@@ -12,14 +12,16 @@ from typing import Optional, Tuple
 from transformers.modeling_outputs import ModelOutput
 
 
-class ESMC_plus_plus_Config(PretrainedConfig):
-    model_type = "esmc_plus_plus"
+class ESMplusplus_Config(PretrainedConfig):
+    model_type = "ESMplusplus"
     def __init__(
         self,
         vocab_size: int = 64,
         hidden_size: int = 960,
         num_attention_heads: int = 15,
         num_hidden_layers: int = 30,
+        num_labels: int = 2,
+        problem_type: str | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -27,6 +29,8 @@ class ESMC_plus_plus_Config(PretrainedConfig):
         self.hidden_size = hidden_size
         self.num_attention_heads = num_attention_heads
         self.num_hidden_layers = num_hidden_layers
+        self.num_labels = num_labels
+        self.problem_type = problem_type
 
 
 ### Rotary
@@ -292,7 +296,7 @@ class TransformerOutput(ModelOutput):
 
 
 @dataclass
-class ESMC_plus_plus_Output(ModelOutput):
+class ESMplusplusOutput(ModelOutput):
     loss: torch.Tensor | None = None
     logits: torch.Tensor | None = None
     last_hidden_state: torch.Tensor | None = None
@@ -338,9 +342,13 @@ class TransformerStack(nn.Module):
 
 
 ### Full model
-class ESMC_plus_plus(PreTrainedModel):
-    def __init__(self, config: ESMC_plus_plus_Config):
+class ESMplusplusForMaskedLM(PreTrainedModel):
+    """
+    ESM++ for masked language modeling.
+    """
+    def __init__(self, config: ESMplusplus_Config):
         super().__init__(config)
+        self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
         self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers)
@@ -351,9 +359,9 @@ class ESMC_plus_plus(PreTrainedModel):
     @classmethod
     def from_pretrained_esm(cls, model_name: str):
         if '300' in model_name:
-            return ESMC_plus_plus_300M()
+            return ESMplusplus_300M()
         elif '600' in model_name:
-            return ESMC_plus_plus_600M()
+            return ESMplusplus_600M()
         else:
             raise ValueError(f"Invalid model name: {model_name}")
 
@@ -367,7 +375,7 @@ class ESMC_plus_plus(PreTrainedModel):
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
-    ) -> ESMC_plus_plus_Output:
+    ) -> ESMplusplusOutput:
         x = self.embed(input_ids)
         output = self.transformer(x, attention_mask, output_hidden_states)
         x = output.last_hidden_state
@@ -375,7 +383,89 @@ class ESMC_plus_plus(PreTrainedModel):
         loss = None
         if labels is not None:
             loss = self.ce_loss(logits.view(-1, self.vocab_size), labels.view(-1))
-        return ESMC_plus_plus_Output(
+        return ESMplusplusOutput(
+            loss=loss,
+            logits=logits,
+            last_hidden_state=x,
+            hidden_states=output.hidden_states,
+        )
+
+
+class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
+    """
+    ESM++ for sequence classification.
+    """
+    def __init__(self, config: ESMplusplus_Config):
+        super().__init__(config)
+        self.config = config
+        self.classifier = RegressionHead(config.hidden_size, config.num_labels)
+        self.mse = nn.MSELoss()
+        self.ce = nn.CrossEntropyLoss()
+        self.bce = nn.BCEWithLogitsLoss()
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        output_hidden_states: bool = False,
+    ) -> ESMplusplusOutput:
+        output = super().forward(input_ids, attention_mask, labels, output_hidden_states)
+        x = output.last_hidden_state
+        logits = self.classifier(x)
+        loss = None
+        if labels is not None:
+            labels = labels.to(logits.device)
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                if self.num_labels == 1:
+                    loss = self.mse(logits.squeeze(), labels.squeeze())
+                else:
+                    loss = self.mse(logits, labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss = self.ce(logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss = self.bce(logits, labels)
+        return ESMplusplusOutput(
+            loss=loss,
+            logits=logits,
+            last_hidden_state=x,
+            hidden_states=output.hidden_states,
+        )
+
+
+class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
+    """
+    ESM++ for token classification.
+    """
+    def __init__(self, config: ESMplusplus_Config):
+        super().__init__(config)
+        self.config = config
+        self.num_labels = config.num_labels
+        self.classifier = RegressionHead(config.hidden_size, config.num_labels)
+        self.loss_fct = nn.CrossEntropyLoss()
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
+        output_hidden_states: bool = False,
+    ) -> ESMplusplusOutput:
+        output = super().forward(input_ids, attention_mask, labels, output_hidden_states)
+        x = output.last_hidden_state
+        logits = self.classifier(x)
+        loss = None
+        if labels is not None:
+            loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+        return ESMplusplusOutput(
             loss=loss,
             logits=logits,
             last_hidden_state=x,
@@ -405,14 +495,14 @@ def data_root(model: str):
     return path
 
 
-def ESMC_plus_plus_300M(device: torch.device | str = "cpu"):
+def ESMplusplus_300M(device: torch.device | str = "cpu"):
     with torch.device(device):
-        config = ESMC_plus_plus_Config(
+        config = ESMplusplus_Config(
             hidden_size=960,
             num_attention_heads=15,
             num_hidden_layers=30,
         )
-        model = ESMC_plus_plus(config)
+        model = ESMplusplusForMaskedLM(config)
     state_dict = torch.load(
         data_root("esmc-300") / "data/weights/esmc_300m_2024_12_v0.pth",
         map_location=device,
@@ -421,14 +511,14 @@ def ESMC_plus_plus_300M(device: torch.device | str = "cpu"):
     return model
 
 
-def ESMC_plus_plus_600M(device: torch.device | str = "cpu"):
+def ESMplusplus_600M(device: torch.device | str = "cpu"):
     with torch.device(device):
-        config = ESMC_plus_plus_Config(
+        config = ESMplusplus_Config(
             hidden_size=1152,
             num_attention_heads=18,
             num_hidden_layers=36,
         )
-        model = ESMC_plus_plus(config)
+        model = ESMplusplusForMaskedLM(config)
     state_dict = torch.load(
         data_root("esmc-600") / "data/weights/esmc_600m_2024_12_v0.pth",
         map_location=device,
@@ -453,9 +543,6 @@ SEQUENCE_VOCAB = [
 ]
 
 class EsmSequenceTokenizer(PreTrainedTokenizerFast):
-    """
-    Constructs an ESM tokenizer.
-    """
     model_input_names = ["input_ids", "attention_mask"]
 
     def __init__(
