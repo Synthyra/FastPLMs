@@ -29,7 +29,7 @@ if args.token:
 
 model_paths = args.model_paths
 canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class ESMCForEmbedding(torch.nn.Module):
@@ -90,6 +90,7 @@ def get_gpu_memory():
     torch.cuda.synchronize()
     return torch.cuda.max_memory_allocated() / 1024**2  # Convert to MB
 
+
 # Test different sequence lengths and batch sizes
 lengths = [128, 256, 512, 1024, 2048]
 batch_sizes = [1, 4, 16, 32]
@@ -135,7 +136,7 @@ if not args.test:
                     'Model': model_path,
                     'Length': length,
                     'Batch Size': batch_size,
-                    'Time': model_time / (num_batches * batch_size),
+                    'Time': model_time,
                     'Memory': model_memory
                 })
                 print(f"Time: {model_time:.2f}s, memory: {model_memory:.0f}MB")
@@ -158,34 +159,40 @@ else:
                     'Model': model_path,
                     'Length': length,
                     'Batch Size': batch_size,
-                    'Time': model_time / (num_batches * batch_size),
+                    'Time': model_time,
                     'Memory': model_memory
                 })
                 print(f"Generated random - Time: {model_time:.2f}s, memory: {model_memory:.0f}MB")
 
-# Create visualization
+# Create visualization for throughput
 num_batch_sizes = len(batch_sizes)
-plt.figure(figsize=(15, 10 * num_batch_sizes))
+plt.figure(figsize=(15, 5 * num_batch_sizes))
 
 for i, batch_size in enumerate(batch_sizes):
-    # Create subplot for throughput
-    plt.subplot(num_batch_sizes * 2, 1, i * 2 + 1)
+    plt.subplot(num_batch_sizes, 1, i + 1)
     for model_path in model_paths:
         model_results = [(r['Length'], r['Time']) for r in results 
                         if r['Model'] == model_path and r['Batch Size'] == batch_size]
         if model_results:
             lengths, times = zip(*model_results)
-            throughput = [batch_size * len / time for len, time in zip(lengths, times)]
+            throughput = [batch_size * len * num_batches / time for len, time in zip(lengths, times)]
             plt.plot(lengths, throughput, marker='o', label=model_path)
 
     plt.title(f'Model Throughput vs Sequence Length (Batch Size = {batch_size})')
     plt.xlabel('Sequence Length')
-    plt.ylabel('Throughput (sequences/second)')
+    plt.ylabel('Throughput (tokens/second)')
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.grid(True)
 
-    # Create subplot for memory usage
-    plt.subplot(num_batch_sizes * 2, 1, i * 2 + 2)
+plt.tight_layout()
+plt.savefig('model_throughput.png', bbox_inches='tight', dpi=300)
+plt.close()
+
+# Create visualization for memory usage
+plt.figure(figsize=(15, 5 * num_batch_sizes))
+
+for i, batch_size in enumerate(batch_sizes):
+    plt.subplot(num_batch_sizes, 1, i + 1)
     for model_path in model_paths:
         model_results = [(r['Length'], r['Memory']) for r in results 
                         if r['Model'] == model_path and r['Batch Size'] == batch_size]
@@ -200,5 +207,5 @@ for i, batch_size in enumerate(batch_sizes):
     plt.grid(True)
 
 plt.tight_layout()
-plt.savefig('model_performance.png', bbox_inches='tight', dpi=300)
+plt.savefig('model_memory.png', bbox_inches='tight', dpi=300)
 plt.close()
