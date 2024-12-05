@@ -1,0 +1,5 @@
+torch==2.5.1
+matplotlib
+transformers==4.45.0
+numpy==1.26.4
+einops

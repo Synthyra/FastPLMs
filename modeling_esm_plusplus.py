@@ -12,7 +12,7 @@ from typing import Optional, Tuple
 from transformers.modeling_outputs import ModelOutput
 
 
-class ESMplusplus_Config(PretrainedConfig):
+class ESMplusplusConfig(PretrainedConfig):
     model_type = "ESMplusplus"
     def __init__(
         self,
@@ -346,7 +346,8 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
     """
     ESM++ for masked language modeling.
     """
-    def __init__(self, config: ESMplusplus_Config):
+    config_class = ESMplusplusConfig
+    def __init__(self, config: ESMplusplusConfig):
         super().__init__(config)
         self.config = config
         self.vocab_size = config.vocab_size
@@ -395,13 +396,23 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
     """
     ESM++ for sequence classification.
     """
-    def __init__(self, config: ESMplusplus_Config):
+    def __init__(self, config: ESMplusplusConfig):
         super().__init__(config)
         self.config = config
-        self.classifier = RegressionHead(config.hidden_size, config.num_labels)
+        self.classifier = RegressionHead(config.hidden_size * 2, config.num_labels, config.hidden_size * 4)
+        # we find that large intermediate projections help with sequence classification tasks (*4)
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
+
+    def mean_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # x: (batch_size, seq_len, hidden_size)
+        # attention_mask: (batch_size, seq_len)
+        if attention_mask is None:
+            return x.mean(dim=1)
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (x * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
 
     def forward(
         self,
@@ -412,7 +423,11 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
     ) -> ESMplusplusOutput:
         output = super().forward(input_ids, attention_mask, labels, output_hidden_states)
         x = output.last_hidden_state
-        logits = self.classifier(x)
+        cls_features = x[:, 0, :]
+        mean_features = self.mean_pooling(x, attention_mask)
+        # we include mean pooling features to help with early convergence, the cost of this is basically zero
+        features = torch.cat([cls_features, mean_features], dim=-1)
+        logits = self.classifier(features)
         loss = None
         if labels is not None:
             labels = labels.to(logits.device)
@@ -445,11 +460,12 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
     """
     ESM++ for token classification.
     """
-    def __init__(self, config: ESMplusplus_Config):
+    def __init__(self, config: ESMplusplusConfig):
         super().__init__(config)
         self.config = config
         self.num_labels = config.num_labels
-        self.classifier = RegressionHead(config.hidden_size, config.num_labels)
+        self.classifier = RegressionHead(config.hidden_size, config.num_labels, config.hidden_size * 4)
+        # we find that large intermediate projections help with sequence classification tasks (*4)
         self.loss_fct = nn.CrossEntropyLoss()
 
     def forward(
@@ -497,7 +513,7 @@ def data_root(model: str):
 
 def ESMplusplus_300M(device: torch.device | str = "cpu"):
     with torch.device(device):
-        config = ESMplusplus_Config(
+        config = ESMplusplusConfig(
             hidden_size=960,
             num_attention_heads=15,
             num_hidden_layers=30,
@@ -513,7 +529,7 @@ def ESMplusplus_300M(device: torch.device | str = "cpu"):
 
 def ESMplusplus_600M(device: torch.device | str = "cpu"):
     with torch.device(device):
-        config = ESMplusplus_Config(
+        config = ESMplusplusConfig(
             hidden_size=1152,
             num_attention_heads=18,
             num_hidden_layers=36,
