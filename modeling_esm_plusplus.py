@@ -4,12 +4,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import os
+from torch.utils.data import Dataset, DataLoader
 from dataclasses import dataclass
 from transformers import PreTrainedModel, PretrainedConfig
 from einops import rearrange, repeat
 from functools import partial
 from typing import Optional, Tuple
 from transformers.modeling_outputs import ModelOutput
+from tqdm.auto import tqdm
 
 
 class ESMplusplusConfig(PretrainedConfig):
@@ -341,6 +344,18 @@ class TransformerStack(nn.Module):
         return TransformerOutput(last_hidden_state=self.norm(x), hidden_states=hidden_states)
 
 
+### Dataset class for embedding
+class ProteinDataset(Dataset):
+    def __init__(self, sequences: list[str]):
+        self.sequences = sequences
+
+    def __len__(self):
+        return len(self.sequences)
+
+    def __getitem__(self, idx: int) -> str:
+        return self.sequences[idx]
+
+
 ### Full model
 class ESMplusplusForMaskedLM(PreTrainedModel):
     """
@@ -369,6 +384,84 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
     @property
     def device(self):
         return next(self.parameters()).device
+
+    def mean_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # x: (batch_size, seq_len, hidden_size)
+        # attention_mask: (batch_size, seq_len)
+        if attention_mask is None:
+            return x.mean(dim=1)
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (x * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
+
+    def _collate_fn(self, sequences: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.tokenizer(sequences, return_tensors="pt", padding='longest', pad_to_multiple_of=8)
+    
+    def embed_dataset(
+        self,
+        sequences: list[str],
+        batch_size: int = 2,
+        max_len: int = 512,
+        full_embeddings: bool = False,
+        full_precision: bool = False,
+        num_workers: int = 0,
+        sql: bool = False,
+        sql_db_path: str = 'embeddings.db',
+    ):
+        print('Processing sequences...')
+        sequences = [seq[:max_len] for seq in sequences]
+        sequences = sorted(sequences, key=len, reverse=True)
+        print('Building dataloader...')
+        dataset = ProteinDataset(sequences)
+        dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn)
+        device = self.device
+        if sql:
+            import sqlite3
+            conn = sqlite3.connect(sql_db_path)
+            c = conn.cursor()
+            c.execute('''CREATE TABLE IF NOT EXISTS embeddings
+                        (sequence text PRIMARY KEY, embedding blob)''')
+            
+            batch_count = 0
+            with torch.no_grad():
+                for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
+                    batch = {k: v.to(device) for k, v in batch.items()}
+                    mask = batch['attention_mask']
+                    residue_embeddings = self.transformer(**batch).last_hidden_state
+                    if full_precision:
+                        residue_embeddings = residue_embeddings.float()
+
+                    if full_embeddings:
+                        embeddings = residue_embeddings
+                    else:
+                        embeddings = self.mean_pooling(residue_embeddings, mask)
+
+                    for seq, emb in zip(batch[0], embeddings):
+                        c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
+                                (seq, emb.cpu().numpy().tobytes()))
+                
+                batch_count += 1
+                if batch_count % 100 == 0:
+                    conn.commit()
+                    print(f'Processed {batch_count} batches')
+            
+            conn.commit()
+            conn.close()
+            return None
+            
+        else:
+            embeddings_dict = {}
+            for batch in dataloader:
+                input_ids, attention_mask = batch
+                with torch.no_grad():
+                    output = self.transformer(input_ids, attention_mask)
+                embeddings = output.last_hidden_state
+                
+                # Store in dictionary
+                for seq, emb in zip(batch[0], embeddings):
+                    embeddings_dict[seq] = emb
+                    
+            return embeddings_dict
 
     def forward(
         self,
@@ -404,15 +497,6 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
-
-    def mean_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # x: (batch_size, seq_len, hidden_size)
-        # attention_mask: (batch_size, seq_len)
-        if attention_mask is None:
-            return x.mean(dim=1)
-        else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (x * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
 
     def forward(
         self,
