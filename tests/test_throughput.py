@@ -135,7 +135,7 @@ if not args.test:
                     'Model': model_path,
                     'Length': length,
                     'Batch Size': batch_size,
-                    'Time': model_time,
+                    'Time': model_time / (num_batches * batch_size),
                     'Memory': model_memory
                 })
                 print(f"Time: {model_time:.2f}s, memory: {model_memory:.0f}MB")
@@ -158,7 +158,7 @@ else:
                     'Model': model_path,
                     'Length': length,
                     'Batch Size': batch_size,
-                    'Time': model_time,
+                    'Time': model_time / (num_batches * batch_size),
                     'Memory': model_memory
                 })
                 print(f"Generated random - Time: {model_time:.2f}s, memory: {model_memory:.0f}MB")

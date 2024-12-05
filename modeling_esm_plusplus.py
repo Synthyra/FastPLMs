@@ -441,7 +441,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
 
             if self.config.problem_type == "regression":
                 if self.num_labels == 1:
-                    loss = self.mse(logits.squeeze(), labels.squeeze())
+                    loss = self.mse(logits.flatten(), labels.flatten())
                 else:
                     loss = self.mse(logits, labels)
             elif self.config.problem_type == "single_label_classification":
