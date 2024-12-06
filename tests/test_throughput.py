@@ -13,7 +13,7 @@ from esm.sdk.api import ESMProtein, LogitsConfig
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_paths', nargs='+', type=str, default=[
     #'facebook/esm2_t6_8M_UR50D',
-    'Synthyra/FastESM2_650'
+    'Synthyra/FastESM2_650',
     'facebook/esm2_t12_35M_UR50D',
     'facebook/esm2_t30_150M_UR50D',
     'facebook/esm2_t33_650M_UR50D',
