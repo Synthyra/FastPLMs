@@ -3,6 +3,7 @@ import time
 import random
 import argparse
 import matplotlib.pyplot as plt
+import pandas as pd
 from huggingface_hub import login
 from transformers import AutoModelForMaskedLM, EsmTokenizer
 from esm.models.esmc import ESMC
@@ -12,6 +13,7 @@ from esm.sdk.api import ESMProtein, LogitsConfig
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_paths', nargs='+', type=str, default=[
     #'facebook/esm2_t6_8M_UR50D',
+    'Synthyra/FastESM2_650'
     'facebook/esm2_t12_35M_UR50D',
     'facebook/esm2_t30_150M_UR50D',
     'facebook/esm2_t33_650M_UR50D',
@@ -58,7 +60,7 @@ def generate_batch_sequences(length: int, batch_size: int, num_batches: int = 10
     return all_sequences
 
 
-def time_model(model, inputs, warmup=10):
+def time_model(model, inputs, warmup=4):
     model.eval()
     with torch.no_grad():
         # Warmup
@@ -92,9 +94,9 @@ def get_gpu_memory():
 
 
 # Test different sequence lengths and batch sizes
-lengths = [128, 256, 512, 1024, 2048]
-batch_sizes = [1, 4, 16, 32]
-num_batches = 100
+lengths = [32, 64, 128, 256, 512, 1024, 2048]
+batch_sizes = [1, 2, 4, 8, 16, 32]
+num_batches = 16
 results = []
 
 if not args.test:
@@ -163,6 +165,10 @@ else:
                     'Memory': model_memory
                 })
                 print(f"Generated random - Time: {model_time:.2f}s, memory: {model_memory:.0f}MB")
+
+# Save results to CSV
+df = pd.DataFrame(results)
+df.to_csv('model_benchmarks.csv', index=False)
 
 # Create visualization for throughput
 num_batch_sizes = len(batch_sizes)
