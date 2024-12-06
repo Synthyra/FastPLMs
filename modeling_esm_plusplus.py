@@ -1,21 +1,44 @@
-### Modified from https://github.com/evolutionaryscale/esm
-### License: https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-license-agreement
+"""
+ESM++ model implementation.
+
+ESM++ is a faithful implementation of ESMC that allows for batching and standard Huggingface compatibility
+The ESM Python package is not required
+
+Modified from https://github.com/evolutionaryscale/esm
+License: https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-license-agreement
+"""
+
+import math
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-import os
-from torch.utils.data import Dataset, DataLoader
 from dataclasses import dataclass
-from transformers import PreTrainedModel, PretrainedConfig
-from einops import rearrange, repeat
-from functools import partial
+from functools import cache, partial
+from pathlib import Path
 from typing import Optional, Tuple
-from transformers.modeling_outputs import ModelOutput
+from einops import rearrange, repeat
+from huggingface_hub import snapshot_download
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.processors import TemplateProcessing
+from torch.utils.data import Dataset, DataLoader
 from tqdm.auto import tqdm
+from transformers import PreTrainedModel, PreTrainedTokenizerFast, PretrainedConfig
+from transformers.modeling_outputs import ModelOutput
 
 
 class ESMplusplusConfig(PretrainedConfig):
+    """Configuration class for ESM++ model.
+    
+    Args:
+        vocab_size: Size of the vocabulary
+        hidden_size: Dimension of hidden layers
+        num_attention_heads: Number of attention heads
+        num_hidden_layers: Number of transformer layers
+        num_labels: Number of output labels for classification
+        problem_type: Type of problem - regression, single/multi label classification
+    """
     model_type = "ESMplusplus"
     def __init__(
         self,
@@ -36,11 +59,9 @@ class ESMplusplusConfig(PretrainedConfig):
         self.problem_type = problem_type
 
 
-### Rotary
-# https://github.com/evolutionaryscale/esm/blob/main/esm/layers/rotary.py
-# https://huggingface.co/togethercomputer/LLaMA-2-7B-32K/blob/08639a72e17836184096ae6a7e2766f2a34c3e36/modeling_flash_llama.py#L114
-# Flash attention rotary implementation can be installed like so: `pip install git+https://github.com/HazyResearch/flash-attention.git#subdirectory=csrc/rotary`
-def rotate_half(x, interleaved=False):
+### Rotary Embeddings
+def rotate_half(x: torch.Tensor, interleaved: bool = False) -> torch.Tensor:
+    """Rotates half the hidden dims of the input."""
     if not interleaved:
         x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
@@ -51,11 +72,14 @@ def rotate_half(x, interleaved=False):
         )
 
 
-def apply_rotary_emb_torch(x, cos, sin, interleaved=False, _inplace=False):
-    """
-    x: (batch_size, seqlen, nheads, headdim)
-    cos, sin: (seqlen, rotary_dim / 2)
-    """
+def apply_rotary_emb_torch(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    interleaved: bool = False,
+    _inplace: bool = False,
+) -> torch.Tensor:
+    """Apply rotary embeddings to input based on cos and sin."""
     ro_dim = cos.shape[-1] * 2
     assert ro_dim <= x.shape[-1]
     seqlen = x.size(1)
@@ -73,21 +97,33 @@ def apply_rotary_emb_torch(x, cos, sin, interleaved=False, _inplace=False):
 
 
 class RotaryEmbedding(torch.nn.Module):
+    """Rotary position embeddings.
+    
+    Based on the paper "RoFormer: Enhanced Transformer with Rotary Position Embedding"
+    
+    Args:
+        dim: Dimension of the embedding
+        base: Base for computing angular frequencies
+        interleaved: Whether to use interleaved rotations
+        scale_base: Base for scaling
+        scaling_factor: Factor for scaling positions
+        pos_idx_in_fp32: Whether to compute position indices in fp32
+        device: Computation device
+    """
     def __init__(
         self,
         dim: int,
-        base=10000.0,
-        interleaved=False,
-        scale_base=None,
-        scaling_factor=1.0,
-        pos_idx_in_fp32=True,
-        device=None,
+        base: float = 10000.0,
+        interleaved: bool = False,
+        scale_base: Optional[float] = None,
+        scaling_factor: float = 1.0,
+        pos_idx_in_fp32: bool = True,
+        device: Optional[torch.device] = None,
     ):
         super().__init__()
         self.dim = dim
         self.base = float(base)
         self.pos_idx_in_fp32 = pos_idx_in_fp32
-        # Generate and save the inverse frequency buffer (non trainable)
         self.interleaved = interleaved
         self.scale_base = scale_base
         self.scaling_factor = scaling_factor
@@ -101,6 +137,7 @@ class RotaryEmbedding(torch.nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
+        """Reset the parameters of the embedding."""
         inv_freq = self._compute_inv_freq(self.device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         arange = torch.arange(0, self.dim, 2, device=self.device, dtype=torch.float32)
@@ -111,7 +148,8 @@ class RotaryEmbedding(torch.nn.Module):
         )
         self.register_buffer("scale", scale)
 
-    def _compute_inv_freq(self, device=None):
+    def _compute_inv_freq(self, device: Optional[torch.device] = None) -> torch.Tensor:
+        """Compute inverse frequency bands."""
         return 1 / (
             self.base
             ** (
@@ -120,7 +158,8 @@ class RotaryEmbedding(torch.nn.Module):
             )
         )
 
-    def _update_cos_sin_cache(self, seqlen, device=None, dtype=None):
+    def _update_cos_sin_cache(self, seqlen: int, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None):
+        """Update the cached cosine and sine values."""
         if (
             seqlen > self._seq_len_cached
             or self._cos_cached is None
@@ -159,9 +198,14 @@ class RotaryEmbedding(torch.nn.Module):
                 self._sin_k_cached = (torch.sin(freqs) / scale).to(dtype)
 
     def forward(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        q: (batch, seqlen, nheads, headdim)
-        k: (batch, seqlen, nheads, headdim)
+        """Apply rotary embeddings to queries and keys.
+        
+        Args:
+            q: Query tensor of shape (batch, seqlen, nheads, headdim)
+            k: Key tensor of shape (batch, seqlen, nheads, headdim)
+            
+        Returns:
+            Tuple of rotated query and key tensors
         """
         self._update_cos_sin_cache(q.shape[1], device=q.device, dtype=q.dtype)
         assert self._cos_cached is not None
@@ -187,12 +231,14 @@ class RotaryEmbedding(torch.nn.Module):
             assert False
 
 
-### Feedforward
+### Feedforward Network Components
 def swiglu_correction_fn(expansion_ratio: float, d_model: int) -> int:
+    """Compute corrected dimension for SwiGLU."""
     return int(((expansion_ratio * d_model) + 255) // 256 * 256)
 
 
 class SwiGLU(nn.Module):
+    """SwiGLU activation function."""
     def __init__(self):
         super(SwiGLU, self).__init__()
 
@@ -201,7 +247,8 @@ class SwiGLU(nn.Module):
         return F.silu(x1) * x2
 
 
-def swiglu_ln_ffn(d_model: int, expansion_ratio: float):
+def swiglu_ln_ffn(d_model: int, expansion_ratio: float) -> nn.Sequential:
+    """Create SwiGLU feedforward network with layer normalization."""
     return nn.Sequential(
         nn.LayerNorm(d_model),
         nn.Linear(
@@ -214,6 +261,12 @@ def swiglu_ln_ffn(d_model: int, expansion_ratio: float):
 
 ### Attention
 class MultiHeadAttention(nn.Module):
+    """Multi-head attention with rotary embeddings.
+    
+    Args:
+        d_model: Model dimension
+        n_heads: Number of attention heads
+    """
     def __init__(self, d_model: int, n_heads: int):
         super().__init__()
         self.d_model = d_model
@@ -228,7 +281,8 @@ class MultiHeadAttention(nn.Module):
         self.reshaper = partial(rearrange, pattern="b s (h d) -> b h s d", h=n_heads)
         self.rotary = RotaryEmbedding(d_model // n_heads)
 
-    def _apply_rotary(self, q: torch.Tensor, k: torch.Tensor):
+    def _apply_rotary(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Apply rotary embeddings to query and key."""
         q = q.unflatten(-1, (self.n_heads, self.d_head))
         k = k.unflatten(-1, (self.n_heads, self.d_head))
         q, k = self.rotary(q, k)
@@ -236,7 +290,15 @@ class MultiHeadAttention(nn.Module):
         k = k.flatten(-2, -1)
         return q, k
 
-    def forward(self, x, attention_mask=None):
+    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor
+            attention_mask: Optional attention mask
+            
+        Returns:
+            Output tensor after self attention
+        """
         qkv_BLD3 = self.layernorm_qkv(x)
         query_BLD, key_BLD, value_BLD = torch.chunk(qkv_BLD3, 3, dim=-1)
         query_BLD, key_BLD = (
@@ -252,10 +314,17 @@ class MultiHeadAttention(nn.Module):
         return self.out_proj(context_BLD)
 
 
-### LM Head
+### Regression Head
 def RegressionHead(
-    d_model: int, output_dim: int, hidden_dim: int | None = None
+    d_model: int, output_dim: int, hidden_dim: Optional[int] = None
 ) -> nn.Module:
+    """Create a regression head with optional hidden dimension.
+    
+    Args:
+        d_model: Input dimension
+        output_dim: Output dimension
+        hidden_dim: Optional hidden dimension (defaults to d_model)
+    """
     hidden_dim = hidden_dim if hidden_dim is not None else d_model
     return nn.Sequential(
         nn.Linear(d_model, hidden_dim),
@@ -267,6 +336,14 @@ def RegressionHead(
 
 ### Transformer Block
 class UnifiedTransformerBlock(nn.Module):
+    """Transformer block with attention and feedforward layers.
+    
+    Args:
+        d_model: Model dimension
+        n_heads: Number of attention heads
+        residue_scaling_factor: Factor for scaling residual connections
+        expansion_ratio: Expansion ratio for feedforward network
+    """
     def __init__(
         self,
         d_model: int,
@@ -284,6 +361,14 @@ class UnifiedTransformerBlock(nn.Module):
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        """
+        Args:
+            x: Input tensor
+            attention_mask: Optional attention mask
+            
+        Returns:
+            Output tensor after transformer block
+        """
         r1 = self.attn(x, attention_mask)
         x = x + r1 / self.scaling_factor
         r3 = self.ffn(x) / self.scaling_factor
@@ -291,23 +376,32 @@ class UnifiedTransformerBlock(nn.Module):
         return x
 
 
-### Outputs
+### Model Outputs
 @dataclass
 class TransformerOutput(ModelOutput):
-    last_hidden_state: torch.Tensor | None = None
-    hidden_states: tuple[torch.Tensor] | None = None
+    """Output type for transformer encoder."""
+    last_hidden_state: Optional[torch.Tensor] = None
+    hidden_states: Optional[Tuple[torch.Tensor]] = None
 
 
 @dataclass
 class ESMplusplusOutput(ModelOutput):
-    loss: torch.Tensor | None = None
-    logits: torch.Tensor | None = None
-    last_hidden_state: torch.Tensor | None = None
-    hidden_states: tuple[torch.Tensor] | None = None
+    """Output type for ESM++ models."""
+    loss: Optional[torch.Tensor] = None
+    logits: Optional[torch.Tensor] = None
+    last_hidden_state: Optional[torch.Tensor] = None
+    hidden_states: Optional[Tuple[torch.Tensor]] = None
 
 
-### Transformer
+### Transformer Stack
 class TransformerStack(nn.Module):
+    """Stack of transformer blocks.
+    
+    Args:
+        d_model: Model dimension
+        n_heads: Number of attention heads
+        n_layers: Number of transformer layers
+    """
     def __init__(
         self,
         d_model: int,
@@ -333,6 +427,15 @@ class TransformerStack(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
     ) -> TransformerOutput:
+        """
+        Args:
+            x: Input tensor
+            attention_mask: Optional attention mask
+            output_hidden_states: Whether to return all hidden states
+            
+        Returns:
+            TransformerOutput containing last hidden state and optionally all hidden states
+        """
         batch_size, seq_len, _ = x.shape
         hidden_states = ()
         if attention_mask is not None:
@@ -344,22 +447,24 @@ class TransformerStack(nn.Module):
         return TransformerOutput(last_hidden_state=self.norm(x), hidden_states=hidden_states)
 
 
-### Dataset class for embedding
+### Dataset for Embedding
 class ProteinDataset(Dataset):
+    """Simple dataset for protein sequences."""
     def __init__(self, sequences: list[str]):
         self.sequences = sequences
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.sequences)
 
     def __getitem__(self, idx: int) -> str:
         return self.sequences[idx]
 
 
-### Full model
+### ESM++ Models
 class ESMplusplusForMaskedLM(PreTrainedModel):
-    """
-    ESM++ for masked language modeling.
+    """ESM++ model for masked language modeling.
+    
+    Implements the base ESM++ architecture with a masked language modeling head.
     """
     config_class = ESMplusplusConfig
     def __init__(self, config: ESMplusplusConfig):
@@ -373,7 +478,8 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
         self.tokenizer = EsmSequenceTokenizer()
 
     @classmethod
-    def from_pretrained_esm(cls, model_name: str):
+    def from_pretrained_esm(cls, model_name: str) -> "ESMplusplusForMaskedLM":
+        """Load a pretrained ESM++ model."""
         if '300' in model_name:
             return ESMplusplus_300M()
         elif '600' in model_name:
@@ -382,12 +488,12 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
             raise ValueError(f"Invalid model name: {model_name}")
 
     @property
-    def device(self):
+    def device(self) -> torch.device:
+        """Get the device of the model."""
         return next(self.parameters()).device
 
     def mean_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        # x: (batch_size, seq_len, hidden_size)
-        # attention_mask: (batch_size, seq_len)
+        """Apply mean pooling to sequence outputs."""
         if attention_mask is None:
             return x.mean(dim=1)
         else:
@@ -395,8 +501,23 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
             return (x * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
 
     def _collate_fn(self, sequences: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Collate function for batching sequences."""
         return self.tokenizer(sequences, return_tensors="pt", padding='longest', pad_to_multiple_of=8)
-    
+
+    def _read_sequences_from_db(self, db_path: str) -> set[str]:
+        """Read sequences from SQLite database."""
+        import sqlite3
+        sequences = []
+        with sqlite3.connect(db_path) as conn:
+            c = conn.cursor()
+            c.execute("SELECT sequence FROM embeddings")
+            while True:
+                row = c.fetchone()
+                if row is None:
+                    break
+                sequences.append(row[0])
+        return set(sequences)
+
     def embed_dataset(
         self,
         sequences: list[str],
@@ -404,72 +525,103 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
         max_len: int = 512,
         full_embeddings: bool = False,
         full_precision: bool = False,
+        pooling_type: str = 'mean',
         num_workers: int = 0,
         sql: bool = False,
         sql_db_path: str = 'embeddings.db',
-    ):
-        print('Processing sequences...')
-        sequences = [seq[:max_len] for seq in sequences]
+    ) -> Optional[dict[str, torch.Tensor]]:
+        """Embed a dataset of protein sequences.
+        
+        Args:
+            sequences: List of protein sequences
+            batch_size: Batch size for processing
+            max_len: Maximum sequence length
+            full_embeddings: Whether to return full residue-wise (True) embeddings or pooled (False)
+            full_precision: Whether to cast to full precision (float32) before storage - relevant for dict storage
+            pooling_type: Type of pooling ('mean' or 'cls')
+            num_workers: Number of workers for data loading, 0 for the main process
+            sql: Whether to store embeddings in SQLite database - will be stored in float32
+            sql_db_path: Path to SQLite database
+            
+        Returns:
+            Dictionary mapping sequences to embeddings, or None if sql=True
+        """
+        sequences = list(set([seq[:max_len] for seq in sequences]))
         sequences = sorted(sequences, key=len, reverse=True)
-        print('Building dataloader...')
         dataset = ProteinDataset(sequences)
         dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn)
         device = self.device
+
+        def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+            if full_embeddings:
+                return residue_embeddings
+            elif pooling_type == 'mean':
+                return self.mean_pooling(residue_embeddings, attention_mask)
+            else:
+                return residue_embeddings[:, 0, :]
+
         if sql:
             import sqlite3
             conn = sqlite3.connect(sql_db_path)
             c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS embeddings
-                        (sequence text PRIMARY KEY, embedding blob)''')
+            c.execute('CREATE TABLE IF NOT EXISTS embeddings (sequence text PRIMARY KEY, embedding blob)')
+            already_embedded = self._read_sequences_from_db(sql_db_path)
+            to_embed = [seq for seq in sequences if seq not in already_embedded]
+            print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
+            print(f"Embedding {len(to_embed)} new sequences")
             
-            batch_count = 0
             with torch.no_grad():
                 for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
-                    batch = {k: v.to(device) for k, v in batch.items()}
-                    mask = batch['attention_mask']
-                    residue_embeddings = self.transformer(**batch).last_hidden_state
-                    if full_precision:
-                        residue_embeddings = residue_embeddings.float()
+                    seqs = sequences[i * batch_size:(i + 1) * batch_size]
+                    input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
+                    x = self.embed(input_ids)
+                    residue_embeddings = self.transformer(x, attention_mask).last_hidden_state.float() # required for sql
+                    embeddings = get_embeddings(residue_embeddings, attention_mask)
 
-                    if full_embeddings:
-                        embeddings = residue_embeddings
-                    else:
-                        embeddings = self.mean_pooling(residue_embeddings, mask)
-
-                    for seq, emb in zip(batch[0], embeddings):
+                    for seq, emb in zip(seqs, embeddings):
                         c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
                                 (seq, emb.cpu().numpy().tobytes()))
-                
-                batch_count += 1
-                if batch_count % 100 == 0:
-                    conn.commit()
-                    print(f'Processed {batch_count} batches')
+                    
+                    if (i + 1) % 100 == 0:
+                        conn.commit()
             
             conn.commit()
             conn.close()
             return None
             
-        else:
-            embeddings_dict = {}
-            for batch in dataloader:
-                input_ids, attention_mask = batch
-                with torch.no_grad():
-                    output = self.transformer(input_ids, attention_mask)
-                embeddings = output.last_hidden_state
-                
-                # Store in dictionary
-                for seq, emb in zip(batch[0], embeddings):
+        embeddings_dict = {}
+        with torch.no_grad():
+            for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
+                seqs = sequences[i * batch_size:(i + 1) * batch_size]
+                input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
+                x = self.embed(input_ids)
+                residue_embeddings = self.transformer(x, attention_mask).last_hidden_state
+                if full_precision:
+                    residue_embeddings = residue_embeddings.float()
+                embeddings = get_embeddings(residue_embeddings, attention_mask)
+                for seq, emb in zip(seqs, embeddings):
                     embeddings_dict[seq] = emb
                     
-            return embeddings_dict
+        return embeddings_dict
 
     def forward(
         self,
-        input_ids: torch.Tensor | None = None,
+        input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
     ) -> ESMplusplusOutput:
+        """Forward pass for masked language modeling.
+        
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Attention mask
+            labels: Optional labels for masked tokens
+            output_hidden_states: Whether to return all hidden states
+            
+        Returns:
+            ESMplusplusOutput containing loss, logits, and hidden states
+        """
         x = self.embed(input_ids)
         output = self.transformer(x, attention_mask, output_hidden_states)
         x = output.last_hidden_state
@@ -486,25 +638,37 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
 
 
 class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
-    """
-    ESM++ for sequence classification.
+    """ESM++ model for sequence classification.
+    
+    Extends the base ESM++ model with a classification head.
     """
     def __init__(self, config: ESMplusplusConfig):
         super().__init__(config)
         self.config = config
         self.classifier = RegressionHead(config.hidden_size * 2, config.num_labels, config.hidden_size * 4)
-        # we find that large intermediate projections help with sequence classification tasks (*4)
+        # Large intermediate projections help with sequence classification tasks (*4)
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
 
     def forward(
         self,
-        input_ids: torch.Tensor | None = None,
+        input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
     ) -> ESMplusplusOutput:
+        """Forward pass for sequence classification.
+        
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Attention mask
+            labels: Optional labels for classification
+            output_hidden_states: Whether to return all hidden states
+            
+        Returns:
+            ESMplusplusOutput containing loss, logits, and hidden states
+        """
         output = super().forward(input_ids, attention_mask, labels, output_hidden_states)
         x = output.last_hidden_state
         cls_features = x[:, 0, :]
@@ -541,24 +705,36 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
 
 
 class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
-    """
-    ESM++ for token classification.
+    """ESM++ model for token classification.
+    
+    Extends the base ESM++ model with a token classification head.
     """
     def __init__(self, config: ESMplusplusConfig):
         super().__init__(config)
         self.config = config
         self.num_labels = config.num_labels
         self.classifier = RegressionHead(config.hidden_size, config.num_labels, config.hidden_size * 4)
-        # we find that large intermediate projections help with sequence classification tasks (*4)
+        # Large intermediate projections help with sequence classification tasks (*4)
         self.loss_fct = nn.CrossEntropyLoss()
 
     def forward(
         self,
-        input_ids: torch.Tensor | None = None,
+        input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
     ) -> ESMplusplusOutput:
+        """Forward pass for token classification.
+        
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Attention mask
+            labels: Optional labels for token classification
+            output_hidden_states: Whether to return all hidden states
+            
+        Returns:
+            ESMplusplusOutput containing loss, logits, and hidden states
+        """
         output = super().forward(input_ids, attention_mask, labels, output_hidden_states)
         x = output.last_hidden_state
         logits = self.classifier(x)
@@ -573,13 +749,7 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
         )
 
 
-### Loading
-import os
-from functools import cache
-from pathlib import Path
-from huggingface_hub import snapshot_download
-
-
+### Loading from EvolutionaryScale
 @staticmethod
 @cache
 def data_root(model: str):
@@ -628,12 +798,6 @@ def ESMplusplus_600M(device: torch.device | str = "cpu"):
 
 
 ### Tokenization
-from tokenizers import Tokenizer
-from tokenizers.models import BPE
-from tokenizers.processors import TemplateProcessing
-from transformers import PreTrainedTokenizerFast
-
-
 SEQUENCE_VOCAB = [
     "<cls>", "<pad>", "<eos>", "<unk>",
     "L", "A", "G", "V", "S", "E", "R", "T", "I", "D", "P", "K",
