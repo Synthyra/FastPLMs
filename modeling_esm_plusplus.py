@@ -569,23 +569,23 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
             to_embed = [seq for seq in sequences if seq not in already_embedded]
             print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
             print(f"Embedding {len(to_embed)} new sequences")
-            
-            with torch.no_grad():
-                for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
-                    seqs = sequences[i * batch_size:(i + 1) * batch_size]
-                    input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
-                    x = self.embed(input_ids)
-                    residue_embeddings = self.transformer(x, attention_mask).last_hidden_state.detach().float() # required for sql
-                    embeddings = get_embeddings(residue_embeddings, attention_mask)
+            if len(to_embed) > 0:
+                with torch.no_grad():
+                    for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
+                        seqs = sequences[i * batch_size:(i + 1) * batch_size]
+                        input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
+                        x = self.embed(input_ids)
+                        residue_embeddings = self.transformer(x, attention_mask).last_hidden_state.detach().float() # required for sql
+                        embeddings = get_embeddings(residue_embeddings, attention_mask)
 
-                    for seq, emb in zip(seqs, embeddings):
-                        c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
-                                (seq, emb.cpu().numpy().tobytes()))
-                    
-                    if (i + 1) % 100 == 0:
-                        conn.commit()
+                        for seq, emb in zip(seqs, embeddings):
+                            c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
+                                    (seq, emb.cpu().numpy().tobytes()))
+                        
+                        if (i + 1) % 100 == 0:
+                            conn.commit()
             
-            conn.commit()
+                conn.commit()
             conn.close()
             return None
             
