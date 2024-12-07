@@ -575,7 +575,7 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
                     seqs = sequences[i * batch_size:(i + 1) * batch_size]
                     input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
                     x = self.embed(input_ids)
-                    residue_embeddings = self.transformer(x, attention_mask).last_hidden_state.float() # required for sql
+                    residue_embeddings = self.transformer(x, attention_mask).last_hidden_state.detach().float() # required for sql
                     embeddings = get_embeddings(residue_embeddings, attention_mask)
 
                     for seq, emb in zip(seqs, embeddings):
@@ -595,10 +595,10 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
                 seqs = sequences[i * batch_size:(i + 1) * batch_size]
                 input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
                 x = self.embed(input_ids)
-                residue_embeddings = self.transformer(x, attention_mask).last_hidden_state
+                residue_embeddings = self.transformer(x, attention_mask).last_hidden_state.detach()
                 if full_precision:
                     residue_embeddings = residue_embeddings.float()
-                embeddings = get_embeddings(residue_embeddings, attention_mask)
+                embeddings = get_embeddings(residue_embeddings, attention_mask).cpu()
                 for seq, emb in zip(seqs, embeddings):
                     embeddings_dict[seq] = emb
                     
