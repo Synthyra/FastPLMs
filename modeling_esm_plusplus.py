@@ -467,8 +467,8 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
     Implements the base ESM++ architecture with a masked language modeling head.
     """
     config_class = ESMplusplusConfig
-    def __init__(self, config: ESMplusplusConfig):
-        super().__init__(config)
+    def __init__(self, config: ESMplusplusConfig, **kwargs):
+        super().__init__(config, **kwargs)
         self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
@@ -642,9 +642,10 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
     
     Extends the base ESM++ model with a classification head.
     """
-    def __init__(self, config: ESMplusplusConfig):
-        super().__init__(config)
+    def __init__(self, config: ESMplusplusConfig, **kwargs):
+        super().__init__(config, **kwargs)
         self.config = config
+        self.num_labels = config.num_labels
         self.classifier = RegressionHead(config.hidden_size * 2, config.num_labels, config.hidden_size * 4)
         # Large intermediate projections help with sequence classification tasks (*4)
         self.mse = nn.MSELoss()
@@ -669,7 +670,12 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
         Returns:
             ESMplusplusOutput containing loss, logits, and hidden states
         """
-        output = super().forward(input_ids, attention_mask, labels, output_hidden_states)
+        output = super().forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=None,
+            output_hidden_states=output_hidden_states
+        )
         x = output.last_hidden_state
         cls_features = x[:, 0, :]
         mean_features = self.mean_pooling(x, attention_mask)
@@ -735,7 +741,12 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
         Returns:
             ESMplusplusOutput containing loss, logits, and hidden states
         """
-        output = super().forward(input_ids, attention_mask, labels, output_hidden_states)
+        output = super().forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=None,
+            output_hidden_states=output_hidden_states
+        )
         x = output.last_hidden_state
         logits = self.classifier(x)
         loss = None
