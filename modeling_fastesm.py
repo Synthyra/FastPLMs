@@ -19,7 +19,6 @@ from transformers.models.esm.modeling_esm import (
     EsmLMHead,
     EsmSelfOutput,
     EsmClassificationHead,
-    create_position_ids_from_input_ids,
 )
 from tqdm.auto import tqdm
 
@@ -80,6 +79,58 @@ def apply_rotary_pos_emb(x, cos, sin):
     sin = sin[:, :, : x.shape[-2], :]
 
     return (x * cos) + (rotate_half(x) * sin)
+
+
+def symmetrize(x):
+    "Make layer symmetric in final two dimensions, used for contact prediction."
+    return x + x.transpose(-1, -2)
+
+
+def average_product_correct(x):
+    "Perform average product correct, used for contact prediction."
+    a1 = x.sum(-1, keepdims=True)
+    a2 = x.sum(-2, keepdims=True)
+    a12 = x.sum((-1, -2), keepdims=True)
+
+    avg = a1 * a2
+    avg.div_(a12)  # in-place to reduce memory
+    normalized = x - avg
+    return normalized
+
+
+class EsmContactPredictionHead(nn.Module):
+    """Performs symmetrization, apc, and computes a logistic regression on the output features"""
+
+    def __init__(
+        self,
+        in_features: int,
+        bias=True,
+        eos_idx: int = 2,
+    ):
+        super().__init__()
+        self.in_features = in_features
+        self.eos_idx = eos_idx
+        self.regression = nn.Linear(in_features, 1, bias)
+        self.activation = nn.Sigmoid()
+
+    def forward(self, tokens, attentions):
+        # remove eos token attentions
+        eos_mask = tokens.ne(self.eos_idx).to(attentions)
+        eos_mask = eos_mask.unsqueeze(1) * eos_mask.unsqueeze(2)
+        attentions = attentions * eos_mask[:, None, None, :, :]
+        attentions = attentions[..., :-1, :-1]
+        # remove cls token attentions
+        attentions = attentions[..., 1:, 1:]
+        batch_size, layers, heads, seqlen, _ = attentions.size()
+        attentions = attentions.view(batch_size, layers * heads, seqlen, seqlen)
+
+        # features: batch x channels x tokens x tokens (symmetric)
+        attentions = attentions.to(
+            self.regression.weight.device
+        )  # attentions always float32, may need to convert to float16
+        attentions = average_product_correct(symmetrize(attentions))
+        attentions = attentions.permute(0, 2, 3, 1)
+        return self.activation(self.regression(attentions).squeeze(3))
 
 
 class RotaryEmbedding(torch.nn.Module):
@@ -207,7 +258,18 @@ class EsmSelfAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.FloatTensor] = None,
-    ) -> Tuple[torch.Tensor]:
+        output_attentions: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Forward pass for self attention.
+        
+        Args:
+            hidden_states: Input tensor
+            attention_mask: Optional attention mask
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            Output tensor and optionally attention weights
+        """
         query_layer = self.transpose_for_scores(self.query(hidden_states)) * self.scale
         key_layer = self.transpose_for_scores(self.key(hidden_states))
         value_layer = self.transpose_for_scores(self.value(hidden_states))
@@ -215,15 +277,28 @@ class EsmSelfAttention(nn.Module):
         if self.position_embedding_type == "rotary":
             query_layer, key_layer = self.rotary_embeddings(query_layer, key_layer)
 
-        context_layer = F.scaled_dot_product_attention(
-            query_layer,
-            key_layer,
-            value_layer,
-            attn_mask=attention_mask,
-            dropout_p=self.dropout_prob,
-            scale=1.0
-        )
-        return rearrange(context_layer, 'b h s d -> b s (h d)')
+        if output_attentions:
+            # Manual attention computation to get attention weights
+            attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+            if attention_mask is not None:
+                attention_scores = attention_scores + attention_mask
+            attention_probs = F.softmax(attention_scores, dim=-1)
+            if self.dropout_prob > 0:
+                attention_probs = F.dropout(attention_probs, p=self.dropout_prob, training=self.training)
+            context_layer = torch.matmul(attention_probs, value_layer)
+            context_layer = rearrange(context_layer, 'b h s d -> b s (h d)')
+            return context_layer, attention_probs
+        else:
+            context_layer = F.scaled_dot_product_attention(
+                query_layer,
+                key_layer,
+                value_layer,
+                attn_mask=attention_mask,
+                dropout_p=self.dropout_prob,
+                scale=1.0
+            )
+            context_layer = rearrange(context_layer, 'b h s d -> b s (h d)')
+            return context_layer
         
 
 class EsmAttention(nn.Module):
@@ -235,15 +310,33 @@ class EsmAttention(nn.Module):
 
     def forward(
         self,
-        hidden_states,
-        attention_mask=None,
-    ):
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        output_attentions: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Forward pass for attention layer.
+        
+        Args:
+            hidden_states: Input tensor
+            attention_mask: Optional attention mask
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            Output tensor and optionally attention weights
+        """
         hidden_states_ln = self.LayerNorm(hidden_states)
-        attention_output = self.self(
+        self_outputs = self.self(
             hidden_states_ln,
             attention_mask,
+            output_attentions,
         )
-        return self.output(attention_output, hidden_states)
+        if output_attentions:
+            attention_output, attention_weights = self_outputs
+            attention_output = self.output(attention_output, hidden_states)
+            return attention_output, attention_weights
+        else:
+            attention_output = self_outputs
+            return self.output(attention_output, hidden_states)
 
 
 class EsmLayer(nn.Module):
@@ -258,14 +351,35 @@ class EsmLayer(nn.Module):
 
     def forward(
         self,
-        hidden_states,
-        attention_mask=None,
-    ):
-        attention_output = self.attention(
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        output_attentions: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        """Forward pass for transformer layer.
+        
+        Args:
+            hidden_states: Input tensor
+            attention_mask: Optional attention mask
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            Output tensor and optionally attention weights
+        """
+        attention_outputs = self.attention(
             hidden_states,
             attention_mask,
+            output_attentions,
         )
+        if output_attentions:
+            attention_output, attention_weights = attention_outputs
+        else:
+            attention_output = attention_outputs
+            attention_weights = None
+
         layer_output = self.feed_forward_chunk(attention_output)
+        
+        if output_attentions:
+            return layer_output, attention_weights
         return layer_output
 
     def feed_forward_chunk(self, attention_output):
@@ -285,26 +399,48 @@ class EsmEncoder(nn.Module):
 
     def forward(
         self,
-        hidden_states,
-        attention_mask=None,
-        output_hidden_states=False,
-    ):
+        hidden_states: torch.Tensor,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+    ) -> BaseModelOutputWithPastAndCrossAttentions:
+        """Forward pass for transformer encoder.
+        
+        Args:
+            hidden_states: Input tensor
+            attention_mask: Optional attention mask
+            output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            BaseModelOutputWithPastAndCrossAttentions containing model outputs
+        """
         all_hidden_states = () if output_hidden_states else None
+        all_attentions = () if output_attentions else None
+
         for layer_module in self.layer:
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
             if self.gradient_checkpointing and self.training:
-                hidden_states = self._gradient_checkpointing_func(
+                layer_outputs = self._gradient_checkpointing_func(
                     layer_module.__call__,
                     hidden_states,
                     attention_mask,
+                    output_attentions,
                 )
             else:
-                hidden_states = layer_module(
+                layer_outputs = layer_module(
                     hidden_states,
                     attention_mask,
+                    output_attentions,
                 )
+
+            if output_attentions:
+                hidden_states, attention_weights = layer_outputs
+                all_attentions = all_attentions + (attention_weights,)
+            else:
+                hidden_states = layer_outputs
 
         if self.emb_layer_norm_after:
             hidden_states = self.emb_layer_norm_after(hidden_states)
@@ -315,6 +451,7 @@ class EsmEncoder(nn.Module):
         return BaseModelOutputWithPastAndCrossAttentions(
             last_hidden_state=hidden_states,
             hidden_states=all_hidden_states,
+            attentions=all_attentions,
         )
 
 
@@ -500,11 +637,24 @@ class FastEsmModel(FastEsmPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
-        if output_attentions is not None:
-            raise ValueError("output_attentions is not supported by F.scaled_dot_product_attention")
+        """Forward pass for base model.
+        
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Optional attention mask
+            position_ids: Optional position IDs
+            inputs_embeds: Optional input embeddings
+            output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            Model outputs including hidden states and optionally attention weights
+        """
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
+
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
@@ -522,10 +672,8 @@ class FastEsmModel(FastEsmPreTrainedModel):
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
         )
-        # Prepare attention mask
+
         if attention_mask is not None:
-            # attention_mask shape should be (batch_size, 1, 1, seq_length)
-            # Expand to (batch_size, 1, seq_length, seq_length)
             extended_attention_mask = attention_mask[:, None, None, :].expand(
                 batch_size, 1, seq_length, seq_length
             ).bool()
@@ -536,6 +684,7 @@ class FastEsmModel(FastEsmPreTrainedModel):
             embedding_output,
             attention_mask=extended_attention_mask,
             output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
         )
         sequence_output = encoder_outputs.last_hidden_state
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
@@ -544,6 +693,7 @@ class FastEsmModel(FastEsmPreTrainedModel):
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
         )
 
 
@@ -593,6 +743,7 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel):
             loss=loss,
             logits=prediction_scores,
             hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
 
     def predict_contacts(self, tokens, attention_mask):
@@ -657,6 +808,7 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel):
             loss=loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
 
 
@@ -701,6 +853,7 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel):
             loss=loss,
             logits=logits,
             hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
 
 

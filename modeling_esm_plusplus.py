@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from einops import rearrange, repeat
 from huggingface_hub import snapshot_download
 from tokenizers import Tokenizer
@@ -292,15 +292,17 @@ class MultiHeadAttention(nn.Module):
         k = k.flatten(-2, -1)
         return q, k
 
-    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, output_attentions: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             x: Input tensor
             attention_mask: Optional attention mask
+            output_attentions: Whether to return attention weights
             
         Returns:
-            Output tensor after self attention
+            Output tensor after self attention, and optionally attention weights
         """
+        attn_weights = None
         qkv_BLD3 = self.layernorm_qkv(x)
         query_BLD, key_BLD, value_BLD = torch.chunk(qkv_BLD3, 3, dim=-1)
         query_BLD, key_BLD = (
@@ -309,11 +311,29 @@ class MultiHeadAttention(nn.Module):
         )
         query_BLD, key_BLD = self._apply_rotary(query_BLD, key_BLD)
         query_BHLD, key_BHLD, value_BHLD = map(self.reshaper, (query_BLD, key_BLD, value_BLD))
-        context_BHLD = F.scaled_dot_product_attention(
-            query_BHLD, key_BHLD, value_BHLD, attention_mask
-        )
+
+        if output_attentions: # Manual attention computation
+            L, S = query_BLD.size(-2), key_BLD.size(-2)
+            scale = 1 / math.sqrt(query_BLD.size(-1))
+            attn_bias = torch.zeros(L, S, dtype=query_BLD.dtype, device=query_BLD.device)
+            if attention_mask is not None:
+                if attention_mask.dtype == torch.bool:
+                    attention_mask.masked_fill_(attention_mask.logical_not(), float('-inf'))
+                else:
+                    attn_bias += attention_mask
+    
+            attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-2, -1)) * scale
+            attn_weights += attn_bias
+            attn_weights = F.softmax(attn_weights, dim=-1)
+            context_BHLD = torch.matmul(attn_weights, value_BHLD)
+        else:
+            context_BHLD = F.scaled_dot_product_attention(
+                query_BHLD, key_BHLD, value_BHLD, attention_mask
+            )
+            
         context_BLD = rearrange(context_BHLD, "b h s d -> b s (h d)")
-        return self.out_proj(context_BLD)
+        output = self.out_proj(context_BLD)
+        return output, attn_weights
 
 
 ### Regression Head
@@ -362,19 +382,23 @@ class UnifiedTransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
+        output_attentions: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             x: Input tensor
             attention_mask: Optional attention mask
+            output_attentions: Whether to return attention weights
             
         Returns:
-            Output tensor after transformer block
+            Output tensor after transformer block, and optionally attention weights
         """
-        r1 = self.attn(x, attention_mask)
-        x = x + r1 / self.scaling_factor
+        attn_output, attn_weights = self.attn(x, attention_mask, output_attentions)
+        x = x + attn_output / self.scaling_factor
         r3 = self.ffn(x) / self.scaling_factor
         x = x + r3
+        if output_attentions:
+            return x, attn_weights
         return x
 
 
@@ -384,6 +408,7 @@ class TransformerOutput(ModelOutput):
     """Output type for transformer encoder."""
     last_hidden_state: Optional[torch.Tensor] = None
     hidden_states: Optional[Tuple[torch.Tensor]] = None
+    attentions: Optional[Tuple[torch.Tensor]] = None
 
 
 @dataclass
@@ -393,6 +418,7 @@ class ESMplusplusOutput(ModelOutput):
     logits: Optional[torch.Tensor] = None
     last_hidden_state: Optional[torch.Tensor] = None
     hidden_states: Optional[Tuple[torch.Tensor]] = None
+    attentions: Optional[Tuple[torch.Tensor]] = None
 
 
 ### Transformer Stack
@@ -428,25 +454,42 @@ class TransformerStack(nn.Module):
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
+        output_attentions: bool = False,
     ) -> TransformerOutput:
         """
         Args:
             x: Input tensor
             attention_mask: Optional attention mask
             output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
             
         Returns:
-            TransformerOutput containing last hidden state and optionally all hidden states
+            TransformerOutput containing last hidden state and optionally all hidden states and attention weights
         """
         batch_size, seq_len, _ = x.shape
-        hidden_states = ()
+        hidden_states = () if output_hidden_states else None
+        attentions = () if output_attentions else None
+        
         if attention_mask is not None:
             attention_mask = attention_mask[:, None, None, :].expand(batch_size, 1, seq_len, seq_len).bool()
+            
         for block in self.blocks:
-            x = block(x, attention_mask)
+            if output_attentions:
+                x, attn_weights = block(x, attention_mask, output_attentions)
+                if attentions is not None:
+                    attentions += (attn_weights,)
+            else:
+                x = block(x, attention_mask, output_attentions)
+                
             if output_hidden_states:
+                assert hidden_states is not None
                 hidden_states += (x,)
-        return TransformerOutput(last_hidden_state=self.norm(x), hidden_states=hidden_states)
+                
+        return TransformerOutput(
+            last_hidden_state=self.norm(x), 
+            hidden_states=hidden_states,
+            attentions=attentions
+        )
 
 
 ### Dataset for Embedding
@@ -618,6 +661,7 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
+        output_attentions: bool = False,
     ) -> ESMplusplusOutput:
         """Forward pass for masked language modeling.
         
@@ -626,12 +670,13 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
             attention_mask: Attention mask
             labels: Optional labels for masked tokens
             output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
             
         Returns:
-            ESMplusplusOutput containing loss, logits, and hidden states
+            ESMplusplusOutput containing loss, logits, hidden states and attention weights
         """
         x = self.embed(input_ids)
-        output = self.transformer(x, attention_mask, output_hidden_states)
+        output = self.transformer(x, attention_mask, output_hidden_states, output_attentions)
         x = output.last_hidden_state
         logits = self.sequence_head(x)
         loss = None
@@ -642,6 +687,7 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
             logits=logits,
             last_hidden_state=x,
             hidden_states=output.hidden_states,
+            attentions=output.attentions,
         )
 
 
@@ -666,6 +712,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
         attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_hidden_states: bool = False,
+        output_attentions: bool = False,
     ) -> ESMplusplusOutput:
         """Forward pass for sequence classification.
         
@@ -674,6 +721,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
             attention_mask: Attention mask
             labels: Optional labels for classification
             output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
             
         Returns:
             ESMplusplusOutput containing loss, logits, and hidden states
