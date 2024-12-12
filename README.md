@@ -81,7 +81,7 @@ You can load the weights from the ESM package instead of transformers by replaci
 We employ linear probing techniques on various PLMs and standard datasets, similar our previous [paper](https://www.biorxiv.org/content/10.1101/2024.07.30.605924v1), to access the intrinsic correlation between pooled hidden states and valuable properties. ESMC (and thus ESM++) perform very well.
 
 The plot below showcases performance normalized between the negative control (random vector embeddings) and the best performer. Classification task scores are averaged between MCC and F1 (or F1max for multilabel) and regression tasks are averaged between Spearman rho and R2.
-![performance_heatmap](https://github.com/user-attachments/assets/26065413-8e1a-4d9b-964a-7f843cf875d2)
+![performance_heatmap](https://github.com/user-attachments/assets/9e9f1517-8a47-489e-8f9e-5ce92e249dee)
 
 
 ## Inference speeds
