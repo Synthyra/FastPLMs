@@ -48,6 +48,7 @@ class ESMplusplusConfig(PretrainedConfig):
         num_hidden_layers: int = 30,
         num_labels: int = 2,
         problem_type: str | None = None,
+        dropout: float = 0.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -57,6 +58,7 @@ class ESMplusplusConfig(PretrainedConfig):
         self.num_hidden_layers = num_hidden_layers
         self.num_labels = num_labels
         self.problem_type = problem_type
+        self.dropout = dropout
 
 
 ### Rotary Embeddings
@@ -603,6 +605,12 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
                     embeddings_dict[seq] = emb
                     
         return embeddings_dict
+
+    """
+    TODO
+     - Add dropout (default 0.0)
+     - Class method for returning manually computed attention maps     
+    """
 
     def forward(
         self,
