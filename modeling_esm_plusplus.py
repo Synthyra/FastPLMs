@@ -714,8 +714,8 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
         attention_mask: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = False,
-        output_hidden_states: Optional[bool] = False,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> ESMplusplusOutput:
         """Forward pass for sequence classification.
