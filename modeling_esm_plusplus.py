@@ -249,7 +249,7 @@ class SwiGLU(nn.Module):
         return F.silu(x1) * x2
 
 
-def swiglu_ln_ffn(d_model: int, expansion_ratio: float) -> nn.Sequential:
+def swiglu_ln_ffn(d_model: int, expansion_ratio: float, dropout: float = 0.0) -> nn.Sequential:
     """Create SwiGLU feedforward network with layer normalization."""
     return nn.Sequential(
         nn.LayerNorm(d_model),
@@ -257,6 +257,7 @@ def swiglu_ln_ffn(d_model: int, expansion_ratio: float) -> nn.Sequential:
             d_model, swiglu_correction_fn(expansion_ratio, d_model) * 2, bias=False
         ),
         SwiGLU(),
+        nn.Dropout(dropout),
         nn.Linear(swiglu_correction_fn(expansion_ratio, d_model), d_model, bias=False),
     )
 
@@ -372,10 +373,11 @@ class UnifiedTransformerBlock(nn.Module):
         n_heads: int,
         residue_scaling_factor: float = 1,
         expansion_ratio: float = 8 / 3,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.attn = MultiHeadAttention(d_model, n_heads)
-        self.ffn = swiglu_ln_ffn(d_model, expansion_ratio)
+        self.ffn = swiglu_ln_ffn(d_model, expansion_ratio, dropout)
         self.scaling_factor = residue_scaling_factor
 
     def forward(
@@ -435,6 +437,7 @@ class TransformerStack(nn.Module):
         d_model: int,
         n_heads: int,
         n_layers: int,
+        dropout: float = 0.0,
     ):
         super().__init__()
         self.blocks = nn.ModuleList(
@@ -443,6 +446,7 @@ class TransformerStack(nn.Module):
                     d_model,
                     n_heads,
                     residue_scaling_factor=math.sqrt(n_layers / 36),
+                    dropout=dropout,
                 )
                 for i in range(n_layers)
             ]
@@ -517,7 +521,7 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
         self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
-        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers)
+        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers, config.dropout)
         self.sequence_head = RegressionHead(config.hidden_size, self.vocab_size)
         self.ce_loss = nn.CrossEntropyLoss()
         self.tokenizer = EsmSequenceTokenizer()
@@ -649,12 +653,6 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
                     
         return embeddings_dict
 
-    """
-    TODO
-     - Add dropout (default 0.0)
-     - Class method for returning manually computed attention maps     
-    """
-
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -663,13 +661,14 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
     ) -> ESMplusplusOutput:
         """Forward pass for masked language modeling.
         
         Args:
             input_ids: Input token IDs
             attention_mask: Attention mask
+            inputs_embeds: Optional precomputed embeddings
             labels: Optional labels for masked tokens
             output_hidden_states: Whether to return all hidden states
             output_attentions: Whether to return attention weights
@@ -677,7 +676,10 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
         Returns:
             ESMplusplusOutput containing loss, logits, hidden states and attention weights
         """
-        x = self.embed(input_ids)
+        if inputs_embeds is None:
+            x = self.embed(input_ids)
+        else:
+            x = inputs_embeds
         output = self.transformer(x, attention_mask, output_hidden_states, output_attentions)
         x = output.last_hidden_state
         logits = self.sequence_head(x)
@@ -716,13 +718,14 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
     ) -> ESMplusplusOutput:
         """Forward pass for sequence classification.
         
         Args:
             input_ids: Input token IDs
             attention_mask: Attention mask
+            inputs_embeds: Optional precomputed embeddings
             labels: Optional labels for classification
             output_hidden_states: Whether to return all hidden states
             output_attentions: Whether to return attention weights
@@ -733,7 +736,9 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
         output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
             labels=None,
+            output_attentions=output_attentions,
             output_hidden_states=output_hidden_states
         )
         x = output.last_hidden_state
@@ -787,16 +792,21 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
-        output_hidden_states: bool = False,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
     ) -> ESMplusplusOutput:
         """Forward pass for token classification.
         
         Args:
             input_ids: Input token IDs
             attention_mask: Attention mask
+            inputs_embeds: Optional precomputed embeddings
             labels: Optional labels for token classification
             output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
             
         Returns:
             ESMplusplusOutput containing loss, logits, and hidden states
@@ -804,7 +814,9 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
         output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
             labels=None,
+            output_attentions=output_attentions,
             output_hidden_states=output_hidden_states
         )
         x = output.last_hidden_state

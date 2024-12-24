@@ -630,12 +630,13 @@ class FastEsmModel(FastEsmPreTrainedModel):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
+        input_ids: Optional[torch.LongTensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        output_hidden_states: Optional[bool] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
         output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
         """Forward pass for base model.
         
@@ -722,6 +723,7 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel):
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
     ) -> Union[Tuple, MaskedLMOutput]:
         outputs = self.esm(
             input_ids,
