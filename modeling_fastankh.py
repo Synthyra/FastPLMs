@@ -11,6 +11,14 @@ from functools import partial
 from typing import Optional, Tuple
 
 
+"""
+WORK IN PROGRESS
+Attempting to port over ANKH models to more efficient implmentations as BERT-like models
+Will likely be required to train more to orient new layer norms, unlink token embedding and lm head, integrate rotary embeddings, etc.
+"""
+
+
+
 class NewGELUActivation(nn.Module):
     """
     Implementation of the GELU activation function as used in Google's BERT and OpenAI GPT.
