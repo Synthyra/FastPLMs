@@ -659,9 +659,11 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
-        output_hidden_states: bool = False,
-        output_attentions: bool = False,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
     ) -> ESMplusplusOutput:
         """Forward pass for masked language modeling.
         
@@ -710,9 +712,11 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
-        output_hidden_states: bool = False,
-        output_attentions: bool = False,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
     ) -> ESMplusplusOutput:
         """Forward pass for sequence classification.
         
