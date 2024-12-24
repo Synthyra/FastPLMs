@@ -249,7 +249,7 @@ class SwiGLU(nn.Module):
         return F.silu(x1) * x2
 
 
-def swiglu_ln_ffn(d_model: int, expansion_ratio: float, dropout: float = 0.0) -> nn.Sequential:
+def swiglu_ln_ffn(d_model: int, expansion_ratio: float) -> nn.Sequential:
     """Create SwiGLU feedforward network with layer normalization."""
     return nn.Sequential(
         nn.LayerNorm(d_model),
@@ -257,7 +257,6 @@ def swiglu_ln_ffn(d_model: int, expansion_ratio: float, dropout: float = 0.0) ->
             d_model, swiglu_correction_fn(expansion_ratio, d_model) * 2, bias=False
         ),
         SwiGLU(),
-        nn.Dropout(dropout),
         nn.Linear(swiglu_correction_fn(expansion_ratio, d_model), d_model, bias=False),
     )
 
@@ -377,8 +376,9 @@ class UnifiedTransformerBlock(nn.Module):
     ):
         super().__init__()
         self.attn = MultiHeadAttention(d_model, n_heads)
-        self.ffn = swiglu_ln_ffn(d_model, expansion_ratio, dropout)
+        self.ffn = swiglu_ln_ffn(d_model, expansion_ratio)
         self.scaling_factor = residue_scaling_factor
+        self.dropout = nn.Dropout(dropout)
 
     def forward(
         self,
@@ -396,9 +396,8 @@ class UnifiedTransformerBlock(nn.Module):
             Output tensor after transformer block, and optionally attention weights
         """
         attn_output, attn_weights = self.attn(x, attention_mask, output_attentions)
-        x = x + attn_output / self.scaling_factor
-        r3 = self.ffn(x) / self.scaling_factor
-        x = x + r3
+        x = x + self.dropout(attn_output) / self.scaling_factor
+        x = x + self.dropout(self.ffn(x)) / self.scaling_factor
         if output_attentions:
             return x, attn_weights
         return x
@@ -431,6 +430,7 @@ class TransformerStack(nn.Module):
         d_model: Model dimension
         n_heads: Number of attention heads
         n_layers: Number of transformer layers
+        dropout: Dropout rate
     """
     def __init__(
         self,
