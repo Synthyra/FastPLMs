@@ -49,6 +49,7 @@ class ESMplusplusConfig(PretrainedConfig):
         num_labels: int = 2,
         problem_type: str | None = None,
         dropout: float = 0.0,
+        initializer_range: float = 0.02,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -59,6 +60,7 @@ class ESMplusplusConfig(PretrainedConfig):
         self.num_labels = num_labels
         self.problem_type = problem_type
         self.dropout = dropout
+        self.initializer_range = initializer_range
 
 
 ### Rotary Embeddings
@@ -398,9 +400,7 @@ class UnifiedTransformerBlock(nn.Module):
         attn_output, attn_weights = self.attn(x, attention_mask, output_attentions)
         x = x + self.dropout(attn_output) / self.scaling_factor
         x = x + self.dropout(self.ffn(x)) / self.scaling_factor
-        if output_attentions:
-            return x, attn_weights
-        return x
+        return x, attn_weights
 
 
 ### Model Outputs
@@ -452,6 +452,7 @@ class TransformerStack(nn.Module):
             ]
         )
         self.norm = nn.LayerNorm(d_model, bias=False)
+        self.gradient_checkpointing = False
 
     def forward(
         self,
@@ -478,12 +479,18 @@ class TransformerStack(nn.Module):
             attention_mask = attention_mask[:, None, None, :].expand(batch_size, 1, seq_len, seq_len).bool()
             
         for block in self.blocks:
-            if output_attentions:
-                x, attn_weights = block(x, attention_mask, output_attentions)
-                if attentions is not None:
-                    attentions += (attn_weights,)
+            if self.gradient_checkpointing and self.training:
+                x, attn_weights = self._gradient_checkpointing_func(
+                    block.__call__,
+                    x,
+                    attention_mask,
+                    output_attentions,
+                )
             else:
-                x = block(x, attention_mask, output_attentions)
+                x, attn_weights = block(x, attention_mask, output_attentions)
+
+            if attentions is not None:
+                attentions += (attn_weights,)
                 
             if output_hidden_states:
                 assert hidden_states is not None
@@ -509,25 +516,30 @@ class ProteinDataset(Dataset):
         return self.sequences[idx]
 
 
-### ESM++ Models
-class ESMplusplusForMaskedLM(PreTrainedModel):
-    """ESM++ model for masked language modeling.
-    
-    Implements the base ESM++ architecture with a masked language modeling head.
+class PreTrainedESMplusplusModel(PreTrainedModel):
+    """
+    init weights for ESM++ models
     """
     config_class = ESMplusplusConfig
-    def __init__(self, config: ESMplusplusConfig, **kwargs):
-        super().__init__(config, **kwargs)
-        self.config = config
-        self.vocab_size = config.vocab_size
-        self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
-        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers, config.dropout)
-        self.sequence_head = RegressionHead(config.hidden_size, self.vocab_size)
-        self.ce_loss = nn.CrossEntropyLoss()
-        self.tokenizer = EsmSequenceTokenizer()
+    base_model_prefix = "esm++"
+    supports_gradient_checkpointing = True
+
+    def _init_weights(self, module):
+        """Initialize the weights"""
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, nn.LayerNorm):
+            module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
 
     @classmethod
-    def from_pretrained_esm(cls, model_name: str) -> "ESMplusplusForMaskedLM":
+    def from_pretrained_esm(cls, model_name: str):
         """Load a pretrained ESM++ model."""
         if '300' in model_name:
             return ESMplusplus_300M()
@@ -548,6 +560,26 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
         else:
             attention_mask = attention_mask.unsqueeze(-1)
             return (x * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
+        
+    def max_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Apply max pooling to sequence outputs."""
+        if attention_mask is None:
+            return x.max(dim=1).values
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (x * attention_mask).max(dim=1).values
+
+    def min_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Apply min pooling to sequence outputs."""
+        if attention_mask is None:
+            return x.min(dim=1).values
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (x * attention_mask).min(dim=1).values
+        
+    def cls_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Apply cls pooling to sequence outputs."""
+        return x[:, 0, :]
 
     def _collate_fn(self, sequences: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
         """Collate function for batching sequences."""
@@ -606,8 +638,14 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
                 return residue_embeddings
             elif pooling_type == 'mean':
                 return self.mean_pooling(residue_embeddings, attention_mask)
+            elif pooling_type == 'max':
+                return self.max_pooling(residue_embeddings, attention_mask)
+            elif pooling_type == 'min':
+                return self.min_pooling(residue_embeddings, attention_mask)
+            elif pooling_type == 'cls':
+                return self.cls_pooling(residue_embeddings, attention_mask)
             else:
-                return residue_embeddings[:, 0, :]
+                raise ValueError(f"Invalid pooling type: {pooling_type}")
 
         if sql:
             import sqlite3
@@ -653,6 +691,67 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
                     
         return embeddings_dict
 
+
+### ESM++ Models
+class ESMplusplusModel(PreTrainedESMplusplusModel):
+    """
+    ESM++ model. transformer model with no heads
+    """
+    config_class = ESMplusplusConfig
+    def __init__(self, config: ESMplusplusConfig, **kwargs):
+        super().__init__(config, **kwargs)
+        self.config = config
+        self.vocab_size = config.vocab_size
+        self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
+        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers, config.dropout)
+        self.tokenizer = EsmSequenceTokenizer()
+        self.init_weights()
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+    ) -> TransformerOutput:
+        """Forward pass for masked language modeling.
+        
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Attention mask
+            inputs_embeds: Optional precomputed embeddings
+            output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            TransformerOutput containing last hidden state and optionally all hidden states and attention weights
+        """
+        if inputs_embeds is None:
+            x = self.embed(input_ids)
+        else:
+            x = inputs_embeds
+        return self.transformer(x, attention_mask, output_hidden_states, output_attentions)
+        
+
+class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel):
+    """
+    ESM++ model for masked language modeling.
+    Implements the base ESM++ architecture with a masked language modeling head.
+    """
+    config_class = ESMplusplusConfig
+    def __init__(self, config: ESMplusplusConfig, **kwargs):
+        super().__init__(config, **kwargs)
+        self.config = config
+        self.vocab_size = config.vocab_size
+        self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
+        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers, config.dropout)
+        self.sequence_head = RegressionHead(config.hidden_size, self.vocab_size)
+        self.ce_loss = nn.CrossEntropyLoss()
+        self.tokenizer = EsmSequenceTokenizer()
+        self.init_weights()
+
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -696,8 +795,8 @@ class ESMplusplusForMaskedLM(PreTrainedModel):
 
 
 class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
-    """ESM++ model for sequence classification.
-    
+    """
+    ESM++ model for sequence classification.
     Extends the base ESM++ model with a classification head.
     """
     def __init__(self, config: ESMplusplusConfig, **kwargs):
@@ -709,6 +808,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
+        self.init_weights()
 
     def forward(
         self,
@@ -776,8 +876,8 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM):
 
 
 class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
-    """ESM++ model for token classification.
-    
+    """
+    ESM++ model for token classification.
     Extends the base ESM++ model with a token classification head.
     """
     def __init__(self, config: ESMplusplusConfig):
@@ -787,6 +887,7 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM):
         self.classifier = RegressionHead(config.hidden_size, config.num_labels, config.hidden_size * 4)
         # Large intermediate projections help with sequence classification tasks (*4)
         self.loss_fct = nn.CrossEntropyLoss()
+        self.init_weights()
 
     def forward(
         self,
