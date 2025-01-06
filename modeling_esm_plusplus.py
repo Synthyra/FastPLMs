@@ -339,9 +339,7 @@ class MultiHeadAttention(nn.Module):
 
 
 ### Regression Head
-def RegressionHead(
-    d_model: int, output_dim: int, hidden_dim: Optional[int] = None
-) -> nn.Module:
+def RegressionHead(d_model: int, output_dim: int, hidden_dim: Optional[int] = None) -> nn.Module:
     """Create a regression head with optional hidden dimension.
     
     Args:
@@ -707,6 +705,12 @@ class ESMplusplusModel(PreTrainedESMplusplusModel):
         self.tokenizer = EsmSequenceTokenizer()
         self.init_weights()
 
+    def get_input_embeddings(self):
+        return self.embed
+
+    def set_input_embeddings(self, value):
+        self.embed = value
+
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -751,6 +755,18 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel):
         self.ce_loss = nn.CrossEntropyLoss()
         self.tokenizer = EsmSequenceTokenizer()
         self.init_weights()
+
+    def get_input_embeddings(self):
+        return self.embed
+
+    def set_input_embeddings(self, value):
+        self.embed = value
+
+    def get_output_embeddings(self):
+        return self.sequence_head[-1]
+
+    def set_output_embeddings(self, new_embeddings):
+        self.sequence_head[-1] = new_embeddings
 
     def forward(
         self,
