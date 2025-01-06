@@ -567,14 +567,6 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
             attention_mask = attention_mask.unsqueeze(-1)
             return (x * attention_mask).max(dim=1).values
 
-    def min_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Apply min pooling to sequence outputs."""
-        if attention_mask is None:
-            return x.min(dim=1).values
-        else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (x * attention_mask).min(dim=1).values
-        
     def cls_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """Apply cls pooling to sequence outputs."""
         return x[:, 0, :]
@@ -638,8 +630,6 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
                 return self.mean_pooling(residue_embeddings, attention_mask)
             elif pooling_type == 'max':
                 return self.max_pooling(residue_embeddings, attention_mask)
-            elif pooling_type == 'min':
-                return self.min_pooling(residue_embeddings, attention_mask)
             elif pooling_type == 'cls':
                 return self.cls_pooling(residue_embeddings, attention_mask)
             else:
