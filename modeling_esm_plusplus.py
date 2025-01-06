@@ -633,7 +633,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
 
         def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
             if full_embeddings:
-                return residue_embeddings
+                return residue_embeddings, attention_mask
             elif pooling_type == 'mean':
                 return self.mean_pooling(residue_embeddings, attention_mask)
             elif pooling_type == 'max':
