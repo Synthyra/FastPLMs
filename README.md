@@ -4,7 +4,7 @@
 
 ## Use with 🤗 transformers
 ```python
-from transformers import AutoModelForMaskedLM #AutoModel also works
+from transformers import AutoModelForMaskedLM
 model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_small', trust_remote_code=True)
 tokenizer = model.tokenizer
 
@@ -103,6 +103,3 @@ If you use any of this implementation or work please cite it (as well as the ESM
 	publisher    = { Hugging Face }
 }
 ```
-
-### Note on the name
-The original thought was ESMC++ but anything with C would technically go against the ESM license agreement - so ESM++. Open to suggestions!
