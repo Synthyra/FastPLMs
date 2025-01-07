@@ -625,7 +625,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
 
         def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
             if full_embeddings:
-                return residue_embeddings, attention_mask
+                return residue_embeddings
             elif pooling_type == 'mean':
                 return self.mean_pooling(residue_embeddings, attention_mask)
             elif pooling_type == 'max':
@@ -653,7 +653,9 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
                         residue_embeddings = self.transformer(x, attention_mask).last_hidden_state.detach().float() # required for sql
                         embeddings = get_embeddings(residue_embeddings, attention_mask)
 
-                        for seq, emb in zip(seqs, embeddings):
+                        for seq, emb, mask in zip(seqs, embeddings, attention_mask):
+                            if full_embeddings:
+                                emb = emb[mask.bool()]
                             c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
                                     (seq, emb.cpu().numpy().tobytes()))
                         
