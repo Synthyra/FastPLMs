@@ -647,7 +647,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
             if len(to_embed) > 0:
                 with torch.no_grad():
                     for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
-                        seqs = sequences[i * batch_size:(i + 1) * batch_size]
+                        seqs = to_embed[i * batch_size:(i + 1) * batch_size]
                         input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
                         x = self.embed(input_ids)
                         residue_embeddings = self.transformer(x, attention_mask).last_hidden_state.detach().float() # required for sql
@@ -665,7 +665,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
                 conn.commit()
             conn.close()
             return None
-            
+
         embeddings_dict = {}
         with torch.no_grad():
             for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
