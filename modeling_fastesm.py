@@ -612,12 +612,95 @@ class FastEsmPreTrainedModel(PreTrainedModel):
                     
         return embeddings_dict
 
-class FastEsmModel(FastEsmPreTrainedModel):
+
+class FAST_ESM_ENCODER(FastEsmPreTrainedModel):
     def __init__(self, config, add_pooling_layer=True):
         super().__init__(config)
         self.config = config
         self.embeddings = EsmEmbeddings(config)
         self.encoder = EsmEncoder(config)
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.embeddings.word_embeddings = value
+
+    def forward(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+    ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
+        """Forward pass for base model.
+        
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Optional attention mask
+            position_ids: Optional position IDs
+            inputs_embeds: Optional input embeddings
+            output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            Model outputs including hidden states and optionally attention weights
+        """
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = (
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+        )
+
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        elif input_ids is not None:
+            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
+            input_shape = input_ids.size()
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+        else:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+        batch_size, seq_length = input_shape
+        embedding_output = self.embeddings(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+        )
+
+        if attention_mask is not None:
+            extended_attention_mask = attention_mask[:, None, None, :].expand(
+                batch_size, 1, seq_length, seq_length
+            ).bool()
+        else:
+            extended_attention_mask = None
+
+        encoder_outputs = self.encoder(
+            embedding_output,
+            attention_mask=extended_attention_mask,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+        )
+        sequence_output = encoder_outputs.last_hidden_state
+
+        return BaseModelOutputWithPoolingAndCrossAttentions(
+            last_hidden_state=sequence_output,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+        )
+
+
+class FastEsmModel(FastEsmPreTrainedModel):
+    def __init__(self, config, add_pooling_layer=True):
+        super().__init__(config)
+        self.config = config
+        self.esm = FAST_ESM_ENCODER(config)
         self.pooler = EsmPooler(config) if add_pooling_layer else None
         # Initialize weights and apply final processing
         self.post_init()
@@ -703,7 +786,7 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel):
 
     def __init__(self, config):
         super().__init__(config)
-        self.esm = FastEsmModel(config, add_pooling_layer=False)
+        self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.lm_head = EsmLMHead(config)
         self.loss_fct = nn.CrossEntropyLoss()
         self.init_weights()
@@ -757,7 +840,7 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.config = config
-        self.esm = FastEsmModel(config, add_pooling_layer=False)
+        self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.classifier = EsmClassificationHead(config)
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
@@ -818,7 +901,7 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
-        self.esm = FastEsmModel(config, add_pooling_layer=False)
+        self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.loss_fct = nn.CrossEntropyLoss()
