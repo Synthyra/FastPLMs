@@ -749,35 +749,22 @@ class FastEsmModel(FastEsmPreTrainedModel):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
-        batch_size, seq_length = input_shape
-        embedding_output = self.embeddings(
-            input_ids=input_ids,
-            position_ids=position_ids,
+        outputs = self.esm(
+            input_ids,
             attention_mask=attention_mask,
+            position_ids=position_ids,
             inputs_embeds=inputs_embeds,
-        )
-
-        if attention_mask is not None:
-            extended_attention_mask = attention_mask[:, None, None, :].expand(
-                batch_size, 1, seq_length, seq_length
-            ).bool()
-        else:
-            extended_attention_mask = None
-
-        encoder_outputs = self.encoder(
-            embedding_output,
-            attention_mask=extended_attention_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
         )
-        sequence_output = encoder_outputs.last_hidden_state
+        sequence_output = outputs.last_hidden_state
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
-            hidden_states=encoder_outputs.hidden_states,
-            attentions=encoder_outputs.attentions,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
 
 
