@@ -619,9 +619,6 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
             Dictionary mapping sequences to embeddings, or None if sql=True
         """
         sequences = list(set([seq[:max_len] for seq in sequences]))
-        sequences = sorted(sequences, key=len, reverse=True)
-        dataset = ProteinDataset(sequences)
-        dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn, shuffle=False)
         device = self.device
 
         def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -636,6 +633,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
             else:
                 raise ValueError(f"Invalid pooling type: {pooling_type}")
 
+        sequences = list(set([seq[:max_len] for seq in sequences]))
         if sql:
             import sqlite3
             conn = sqlite3.connect(sql_db_path)
@@ -646,6 +644,9 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
             print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
             print(f"Embedding {len(to_embed)} new sequences")
             if len(to_embed) > 0:
+                to_embed = sorted(to_embed, key=len, reverse=True)
+                dataset = ProteinDataset(to_embed)
+                dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn, shuffle=False)
                 with torch.no_grad():
                     for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
                         seqs = to_embed[i * batch_size:(i + 1) * batch_size]
@@ -668,6 +669,9 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
             return None
 
         embeddings_dict = {}
+        sequences = sorted(sequences, key=len, reverse=True)
+        dataset = ProteinDataset(sequences)
+        dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn, shuffle=False)
         with torch.no_grad():
             for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
                 seqs = sequences[i * batch_size:(i + 1) * batch_size]
