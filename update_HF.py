@@ -20,7 +20,7 @@ esm_plusplus_models = [
 api = HfApi()
 
 for path in fast_esm_models:
-    print(path)
+    print(path.lower())
     api.upload_file(
         path_or_fileobj="modeling_fastesm.py",
         path_in_repo="modeling_fastesm.py",
@@ -34,7 +34,8 @@ for path in fast_esm_models:
             repo_id=path,
             repo_type="model",
         )
-    elif 'fastesm' in path.lower():
+
+    if 'fastesm' in path.lower():
         api.upload_file(
             path_or_fileobj="readmes/fastesm_650_readme.md",
             path_in_repo="README.md",
@@ -58,7 +59,8 @@ for path in esm_plusplus_models:
             repo_id=path,
             repo_type="model",
         )
-    elif path == 'Synthyra/ESMplusplus_large':
+    
+    if path == 'Synthyra/ESMplusplus_large':
         api.upload_file(
             path_or_fileobj="readmes/esm_plusplus_large_readme.md",
             path_in_repo="README.md",

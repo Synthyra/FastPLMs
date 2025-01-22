@@ -621,7 +621,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
         sequences = list(set([seq[:max_len] for seq in sequences]))
         sequences = sorted(sequences, key=len, reverse=True)
         dataset = ProteinDataset(sequences)
-        dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn)
+        dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn, shuffle=False)
         device = self.device
 
         def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
