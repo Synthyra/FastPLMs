@@ -847,6 +847,7 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel):
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None
     ) -> Union[Tuple, SequenceClassifierOutput]:
         outputs = self.esm(
             input_ids,
@@ -907,6 +908,7 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel):
         labels: Optional[torch.LongTensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None
     ) -> Union[Tuple, TokenClassifierOutput]:
         outputs = self.esm(
             input_ids,
