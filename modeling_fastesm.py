@@ -4,9 +4,10 @@ from torch.nn import functional as F
 from torch.utils.data import Dataset, DataLoader
 from typing import Optional, Tuple, Union
 from einops import rearrange
+from dataclasses import dataclass
 from transformers import PreTrainedModel, PretrainedConfig, EsmTokenizer
 from transformers.modeling_outputs import (
-    MaskedLMOutput,
+    ModelOutput,
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
     SequenceClassifierOutput,
@@ -21,6 +22,15 @@ from transformers.models.esm.modeling_esm import (
     EsmClassificationHead,
 )
 from tqdm.auto import tqdm
+
+
+@dataclass
+class EsmMaskedLMOutput(ModelOutput):
+    loss: Optional[torch.FloatTensor] = None
+    logits: Optional[torch.FloatTensor] = None
+    last_hidden_state: Optional[torch.FloatTensor] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
 
 
 class FastEsmConfig(PretrainedConfig):
@@ -794,7 +804,7 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
-    ) -> Union[Tuple, MaskedLMOutput]:
+    ) -> Union[Tuple, EsmMaskedLMOutput]:
         outputs = self.esm(
             input_ids,
             attention_mask=attention_mask,
@@ -811,7 +821,7 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel):
             labels = labels.to(prediction_scores.device)
             loss = self.loss_fct(prediction_scores.view(-1, self.config.vocab_size), labels.view(-1))
 
-        return MaskedLMOutput(
+        return EsmMaskedLMOutput(
             loss=loss,
             logits=prediction_scores,
             hidden_states=outputs.hidden_states,
