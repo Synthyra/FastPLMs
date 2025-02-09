@@ -824,6 +824,7 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel):
         return EsmMaskedLMOutput(
             loss=loss,
             logits=prediction_scores,
+            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
