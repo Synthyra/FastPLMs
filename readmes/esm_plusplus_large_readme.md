@@ -69,6 +69,31 @@ _ = model.embed_dataset(
 )
 ```
 
+## Fine-tuning with 🤗 peft
+```python
+model = AutoModelForSequenceClassification.from_pretrained('Synthyra/ESMplusplus_large', num_labels=2, trust_remote_code=True)
+# these modules handle ESM++ and ESM2 attention layers
+target_modules = ["layernorm_qkv.1", "out_proj", "query", "key", "value", "dense"]
+
+lora_config = LoraConfig(
+    r=8, # choose lora parameters to your liking
+    lora_alpha=16,
+    lora_dropout=0.01,
+    bias="none",
+    target_modules=target_modules,
+)
+
+# Apply LoRA to the model
+model = get_peft_model(model, lora_config)
+
+# Unfreeze the classifier head
+for param in model.classifier.parameters():
+    param.requires_grad = True
+```
+
+For a more thourough example of fine-tuning, check out our example script [here](https://github.com/Synthyra/FastPLMs/blob/main/fine_tuning_example.py).
+
+
 ## Returning attention maps
 Usually F.scaled_dot_product_attention is used for the attention calculations, which is much faster than native PyTorch. However, it cannot return attention maps.
 ESM++ has the option to ```output_attentions```, which will calculate attention manually. This is much slower, so do not use unless you need the attention maps.
