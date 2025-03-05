@@ -12,8 +12,6 @@ from typing import Optional, Tuple, Union
 from transformers.pytorch_utils import find_pruneable_heads_and_indices, prune_linear_layer
 from torch.nn.attention.flex_attention import flex_attention
 import math
-import platform
-import os
 
 
 class T5FlexAttentionMixin:
@@ -24,20 +22,16 @@ class T5FlexAttentionMixin:
     preserving the position bias mechanism that T5 uses.
     """
     
-    def __init__(self, compile_flex=None, kernel_options=None, scaling=None, softcap=None):
+    def __init__(self, compile_flex=True, kernel_options=None, scaling=None, softcap=None):
         """
         Initialize the T5FlexAttentionMixin.
         
         Args:
             compile_flex: Whether to compile the flex attention function.
-                          Defaults to False on Windows, True otherwise.
             kernel_options: Optional kernel options for flex attention.
             scaling: Optional scaling factor for attention scores.
             softcap: Optional softcap value for attention scores.
         """
-        # Default compile_flex to False on Windows systems to avoid compiler issues
-        if compile_flex is None:
-            compile_flex = False if platform.system() == "Windows" else True
         
         self.flex_attention_fn = torch.compile(flex_attention) if compile_flex else flex_attention
         
@@ -145,7 +139,7 @@ class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
     This is a drop-in replacement for T5Attention.
     """
     
-    def __init__(self, config, has_relative_attention_bias=False, layer_idx=None, compile_flex=None):
+    def __init__(self, config, has_relative_attention_bias=False, layer_idx=None, compile_flex=True):
         """
         Initialize the T5FlexAttention module.
         
@@ -153,8 +147,7 @@ class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
             config: T5 config object
             has_relative_attention_bias: Whether to use relative attention bias
             layer_idx: Layer index
-            compile_flex: Whether to compile the flex attention function.
-                          Defaults to False on Windows, True otherwise.
+            compile_flex: Whether to compile the flex attention function
         """
         nn.Module.__init__(self)
         T5FlexAttentionMixin.__init__(
@@ -384,14 +377,12 @@ class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
         return outputs
 
 
-def replace_t5_attention_with_flex(model, compile_flex=None):
+def replace_t5_attention_with_flex(model):
     """
     Replace all T5Attention modules in a T5 model with T5FlexAttention.
     
     Args:
         model: A T5 model instance
-        compile_flex: Whether to compile the flex attention function.
-                      Defaults to False on Windows, True otherwise.
         
     Returns:
         The modified model with flex attention
@@ -405,8 +396,7 @@ def replace_t5_attention_with_flex(model, compile_flex=None):
             flex_attn = T5FlexAttention(
                 config=model.config,
                 has_relative_attention_bias=module.has_relative_attention_bias,
-                layer_idx=module.layer_idx,
-                compile_flex=compile_flex
+                layer_idx=module.layer_idx
             )
             
             # Copy weights
@@ -422,21 +412,19 @@ def replace_t5_attention_with_flex(model, compile_flex=None):
             setattr(model, name, flex_attn)
         else:
             # Recursively process child modules
-            replace_t5_attention_with_flex(module, compile_flex)
+            replace_t5_attention_with_flex(module)
     
     return model
+
 
 
 if __name__ == "__main__":
     # py -m wip.t5.t5_flex_attention
     from transformers import T5Config
-    import torch
 
     config = T5Config()
 
-    # Explicitly disable compilation on Windows to avoid compiler errors
-    compile_flex = False if platform.system() == "Windows" else True
-    attention_layer = T5FlexAttention(config=config, has_relative_attention_bias=True, layer_idx=0, compile_flex=compile_flex)
+    attention_layer = T5FlexAttention(config=config, has_relative_attention_bias=True, layer_idx=0)
     hidden_states = torch.randn(1, 10, config.d_model)
 
     output = attention_layer(hidden_states)
