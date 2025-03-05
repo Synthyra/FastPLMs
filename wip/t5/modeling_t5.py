@@ -2300,7 +2300,7 @@ __all__ = [
 
 
 if __name__ == '__main__':
-    # py -m wip.t5.t5_encoder
+    # py -m wip.t5.modeling_t5
     model_path = 'Synthyra/ANKH_base'
     model = T5EncoderModel.from_pretrained(model_path)
     random_input = torch.rand(1, 256, model.config.d_model)

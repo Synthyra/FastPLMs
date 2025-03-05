@@ -11,6 +11,9 @@ import torch.nn as nn
 from typing import Optional, Tuple, Union
 from transformers.pytorch_utils import find_pruneable_heads_and_indices, prune_linear_layer
 from torch.nn.attention.flex_attention import flex_attention
+import math
+import platform
+import os
 
 
 class T5FlexAttentionMixin:
@@ -21,14 +24,20 @@ class T5FlexAttentionMixin:
     preserving the position bias mechanism that T5 uses.
     """
     
-    def __init__(self, compile_flex=True, kernel_options=None):
+    def __init__(self, compile_flex=None, kernel_options=None, scaling=None, softcap=None):
         """
         Initialize the T5FlexAttentionMixin.
         
         Args:
             compile_flex: Whether to compile the flex attention function.
+                          Defaults to False on Windows, True otherwise.
             kernel_options: Optional kernel options for flex attention.
+            scaling: Optional scaling factor for attention scores.
+            softcap: Optional softcap value for attention scores.
         """
+        # Default compile_flex to False on Windows systems to avoid compiler issues
+        if compile_flex is None:
+            compile_flex = False if platform.system() == "Windows" else True
         
         self.flex_attention_fn = torch.compile(flex_attention) if compile_flex else flex_attention
         
@@ -41,6 +50,10 @@ class T5FlexAttentionMixin:
             "BLOCK_M2": 32,
             "BLOCK_N2": 16,
         }
+        
+        # Store scaling and softcap parameters
+        self.scaling = scaling
+        self.softcap = softcap
         
     def _apply_flex_attention(self, query_states, key_states, value_states, position_bias, mask=None, layer_head_mask=None):
         """
@@ -55,59 +68,104 @@ class T5FlexAttentionMixin:
             layer_head_mask: Optional head mask
             
         Returns:
-            Attention output tensor
+            Attention output tensor and attention weights
         """
         batch_size = query_states.shape[0]
         
-        # Create score_mod function to apply position bias
+        # Prepare mask if provided
+        causal_mask = None
+        if mask is not None:
+            causal_mask = mask[:, :, :, : key_states.shape[-2]]
+        
+        # Create score_mod function to apply position bias, mask, and head mask
         def score_mod(score, b, h, q_idx, kv_idx):
+            # Start with the score
+            modified_score = score
+            
+            # Apply softcap if provided
+            if self.softcap is not None:
+                modified_score = self.softcap * torch.tanh(modified_score / self.softcap)
+            
             # Apply position bias
-            bias = position_bias[0, h, q_idx, kv_idx]
+            modified_score = modified_score + position_bias[0, h, q_idx, kv_idx]
             
             # Apply mask if provided
-            if mask is not None:
+            if causal_mask is not None:
                 # Extract the appropriate mask value
-                # Assuming mask is [batch_size, 1, seq_length, key_length] or [batch_size, 1, 1, key_length]
-                mask_value = mask[b, 0, min(q_idx, mask.size(2)-1), kv_idx]
-                bias = bias + mask_value
+                mask_value = causal_mask[b, 0, min(q_idx, causal_mask.size(2)-1), kv_idx]
+                modified_score = modified_score + mask_value
             
-            return score + bias
+            # Apply head mask if provided
+            if layer_head_mask is not None:
+                # Following the reference implementation
+                try:
+                    # Try to access the head mask based on its dimensionality
+                    if layer_head_mask.dim() == 1:
+                        # If layer_head_mask is just [num_heads]
+                        head_mask_value = layer_head_mask[h]
+                    elif layer_head_mask.dim() == 2:
+                        # If layer_head_mask is [batch_size, num_heads]
+                        head_mask_value = layer_head_mask[b, h]
+                    elif layer_head_mask.dim() == 4:
+                        # If layer_head_mask is [batch_size, num_heads, 1, 1]
+                        head_mask_value = layer_head_mask[b, h, 0, 0]
+                    else:
+                        # Default case
+                        head_mask_value = 0
+                except (IndexError, RuntimeError):
+                    # If there's an error, use a default value
+                    head_mask_value = 0
+                
+                # Apply the head mask to the score
+                modified_score = modified_score + head_mask_value
+            
+            return modified_score
         
-        # Apply flex attention
-        attn_output = self.flex_attention_fn(
+        # Apply flex attention with return_lse=True to match reference implementation
+        attn_output, attention_weights = self.flex_attention_fn(
             query=query_states,
             key=key_states,
             value=value_states,
             score_mod=score_mod,
+            enable_gqa=True,  # Enable grouped query attention
+            return_lse=True,  # Return log-sum-exp for attention weights
+            scale=self.scaling,  # Apply scaling if provided
             kernel_options=self.kernel_options
         )
         
-        # Apply head mask if provided
-        if layer_head_mask is not None:
-            # This is a bit tricky with flex attention
-            # We need to apply the head mask after the attention is computed
-            # For simplicity, we'll reshape and apply it
-            attn_output = attn_output * layer_head_mask.unsqueeze(-1).unsqueeze(-1)
+        # Convert attention weights to the same dtype as value_states
+        attention_weights = attention_weights.to(value_states.dtype)
         
-        return attn_output
+        return attn_output, attention_weights
 
 
 class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
     """
-    Drop-in replacement for T5Attention that uses flex attention.
-    
-    This class preserves the interface of T5Attention but uses flex attention
-    for the core attention computation.
+    T5 attention module using flex attention.
+    This is a drop-in replacement for T5Attention.
     """
     
-    def __init__(self, config, has_relative_attention_bias=False, layer_idx=None, compile_flex=True):
+    def __init__(self, config, has_relative_attention_bias=False, layer_idx=None, compile_flex=None):
+        """
+        Initialize the T5FlexAttention module.
+        
+        Args:
+            config: T5 config object
+            has_relative_attention_bias: Whether to use relative attention bias
+            layer_idx: Layer index
+            compile_flex: Whether to compile the flex attention function.
+                          Defaults to False on Windows, True otherwise.
+        """
         nn.Module.__init__(self)
-        T5FlexAttentionMixin.__init__(self, compile_flex=compile_flex)
+        T5FlexAttentionMixin.__init__(
+            self, 
+            compile_flex=compile_flex,
+            scaling=1.0 / math.sqrt(config.d_kv),  # Standard scaling factor
+            softcap=None  # No softcap by default
+        )
         
         self.is_decoder = config.is_decoder
         self.has_relative_attention_bias = has_relative_attention_bias
-        self.layer_idx = layer_idx
-        
         self.relative_attention_num_buckets = config.relative_attention_num_buckets
         self.relative_attention_max_distance = config.relative_attention_max_distance
         self.d_model = config.d_model
@@ -115,8 +173,9 @@ class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
         self.n_heads = config.num_heads
         self.dropout = config.dropout_rate
         self.inner_dim = self.n_heads * self.key_value_proj_dim
+        self.layer_idx = layer_idx
         
-        # Regular T5 projection layers
+        # Mesh TensorFlow initialization to avoid scaling before softmax
         self.q = nn.Linear(self.d_model, self.inner_dim, bias=False)
         self.k = nn.Linear(self.d_model, self.inner_dim, bias=False)
         self.v = nn.Linear(self.d_model, self.inner_dim, bias=False)
@@ -215,6 +274,21 @@ class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
     ):
         """
         Forward pass, similar to T5Attention but using flex attention
+        
+        Args:
+            hidden_states: Input tensor
+            mask: Attention mask
+            key_value_states: Key-value states for cross-attention
+            position_bias: Position bias tensor
+            past_key_value: Past key-value states for caching
+            layer_head_mask: Head mask
+            query_length: Query length for position bias
+            use_cache: Whether to use cache
+            output_attentions: Whether to output attention weights
+            cache_position: Cache position
+            
+        Returns:
+            Tuple of (output, past_key_value, position_bias, attention_weights)
         """
         batch_size, seq_length = hidden_states.shape[:2]
         
@@ -277,11 +351,6 @@ class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
                     real_seq_length, key_length, device=query_states.device, cache_position=cache_position
                 )
                 position_bias = position_bias[:, :, -seq_length:, :]
-            
-            # Add mask to position bias if provided
-            if mask is not None:
-                causal_mask = mask[:, :, :, : key_states.shape[-2]]
-                position_bias = position_bias + causal_mask
         
         # Apply pruned heads if any
         if self.pruned_heads:
@@ -292,7 +361,7 @@ class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
             position_bias_masked = position_bias
         
         # Apply flex attention
-        attn_output = self._apply_flex_attention(
+        attn_output, attention_weights = self._apply_flex_attention(
             query_states, 
             key_states, 
             value_states, 
@@ -309,20 +378,20 @@ class T5FlexAttention(nn.Module, T5FlexAttentionMixin):
         # Prepare outputs
         outputs = (attn_output, past_key_value, position_bias)
         if output_attentions:
-            # For output_attentions, we would need to compute attention weights
-            # This is a bit tricky with flex attention, so we'll skip it for now
-            # In a real implementation, you might want to add this
-            outputs = outputs + (None,)  # Placeholder for attention weights
+            # Now we have attention weights from flex attention
+            outputs = outputs + (attention_weights,)
             
         return outputs
 
 
-def replace_t5_attention_with_flex(model):
+def replace_t5_attention_with_flex(model, compile_flex=None):
     """
     Replace all T5Attention modules in a T5 model with T5FlexAttention.
     
     Args:
         model: A T5 model instance
+        compile_flex: Whether to compile the flex attention function.
+                      Defaults to False on Windows, True otherwise.
         
     Returns:
         The modified model with flex attention
@@ -336,7 +405,8 @@ def replace_t5_attention_with_flex(model):
             flex_attn = T5FlexAttention(
                 config=model.config,
                 has_relative_attention_bias=module.has_relative_attention_bias,
-                layer_idx=module.layer_idx
+                layer_idx=module.layer_idx,
+                compile_flex=compile_flex
             )
             
             # Copy weights
@@ -352,8 +422,23 @@ def replace_t5_attention_with_flex(model):
             setattr(model, name, flex_attn)
         else:
             # Recursively process child modules
-            replace_t5_attention_with_flex(module)
+            replace_t5_attention_with_flex(module, compile_flex)
     
     return model
 
 
+if __name__ == "__main__":
+    # py -m wip.t5.t5_flex_attention
+    from transformers import T5Config
+    import torch
+
+    config = T5Config()
+
+    # Explicitly disable compilation on Windows to avoid compiler errors
+    compile_flex = False if platform.system() == "Windows" else True
+    attention_layer = T5FlexAttention(config=config, has_relative_attention_bias=True, layer_idx=0, compile_flex=compile_flex)
+    hidden_states = torch.randn(1, 10, config.d_model)
+
+    output = attention_layer(hidden_states)
+
+    print(output)
