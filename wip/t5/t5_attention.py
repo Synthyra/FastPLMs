@@ -156,6 +156,16 @@ class T5AttentionTransformers(nn.Module):
         query_states = self.q(hidden_states)
         query_states = query_states.view(batch_size, -1, self.n_heads, self.key_value_proj_dim).transpose(1, 2)
 
+        if cache_position is None:
+            if past_key_value is not None:
+                logger.warning_once(
+                    f"{self.__class__.__name__} forward called without cache_position when using cache, which might result in errors. "
+                    "Please provide a cache_position when calling this function. "
+                    "See 'Best Practices for Generation with Cache' in the docs for more information. "
+                    "Assuming cache position starts at 0."
+                )
+            cache_position = torch.arange(seq_length)
+
         if past_key_value is not None:
             is_updated = past_key_value.is_updated.get(self.layer_idx)
             if is_cross_attention:
