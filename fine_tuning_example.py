@@ -330,7 +330,7 @@ def train_regression_model(
     
     metrics = trainer.evaluate(test_dataset)
     print(f"Initial metrics: {metrics}")
-    print("Training classification model...")
+    print("Training regression model...")
     trainer.train()
     
     # Evaluate and visualize results
