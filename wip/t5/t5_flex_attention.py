@@ -22,7 +22,7 @@ class T5FlexAttentionMixin:
     preserving the position bias mechanism that T5 uses.
     """
     
-    def __init__(self, compile_flex=True, kernel_options=None, scaling=None, softcap=None):
+    def __init__(self, compile_flex=False, kernel_options=None, scaling=None, softcap=None):
         """
         Initialize the T5FlexAttentionMixin.
         
@@ -91,26 +91,15 @@ class T5FlexAttentionMixin:
             
             # Apply head mask if provided
             if layer_head_mask is not None:
-                # Following the reference implementation
-                try:
-                    # Try to access the head mask based on its dimensionality
-                    if layer_head_mask.dim() == 1:
-                        # If layer_head_mask is just [num_heads]
-                        head_mask_value = layer_head_mask[h]
-                    elif layer_head_mask.dim() == 2:
-                        # If layer_head_mask is [batch_size, num_heads]
-                        head_mask_value = layer_head_mask[b, h]
-                    elif layer_head_mask.dim() == 4:
-                        # If layer_head_mask is [batch_size, num_heads, 1, 1]
-                        head_mask_value = layer_head_mask[b, h, 0, 0]
-                    else:
-                        # Default case
-                        head_mask_value = 0
-                except (IndexError, RuntimeError):
-                    # If there's an error, use a default value
-                    head_mask_value = 0
+                head_mask_value = 0.0
+                # Use static conditions instead of dynamic indexing
+                if layer_head_mask.dim() == 1 and h < layer_head_mask.size(0):
+                    head_mask_value = layer_head_mask[h]
+                elif layer_head_mask.dim() == 2 and b < layer_head_mask.size(0) and h < layer_head_mask.size(1):
+                    head_mask_value = layer_head_mask[b, h]
+                elif layer_head_mask.dim() == 4 and b < layer_head_mask.size(0) and h < layer_head_mask.size(1):
+                    head_mask_value = layer_head_mask[b, h, 0, 0]
                 
-                # Apply the head mask to the score
                 modified_score = modified_score + head_mask_value
             
             return modified_score
@@ -424,7 +413,7 @@ if __name__ == "__main__":
 
     config = T5Config()
 
-    attention_layer = T5FlexAttention(config=config, has_relative_attention_bias=True, layer_idx=0)
+    attention_layer = T5FlexAttention(config=config, has_relative_attention_bias=True, layer_idx=0, compile_flex=False)
     hidden_states = torch.randn(1, 10, config.d_model)
 
     output = attention_layer(hidden_states)
