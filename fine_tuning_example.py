@@ -277,16 +277,21 @@ def train_regression_model(
         batch_size=8,
         learning_rate=5e-5,
         num_epochs=10,
-        max_length=512,
+        max_length=1024,
+        gradient_accumulation_steps=1
     ):
     """Train a regression model for protein-protein affinity prediction"""
     print("Loading datasets for regression task...")
     
+    # Filter sequences that exceed max_length
+    def filter_pair(example):
+        return len(example['SeqA']) + len(example['SeqB']) <= max_length
+
     # Load datasets
-    train_data = load_dataset('Synthyra/ProteinProteinAffinity', split='train')
-    valid_data = load_dataset('Synthyra/AffinityBenchmarkv5.5', split='train')
-    test_data = load_dataset('Synthyra/haddock_benchmark', split='train')
-    
+    train_data = load_dataset('Synthyra/ProteinProteinAffinity', split='train').filter(filter_pair)
+    valid_data = load_dataset('Synthyra/AffinityBenchmarkv5.5', split='train').filter(filter_pair)
+    test_data = load_dataset('Synthyra/haddock_benchmark', split='train').filter(filter_pair)
+
     # Create datasets
     train_dataset = PairDatasetHF(train_data, 'SeqA', 'SeqB', 'labels', max_length=max_length)
     valid_dataset = PairDatasetHF(valid_data, 'SeqA', 'SeqB', 'labels', max_length=max_length)
@@ -310,6 +315,7 @@ def train_regression_model(
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         logging_dir=logging_dir,
@@ -349,16 +355,22 @@ def train_classification_model(
         learning_rate=5e-5,
         num_epochs=10,
         max_length=512,
+        grad_accum=1
     ):
     """Train a classification model for protein solubility prediction"""
     print("Loading datasets for classification task...")
     
+    # Filter sequences that exceed max_length
+    def filter_pair(example):
+        return len(example['SeqA']) + len(example['SeqB']) <= max_length
+
     # Load datasets
     data = load_dataset('GleghornLab/DL2_reg')
-    train_data = data['train']
-    valid_data = data['valid']
-    test_data = data['test']
-    
+    train_data = data['train'].filter(filter_pair)
+    valid_data = data['valid'].filter(filter_pair)
+    test_data = data['test'].filter(filter_pair)
+
+
     # Create datasets
     train_dataset = SequenceDatasetHF(train_data, 'seqs', 'labels', max_length=max_length)
     valid_dataset = SequenceDatasetHF(valid_data, 'seqs', 'labels', max_length=max_length)
@@ -385,6 +397,7 @@ def train_classification_model(
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
+        gradient_accumulation_steps=grad_accum,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         logging_dir=logging_dir,
@@ -403,7 +416,6 @@ def train_classification_model(
         callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
     )
     
-    # Train model
     metrics = trainer.evaluate(test_dataset)
     print(f"Initial metrics: {metrics}")
     print("Training classification model...")
@@ -422,7 +434,7 @@ if __name__ == "__main__":
     # py -m fine_tuning_example --task classification
     import argparse
     
-    # Examples of PLMs with efficient implemenations offered by Synthyra
+    # Examples of PLMs with efficient implementations offered by Synthyra
     MODEL_LIST = [
         'Synthyra/ESMplusplus_small',
         'Synthyra/ESMplusplus_large',
@@ -447,8 +459,10 @@ if __name__ == "__main__":
                         help="Number of epochs for training")
     parser.add_argument("--max_length", type=int, default=1024,
                         help="Maximum length of input sequences")
+    parser.add_argument("--grad_accum", type=int, default=1,
+                        help="Number of gradient accumulation steps")
     args = parser.parse_args()
-    
+
     # Print training configuration
     print("\n" + "="*50)
     print("TRAINING CONFIGURATION")
@@ -459,9 +473,11 @@ if __name__ == "__main__":
     print(f"Learning rate: {args.lr}")
     print(f"Number of epochs: {args.epochs}")
     print(f"Max sequence length: {args.max_length}")
+    print(f"Gradient Accumulation Steps: {args.grad_accum}")
     print("="*50 + "\n")
     
-    if args.task == "regression" or args.task == "both":
+    # Train regression model if required
+    if args.task in ["regression", "both"]:
         print("\n" + "="*50)
         print("TRAINING REGRESSION MODEL")
         print("="*50)
@@ -471,10 +487,42 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             learning_rate=args.lr,
             num_epochs=args.epochs,
-            max_length=args.max_length
+            max_length=args.max_length,
+            gradient_accumulation_steps=args.gradient_accumulation_steps
         )
+        test_data = load_dataset('Synthyra/haddock_benchmark', split='train')
+        test_dataset = PairDatasetHF(test_data, 'SeqA', 'SeqB', 'labels', max_length=args.max_length)
     
-    if args.task == "classification" or args.task == "both":
+    # Get predictions and compute correlation
+    try:
+        predictions = regression_trainer.predict(test_dataset)
+        try:
+            # Attempt to extract predictions and labels using attributes
+            pred_values = predictions.predictions.squeeze()
+            true_values = predictions.label_ids
+        except AttributeError:
+            # Fallback in case predictions is a tuple
+            pred_values, true_values = predictions
+    except Exception as e:
+        print(f"Error during prediction: {e}")
+        pred_values, true_values = None, None
+
+    if pred_values is not None and true_values is not None:
+        try:
+            correlation, p_value = spearmanr(pred_values, true_values)
+            print(f"Spearman correlation: {correlation:.5f} (p={p_value:.5e})")
+        except Exception as e:
+            print(f"Error calculating Spearman correlation: {e}")
+    else:
+        print("Prediction failed; skipping correlation calculation and plotting regression results.")
+        print("\n" + "="*50)
+        print("PLOTTING REGRESSION RESULTS")
+        print("="*50)
+        correlation = plot_regression_results(regression_trainer, test_dataset, "Regression")
+        print(f"Final Spearman correlation on test set: {correlation:.5f}")
+
+    # Train classification model if required
+    if args.task in ["classification", "both"]:
         print("\n" + "="*50)
         print("TRAINING CLASSIFICATION MODEL")
         print("="*50)
@@ -484,7 +532,8 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             learning_rate=args.lr,
             num_epochs=args.epochs,
-            max_length=args.max_length
+            max_length=args.max_length,
+            gradient_accumulation_steps=args.gradient_accumulation_steps
         )
     
     print("\nTraining completed!") 
