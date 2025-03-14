@@ -1,0 +1,157 @@
+License for ESM++ large
+This derivative is built with ESM. The license for use is as follows (updated here https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-license-agreement):
+EvolutionaryScale Cambrian Non-Commercial License Agreement
+‍
+
+Please read this EvolutionaryScale Cambrian Non-Commercial License Agreement (the “Agreement”) carefully before using the Licensed Non-Commercial Models (as defined below), which are offered by EvolutionaryScale, PBC (“ES”).  
+
+‍
+
+By downloading the Licensed Non-Commercial Models, or otherwise using the Licensed Non-Commercial Models in any manner, You agree that You have read and agree to be bound by the terms of this Agreement. If You are accessing the Licensed Non-Commercial Models on behalf of an organization or entity, You represent and warrant that You are authorized to enter into this Agreement on that organization’s or entity’s behalf and bind them to the terms of this Agreement (in which case, the references to “You” and “Your” in this Agreement, except for in this sentence, refer to that organization or entity) and that such entity is a non-commercial organization (such as a university, non-profit organization, research institute or educational or governmental body). For the avoidance of doubt, You may not access the Licensed Non-Commercial Models for or on behalf of a Commercial Entity. Use of the Licensed Non-Commercial Models and all other Licensed Non-Commercial Model IP is expressly conditioned upon Your assent to all terms of this Agreement, to the exclusion of all other terms. 
+
+‍
+
+Definitions.  In addition to other terms defined elsewhere in this Agreement, the terms below have the following meanings.
+‍
+
+“Commercial Entity” means any entity engaged in any activity intended for or directed toward commercial advantage or monetary compensation, including, without limitation, the development of any product or service intended to be sold or made available for a fee. For the purpose of this Agreement, references to a Commercial Entity expressly exclude any universities, non-profit organizations, not-for-profit entities, research institutes and educational and government bodies. 
+‍
+
+“Contribution” means any work of authorship, including the original versions of the Licensed Non-Commercial Models and any modifications or additions to the Licensed Non-Commercial Models or Derivative Works thereof, that are intentionally submitted to ES for inclusion in the Licensed Non-Commercial Models by the copyright owner or by an individual or Legal Entity authorized to submit on behalf of the copyright owner. For the purposes of this definition, "submitted" means any form of electronic, verbal, or written communication sent to ES or its representatives, including but not limited to communication on electronic mailing lists, source code control systems, and issue tracking systems that are managed by, or on behalf of, ES for the purpose of discussing and improving the Licensed Non-Commercial Models, but excluding Outputs and all communications that are conspicuously marked or otherwise designated in writing by the copyright owner as "Not a Contribution."
+  
+
+“Contributor” means ES and any individual or Legal Entity on behalf of whom a Contribution has been received by ES and subsequently incorporated within the Licensed Non-Commercial Models.
+‍
+
+“Derivative Work” means any work, whether in Source or Object form, that is based on (or derived from) the Licensed Non-Commercial Models and for which the editorial revisions, annotations, elaborations, or other modifications represent, as a whole, an original work of authorship, including, without limitation, any artificial intelligence models which are distributed or made available that are created, trained, fine-tuned or otherwise improved using the Licensed Non-Commercial Models, Outputs or Output Derivatives. For the purposes of this Agreement, Derivative Works shall not include works that remain separable from, or merely link (or bind by name) to the interfaces of, the Licensed Non-Commercial Models and Derivative Works thereof.
+‍
+
+“ESM-3 Model” means the combination of the ESM-3 Model Code and the ESM-3 Model Weights and all software, algorithms, machine-learning model code, inference-enabling code, training-enabling code, fine-tuning enabling code and other elements of the foregoing distributed and made available to You by ES on the GitHub Page, each as may be updated and amended from time to time, whether in Source or Object form.
+‍
+
+“ESM-3 Model Code” means the code for EvolutionaryScale’s ESM-3 Open Model made available to You on the GitHub Page.
+‍
+
+“ESM-3 Model Weights” means the trained model weights for EvolutionaryScale’s ESM-3 Open Model made available to You at https://huggingface.co/EvolutionaryScale/esm3-sm-open-v1, as may be updated and amended from time to time.
+‍
+
+ESMC 600M Model” means the combination of the ESMC 600M Model Code and the ESMC 600M Model Weights and all software, algorithms, machine-learning model code, inference-enabling code, training-enabling code, fine-tuning enabling code and other elements of the foregoing distributed and made available to You by ES on the GitHub Page, each as may be updated and amended from time to time, whether in Source or Object form.
+‍
+
+“ESMC 600M Model Code” means the code for EvolutionaryScale’s ESMC 600M Open Model made available to You on the GitHub Page.
+‍
+
+“ESMC 600M Model Weights” means the trained model weights for EvolutionaryScale’s ESMC 600M Open Model made available to You at https://huggingface.co/EvolutionaryScale/esmc-600m-2024-12, as may be updated and amended from time to time.
+‍
+
+“GitHub Page” means the page made available at https://github.com/evolutionaryscale/esm, as may be updated and amended from time to time.
+‍
+
+“Legal Entity” means the union of the acting entity and all other entities that control, are controlled by, or are under common control with that entity. For the purposes of this definition, "control" means (i) the power, direct or indirect, to cause the direction or management of such entity, whether by contract or otherwise, or (ii) ownership of fifty percent (50%) or more of the outstanding shares, or (iii) beneficial ownership of such entity.
+ 
+
+“Licensed Non-Commercial Model IP” means, collectively, the Licensed Non-Commercial Models, all Derivative Works, all Outputs and all Output Derivatives.
+‍
+
+“Licensed Non-Commercial Models” means the ESM-3 Model and the ESMC 600M Model.
+‍
+
+“Non-Commercial Purposes” means uses not intended for or directed toward commercial advantage or monetary compensation, or the facilitation of development of any product or service to be sold or made available for a fee. For the avoidance of doubt, the provision of Output as a service or the use of the Licensed Non-Commercial Models for sponsored research purposes (funded by a Commercial Entity) are not Non-Commercial Purposes.
+‍
+
+“Object” means any form resulting from mechanical transformation or translation of a Source form, including but not limited to compiled object code, generated documentation, and conversions to other media types.
+‍
+
+“Output” means any output, including any protein sequence, structure prediction, functional annotation, molecule, descriptions of a molecule, model, sequence, text, and/or image that is elicited directly or indirectly by, or otherwise made available to, You in connection with Your use of the Licensed Non-Commercial Models.
+‍
+
+“Output Derivatives” means any enhancements, modifications and derivative works of Outputs (including, but not limited to, any derivative sequences or molecules).
+‍
+
+“Source” means the preferred form for making modifications, including but not limited to Licensed Non-Commercial Models source code, documentation source, and configuration files.
+ 
+
+“Third Party Model” means any non-human tool, platform and/or other technology powered or made available in connection with the use of generative artificial intelligence or machine learning models that is operated by any third party.
+‍
+
+“You” or “Your” means the individual entering into this Agreement or the organization or entity on whose behalf such individual is entering into this Agreement. 
+‍
+
+Intellectual Property Rights and Licenses.  
+ 
+
+Copyright License.  Subject to the terms and conditions of this Agreement, each Contributor hereby grants to You a worldwide, non-exclusive, non-transferable, limited copyright license to reproduce, prepare Derivative Works of, publicly display, publicly perform, sublicense, and distribute the Licensed Non-Commercial Models and such Derivative Works in Source or Object form for Your Non-Commercial Purposes.  
+‍
+
+Patent License.  Subject to the terms and conditions of this Agreement, each Contributor hereby grants to You a worldwide, non-exclusive, non-transferable, limited patent license to make, have made, use, import, and otherwise transfer the Licensed Non-Commercial Models for Your Non-Commercial Purposes, where such license applies only to those patent claims licensable by such Contributor that are necessarily infringed by their Contribution(s) alone or by combination of their Contribution(s) with the Licensed Non-Commercial Models to which such Contribution(s) was submitted. 
+‍
+
+Infringement and Misappropriation Claims.  If You institute litigation or other proceedings against ES or any other entity (including a cross-claim or counterclaim in a lawsuit) alleging that the Licensed Non-Commercial Model IP or a Contribution incorporated within the Licensed Non-Commercial Model IP constitutes direct or contributory infringement, violation or misappropriation of any copyright, patent, trademark or other intellectual property or proprietary rights owned or licensable by You, then any licenses granted to You under this Agreement for that Licensed Non-Commercial Model IP shall terminate as of the date such litigation or claim is filed or instituted. You will indemnify, defend and hold ES harmless from and against any claim by any third party arising out of or related to Your use or distribution of the Licensed Non-Commercial Model IP.
+‍
+
+Licensing Process.  In connection with Your licensing of the Licensed Non-Commercial Models, ES may collect, from You or automatically through Your use of the Licensed Non-Commercial Models, certain registration information about You, any Legal Entity You may represent, and Your use of the Licensed Non-Commercial Models. The collection of this information and ES’s policies and procedures regarding the collection, use, disclosure and security of information received are described further in ES’s Privacy Policy available at https://www.evolutionaryscale.ai/policies/privacy, as may be updated from time to time. 
+‍
+
+Redistribution.  Subject to Section 5 below, You may reproduce and distribute copies of the Licensed Non-Commercial Model IP in any medium, with or without modifications, and in Source or Object form for Your Non-Commercial Purposes, provided that You meet the following conditions:
+‍
+
+You must give any other recipients of the Licensed Non-Commercial Model IP a copy of this Agreement; 
+‍
+
+You must cause any modified files to carry prominent notices stating that You changed the files; 
+‍
+
+You must prominently display “Built with ESM” on any application programming interface, model, workflow, website, user interface, blog post, about page, product documentation or other media or interface that incorporates Licensed Non-Commercial Model IP or where You make any Licensed Non-Commercial Model IP accessible or available; 
+‍
+
+You must include “ESM” at the beginning of the title of any Derivative Works, but without (i) using the same combination of either of these words with a version number, model size, indication, letter or similar designation that forms the title of an existing ES model or offering; (ii) incorporating any proper noun, name or trademark in the title of any Derivative Works; or (iii) using any other title that is reasonably likely to mislead a user, lead to user confusion or be mistaken for an EvolutionaryScale model or offering; and
+‍
+
+You must retain, in the Source form of any Derivative Works that You distribute, all copyright, patent, trademark, and attribution notices from the Source form of the Licensed Non-Commercial Models, excluding those notices that do not pertain to any part of the Derivative Works; and
+‍
+
+If the Licensed Non-Commercial Models includes a "NOTICE" text file as part of its distribution, then any Derivative Works that You distribute must include a readable copy of the attribution notices contained within such NOTICE file, excluding those notices that do not pertain to any part of the Derivative Works, in at least one of the following places: (i) within a NOTICE text file distributed as part of the Derivative Works; (ii) within the Source form or documentation, if provided along with the Derivative Works; or (iii) within a display generated by the Derivative Works, if and wherever such third-party notices normally appear. The contents of the NOTICE file are for informational purposes only and do not modify this Agreement, and must include “ESM-3 and ESMC 600M Models are licensed under the EvolutionaryScale Cambrian Non-Commercial License Agreement.” You may add Your own attribution notices within Derivative Works that You distribute, alongside or as an addendum to the NOTICE text from the Licensed Non-Commercial Models, provided that such additional attribution notices cannot be construed as modifying this Agreement.
+‍
+
+You may add Your own copyright statement to Your modifications and may provide additional or different license terms and conditions for use, reproduction, or distribution of Your modifications, or for any such Derivative Works as a whole, provided Your use, reproduction, and distribution of the Licensed Non-Commercial Models otherwise complies with the conditions stated in this Agreement.
+
+‍
+
+Acceptable Use.  You may only use the Licensed Non-Commercial Model IP for Non-Commercial Purposes. Your use of the Licensed Non-Commercial Model IP must comply with all applicable laws, rules and regulations (including, without limitation, trade compliance laws and regulations) and may also be subject to additional use restrictions communicated to You through the Licensed Non-Commercial Model IP or otherwise, including those set forth in the ES Acceptable Use Policy available at https://www.evolutionaryscale.ai/policies/acceptable-use-policy, as may be updated and amended from time to time (the “AUP”), the terms of which are incorporated herein by reference. In the event of any conflict between the terms of this Agreement and the terms of the AUP, the terms that are more restrictive of Your use of the Licensed Non-Commercial Model IP, as applicable, shall govern and control. Your access to and use of the ESM-3 Model Code and the ESMC 600M Model Code separate and apart from the ESM-3 Model and the ESMC 600M Model is subject to the EvolutionaryScale’s Cambrian Open License Agreement made available at https://www.evolutionaryscale.ai/policies/cambrian-open-license-agreement, as may be updated and amended from time to time.
+‍
+
+Submission of Contributions.  Unless You explicitly state otherwise, any Contribution intentionally submitted for inclusion in the Licensed Non-Commercial Models by You to ES shall be under the terms and conditions of this Agreement, without any additional terms or conditions. Notwithstanding the above, nothing herein shall supersede or modify the terms of any separate license agreement you may have executed with ES regarding such Contributions.
+ 
+
+Trademarks.  This Agreement does not grant permission to use the trade names, trademarks, service marks, or product names of ES, except as required for reasonable and customary use to comply with the requirements of Section 4 of this Agreement or in describing the origin of the Licensed Non-Commercial Model IP and reproducing the content of the NOTICE file. ES hereby grants You a limited, non-exclusive, non-transferable license to use the “ESM,” “ESM-3,” and “ESMC 600M” names (the “Marks”) solely as required to comply with the requirements of Section 4. For the avoidance of doubt, You may not use any Marks in a way that is misrepresentative, violates the AUP or is otherwise harmful or objectionable to ES. All goodwill arising out of Your use of the Marks will inure to the benefit of ES. 
+‍
+
+Disclaimer of Warranty.  UNLESS REQUIRED BY APPLICABLE LAW OR OTHERWISE EXPRESSLY AGREED MUTUALLY AGREED UPON BY YOU AND ES IN WRITING, ES PROVIDES THE LICENSED NON-COMMERCIAL MODELS (AND EACH CONTRIBUTOR PROVIDES ITS CONTRIBUTIONS) ON AN "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OR CONDITIONS OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY, CORRECTNESS, RELIABILITY OR FITNESS FOR A PARTICULAR PURPOSE, ALL OF WHICH ARE HEREBY DISCLAIMED. YOU ARE SOLELY RESPONSIBLE FOR DETERMINING THE APPROPRIATENESS OF USING OR REDISTRIBUTING THE LICENSED NON-COMMERCIAL MODELS AND ASSUME ANY RISKS ASSOCIATED WITH YOUR EXERCISE OF PERMISSIONS UNDER THIS AGREEMENT.
+‍
+
+Limitation of Liability.  In no event and under no legal theory, whether in tort (including negligence), contract, or otherwise, unless required by applicable law (such as deliberate and grossly negligent acts) or agreed to in writing, shall any Contributor be liable to You for damages, including any direct, indirect, special, incidental, or consequential damages of any character arising as a result of this Agreement or out of the use or inability to use the Licensed Non-Commercial Model IP (including but not limited to damages for loss of goodwill, work stoppage, computer failure or malfunction, or any and all other commercial damages or losses), even if such Contributor has been advised of the possibility of such damages.
+‍
+
+General. 
+‍
+
+Entire Agreement.  This Agreement constitutes the entire agreement between You and ES relating to the subject matter hereof and supersedes all proposals, understandings, or discussions, whether written or oral, relating to the subject matter of this Agreement and all past dealing or industry custom. The failure of either party to enforce its rights under this Agreement at any time for any period shall not be construed as a waiver of such rights. ES may amend or modify this Agreement from time to time and will use reasonable efforts to provide You with notice of any material changes that may negatively impact Your use of the Licensed Non-Commercial Models through the GitHub Page or through another means made available to You. No other changes, modifications or waivers to this Agreement will be effective unless in writing and signed by both parties.
+‍
+
+Term and Termination.  The term of this Agreement will commence upon Your acceptance of this Agreement or access to the Licensed Non-Commercial Models and will continue in full force and effect until terminated in accordance with the terms and conditions herein. ES may terminate this Agreement if You are in breach of any term or condition of this Agreement. Upon termination of this Agreement, you shall delete and cease use of the Licensed Non-Commercial Model IP. All provisions of this Agreement which by their nature should survive termination shall survive termination, including, without limitation, ownership provisions, warranty disclaimers, indemnity obligations and limitations of liability.
+‍
+
+Relationship of Parties.  You and ES are independent contractors, and nothing herein shall be deemed to constitute either party as the agent or representative of the other or both parties as joint venturers or partners for any purpose.
+‍
+
+Export Control.  You shall comply with the U.S. Foreign Corrupt Practices Act and all applicable export laws, restrictions and regulations of the U.S. Department of Commerce, and any other applicable U.S. and foreign authority.
+‍
+
+Assignment.  This Agreement and the rights and obligations herein may not be assigned or transferred, in whole or in part, by You without the prior written consent of ES. Any assignment in violation of this provision is void. ES may freely assign or transfer this Agreement, in whole or in part. This Agreement shall be binding upon, and inure to the benefit of, the successors and permitted assigns of the parties.
+‍
+
+Governing Law.  This Agreement shall be governed by and construed under the laws of the State of New York and the United States without regard to conflicts of laws provisions thereof, and without regard to the Uniform Computer Information Transactions Act.
+‍
+
+Severability.  If any provision of this Agreement is held to be invalid, illegal or unenforceable in any respect, that provision shall be limited or eliminated to the minimum extent necessary so that this Agreement otherwise remains in full force and effect and enforceable.
+‍

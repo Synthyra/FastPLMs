@@ -6,3 +6,4 @@
 *.safetensors
 *.json
 *.bin
+.qodo
