@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datasets import load_dataset
 from torch.utils.data import Dataset as TorchDataset
-from typing import List, Tuple, Dict, Union
+from typing import List, Tuple, Dict, Union, Any
 from transformers import (
     AutoModelForSequenceClassification,
     Trainer,
@@ -42,39 +42,65 @@ BASE_TRAINER_KWARGS = {
 
 # Dataset classes
 class PairDatasetHF(TorchDataset):
-    def __init__(self, data, col_a, col_b, label_col, max_length=2048):
-        self.seqs_a = data[col_a]
-        self.seqs_b = data[col_b]
-        self.labels = data[label_col]
+    """
+    Dataset class for protein pair data (e.g., protein-protein interactions).
+    
+    Args:
+        data: The dataset containing protein sequences and labels
+        col_a: Column name for the first protein sequence
+        col_b: Column name for the second protein sequence
+        label_col: Column name for the labels
+        max_length: Maximum sequence length to consider
+    """
+    def __init__(self, dataset: Any, col_a: str, col_b: str, label_col: str, max_length: int = 2048):
+        self.seqs_a = dataset[col_a]
+        self.seqs_b = dataset[col_b]
+        self.labels = dataset[label_col]
         self.max_length = max_length
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.seqs_a)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[str, str, Union[float, int]]:
         seq_a = self.seqs_a[idx][:self.max_length]
         seq_b = self.seqs_b[idx][:self.max_length]
         label = self.labels[idx]
         return seq_a, seq_b, label
 
 
-class SequenceDatasetHF(TorchDataset):    
-    def __init__(self, dataset, col_name='seqs', label_col='labels', max_length=2048):
+class SequenceDatasetHF(TorchDataset):
+    """
+    Dataset class for single protein sequence data.
+    
+    Args:
+        dataset: The dataset containing protein sequences and labels
+        col_name: Column name for the protein sequences
+        label_col: Column name for the labels
+        max_length: Maximum sequence length to consider
+    """
+    def __init__(self, dataset: Any, col_name: str = 'seqs', label_col: str = 'labels', max_length: int = 2048):
         self.seqs = dataset[col_name]
         self.labels = dataset[label_col]
         self.max_length = max_length
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.seqs)
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[str, Union[float, int]]:
         seq = self.seqs[idx][:self.max_length]
         label = self.labels[idx]
         return seq, label
 
 
 class PairCollator:
-    def __init__(self, tokenizer, regression=False):
+    """
+    Collator for protein pair data that handles tokenization and tensor conversion.
+    
+    Args:
+        tokenizer: The tokenizer to use for encoding sequences
+        regression: Whether this is a regression task (True) or classification (False)
+    """
+    def __init__(self, tokenizer: Any, regression: bool = False):
         self.tokenizer = tokenizer
         self.regression = regression
 
@@ -99,7 +125,14 @@ class PairCollator:
 
 
 class SequenceCollator:
-    def __init__(self, tokenizer, regression=False):
+    """
+    Collator for single protein sequence data that handles tokenization and tensor conversion.
+    
+    Args:
+        tokenizer: The tokenizer to use for encoding sequences
+        regression: Whether this is a regression task (True) or classification (False)
+    """
+    def __init__(self, tokenizer: Any, regression: bool = False):
         self.tokenizer = tokenizer
         self.regression = regression
 
@@ -124,7 +157,7 @@ class SequenceCollator:
 
 
 # Get the model ready, with or without LoRA
-def initialize_model(model_name, num_labels, use_lora=True, lora_config=None):
+def initialize_model(model_name: str, num_labels: int, use_lora: bool = True, lora_config: Any = None):
     """
     Initialize a model with optional LoRA support
     
@@ -183,11 +216,11 @@ def initialize_model(model_name, num_labels, use_lora=True, lora_config=None):
 
 
 # For computing performance metrics, it's fairly straightforward to add more metrics here
-def compute_metrics_regression(p: EvalPrediction):
+def compute_metrics_regression(p: EvalPrediction) -> Dict[str, float]:
     """Compute Spearman correlation for regression tasks"""
     predictions, labels = p.predictions, p.label_ids
     predictions = predictions[0] if isinstance(predictions, tuple) else predictions
-    print(predictions.shape)
+    
     # Calculate Spearman correlation
     correlation, p_value = spearmanr(predictions.flatten(), labels.flatten())
     
@@ -197,7 +230,7 @@ def compute_metrics_regression(p: EvalPrediction):
     }
 
 
-def compute_metrics_classification(p: EvalPrediction):
+def compute_metrics_classification(p: EvalPrediction) -> Dict[str, float]:
     """Compute accuracy for classification tasks"""
     predictions, labels = p.predictions, p.label_ids
     predictions = predictions[0] if isinstance(predictions, tuple) else predictions
@@ -211,22 +244,27 @@ def compute_metrics_classification(p: EvalPrediction):
 
 
 # For plotting the results, it's fairly straightforward to add more plots here
-def plot_regression_results(trainer, test_dataset, task_name="Regression"):
-    """Plot regression results with Spearman correlation"""
-    # Get predictions
-    predictions = trainer.predict(test_dataset)
-    pred_values = predictions.predictions.squeeze()
-    true_values = predictions.label_ids
+def plot_regression_results(preds: np.ndarray, labels: np.ndarray, task_name: str = "Regression") -> float:
+    """
+    Plot regression results with Spearman correlation
     
+    Args:
+        preds: Predicted values
+        labels: True values
+        task_name: Name of the task for plot title and filename
+        
+    Returns:
+        correlation: Spearman correlation coefficient
+    """
     # Calculate Spearman correlation
-    correlation, p_value = spearmanr(pred_values, true_values)
+    correlation, p_value = spearmanr(preds, labels)
     
     # Create scatter plot
     plt.figure(figsize=(10, 8))
-    sns.scatterplot(x=true_values, y=pred_values, alpha=0.6)
+    sns.scatterplot(x=labels, y=preds, alpha=0.6)
     
     # Add regression line
-    sns.regplot(x=true_values, y=pred_values, scatter=False, color='red')
+    sns.regplot(x=labels, y=preds, scatter=False, color='red')
     
     plt.title(f'{task_name} - Spearman Correlation: {correlation:.3f} (p={p_value:.3e})')
     plt.xlabel('True Values')
@@ -239,22 +277,31 @@ def plot_regression_results(trainer, test_dataset, task_name="Regression"):
     plt.tight_layout()
     plt.savefig(f'{task_name.lower().replace(" ", "_")}_results.png')
     plt.show()
-    
     return correlation
 
 
-def plot_classification_results(trainer, test_dataset, task_name="Classification"):
-    """Plot classification results with confusion matrix"""
+def plot_classification_results(trainer: Trainer, test_dataset: Any, task_name: str = "Classification") -> float:
+    """
+    Plot classification results with confusion matrix
+    
+    Args:
+        trainer: The trained model trainer
+        test_dataset: Dataset to evaluate on
+        task_name: Name of the task for plot title and filename
+        
+    Returns:
+        accuracy: Classification accuracy
+    """
     # Get predictions
-    predictions = trainer.predict(test_dataset)
-    pred_values = np.argmax(predictions.predictions, axis=1)
-    true_values = predictions.label_ids
+    predictions, labels, _ = trainer.predict(test_dataset)
+    preds = predictions[0] if isinstance(predictions, tuple) else predictions
+    pred_values = np.argmax(preds, axis=1)
     
     # Calculate accuracy
-    accuracy = (pred_values == true_values).mean()
+    accuracy = (pred_values == labels).mean()
     
     # Create confusion matrix
-    cm = confusion_matrix(true_values, pred_values)
+    cm = confusion_matrix(labels, pred_values)
     
     # Plot confusion matrix
     plt.figure(figsize=(10, 8))
@@ -271,22 +318,45 @@ def plot_classification_results(trainer, test_dataset, task_name="Classification
 
 # Training functions
 def train_regression_model(
-        model_name='Synthyra/ESMplusplus_small',
-        use_lora=True,
-        custom_lora_config=None,
-        batch_size=8,
-        learning_rate=5e-5,
-        num_epochs=10,
-        max_length=512,
-    ):
-    """Train a regression model for protein-protein affinity prediction"""
+        model_name: str = 'Synthyra/ESMplusplus_small',
+        use_lora: bool = True,
+        custom_lora_config: Any = None,
+        batch_size: int = 8,
+        learning_rate: float = 5e-5,
+        num_epochs: int = 10,
+        max_length: int = 1024,
+        gradient_accumulation_steps: int = 1,
+        patience: int = 3
+    ) -> Tuple[Trainer, Any]:
+    """
+    Train a regression model for protein-protein affinity prediction
+    
+    Args:
+        model_name: Name or path of the pretrained model
+        use_lora: Whether to use LoRA for fine-tuning
+        custom_lora_config: Custom LoRA configuration (optional)
+        batch_size: Batch size for training
+        learning_rate: Learning rate for training
+        num_epochs: Number of epochs for training
+        max_length: Maximum sequence length to consider
+        gradient_accumulation_steps: Number of gradient accumulation steps
+        patience: Number of evaluation calls with no improvement after which training will be stopped
+        
+    Returns:
+        trainer: The trained model trainer
+        test_dataset: The test dataset used for evaluation
+    """
     print("Loading datasets for regression task...")
     
+    # Filter sequences that exceed max_length
+    def _filter_pair_by_length(example: Any) -> bool:
+        return len(example['SeqA']) + len(example['SeqB']) <= max_length
+
     # Load datasets
-    train_data = load_dataset('Synthyra/ProteinProteinAffinity', split='train')
-    valid_data = load_dataset('Synthyra/AffinityBenchmarkv5.5', split='train')
-    test_data = load_dataset('Synthyra/haddock_benchmark', split='train')
-    
+    train_data = load_dataset('Synthyra/ProteinProteinAffinity', split='train').filter(_filter_pair_by_length)
+    valid_data = load_dataset('Synthyra/AffinityBenchmarkv5.5', split='train').filter(_filter_pair_by_length)
+    test_data = load_dataset('Synthyra/haddock_benchmark', split='train').filter(_filter_pair_by_length)
+
     # Create datasets
     train_dataset = PairDatasetHF(train_data, 'SeqA', 'SeqB', 'labels', max_length=max_length)
     valid_dataset = PairDatasetHF(valid_data, 'SeqA', 'SeqB', 'labels', max_length=max_length)
@@ -310,6 +380,7 @@ def train_regression_model(
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         logging_dir=logging_dir,
@@ -325,40 +396,63 @@ def train_regression_model(
         eval_dataset=valid_dataset,
         data_collator=data_collator,
         compute_metrics=compute_metrics_regression,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)]
     )
     
     metrics = trainer.evaluate(test_dataset)
     print(f"Initial metrics: {metrics}")
-    print("Training classification model...")
+    print("Training regression model...")
     trainer.train()
     
     # Evaluate and visualize results
     print("Evaluating and visualizing results...")
-    correlation = plot_regression_results(trainer, test_dataset, "Protein-Protein Affinity")
+    predictions, labels, metrics = trainer.predict(test_dataset)
+    preds = predictions[0] if isinstance(predictions, tuple) else predictions
+    correlation = plot_regression_results(preds.flatten(), labels.flatten(), "Protein-Protein Affinity")
     print(f"Final Spearman correlation on test set: {correlation:.3f}")
-    
-    return trainer
+    return trainer, test_dataset
 
 
 def train_classification_model(
-        model_name='Synthyra/ESMplusplus_small',
-        use_lora=True,
-        custom_lora_config=None,
-        batch_size=8,
-        learning_rate=5e-5,
-        num_epochs=10,
-        max_length=512,
-    ):
-    """Train a classification model for protein solubility prediction"""
+        model_name: str = 'Synthyra/ESMplusplus_small',
+        use_lora: bool = True,
+        custom_lora_config: Any = None,
+        batch_size: int = 8,
+        learning_rate: float = 5e-5,
+        num_epochs: int = 10,
+        max_length: int = 512,
+        gradient_accumulation_steps: int = 1,
+        patience: int = 3
+    ) -> Tuple[Trainer, Any]:
+    """
+    Train a classification model for protein solubility prediction
+    
+    Args:
+        model_name: Name or path of the pretrained model
+        use_lora: Whether to use LoRA for fine-tuning
+        custom_lora_config: Custom LoRA configuration (optional)
+        batch_size: Batch size for training
+        learning_rate: Learning rate for training
+        num_epochs: Number of epochs for training
+        max_length: Maximum sequence length to consider
+        gradient_accumulation_steps: Number of gradient accumulation steps
+        patience: Number of evaluation calls with no improvement after which training will be stopped
+        
+    Returns:
+        trainer: The trained model trainer
+    """
     print("Loading datasets for classification task...")
     
+    # Filter sequences that exceed max_length
+    def _filter_by_length(example: Any) -> bool:
+        return len(example['seqs']) <= max_length
+
     # Load datasets
     data = load_dataset('GleghornLab/DL2_reg')
-    train_data = data['train']
-    valid_data = data['valid']
-    test_data = data['test']
-    
+    train_data = data['train'].filter(_filter_by_length)
+    valid_data = data['valid'].filter(_filter_by_length)
+    test_data = data['test'].filter(_filter_by_length)
+
     # Create datasets
     train_dataset = SequenceDatasetHF(train_data, 'seqs', 'labels', max_length=max_length)
     valid_dataset = SequenceDatasetHF(valid_data, 'seqs', 'labels', max_length=max_length)
@@ -385,6 +479,7 @@ def train_classification_model(
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         logging_dir=logging_dir,
@@ -400,10 +495,9 @@ def train_classification_model(
         eval_dataset=valid_dataset,
         data_collator=data_collator,
         compute_metrics=compute_metrics_classification,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=3)]
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=patience)]
     )
     
-    # Train model
     metrics = trainer.evaluate(test_dataset)
     print(f"Initial metrics: {metrics}")
     print("Training classification model...")
@@ -419,10 +513,16 @@ def train_classification_model(
 
 # Main function
 if __name__ == "__main__":
-    # py -m fine_tuning_example --task classification
+    """
+    With default arguments on 4070 laptop GPU
+    py -m fine_tuning_example --task classification --batch_size 8 --epochs 2
+        Runs in 80 seconds with test accuracy of ~89%
+    py -m fine_tuning_example --task regression --batch_size 2 --max_length 1024 --grad_accum 4 --epochs 2
+        Runs in 7 minutes with test Spearman correlation of ~0.72
+    """
     import argparse
     
-    # Examples of PLMs with efficient implemenations offered by Synthyra
+    # Examples of PLMs with efficient implementations offered by Synthyra
     MODEL_LIST = [
         'Synthyra/ESMplusplus_small',
         'Synthyra/ESMplusplus_large',
@@ -435,20 +535,24 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train models for protein tasks")
     parser.add_argument("--task", type=str, choices=["regression", "classification", "both"], 
                         default="both", help="Task to train model for")
-    parser.add_argument("--model_path", type=str, default="Synthyra/ESMplusplus_small",
+    parser.add_argument("--model_path", type=str, default="Synthyra/ESM2-8M",
                         help="Path to the model to train")
     parser.add_argument("--use_lora", action="store_true", default=True,
                         help="Whether to use LoRA for fine-tuning")
-    parser.add_argument("--batch_size", type=int, default=16,
+    parser.add_argument("--batch_size", type=int, default=2,
                         help="Batch size for training")
     parser.add_argument("--lr", type=float, default=5e-5,
                         help="Learning rate for training")
-    parser.add_argument("--epochs", type=int, default=10,
+    parser.add_argument("--epochs", type=float, default=1.0,
                         help="Number of epochs for training")
-    parser.add_argument("--max_length", type=int, default=1024,
+    parser.add_argument("--max_length", type=int, default=512,
                         help="Maximum length of input sequences")
+    parser.add_argument("--grad_accum", type=int, default=1,
+                        help="Number of gradient accumulation steps")
+    parser.add_argument("--patience", type=int, default=3,
+                        help="Early stopping patience - number of evaluation calls with no improvement after which training will be stopped")
     args = parser.parse_args()
-    
+
     # Print training configuration
     print("\n" + "="*50)
     print("TRAINING CONFIGURATION")
@@ -459,22 +563,28 @@ if __name__ == "__main__":
     print(f"Learning rate: {args.lr}")
     print(f"Number of epochs: {args.epochs}")
     print(f"Max sequence length: {args.max_length}")
+    print(f"Gradient Accumulation Steps: {args.grad_accum}")
+    print(f"Early stopping patience: {args.patience}")
     print("="*50 + "\n")
     
-    if args.task == "regression" or args.task == "both":
+    # Train regression model if required
+    if args.task in ["regression", "both"]:
         print("\n" + "="*50)
         print("TRAINING REGRESSION MODEL")
         print("="*50)
-        regression_trainer = train_regression_model(
+        regression_trainer, test_dataset = train_regression_model(
             model_name=args.model_path,
             use_lora=args.use_lora,
             batch_size=args.batch_size,
             learning_rate=args.lr,
             num_epochs=args.epochs,
-            max_length=args.max_length
+            max_length=args.max_length,
+            gradient_accumulation_steps=args.grad_accum,
+            patience=args.patience
         )
-    
-    if args.task == "classification" or args.task == "both":
+
+    # Train classification model if required
+    if args.task in ["classification", "both"]:
         print("\n" + "="*50)
         print("TRAINING CLASSIFICATION MODEL")
         print("="*50)
@@ -484,7 +594,9 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             learning_rate=args.lr,
             num_epochs=args.epochs,
-            max_length=args.max_length
+            max_length=args.max_length,
+            gradient_accumulation_steps=args.grad_accum,
+            patience=args.patience
         )
     
     print("\nTraining completed!") 

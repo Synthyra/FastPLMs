@@ -6,4 +6,6 @@
 *.safetensors
 *.json
 *.bin
+/results_classification_lora
+/results_regression_lora
 .qodo
