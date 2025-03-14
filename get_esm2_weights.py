@@ -1,4 +1,4 @@
-from modeling_fastesm import FastEsmForMaskedLM
+from modeling_fastesm import FastEsmForMaskedLM, FastEsmConfig
 
 
 model_dict = {
@@ -16,5 +16,13 @@ model_dict = {
 
 
 for model_name in model_dict:
-    model = FastEsmForMaskedLM.from_pretrained(model_dict[model_name])
+    config = FastEsmConfig.from_pretrained(model_dict[model_name])
+    config.auto_map = {
+        "AutoConfig": "modeling_fastesm.FastEsmConfig",
+        "AutoModel": "modeling_fastesm.FastEsmModel",
+        "AutoModelForMaskedLM": "modeling_fastesm.FastEsmForMaskedLM",
+        "AutoModelForSequenceClassification": "modeling_fastesm.FastEsmForSequenceClassification",
+        "AutoModelForTokenClassification": "modeling_fastesm.FastEsmForTokenClassification"
+    }
+    model = FastEsmForMaskedLM(config=config).from_pretrained(model_dict[model_name], config=config)
     model.push_to_hub('Synthyra/' + model_name)
