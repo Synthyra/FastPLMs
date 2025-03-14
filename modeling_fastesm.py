@@ -1,11 +1,13 @@
 import torch
 import torch.nn as nn
+import os
 from torch.nn import functional as F
-from torch.utils.data import Dataset, DataLoader
-from typing import Optional, Tuple, Union
+from torch.utils.data import Dataset as TorchDataset
+from torch.utils.data import DataLoader as DataLoader
+from typing import Optional, Tuple, Union, Callable, List, Dict, Any
 from einops import rearrange
 from dataclasses import dataclass
-from transformers import PreTrainedModel, PretrainedConfig, EsmTokenizer
+from transformers import PreTrainedModel, PretrainedConfig, EsmTokenizer, PreTrainedTokenizerBase
 from transformers.modeling_outputs import (
     ModelOutput,
     BaseModelOutputWithPastAndCrossAttentions,
@@ -26,31 +28,31 @@ from tqdm.auto import tqdm
 
 @dataclass
 class EsmMaskedLMOutput(ModelOutput):
-    loss: Optional[torch.FloatTensor] = None
-    logits: Optional[torch.FloatTensor] = None
-    last_hidden_state: Optional[torch.FloatTensor] = None
-    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
-    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    loss: Optional[torch.Tensor] = None
+    logits: Optional[torch.Tensor] = None
+    last_hidden_state: Optional[torch.Tensor] = None
+    hidden_states: Optional[Tuple[torch.Tensor, ...]] = None
+    attentions: Optional[Tuple[torch.Tensor, ...]] = None
 
 
 class FastEsmConfig(PretrainedConfig):
     model_type = "fast_esm"
     def __init__(
         self,
-        vocab_size=None,
-        mask_token_id=None,
-        pad_token_id=None,
-        hidden_size=768,
-        num_hidden_layers=12,
-        num_attention_heads=12,
-        intermediate_size=3072,
-        hidden_dropout_prob=0.1,
-        attention_probs_dropout_prob=0.1,
-        max_position_embeddings=1026,
-        initializer_range=0.02,
-        layer_norm_eps=1e-12,
-        position_embedding_type="absolute",
-        emb_layer_norm_before=None,
+        vocab_size: int = None,
+        mask_token_id: int = None,
+        pad_token_id: int = None,
+        hidden_size: int = 768,
+        num_hidden_layers: int = 12,
+        num_attention_heads: int = 12,
+        intermediate_size: int = 3072,
+        hidden_dropout_prob: float = 0.1,
+        attention_probs_dropout_prob: float = 0.1,
+        max_position_embeddings: int = 1026,
+        initializer_range: float = 0.02,
+        layer_norm_eps: float = 1e-12,
+        position_embedding_type: str = "absolute",
+        emb_layer_norm_before: bool = None,
         **kwargs,
     ):
         super().__init__(pad_token_id=pad_token_id, mask_token_id=mask_token_id, **kwargs)
@@ -68,35 +70,35 @@ class FastEsmConfig(PretrainedConfig):
         self.position_embedding_type = position_embedding_type
         self.emb_layer_norm_before = emb_layer_norm_before
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, Any]:
         """
         Serializes this instance to a Python dictionary. Override the default [`~PretrainedConfig.to_dict`].
 
         Returns:
-            `Dict[str, any]`: Dictionary of all the attributes that make up this configuration instance,
+            `Dict[str, any]`: Dictionar y of all the attributes that make up this configuration instance,
         """
         output = super().to_dict()
         return output
 
 
-def rotate_half(x):
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
     x1, x2 = x.chunk(2, dim=-1)
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rotary_pos_emb(x, cos, sin):
+def apply_rotary_pos_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     cos = cos[:, :, : x.shape[-2], :]
     sin = sin[:, :, : x.shape[-2], :]
 
     return (x * cos) + (rotate_half(x) * sin)
 
 
-def symmetrize(x):
+def symmetrize(x: torch.Tensor) -> torch.Tensor:
     "Make layer symmetric in final two dimensions, used for contact prediction."
     return x + x.transpose(-1, -2)
 
 
-def average_product_correct(x):
+def average_product_correct(x: torch.Tensor) -> torch.Tensor:
     "Perform average product correct, used for contact prediction."
     a1 = x.sum(-1, keepdims=True)
     a2 = x.sum(-2, keepdims=True)
@@ -114,18 +116,18 @@ class EsmContactPredictionHead(nn.Module):
     def __init__(
         self,
         in_features: int,
-        bias=True,
+        bias: bool = True,
         eos_idx: int = 2,
     ):
         super().__init__()
         self.in_features = in_features
         self.eos_idx = eos_idx
-        self.regression = nn.Linear(in_features, 1, bias)
+        self.regression = nn.Linear(in_features, 1, bias=bias)
         self.activation = nn.Sigmoid()
 
-    def forward(self, tokens, attentions):
+    def forward(self, input_ids: torch.Tensor, attentions: torch.Tensor) -> torch.Tensor:
         # remove eos token attentions
-        eos_mask = tokens.ne(self.eos_idx).to(attentions)
+        eos_mask = input_ids.ne(self.eos_idx).to(attentions)
         eos_mask = eos_mask.unsqueeze(1) * eos_mask.unsqueeze(2)
         attentions = attentions * eos_mask[:, None, None, :, :]
         attentions = attentions[..., :-1, :-1]
@@ -161,7 +163,7 @@ class RotaryEmbedding(torch.nn.Module):
         self._cos_cached = None
         self._sin_cached = None
 
-    def _update_cos_sin_tables(self, x, seq_dimension=2):
+    def _update_cos_sin_tables(self, x: torch.Tensor, seq_dimension: int = 2) -> Tuple[torch.Tensor, torch.Tensor]:
         seq_len = x.shape[seq_dimension]
 
         # Reset the tables if the sequence length has changed,
@@ -204,7 +206,12 @@ class EsmEmbeddings(nn.Module):
         )
 
     def forward(
-        self, input_ids=None, attention_mask=None, position_ids=None, inputs_embeds=None, past_key_values_length=0
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        past_key_values_length: Optional[int] = 0,
     ):
         if inputs_embeds is None:
             inputs_embeds = self.word_embeddings(input_ids)
@@ -236,7 +243,7 @@ class EsmEmbeddings(nn.Module):
 
 
 class EsmSelfAttention(nn.Module):
-    def __init__(self, config, position_embedding_type=None):
+    def __init__(self, config, position_embedding_type: Optional[str] = None):
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
@@ -267,8 +274,8 @@ class EsmSelfAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        output_attentions: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Forward pass for self attention.
         
@@ -321,8 +328,8 @@ class EsmAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        output_attentions: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Forward pass for attention layer.
         
@@ -362,8 +369,8 @@ class EsmLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        output_attentions: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Forward pass for transformer layer.
         
@@ -410,9 +417,9 @@ class EsmEncoder(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        output_hidden_states: bool = False,
-        output_attentions: bool = False,
+        attention_mask: Optional[torch.Tensor] = None,
+        output_hidden_states: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
     ) -> BaseModelOutputWithPastAndCrossAttentions:
         """Forward pass for transformer encoder.
         
@@ -465,8 +472,90 @@ class EsmEncoder(nn.Module):
         )
 
 
-### Dataset for Embedding
-class ProteinDataset(Dataset):
+### Support for embedding datasets with low code
+class Pooler:
+    def __init__(self, pooling_types: List[str]):
+        self.pooling_types = pooling_types
+        self.pooling_options = {
+            'mean': self.mean_pooling,
+            'max': self.max_pooling,
+            'min': self.min_pooling,
+            'norm': self.norm_pooling,
+            'prod': self.prod_pooling,
+            'median': self.median_pooling,
+            'std': self.std_pooling,
+            'var': self.var_pooling,
+            'cls': self.cls_pooling,
+        }
+
+    def mean_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        if attention_mask is None:
+            return emb.mean(dim=1)
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (emb * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
+
+    def max_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        if attention_mask is None:
+            return emb.max(dim=1).values
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (emb * attention_mask).max(dim=1).values
+    
+    def min_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        if attention_mask is None:
+            return emb.min(dim=1).values
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (emb * attention_mask).min(dim=1).values
+
+    def norm_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        if attention_mask is None:
+            return emb.norm(dim=1, p=2)
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (emb * attention_mask).norm(dim=1, p=2)
+
+    def prod_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        length = emb.shape[1]
+        if attention_mask is None:
+            return emb.prod(dim=1) / length
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return ((emb * attention_mask).prod(dim=1) / attention_mask.sum(dim=1)) / length
+
+    def median_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        if attention_mask is None:
+            return emb.median(dim=1).values
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (emb * attention_mask).median(dim=1).values
+    
+    def std_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        if attention_mask is None:
+            return emb.std(dim=1)
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (emb * attention_mask).std(dim=1)
+    
+    def var_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        if attention_mask is None:
+            return emb.var(dim=1)
+        else:
+            attention_mask = attention_mask.unsqueeze(-1)
+            return (emb * attention_mask).var(dim=1)
+
+    def cls_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+        return emb[:, 0, :]
+
+    def __call__(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # [mean, max]
+        final_emb = []
+        for pooling_type in self.pooling_types:
+            final_emb.append(self.pooling_options[pooling_type](emb, attention_mask)) # (b, d)
+        return torch.cat(final_emb, dim=-1) # (b, n_pooling_types * d)
+
+
+class ProteinDataset(TorchDataset):
     """Simple dataset for protein sequences."""
     def __init__(self, sequences: list[str]):
         self.sequences = sequences
@@ -478,6 +567,164 @@ class ProteinDataset(Dataset):
         return self.sequences[idx]
 
 
+def build_collator(tokenizer) -> Callable[[list[str]], tuple[torch.Tensor, torch.Tensor]]:
+    def _collate_fn(sequences: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
+        """Collate function for batching sequences."""
+        return tokenizer(sequences, return_tensors="pt", padding='longest', pad_to_multiple_of=8)
+    return _collate_fn
+
+
+class EmbeddingMixin:
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        raise NotImplementedError
+
+    @property
+    def device(self) -> torch.device:
+        """Get the device of the model."""
+        return next(self.parameters()).device
+
+    def _read_sequences_from_db(self, db_path: str) -> set[str]:
+        """Read sequences from SQLite database."""
+        import sqlite3
+        sequences = []
+        with sqlite3.connect(db_path) as conn:
+            c = conn.cursor()
+            c.execute("SELECT sequence FROM embeddings")
+            while True:
+                row = c.fetchone()
+                if row is None:
+                    break
+                sequences.append(row[0])
+        return set(sequences)
+
+    def embed_dataset(
+        self,
+        sequences: List[str],
+        tokenizer: PreTrainedTokenizerBase,
+        batch_size: int = 2,
+        max_len: int = 512,
+        full_embeddings: bool = False,
+        embed_dtype: torch.dtype = torch.float32,
+        pooling_types: List[str] = ['mean'],
+        num_workers: int = 0,
+        sql: bool = False,
+        save: bool = True,
+        sql_db_path: str = 'embeddings.db',
+        save_path: str = 'embeddings.pth',
+    ) -> Optional[dict[str, torch.Tensor]]:
+        """Embed a dataset of protein sequences.
+        
+        Args:
+            sequences: List of protein sequences
+            batch_size: Batch size for processing
+            max_len: Maximum sequence length
+            full_embeddings: Whether to return full residue-wise (True) embeddings or pooled (False)
+            pooling_type: Type of pooling ('mean' or 'cls')
+            num_workers: Number of workers for data loading, 0 for the main process
+            sql: Whether to store embeddings in SQLite database - will be stored in float32
+            sql_db_path: Path to SQLite database
+            
+        Returns:
+            Dictionary mapping sequences to embeddings, or None if sql=True
+
+        Note:
+            - If sql=True, embeddings can only be stored in float32
+            - sql is ideal if you need to stream a very large dataset for training in real-time
+            - save=True is ideal if you can store the entire embedding dictionary in RAM
+            - sql will be used if it is True and save is True or False
+            - If your sql database or .pth file is already present, they will be scanned first for already embedded sequences
+            - Sequences will be truncated to max_len and sorted by length in descending order for faster processing
+
+        Example:
+            >>> embedder = EmbeddingMixin()
+            >>> embedding_dict = embedder.embed_dataset(
+                sequences=[
+                    'MALWMRLLPLLALLALWGPDPAAA', ... # list of protein sequences
+                ],
+                batch_size=2, # adjust for your GPU memory
+                max_len=512, # adjust for your needs
+                full_embeddings=False, # if True, no pooling is performed
+                embed_dtype=torch.float32, # cast to what dtype you want
+                pooling_type=['mean', 'cls'], # more than one pooling type will be concatenated together
+                num_workers=0, # if you have many cpu cores, we find that num_workers = 4 is fast for large datasets
+                sql=False, # if True, embeddings will be stored in SQLite database
+                sql_db_path='embeddings.db',
+                save=True, # if True, embeddings will be saved as a .pth file
+                save_path='embeddings.pth',
+            )
+            >>> # embedding_dict is a dictionary mapping sequences to their embeddings as tensors for .pth or numpy arrays for sql
+        """
+        sequences = list(set([seq[:max_len] for seq in sequences]))
+        sequences = sorted(sequences, key=len, reverse=True)
+        collate_fn = build_collator(tokenizer)
+        device = self.device
+        pooler = Pooler(pooling_types) if not full_embeddings else None
+
+        def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+            if full_embeddings or residue_embeddings.ndim == 2: # if already pooled or want residue-wise embeddings
+                return residue_embeddings
+            else:
+                return pooler(residue_embeddings, attention_mask)
+
+        if sql:
+            import sqlite3
+            conn = sqlite3.connect(sql_db_path)
+            c = conn.cursor()
+            c.execute('CREATE TABLE IF NOT EXISTS embeddings (sequence text PRIMARY KEY, embedding blob)')
+            already_embedded = self._read_sequences_from_db(sql_db_path)
+            to_embed = [seq for seq in sequences if seq not in already_embedded]
+            print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
+            print(f"Embedding {len(to_embed)} new sequences")
+            if len(to_embed) > 0:
+                dataset = ProteinDataset(to_embed)
+                dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, shuffle=False)
+                with torch.no_grad():
+                    for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
+                        seqs = to_embed[i * batch_size:(i + 1) * batch_size]
+                        input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
+                        residue_embeddings = self._embed(input_ids, attention_mask).float() # sql requires float32
+                        embeddings = get_embeddings(residue_embeddings, attention_mask).cpu()
+                        for seq, emb, mask in zip(seqs, embeddings, attention_mask):
+                            if full_embeddings:
+                                emb = emb[mask.bool()]
+                            c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
+                                    (seq, emb.cpu().numpy().tobytes()))
+                        
+                        if (i + 1) % 100 == 0:
+                            conn.commit()
+            
+                conn.commit()
+            conn.close()
+            return None
+
+        embeddings_dict = {}
+        if os.path.exists(save_path):
+            embeddings_dict = torch.load(save_path, map_location='cpu', weights_only=True)
+            to_embed = [seq for seq in sequences if seq not in embeddings_dict]
+            print(f"Found {len(embeddings_dict)} already embedded sequences in {save_path}")
+            print(f"Embedding {len(to_embed)} new sequences")
+        else:
+            to_embed = sequences
+            print(f"Embedding {len(to_embed)} new sequences")
+
+        if len(to_embed) > 0:
+            dataset = ProteinDataset(to_embed)
+            dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, shuffle=False)
+            with torch.no_grad():
+                for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
+                    seqs = to_embed[i * batch_size:(i + 1) * batch_size]
+                    input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
+                    residue_embeddings = self._embed(input_ids, attention_mask)
+                    embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype).cpu()
+                    for seq, emb in zip(seqs, embeddings):
+                        embeddings_dict[seq] = emb
+
+        if save:
+            torch.save(embeddings_dict, save_path)
+
+        return embeddings_dict
+
+
 class FastEsmPreTrainedModel(PreTrainedModel):
     """
     An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
@@ -486,7 +733,7 @@ class FastEsmPreTrainedModel(PreTrainedModel):
     config_class = FastEsmConfig
     base_model_prefix = "fastesm"
     supports_gradient_checkpointing = True
-    tokenizer = EsmTokenizer.from_pretrained("facebook/esm2_t33_650M_UR50D")
+    tokenizer = EsmTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
     def _init_weights(self, module):
         """Initialize the weights"""
         if isinstance(module, nn.Linear):
@@ -507,132 +754,16 @@ class FastEsmPreTrainedModel(PreTrainedModel):
         except AttributeError:
             return self.esm.embeddings.word_embeddings
 
-    @property
-    def device(self) -> torch.device:
-        """Get the device of the model."""
-        return next(self.parameters()).device
 
-    def mean_pooling(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        """Apply mean pooling to sequence outputs."""
-        if attention_mask is None:
-            return x.mean(dim=1)
-        else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (x * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
-
-    def _collate_fn(self, sequences: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Collate function for batching sequences."""
-        return self.tokenizer(sequences, return_tensors="pt", padding='longest', pad_to_multiple_of=8)
-
-    def _read_sequences_from_db(self, db_path: str) -> set[str]:
-        """Read sequences from SQLite database."""
-        import sqlite3
-        sequences = []
-        with sqlite3.connect(db_path) as conn:
-            c = conn.cursor()
-            c.execute("SELECT sequence FROM embeddings")
-            while True:
-                row = c.fetchone()
-                if row is None:
-                    break
-                sequences.append(row[0])
-        return set(sequences)
-
-    def embed_dataset(
-        self,
-        sequences: list[str],
-        batch_size: int = 2,
-        max_len: int = 512,
-        full_embeddings: bool = False,
-        full_precision: bool = False,
-        pooling_type: str = 'mean',
-        num_workers: int = 0,
-        sql: bool = False,
-        sql_db_path: str = 'embeddings.db',
-    ) -> Optional[dict[str, torch.Tensor]]:
-        """Embed a dataset of protein sequences.
-        
-        Args:
-            sequences: List of protein sequences
-            batch_size: Batch size for processing
-            max_len: Maximum sequence length
-            full_embeddings: Whether to return full residue-wise (True) embeddings or pooled (False)
-            full_precision: Whether to cast to full precision (float32) before storage - relevant for dict storage
-            pooling_type: Type of pooling ('mean' or 'cls')
-            num_workers: Number of workers for data loading, 0 for the main process
-            sql: Whether to store embeddings in SQLite database - will be stored in float32
-            sql_db_path: Path to SQLite database
-            
-        Returns:
-            Dictionary mapping sequences to embeddings, or None if sql=True
-        """
-        device = self.device
-
-        def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-            if full_embeddings:
-                return residue_embeddings
-            elif pooling_type == 'mean':
-                return self.mean_pooling(residue_embeddings, attention_mask)
-            else:
-                return residue_embeddings[:, 0, :]
-
-        sequences = list(set([seq[:max_len] for seq in sequences]))
-        if sql:
-            import sqlite3
-            conn = sqlite3.connect(sql_db_path)
-            c = conn.cursor()
-            c.execute('CREATE TABLE IF NOT EXISTS embeddings (sequence text PRIMARY KEY, embedding blob)')
-            already_embedded = self._read_sequences_from_db(sql_db_path)
-            to_embed = [seq for seq in sequences if seq not in already_embedded]
-            print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
-            print(f"Embedding {len(to_embed)} new sequences")
-            if len(to_embed) > 0:
-                to_embed = sorted(to_embed, key=len, reverse=True)
-                dataset = ProteinDataset(to_embed)
-                dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn, shuffle=False)
-                with torch.no_grad():
-                    for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
-                        seqs = sequences[i * batch_size:(i + 1) * batch_size]
-                        input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
-                        residue_embeddings = self.forward(input_ids, attention_mask, output_hidden_states=True).hidden_states[-1].detach().float() # required for sql
-                        embeddings = get_embeddings(residue_embeddings, attention_mask).cpu()
-
-                        for seq, emb in zip(seqs, embeddings):
-                            c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
-                                    (seq, emb.cpu().numpy().tobytes()))
-                        
-                        if (i + 1) % 100 == 0:
-                            conn.commit()
-                
-                conn.commit()
-            conn.close()
-            return None
-            
-        sequences = list(set([seq[:max_len] for seq in sequences]))
-        sequences = sorted(sequences, key=len, reverse=True)
-        dataset = ProteinDataset(sequences)
-        dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate_fn, shuffle=False)
-        embeddings_dict = {}
-        with torch.no_grad():
-            for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
-                seqs = sequences[i * batch_size:(i + 1) * batch_size]
-                input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
-                residue_embeddings = self.forward(input_ids, attention_mask, output_hidden_states=True).hidden_states[-1].detach().float()
-                if full_precision:
-                    residue_embeddings = residue_embeddings.float()
-                embeddings = get_embeddings(residue_embeddings, attention_mask).cpu()
-                for seq, emb in zip(seqs, embeddings):
-                    embeddings_dict[seq] = emb
-                    
-        return embeddings_dict
-
-
-class FAST_ESM_ENCODER(FastEsmPreTrainedModel):
-    def __init__(self, config, add_pooling_layer=True):
-        super().__init__(config)
+class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
+    def __init__(self, config, add_pooling_layer: Optional[bool] = True):
+        super(FastEsmPreTrainedModel, self).__init__(config)
         self.config = config
         self.embeddings = EsmEmbeddings(config)
         self.encoder = EsmEncoder(config)
+        self.contact_head = EsmContactPredictionHead(
+            in_features=config.num_hidden_layers * config.num_attention_heads, bias=True
+        )
         # Initialize weights and apply final processing
         self.post_init()
 
@@ -642,12 +773,36 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        token_embedding_output = self.embeddings(input_ids, attention_mask=attention_mask)
+        batch_size, seq_length = input_ids.shape
+        if attention_mask is not None:
+            extended_attention_mask = attention_mask[:, None, None, :].expand(
+                batch_size, 1, seq_length, seq_length
+            ).bool()
+        else:
+            extended_attention_mask = None
+        encoder_outputs = self.encoder(
+            token_embedding_output,
+            attention_mask=extended_attention_mask,
+            output_hidden_states=False,
+            output_attentions=False,
+        )
+        return encoder_outputs.last_hidden_state
+
+    def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        attns = self(input_ids, attention_mask=attention_mask, output_attentions=True).attentions
+        attns = torch.stack(attns, dim=1)
+        attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+        attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(4)
+        return self.contact_head(input_ids, attns)
+
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
@@ -679,7 +834,7 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel):
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
         batch_size, seq_length = input_shape
-        embedding_output = self.embeddings(
+        token_embedding_output = self.embeddings(
             input_ids=input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
@@ -694,7 +849,7 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel):
             extended_attention_mask = None
 
         encoder_outputs = self.encoder(
-            embedding_output,
+            token_embedding_output,
             attention_mask=extended_attention_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
@@ -708,9 +863,9 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel):
         )
 
 
-class FastEsmModel(FastEsmPreTrainedModel):
-    def __init__(self, config, add_pooling_layer=True):
-        super().__init__(config)
+class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
+    def __init__(self, config, add_pooling_layer: Optional[bool] = True):
+        super(FastEsmPreTrainedModel, self).__init__(config)
         self.config = config
         self.esm = FAST_ESM_ENCODER(config)
         self.pooler = EsmPooler(config) if add_pooling_layer else None
@@ -723,12 +878,18 @@ class FastEsmModel(FastEsmPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.esm._embed(input_ids, attention_mask)
+
+    def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.esm.predict_contacts(input_ids, attention_mask=attention_mask)
+
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
@@ -778,11 +939,11 @@ class FastEsmModel(FastEsmPreTrainedModel):
         )
 
 
-class FastEsmForMaskedLM(FastEsmPreTrainedModel):
+class FastEsmForMaskedLM(FastEsmPreTrainedModel, EmbeddingMixin):
     _tied_weights_keys = ["lm_head.decoder.weight"]
 
     def __init__(self, config):
-        super().__init__(config)
+        super(FastEsmPreTrainedModel, self).__init__(config)
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.lm_head = EsmLMHead(config)
         self.loss_fct = nn.CrossEntropyLoss()
@@ -794,13 +955,19 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head.decoder = new_embeddings
 
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.esm._embed(input_ids, attention_mask)
+
+    def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.esm.predict_contacts(input_ids, attention_mask=attention_mask)
+
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
@@ -829,13 +996,10 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel):
             attentions=outputs.attentions,
         )
 
-    def predict_contacts(self, tokens, attention_mask):
-        raise NotImplementedError("predict_contacts is not supported by F.scaled_dot_product_attention")
 
-
-class FastEsmForSequenceClassification(FastEsmPreTrainedModel):
+class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
     def __init__(self, config):
-        super().__init__(config)
+        super(FastEsmPreTrainedModel, self).__init__(config)
         self.num_labels = config.num_labels
         self.config = config
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
@@ -845,13 +1009,19 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel):
         self.bce = nn.BCEWithLogitsLoss()
         self.init_weights()
 
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.esm._embed(input_ids, attention_mask)
+
+    def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.esm.predict_contacts(input_ids, attention_mask=attention_mask)
+
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None
@@ -896,9 +1066,9 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel):
         )
 
 
-class FastEsmForTokenClassification(FastEsmPreTrainedModel):
+class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
     def __init__(self, config):
-        super().__init__(config)
+        super(FastEsmPreTrainedModel, self).__init__(config)
         self.num_labels = config.num_labels
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -906,13 +1076,19 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel):
         self.loss_fct = nn.CrossEntropyLoss()
         self.init_weights()
 
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.esm._embed(input_ids, attention_mask)
+
+    def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.esm.predict_contacts(input_ids, attention_mask=attention_mask)
+
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
+        input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None
@@ -972,7 +1148,11 @@ if __name__ == "__main__":
         tokenizer = EsmTokenizer.from_pretrained(model_path)
         config = FastEsmConfig.from_pretrained(model_path)
         fast_model = FastEsmForMaskedLM(config).from_pretrained(model_path).to(device)
+        print('fast model')
+        print(fast_model)
         model = TransformersEsmModel.from_pretrained(model_path, token_dropout=False).to(device)
+        print('transformers model')
+        print(model)
 
         counts = [0] * len(tolerances)
         for _ in range(seq_count):

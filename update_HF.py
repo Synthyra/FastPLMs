@@ -45,7 +45,7 @@ if __name__ == "__main__":
         )
         # Upload license file for FastESM models
         api.upload_file(
-            path_or_fileobj="licenses/fastesm_license.txt",
+            path_or_fileobj="LICENSE",
             path_in_repo="LICENSE",
             repo_id=path,
             repo_type="model",
@@ -84,7 +84,7 @@ if __name__ == "__main__":
             )
             # Upload license file for ESM++ small model
             api.upload_file(
-                path_or_fileobj="licenses/esmplusplus_small_license.txt",
+                path_or_fileobj="LICENSE",
                 path_in_repo="LICENSE",
                 repo_id=path,
                 repo_type="model",
@@ -99,7 +99,7 @@ if __name__ == "__main__":
             )
             # Upload license file for ESM++ large model
             api.upload_file(
-                path_or_fileobj="licenses/esmplusplus_large_license.txt",
+                path_or_fileobj="LICENSE",
                 path_in_repo="LICENSE",
                 repo_id=path,
                 repo_type="model",
@@ -110,7 +110,7 @@ if __name__ == "__main__":
         print(path)
         # Upload license file for ANKH models
         api.upload_file(
-            path_or_fileobj="licenses/ankh_license.txt",
+            path_or_fileobj="LICENSE",
             path_in_repo="LICENSE",
             repo_id=path,
             repo_type="model",

@@ -2,73 +2,81 @@ import torch
 import random
 import numpy as np
 import sqlite3
-from transformers import AutoModelForMaskedLM
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from modeling_fastesm import FastEsmModel
+from modeling_esm_plusplus import ESMplusplusModel
 
 
-canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
+CANONICAL_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 
 
 def generate_random_sequence(length: int) -> str:
-    return 'M' + "".join(random.choices(canonical_amino_acids, k=length))
+    return 'M' + "".join(random.choices(CANONICAL_AMINO_ACIDS, k=length))
 
 
-sequences = [generate_random_sequence(random.randint(4, 8)) for _ in range(100)]
+if __name__ == "__main__":
+    # py tests/test_embedding_esmfast.py
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    def test_embedding(model, sequences):
+        embeddings = model.embed_dataset(
+            sequences=sequences,
+            tokenizer=model.tokenizer,
+            sql=False, # return dictionary of sequences and embeddings
+            save=False,
+        )
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESMplusplus_large", trust_remote_code=True, torch_dtype=torch.float16).to(device)
-print(model)
+        count = 0
+        for k, v in embeddings.items():
+            print(k)
+            print(v.dtype, v.shape)
+            count += 1
+            if count > 10:
+                break
 
-embeddings = model.embed_dataset(
-    sequences=sequences,
-    batch_size=16, # embedding batch size
-    max_len=2048, # truncate to max_len
-    full_embeddings=True, # return residue-wise embeddings
-    full_precision=False, # store as float32
-    pooling_type='mean', # use mean pooling if protein-wise embeddings
-    num_workers=0, # data loading num workers
-    sql=False, # return dictionary of sequences and embeddings
-)
+        db_path = 'embeddings.db'
+            
+        _ = model.embed_dataset(
+            sequences=sequences,
+            tokenizer=model.tokenizer,
+            pooling_types=['cls', 'mean'],
+            sql=True,
+            sql_db_path=db_path,
+            save=False,
+        )
 
-count = 0
-for k, v in embeddings.items():
-    print(k)
-    print(v.dtype, v.shape)
-    count += 1
-    if count > 10:
-        break
+        # Verify database contents
+        conn = sqlite3.connect(db_path)
+        c = conn.cursor()
 
-db_path = 'embeddings.db'
-    
-_ = model.embed_dataset(
-    sequences=sequences,
-    batch_size=2,
-    max_len=512,
-    full_embeddings=False,
-    full_precision=False,
-    pooling_type='cls',
-    num_workers=0,
-    sql=True,
-    sql_db_path=db_path,
-)
+        # Check number of sequences
+        c.execute('SELECT COUNT(*) FROM embeddings')
+        db_count = c.fetchone()[0]
+        print(f"\nNumber of sequences in database: {db_count}")
 
-# Verify database contents
-conn = sqlite3.connect(db_path)
-c = conn.cursor()
+        count = 0
+        for seq in sequences:
+            c.execute('SELECT embedding FROM embeddings WHERE sequence = ?', (seq,))
+            result = c.fetchone()
+            assert result is not None, f"Sequence {seq} not found in database"
+            if count < 10:
+                embedding = np.frombuffer(result[0], dtype=np.float32)
+                print(seq)
+                print(f"Embedding shape: {embedding.shape}")
+            count += 1
+        
+        # Make sure to close the connection before attempting to delete the file
+        c.close()
+        conn.close()
 
-# Check number of sequences
-c.execute('SELECT COUNT(*) FROM embeddings')
-db_count = c.fetchone()[0]
-print(f"\nNumber of sequences in database: {db_count}")
+    sequences = [generate_random_sequence(random.randint(4, 16)) for _ in range(100)]
+    model = FastEsmModel.from_pretrained("Synthyra/ESM2-8M", torch_dtype=torch.float16).to(device)
+    print(model)
+    test_embedding(model, sequences)
 
-count = 0
-for seq in sequences:
-    c.execute('SELECT embedding FROM embeddings WHERE sequence = ?', (seq,))
-    result = c.fetchone()
-    assert result is not None, f"Sequence {seq} not found in database"
-    if count < 10:
-        embedding = np.frombuffer(result[0], dtype=np.float32)
-        print(seq)
-        print(f"Embedding shape: {embedding.shape}")
-    count += 1
-conn.close()
+    sequences = [generate_random_sequence(random.randint(4, 16)) for _ in range(100)]
+    model = ESMplusplusModel.from_pretrained("Synthyra/ESMplusplus_small", torch_dtype=torch.float16).to(device)
+    print(model)
+    test_embedding(model, sequences)
