@@ -756,8 +756,8 @@ class FastEsmPreTrainedModel(PreTrainedModel):
 
 
 class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config, add_pooling_layer: Optional[bool] = True):
-        super(FastEsmPreTrainedModel, self).__init__(config)
+    def __init__(self, config, add_pooling_layer: Optional[bool] = True, **kwargs):
+        FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
         self.embeddings = EsmEmbeddings(config)
         self.encoder = EsmEncoder(config)
@@ -864,8 +864,8 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
 
 
 class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config, add_pooling_layer: Optional[bool] = True):
-        super(FastEsmPreTrainedModel, self).__init__(config)
+    def __init__(self, config, add_pooling_layer: Optional[bool] = True, **kwargs):
+        FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
         self.esm = FAST_ESM_ENCODER(config)
         self.pooler = EsmPooler(config) if add_pooling_layer else None
@@ -942,8 +942,8 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
 class FastEsmForMaskedLM(FastEsmPreTrainedModel, EmbeddingMixin):
     _tied_weights_keys = ["lm_head.decoder.weight"]
 
-    def __init__(self, config):
-        super(FastEsmPreTrainedModel, self).__init__(config)
+    def __init__(self, config, **kwargs):
+        FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.lm_head = EsmLMHead(config)
         self.loss_fct = nn.CrossEntropyLoss()
@@ -998,8 +998,8 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel, EmbeddingMixin):
 
 
 class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config):
-        super(FastEsmPreTrainedModel, self).__init__(config)
+    def __init__(self, config, **kwargs):
+        FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.num_labels = config.num_labels
         self.config = config
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
@@ -1067,8 +1067,8 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
 
 
 class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config):
-        super(FastEsmPreTrainedModel, self).__init__(config)
+    def __init__(self, config, **kwargs):
+        FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.num_labels = config.num_labels
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)

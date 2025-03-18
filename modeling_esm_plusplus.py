@@ -796,7 +796,7 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
     """
     config_class = ESMplusplusConfig
     def __init__(self, config: ESMplusplusConfig, **kwargs):
-        super(PreTrainedESMplusplusModel, self).__init__(config, **kwargs)
+        PreTrainedESMplusplusModel.__init__(self, config, **kwargs)
         self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
@@ -849,7 +849,7 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
     """
     config_class = ESMplusplusConfig
     def __init__(self, config: ESMplusplusConfig, **kwargs):
-        super(PreTrainedESMplusplusModel, self).__init__(config, **kwargs)
+        PreTrainedESMplusplusModel.__init__(self, config, **kwargs)
         self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
@@ -923,7 +923,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
     Extends the base ESM++ model with a classification head.
     """
     def __init__(self, config: ESMplusplusConfig, **kwargs):
-        super(ESMplusplusForMaskedLM, self).__init__(config, **kwargs)
+        ESMplusplusForMaskedLM.__init__(self, config, **kwargs)
         self.config = config
         self.num_labels = config.num_labels
         self.classifier = RegressionHead(config.hidden_size * 2, config.num_labels, config.hidden_size * 4)
@@ -1007,8 +1007,8 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
     ESM++ model for token classification.
     Extends the base ESM++ model with a token classification head.
     """
-    def __init__(self, config: ESMplusplusConfig):
-        super(ESMplusplusForMaskedLM, self).__init__(config)
+    def __init__(self, config: ESMplusplusConfig, **kwargs):
+        ESMplusplusForMaskedLM.__init__(self, config, **kwargs)
         self.config = config
         self.num_labels = config.num_labels
         self.classifier = RegressionHead(config.hidden_size, config.num_labels, config.hidden_size * 4)
