@@ -68,11 +68,12 @@ embedding_dict = model.embed_dataset(
     sequences=[
         'MALWMRLLPLLALLALWGPDPAAA', ... # list of protein sequences
     ],
+    tokenizer=model.tokenizer,
     batch_size=2, # adjust for your GPU memory
     max_len=512, # adjust for your needs
     full_embeddings=False, # if True, no pooling is performed
     embed_dtype=torch.float32, # cast to what dtype you want
-    pooling_type=['mean', 'cls'], # more than one pooling type will be concatenated together
+    pooling_types=['mean', 'cls'], # more than one pooling type will be concatenated together
     num_workers=0, # if you have many cpu cores, we find that num_workers = 4 is fast for large datasets
     sql=False, # if True, embeddings will be stored in SQLite database
     sql_db_path='embeddings.db',
