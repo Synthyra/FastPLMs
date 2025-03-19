@@ -931,6 +931,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
+        self.pooler = Pooler(['cls','mean'])
         self.init_weights()
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -969,10 +970,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
             output_hidden_states=output_hidden_states
         )
         x = output.last_hidden_state
-        cls_features = x[:, 0, :]
-        mean_features = self.mean_pooling(x, attention_mask)
-        # we include mean pooling features to help with early convergence, the cost of this is basically zero
-        features = torch.cat([cls_features, mean_features], dim=-1)
+        features = self.pooler(x, attention_mask)
         logits = self.classifier(features)
         loss = None
         if labels is not None:
@@ -994,6 +992,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
                 loss = self.ce(logits.view(-1, self.num_labels), labels.view(-1))
             elif self.config.problem_type == "multi_label_classification":
                 loss = self.bce(logits, labels)
+
         return ESMplusplusOutput(
             loss=loss,
             logits=logits,
@@ -1197,3 +1196,97 @@ class EsmSequenceTokenizer(PreTrainedTokenizerFast):
     @property
     def special_token_ids(self):
         return self.all_special_ids
+
+
+if __name__ == "__main__":    
+    # Set device to CPU for testing
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # Test tokenizer
+    tokenizer = EsmSequenceTokenizer()
+    sample_sequence = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
+    encoding = tokenizer(sample_sequence, return_tensors="pt")
+    print(f"Input sequence length: {len(sample_sequence)}")
+    print(f"Tokenized sequence: {encoding['input_ids'].shape}")
+    
+    # Prepare inputs
+    input_ids = encoding['input_ids'].to(device)
+    attention_mask = encoding['attention_mask'].to(device)
+    
+    # Test base model with smaller config for quick testing
+    print("\n=== Testing ESMplusplus Base Model ===")
+    base_config = ESMplusplusConfig(
+        hidden_size=384,
+        num_attention_heads=6,
+        num_hidden_layers=4
+    )
+    base_model = ESMplusplusModel(base_config).to(device)
+    
+    with torch.no_grad():
+        outputs = base_model(input_ids=input_ids, attention_mask=attention_mask)
+    
+    print(f"Last hidden state shape: {outputs.last_hidden_state.shape}")
+    
+    # Test embedding functionality
+    print("\nTesting embedding functionality:")
+    with torch.no_grad():
+        embeddings = base_model._embed(input_ids, attention_mask)
+    print(f"Embedding shape: {embeddings.shape}")
+    
+    # Test masked language modeling
+    print("\n=== Testing ESMplusplus For Masked LM ===")
+    mlm_model = ESMplusplusForMaskedLM(base_config).to(device)
+    
+    with torch.no_grad():
+        outputs = mlm_model(input_ids=input_ids, attention_mask=attention_mask)
+    
+    print(f"Last hidden state shape: {outputs.last_hidden_state.shape}")
+    print(f"Logits shape: {outputs.logits.shape}")
+    
+    # Test sequence classification model
+    print("\n=== Testing Sequence Classification Model ===")
+    classification_model = ESMplusplusForSequenceClassification(base_config).to(device)
+    
+    with torch.no_grad():
+        outputs = classification_model(input_ids=input_ids, attention_mask=attention_mask)
+    
+    print(f"Last hidden state shape: {outputs.last_hidden_state.shape}")
+    print(f"Logits shape: {outputs.logits.shape}")
+    
+    # Test token classification model
+    print("\n=== Testing Token Classification Model ===")
+    token_model = ESMplusplusForTokenClassification(base_config).to(device)
+    
+    with torch.no_grad():
+        outputs = token_model(input_ids=input_ids, attention_mask=attention_mask)
+    
+    print(f"Last hidden state shape: {outputs.last_hidden_state.shape}")
+    print(f"Logits shape: {outputs.logits.shape}")
+    
+    # Test embedding dataset functionality with a mini dataset
+    print("\n=== Testing Embed Dataset Functionality ===")
+    mini_dataset = [sample_sequence, sample_sequence[:50], sample_sequence[:30]]
+    print(f"Creating embeddings for {len(mini_dataset)} sequences")
+    
+    # Only run this if save path doesn't exist to avoid overwriting
+    if not os.path.exists("test_embeddings.pth"):
+        embeddings = mlm_model.embed_dataset(
+            sequences=mini_dataset,
+            tokenizer=tokenizer,
+            batch_size=2,
+            max_len=100,
+            full_embeddings=False,
+            pooling_types=['mean'],
+            save_path="test_embeddings.pth"
+        )
+        if embeddings:
+            print(f"Embedding dictionary size: {len(embeddings)}")
+            for seq, emb in embeddings.items():
+                print(f"Sequence length: {len(seq)}, Embedding shape: {emb.shape}")
+                break
+    else:
+        print("Skipping embedding test as test_embeddings.pth already exists")
+    
+    print("\nAll tests completed successfully!")
+    
