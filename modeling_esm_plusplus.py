@@ -321,7 +321,7 @@ class MultiHeadAttention(nn.Module):
             attn_bias = torch.zeros(L, S, dtype=query_BLD.dtype, device=query_BLD.device)
             if attention_mask is not None:
                 if attention_mask.dtype == torch.bool:
-                    attention_mask.masked_fill_(attention_mask.logical_not(), float('-inf'))
+                    attn_bias.masked_fill_(attention_mask.logical_not(), float('-inf'))
                 else:
                     attn_bias += attention_mask
     
