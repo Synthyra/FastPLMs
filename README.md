@@ -59,3 +59,29 @@ Note:
 
 ## Upcoming releases
 A Fast version of ANKH is in progress. It is functional but is still currently native attention, we are waiting for bias gradient support in [FlexAttention](https://pytorch.org/blog/flexattention/).
+
+## Docker Setup
+
+To use the Docker container (for testing):
+
+```bash
+# Build and start the container
+docker-compose up -d
+
+# Execute commands inside the container
+docker-compose exec esmplusplus bash
+
+# Or run specific Python scripts
+docker-compose exec esmplusplus python wip/flasht5/test_t5_flash_attention.py
+docker-compose exec esmplusplus python wip/flasht5/flashT5/benchmarks/bench_fa2_bias.py
+docker-compose exec esmplusplus python -m wip.flasht5.flashT5.benchmarks.bench_fa2_bias
+```
+
+The Docker container automatically:
+- Installs all required dependencies from requirements.txt
+- Initializes the Git submodules
+- Provides GPU support (if available and Docker is configured for GPU access)
+
+### Prerequisites for GPU support
+- Install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+- Ensure Docker is configured to use the NVIDIA runtime

@@ -1,0 +1,19 @@
+version: '3'
+
+services:
+  esmplusplus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/app
+    tty: true
+    stdin_open: true
+    # If you need GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu] 
