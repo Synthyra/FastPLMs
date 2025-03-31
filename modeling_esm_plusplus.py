@@ -316,15 +316,12 @@ class MultiHeadAttention(nn.Module):
         query_BHLD, key_BHLD, value_BHLD = map(self.reshaper, (query_BLD, key_BLD, value_BLD))
 
         if output_attentions: # Manual attention computation
-            L, S = query_BLD.size(-2), key_BLD.size(-2)
-            scale = 1 / math.sqrt(query_BLD.size(-1))
-            attn_bias = torch.zeros(L, S, dtype=query_BLD.dtype, device=query_BLD.device)
+            b, L, d = x.shape
+            scale = 1 / math.sqrt(d)
+            attn_bias = torch.zeros(b, 1, L, L, dtype=query_BLD.dtype, device=query_BLD.device)
             if attention_mask is not None:
-                if attention_mask.dtype == torch.bool:
-                    attn_bias.masked_fill_(attention_mask.logical_not(), float('-inf'))
-                else:
-                    attn_bias += attention_mask
-    
+                attn_bias.masked_fill_(attention_mask.logical_not(), float('-inf'))
+
             attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-2, -1)) * scale
             attn_weights += attn_bias
             attn_weights = F.softmax(attn_weights, dim=-1)
