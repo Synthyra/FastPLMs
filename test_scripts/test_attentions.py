@@ -56,7 +56,7 @@ def test_attention_outputs(model, tokenizer, seqs, batch_size=4, tolerances=[1e-
 
 
 if __name__ == '__main__':
-    # Parse arguments
+    # py -m test_scripts.test_attentions
     parser = argparse.ArgumentParser(description='Test attention outputs in ESM++ models')
     parser.add_argument('--model', type=str, default='Synthyra/ESMplusplus_small', help='Model to test')
     parser.add_argument('--num_samples', type=int, default=100, help='Number of samples to test')
