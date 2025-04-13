@@ -629,6 +629,7 @@ class EmbeddingMixin:
         tokenizer: PreTrainedTokenizerBase,
         batch_size: int = 2,
         max_len: int = 512,
+        truncate: bool = True,
         full_embeddings: bool = False,
         embed_dtype: torch.dtype = torch.float32,
         pooling_types: List[str] = ['mean'],
@@ -680,8 +681,9 @@ class EmbeddingMixin:
             )
             >>> # embedding_dict is a dictionary mapping sequences to their embeddings as tensors for .pth or numpy arrays for sql
         """
-        sequences = list(set([seq[:max_len] for seq in sequences]))
+        sequences = list(set([seq[:max_len] if truncate else seq for seq in sequences]))
         sequences = sorted(sequences, key=len, reverse=True)
+        hidden_size = self.config.hidden_size
         collate_fn = build_collator(tokenizer)
         device = self.device
         pooler = Pooler(pooling_types) if not full_embeddings else None
@@ -709,10 +711,10 @@ class EmbeddingMixin:
                         seqs = to_embed[i * batch_size:(i + 1) * batch_size]
                         input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
                         residue_embeddings = self._embed(input_ids, attention_mask).float() # sql requires float32
-                        embeddings = get_embeddings(residue_embeddings, attention_mask).cpu()
+                        embeddings = get_embeddings(residue_embeddings, attention_mask)
                         for seq, emb, mask in zip(seqs, embeddings, attention_mask):
                             if full_embeddings:
-                                emb = emb[mask.bool()]
+                                emb = emb[mask.bool()].reshape(-1, hidden_size)
                             c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
                                     (seq, emb.cpu().numpy().tobytes()))
                         
@@ -741,9 +743,11 @@ class EmbeddingMixin:
                     seqs = to_embed[i * batch_size:(i + 1) * batch_size]
                     input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
                     residue_embeddings = self._embed(input_ids, attention_mask)
-                    embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype).cpu()
-                    for seq, emb in zip(seqs, embeddings):
-                        embeddings_dict[seq] = emb
+                    embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
+                    for seq, emb, mask in zip(seqs, embeddings, attention_mask):
+                        if full_embeddings:
+                            emb = emb[mask.bool()].reshape(-1, hidden_size)
+                        embeddings_dict[seq] = emb.cpu()
 
         if save:
             torch.save(embeddings_dict, save_path)

@@ -17,7 +17,7 @@ def generate_random_sequence(length: int) -> str:
 
 
 if __name__ == "__main__":
-    # py tests/test_embedding.py
+    # py test_scripts/test_embedding.py
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     def test_embedding(model, sequences):
@@ -33,7 +33,23 @@ if __name__ == "__main__":
             print(k)
             print(v.dtype, v.shape)
             count += 1
-            if count > 10:
+            if count > 5:
+                break
+
+        embeddings = model.embed_dataset(
+            sequences=sequences,
+            tokenizer=model.tokenizer,
+            full_embeddings=True,
+            sql=False, # return dictionary of sequences and embeddings
+            save=False,
+        )
+
+        count = 0
+        for k, v in embeddings.items():
+            print(k)
+            print(v.dtype, v.shape)
+            count += 1
+            if count > 100:
                 break
 
         db_path = 'embeddings.db'
