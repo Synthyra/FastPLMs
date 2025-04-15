@@ -1156,6 +1156,7 @@ class EsmSequenceTokenizer(PreTrainedTokenizerFast):
         # sequences are merged if you want.
         tokenizer.post_processor = TemplateProcessing(  # type: ignore
             single="<cls> $A <eos>",
+            pair="<cls>:0 $A:0 <eos>:0 $B:1 <eos>:1",
             special_tokens=[
                 ("<cls>", tokenizer.token_to_id("<cls>")),
                 ("<eos>", tokenizer.token_to_id("<eos>")),
