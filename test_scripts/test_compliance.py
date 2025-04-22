@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 import random
 import argparse
+import numpy as np
 import matplotlib.pyplot as plt
 from huggingface_hub import login
 from transformers import AutoModelForMaskedLM
@@ -14,6 +15,14 @@ from esm.sdk.api import ESMProtein, LogitsConfig
 """
 Testing if ESM++ outputs are compliant with ESMC outputs
 """
+
+def set_seed(seed: int):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    random.seed(seed)
+    np.random.seed(seed)
 
 
 parser = argparse.ArgumentParser()
@@ -30,6 +39,7 @@ length = 128
 seq_count = 1000
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+set_seed(42)
 
 def generate_random_sequence(length: int) -> str:
     return 'M' + "".join(random.choices(canonical_amino_acids, k=length-3))
