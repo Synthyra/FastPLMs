@@ -3,6 +3,9 @@ library_name: transformers
 tags: []
 ---
 
+# NOTE
+There was previously a bug with Huggingface weight tieing that caused the logits of FastESM to differ from ESM2. That bug is now resolved.
+
 # FastESM
 FastESM is a Huggingface compatible plug in version of ESM2 rewritten with a newer PyTorch attention implementation.
 

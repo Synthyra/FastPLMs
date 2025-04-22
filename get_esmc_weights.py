@@ -1,8 +1,9 @@
 import os
 import torch
+import copy
 from functools import cache
 from pathlib import Path
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, login
 from modeling_esm_plusplus import ESMplusplusForMaskedLM, ESMplusplusConfig
 
 
@@ -53,21 +54,25 @@ def ESMplusplus_600M(device: torch.device | str = "cpu"):
     return model
 
 
-model_dict = {
-    # Synthyra/ESM++small
-    'Synthyra/ESMplusplus_small': ESMplusplus_300M,
-    # Synthyra/ESM++large
-    'Synthyra/ESMplusplus_large': ESMplusplus_600M,
-}
-
-
-for model_path, model_fn in model_dict.items():
-    model = model_fn()
-    model.config.auto_map = {
-        "AutoConfig": "modeling_esm_plusplus.ESMplusplusConfig",
-        "AutoModel": "modeling_esm_plusplus.ESMplusplusModel",
-        "AutoModelForMaskedLM": "modeling_esm_plusplus.ESMplusplusForMaskedLM",
-        "AutoModelForSequenceClassification": "modeling_esm_plusplus.ESMplusplusForSequenceClassification",
-        "AutoModelForTokenClassification": "modeling_esm_plusplus.ESMplusplusForTokenClassification"
+if __name__ == "__main__":
+    login()
+    
+    model_dict = {
+        # Synthyra/ESM++small
+        'Synthyra/ESMplusplus_small': ESMplusplus_300M,
+        # Synthyra/ESM++large
+        'Synthyra/ESMplusplus_large': ESMplusplus_600M,
     }
-    model.push_to_hub(model_path, safe_serialization=False)
+
+
+    for model_path, model_fn in model_dict.items():
+        model = model_fn()
+        model.sequence_head = copy.deepcopy(model.sequence_head)
+        model.config.auto_map = {
+            "AutoConfig": "modeling_esm_plusplus.ESMplusplusConfig",
+            "AutoModel": "modeling_esm_plusplus.ESMplusplusModel",
+            "AutoModelForMaskedLM": "modeling_esm_plusplus.ESMplusplusForMaskedLM",
+            "AutoModelForSequenceClassification": "modeling_esm_plusplus.ESMplusplusForSequenceClassification",
+            "AutoModelForTokenClassification": "modeling_esm_plusplus.ESMplusplusForTokenClassification"
+        }
+        model.push_to_hub(model_path)

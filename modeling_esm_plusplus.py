@@ -53,7 +53,7 @@ class ESMplusplusConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         **kwargs,
     ):
-        super().__init__(**kwargs)
+        super().__init__(**kwargs, tie_word_embeddings=False)
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_attention_heads = num_attention_heads

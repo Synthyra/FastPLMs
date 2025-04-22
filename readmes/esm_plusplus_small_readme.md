@@ -3,6 +3,9 @@ library_name: transformers
 tags: []
 ---
 
+# NOTE
+There was previously a bug with Huggingface weight tieing that caused the logits of ESM++ to differ from ESMC. That bug is now resolved.
+
 # ESM++
 [ESM++](https://github.com/Synthyra/ESMplusplus) is a faithful implementation of [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) ([license](https://www.evolutionaryscale.ai/policies/cambrian-open-license-agreement)) that allows for batching and standard Huggingface compatibility without requiring the ESM Python package.
 The small version corresponds to the 300 million parameter version of ESMC.

@@ -55,7 +55,12 @@ class FastEsmConfig(PretrainedConfig):
         emb_layer_norm_before: bool = None,
         **kwargs,
     ):
-        super().__init__(pad_token_id=pad_token_id, mask_token_id=mask_token_id, **kwargs)
+        super().__init__(
+            pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
+            tie_word_embeddings=False,
+            **kwargs,
+        )
 
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
@@ -945,8 +950,6 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
 
 
 class FastEsmForMaskedLM(FastEsmPreTrainedModel, EmbeddingMixin):
-    _tied_weights_keys = ["lm_head.decoder.weight"]
-
     def __init__(self, config, **kwargs):
         FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)

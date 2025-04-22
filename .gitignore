@@ -10,3 +10,4 @@
 /results_regression_lora
 .qodo
 *.db
+/esm

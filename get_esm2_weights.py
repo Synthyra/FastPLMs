@@ -1,3 +1,6 @@
+import copy
+from huggingface_hub import login
+from transformers import EsmForMaskedLM
 from modeling_fastesm import FastEsmForMaskedLM, FastEsmConfig
 
 
@@ -15,8 +18,10 @@ model_dict = {
 }
 
 
-for model_name in model_dict:
-    config = FastEsmConfig.from_pretrained(model_dict[model_name])
+if __name__ == "__main__":
+    login()
+    for model_name in model_dict:
+        config = FastEsmConfig.from_pretrained(model_dict[model_name])
     config.auto_map = {
         "AutoConfig": "modeling_fastesm.FastEsmConfig",
         "AutoModel": "modeling_fastesm.FastEsmModel",
@@ -24,5 +29,7 @@ for model_name in model_dict:
         "AutoModelForSequenceClassification": "modeling_fastesm.FastEsmForSequenceClassification",
         "AutoModelForTokenClassification": "modeling_fastesm.FastEsmForTokenClassification"
     }
+    original_model = EsmForMaskedLM.from_pretrained(model_dict[model_name])
     model = FastEsmForMaskedLM(config=config).from_pretrained(model_dict[model_name], config=config)
+    model.lm_head = copy.deepcopy(original_model.lm_head)
     model.push_to_hub('Synthyra/' + model_name)
