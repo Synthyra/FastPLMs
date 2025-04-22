@@ -61,14 +61,14 @@ torch.cuda.empty_cache()
 
 # Get plusplus outputs
 total_mse = 0
-model = AutoModelForMaskedLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True).to(device)
+model = AutoModelForMaskedLM.from_pretrained(model_path, trust_remote_code=True).to(device)
 tokenizer = model.tokenizer
 with torch.no_grad():
     for i, seq in tqdm(enumerate(sequences), total=len(sequences)):
         input = tokenizer(seq, return_tensors="pt").to(device)
         embeddings = model(**input).last_hidden_state.cpu()
         mse = F.mse_loss(base_outputs[i], embeddings).item()
-        if mse > 0.0001:
+        if mse > 0.001:
             print(f"MSE for sequence {i}: {mse:.8f}")
             # Find positions where tensors differ
             diff = torch.abs(base_outputs[i] - embeddings)
