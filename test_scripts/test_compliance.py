@@ -36,7 +36,7 @@ if args.token:
 model_path = args.model_path
 canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
 length = 128
-seq_count = 1000
+seq_count = 10
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 set_seed(42)
@@ -56,39 +56,65 @@ else:
 
 # Get esmc model outputs
 base_outputs = []
+base_logits = []
 with torch.no_grad():
     for seq in tqdm(sequences):
         protein = ESMProtein(sequence=seq)
         protein_tensor = esmc.encode(protein)
-        embeddings = esmc.logits(
+        logits_result = esmc.logits(
             protein_tensor, LogitsConfig(sequence=True, return_embeddings=True)
-        ).embeddings.cpu()
+        )
+        embeddings = logits_result.embeddings.cpu()
+        logits = logits_result.logits.sequence.cpu()
         base_outputs.append(embeddings)
+        base_logits.append(logits)
 esmc.cpu()
 del esmc
 torch.cuda.empty_cache()
 
 
 # Get plusplus outputs
-total_mse = 0
+total_mse_embeddings = 0
+total_mse_logits = 0
 model = AutoModelForMaskedLM.from_pretrained(model_path, trust_remote_code=True).to(device)
 tokenizer = model.tokenizer
 with torch.no_grad():
     for i, seq in tqdm(enumerate(sequences), total=len(sequences)):
         input = tokenizer(seq, return_tensors="pt").to(device)
-        embeddings = model(**input).last_hidden_state.cpu()
-        mse = F.mse_loss(base_outputs[i], embeddings).item()
-        if mse > 0.001:
-            print(f"MSE for sequence {i}: {mse:.8f}")
+        outputs = model(**input)
+        embeddings = outputs.last_hidden_state.cpu()
+        logits = outputs.logits.cpu()
+        
+        # Compare embeddings
+        mse_embeddings = F.mse_loss(base_outputs[i], embeddings).item()
+        # Compare logits
+        mse_logits = F.mse_loss(base_logits[i], logits).item()
+        
+        if mse_embeddings > 0.001 or mse_logits > 0.001:
+            print(f"Sequence {i}:")
+            print(f"  Embeddings MSE: {mse_embeddings:.8f}")
+            print(f"  Logits MSE: {mse_logits:.8f}")
+            
             # Find positions where tensors differ
-            diff = torch.abs(base_outputs[i] - embeddings)
-            # plot diff
-            plt.imshow(diff[0].detach().numpy())
+            diff_embeddings = torch.abs(base_outputs[i] - embeddings)
+            diff_logits = torch.abs(base_logits[i] - logits)
+            
+            # plot diffs
+            plt.figure(figsize=(12, 5))
+            plt.subplot(1, 2, 1)
+            plt.imshow(diff_embeddings[0].detach().numpy())
+            plt.title("Embeddings Difference")
+            
+            plt.subplot(1, 2, 2)
+            plt.imshow(diff_logits[0].detach().numpy())
+            plt.title("Logits Difference")
             plt.show()
             
-        total_mse += mse
+        total_mse_embeddings += mse_embeddings
+        total_mse_logits += mse_logits
 model.cpu()
 del model
 torch.cuda.empty_cache()
 
-print(f"Average MSE: {mse / seq_count}")
+print(f"Average Embeddings MSE: {total_mse_embeddings / seq_count}")
+print(f"Average Logits MSE: {total_mse_logits / seq_count}")
