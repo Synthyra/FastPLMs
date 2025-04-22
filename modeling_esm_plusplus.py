@@ -53,7 +53,7 @@ class ESMplusplusConfig(PretrainedConfig):
         initializer_range: float = 0.02,
         **kwargs,
     ):
-        super().__init__(**kwargs, tie_word_embeddings=False)
+        super().__init__(**kwargs)
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_attention_heads = num_attention_heads
@@ -62,6 +62,7 @@ class ESMplusplusConfig(PretrainedConfig):
         self.problem_type = problem_type
         self.dropout = dropout
         self.initializer_range = initializer_range
+        self.tie_word_embeddings = False
 
 
 ### Rotary Embeddings

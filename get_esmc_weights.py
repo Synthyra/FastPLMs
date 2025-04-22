@@ -55,7 +55,7 @@ def ESMplusplus_600M(device: torch.device | str = "cpu"):
 
 
 if __name__ == "__main__":
-    login()
+    #login()
     
     model_dict = {
         # Synthyra/ESM++small

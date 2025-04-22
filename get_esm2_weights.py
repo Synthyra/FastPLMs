@@ -19,17 +19,19 @@ model_dict = {
 
 
 if __name__ == "__main__":
-    login()
+    #login()
     for model_name in model_dict:
         config = FastEsmConfig.from_pretrained(model_dict[model_name])
-    config.auto_map = {
-        "AutoConfig": "modeling_fastesm.FastEsmConfig",
-        "AutoModel": "modeling_fastesm.FastEsmModel",
-        "AutoModelForMaskedLM": "modeling_fastesm.FastEsmForMaskedLM",
-        "AutoModelForSequenceClassification": "modeling_fastesm.FastEsmForSequenceClassification",
-        "AutoModelForTokenClassification": "modeling_fastesm.FastEsmForTokenClassification"
-    }
-    original_model = EsmForMaskedLM.from_pretrained(model_dict[model_name])
-    model = FastEsmForMaskedLM(config=config).from_pretrained(model_dict[model_name], config=config)
-    model.lm_head = copy.deepcopy(original_model.lm_head)
-    model.push_to_hub('Synthyra/' + model_name)
+        config.auto_map = {
+            "AutoConfig": "modeling_fastesm.FastEsmConfig",
+            "AutoModel": "modeling_fastesm.FastEsmModel",
+            "AutoModelForMaskedLM": "modeling_fastesm.FastEsmForMaskedLM",
+            "AutoModelForSequenceClassification": "modeling_fastesm.FastEsmForSequenceClassification",
+            "AutoModelForTokenClassification": "modeling_fastesm.FastEsmForTokenClassification"
+        }
+        config.tie_word_embeddings = False
+        original_model = EsmForMaskedLM.from_pretrained(model_dict[model_name])
+        model = FastEsmForMaskedLM(config=config).from_pretrained(model_dict[model_name], config=config)
+        model.lm_head.load_state_dict(original_model.lm_head.state_dict())
+        model.lm_head = copy.deepcopy(model.lm_head)
+        model.push_to_hub('Synthyra/' + model_name)

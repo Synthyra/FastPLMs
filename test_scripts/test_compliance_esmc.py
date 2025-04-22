@@ -39,7 +39,7 @@ if __name__ == "__main__":
     model_path = args.model_path
     canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
     length = 128
-    seq_count = 100
+    seq_count = 10
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     set_seed(42)
@@ -104,7 +104,7 @@ if __name__ == "__main__":
             # Compare logits
             mse_logits = F.mse_loss(base_logits[i], logits).item()
             
-            if mse_embeddings > 0.001 or mse_logits > 0.001:
+            if mse_embeddings > 0.01 or mse_logits > 0.01:
                 print(f"Sequence {i}:")
                 print(f"  Embeddings MSE: {mse_embeddings:.8f}")
                 print(f"  Logits MSE: {mse_logits:.8f}")

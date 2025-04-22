@@ -58,7 +58,6 @@ class FastEsmConfig(PretrainedConfig):
         super().__init__(
             pad_token_id=pad_token_id,
             mask_token_id=mask_token_id,
-            tie_word_embeddings=False,
             **kwargs,
         )
 
@@ -74,6 +73,7 @@ class FastEsmConfig(PretrainedConfig):
         self.layer_norm_eps = layer_norm_eps
         self.position_embedding_type = position_embedding_type
         self.emb_layer_norm_before = emb_layer_norm_before
+        self.tie_word_embeddings = False
 
     def to_dict(self) -> Dict[str, Any]:
         """

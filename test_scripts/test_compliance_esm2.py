@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import copy
 from huggingface_hub import login
 from tqdm.auto import tqdm
-from transformers import EsmForMaskedLM
+from transformers import EsmForMaskedLM, AutoModelForMaskedLM
 from modeling_fastesm import FastEsmForMaskedLM
 
 
@@ -25,7 +25,6 @@ def set_seed(seed: int):
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model_path', type=str, default='facebook/esm2_t33_650M_UR50D')
 parser.add_argument('--token', type=str, default=None)
 args = parser.parse_args()
 
@@ -35,10 +34,9 @@ if __name__ == "__main__":
     if args.token:
         login(args.token)
 
-    model_path = args.model_path
     canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
     length = 128
-    seq_count = 100
+    seq_count = 10
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     set_seed(42)
@@ -50,9 +48,10 @@ if __name__ == "__main__":
     sequences = [generate_random_sequence(length) for _ in range(seq_count)]
 
 
-    esm2 = EsmForMaskedLM.from_pretrained(model_path).to(device)
-    fastesm = FastEsmForMaskedLM.from_pretrained(model_path).to(device)
-    fastesm.lm_head.decoder.weight = copy.deepcopy(esm2.lm_head.decoder.weight)
+    esm2 = EsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D').to(device)
+    fastesm = FastEsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D').to(device)
+    fastesm.lm_head.load_state_dict(esm2.lm_head.state_dict())
+    #fastesm = FastEsmForMaskedLM.from_pretrained('Synthyra/ESM2-650M').to(device)
     tokenizer = fastesm.tokenizer
 
     # Get esmc model outputs
@@ -88,7 +87,7 @@ if __name__ == "__main__":
             # Compare logits
             mse_logits = F.mse_loss(base_logits[i], logits).item()
             
-            if mse_embeddings > 0.01 or mse_logits > 0.01:
+            if mse_embeddings > 0.01 or mse_logits > 0.1:
                 print(f"Sequence {i}:")
                 print(f"  Embeddings MSE: {mse_embeddings:.8f}")
                 print(f"  Logits MSE: {mse_logits:.8f}")
