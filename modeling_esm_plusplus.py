@@ -950,6 +950,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        **kwargs,
     ) -> ESMplusplusOutput:
         """Forward pass for sequence classification.
         
