@@ -1,0 +1,3 @@
+[submodule "wip/flasht5/flashT5"]
+	path = wip/flasht5/flashT5
+	url = https://github.com/catie-aq/flashT5.git
