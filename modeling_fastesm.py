@@ -903,6 +903,7 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        **kwargs,
     ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
         """Forward pass for base model.
         
@@ -979,6 +980,7 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel, EmbeddingMixin):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        **kwargs,
     ) -> Union[Tuple, EsmMaskedLMOutput]:
         outputs = self.esm(
             input_ids,
@@ -1032,7 +1034,8 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None
+        return_dict: Optional[bool] = None,
+        **kwargs,
     ) -> Union[Tuple, SequenceClassifierOutput]:
         outputs = self.esm(
             input_ids,
@@ -1099,7 +1102,8 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None
+        return_dict: Optional[bool] = None,
+        **kwargs,
     ) -> Union[Tuple, TokenClassifierOutput]:
         outputs = self.esm(
             input_ids,

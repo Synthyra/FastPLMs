@@ -823,6 +823,7 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        **kwargs,
     ) -> TransformerOutput:
         """Forward pass for masked language modeling.
         
@@ -885,6 +886,7 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        **kwargs,
     ) -> ESMplusplusOutput:
         """Forward pass for masked language modeling.
         
@@ -1029,6 +1031,7 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        **kwargs,
     ) -> ESMplusplusOutput:
         """Forward pass for token classification.
         
