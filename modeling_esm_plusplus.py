@@ -1002,6 +1002,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
             logits=logits,
             last_hidden_state=x,
             hidden_states=output.hidden_states,
+            attentions=output.attentions,
         )
 
 
@@ -1065,6 +1066,7 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
             logits=logits,
             last_hidden_state=x,
             hidden_states=output.hidden_states,
+            attentions=output.attentions,
         )
 
 
