@@ -156,12 +156,12 @@ We look at various ESM models and their throughput on an H100. Adding efficient 
 If you use any of this implementation or work please cite it (as well as the ESMC preprint).
 
 ```
-@misc {ESMPlusPlus,
-	author       = { Hallee, L. and Bichara, D. and Gleghorn, J, P. },
-	title        = { ESMPlusPlus },
-	year         = 2024,
-	url          = { https://huggingface.co/Synthyra/ESMplusplus_small },
-	doi          = { 10.57967/hf/3726 },
-	publisher    = { Hugging Face }
+@misc {ESM++,
+    author       = { Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+    title        = { ESM++: Efficient and Hugging Face compatible versions of the ESM Cambrian models},
+    year         = {2024},
+    url          = { https://huggingface.co/Synthyra/ESMplusplus_small },
+    DOI          = { 10.57967/hf/3726 },
+    publisher    = { Hugging Face }
 }
 ```
