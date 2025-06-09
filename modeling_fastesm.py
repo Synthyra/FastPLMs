@@ -575,7 +575,7 @@ class ProteinDataset(TorchDataset):
 def build_collator(tokenizer) -> Callable[[list[str]], tuple[torch.Tensor, torch.Tensor]]:
     def _collate_fn(sequences: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
         """Collate function for batching sequences."""
-        return tokenizer(sequences, return_tensors="pt", padding='longest', pad_to_multiple_of=8)
+        return tokenizer(sequences, return_tensors="pt", padding='longest')
     return _collate_fn
 
 
@@ -690,7 +690,7 @@ class EmbeddingMixin:
                         seqs = to_embed[i * batch_size:(i + 1) * batch_size]
                         input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
                         residue_embeddings = self._embed(input_ids, attention_mask).float() # sql requires float32
-                        embeddings = get_embeddings(residue_embeddings, attention_mask).cpu()
+                        embeddings = get_embeddings(residue_embeddings, attention_mask)
                         for seq, emb, mask in zip(seqs, embeddings, attention_mask):
                             if full_embeddings:
                                 emb = emb[mask.bool()].reshape(-1, hidden_size)

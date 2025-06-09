@@ -597,7 +597,7 @@ class ProteinDataset(TorchDataset):
 def build_collator(tokenizer) -> Callable[[list[str]], tuple[torch.Tensor, torch.Tensor]]:
     def _collate_fn(sequences: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
         """Collate function for batching sequences."""
-        return tokenizer(sequences, return_tensors="pt", padding='longest', pad_to_multiple_of=8)
+        return tokenizer(sequences, return_tensors="pt", padding='longest')
     return _collate_fn
 
 
@@ -754,7 +754,6 @@ class EmbeddingMixin:
             torch.save(embeddings_dict, save_path)
 
         return embeddings_dict
-
 
 class PreTrainedESMplusplusModel(PreTrainedModel):
     """
