@@ -53,6 +53,7 @@ class FastEsmConfig(PretrainedConfig):
         layer_norm_eps: float = 1e-12,
         position_embedding_type: str = "absolute",
         emb_layer_norm_before: bool = None,
+        token_dropout: bool = True,
         **kwargs,
     ):
         super().__init__(
@@ -74,6 +75,7 @@ class FastEsmConfig(PretrainedConfig):
         self.position_embedding_type = position_embedding_type
         self.emb_layer_norm_before = emb_layer_norm_before
         self.tie_word_embeddings = False
+        self.token_dropout = token_dropout
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -209,6 +211,8 @@ class EsmEmbeddings(nn.Module):
         self.register_buffer(
             "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
         )
+        self.token_dropout = config.token_dropout
+        self.mask_token_id = config.mask_token_id
 
     def forward(
         self,
@@ -222,6 +226,18 @@ class EsmEmbeddings(nn.Module):
             inputs_embeds = self.word_embeddings(input_ids)
 
         embeddings = inputs_embeds
+
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+
+        if self.token_dropout:
+            embeddings = embeddings.masked_fill((input_ids == self.mask_token_id).unsqueeze(-1), 0)
+            mask_ratio_train = 0.15 * 0.8
+            src_lengths = attention_mask.sum(-1)
+            mask_ratio_observed = (input_ids == self.mask_token_id).sum(-1).float() / src_lengths
+            embeddings = (embeddings * (1 - mask_ratio_train) / (1 - mask_ratio_observed)[:, None, None]).to(
+                embeddings.dtype
+            )
 
         if self.layer_norm is not None:
             embeddings = self.layer_norm(embeddings)
@@ -300,8 +316,8 @@ class EsmSelfAttention(nn.Module):
             query_layer, key_layer = self.rotary_embeddings(query_layer, key_layer)
 
         if output_attentions:
-            # Manual attention computation to get attention weights
-            attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+            # Manual attention computation - apply scaling here
+            attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2)) * self.scale
             if attention_mask is not None:
                 attention_scores = attention_scores + attention_mask
             attention_probs = F.softmax(attention_scores, dim=-1)

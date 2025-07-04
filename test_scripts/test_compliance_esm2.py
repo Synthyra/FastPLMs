@@ -4,6 +4,7 @@ import random
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+from datasets import load_dataset
 from huggingface_hub import login
 from tqdm.auto import tqdm
 from transformers import EsmForMaskedLM, AutoModelForMaskedLM
@@ -34,23 +35,19 @@ if __name__ == "__main__":
         login(args.token)
 
     canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
-    length = 128
-    seq_count = 100
+    length = 1024
+    seq_count = 10
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     set_seed(42)
 
-    def generate_random_sequence(length: int) -> str:
-        return 'M' + "".join(random.choices(canonical_amino_acids, k=length-3))
+    sequences = load_dataset('lhallee/ccds_human_512', split='train')['AA'][:seq_count]
+    sequences = [seq.replace('L', '<mask>') for seq in sequences]
 
-
-    sequences = [generate_random_sequence(length) for _ in range(seq_count)]
-
-
-    esm2 = EsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D').to(device)
+    esm2 = EsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D').to(device).eval()
     #fastesm = FastEsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D').to(device)
     #fastesm.lm_head.load_state_dict(esm2.lm_head.state_dict())
-    fastesm = AutoModelForMaskedLM.from_pretrained('Synthyra/ESM2-650M', trust_remote_code=True).to(device)
+    fastesm = FastEsmForMaskedLM.from_pretrained('Synthyra/ESM2-650M').to(device).eval()
     tokenizer = fastesm.tokenizer
 
     # Get esmc model outputs
@@ -78,7 +75,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         for i, seq in tqdm(enumerate(sequences), total=len(sequences)):
             input = tokenizer(seq, return_tensors="pt").to(device)
-            outputs = fastesm(**input)
+            outputs = fastesm(**input, output_attentions=False)
             embeddings = outputs.last_hidden_state.float().cpu()
             logits = outputs.logits.float().cpu()
             
