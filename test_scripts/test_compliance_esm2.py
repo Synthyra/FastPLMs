@@ -4,7 +4,6 @@ import random
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
-import copy
 from huggingface_hub import login
 from tqdm.auto import tqdm
 from transformers import EsmForMaskedLM, AutoModelForMaskedLM
@@ -36,7 +35,7 @@ if __name__ == "__main__":
 
     canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
     length = 128
-    seq_count = 10
+    seq_count = 100
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     set_seed(42)
@@ -49,9 +48,9 @@ if __name__ == "__main__":
 
 
     esm2 = EsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D').to(device)
-    fastesm = FastEsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D').to(device)
-    fastesm.lm_head.load_state_dict(esm2.lm_head.state_dict())
-    #fastesm = FastEsmForMaskedLM.from_pretrained('Synthyra/ESM2-650M').to(device)
+    #fastesm = FastEsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D').to(device)
+    #fastesm.lm_head.load_state_dict(esm2.lm_head.state_dict())
+    fastesm = AutoModelForMaskedLM.from_pretrained('Synthyra/ESM2-650M', trust_remote_code=True).to(device)
     tokenizer = fastesm.tokenizer
 
     # Get esmc model outputs
@@ -69,11 +68,12 @@ if __name__ == "__main__":
     del esm2
     torch.cuda.empty_cache()
 
-
     # Get plusplus outputs
     total_mse_embeddings = 0
     total_mse_logits = 0
-    
+    total_max_diff_embeddings = 0
+    total_max_diff_logits = 0
+    total_accuracy = 0
 
     with torch.no_grad():
         for i, seq in tqdm(enumerate(sequences), total=len(sequences)):
@@ -86,11 +86,18 @@ if __name__ == "__main__":
             mse_embeddings = F.mse_loss(base_outputs[i], embeddings).item()
             # Compare logits
             mse_logits = F.mse_loss(base_logits[i], logits).item()
+            max_diff_embeddings = torch.max(torch.abs(base_outputs[i] - embeddings)).item()
+            max_diff_logits = torch.max(torch.abs(base_logits[i] - logits)).item()
             
+            # Calculate accuracy of argmaxed logits
+            base_argmax = torch.argmax(base_logits[i], dim=-1)
+            fastesm_argmax = torch.argmax(logits, dim=-1)
+            accuracy = (base_argmax == fastesm_argmax).float().mean().item()
             if mse_embeddings > 0.01 or mse_logits > 0.1:
                 print(f"Sequence {i}:")
                 print(f"  Embeddings MSE: {mse_embeddings:.8f}")
                 print(f"  Logits MSE: {mse_logits:.8f}")
+                print(f"  Argmax Accuracy: {accuracy:.6f}")
                 
                 # Find positions where tensors differ
                 diff_embeddings = torch.abs(base_outputs[i] - embeddings)
@@ -109,9 +116,15 @@ if __name__ == "__main__":
                 
             total_mse_embeddings += mse_embeddings
             total_mse_logits += mse_logits
+            total_max_diff_embeddings += max_diff_embeddings
+            total_max_diff_logits += max_diff_logits
+            total_accuracy += accuracy
     fastesm.cpu()
     del fastesm
     torch.cuda.empty_cache()
 
     print(f"Average Embeddings MSE: {total_mse_embeddings / seq_count}")
     print(f"Average Logits MSE: {total_mse_logits / seq_count}")
+    print(f"Average Max Diff Embeddings: {total_max_diff_embeddings / seq_count}")
+    print(f"Average Max Diff Logits: {total_max_diff_logits / seq_count}")
+    print(f"Average Argmax Accuracy: {total_accuracy / seq_count:.6f}")
