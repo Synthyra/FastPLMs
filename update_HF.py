@@ -25,7 +25,6 @@ ANKH_MODELS = [
 if __name__ == "__main__":
     # py -m update_HF
     import argparse
-
     parser = argparse.ArgumentParser()
     parser.add_argument('--token', type=str, default=None)
     args = parser.parse_args()
@@ -115,4 +114,3 @@ if __name__ == "__main__":
             repo_id=path,
             repo_type="model",
         )
-        
