@@ -3,6 +3,9 @@ library_name: transformers
 tags: []
 ---
 
+# NOTE
+The GitHub with the implementation and requirements.txt can be found [here](https://github.com/Synthyra/FastPLMs.git)
+
 # FastESM
 FastESM is a Huggingface compatible plug in version of ESM2 rewritten with a newer PyTorch attention implementation.
 
