@@ -1,0 +1,3 @@
+[submodule "boltzgen"]
+	path = boltzgen
+	url = https://github.com/HannesStark/boltzgen.git
