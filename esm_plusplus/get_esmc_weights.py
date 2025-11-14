@@ -4,7 +4,8 @@ import copy
 from functools import cache
 from pathlib import Path
 from huggingface_hub import snapshot_download, login
-from modeling_esm_plusplus import ESMplusplusForMaskedLM, ESMplusplusConfig
+
+from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM, ESMplusplusConfig
 
 
 @staticmethod

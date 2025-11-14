@@ -9,7 +9,7 @@ from transformers import EsmForMaskedLM, AutoModelForMaskedLM, EsmTokenizer
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model_path', type=str, default='lhallee/synthyra_esm2_650_mlm')
+parser.add_argument('--model_path', type=str, default='Synthyra/FastESM2_650')
 parser.add_argument('--token', type=str, default=None)
 args = parser.parse_args()
 
@@ -93,7 +93,7 @@ torch.cuda.empty_cache()
 
 # Test FastESM in fp16
 print("\nTesting FastESM model in FP16...")
-model = AutoModelForMaskedLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.float16).to(device)
+model = AutoModelForMaskedLM.from_pretrained(model_path, trust_remote_code=True, dtype=torch.float16).to(device)
 for i, (length, batch_size) in enumerate([(l,b) for l in lengths for b in batch_sizes]):
     print(f"\nTesting length={length}, batch_size={batch_size}")
     inputs = all_test_inputs[(length, batch_size)]

@@ -679,6 +679,7 @@ class EmbeddingMixin:
         save: bool = True,
         sql_db_path: str = 'embeddings.db',
         save_path: str = 'embeddings.pth',
+        **kwargs,
     ) -> Optional[dict[str, torch.Tensor]]:
         """Embed a dataset of protein sequences.
         
@@ -756,8 +757,7 @@ class EmbeddingMixin:
                         for seq, emb, mask in zip(seqs, embeddings, attention_mask):
                             if full_embeddings:
                                 emb = emb[mask.bool()].reshape(-1, hidden_size)
-                            c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", 
-                                    (seq, emb.cpu().numpy().tobytes()))
+                            c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", (seq, emb.cpu().numpy().tobytes()))
                         
                         if (i + 1) % 100 == 0:
                             conn.commit()

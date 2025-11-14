@@ -8,8 +8,8 @@ import requests
 import tempfile
 import sys
 from Bio.PDB import PDBParser, PPBuilder
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from modeling_fastesm import FastEsmModel
+
+from esm2.modeling_fastesm import FastEsmModel
 
 
 def download_random_pdb():

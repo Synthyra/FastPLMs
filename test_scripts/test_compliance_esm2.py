@@ -7,12 +7,13 @@ import matplotlib.pyplot as plt
 from datasets import load_dataset
 from huggingface_hub import login
 from tqdm.auto import tqdm
-from transformers import EsmForMaskedLM, AutoModelForMaskedLM
-from modeling_fastesm import FastEsmForMaskedLM
+from transformers import EsmForMaskedLM
+
+from esm2.modeling_fastesm import FastEsmForMaskedLM
 
 
 """
-Testing if ESM++ outputs are compliant with ESMC outputs
+Testing if FastESM outputs are compliant with ESM2 outputs
 """
 
 def set_seed(seed: int):

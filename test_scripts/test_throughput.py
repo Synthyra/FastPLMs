@@ -115,7 +115,7 @@ if not args.test:
             model = ESMCForEmbedding(esm).to(device)
             tokenizer = None
         elif 'synthyra' in model_path.lower():
-            model = AutoModelForMaskedLM.from_pretrained(model_path, trust_remote_code=True, torch_dtype=torch.float16).to(device)
+            model = AutoModelForMaskedLM.from_pretrained(model_path, trust_remote_code=True, dtype=torch.float16).to(device)
             tokenizer = model.tokenizer
         else:
             model = AutoModelForMaskedLM.from_pretrained(model_path).to(device)
