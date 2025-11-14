@@ -1579,8 +1579,8 @@ class EmbeddingMixin:
             print(f"Embedding {len(to_embed)} new sequences")
             if len(to_embed) > 0:
                 with torch.no_grad():
-                    for i, batch in tqdm(enumerate(range(0, len(to_embed), batch_size)), desc='Embedding batches'):
-                        seqs = to_embed[i:i + batch_size]
+                    for batch_start in tqdm(range(0, len(to_embed), batch_size), desc='Embedding batches'):
+                        seqs = to_embed[batch_start:batch_start + batch_size]
                         input_ids, attention_mask = self._embed(seqs, return_attention_mask=True) 
                         embeddings = get_embeddings(input_ids, attention_mask).float() # sql requires float32
                         for seq, emb, mask in zip(seqs, embeddings, attention_mask):
@@ -1604,8 +1604,8 @@ class EmbeddingMixin:
 
         if len(to_embed) > 0:
             with torch.no_grad():
-                for i, batch in tqdm(enumerate(range(0, len(to_embed), batch_size)), desc='Embedding batches'):
-                    seqs = to_embed[i:i + batch_size]
+                for batch_start in tqdm(range(0, len(to_embed), batch_size), desc='Embedding batches'):
+                    seqs = to_embed[batch_start:batch_start + batch_size]
                     last_hidden_state, attention_mask = self._embed(seqs, return_attention_mask=True)
                     embeddings = get_embeddings(last_hidden_state, attention_mask).to(embed_dtype)
                     for seq, emb, mask in zip(seqs, embeddings, attention_mask):
