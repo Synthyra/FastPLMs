@@ -7,9 +7,11 @@ import matplotlib.pyplot as plt
 import contextlib
 from huggingface_hub import login
 from tqdm.auto import tqdm
-from modeling_esm_plusplus import ESMplusplus_300M
+
 from esm.pretrained import ESMC_600M_202412, ESMC_300M_202412
 from esm.sdk.api import ESMProtein, LogitsConfig
+
+from esm_plusplus.modeling_esm_plusplus import ESMplusplus_300M
 
 
 """

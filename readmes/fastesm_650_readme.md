@@ -27,7 +27,7 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 
 model_path = 'Synthyra/FastESM2_650'
-model = AutoModel.from_pretrained(model_path, torch_dtype=torch.float16, trust_remote_code=True).eval()
+model = AutoModel.from_pretrained(model_path, dtype=torch.float16, trust_remote_code=True).eval()
 tokenizer = model.tokenizer
 
 sequences = ['MPRTEIN', 'MSEQWENCE']
@@ -43,7 +43,7 @@ print(embeddings.shape) # (2, 11, 1280)
 import torch
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
-model = AutoModelForMaskedLM.from_pretrained(model_path, torch_dtype=torch.float16, trust_remote_code=True).eval()
+model = AutoModelForMaskedLM.from_pretrained(model_path, dtype=torch.float16, trust_remote_code=True).eval()
 with torch.no_grad():
     logits = model(**tokenized).logits
 
@@ -55,7 +55,7 @@ print(logits.shape) # (2, 11, 33)
 import torch
 from transformers import AutoModel, AutoTokenizer
 
-model = AutoModel.from_pretrained(model_path, torch_dtype=torch.float16, trust_remote_code=True).eval()
+model = AutoModel.from_pretrained(model_path, dtype=torch.float16, trust_remote_code=True).eval()
 with torch.no_grad():
     attentions = model(**tokenized, output_attentions).attentions # tuples of (batch_size, num_heads, seq_len, seq_len)
 
@@ -132,12 +132,12 @@ We look at various ESM models and their throughput on an H100. FastESM is over t
 ### Citation
 If you use any of this implementation or work please cite it (as well as the [ESM2](https://www.science.org/doi/10.1126/science.ade2574) paper).
 ```
-@misc {FastESM2,
-	author       = { Hallee, L. and Bichara, D. and Gleghorn, J, P. },
-	title        = { FastESM2 },
-	year         = 2024,
-	url          = { https://huggingface.co/Synthyra/FastESM2_650 },
-	doi          = { 10.57967/hf/3729 },
-	publisher    = { Hugging Face }
+@misc {FastPLMs,
+    author       = { Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+    title        = { FastPLMs: Fast, efficient, protien language model inference from Huggingface AutoModel.},
+    year         = {2024},
+    url          = { https://huggingface.co/Synthyra/ESMplusplus_small },
+    DOI          = { 10.57967/hf/3726 },
+    publisher    = { Hugging Face }
 }
 ```
