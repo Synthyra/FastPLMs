@@ -6,7 +6,6 @@ import networkx as nx
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset as TorchDataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 
 from einops import rearrange, repeat
@@ -14,7 +13,7 @@ from enum import Enum
 from typing import Any, TypedDict, Callable, Optional, List
 from dataclasses import dataclass
 from tokenizers import Tokenizer
-from transformers import PretrainedConfig, PreTrainedModel, PreTrainedTokenizerBase
+from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
