@@ -5,6 +5,7 @@
 *.pt
 *.safetensors
 *.json
+!e1/*.json
 *.bin
 /results_classification_lora
 /results_regression_lora

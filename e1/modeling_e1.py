@@ -404,8 +404,14 @@ PAD_TOKEN_ID = 0
 
 
 def get_tokenizer() -> Tokenizer:
-    fname = os.path.join(os.path.dirname(__file__), "tokenizer.json")
-    tokenizer: Tokenizer = Tokenizer.from_file(fname)
+    try:
+        fname = os.path.join(os.path.dirname(__file__), "tokenizer.json")
+        tokenizer: Tokenizer = Tokenizer.from_file(fname)
+    except:
+        print("E1 Tokenizer not found in local directory, downloading from Hugging Face")
+        from huggingface_hub import hf_hub_download
+        fname = hf_hub_download(repo_id="Synthyra/Profluent-E1-150M", filename="tokenizer.json")
+        tokenizer: Tokenizer = Tokenizer.from_file(fname)
     assert tokenizer.padding["pad_id"] == PAD_TOKEN_ID, (
         f"Padding token id must be {PAD_TOKEN_ID}, but got {tokenizer.padding['pad_id']}"
     )
