@@ -46,7 +46,7 @@ torch.cuda.empty_cache()
 
 # Get fp16 outputs
 fp16_mse = 0
-model = AutoModelForMaskedLM.from_pretrained(model_path, torch_dtype=torch.float16, trust_remote_code=True).to(device)
+model = AutoModelForMaskedLM.from_pretrained(model_path, dtype=torch.float16, trust_remote_code=True).to(device)
 with torch.no_grad():
     for i, seq in tqdm(enumerate(sequences), total=len(sequences)):
         input = tokenizer(seq, return_tensors="pt").to(device)
@@ -59,7 +59,7 @@ torch.cuda.empty_cache()
 
 # Get bfloat16 outputs
 bf16_mse = 0
-model = AutoModelForMaskedLM.from_pretrained(model_path, torch_dtype=torch.bfloat16, trust_remote_code=True).to(device)
+model = AutoModelForMaskedLM.from_pretrained(model_path, dtype=torch.bfloat16, trust_remote_code=True).to(device)
 with torch.no_grad():
     for i, seq in tqdm(enumerate(sequences), total=len(sequences)):
         input = tokenizer(seq, return_tensors="pt").to(device)

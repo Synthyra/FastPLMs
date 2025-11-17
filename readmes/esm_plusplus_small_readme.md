@@ -42,7 +42,7 @@ print(logits.shape) # (batch_size, num_labels), (2, 2)
 ESM++ weights are fp32 by default. You can load them in fp16 or bf16 like this:
 ```python
 import torch
-model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_small', trust_remote_code=True, torch_dtype=torch.float16) # or torch.bfloat16
+model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_small', trust_remote_code=True, dtype=torch.float16) # or torch.bfloat16
 ```
 
 ## Embed entire datasets with no new code
@@ -157,9 +157,9 @@ The most gains will be seen with PyTorch > 2.5 on linux machines.
 If you use any of this implementation or work please cite it (as well as the ESMC preprint).
 
 ```
-@misc {ESM++,
+@misc {FastPLMs,
     author       = { Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
-    title        = { ESM++: Efficient and Hugging Face compatible versions of the ESM Cambrian models},
+    title        = { FastPLMs: Fast, efficient, protien language model inference from Huggingface AutoModel.},
     year         = {2024},
     url          = { https://huggingface.co/Synthyra/ESMplusplus_small },
     DOI          = { 10.57967/hf/3726 },

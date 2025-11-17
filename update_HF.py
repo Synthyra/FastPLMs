@@ -15,6 +15,12 @@ ESM_PLUSPLUS_MODELS = [
     'Synthyra/ESMplusplus_large',
 ]
 
+E1_MODELS = [
+    'Synthyra/Profluent-E1-150M',
+    'Synthyra/Profluent-E1-300M',
+    'Synthyra/Profluent-E1-600M',
+]
+
 ANKH_MODELS = [
     'Synthyra/ANKH_base',
     'Synthyra/ANKH_large',
@@ -37,7 +43,7 @@ if __name__ == "__main__":
     for path in FAST_ESM_MODELS:
         print(path.lower())
         api.upload_file(
-            path_or_fileobj="modeling_fastesm.py",
+            path_or_fileobj="esm2/modeling_fastesm.py",
             path_in_repo="modeling_fastesm.py",
             repo_id=path,
             repo_type="model",
@@ -69,7 +75,7 @@ if __name__ == "__main__":
     for path in ESM_PLUSPLUS_MODELS:
         print(path)
         api.upload_file(
-            path_or_fileobj="modeling_esm_plusplus.py",
+            path_or_fileobj="esm_plusplus/modeling_esm_plusplus.py",
             path_in_repo="modeling_esm_plusplus.py",
             repo_id=path,
             repo_type="model",
@@ -103,6 +109,30 @@ if __name__ == "__main__":
                 repo_id=path,
                 repo_type="model",
             )
+
+
+    for path in E1_MODELS:
+        print(path)
+        api.upload_file(
+            path_or_fileobj="e1/modeling_e1.py",
+            path_in_repo="modeling_e1.py",
+            repo_id=path,
+            repo_type="model",
+        )
+        # Upload license file for FastESM models
+        api.upload_file(
+            path_or_fileobj="LICENSE",
+            path_in_repo="LICENSE",
+            repo_id=path,
+            repo_type="model",
+        )
+        api.upload_file(
+            path_or_fileobj="readmes/e1_readme.md",
+            path_in_repo="README.md",
+            repo_id=path,
+            repo_type="model",
+        )
+
 
     # Add code to upload files for ANKH models
     for path in ANKH_MODELS:

@@ -1,7 +1,7 @@
 import torch
 import argparse
 from datasets import load_dataset
-from modeling_esm_plusplus import ESMplusplusModel
+from esm_plusplus.modeling_esm_plusplus import ESMplusplusModel
 from tqdm import tqdm
 
 
