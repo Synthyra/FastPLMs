@@ -11,3 +11,5 @@
 .qodo
 *.db
 /esm
+*.nbc
+*.nbi
