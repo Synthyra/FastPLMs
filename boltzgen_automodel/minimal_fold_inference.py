@@ -11,59 +11,32 @@ Usage:
 
 import torch
 import numpy as np
-from pathlib import Path
-from typing import List, Dict, Optional
 import sys
-
-# Import BoltzGen components we need
-sys.path.insert(0, str(Path(__file__).parent / "boltzgen" / "src"))
-from boltzgen.data.tokenize.tokenizer import Tokenizer
-from boltzgen.data.feature.featurizer import Featurizer
-from boltzgen.data.data import Input, Structure
-from boltzgen.data.mol import load_canonicals
-from boltzgen.data.template.features import load_dummy_templates
-from boltzgen.data import const
-
-# Import our custom Boltz model and setup from minimal_working_example
-from minimal_working_example import (
-    create_dummy_module, Boltz, DummyEMA, DummyValidator
-)
 import types
 import huggingface_hub
+from pathlib import Path
+from typing import List, Dict, Optional
 
 
-# ============================================================================
-# Setup module redirects (same as minimal_working_example.py)
-# ============================================================================
-def setup_pickle_modules():
-    """Create module structure for pickle to find our Boltz class"""
-    boltzgen = create_dummy_module('boltzgen')
-    boltzgen_data = create_dummy_module('boltzgen.data', boltzgen)
-    boltzgen_data_const = create_dummy_module('boltzgen.data.const', boltzgen_data)
-    boltzgen_model = create_dummy_module('boltzgen.model', boltzgen)
-    boltzgen_model_models = create_dummy_module('boltzgen.model.models', boltzgen_model)
-    boltzgen_model_models_boltz = create_dummy_module('boltzgen.model.models.boltz', boltzgen_model_models)
-    boltzgen_model_models_boltz.Boltz = Boltz
-    boltzgen_model_optim = create_dummy_module('boltzgen.model.optim', boltzgen_model)
-    boltzgen_model_optim_ema = create_dummy_module('boltzgen.model.optim.ema', boltzgen_model_optim)
-    boltzgen_model_optim_ema.EMA = DummyEMA
-    boltzgen_model_validation = create_dummy_module('boltzgen.model.validation', boltzgen_model)
-    boltzgen_model_validation_validator = create_dummy_module('boltzgen.model.validation.validator', boltzgen_model_validation)
-    boltzgen_model_validation_validator.Validator = DummyValidator
-    boltzgen_model_validation_design = create_dummy_module('boltzgen.model.validation.design', boltzgen_model_validation)
-    boltzgen_model_validation_design.DesignValidator = DummyValidator
-    boltzgen_model_validation_rcsb = create_dummy_module('boltzgen.model.validation.rcsb', boltzgen_model_validation)
-    boltzgen_model_validation_rcsb.RCSBValidator = DummyValidator
-    boltzgen_model_validation_refolding = create_dummy_module('boltzgen.model.validation.refolding', boltzgen_model_validation)
-    boltzgen_model_validation_refolding.RefoldingValidator = DummyValidator
+from boltzgen_flat.data_tokenize_tokenizer import Tokenizer
+from boltzgen_flat.data_feature_featurizer import Featurizer
+from boltzgen_flat.data_data import Input, Structure
+from boltzgen_flat.data_mol import load_canonicals
+from boltzgen_flat.data_template_features import load_dummy_templates
+from boltzgen_flat import data_const as const
+
+# Import our custom Boltz model and setup from minimal_working_example
+from load_utils import (
+    Boltz,
+    create_dummy_module,
+    DummyEMA,
+    DummyValidator,
+    setup_pickle_modules,
+)
 
 
 setup_pickle_modules()
 
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
 
 def create_protein_tokens(sequence: str, chain_id: int = 0, entity_id: int = 0) -> np.ndarray:
     """
@@ -88,54 +61,56 @@ def create_protein_tokens(sequence: str, chain_id: int = 0, entity_id: int = 0) 
         ('sym_id', 'i4'),
         ('mol_type', 'i4'),
         ('res_type', 'i4'),
-        ('is_standard', 'bool'),
-        ('design_mask', 'bool'),
         ('modified', 'i4'),
         ('ccd', 'i4'),
         ('binding_type', 'i4'),
         ('structure_group', 'i4'),
-        ('center_coords', 'f4', (3,)),
-        ('target_msa_mask', 'bool'),
-        ('design_ss_mask', 'bool'),
         ('feature_res_idx', 'i4'),
         ('feature_asym_id', 'i4'),
+        ('center_coords', 'f4', (3,)),
+        ('is_standard', 'bool'),
+        ('design_mask', 'bool'),
+        ('target_msa_mask', 'bool'),
+        ('design_ss_mask', 'bool'),
+        ('resolved_mask', 'bool'),
+        ('disto_mask', 'bool'),
+        ('token_idx', 'i4'),
+        ('atom_idx', 'i4'),
+        ('atom_num', 'i4'),
+        ('center_idx', 'i4'),
+        ('disto_idx', 'i4'),
+        ('res_name', 'U3'),
+        ('cyclic_period', 'i4'),
     ]
+    dtype = np.dtype(dtype, align=True)
     
     tokens = np.zeros(seq_len, dtype=dtype)
+    tokens['token_idx'] = np.arange(seq_len)
     
     for i, aa in enumerate(sequence):
         # Map amino acid to residue type
-        if aa in const.prot_letter_to_token:
-            token_name = const.prot_letter_to_token[aa]
-        else:
-            token_name = const.prot_letter_to_token['X']  # Unknown
-        
-        res_type_id = const.token_ids[token_name]
-        
-        tokens[i]['res_idx'] = i + 1
-        tokens[i]['asym_id'] = chain_id
-        tokens[i]['entity_id'] = entity_id
-        tokens[i]['sym_id'] = 0
-        tokens[i]['mol_type'] = const.chain_type_ids['PROTEIN']
-        tokens[i]['res_type'] = res_type_id
-        tokens[i]['is_standard'] = True
-        tokens[i]['design_mask'] = False  # Not designing for folding
-        tokens[i]['modified'] = 0
-        tokens[i]['ccd'] = res_type_id
-        tokens[i]['binding_type'] = const.binding_type_ids['UNSPECIFIED']
-        tokens[i]['structure_group'] = 0
-        tokens[i]['center_coords'] = [0.0, 0.0, 0.0]
-        tokens[i]['target_msa_mask'] = True
-        tokens[i]['design_ss_mask'] = False
-        tokens[i]['feature_res_idx'] = i + 1
+        tokens[i]['res_type'] = const.token_ids.get(const.prot_letter_to_token.get(aa, 'UNK'), const.token_ids['UNK'])
+        tokens[i]['res_name'] = const.prot_letter_to_token.get(aa, 'UNK')
         tokens[i]['feature_asym_id'] = chain_id
+        
+        # Initialize atom fields (assuming 4 atoms per residue: N, CA, C, O)
+        tokens[i]['atom_idx'] = i * 4
+        tokens[i]['atom_num'] = 4
+        tokens[i]['center_idx'] = i * 4 + 1  # CA
+        tokens[i]['disto_idx'] = i * 4 + 1   # CA (using CA as disto for minimal example)
+        tokens[i]['cyclic_period'] = 0
     
     return tokens
 
 
 def create_bonds(num_tokens: int) -> np.ndarray:
-    """Create bond connectivity matrix (all zeros for now - will be populated by featurizer)"""
-    return np.zeros((num_tokens, num_tokens), dtype=np.float32)
+    """Create bond connectivity list (empty for now)"""
+    dtype = [
+        ('token_1', 'i4'),
+        ('token_2', 'i4'),
+        ('type', 'i4'),
+    ]
+    return np.zeros(0, dtype=dtype)
 
 
 def create_dummy_structure(num_tokens: int) -> Structure:
@@ -149,18 +124,21 @@ def create_dummy_structure(num_tokens: int) -> Structure:
     ensemble[0]['atom_coord_idx'] = [0, num_atoms]
     
     # Create dummy coords
-    coords = np.zeros((1, num_atoms, 3), dtype=np.float32)
+    coords = np.zeros(num_atoms, dtype=[('coords', 'f4', (3,))])
     
     # Create dummy atoms data
     atoms = np.zeros(num_atoms, dtype=[
         ('res_idx', 'i4'),
-        ('atom_name', 'U4'),
+        ('name', 'U4'),
         ('element', 'U2'),
         ('charge', 'i4'),
         ('conformer', 'i4'),
         ('chirality', 'i4'),
         ('ref_space_uid', 'i4'),
         ('bfactor', 'f4'),
+        ('is_present', 'bool'),
+        ('plddt', 'f4'),
+        ('coords', 'f4', (3,)),
     ])
     
     for i in range(num_atoms):
@@ -170,13 +148,16 @@ def create_dummy_structure(num_tokens: int) -> Structure:
         elements = ['N', 'C', 'C', 'O']
         
         atoms[i]['res_idx'] = token_idx
-        atoms[i]['atom_name'] = atom_names[atom_idx]
+        atoms[i]['name'] = atom_names[atom_idx]
         atoms[i]['element'] = elements[atom_idx]
         atoms[i]['charge'] = 0
         atoms[i]['conformer'] = 0
         atoms[i]['chirality'] = const.chirality_type_ids['CHI_UNSPECIFIED']
         atoms[i]['ref_space_uid'] = token_idx
         atoms[i]['bfactor'] = 100.0
+        atoms[i]['is_present'] = True
+        atoms[i]['plddt'] = 100.0
+        atoms[i]['coords'] = [0.0, 0.0, 0.0]
     
     # Create dummy bonds (no bonds for now)
     bonds = np.zeros(0, dtype=[
@@ -195,6 +176,7 @@ def create_dummy_structure(num_tokens: int) -> Structure:
         ('pdbx_PDB_ins_code', 'U8'),
         ('atom_idx', 'i4'),
         ('atom_num', 'i4'),
+        ('res_type', 'i4'),
     ])
     
     for i in range(num_tokens):
@@ -206,6 +188,7 @@ def create_dummy_structure(num_tokens: int) -> Structure:
         residues[i]['pdbx_PDB_ins_code'] = ''
         residues[i]['atom_idx'] = i * 4
         residues[i]['atom_num'] = 4
+        residues[i]['res_type'] = const.token_ids['GLY']
     
     # Create dummy chains (single chain)
     chains = np.zeros(1, dtype=[
@@ -213,6 +196,8 @@ def create_dummy_structure(num_tokens: int) -> Structure:
         ('label_asym_id', 'U8'),
         ('auth_asym_id', 'U8'),
         ('entity_id', 'i4'),
+        ('asym_id', 'i4'),
+        ('name', 'U4'),
         ('res_idx', 'i4'),
         ('res_num', 'i4'),
         ('cyclic_period', 'i4'),
@@ -222,6 +207,8 @@ def create_dummy_structure(num_tokens: int) -> Structure:
     chains[0]['label_asym_id'] = 'A'
     chains[0]['auth_asym_id'] = 'A'
     chains[0]['entity_id'] = 0
+    chains[0]['asym_id'] = 0
+    chains[0]['name'] = 'A'
     chains[0]['res_idx'] = 0
     chains[0]['res_num'] = num_tokens
     chains[0]['cyclic_period'] = 0
@@ -294,10 +281,23 @@ def create_input_features(
         templates=None,
     )
     
+    # Load canonical molecules
+    import huggingface_hub
+    
+    # Download moldir
+    print("Downloading molecule data...")
+    moldir_path = huggingface_hub.hf_hub_download(
+        "boltzgen/inference-data",
+        "mols.zip",
+        repo_type="dataset",
+        library_name="boltzgen",
+    )
+    molecules = load_canonicals(moldir=Path(moldir_path))
+    
     # Use featurizer to create features
     features = featurizer.process(
         input_data,
-        molecules={},
+        molecules=molecules,
         random=np.random.default_rng(42),
         training=False,
         max_seqs=1,
@@ -594,9 +594,9 @@ Running example predictions...
             print(f"  PTM score: {output['ptm'].item():.3f}")
         
     except Exception as e:
-        print(f"Error: {e}")
         import traceback
-        traceback.print_exc()
+        print(traceback.format_exc())
+        print(f"Error: {e}")
     
     # Example 2: Fold a protein complex
     print("\n" + "="*80)
@@ -623,9 +623,9 @@ Running example predictions...
             print(f"  iPTM score: {output['iptm'].item():.3f}")
         
     except Exception as e:
-        print(f"Error: {e}")
         import traceback
-        traceback.print_exc()
+        print(traceback.format_exc())
+        print(f"Error: {e}")
     
     print("\n" + "="*80)
     print("Examples complete!")

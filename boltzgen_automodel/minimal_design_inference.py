@@ -9,18 +9,18 @@ Usage:
 
 import torch
 import numpy as np
+import sys
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
-import sys
 
-# Import BoltzGen components we need
-sys.path.insert(0, str(Path(__file__).parent / "boltzgen" / "src"))
-from boltzgen.data.tokenize.tokenizer import Tokenizer
-from boltzgen.data.feature.featurizer import Featurizer
-from boltzgen.data.data import Input, Structure
-from boltzgen.data.parse.mmcif import parse_mmcif
-from boltzgen.data.template.features import load_dummy_templates
-from boltzgen.data import const
+
+from boltzgen_flat.data_tokenize_tokenizer import Tokenizer
+from boltzgen_flat.data_feature_featurizer import Featurizer
+from boltzgen_flat.data_data import Input, Structure
+from boltzgen_flat.data_parse_mmcif import parse_mmcif
+from boltzgen_flat.data_template_features import load_dummy_templates
+from boltzgen_flat.data_mol import load_canonicals
+from boltzgen_flat import data_const as const
 
 # Import our custom Boltz model and setup from minimal_working_example
 from minimal_working_example import (
@@ -89,20 +89,31 @@ def create_design_tokens(
         ('sym_id', 'i4'),
         ('mol_type', 'i4'),
         ('res_type', 'i4'),
-        ('is_standard', 'bool'),
-        ('design_mask', 'bool'),
         ('modified', 'i4'),
         ('ccd', 'i4'),
         ('binding_type', 'i4'),
         ('structure_group', 'i4'),
-        ('center_coords', 'f4', (3,)),
-        ('target_msa_mask', 'bool'),
-        ('design_ss_mask', 'bool'),
         ('feature_res_idx', 'i4'),
         ('feature_asym_id', 'i4'),
+        ('center_coords', 'f4', (3,)),
+        ('is_standard', 'bool'),
+        ('design_mask', 'bool'),
+        ('target_msa_mask', 'bool'),
+        ('design_ss_mask', 'bool'),
+        ('resolved_mask', 'bool'),
+        ('disto_mask', 'bool'),
+        ('token_idx', 'i4'),
+        ('atom_idx', 'i4'),
+        ('atom_num', 'i4'),
+        ('center_idx', 'i4'),
+        ('disto_idx', 'i4'),
+        ('res_name', 'U3'),
+        ('cyclic_period', 'i4'),
     ]
+    dtype = np.dtype(dtype, align=True)
     
     tokens = np.zeros(design_length, dtype=dtype)
+    tokens['token_idx'] = np.arange(design_length)
     
     for i in range(design_length):
         # Use glycine as placeholder for design tokens
@@ -131,8 +142,19 @@ def create_design_tokens(
         else:
             tokens[i]['design_ss_mask'] = False
         
+        tokens[i]['resolved_mask'] = True
+        tokens[i]['disto_mask'] = True
+        
         tokens[i]['feature_res_idx'] = i + 1
         tokens[i]['feature_asym_id'] = chain_id
+        
+        # Initialize atom fields (assuming 4 atoms per residue: N, CA, C, O)
+        tokens[i]['atom_idx'] = i * 4
+        tokens[i]['atom_num'] = 4
+        tokens[i]['center_idx'] = i * 4 + 1  # CA
+        tokens[i]['disto_idx'] = i * 4 + 1   # CA (using CA as disto for minimal example)
+        tokens[i]['res_name'] = token_name  # Set res_name to 'GLY'
+        tokens[i]['cyclic_period'] = 0
     
     return tokens
 
@@ -219,7 +241,7 @@ def create_design_input_features(
     # Create design tokens
     design_tokens = create_design_tokens(
         design_length,
-        chain_id=1,  # Different chain from target (if target is chain 0)
+        chain_id=0,  # Use chain 0 for simple design
         entity_id=1,
         secondary_structure=secondary_structure,
     )
@@ -233,7 +255,12 @@ def create_design_input_features(
     num_tokens = len(all_tokens)
     
     # Create bonds
-    bonds = np.zeros((num_tokens, num_tokens), dtype=np.float32)
+    bonds_dtype = [
+        ('token_1', 'i4'),
+        ('token_2', 'i4'),
+        ('type', 'i4'),
+    ]
+    bonds = np.zeros(0, dtype=bonds_dtype)
     
     # Create token_to_res mapping
     token_to_res = np.arange(num_tokens, dtype=np.int64)
@@ -256,15 +283,28 @@ def create_design_input_features(
         templates=None,
     )
     
+    # Load canonical molecules
+    import huggingface_hub
+    
+    # Download moldir
+    print("Downloading molecule data...")
+    moldir_path = huggingface_hub.hf_hub_download(
+        "boltzgen/inference-data",
+        "mols.zip",
+        repo_type="dataset",
+        library_name="boltzgen",
+    )
+    molecules = load_canonicals(moldir=Path(moldir_path))
+    
     # Use featurizer to create features
     features = featurizer.process(
         input_data,
-        molecules={},
+        molecules=molecules,
         random=np.random.default_rng(42),
         training=False,
         max_seqs=1,
-        backbone_only=False,
-        atom14=True,  # Use atom14 for design
+        backbone_only=True,  # Use backbone_only instead of atom14 to avoid dtype issues
+        atom14=False,
         atom37=False,
         design=True,  # Enable design mode
         override_method="X-RAY DIFFRACTION",
@@ -286,6 +326,7 @@ def create_design_input_features(
     
     # Add required features
     features["idx_dataset"] = torch.tensor(1)
+    features["id"] = "design_example"  # Add ID for masker
     
     return features
 
@@ -301,18 +342,21 @@ def create_dummy_structure(num_tokens: int) -> Structure:
     ensemble[0]['atom_coord_idx'] = [0, num_atoms]
     
     # Create dummy coords
-    coords = np.zeros((1, num_atoms, 3), dtype=np.float32)
+    coords = np.zeros(num_atoms, dtype=[('coords', 'f4', (3,))])
     
     # Create dummy atoms data
     atoms = np.zeros(num_atoms, dtype=[
         ('res_idx', 'i4'),
-        ('atom_name', 'U4'),
+        ('name', 'U4'),
         ('element', 'U2'),
         ('charge', 'i4'),
         ('conformer', 'i4'),
         ('chirality', 'i4'),
         ('ref_space_uid', 'i4'),
         ('bfactor', 'f4'),
+        ('is_present', 'bool'),
+        ('plddt', 'f4'),
+        ('coords', 'f4', (3,)),
     ])
     
     for i in range(num_atoms):
@@ -322,13 +366,16 @@ def create_dummy_structure(num_tokens: int) -> Structure:
         elements = ['N', 'C', 'C', 'O']
         
         atoms[i]['res_idx'] = token_idx
-        atoms[i]['atom_name'] = atom_names[atom_idx]
+        atoms[i]['name'] = atom_names[atom_idx]
         atoms[i]['element'] = elements[atom_idx]
         atoms[i]['charge'] = 0
         atoms[i]['conformer'] = 0
         atoms[i]['chirality'] = const.chirality_type_ids['CHI_UNSPECIFIED']
         atoms[i]['ref_space_uid'] = token_idx
         atoms[i]['bfactor'] = 100.0
+        atoms[i]['is_present'] = True
+        atoms[i]['plddt'] = 100.0
+        atoms[i]['coords'] = [0.0, 0.0, 0.0]
     
     # Create dummy bonds (no bonds for now)
     bonds = np.zeros(0, dtype=[
@@ -347,6 +394,7 @@ def create_dummy_structure(num_tokens: int) -> Structure:
         ('pdbx_PDB_ins_code', 'U8'),
         ('atom_idx', 'i4'),
         ('atom_num', 'i4'),
+        ('res_type', 'i4'),
     ])
     
     for i in range(num_tokens):
@@ -358,6 +406,7 @@ def create_dummy_structure(num_tokens: int) -> Structure:
         residues[i]['pdbx_PDB_ins_code'] = ''
         residues[i]['atom_idx'] = i * 4
         residues[i]['atom_num'] = 4
+        residues[i]['res_type'] = const.token_ids['GLY']
     
     # Create dummy chains (single chain)
     chains = np.zeros(1, dtype=[
@@ -365,6 +414,8 @@ def create_dummy_structure(num_tokens: int) -> Structure:
         ('label_asym_id', 'U8'),
         ('auth_asym_id', 'U8'),
         ('entity_id', 'i4'),
+        ('asym_id', 'i4'),
+        ('name', 'U4'),
         ('res_idx', 'i4'),
         ('res_num', 'i4'),
         ('cyclic_period', 'i4'),
@@ -374,6 +425,8 @@ def create_dummy_structure(num_tokens: int) -> Structure:
     chains[0]['label_asym_id'] = 'A'
     chains[0]['auth_asym_id'] = 'A'
     chains[0]['entity_id'] = 0
+    chains[0]['asym_id'] = 0
+    chains[0]['name'] = 'A'
     chains[0]['res_idx'] = 0
     chains[0]['res_num'] = num_tokens
     chains[0]['cyclic_period'] = 0
@@ -666,9 +719,9 @@ Running example predictions...
             print(f"  PTM score: {output['ptm'].item():.3f}")
         
     except Exception as e:
-        print(f"Error: {e}")
         import traceback
-        traceback.print_exc()
+        print(traceback.format_exc())
+        print(f"Error: {e}")
     
     # Example 2: Design a protein against a target
     print("\n" + "="*80)

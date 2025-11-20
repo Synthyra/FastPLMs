@@ -1,3 +1,3 @@
 [submodule "boltzgen"]
-	path = boltzgen
+	path = boltzgen_automodel/boltzgen
 	url = https://github.com/HannesStark/boltzgen.git
