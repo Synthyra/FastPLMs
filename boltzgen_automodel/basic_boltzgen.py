@@ -1,20 +1,19 @@
-
 import torch
 from torch import Tensor, nn
 from typing import Any, Dict, Optional, List
 
-import boltzgen_flat.model_layers_initialize as init
-from boltzgen_flat import data_const as const
-from boltzgen_flat.data_mol import minimum_lddt_symmetry_dist
-from boltzgen_flat.model_layers_miniformer import MiniformerModule
-from boltzgen_flat.model_layers_pairformer import PairformerModule
-from boltzgen_flat.model_modules_confidence import ConfidenceModule
-from boltzgen_flat.model_modules_diffusion import AtomDiffusion
-from boltzgen_flat.model_modules_diffusion_conditioning import DiffusionConditioning
-from boltzgen_flat.model_modules_encoders import RelativePositionEncoder
-from boltzgen_flat.model_modules_affinity import AffinityModule
-from boltzgen_flat.model_modules_masker import BoltzMasker
-from boltzgen_flat.model_modules_trunk import (
+from .boltzgen_flat import model_layers_initialize as init
+from .boltzgen_flat import data_const as const
+from .boltzgen_flat.data_mol import minimum_lddt_symmetry_dist
+from .boltzgen_flat.model_layers_miniformer import MiniformerModule
+from .boltzgen_flat.model_layers_pairformer import PairformerModule
+from .boltzgen_flat.model_modules_confidence import ConfidenceModule
+from .boltzgen_flat.model_modules_diffusion import AtomDiffusion
+from .boltzgen_flat.model_modules_diffusion_conditioning import DiffusionConditioning
+from .boltzgen_flat.model_modules_encoders import RelativePositionEncoder
+from .boltzgen_flat.model_modules_affinity import AffinityModule
+from .boltzgen_flat.model_modules_masker import BoltzMasker
+from .boltzgen_flat.model_modules_trunk import (
     BFactorModule,
     ContactConditioning,
     DistogramModule,
@@ -23,7 +22,7 @@ from boltzgen_flat.model_modules_trunk import (
     TemplateModule,
     TokenDistanceModule,
 )
-from boltzgen_flat.model_modules_inverse_fold import InverseFoldingEncoder, InverseFoldingDecoder
+from .boltzgen_flat.model_modules_inverse_fold import InverseFoldingEncoder, InverseFoldingDecoder
 
 
 class Boltz(nn.Module):
