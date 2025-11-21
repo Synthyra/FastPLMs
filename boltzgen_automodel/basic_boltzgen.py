@@ -1,36 +1,16 @@
-from math import e
 
-import math
-from pathlib import Path
-import time
+import torch
+from torch import Tensor, nn
 from typing import Any, Dict, Optional, List
 
-import numpy as np
-import torch
-from pytorch_lightning import Callback, LightningModule
-from torch import Tensor, nn
-from torchmetrics import MeanMetric
-
-from boltzgen_flat.data_rmsd_computation import get_true_coordinates
 import boltzgen_flat.model_layers_initialize as init
 from boltzgen_flat import data_const as const
-from boltzgen_flat.data_mol import (
-    minimum_lddt_symmetry_dist,
-)
+from boltzgen_flat.data_mol import minimum_lddt_symmetry_dist
 from boltzgen_flat.model_layers_miniformer import MiniformerModule
 from boltzgen_flat.model_layers_pairformer import PairformerModule
-from boltzgen_flat.model_loss_bfactor import bfactor_loss_fn
-from boltzgen_flat.model_loss_confidence import (
-    confidence_loss,
-)
-from boltzgen_flat.model_loss_distogram import distogram_loss
-from boltzgen_flat.model_loss_res_type import res_type_loss_fn
-
 from boltzgen_flat.model_modules_confidence import ConfidenceModule
 from boltzgen_flat.model_modules_diffusion import AtomDiffusion
-from boltzgen_flat.model_modules_diffusion_conditioning import (
-    DiffusionConditioning,
-)
+from boltzgen_flat.model_modules_diffusion_conditioning import DiffusionConditioning
 from boltzgen_flat.model_modules_encoders import RelativePositionEncoder
 from boltzgen_flat.model_modules_affinity import AffinityModule
 from boltzgen_flat.model_modules_masker import BoltzMasker
@@ -43,17 +23,10 @@ from boltzgen_flat.model_modules_trunk import (
     TemplateModule,
     TokenDistanceModule,
 )
-from boltzgen_flat.model_optim_ema import EMA
-from boltzgen_flat.model_optim_scheduler import AlphaFoldLRScheduler
-from boltzgen_flat.model_modules_inverse_fold import (
-    InverseFoldingEncoder,
-    InverseFoldingDecoder,
-)
-
-import torch
+from boltzgen_flat.model_modules_inverse_fold import InverseFoldingEncoder, InverseFoldingDecoder
 
 
-class Boltz(LightningModule):
+class Boltz(nn.Module):
     """Boltz Implementation."""
 
     def __init__(
@@ -119,6 +92,7 @@ class Boltz(LightningModule):
         inverse_fold_args: Optional[Dict[str, Any]] = None,
         inference_logging: bool = False,
         use_kernels: bool = False,
+        **kwargs: Any,
     ) -> None:
         super().__init__()
         """
@@ -128,23 +102,10 @@ class Boltz(LightningModule):
         3. Inverse folding
         4. Affinity prediction
         """
-        self.save_hyperparameters()
         self.inverse_fold = inverse_fold
         self.inference_logging = inference_logging
 
         self.use_kernels = use_kernels
-
-        # No random recycling
-        self.no_random_recycling_training = no_random_recycling_training
-
-        if validate_structure:
-            # Late init at setup time
-            self.val_group_mapper = {}  # maps a dataset index to a validation group name
-            self.validator_mapper = {}  # maps a dataset index to a validator
-
-            # Validators for each dataset keep track of all metrics,
-            # compute validation, aggregate results and log
-            self.validators = nn.ModuleList(validators)
 
         self.num_val_datasets = num_val_datasets
         self.ignore_ckpt_shape_mismatch = ignore_ckpt_shape_mismatch
@@ -183,18 +144,6 @@ class Boltz(LightningModule):
         self.step_scale_values = []
         self.noise_scale_switch_points = []
         self.noise_scale_values = []
-
-        # Training metrics
-        if validate_structure:
-            self.train_confidence_loss_logger = MeanMetric()
-            self.train_confidence_loss_dict_logger = nn.ModuleDict()
-            for m in [
-                "plddt_loss",
-                "resolved_loss",
-                "pde_loss",
-                "pae_loss",
-            ]:
-                self.train_confidence_loss_dict_logger[m] = MeanMetric()
 
         if "affinity_args" not in affinity_model_args:
             affinity_model_args["affinity_args"] = {}
@@ -327,8 +276,6 @@ class Boltz(LightningModule):
         self.token_level_confidence = token_level_confidence
         self.alpha_pae = alpha_pae
 
-        self.structure_prediction_training = structure_prediction_training
-
         ### Affinity ###
         self.affinity_prediction = affinity_prediction
         self.affinity_ensemble = affinity_ensemble
@@ -374,117 +321,9 @@ class Boltz(LightningModule):
             self.inverse_folding_encoder = InverseFoldingEncoder(**inverse_fold_args)
             self.structure_module = InverseFoldingDecoder(**inverse_fold_args)
 
-        # Remove grad from weights they are not trained for ddp
-        if not structure_prediction_training:
-            for name, param in self.named_parameters():
-                if (
-                    name.split(".")[0] not in ["confidence_module", "affinity_module"]
-                    and "out_token_feat_update" not in name
-                ):
-                    param.requires_grad = False
-
-        if self.freeze_template_weights:
-            for pn, p in self.named_parameters():
-                if "template_module" in pn:
-                    p.requires_grad = False
-        self.timestamp = time.time()
-
-        self.training_args.skip_batch_by_single_rep = getattr(
-            self.training_args, "skip_batch_by_single_rep", False
-        )
-        if self.training_args.skip_batch_by_single_rep:
-            self.skip_step_by_single_rep = False
-            print(
-                "skip_batch_by_single_rep is on. Will skip training step if single representation has unstable magnitude."
-            )
-
-    def setup(self, stage: str) -> None:
-        """Set the model for training, validation."""
-        if (
-            stage != "predict"
-            and hasattr(self.trainer, "datamodule")
-            and self.trainer.datamodule
-            and self.validate_structure
-        ):
-            self.val_group_mapper.update(self.trainer.datamodule.val_group_mapper)
-
-            l1 = len(self.val_group_mapper)
-            l2 = self.num_val_datasets
-            msg = (
-                f"Number of validation datasets num_val_datasets={l2} "
-                f"does not match the number of val_group_mapper entries={l1}."
-            )
-            assert l1 == l2, msg
-
-            # Map an index to a validator, and double check val names
-            # match from datamodule
-            all_validator_names = []
-            for validator in self.validators:
-                for val_name in validator.val_names:
-                    msg = f"Validator {val_name} duplicated in validators."
-                    assert val_name not in all_validator_names, msg
-                    all_validator_names.append(val_name)
-                    for val_idx, val_group in self.val_group_mapper.items():
-                        if val_name == val_group["label"]:
-                            self.validator_mapper[val_idx] = validator
-
-            msg = "Mismatch between validator names and val_group_mapper values."
-            assert set(all_validator_names) == {
-                x["label"] for x in self.val_group_mapper.values()
-            }, msg
-
-        dataloader = self.trainer.datamodule.predict_dataloader()
-        self.total_samples = len(dataloader.dataset)
-        if stage == "predict" and self.checkpoints:
-            fractions = [self.first_checkpoint_num_samples] + [
-                ckpt["checkpoint"]["num_samples"] for ckpt in self.checkpoint_list
-            ]
-            cumulative_samples = np.cumsum(
-                [int(math.ceil(f * self.total_samples)) for f in fractions]
-            )
-            self.switch_points = cumulative_samples.tolist()
-
-            self.checkpoint_paths = [
-                ckpt["checkpoint"]["path"] for ckpt in self.checkpoint_list
-            ]
-            for path in self.checkpoint_paths:
-                if not Path(path).exists():
-                    raise ValueError(f"Missing checkpoint path: {path}")
-            self.next_switch_point = (
-                self.switch_points[0] if self.switch_points else None
-            )
-
-        # Step scale
-        if stage == "predict" and self.step_scale_schedule:
-            self.step_scale_values = [
-                item["step_scale"] for item in self.step_scale_schedule
-            ]
-            fractions = [item["period"] for item in self.step_scale_schedule]
-            cumulative_samples = np.cumsum(
-                [int(f * self.total_samples) for f in fractions]
-            )
-            self.step_scale_switch_points = cumulative_samples.tolist()
-            self.current_step_scale_index = 0
-            self.next_step_scale_switch_point = self.step_scale_switch_points[0]
-            self.current_step_scale = self.step_scale_values[0]
-
-        # Noise scale
-        if stage == "predict" and self.noise_scale_schedule:
-            self.noise_scale_values = [
-                item["noise_scale"] for item in self.noise_scale_schedule
-            ]
-            fractions = [item["period"] for item in self.noise_scale_schedule]
-            cumulative_samples = np.cumsum(
-                [int(f * self.total_samples) for f in fractions]
-            )
-            self.noise_scale_switch_points = cumulative_samples.tolist()
-            self.current_noise_scale_index = 0
-            self.next_noise_scale_switch_point = self.noise_scale_switch_points[0]
-            self.current_noise_scale = self.noise_scale_values[0]
-
-    def load_checkpoint_weights(self, checkpoint_path):
+    def load_checkpoint_weights(self, checkpoint_path, device='cpu'):
         checkpoint = torch.load(
-            checkpoint_path, map_location=self.device, weights_only=False
+            checkpoint_path, map_location=device, weights_only=False
         )
         self.load_state_dict(checkpoint["state_dict"], strict=False)
         print(f"Loaded weights from {checkpoint_path}")
@@ -870,342 +709,6 @@ class Boltz(LightningModule):
         dict_out["s_trunk"] = s
         return dict_out
 
-    def training_step(self, batch: Dict[str, Tensor], batch_idx: int) -> Tensor:
-        start = time.time()
-
-        # Sample recycling steps
-        if self.no_random_recycling_training:
-            recycling_steps = self.training_args.recycling_steps
-        else:
-            rgn = np.random.default_rng(self.global_step)
-            recycling_steps = rgn.integers(
-                0, self.training_args.recycling_steps + 1
-            ).item()
-
-        if self.training_args.get("sampling_steps_random", None) is not None:
-            rgn_samplng_steps = np.random.default_rng(self.global_step)
-            sampling_steps = rgn_samplng_steps.choice(
-                self.training_args.sampling_steps_random
-            )
-        else:
-            sampling_steps = self.training_args.sampling_steps
-
-        # Mask features for conditioning
-        feat_masked = self.masker(batch)
-
-        # Compute the forward pass
-        out = self(
-            feats=feat_masked,
-            recycling_steps=recycling_steps,
-            num_sampling_steps=sampling_steps,
-            multiplicity_diffusion_train=self.training_args.diffusion_multiplicity,
-            diffusion_samples=self.training_args.diffusion_samples,
-        )
-        if "sigmas" in out:
-            sigmas = out["sigmas"]
-            pred_mask = (sigmas < self.structure_module.pred_sigma_thresh).float()
-
-        batch["coords"] = feat_masked["coords"].clone()
-
-        # Compute losses
-        if self.structure_prediction_training:
-            if not self.inverse_fold:
-                disto_loss, _ = distogram_loss(
-                    out,
-                    batch,
-                    aggregate_distogram=self.aggregate_distogram,
-                )
-                try:
-                    diffusion_loss_dict = self.structure_module.compute_loss(
-                        batch,
-                        out,
-                        multiplicity=self.training_args.diffusion_multiplicity,
-                        **self.diffusion_loss_args,
-                    )
-                except Exception as e:
-                    print(f"Skipping batch {batch_idx} due to error: {e}")
-                    return None
-            else:
-                disto_loss = 0.0
-                diffusion_loss_dict = {"loss": 0.0, "loss_breakdown": {}}
-
-            if self.predict_bfactor:
-                bfactor_loss = bfactor_loss_fn(out, batch)
-            else:
-                bfactor_loss = 0.0
-
-            if self.predict_res_type:
-                res_type_loss, res_type_acc = res_type_loss_fn(out, batch)
-            else:
-                res_type_loss, res_type_acc = 0.0, 0.0
-
-        else:
-            disto_loss = 0.0
-            bfactor_loss = 0.0
-            res_type_loss = 0.0
-            diffusion_loss_dict = {"loss": 0.0, "loss_breakdown": {}}
-
-        if self.confidence_prediction:
-            try:
-                # confidence model symmetry correction
-                return_dict = get_true_coordinates(
-                    batch,
-                    out,
-                    diffusion_samples=self.training_args.diffusion_samples,
-                    symmetry_correction=self.training_args.symmetry_correction,
-                )
-            except Exception as e:
-                print(f"Skipping batch with id {batch['pdb_id']} due to error: {e}")
-                return None
-
-            true_coords = return_dict["true_coords"]
-            true_coords_resolved_mask = return_dict["true_coords_resolved_mask"]
-
-            K = true_coords.shape[1]
-            assert K == 1, (
-                f"Confidence_prediction is not supported for num_ensembles_val={K}."
-            )
-
-            # For now, just take the only conformer.
-            true_coords = true_coords.squeeze(1)  # (S, L, 3)
-            batch["frames_idx"] = batch["frames_idx"].squeeze(1)
-            batch["frame_resolved_mask"] = batch["frame_resolved_mask"].squeeze(1)
-
-            confidence_loss_dict = confidence_loss(
-                out,
-                batch,
-                true_coords,
-                true_coords_resolved_mask,
-                token_level_confidence=self.token_level_confidence,
-                alpha_pae=self.alpha_pae,
-                multiplicity=self.training_args.diffusion_samples,
-            )
-
-        else:
-            confidence_loss_dict = {
-                "loss": torch.tensor(0.0, device=batch["token_index"].device),
-                "loss_breakdown": {},
-            }
-
-        # Skip step if single representation has unstable magnitude.
-        # Reference: https://github.com/IntelliGen-AI/IntFold
-        if self.training_args.skip_batch_by_single_rep:
-            s_trunk = out["s_trunk"]
-            magnitudes = torch.linalg.norm(s_trunk, dim=-1)
-            if torch.any(magnitudes > 40000):
-                self.skip_step_by_single_rep = True
-            self.log("train/single_norm", torch.mean(magnitudes), prog_bar=False)
-
-        # Aggregate losses
-        # NOTE: we already have an implicit weight in the losses induced by dataset sampling
-        # NOTE: this logic works only for datasets with either affinity or confidence labels
-        loss = (
-            self.training_args.confidence_loss_weight * confidence_loss_dict["loss"]
-            + self.training_args.diffusion_loss_weight * diffusion_loss_dict["loss"]
-            + self.training_args.distogram_loss_weight * disto_loss
-            + self.training_args.get("bfactor_loss_weight", 0.0) * bfactor_loss
-            + self.training_args.get("res_type_loss_weight", 0.0) * res_type_loss
-        )
-
-        if not (self.global_step % self.log_loss_every_steps):
-            # Log losses
-            if self.validate_structure:
-                self.log("train/distogram_loss", disto_loss)
-                self.log("train/res_type_loss", res_type_loss)
-                self.log("train/res_type_acc", res_type_acc)
-                self.log("train/diffusion_loss", diffusion_loss_dict["loss"])
-                for k, v in diffusion_loss_dict["loss_breakdown"].items():
-                    self.log(f"train/{k}", v)
-
-            if self.confidence_prediction:
-                self.train_confidence_loss_logger.update(
-                    confidence_loss_dict["loss"].detach()
-                )
-                for k in self.train_confidence_loss_dict_logger:
-                    self.train_confidence_loss_dict_logger[k].update(
-                        (
-                            confidence_loss_dict["loss_breakdown"][k].detach()
-                            if torch.is_tensor(
-                                confidence_loss_dict["loss_breakdown"][k]
-                            )
-                            else confidence_loss_dict["loss_breakdown"][k]
-                        ),
-                    )
-            self.log("train/loss", loss)
-            self.log("train/forward_dur", time.time() - start)
-            self.log("train/step_dur", time.time() - self.timestamp)
-            self.timestamp = time.time()
-            self.training_log()
-        return loss
-
-    def training_log(self):
-        self.log("train/grad_norm", self.gradient_norm(self), prog_bar=False)
-        if self.confidence_prediction:
-            self.log(
-                "train/grad_norm_affinity_module",
-                self.gradient_norm(self.affinity_module),
-                prog_bar=False,
-            )
-
-        self.log("train/param_norm", self.parameter_norm(self), prog_bar=False)
-
-        lr = self.trainer.optimizers[0].param_groups[0]["lr"]
-        self.log("lr", lr, prog_bar=False)
-
-        if not self.inverse_fold:
-            self.log(
-                "train/param_norm_msa_module",
-                self.parameter_norm(self.msa_module),
-                prog_bar=False,
-            )
-
-            self.log(
-                "train/param_norm_pairformer_module",
-                self.parameter_norm(self.pairformer_module),
-                prog_bar=False,
-            )
-
-            self.log(
-                "train/param_norm_structure_module",
-                self.parameter_norm(self.structure_module),
-                prog_bar=False,
-            )
-
-        if self.confidence_prediction:
-            self.log(
-                "train/grad_norm_confidence_module",
-                self.gradient_norm(self.confidence_module),
-                prog_bar=False,
-            )
-            self.log(
-                "train/param_norm_confidence_module",
-                self.parameter_norm(self.confidence_module),
-                prog_bar=False,
-            )
-
-    def on_train_epoch_end(self):
-        if self.confidence_prediction:
-            self.log(
-                "train/confidence_loss",
-                self.train_confidence_loss_logger,
-                prog_bar=False,
-                on_step=False,
-                on_epoch=True,
-            )
-            for k, v in self.train_confidence_loss_dict_logger.items():
-                self.log(f"train/{k}", v, prog_bar=False, on_step=False, on_epoch=True)
-
-    def gradient_norm(self, module):
-        parameters = [
-            p.grad.norm(p=2) ** 2
-            for p in module.parameters()
-            if p.requires_grad and p.grad is not None
-        ]
-        if len(parameters) == 0:
-            return torch.tensor(
-                0.0, device="cuda" if torch.cuda.is_available() else "cpu"
-            )
-        norm = torch.stack(parameters).sum().sqrt()
-        return norm
-
-    def parameter_norm(self, module):
-        parameters = [p.norm(p=2) ** 2 for p in module.parameters() if p.requires_grad]
-        if len(parameters) == 0:
-            return torch.tensor(
-                0.0, device="cuda" if torch.cuda.is_available() else "cpu"
-            )
-        norm = torch.stack(parameters).sum().sqrt()
-        return norm
-
-    def validation_step(
-        self, batch: Dict[str, Tensor], batch_idx: int, dataloader_idx: int = 0
-    ):
-        start = time.time()
-        if self.validate_structure:
-            try:
-                msg = "Only batch=1 is supported for validation"
-                assert batch["idx_dataset"].shape[0] == 1, msg
-
-                # Select validator based on dataset
-                idx_dataset = batch["idx_dataset"][0].item()
-                if dataloader_idx > 0:
-                    validator = self.refolding_validator
-                else:
-                    validator = self.validator_mapper[idx_dataset]
-
-                # Mask features
-                feat_masked = self.masker(batch)
-
-                # Run forward pass
-                out = validator.run_model(
-                    model=self, batch=feat_masked, idx_dataset=idx_dataset
-                )
-
-                batch["coords"] = feat_masked["coords"].clone()
-                out["feat_masked"] = feat_masked
-
-                # Compute validation step
-
-                validator.process(
-                    model=self,
-                    batch=batch,
-                    out=out,
-                    idx_dataset=idx_dataset,
-                    n_samples=self.validation_args.diffusion_samples,
-                    batch_idx=batch_idx,
-                    dataloader_idx=dataloader_idx,
-                )
-            except RuntimeError as e:  # catch out of memory exceptions
-                if "out of memory" in str(e):
-                    msg = f"| WARNING: ran out of memory, skipping batch, {idx_dataset}"
-                    print(
-                        msg,
-                        "coords =",
-                        batch["coords"].shape,
-                        "res_type =",
-                        batch["res_type"].shape,
-                    )
-                    torch.cuda.empty_cache()
-                    return
-                raise e
-        else:
-            try:
-                out = self(
-                    batch,
-                    recycling_steps=self.validation_args.recycling_steps,
-                    num_sampling_steps=self.validation_args.sampling_steps,
-                    diffusion_samples=self.validation_args.diffusion_samples,
-                    run_confidence_sequentially=self.validation_args.get(
-                        "run_confidence_sequentially", False
-                    ),
-                )
-            except RuntimeError as e:  # catch out of memory exceptions
-                idx_dataset = batch["idx_dataset"][0].item()
-                if "out of memory" in str(e):
-                    msg = f"| WARNING: ran out of memory, skipping batch, {idx_dataset}"
-                    print(msg)
-                    torch.cuda.empty_cache()
-                    return
-                raise e
-
-        self.log("val/forward_dur", time.time() - start)
-        self.log("val/step_dur", time.time() - self.timestamp)
-        self.timestamp = time.time()
-
-    def on_validation_epoch_end(self) -> None:
-        """Aggregate all metrics for each validator."""
-        if self.validate_structure:
-            for validator in self.validator_mapper.values():
-                # This will aggregate, compute and log all metrics
-                validator.on_epoch_end(model=self)
-
-        if self.refolding_validator is not None:
-            assert (
-                self.trainer.datamodule.monomer_split
-                or self.trainer.datamodule.ligand_split
-            )
-            self.refolding_validator.on_epoch_end(model=self)
-
     def predict_step(
         self, batch: Any, batch_idx: int = 0, dataloader_idx: int = 0
     ) -> Dict:
@@ -1373,116 +876,6 @@ class Boltz(LightningModule):
             else:
                 raise e
 
-    def configure_optimizers(self) -> torch.optim.Optimizer:
-        """Configure the optimizer."""
-        param_dict = dict(self.named_parameters())
-
-        if self.structure_prediction_training:
-            all_parameter_names = [
-                pn for pn, p in self.named_parameters() if p.requires_grad
-            ]
-        else:
-            all_parameter_names = [
-                pn
-                for pn, p in self.named_parameters()
-                if p.requires_grad
-                and ("out_token_feat_update" in pn or "confidence_module" in pn)
-            ]
-
-        if self.training_args.get("weight_decay", 0.0) > 0:
-            w_decay = self.training_args.get("weight_decay", 0.0)
-            if self.training_args.get("weight_decay_exclude", False):
-                nodecay_params_names = [
-                    pn
-                    for pn in all_parameter_names
-                    if (
-                        "norm" in pn
-                        or "rel_pos" in pn
-                        or ".s_init" in pn
-                        or ".z_init_" in pn
-                        or "token_bonds" in pn
-                        or "embed_atom_features" in pn
-                        or "dist_bin_pairwise_embed" in pn
-                    )
-                ]
-                nodecay_params = [param_dict[pn] for pn in nodecay_params_names]
-                decay_params = [
-                    param_dict[pn]
-                    for pn in all_parameter_names
-                    if pn not in nodecay_params_names
-                ]
-                optim_groups = [
-                    {"params": decay_params, "weight_decay": w_decay},
-                    {"params": nodecay_params, "weight_decay": 0.0},
-                ]
-                optimizer = torch.optim.AdamW(
-                    optim_groups,
-                    betas=(
-                        self.training_args.adam_beta_1,
-                        self.training_args.adam_beta_2,
-                    ),
-                    eps=self.training_args.adam_eps,
-                    lr=self.training_args.base_lr,
-                )
-
-            else:
-                optimizer = torch.optim.AdamW(
-                    [param_dict[pn] for pn in all_parameter_names],
-                    betas=(
-                        self.training_args.adam_beta_1,
-                        self.training_args.adam_beta_2,
-                    ),
-                    eps=self.training_args.adam_eps,
-                    lr=self.training_args.base_lr,
-                    weight_decay=self.training_args.get("weight_decay", 0.0),
-                )
-        else:
-            optimizer = torch.optim.AdamW(
-                [param_dict[pn] for pn in all_parameter_names],
-                betas=(self.training_args.adam_beta_1, self.training_args.adam_beta_2),
-                eps=self.training_args.adam_eps,
-                lr=self.training_args.base_lr,
-                weight_decay=self.training_args.get("weight_decay", 0.0),
-            )
-
-        if self.training_args.lr_scheduler == "af3":
-            scheduler = AlphaFoldLRScheduler(
-                optimizer,
-                base_lr=self.training_args.base_lr,
-                max_lr=self.training_args.max_lr,
-                warmup_no_steps=self.training_args.lr_warmup_no_steps,
-                start_decay_after_n_steps=self.training_args.lr_start_decay_after_n_steps,
-                decay_every_n_steps=self.training_args.lr_decay_every_n_steps,
-                decay_factor=self.training_args.lr_decay_factor,
-            )
-            return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
-        elif self.training_args.lr_scheduler == "onecycle":
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                max_lr=self.training_args.max_lr,
-                total_steps=self.trainer.estimated_stepping_batches,
-            )
-            # return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": {
-                    "scheduler": scheduler,
-                    "interval": "step",
-                },
-            }
-
-        return optimizer
-
-    def log_image(self, name, path):
-        if self.logger is not None:
-            try:
-                self.logger.log_image(name, images=[str(path)])
-            except:
-                import traceback
-
-                traceback.print_exc()  # noqa: T201
-                print(f"Image logging failed for {name} {str(path)}.")  # noqa: T201
-
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         # Ignore the lr from the checkpoint
         lr = self.training_args.max_lr
@@ -1540,14 +933,3 @@ class Boltz(LightningModule):
 
             if is_changed:
                 checkpoint.pop("optimizer_states", None)
-
-    def configure_callbacks(self) -> List[Callback]:
-        """Configure model callbacks.
-
-        Returns
-        -------
-        List[Callback]
-            List of callbacks to be used in the model.
-
-        """
-        return [EMA(self.ema_decay)] if self.use_ema else []

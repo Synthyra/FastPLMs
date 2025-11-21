@@ -9,10 +9,9 @@ Usage:
 
 import torch
 import numpy as np
-import sys
+import huggingface_hub
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
-
+from typing import Dict, Optional, Tuple
 
 from boltzgen_flat.data_tokenize_tokenizer import Tokenizer
 from boltzgen_flat.data_feature_featurizer import Featurizer
@@ -22,46 +21,12 @@ from boltzgen_flat.data_template_features import load_dummy_templates
 from boltzgen_flat.data_mol import load_canonicals
 from boltzgen_flat import data_const as const
 
-# Import our custom Boltz model and setup from minimal_working_example
-from minimal_working_example import (
-    create_dummy_module, Boltz, DummyEMA, DummyValidator
-)
-import types
-import huggingface_hub
-
-
-# ============================================================================
-# Setup module redirects (same as minimal_working_example.py)
-# ============================================================================
-def setup_pickle_modules():
-    """Create module structure for pickle to find our Boltz class"""
-    boltzgen = create_dummy_module('boltzgen')
-    boltzgen_data = create_dummy_module('boltzgen.data', boltzgen)
-    boltzgen_data_const = create_dummy_module('boltzgen.data.const', boltzgen_data)
-    boltzgen_model = create_dummy_module('boltzgen.model', boltzgen)
-    boltzgen_model_models = create_dummy_module('boltzgen.model.models', boltzgen_model)
-    boltzgen_model_models_boltz = create_dummy_module('boltzgen.model.models.boltz', boltzgen_model_models)
-    boltzgen_model_models_boltz.Boltz = Boltz
-    boltzgen_model_optim = create_dummy_module('boltzgen.model.optim', boltzgen_model)
-    boltzgen_model_optim_ema = create_dummy_module('boltzgen.model.optim.ema', boltzgen_model_optim)
-    boltzgen_model_optim_ema.EMA = DummyEMA
-    boltzgen_model_validation = create_dummy_module('boltzgen.model.validation', boltzgen_model)
-    boltzgen_model_validation_validator = create_dummy_module('boltzgen.model.validation.validator', boltzgen_model_validation)
-    boltzgen_model_validation_validator.Validator = DummyValidator
-    boltzgen_model_validation_design = create_dummy_module('boltzgen.model.validation.design', boltzgen_model_validation)
-    boltzgen_model_validation_design.DesignValidator = DummyValidator
-    boltzgen_model_validation_rcsb = create_dummy_module('boltzgen.model.validation.rcsb', boltzgen_model_validation)
-    boltzgen_model_validation_rcsb.RCSBValidator = DummyValidator
-    boltzgen_model_validation_refolding = create_dummy_module('boltzgen.model.validation.refolding', boltzgen_model_validation)
-    boltzgen_model_validation_refolding.RefoldingValidator = DummyValidator
+from load_utils_native import setup_pickle_modules
+from basic_boltzgen import Boltz
 
 
 setup_pickle_modules()
 
-
-# ============================================================================
-# Helper Functions
-# ============================================================================
 
 def create_design_tokens(
     design_length: int,

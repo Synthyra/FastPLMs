@@ -2,9 +2,8 @@ import torch
 import sys
 import types
 import huggingface_hub
-from pathlib import Path
 
-from boltzgen_flat.model_models_boltz import Boltz
+from modeling_boltzgen import Boltz
 
 
 def create_dummy_module(name, parent=None):
@@ -22,71 +21,59 @@ class DummyValidator:
     pass
 
 
-def setup_pickle_modules():
-    """Create module structure for pickle to find our Boltz class"""
-    boltzgen = create_dummy_module('boltzgen')
-    boltzgen_data = create_dummy_module('boltzgen.data', boltzgen)
-    boltzgen_data_const = create_dummy_module('boltzgen.data.const', boltzgen_data)
-    boltzgen_model = create_dummy_module('boltzgen.model', boltzgen)
-    boltzgen_model_models = create_dummy_module('boltzgen.model.models', boltzgen_model)
-    boltzgen_model_models_boltz = create_dummy_module('boltzgen.model.models.boltz', boltzgen_model_models)
-    boltzgen_model_models_boltz.Boltz = Boltz
-    boltzgen_model_optim = create_dummy_module('boltzgen.model.optim', boltzgen_model)
-    boltzgen_model_optim_ema = create_dummy_module('boltzgen.model.optim.ema', boltzgen_model_optim)
-    boltzgen_model_optim_ema.EMA = DummyEMA
-    boltzgen_model_validation = create_dummy_module('boltzgen.model.validation', boltzgen_model)
-    boltzgen_model_validation_validator = create_dummy_module('boltzgen.model.validation.validator', boltzgen_model_validation)
-    boltzgen_model_validation_validator.Validator = DummyValidator
-    boltzgen_model_validation_design = create_dummy_module('boltzgen.model.validation.design', boltzgen_model_validation)
-    boltzgen_model_validation_design.DesignValidator = DummyValidator
-    boltzgen_model_validation_rcsb = create_dummy_module('boltzgen.model.validation.rcsb', boltzgen_model_validation)
-    boltzgen_model_validation_rcsb.RCSBValidator = DummyValidator
-    boltzgen_model_validation_refolding = create_dummy_module('boltzgen.model.validation.refolding', boltzgen_model_validation)
-    boltzgen_model_validation_refolding.RefoldingValidator = DummyValidator
-
-
-# Create boltzgen package hierarchy
-boltzgen = create_dummy_module('boltzgen')
-
-# Create boltzgen.data package (needed for validators)
-boltzgen_data = create_dummy_module('boltzgen.data', boltzgen)
-boltzgen_data_const = create_dummy_module('boltzgen.data.const', boltzgen_data)
-
-# Create boltzgen.model package
-boltzgen_model = create_dummy_module('boltzgen.model', boltzgen)
-
-# Create boltzgen.model.models package
-boltzgen_model_models = create_dummy_module('boltzgen.model.models', boltzgen_model)
-
-# Create boltzgen.model.models.boltz module with our Boltz class
-boltzgen_model_models_boltz = create_dummy_module('boltzgen.model.models.boltz', boltzgen_model_models)
-boltzgen_model_models_boltz.Boltz = Boltz  # Redirect to our implementation!
-
-# Create boltzgen.model.optim for EMA
-boltzgen_model_optim = create_dummy_module('boltzgen.model.optim', boltzgen_model)
-
 # Create a dummy EMA class (PyTorch Lightning callback)
 class DummyEMA:
     """Dummy EMA callback for loading checkpoints"""
     pass
 
-boltzgen_model_optim_ema = create_dummy_module('boltzgen.model.optim.ema', boltzgen_model_optim)
-boltzgen_model_optim_ema.EMA = DummyEMA
 
-# Create boltzgen.model.validation for validators
-boltzgen_model_validation = create_dummy_module('boltzgen.model.validation', boltzgen_model)
+def setup_pickle_modules():
+    """
+    Create module structure for pickle to find our Boltz class.
+    
+    This MUST be called before torch.load() to avoid ModuleNotFoundError.
+    The modules are registered in sys.modules so pickle can import them.
+    """
+    # Create boltzgen package hierarchy
+    boltzgen = create_dummy_module('boltzgen')
+    
+    # Create boltzgen.data package (needed for validators)
+    boltzgen_data = create_dummy_module('boltzgen.data', boltzgen)
+    boltzgen_data_const = create_dummy_module('boltzgen.data.const', boltzgen_data)
+    
+    # Create boltzgen.model package
+    boltzgen_model = create_dummy_module('boltzgen.model', boltzgen)
+    
+    # Create boltzgen.model.models package
+    boltzgen_model_models = create_dummy_module('boltzgen.model.models', boltzgen_model)
+    
+    # Create boltzgen.model.models.boltz module with our Boltz class
+    boltzgen_model_models_boltz = create_dummy_module('boltzgen.model.models.boltz', boltzgen_model_models)
+    boltzgen_model_models_boltz.Boltz = Boltz  # Redirect to our implementation!
+    
+    # Create boltzgen.model.optim for EMA
+    boltzgen_model_optim = create_dummy_module('boltzgen.model.optim', boltzgen_model)
+    boltzgen_model_optim_ema = create_dummy_module('boltzgen.model.optim.ema', boltzgen_model_optim)
+    boltzgen_model_optim_ema.EMA = DummyEMA
+    
+    # Create boltzgen.model.validation for validators
+    boltzgen_model_validation = create_dummy_module('boltzgen.model.validation', boltzgen_model)
+    
+    boltzgen_model_validation_validator = create_dummy_module('boltzgen.model.validation.validator', boltzgen_model_validation)
+    boltzgen_model_validation_validator.Validator = DummyValidator
+    
+    boltzgen_model_validation_design = create_dummy_module('boltzgen.model.validation.design', boltzgen_model_validation)
+    boltzgen_model_validation_design.DesignValidator = DummyValidator
+    
+    boltzgen_model_validation_rcsb = create_dummy_module('boltzgen.model.validation.rcsb', boltzgen_model_validation)
+    boltzgen_model_validation_rcsb.RCSBValidator = DummyValidator
+    
+    boltzgen_model_validation_refolding = create_dummy_module('boltzgen.model.validation.refolding', boltzgen_model_validation)
+    boltzgen_model_validation_refolding.RefoldingValidator = DummyValidator
 
-boltzgen_model_validation_validator = create_dummy_module('boltzgen.model.validation.validator', boltzgen_model_validation)
-boltzgen_model_validation_validator.Validator = DummyValidator
 
-boltzgen_model_validation_design = create_dummy_module('boltzgen.model.validation.design', boltzgen_model_validation)
-boltzgen_model_validation_design.DesignValidator = DummyValidator
-
-boltzgen_model_validation_rcsb = create_dummy_module('boltzgen.model.validation.rcsb', boltzgen_model_validation)
-boltzgen_model_validation_rcsb.RCSBValidator = DummyValidator
-
-boltzgen_model_validation_refolding = create_dummy_module('boltzgen.model.validation.refolding', boltzgen_model_validation)
-boltzgen_model_validation_refolding.RefoldingValidator = DummyValidator
+# Set up dummy modules at import time (required before any torch.load() calls)
+setup_pickle_modules()
 
 
 def minimal_load_example():
@@ -113,27 +100,7 @@ def minimal_load_example():
     print("\n[3/4] Extracting model configuration...")
     
     config = checkpoint["hyper_parameters"]
-    print(f"[OK] Found hyperparameters in checkpoint")
-    print(f"\n  Key configuration:")
-    print(f"    - token_s: {config.get('token_s')}")
-    print(f"    - token_z: {config.get('token_z')}")
-    print(f"    - atom_s: {config.get('atom_s')}")
-    print(f"    - atom_z: {config.get('atom_z')}")
-    print(f"    - confidence_prediction: {config.get('confidence_prediction')}")
-    print(f"    - inverse_fold: {config.get('inverse_fold')}")
-    print(f"    - use_miniformer: {config.get('use_miniformer')}")
-    
-    # Override for inference (remove PyTorch Lightning specific stuff)
-    config["validators"] = None
-    config["validate_structure"] = False
-    config["structure_prediction_training"] = False
-    config["inference_logging"] = False
-    config["predict_args"] = {
-        "recycling_steps": 3,
-        "sampling_steps": 200,
-        "diffusion_samples": 5,
-    }
-    
+
     print("\n[4/4] Instantiating model and loading weights...")
     
     # Create model with config
@@ -159,9 +126,6 @@ def minimal_load_example():
         print(f"\n  First few unexpected keys:")
         for key in list(unexpected)[:5]:
             print(f"    - {key}")
-    
-    # Set to eval mode
-    model.eval()
     
     print("\n" + "="*80)
     print("MODEL STRUCTURE")
@@ -190,8 +154,5 @@ def minimal_load_example():
     return model, config
 
 
-
-if __name__ == "__main__":
-    import sys
-    
+if __name__ == "__main__":    
     result = minimal_load_example()

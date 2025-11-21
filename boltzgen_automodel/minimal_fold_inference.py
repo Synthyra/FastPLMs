@@ -11,8 +11,6 @@ Usage:
 
 import torch
 import numpy as np
-import sys
-import types
 import huggingface_hub
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -25,14 +23,8 @@ from boltzgen_flat.data_mol import load_canonicals
 from boltzgen_flat.data_template_features import load_dummy_templates
 from boltzgen_flat import data_const as const
 
-# Import our custom Boltz model and setup from minimal_working_example
-from load_utils import (
-    Boltz,
-    create_dummy_module,
-    DummyEMA,
-    DummyValidator,
-    setup_pickle_modules,
-)
+from load_utils_native import setup_pickle_modules
+from basic_boltzgen import Boltz
 
 
 setup_pickle_modules()
