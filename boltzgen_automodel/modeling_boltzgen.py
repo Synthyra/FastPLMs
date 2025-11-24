@@ -1,20 +1,20 @@
 import torch
 import torch.nn as nn
 from transformers import PreTrainedModel
-from typing import Dict, Optional, List, Any, Union
+from typing import Dict, Optional, List, Any
 import numpy as np
 from pathlib import Path
 import huggingface_hub
 
-from .basic_boltzgen import Boltz
-from .boltzgen_config import BoltzGenConfig
-from .boltzgen_flat.data_tokenize_tokenizer import Tokenizer
-from .boltzgen_flat.data_feature_featurizer import Featurizer
-from .boltzgen_flat.data_data import Input, Structure
-from .boltzgen_flat.data_mol import load_canonicals
-from .boltzgen_flat.data_template_features import load_dummy_templates
-from .boltzgen_flat import data_const as const
-from .boltzgen_flat.data_parse_mmcif import parse_mmcif
+from basic_boltzgen import Boltz
+from boltzgen_config import BoltzGenConfig
+from boltzgen_flat.data_tokenize_tokenizer import Tokenizer
+from boltzgen_flat.data_feature_featurizer import Featurizer
+from boltzgen_flat.data_data import Input, Structure
+from boltzgen_flat.data_mol import load_canonicals
+from boltzgen_flat.data_template_features import load_dummy_templates
+from boltzgen_flat import data_const as const
+from boltzgen_flat.data_parse_mmcif import parse_mmcif
 
 
 """
@@ -30,7 +30,6 @@ model.save_to_cif(output, "prediction.cif", sequence="MKTAYIAKQRQISFVK")
 # Design
 design_output = model.design_proteins(design_length=20)
 """
-
 
 
 class BoltzGen(PreTrainedModel):

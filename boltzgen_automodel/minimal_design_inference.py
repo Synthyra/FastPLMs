@@ -9,7 +9,6 @@ Usage:
 
 import torch
 import numpy as np
-import huggingface_hub
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
@@ -20,9 +19,8 @@ from boltzgen_flat.data_parse_mmcif import parse_mmcif
 from boltzgen_flat.data_template_features import load_dummy_templates
 from boltzgen_flat.data_mol import load_canonicals
 from boltzgen_flat import data_const as const
-
-from load_utils_native import setup_pickle_modules
-from basic_boltzgen import Boltz
+from load_utils_native import setup_pickle_modules, load_model
+from modeling_boltzgen import BoltzGen
 
 
 setup_pickle_modules()
@@ -419,117 +417,11 @@ def create_dummy_structure(num_tokens: int) -> Structure:
     return structure
 
 
-def load_model(
-    checkpoint_path: Optional[str] = None,
-    checkpoint_name: str = "boltz2_conf_final.ckpt",
-    device: str = "cuda"
-) -> Boltz:
-    """
-    Load BoltzGen model.
-    
-    Args:
-        checkpoint_path: Path to checkpoint file. If None, downloads from HuggingFace.
-        checkpoint_name: Name of checkpoint to download from HuggingFace.
-                        Options:
-                        - "boltz2_conf_final.ckpt" (default, full model with confidence)
-                        - Custom checkpoint filename if you have your own
-        device: Device to load model on ('cuda' or 'cpu')
-        
-    Returns:
-        Loaded Boltz model
-        
-    Available checkpoints on HuggingFace (boltzgen/boltzgen-1):
-        - boltz2_conf_final.ckpt: Full BoltzGen model with confidence prediction
-        - boltzgen1_structuretrained_small.ckpt: Small pretrained checkpoint (training only)
-        
-    Note: For inference, boltz2_conf_final.ckpt is the standard checkpoint.
-    If you've trained your own model (small/large), pass the path to checkpoint_path.
-    """
-    if checkpoint_path is None:
-        print(f"Downloading checkpoint '{checkpoint_name}' from HuggingFace...")
-        checkpoint_path = huggingface_hub.hf_hub_download(
-            repo_id="boltzgen/boltzgen-1",
-            filename=checkpoint_name,
-            repo_type="model",
-            library_name="boltzgen",
-        )
-        print(f"Downloaded to: {checkpoint_path}")
-    
-    print("Loading checkpoint...")
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    
-    # Extract config
-    config = checkpoint["hyper_parameters"]
-    config["validators"] = None
-    config["validate_structure"] = False
-    config["structure_prediction_training"] = False
-    config["inference_logging"] = False
-    config["predict_args"] = {
-        "recycling_steps": 3,
-        "sampling_steps": 500,
-        "diffusion_samples": 1,
-    }
-    
-    # Override masker args for design
-    config["masker_args"] = {
-        "mask": True,
-        "mask_backbone": False,
-    }
-    
-    # Create model
-    print("Creating model...")
-    model = Boltz(**config)
-    
-    # Load weights (prefer EMA if available)
-    state_dict = checkpoint["state_dict"]
-    ema_keys = [k for k in state_dict.keys() if k.startswith("ema.")]
-    
-    if ema_keys:
-        print(f"Using EMA weights ({len(ema_keys)} parameters)")
-        state_dict = {
-            k.replace("ema.", ""): v
-            for k, v in state_dict.items()
-            if k.startswith("ema.")
-        }
-    
-    model.load_state_dict(state_dict, strict=False)
-    model.eval()
-    model.to(device)
-    
-    # Display model architecture info
-    print("\n" + "="*60)
-    print("MODEL ARCHITECTURE")
-    print("="*60)
-    print(f"  Token embedding dim (token_s): {config.get('token_s', 'N/A')}")
-    print(f"  Token pair dim (token_z): {config.get('token_z', 'N/A')}")
-    print(f"  Atom embedding dim (atom_s): {config.get('atom_s', 'N/A')}")
-    print(f"  Atom pair dim (atom_z): {config.get('atom_z', 'N/A')}")
-    
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"  Total parameters: {total_params:,}")
-    print(f"  Model size: ~{total_params * 4 / (1024**3):.2f} GB (fp32)")
-    
-    # Show pairformer info
-    if hasattr(model, 'pairformer_module'):
-        pf_config = config.get('pairformer_args', {})
-        print(f"  Pairformer blocks: {pf_config.get('num_blocks', 'N/A')}")
-        print(f"  Pairformer heads: {pf_config.get('num_heads', 'N/A')}")
-    
-    print("="*60)
-    print("\nModel loaded successfully!")
-    return model
-
-
-# ============================================================================
-# Main Design Functions
-# ============================================================================
-
 def design_protein(
     design_length: int,
     target_cif_path: Optional[str] = None,
     secondary_structure: Optional[str] = None,
-    model: Optional[Boltz] = None,
+    model: Optional[BoltzGen] = None,
     recycling_steps: int = 3,
     sampling_steps: int = 500,
     diffusion_samples: int = 1,
@@ -653,41 +545,35 @@ def extract_designed_sequence(output: Dict[str, torch.Tensor], design_mask: torc
 # ============================================================================
 
 if __name__ == "__main__":
-    print("""
-MINIMAL DESIGN INFERENCE EXAMPLES
-===================================
-
-This script demonstrates minimal protein design with BoltzGen.
-
-Running example predictions...
-    """)
-    
+    # py -m minimal_design_inference
     # Example 1: Design a protein de novo (no target)
     print("\n" + "="*80)
     print("EXAMPLE 1: De novo protein design (no target)")
     print("="*80)
+
+    recycling_steps = 3
+    sampling_steps = 200
+    diffusion_samples = 1
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model = BoltzGen.from_pretrained('Synthyra/boltzgen').boltz.eval().to(device)
+
+    output = design_protein(
+        design_length=50,
+        target_cif_path=None,
+        secondary_structure="HHHHHHHHHEEEEEEELLLLLHHHHHHHHHEEEEEEELLLLL",
+        recycling_steps=3,
+        sampling_steps=100,  # Reduced for speed
+        diffusion_samples=1,
+        device=device,
+    )
     
-    try:
-        output = design_protein(
-            design_length=50,
-            target_cif_path=None,
-            secondary_structure="HHHHHHHHHEEEEEEELLLLLHHHHHHHHHEEEEEEELLLLL",
-            recycling_steps=3,
-            sampling_steps=100,  # Reduced for speed
-            diffusion_samples=1,
-            device="cuda" if torch.cuda.is_available() else "cpu",
-        )
+    print(f"\nResults:")
+    print(f"  Coordinates: {output['sample_atom_coords'].shape}")
+    if 'ptm' in output:
+        print(f"  PTM score: {output['ptm'].item():.3f}")
         
-        print(f"\nResults:")
-        print(f"  Coordinates: {output['sample_atom_coords'].shape}")
-        if 'ptm' in output:
-            print(f"  PTM score: {output['ptm'].item():.3f}")
-        
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        print(f"Error: {e}")
-    
+
     # Example 2: Design a protein against a target
     print("\n" + "="*80)
     print("EXAMPLE 2: Protein design against target")
@@ -697,41 +583,22 @@ Running example predictions...
     target_path = Path("boltzgen/example/7rpz.cif")
     
     if target_path.exists():
-        try:
-            output = design_protein(
-                design_length=30,
-                target_cif_path=str(target_path),
-                recycling_steps=3,
-                sampling_steps=100,
-                diffusion_samples=1,
-                device="cuda" if torch.cuda.is_available() else "cpu",
-            )
+        output = design_protein(
+            design_length=30,
+            target_cif_path=str(target_path),
+            recycling_steps=3,
+            sampling_steps=100,
+            diffusion_samples=1,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+        )
+        
+        print(f"\nResults:")
+        print(f"  Coordinates: {output['sample_atom_coords'].shape}")
+        if 'iptm' in output:
+            print(f"  iPTM score: {output['iptm'].item():.3f}")
+        if 'design_ptm' in output:
+            print(f"  Design PTM: {output['design_ptm'].item():.3f}")
             
-            print(f"\nResults:")
-            print(f"  Coordinates: {output['sample_atom_coords'].shape}")
-            if 'iptm' in output:
-                print(f"  iPTM score: {output['iptm'].item():.3f}")
-            if 'design_ptm' in output:
-                print(f"  Design PTM: {output['design_ptm'].item():.3f}")
-            
-        except Exception as e:
-            print(f"Error: {e}")
-            import traceback
-            traceback.print_exc()
     else:
         print(f"Target file not found: {target_path}")
         print("Skipping this example.")
-    
-    print("\n" + "="*80)
-    print("Examples complete!")
-    print("="*80)
-    print("""
-NEXT STEPS:
------------
-1. Extract coordinates: output['sample_atom_coords']
-2. Extract sequences: output['res_type_logits'] 
-3. Save to CIF files (implement separately)
-4. Analyze confidence metrics (ptm, iptm, pae, etc.)
-5. Run multiple samples and filter by metrics
-    """)
-
