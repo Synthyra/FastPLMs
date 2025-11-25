@@ -16,7 +16,28 @@ def test_boltzgen_automodel():
     
     # 1. Initialize Config
     print("Initializing Config...")
-    config = BoltzGenConfig()
+    config = BoltzGenConfig(
+        atom_s=64,
+        atom_z=16,
+        token_s=64,
+        token_z=32,
+        num_bins=64,
+        pairformer_args={'num_blocks': 1, 'num_heads': 4},
+        score_model_args={
+            'atom_encoder_depth': 1, 'atom_encoder_heads': 4,
+            'token_transformer_depth': 1, 'token_transformer_heads': 4,
+            'atom_decoder_depth': 1, 'atom_decoder_heads': 4,
+            'conditioning_transition_layers': 1,
+        },
+        diffusion_process_args={
+            'sigma_min': 0.0004, 'sigma_max': 160.0, 'sigma_data': 16.0,
+            'rho': 7, 'P_mean': -1.2, 'P_std': 1.5, 'gamma_0': 0.8, 'gamma_min': 1.0,
+            'noise_scale': 1.0, 'step_scale': 1.0,
+            'step_scale_random': [1.0],
+            'mse_rotational_alignment': True, 'coordinate_augmentation': True,
+            'alignment_reverse_diff': True, 'synchronize_sigmas': False,
+        },
+    )
     
     # 2. Initialize Model
     print("Initializing Model...")

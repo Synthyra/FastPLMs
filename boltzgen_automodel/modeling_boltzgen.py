@@ -17,6 +17,7 @@ from boltzgen_flat.data_write_mmcif import to_mmcif
 from boltzgen_flat.data_data import Structure
 from boltzgen_flat import data_const as const
 from boltzgen_flat import cli_boltzgen
+import huggingface_hub
 
 
 class BoltzGen(PreTrainedModel):
@@ -30,6 +31,32 @@ class BoltzGen(PreTrainedModel):
         # Initialize tokenizer and featurizer for data processing
         self.tokenizer = Tokenizer()
         self.featurizer = Featurizer()
+
+    def _resolve_artifact_path(self, artifact: str, repo_type: str = "dataset") -> str:
+        """
+        Resolve artifact path, downloading from HuggingFace if necessary.
+        """
+        if artifact.startswith("huggingface:"):
+            try:
+                _, repo_id, filename = artifact.split(":")
+            except ValueError:
+                raise ValueError(
+                    f"Invalid artifact: {artifact}. Expected format: huggingface:<repo_id>:<filename>"
+                )
+            
+            # Use default cache dir and token from env
+            result = huggingface_hub.hf_hub_download(
+                repo_id,
+                filename,
+                repo_type=repo_type,
+                library_name="boltzgen",
+            )
+            return str(Path(result))
+        else:
+            path = Path(artifact)
+            if not path.exists():
+                raise FileNotFoundError(f"Artifact not found: {path}")
+            return str(path)
 
     @torch.inference_mode()
     def fold_proteins(self, sequences: Dict[str, str], output_path: Optional[str] = None) -> Dict[str, Any]:
@@ -64,6 +91,8 @@ class BoltzGen(PreTrainedModel):
             moldir = getattr(self.config, 'moldir', None)
             if moldir is None:
                 moldir = cli_boltzgen.ARTIFACTS["moldir"][0]
+            
+            moldir = self._resolve_artifact_path(moldir, repo_type="dataset")
 
             data_config = DataConfig(
                 moldir=moldir,
@@ -154,6 +183,8 @@ class BoltzGen(PreTrainedModel):
             moldir = getattr(self.config, 'moldir', None)
             if moldir is None:
                 moldir = cli_boltzgen.ARTIFACTS["moldir"][0]
+            
+            moldir = self._resolve_artifact_path(moldir, repo_type="dataset")
 
             data_config = DataConfig(
                 moldir=moldir,

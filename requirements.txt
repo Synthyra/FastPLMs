@@ -1,3 +1,4 @@
+# for esm models
 torch>=2.6.0
 matplotlib>=3.5.0
 transformers>=4.47.0
@@ -10,5 +11,27 @@ scipy>=1.7.0
 seaborn>=0.12.0
 peft>=0.5.0
 accelerate>=1.1.0
+# for pool parti
 networkx
+# e1
 pydssp
+# boltzgen
+numba==0.61.0
+hydride
+biotite
+logomaker
+gemmi==0.6.5
+pytorch-lightning
+hydra-core
+edit_distance
+rdkit
+pandas
+pdbeccdutils
+einx
+mashumaro
+nvidia-ml-py>=12.535.133
+cuequivariance_ops_cu12>=0.5.0
+cuequivariance_ops_torch_cu12>=0.5.0
+cuequivariance_torch>=0.5.0
+huggingface_hub
+biopython
