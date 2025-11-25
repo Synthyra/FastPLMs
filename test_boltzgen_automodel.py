@@ -14,8 +14,8 @@ from boltzgen_automodel.boltzgen_config import BoltzGenConfig
 def test_boltzgen_automodel():
     print("Testing BoltzGen AutoModel...")
     
-    # 1. Initialize Config
-    print("Initializing Config...")
+    # 1. Initialize Config with smaller model for faster testing
+    print("\n1. Initializing Config...")
     config = BoltzGenConfig(
         atom_s=64,
         atom_z=16,
@@ -40,7 +40,7 @@ def test_boltzgen_automodel():
     )
     
     # 2. Initialize Model
-    print("Initializing Model...")
+    print("\n2. Initializing Model...")
     model = BoltzGen(config)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
@@ -49,56 +49,122 @@ def test_boltzgen_automodel():
     
     base_dir = Path(".")
 
-    print("\nTesting fold_proteins...")
-    sequences = {"A": "MKTAYIAKQRQISFVK"}
+    # 3. Test fold_proteins with defaults
+    print("\n3. Testing fold_proteins with defaults...")
+    try:
+        output = model.fold_proteins()  # Uses default sequence
+        print("fold_proteins (default) successful!")
+        print(f"  Output keys: {list(output.keys())[:10]}...")  # Show first 10 keys
+        if 'coords' in output:
+            print(f"  Coords shape: {output['coords'].shape}")
+        
+        # Test confidence extraction
+        confidence = model.get_confidence_scores(output)
+        print(f"  Confidence metrics: {list(confidence.keys())}")
+        
+    except Exception as e:
+        print(f"fold_proteins (default) failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # 4. Test fold_proteins with custom sequence
+    print("\n4. Testing fold_proteins with custom sequence...")
+    sequences = {"A": "MKTAYIAKQRQISFVKGDPRAEVPRA"}
     fold_output_path = base_dir / "test_fold.cif"
     try:
         output = model.fold_proteins(
             sequences=sequences,
             output_path=str(fold_output_path)
         )
-        print("fold_proteins successful!")
-        print("Output type:", type(output))
-        print("Output keys:", output.keys())
-        if 'coords' in output:
-            print("Coords shape:", output['coords'].shape)
+        print("fold_proteins (custom) successful!")
+        if fold_output_path.exists():
+            print(f"  CIF file saved to {fold_output_path}")
             
-        # Test output_to_structure
-        print("Testing output_to_structure...")
-        structures = model.output_to_structure(output)
-        print(f"Converted to {len(structures)} structures")
-        
-        # Test save_to_cif
-        print("Testing save_to_cif...")
-        if structures:
-            save_cif_path = base_dir / "test_fold_saved.cif"
-            model.save_to_cif(structures[0], str(save_cif_path))
-            print(f"save_to_cif successful! Saved to {save_cif_path}")
-        
     except Exception as e:
-        print(f"fold_proteins failed: {e}")
+        print(f"fold_proteins (custom) failed: {e}")
         import traceback
         traceback.print_exc()
 
-    print("\nTesting design_proteins...")
-    entities = [{"protein": {"id": "A", "sequence": "MKTAYIAKQRQISFVK"}}]
+    # 5. Test output_to_structure
+    print("\n5. Testing output_to_structure...")
+    try:
+        structures = model.output_to_structure(output)
+        print(f"  Converted to {len(structures)} structures")
+        if structures:
+            struct = structures[0]
+            print(f"  Structure has {len(struct.atoms)} atoms, {len(struct.residues)} residues, {len(struct.chains)} chains")
+            
+    except Exception as e:
+        print(f"output_to_structure failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # 6. Test save_to_cif
+    print("\n6. Testing save_to_cif...")
+    if structures:
+        try:
+            save_cif_path = base_dir / "test_fold_saved.cif"
+            model.save_to_cif(structures[0], str(save_cif_path))
+            if save_cif_path.exists():
+                print(f"  save_to_cif successful! Saved to {save_cif_path}")
+        except Exception as e:
+            print(f"save_to_cif failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # 7. Test design_proteins with defaults
+    print("\n7. Testing design_proteins with defaults...")
+    try:
+        output = model.design_proteins()  # Uses default entities
+        print("design_proteins (default) successful!")
+        print(f"  Output keys: {list(output.keys())[:10]}...")
+        if 'coords' in output:
+            print(f"  Coords shape: {output['coords'].shape}")
+            
+    except Exception as e:
+        print(f"design_proteins (default) failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # 8. Test design_proteins with custom entities
+    print("\n8. Testing design_proteins with custom entities...")
+    entities = [{"protein": {"id": "A", "sequence": "20..30"}}]  # Smaller for faster test
     design_output_dir = base_dir / "test_design_output"
     try:
         output = model.design_proteins(
             entities=entities,
             num_designs=1,
-            output_dir=str(design_output_dir)
+            output_dir=str(design_output_dir),
+            sampling_steps=50  # Fewer steps for faster test
         )
-        print("design_proteins successful!")
-        print("Output type:", type(output))
-        print("Output keys:", output.keys())
-        if 'coords' in output:
-            print("Coords shape:", output['coords'].shape)
+        print("design_proteins (custom) successful!")
+        if design_output_dir.exists():
+            cif_files = list(design_output_dir.glob("*.cif"))
+            print(f"  Generated {len(cif_files)} CIF files in {design_output_dir}")
             
     except Exception as e:
-        print(f"design_proteins failed: {e}")
+        print(f"design_proteins (custom) failed: {e}")
         import traceback
         traceback.print_exc()
+
+    # 9. Test select_best_design
+    print("\n9. Testing select_best_design...")
+    try:
+        best_idx = model.select_best_design(output)
+        print(f"  Best design index: {best_idx}")
+        
+        # Get only the best structure
+        best_structures = model.output_to_structure(output, sample_indices=[best_idx])
+        print(f"  Best structure has {len(best_structures[0].atoms)} atoms")
+        
+    except Exception as e:
+        print(f"select_best_design failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    print("\n" + "="*50)
+    print("Testing complete!")
+    print("="*50)
 
 if __name__ == "__main__":
     test_boltzgen_automodel()
