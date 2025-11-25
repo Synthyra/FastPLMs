@@ -253,14 +253,14 @@ class BoltzGen(PreTrainedModel):
         structures = []
         
         # Determine number of samples
-        if "sample_atom_coords" in output:
-            num_samples = output["sample_atom_coords"].shape[0]
-        elif "coords" in output:
+        if "coords" in output:
              # If coords has shape (samples, L, 3)
              if output["coords"].ndim == 3:
                  num_samples = output["coords"].shape[0]
              else:
                  num_samples = 1
+        elif "sample_atom_coords" in output:
+            num_samples = output["sample_atom_coords"].shape[0]
         else:
             num_samples = 1
 
@@ -298,13 +298,13 @@ class BoltzGen(PreTrainedModel):
                         struct_feat['id'] = str(val.item())
 
             # Handle coords for this sample
-            if "sample_atom_coords" in output:
-                struct_feat["coords"] = output["sample_atom_coords"][i].cpu()
-            elif "coords" in output:
+            if "coords" in output:
                 if output["coords"].ndim == 3:
                     struct_feat["coords"] = output["coords"][i].cpu()
                 else:
                     struct_feat["coords"] = output["coords"].cpu()
+            elif "sample_atom_coords" in output:
+                struct_feat["coords"] = output["sample_atom_coords"][i].cpu()
             
             # Create Structure
             try:

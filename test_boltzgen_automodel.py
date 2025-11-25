@@ -58,8 +58,8 @@ def test_boltzgen_automodel():
         print("fold_proteins successful!")
         print("Output type:", type(output))
         print("Output keys:", output.keys())
-        if 'sample_atom_coords' in output:
-            print("Coords shape:", output['sample_atom_coords'].shape)
+        if 'coords' in output:
+            print("Coords shape:", output['coords'].shape)
             
         # Test output_to_structure
         print("Testing output_to_structure...")
