@@ -111,7 +111,7 @@ class BoltzGen(PreTrainedModel):
                 num_workers=0,
                 pin_memory=False
             )
-            dm.setup()
+            dm.setup(stage="predict")
             dataloader = dm.predict_dataloader()
 
             # Run inference
