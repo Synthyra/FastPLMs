@@ -293,9 +293,26 @@ class BoltzGen(PreTrainedModel):
                 if isinstance(val, (np.ndarray, np.generic)):
                     if val.size == 1:
                         struct_feat['id'] = str(val.item())
+                    else:
+                         # If it's an array of chars/bytes, decode it
+                         try:
+                             struct_feat['id'] = str(val)
+                         except:
+                             pass
                 elif isinstance(val, torch.Tensor):
                     if val.numel() == 1:
                         struct_feat['id'] = str(val.item())
+                    else:
+                        # If it's a tensor of chars/bytes
+                        try:
+                            struct_feat['id'] = str(val.tolist())
+                        except:
+                            pass
+            
+            # Special handling for structure_bonds which must be numpy array
+            if 'structure_bonds' in struct_feat:
+                if isinstance(struct_feat['structure_bonds'], torch.Tensor):
+                    struct_feat['structure_bonds'] = struct_feat['structure_bonds'].numpy()
 
             # Handle coords for this sample
             if "coords" in output:

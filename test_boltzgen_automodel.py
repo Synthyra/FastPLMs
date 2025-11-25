@@ -5,20 +5,6 @@ from pathlib import Path
 
 # Add current directory to path
 sys.path.append(os.getcwd())
-# Add boltzgen_automodel to path so boltzgen_flat can be imported as top-level
-sys.path.append(os.path.join(os.getcwd(), 'boltzgen_automodel'))
-
-from boltzgen_automodel.modeling_boltzgen import BoltzGen
-from boltzgen_automodel.boltzgen_config import BoltzGenConfig
-
-def test_boltzgen_automodel():
-    print("Testing BoltzGen AutoModel...")
-    
-    # 1. Initialize Config
-    print("Initializing Config...")
-    config = BoltzGenConfig(
-        atom_s=64,
-        atom_z=16,
         token_s=64,
         token_z=32,
         num_bins=64,
@@ -47,13 +33,13 @@ def test_boltzgen_automodel():
     model.eval()
     print(f"Model initialized on {device}")
     
-    # 3. Test fold_proteins
     print("\nTesting fold_proteins...")
     sequences = {"A": "MKTAYIAKQRQISFVK"}
+    fold_output_path = base_dir / "test_fold.cif"
     try:
         output = model.fold_proteins(
             sequences=sequences,
-            output_path="test_fold.cif"
+            output_path=str(fold_output_path)
         )
         print("fold_proteins successful!")
         print("Output type:", type(output))
@@ -69,28 +55,29 @@ def test_boltzgen_automodel():
         # Test save_to_cif
         print("Testing save_to_cif...")
         if structures:
-            model.save_to_cif(structures[0], "test_fold_saved.cif")
-            print("save_to_cif successful!")
+            save_cif_path = base_dir / "test_fold_saved.cif"
+            model.save_to_cif(structures[0], str(save_cif_path))
+            print(f"save_to_cif successful! Saved to {save_cif_path}")
         
     except Exception as e:
         print(f"fold_proteins failed: {e}")
         import traceback
         traceback.print_exc()
 
-    # 4. Test design_proteins
     print("\nTesting design_proteins...")
     entities = [{"protein": {"id": "A", "sequence": "MKTAYIAKQRQISFVK"}}]
+    design_output_dir = base_dir / "test_design_output"
     try:
         output = model.design_proteins(
             entities=entities,
             num_designs=1,
-            output_dir="test_design_output"
+            output_dir=str(design_output_dir)
         )
         print("design_proteins successful!")
         print("Output type:", type(output))
         print("Output keys:", output.keys())
-        if 'sample_atom_coords' in output:
-            print("Coords shape:", output['sample_atom_coords'].shape)
+        if 'coords' in output:
+            print("Coords shape:", output['coords'].shape)
             
     except Exception as e:
         print(f"design_proteins failed: {e}")
