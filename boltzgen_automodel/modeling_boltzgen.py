@@ -203,7 +203,7 @@ class BoltzGen(PreTrainedModel):
                 num_workers=0,
                 pin_memory=False
             )
-            dm.setup()
+            dm.setup(stage="predict")
             dataloader = dm.predict_dataloader()
 
             # Run inference
@@ -277,8 +277,25 @@ class BoltzGen(PreTrainedModel):
                         struct_feat[k] = v[0].cpu()
                     else:
                         struct_feat[k] = v.cpu()
+                    
+                    # Ensure scalar tensors are converted to python scalars if needed
+                    # Structure.from_feat might expect numpy arrays or scalars
+                    if isinstance(struct_feat.get(k), torch.Tensor):
+                         if struct_feat[k].numel() == 1:
+                             # Keep as tensor but squeeze if needed, or let it be
+                             pass
                 else:
                     struct_feat[k] = v
+            
+            # Special handling for 'id' which might be a 0-d array/tensor
+            if 'id' in struct_feat:
+                val = struct_feat['id']
+                if isinstance(val, (np.ndarray, np.generic)):
+                    if val.size == 1:
+                        struct_feat['id'] = str(val.item())
+                elif isinstance(val, torch.Tensor):
+                    if val.numel() == 1:
+                        struct_feat['id'] = str(val.item())
 
             # Handle coords for this sample
             if "sample_atom_coords" in output:
