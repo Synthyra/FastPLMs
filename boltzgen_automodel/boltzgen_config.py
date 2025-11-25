@@ -255,9 +255,11 @@ class BoltzGenConfig(PretrainedConfig):
         inverse_fold_args: Optional[Dict[str, Any]] = None,
         inference_logging: bool = False,
         use_kernels: bool = False,
+        moldir: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
+        self.moldir = moldir
         self.atom_s = atom_s
         self.atom_z = atom_z
         self.token_s = token_s
