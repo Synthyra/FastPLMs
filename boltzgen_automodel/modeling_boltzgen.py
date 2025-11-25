@@ -1,12 +1,17 @@
+import os
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+
+import math
 import tempfile
 import yaml
 import torch
 import numpy as np
-import os
+import huggingface_hub
 from pathlib import Path
 from typing import Dict, Optional, Any, List, Union
 
 from transformers import PreTrainedModel
+
 from basic_boltzgen import Boltz
 from boltzgen_config import BoltzGenConfig
 from boltzgen_flat.task_predict_data_from_yaml import DataConfig, FromYamlDataModule
@@ -16,7 +21,6 @@ from boltzgen_flat.data_write_mmcif import to_mmcif
 from boltzgen_flat.data_data import Structure
 from boltzgen_flat import data_const as const
 from boltzgen_flat import cli_boltzgen
-import huggingface_hub
 
 
 # Default design specification - a simple protein design (80-140 residues)
@@ -28,6 +32,12 @@ DEFAULT_DESIGN_ENTITIES = [
         }
     }
 ]
+
+
+# MSA special values
+MSA_AUTO = 0      # Auto-generate MSA (not actually supported in simplified implementation)
+MSA_NONE = -1     # No MSA / single-sequence mode
+MSA_EMPTY = "empty"  # Alias for no MSA
 
 
 class BoltzGen(PreTrainedModel):
@@ -79,9 +89,10 @@ class BoltzGen(PreTrainedModel):
         self,
         yaml_content: Dict[str, Any],
         design: bool = True,
-        diffusion_samples: int = 1,
         recycling_steps: int = 3,
         sampling_steps: int = 200,
+        diffusion_samples: int = 1,
+        num_designs: int = 1,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -90,9 +101,10 @@ class BoltzGen(PreTrainedModel):
         Args:
             yaml_content: Dictionary with 'entities' and optional 'constraints'.
             design: Whether this is a design task.
-            diffusion_samples: Number of diffusion samples to generate.
             recycling_steps: Number of recycling steps.
             sampling_steps: Number of sampling steps.
+            diffusion_samples: Number of diffusion samples to generate.
+            num_designs: Number of designs to generate.
             **kwargs: Additional predict args.
             
         Returns:
@@ -155,9 +167,12 @@ class BoltzGen(PreTrainedModel):
     def fold_proteins(
         self, 
         sequences: Optional[Dict[str, str]] = None,
+        msa_paths: Optional[Dict[str, Union[str, int]]] = None,
         output_path: Optional[str] = None,
         recycling_steps: int = 3,
         sampling_steps: int = 200,
+        diffusion_samples: int = 1,
+        **kwargs
     ) -> Dict[str, Any]:
         """
         Fold proteins from sequences.
@@ -165,12 +180,30 @@ class BoltzGen(PreTrainedModel):
         Args:
             sequences: Dictionary mapping chain IDs to sequences.
                        If None, uses a default short sequence for testing.
+            msa_paths: Optional dictionary mapping chain IDs to MSA file paths or special values:
+                       - A file path (str): Path to an MSA file (a3m format)
+                       - 0 or MSA_AUTO: Signal for auto-generation (not implemented in simplified version)
+                       - -1 or MSA_NONE: No MSA / single-sequence mode (default)
+                       - "empty": Alias for no MSA
+                       If None, all chains use single-sequence mode.
             output_path: Optional path to save the resulting CIF file.
             recycling_steps: Number of recycling steps.
             sampling_steps: Number of sampling steps.
-
+            diffusion_samples: Number of diffusion samples to generate.
+            **kwargs: Additional arguments for boltzgen prediction.
+            
         Returns:
             Dictionary containing raw model output.
+            
+        Example usage:
+            # Simple folding without MSA
+            output = model.fold_proteins(sequences={"A": "MKTAYIAKQRQISFVK"})
+            
+            # Folding with MSA file
+            output = model.fold_proteins(
+                sequences={"A": "MKTAYIAKQRQISFVK"},
+                msa_paths={"A": "/path/to/chain_a.a3m"}
+            )
         """
         # Default sequence for testing
         if sequences is None:
@@ -179,21 +212,32 @@ class BoltzGen(PreTrainedModel):
         # Create YAML content
         entities = []
         for chain_id, seq in sequences.items():
-            entities.append({
+            entity = {
                 "protein": {
                     "id": chain_id,
                     "sequence": seq
                 }
-            })
+            }
+            
+            # Add MSA specification if provided
+            if msa_paths is not None and chain_id in msa_paths:
+                msa_value = msa_paths[chain_id]
+                # Normalize MSA value
+                if msa_value == "empty":
+                    msa_value = -1
+                entity["protein"]["msa"] = msa_value
+            
+            entities.append(entity)
         
         yaml_content = {"entities": entities}
         
         out = self._run_prediction(
             yaml_content=yaml_content,
             design=False,
-            diffusion_samples=1,
             recycling_steps=recycling_steps,
             sampling_steps=sampling_steps,
+            diffusion_samples=diffusion_samples,
+            **kwargs
         )
 
         if output_path:
@@ -208,7 +252,9 @@ class BoltzGen(PreTrainedModel):
         self,
         entities: Optional[List[Dict[str, Any]]] = None,
         constraints: Optional[List[Dict[str, Any]]] = None,
+        msa_paths: Optional[Dict[str, Union[str, int]]] = None,
         num_designs: int = 1,
+        diffusion_batch_size: Optional[int] = None,
         output_dir: Optional[str] = None,
         recycling_steps: int = 3,
         sampling_steps: int = 200,
@@ -221,59 +267,191 @@ class BoltzGen(PreTrainedModel):
             entities: List of entity dictionaries. If None, uses a default design
                      specification (protein with 80-140 designed residues).
             constraints: Optional list of constraint dictionaries (bonds, total_len, etc).
-            num_designs: Number of designs to generate.
+            msa_paths: Optional dictionary mapping chain IDs to MSA file paths or special values:
+                       - A file path (str): Path to an MSA file (a3m format)
+                       - 0 or MSA_AUTO: Signal for auto-generation (not implemented)
+                       - -1 or MSA_NONE: No MSA / single-sequence mode (default for design)
+                       - "empty": Alias for no MSA
+                       Note: Designed chains automatically use single-sequence mode.
+            num_designs: Total number of designs to generate. The implementation batches
+                        these efficiently using diffusion_batch_size.
+            diffusion_batch_size: Number of diffusion samples to generate per model run.
+                                 If None, defaults to 1 if num_designs < 100, else 10.
+                                 Note: All designs in the same batch share random parameters
+                                 (e.g., sampled length for variable-length designs).
             output_dir: Optional directory to save outputs.
             recycling_steps: Number of recycling steps.
             sampling_steps: Number of sampling steps.
             **kwargs: Additional arguments for boltzgen prediction.
 
         Returns:
-            Dictionary containing raw model output.
+            Dictionary containing raw model output with all designs.
+            The 'coords' key will have shape (num_designs, num_atoms, 3).
             
         Example usage:
             # Design with defaults (80-140 residue protein)
             output = model.design_proteins()
             
-            # Design a specific protein
+            # Design a specific protein with 10 designs
             output = model.design_proteins(
                 entities=[{"protein": {"id": "A", "sequence": "50..100"}}],
-                num_designs=5
+                num_designs=10
             )
             
-            # Design with target structure
+            # Design with target structure and MSA for target
             output = model.design_proteins(
                 entities=[
                     {"protein": {"id": "B", "sequence": "80..140"}},
                     {"file": {"path": "target.cif", "include": [{"chain": {"id": "A"}}]}}
-                ]
+                ],
+                msa_paths={"A": "/path/to/target_msa.a3m"},
+                num_designs=100
             )
         """
         # Use default design entities if none provided
         if entities is None:
             entities = DEFAULT_DESIGN_ENTITIES
         
+        # Calculate batching parameters (following boltzgen CLI logic)
+        if diffusion_batch_size is None:
+            diffusion_batch_size = 1 if num_designs < 100 else 10
+        
+        num_batches = math.ceil(num_designs / diffusion_batch_size)
+        
+        # Apply MSA specifications to entities
+        if msa_paths is not None:
+            entities = self._apply_msa_to_entities(entities, msa_paths)
+        
         # Construct YAML content
         yaml_content = {"entities": entities}
         if constraints:
             yaml_content["constraints"] = constraints
 
-        out = self._run_prediction(
-            yaml_content=yaml_content,
-            design=True,
-            diffusion_samples=num_designs,
-            recycling_steps=recycling_steps,
-            sampling_steps=sampling_steps,
-            **kwargs
-        )
+        # Collect all outputs across batches
+        all_outputs = []
+        
+        for batch_idx in range(num_batches):
+            # Calculate how many samples for this batch
+            remaining = num_designs - batch_idx * diffusion_batch_size
+            batch_samples = min(diffusion_batch_size, remaining)
+            
+            out = self._run_prediction(
+                yaml_content=yaml_content,
+                design=True,
+                diffusion_samples=batch_samples,
+                recycling_steps=recycling_steps,
+                sampling_steps=sampling_steps,
+                **kwargs
+            )
+            all_outputs.append(out)
+        
+        # Merge outputs from all batches
+        merged_output = self._merge_batch_outputs(all_outputs)
         
         if output_dir:
             out_path = Path(output_dir)
             out_path.mkdir(parents=True, exist_ok=True)
-            structures = self.output_to_structure(out)
+            structures = self.output_to_structure(merged_output)
             for i, structure in enumerate(structures):
                 self.save_to_cif(structure, str(out_path / f"design_{i}.cif"))
 
-        return out
+        return merged_output
+    
+    def _apply_msa_to_entities(
+        self, 
+        entities: List[Dict[str, Any]], 
+        msa_paths: Dict[str, Union[str, int]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply MSA specifications to entities.
+        
+        Args:
+            entities: List of entity dictionaries.
+            msa_paths: Dictionary mapping chain IDs to MSA paths or special values.
+            
+        Returns:
+            Modified entities list with MSA specifications added.
+        """
+        import copy
+        modified_entities = copy.deepcopy(entities)
+        
+        for entity in modified_entities:
+            entity_type = next(iter(entity.keys())).lower()
+            
+            if entity_type == "protein":
+                chain_id = entity["protein"].get("id")
+                if chain_id and chain_id in msa_paths:
+                    msa_value = msa_paths[chain_id]
+                    # Normalize MSA value
+                    if msa_value == "empty":
+                        msa_value = -1
+                    entity["protein"]["msa"] = msa_value
+            elif entity_type == "file":
+                # Handle file entities - MSAs can be specified per chain in include
+                include = entity["file"].get("include", [])
+                if isinstance(include, list):
+                    for item in include:
+                        if "chain" in item:
+                            chain_id = item["chain"].get("id")
+                            if chain_id and chain_id in msa_paths:
+                                msa_value = msa_paths[chain_id]
+                                if msa_value == "empty":
+                                    msa_value = -1
+                                item["chain"]["msa"] = msa_value
+        
+        return modified_entities
+    
+    def _merge_batch_outputs(self, outputs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Merge outputs from multiple batches into a single output dictionary.
+        
+        Args:
+            outputs: List of output dictionaries from separate batches.
+            
+        Returns:
+            Merged output dictionary.
+        """
+        if len(outputs) == 1:
+            return outputs[0]
+        
+        merged = {}
+        
+        # Keys that should be concatenated along the sample dimension
+        concat_keys = {"coords", "plddt", "pae", "ptm", "iptm", "confidence_score",
+                      "complex_plddt", "complex_iplddt", "complex_pde", "complex_ipde",
+                      "ligand_iptm", "protein_iptm"}
+        
+        for key in outputs[0].keys():
+            values = [out[key] for out in outputs if key in out]
+            
+            if not values:
+                continue
+            
+            first_val = values[0]
+            
+            if key in concat_keys and isinstance(first_val, torch.Tensor):
+                # Concatenate along sample dimension (dim 0 for most metrics)
+                if first_val.ndim >= 1:
+                    merged[key] = torch.cat(values, dim=0)
+                else:
+                    merged[key] = torch.stack(values)
+            elif isinstance(first_val, torch.Tensor):
+                # For non-concatenated tensors, just use first batch's value
+                # (these are typically shared features like atom masks)
+                merged[key] = first_val
+            elif isinstance(first_val, list):
+                # Extend lists
+                merged[key] = []
+                for v in values:
+                    if isinstance(v, list):
+                        merged[key].extend(v)
+                    else:
+                        merged[key].append(v)
+            else:
+                # For other types, use first value
+                merged[key] = first_val
+        
+        return merged
 
     def output_to_structure(
         self, 
@@ -489,3 +667,59 @@ class BoltzGen(PreTrainedModel):
                 scores = scores.cpu().numpy()
         
         return int(np.argmax(scores))
+
+
+if __name__ == "__main__":
+    # py -m modeling_boltzgen
+    import matplotlib.pyplot as plt
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--design", action="store_true")
+    args = parser.parse_args()
+
+    recycling_steps = 3
+    sampling_steps = 200
+    diffusion_samples = 1
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    model = BoltzGen.from_pretrained('Synthyra/boltzgen').eval().to(device)
+
+
+    sequence = "MTLRCLEPSGNGGEGTRSQWGTAGSAEEPSPQAARLAKALRELGQTGWYWGSMTVNEAKEKLKEAPEGTFLIRDSSHSDYLLTISVKTSAGPTNLRIEYQDGKFRLDSIICVKSKLKQFDSVVHLIDYYVQMCKDKRTGPEAPRNGTVHLYLTKPLYTSAPSLQHLCRLTINKCTGAIWGLPLPTRLKDYLEEYKFQV"
+
+
+    if args.design:
+        num_designs = 10
+        diffusion_batch_size = 1
+        output_dir = "design_proteins"
+        entities = [{"protein": {"id": "A", "sequence": sequence}}]
+
+        output = model.design_proteins(
+            entities=entities,
+            num_designs=num_designs,
+            diffusion_batch_size=diffusion_batch_size,
+            output_dir=output_dir,
+            recycling_steps=recycling_steps,
+            sampling_steps=sampling_steps,
+        )
+
+    else:
+        output = model.fold_proteins(
+            sequences={"A": sequence},
+            recycling_steps=recycling_steps, 
+            sampling_steps=sampling_steps,
+
+        )
+
+        for k, v in output.items():
+            try:
+                print(f"{k}: {v.shape}")
+            except:
+                print(f"{k}: {type(v)}")
+
+        print(output['plddt'])
+        pae = output['pae']
+        plt.imshow(pae.cpu().numpy().squeeze())
+        plt.colorbar()
+        plt.show()
