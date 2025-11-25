@@ -47,6 +47,8 @@ def test_boltzgen_automodel():
     model.eval()
     print(f"Model initialized on {device}")
     
+    base_dir = Path(".")
+
     print("\nTesting fold_proteins...")
     sequences = {"A": "MKTAYIAKQRQISFVK"}
     fold_output_path = base_dir / "test_fold.cif"
