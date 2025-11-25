@@ -5,6 +5,20 @@ from pathlib import Path
 
 # Add current directory to path
 sys.path.append(os.getcwd())
+# Add boltzgen_automodel to path so boltzgen_flat can be imported as top-level
+sys.path.append(os.path.join(os.getcwd(), 'boltzgen_automodel'))
+
+from boltzgen_automodel.modeling_boltzgen import BoltzGen
+from boltzgen_automodel.boltzgen_config import BoltzGenConfig
+
+def test_boltzgen_automodel():
+    print("Testing BoltzGen AutoModel...")
+    
+    # 1. Initialize Config
+    print("Initializing Config...")
+    config = BoltzGenConfig(
+        atom_s=64,
+        atom_z=16,
         token_s=64,
         token_z=32,
         num_bins=64,
