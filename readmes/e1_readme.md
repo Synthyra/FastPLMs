@@ -7,7 +7,7 @@ tags: []
 The GitHub with the implementation and requirements.txt can be found [here](https://github.com/Synthyra/FastPLMs.git)
 
 # Profluent-E1
-[Profluent-E1](https://github.com/Synthyra/ESMplusplus) is a faithful implementation of Profluent's [E1](https://www.profluent.bio/showcase/e1) models ([license](https://github.com/Profluent-AI/E1/tree/main?tab=License-1-ov-file)) that integrates Huggingface AutoModel compatability and nice embedding functionality.
+[Synthyra's version of Profluent-E1](https://github.com/Synthyra/Profluent-E1-300M) is a faithful implementation of Profluent's [E1](https://www.profluent.bio/showcase/e1) models ([license](https://github.com/Profluent-AI/E1/tree/main?tab=License-1-ov-file)) that integrates Huggingface AutoModel compatability and nice embedding functionality.
 
 
 ## Use with 🤗 transformers
@@ -54,7 +54,7 @@ print(logits.shape) # (batch_size, num_labels), (2, 2)
 E1 weights were trained in bf16 and are in bf16 by default. You can load them in the precision of your choosing by leveraging the dtype parameter:
 ```python
 import torch
-model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_small', trust_remote_code=True, dtype=torch.float) # fp32
+model = AutoModelForMaskedLM.from_pretrained('Synthyra/Profluent-E1-150M', trust_remote_code=True, dtype=torch.float) # fp32
 ```
 
 ## Embed entire datasets with no new code
