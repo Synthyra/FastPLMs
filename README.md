@@ -1,5 +1,7 @@
 # FastPLMs
 
+<img width="2816" height="1536" alt="Gemini_Generated_Image_5bmmdc5bmmdc5bmm" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
+
 FastPLMs is an open-source effort to increase the efficiency of pretrained protein language models, switching out native attention implementations for Flash or Flex attention.
 
 All models can be loaded from Huggingface 🤗 transformers via `AutoModel`, this repository does not need to be cloned for most use cases.
