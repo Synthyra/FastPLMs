@@ -13,7 +13,15 @@ model_dict = {
 
 if __name__ == "__main__":
     # py -m e1.get_e1_weights
-    login()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--token', type=str, default=None)
+    args = parser.parse_args()
+
+    if args.token:
+        login(token=args.token)
+        
     for model_name in model_dict:
         config = E1Config.from_pretrained(model_dict[model_name])
         config.auto_map = {
@@ -23,5 +31,5 @@ if __name__ == "__main__":
             "AutoModelForSequenceClassification": "modeling_e1.E1ForSequenceClassification",
             "AutoModelForTokenClassification": "modeling_e1.E1ForTokenClassification"
         }
-        model = E1ForMaskedLM.from_pretrained(model_dict[model_name], dtype=torch.bfloat16)
+        model = E1ForMaskedLM.from_pretrained(model_dict[model_name], config=config, dtype=torch.bfloat16)
         model.push_to_hub('Synthyra/' + model_name)
