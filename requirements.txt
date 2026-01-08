@@ -1,10 +1,13 @@
-torch>=2.6.0
+torch>=2.9.1
+torchvision>=0.24.1
 matplotlib>=3.5.0
-transformers>=4.47.0
-numpy>=1.26.2
+transformers>=4.57.3
+datasets>=4.4.2
+hf_transfer
+hf-xet
+numpy==1.26.4
 einops
 esm
-datasets>=2.14.0
 scikit-learn>=1.0.0
 scipy>=1.7.0
 seaborn>=0.12.0
