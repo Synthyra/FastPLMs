@@ -18,6 +18,7 @@ from transformers import AutoModel
 from boltz_automodel.get_boltz2_weights import BOLTZ2_CKPT_URL
 from boltz_automodel.minimal_featurizer import build_boltz2_features
 from test_scripts.common import build_output_dir
+from test_scripts.common import autocast_context
 from test_scripts.common import generate_sequences
 from test_scripts.common import login_if_needed
 from test_scripts.common import resolve_device
@@ -98,6 +99,25 @@ def _compute_confidence_score(ptm: torch.Tensor, iptm: torch.Tensor, complex_pld
     if torch.allclose(iptm, torch.zeros_like(iptm)):
         return (4 * complex_plddt + ptm) / 5
     return (4 * complex_plddt + iptm) / 5
+
+
+def _run_ours_forward(
+    model,
+    feats_ours: Dict[str, torch.Tensor],
+    args: argparse.Namespace,
+    device: torch.device,
+    dtype: torch.dtype,
+    sequence_index: int,
+) -> Dict[str, torch.Tensor]:
+    with torch.no_grad(), autocast_context(device=device, dtype=dtype):
+        _set_sequence_seed(args.seed, sequence_index)
+        return model.forward(
+            feats=feats_ours,
+            recycling_steps=args.recycling_steps,
+            num_sampling_steps=args.num_sampling_steps,
+            diffusion_samples=args.diffusion_samples,
+            run_confidence_sequentially=args.run_confidence_sequentially,
+        )
 
 
 def _vector_metrics(lhs: torch.Tensor, rhs: torch.Tensor) -> Tuple[float, float, float]:
@@ -269,9 +289,8 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
     model = AutoModel.from_pretrained(
         args.repo_id,
         trust_remote_code=True,
-        dtype=dtype,
     )
-    model = model.to(device).eval()
+    model = model.to(device=device, dtype=torch.float32).eval()
 
     rows: List[Dict[str, object]] = []
     overall_pass = True
@@ -282,6 +301,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             "sequence_index": sequence_index,
             "sequence": sequence,
             "sequence_seed": args.seed + sequence_index,
+            "ours_dtype_effective": str(dtype),
             "coord_mae": float("nan"),
             "coord_rmse": float("nan"),
             "coord_max_abs": float("nan"),
@@ -302,17 +322,33 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
                 num_bins=model.config.num_bins,
                 atoms_per_window_queries=model.core.input_embedder.atom_encoder.atoms_per_window_queries,
             )
-            feats_ours = _to_device(_clone_feats(feats), device=device, dtype=dtype)
+            feats_ours = _to_device(_clone_feats(feats), device=device, dtype=torch.float32)
 
-            with torch.no_grad():
-                _set_sequence_seed(args.seed, sequence_index)
-                out_ours = model.forward(
-                    feats=feats_ours,
-                    recycling_steps=args.recycling_steps,
-                    num_sampling_steps=args.num_sampling_steps,
-                    diffusion_samples=args.diffusion_samples,
-                    run_confidence_sequentially=args.run_confidence_sequentially,
+            try:
+                out_ours = _run_ours_forward(
+                    model=model,
+                    feats_ours=feats_ours,
+                    args=args,
+                    device=device,
+                    dtype=dtype,
+                    sequence_index=sequence_index,
                 )
+            except RuntimeError as exc:
+                error_text = str(exc)
+                bf16_mismatch = "expected scalar type Float but found BFloat16" in error_text
+                fp16_mismatch = "expected scalar type Float but found Half" in error_text
+                if bf16_mismatch or fp16_mismatch:
+                    out_ours = _run_ours_forward(
+                        model=model,
+                        feats_ours=feats_ours,
+                        args=args,
+                        device=device,
+                        dtype=torch.float32,
+                        sequence_index=sequence_index,
+                    )
+                    row["ours_dtype_effective"] = str(torch.float32)
+                else:
+                    raise
 
             ours_atom_map = _build_ours_atom_map(
                 sample_coords=out_ours["sample_atom_coords"].detach().cpu(),
@@ -435,6 +471,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         status = "PASS" if bool(row["pass"]) else "FAIL"
         summary_lines.append(
             f"{status} | idx={row['sequence_index']} | seed={row['sequence_seed']} | "
+            f"ours_dtype={row['ours_dtype_effective']} | "
             f"shared_atoms={row['shared_atoms']} | "
             f"coord_mae={row['coord_mae']} | coord_rmse={row['coord_rmse']} | "
             f"coord_max={row['coord_max_abs']} | plddt_mae={row['plddt_mae']} | "
