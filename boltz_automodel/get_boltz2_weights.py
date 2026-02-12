@@ -21,14 +21,20 @@ def _download_checkpoint_if_needed(checkpoint_path: Path) -> Path:
 def _copy_runtime_package(output_dir: Path) -> None:
     source_pkg = Path(__file__).resolve().parent
     runtime_files = [
+        "__init__.py",
         "modeling_boltz2.py",
         "minimal_featurizer.py",
         "minimal_structures.py",
         "cif_writer.py",
-        "runtime.py",
     ]
     for filename in runtime_files:
         shutil.copyfile(source_pkg / filename, output_dir / filename)
+    shutil.copytree(
+        source_pkg / "vendored_boltz",
+        output_dir / "vendored_boltz",
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+    )
 
 
 if __name__ == "__main__":

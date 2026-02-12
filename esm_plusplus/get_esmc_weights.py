@@ -55,8 +55,16 @@ def ESMplusplus_600M(device: torch.device | str = "cpu"):
 
 
 if __name__ == "__main__":
-    #login()
+    # py -m esm_plusplus.get_esmc_weights
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--token', type=str, default=None)
+    args = parser.parse_args()
     api = HfApi()
+
+    if args.token:
+        login(token=args.token)
     
     model_dict = {
         # Synthyra/ESM++small

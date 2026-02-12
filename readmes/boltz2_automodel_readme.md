@@ -22,8 +22,8 @@ The implementation is located in `boltz_automodel/` and exposes:
 - Confidence outputs included in prediction outputs (`plddt`, `ptm`, `iptm`, and derived confidence score when available).
 
 ## Runtime note
-This wrapper reuses Boltz model internals from the cloned `boltz/src` tree.  
-You should keep the `boltz` submodule present locally, or set `BOLTZ_SRC_DIR` to a valid `boltz/src` path.
+This implementation is self-contained inside `boltz_automodel/` and does not require
+the original cloned `boltz` package at runtime.
 
 ## Use with transformers
 
@@ -71,7 +71,7 @@ The export directory contains:
 - `minimal_featurizer.py`
 - `minimal_structures.py`
 - `cif_writer.py`
-- `runtime.py`
+- `vendored_boltz/` (minimal vendored Boltz2 inference modules/constants)
 
 ## Output object fields
 `predict_structure(...)` returns `Boltz2StructureOutput` with:

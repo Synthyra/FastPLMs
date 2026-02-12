@@ -2,7 +2,7 @@ import copy
 import torch    
 from huggingface_hub import HfApi, login
 from transformers import EsmForMaskedLM
-from modeling_fastesm import FastEsmForMaskedLM, FastEsmConfig
+from esm2.modeling_fastesm import FastEsmForMaskedLM, FastEsmConfig
 
 
 model_dict = {
@@ -20,8 +20,17 @@ model_dict = {
 
 
 if __name__ == "__main__":
-    #login()
+    # py -m esm2.get_esm2_weights
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--token', type=str, default=None)
+    args = parser.parse_args()
     api = HfApi()
+
+    if args.token:
+        login(token=args.token)
+    
     for model_name in model_dict:
         config = FastEsmConfig.from_pretrained(model_dict[model_name])
         config.auto_map = {
