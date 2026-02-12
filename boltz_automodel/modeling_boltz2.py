@@ -14,14 +14,32 @@ from transformers.modeling_outputs import ModelOutput
 from .cif_writer import write_cif
 from .minimal_featurizer import build_boltz2_features
 from .minimal_structures import ProteinStructureTemplate
-from .vendored_boltz.boltz.data import const
-from .vendored_boltz.boltz.model.layers import initialize as init
-from .vendored_boltz.boltz.model.layers.pairformer import PairformerModule
-from .vendored_boltz.boltz.model.modules.confidencev2 import ConfidenceModule
-from .vendored_boltz.boltz.model.modules.diffusion_conditioning import DiffusionConditioning
-from .vendored_boltz.boltz.model.modules.diffusionv2 import AtomDiffusion, DiffusionModule
-from .vendored_boltz.boltz.model.modules.encodersv2 import RelativePositionEncoder
-from .vendored_boltz.boltz.model.modules.trunkv2 import (
+from .vb_const import bond_types as _vb_const_bond_types  # noqa: F401
+from .vb_layers_attention import AttentionPairBias as _vb_layers_attention_marker  # noqa: F401
+from .vb_layers_attentionv2 import AttentionPairBias as _vb_layers_attentionv2_marker  # noqa: F401
+from .vb_layers_confidence_utils import compute_ptms as _vb_layers_confidence_utils_marker  # noqa: F401
+from .vb_layers_dropout import get_dropout_mask as _vb_layers_dropout_marker  # noqa: F401
+from .vb_layers_initialize import gating_init_ as _vb_layers_initialize_marker  # noqa: F401
+from .vb_layers_outer_product_mean import OuterProductMean as _vb_layers_outer_product_mean_marker  # noqa: F401
+from .vb_layers_pair_averaging import PairWeightedAveraging as _vb_layers_pair_averaging_marker  # noqa: F401
+from .vb_layers_transition import Transition as _vb_layers_transition_marker  # noqa: F401
+from .vb_layers_triangular_mult import TriangleMultiplicationIncoming as _vb_layers_triangular_mult_marker  # noqa: F401
+from .vb_loss_diffusionv2 import weighted_rigid_align as _vb_loss_diffusionv2_marker  # noqa: F401
+from .vb_modules_transformersv2 import DiffusionTransformer as _vb_modules_transformersv2_marker  # noqa: F401
+from .vb_modules_utils import LinearNoBias as _vb_modules_utils_marker  # noqa: F401
+from .vb_potentials_potentials import get_potentials as _vb_potentials_potentials_marker  # noqa: F401
+from .vb_potentials_schedules import ParameterSchedule as _vb_potentials_schedules_marker  # noqa: F401
+from .vb_tri_attn_attention import TriangleAttentionStartingNode as _vb_tri_attn_attention_marker  # noqa: F401
+from .vb_tri_attn_primitives import Attention as _vb_tri_attn_primitives_marker  # noqa: F401
+from .vb_tri_attn_utils import permute_final_dims as _vb_tri_attn_utils_marker  # noqa: F401
+from . import vb_const as const
+from . import vb_layers_initialize as init
+from .vb_layers_pairformer import PairformerModule
+from .vb_modules_confidencev2 import ConfidenceModule
+from .vb_modules_diffusion_conditioning import DiffusionConditioning
+from .vb_modules_diffusionv2 import AtomDiffusion, DiffusionModule
+from .vb_modules_encodersv2 import RelativePositionEncoder
+from .vb_modules_trunkv2 import (
     ContactConditioning,
     DistogramModule,
     InputEmbedder,

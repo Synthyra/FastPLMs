@@ -29,12 +29,8 @@ def _copy_runtime_package(output_dir: Path) -> None:
     ]
     for filename in runtime_files:
         shutil.copyfile(source_pkg / filename, output_dir / filename)
-    shutil.copytree(
-        source_pkg / "vendored_boltz",
-        output_dir / "vendored_boltz",
-        dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-    )
+    for flat_module in source_pkg.glob("vb_*.py"):
+        shutil.copyfile(flat_module, output_dir / flat_module.name)
 
 
 if __name__ == "__main__":

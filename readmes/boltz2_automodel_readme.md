@@ -71,7 +71,7 @@ The export directory contains:
 - `minimal_featurizer.py`
 - `minimal_structures.py`
 - `cif_writer.py`
-- `vendored_boltz/` (minimal vendored Boltz2 inference modules/constants)
+- `vb_*.py` (self-contained vendored Boltz2 inference modules/constants)
 
 ## Output object fields
 `predict_structure(...)` returns `Boltz2StructureOutput` with:

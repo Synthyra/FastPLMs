@@ -6,7 +6,7 @@ import torch
 from torch.nn.functional import one_hot
 
 from .minimal_structures import ProteinStructureTemplate
-from .vendored_boltz.boltz.data import const
+from . import vb_const as const
 
 
 _ELEMENT_TO_Z = {
