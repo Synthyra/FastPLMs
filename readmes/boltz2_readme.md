@@ -105,11 +105,20 @@ docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test bash
 Inside the container, run Boltz2 compliance against pip `boltz`:
 
 ```bash
-python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1
+python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1 --pass-coord-metric aligned --write-cif-artifacts
 ```
 
 Artifacts are written to `test_scripts/results/<timestamp>/boltz2_compliance/` by default:
 - `metrics.json`
 - `metrics.csv`
 - `summary.txt`
+- `structures/seq_<idx>/ours_seq<idx>.cif`
+- `structures/seq_<idx>/ref_seq<idx>.cif`
+
+Coordinate metrics now include both raw and rigid-aligned variants:
+- `coord_mae`, `coord_rmse`, `coord_max_abs` (raw frame-dependent deltas)
+- `coord_mae_aligned`, `coord_rmse_aligned`, `coord_max_abs_aligned` (Kabsch aligned)
+- `pairwise_dist_mae` (frame-invariant pairwise-distance delta)
+
+Pass/fail uses `--pass-coord-metric aligned` by default. Set `--pass-coord-metric raw` to use the raw coordinate thresholds.
 

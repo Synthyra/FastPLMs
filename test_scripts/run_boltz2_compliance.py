@@ -15,8 +15,10 @@ import numpy as np
 import torch
 from transformers import AutoModel
 
+from boltz_automodel.cif_writer import write_cif
 from boltz_automodel.get_boltz2_weights import BOLTZ2_CKPT_URL
 from boltz_automodel.minimal_featurizer import build_boltz2_features
+from boltz_automodel.minimal_structures import ProteinStructureTemplate
 from test_scripts.common import build_output_dir
 from test_scripts.common import autocast_context
 from test_scripts.common import generate_sequences
@@ -129,6 +131,43 @@ def _vector_metrics(lhs: torch.Tensor, rhs: torch.Tensor) -> Tuple[float, float,
     return mae, rmse, max_abs
 
 
+def _kabsch_align_mobile_to_target(mobile: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    assert mobile.ndim == 2 and target.ndim == 2, "Expected coordinate tensors with shape [N, 3]."
+    assert mobile.shape == target.shape, "Coordinate tensors must have matching shapes."
+    assert mobile.shape[1] == 3, "Coordinate tensors must have last dimension size 3."
+    assert mobile.shape[0] > 0, "Expected at least one shared atom for alignment."
+
+    mobile_32 = mobile.float()
+    target_32 = target.float()
+    if mobile_32.shape[0] < 3:
+        mobile_centroid = mobile_32.mean(dim=0, keepdim=True)
+        target_centroid = target_32.mean(dim=0, keepdim=True)
+        return mobile_32 - mobile_centroid + target_centroid
+
+    mobile_centroid = mobile_32.mean(dim=0, keepdim=True)
+    target_centroid = target_32.mean(dim=0, keepdim=True)
+    mobile_centered = mobile_32 - mobile_centroid
+    target_centered = target_32 - target_centroid
+
+    covariance = mobile_centered.transpose(0, 1).matmul(target_centered)
+    u_mat, _, vh_mat = torch.linalg.svd(covariance, full_matrices=False)
+    correction = torch.eye(3, dtype=mobile_32.dtype, device=mobile_32.device)
+    det_sign = torch.det(vh_mat.transpose(0, 1).matmul(u_mat.transpose(0, 1))).item()
+    if det_sign < 0:
+        correction[2, 2] = -1.0
+    rotation = vh_mat.transpose(0, 1).matmul(correction).matmul(u_mat.transpose(0, 1))
+    return mobile_centered.matmul(rotation) + target_centroid
+
+
+def _pairwise_distance_mae(lhs: torch.Tensor, rhs: torch.Tensor) -> float:
+    assert lhs.ndim == 2 and rhs.ndim == 2, "Expected coordinate tensors with shape [N, 3]."
+    assert lhs.shape == rhs.shape, "Coordinate tensors must have matching shapes."
+    assert lhs.shape[1] == 3, "Coordinate tensors must have last dimension size 3."
+    lhs_dist = torch.cdist(lhs.float(), lhs.float())
+    rhs_dist = torch.cdist(rhs.float(), rhs.float())
+    return float(torch.mean(torch.abs(lhs_dist - rhs_dist)).item())
+
+
 def _write_single_chain_fasta(sequence: str, path: Path) -> None:
     text = f">A|protein|empty\n{sequence}\n"
     path.write_text(text, encoding="utf-8")
@@ -175,6 +214,28 @@ def _build_ours_atom_map(
         )
         atom_map[key] = valid_coords[atom_idx].float().cpu()
     return atom_map
+
+
+def _build_reference_cif_tensors(
+    template: ProteinStructureTemplate,
+    atom_pad_mask: torch.Tensor,
+    ref_atom_map: Dict[Tuple[str, int, str], torch.Tensor],
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    assert atom_pad_mask.ndim == 1, "Expected atom pad mask with shape [atoms]."
+    atom_slots = atom_pad_mask.shape[0]
+    coords = torch.zeros((1, atom_slots, 3), dtype=torch.float32)
+    ref_mask = atom_pad_mask.detach().cpu().float().clone()
+    for atom_idx in range(template.num_atoms):
+        key = (
+            template.atom_chain_id[atom_idx],
+            template.atom_residue_index[atom_idx] + 1,
+            template.atom_names[atom_idx],
+        )
+        if key in ref_atom_map:
+            coords[0, atom_idx] = ref_atom_map[key].float().cpu()
+        else:
+            ref_mask[atom_idx] = 0.0
+    return coords, ref_mask
 
 
 def _run_boltz_cli_reference(
@@ -305,12 +366,18 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             "coord_mae": float("nan"),
             "coord_rmse": float("nan"),
             "coord_max_abs": float("nan"),
+            "coord_mae_aligned": float("nan"),
+            "coord_rmse_aligned": float("nan"),
+            "coord_max_abs_aligned": float("nan"),
+            "pairwise_dist_mae": float("nan"),
             "plddt_mae": float("nan"),
             "ptm_abs_diff": float("nan"),
             "iptm_abs_diff": float("nan"),
             "complex_plddt_abs_diff": float("nan"),
             "confidence_score_abs_diff": float("nan"),
             "shared_atoms": 0,
+            "ours_cif_path": "",
+            "ref_cif_path": "",
             "pass": False,
             "seconds": 0.0,
             "error": "",
@@ -380,6 +447,15 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             row["coord_mae"] = coord_mae
             row["coord_rmse"] = coord_rmse
             row["coord_max_abs"] = coord_max_abs
+            ours_coords_aligned = _kabsch_align_mobile_to_target(ours_coords_stack, ref_coords_stack)
+            coord_mae_aligned, coord_rmse_aligned, coord_max_abs_aligned = _vector_metrics(
+                ours_coords_aligned,
+                ref_coords_stack,
+            )
+            row["coord_mae_aligned"] = coord_mae_aligned
+            row["coord_rmse_aligned"] = coord_rmse_aligned
+            row["coord_max_abs_aligned"] = coord_max_abs_aligned
+            row["pairwise_dist_mae"] = _pairwise_distance_mae(ours_coords_stack, ref_coords_stack)
 
             ours_plddt = _extract_primary_plddt_vector(out_ours, feats_ours)
             ref_plddt = ref_plddt.float().cpu().reshape(-1)
@@ -417,10 +493,50 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
                 torch.mean(torch.abs(ours_confidence_score - ref_confidence_score)).item()
             )
 
+            if args.write_cif_artifacts:
+                structure_dir = output_dir / "structures" / f"seq_{sequence_index}"
+                structure_dir.mkdir(parents=True, exist_ok=True)
+
+                ours_cif_path = structure_dir / f"ours_seq{sequence_index}.cif"
+                write_cif(
+                    structure_template=template,
+                    atom_coords=out_ours["sample_atom_coords"].detach().cpu(),
+                    atom_mask=feats_ours["atom_pad_mask"][0].detach().cpu(),
+                    output_path=str(ours_cif_path),
+                    plddt=out_ours["plddt"].detach().cpu() if "plddt" in out_ours else None,
+                    sample_index=0,
+                )
+                row["ours_cif_path"] = str(ours_cif_path)
+
+                ref_coords_cif, ref_atom_mask_cif = _build_reference_cif_tensors(
+                    template=template,
+                    atom_pad_mask=feats_ours["atom_pad_mask"][0].detach().cpu(),
+                    ref_atom_map=ref_atom_map,
+                )
+                ref_cif_path = structure_dir / f"ref_seq{sequence_index}.cif"
+                write_cif(
+                    structure_template=template,
+                    atom_coords=ref_coords_cif,
+                    atom_mask=ref_atom_mask_cif,
+                    output_path=str(ref_cif_path),
+                    plddt=ref_plddt,
+                    sample_index=0,
+                )
+                row["ref_cif_path"] = str(ref_cif_path)
+
+            if args.pass_coord_metric == "aligned":
+                coord_mae_for_pass = row["coord_mae_aligned"]
+                coord_rmse_for_pass = row["coord_rmse_aligned"]
+                coord_max_for_pass = row["coord_max_abs_aligned"]
+            else:
+                coord_mae_for_pass = row["coord_mae"]
+                coord_rmse_for_pass = row["coord_rmse"]
+                coord_max_for_pass = row["coord_max_abs"]
+
             row["pass"] = bool(
-                row["coord_mae"] <= args.coord_mae_threshold
-                and row["coord_rmse"] <= args.coord_rmse_threshold
-                and row["coord_max_abs"] <= args.coord_max_abs_threshold
+                coord_mae_for_pass <= args.coord_mae_threshold
+                and coord_rmse_for_pass <= args.coord_rmse_threshold
+                and coord_max_for_pass <= args.coord_max_abs_threshold
                 and row["plddt_mae"] <= args.plddt_mae_threshold
                 and row["ptm_abs_diff"] <= args.summary_metric_abs_threshold
                 and row["iptm_abs_diff"] <= args.summary_metric_abs_threshold
@@ -445,6 +561,8 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         "dtype": str(dtype),
         "seed": args.seed,
         "enforce_determinism": args.enforce_determinism,
+        "pass_coord_metric": args.pass_coord_metric,
+        "write_cif_artifacts": args.write_cif_artifacts,
         "num_sequences": args.num_sequences,
         "recycling_steps": args.recycling_steps,
         "num_sampling_steps": args.num_sampling_steps,
@@ -466,6 +584,8 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         f"Output directory: {output_dir}",
         f"Device: {device}",
         f"Dtype: {dtype}",
+        f"Pass coord metric: {args.pass_coord_metric}",
+        f"Write CIF artifacts: {args.write_cif_artifacts}",
     ]
     for row in rows:
         status = "PASS" if bool(row["pass"]) else "FAIL"
@@ -473,11 +593,14 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             f"{status} | idx={row['sequence_index']} | seed={row['sequence_seed']} | "
             f"ours_dtype={row['ours_dtype_effective']} | "
             f"shared_atoms={row['shared_atoms']} | "
-            f"coord_mae={row['coord_mae']} | coord_rmse={row['coord_rmse']} | "
-            f"coord_max={row['coord_max_abs']} | plddt_mae={row['plddt_mae']} | "
+            f"coord_raw_mae={row['coord_mae']} | coord_raw_rmse={row['coord_rmse']} | "
+            f"coord_raw_max={row['coord_max_abs']} | coord_aln_mae={row['coord_mae_aligned']} | "
+            f"coord_aln_rmse={row['coord_rmse_aligned']} | coord_aln_max={row['coord_max_abs_aligned']} | "
+            f"pairwise_dist_mae={row['pairwise_dist_mae']} | plddt_mae={row['plddt_mae']} | "
             f"ptm_diff={row['ptm_abs_diff']} | iptm_diff={row['iptm_abs_diff']} | "
             f"cplddt_diff={row['complex_plddt_abs_diff']} | "
-            f"score_diff={row['confidence_score_abs_diff']} | error={row['error']}"
+            f"score_diff={row['confidence_score_abs_diff']} | "
+            f"ours_cif={row['ours_cif_path']} | ref_cif={row['ref_cif_path']} | error={row['error']}"
         )
     write_summary(output_dir / "summary.txt", summary_lines)
     print("\n".join(summary_lines))
@@ -496,6 +619,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", type=str, default="float32", choices=["auto", "float32", "float16", "bfloat16"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--enforce-determinism", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--write-cif-artifacts", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--pass-coord-metric", type=str, default="aligned", choices=["raw", "aligned"])
     parser.add_argument("--num-sequences", type=int, default=3)
     parser.add_argument("--min-length", type=int, default=24)
     parser.add_argument("--max-length", type=int, default=64)

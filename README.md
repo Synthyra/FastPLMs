@@ -82,9 +82,13 @@ Run tests inside the container from your checked-out repo:
 Inside the container (`/workspace`):
 
 - Boltz2 compliance (3 sequences, 3 recycles, 200 diffusion steps, 1 sample):
-  - `python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1`
+  - `python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1 --pass-coord-metric aligned --write-cif-artifacts`
 - Full suite (including Boltz2 compliance):
   - `python -m test_scripts.run_all --device cuda --compliance-dtype float32`
+
+Boltz2 compliance writes per-sequence CIF artifacts for both predictions under:
+- `test_scripts/results/<timestamp>/boltz2_compliance/structures/seq_<idx>/ours_seq<idx>.cif`
+- `test_scripts/results/<timestamp>/boltz2_compliance/structures/seq_<idx>/ref_seq<idx>.cif`
 
 ## Suggestions
 Have suggestions, comments, or requests? Found a bug? Open a GitHub issue and we'll respond soon.
