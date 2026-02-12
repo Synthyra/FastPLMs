@@ -88,3 +88,28 @@ The export directory contains:
 - Current featurization path is protein-only and minimal.
 - This implementation is meant for practical inference and export workflows, not full Boltz training parity.
 
+## Docker-first compliance testing
+
+Build the container at repo root:
+
+```bash
+docker build -t fastplms-test -f Dockerfile .
+```
+
+Launch a test shell:
+
+```bash
+docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test bash
+```
+
+Inside the container, run Boltz2 compliance against pip `boltz`:
+
+```bash
+python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1
+```
+
+Artifacts are written to `test_scripts/results/<timestamp>/boltz2_compliance/` by default:
+- `metrics.json`
+- `metrics.csv`
+- `summary.txt`
+

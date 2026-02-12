@@ -35,6 +35,7 @@ def ESMplusplus_300M(device: torch.device | str = "cpu"):
         map_location=device,
     )
     model.load_state_dict(state_dict)
+    model.sequence_head = copy.deepcopy(model.sequence_head)
     return model
 
 
@@ -51,6 +52,7 @@ def ESMplusplus_600M(device: torch.device | str = "cpu"):
         map_location=device,
     )
     model.load_state_dict(state_dict)
+    model.sequence_head = copy.deepcopy(model.sequence_head)
     return model
 
 

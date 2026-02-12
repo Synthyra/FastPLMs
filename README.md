@@ -17,6 +17,8 @@ The testing workflow is now CLI-first under `test_scripts/` with clean, structur
 
 - Compliance and correctness checks:
   - `py -m test_scripts.run_compliance`
+- Boltz2 compliance vs pip boltz reference:
+  - `py -m test_scripts.run_boltz2_compliance`
 - Embedding mixin behavior checks:
   - `py -m test_scripts.run_embedding`
 - Throughput and memory benchmarks:
@@ -61,6 +63,23 @@ Each suite writes professional artifacts to:
   - `py -m test_scripts.run_embedding --families esm2`
 - Compliance checks with output directory override:
   - `py -m test_scripts.run_compliance --output-dir test_scripts/results/manual_compliance`
+
+### Docker-first testing
+
+Build the image:
+
+- `docker build -t fastplms-test -f Dockerfile .`
+
+Run tests inside the container from your checked-out repo:
+
+- `docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test bash`
+
+Inside the container (`/workspace`):
+
+- Boltz2 compliance (3 sequences, 3 recycles, 200 diffusion steps, 1 sample):
+  - `python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1`
+- Full suite (including Boltz2 compliance):
+  - `python -m test_scripts.run_all --device cuda --compliance-dtype float32`
 
 ## Suggestions
 Have suggestions, comments, or requests? Found a bug? Open a GitHub issue and we'll respond soon.

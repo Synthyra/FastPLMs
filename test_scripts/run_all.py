@@ -6,6 +6,7 @@ from test_scripts.common import ensure_dir
 from test_scripts.common import now_timestamp
 from test_scripts.reporting import write_json
 from test_scripts.reporting import write_summary
+from test_scripts.run_boltz2_compliance import run_boltz2_compliance_suite
 from test_scripts.run_compliance import run_compliance_suite
 from test_scripts.run_embedding import run_embedding_suite
 from test_scripts.run_throughput import run_throughput_suite
@@ -72,12 +73,41 @@ def run_all_suites(args: argparse.Namespace) -> int:
         output_dir=str(root_dir / "throughput"),
         dry_run=args.dry_run,
     )
+    boltz2_compliance_args = argparse.Namespace(
+        token=args.token,
+        repo_id=args.boltz2_repo_id,
+        checkpoint_path=args.boltz2_checkpoint_path,
+        device=args.device,
+        dtype=args.compliance_dtype,
+        seed=args.seed,
+        num_sequences=args.boltz2_num_sequences,
+        min_length=args.min_length,
+        max_length=args.max_length,
+        recycling_steps=args.boltz2_recycling_steps,
+        num_sampling_steps=args.boltz2_sampling_steps,
+        diffusion_samples=args.boltz2_diffusion_samples,
+        run_confidence_sequentially=args.boltz2_run_confidence_sequentially,
+        coord_mae_threshold=args.boltz2_coord_mae_threshold,
+        coord_rmse_threshold=args.boltz2_coord_rmse_threshold,
+        coord_max_abs_threshold=args.boltz2_coord_max_abs_threshold,
+        plddt_mae_threshold=args.boltz2_plddt_mae_threshold,
+        summary_metric_abs_threshold=args.boltz2_summary_metric_abs_threshold,
+        output_dir=str(root_dir / "boltz2_compliance"),
+    )
 
     results: List[Dict[str, object]] = []
 
     print("[run_all] Running compliance suite...")
     compliance_rc = run_compliance_suite(compliance_args)
     results.append({"suite": "compliance", "exit_code": compliance_rc, "output_dir": str(root_dir / "compliance")})
+
+    if args.skip_boltz2_compliance:
+        print("[run_all] Skipping boltz2 compliance suite...")
+        results.append({"suite": "boltz2_compliance", "exit_code": 0, "output_dir": str(root_dir / "boltz2_compliance")})
+    else:
+        print("[run_all] Running boltz2 compliance suite...")
+        boltz2_compliance_rc = run_boltz2_compliance_suite(boltz2_compliance_args)
+        results.append({"suite": "boltz2_compliance", "exit_code": boltz2_compliance_rc, "output_dir": str(root_dir / "boltz2_compliance")})
 
     print("[run_all] Running embedding suite...")
     embedding_rc = run_embedding_suite(embedding_args)
@@ -131,6 +161,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup-steps", type=int, default=2)
     parser.add_argument("--timing-runs", type=int, default=4)
     parser.add_argument("--attn-tolerance", type=float, default=5e-3)
+    parser.add_argument("--skip-boltz2-compliance", action="store_true")
+    parser.add_argument("--boltz2-repo-id", type=str, default="Synthyra/Boltz2")
+    parser.add_argument("--boltz2-checkpoint-path", type=str, default="boltz_automodel/weights/boltz2_conf.ckpt")
+    parser.add_argument("--boltz2-num-sequences", type=int, default=3)
+    parser.add_argument("--boltz2-recycling-steps", type=int, default=3)
+    parser.add_argument("--boltz2-sampling-steps", type=int, default=200)
+    parser.add_argument("--boltz2-diffusion-samples", type=int, default=1)
+    parser.add_argument("--boltz2-run-confidence-sequentially", action="store_true")
+    parser.add_argument("--boltz2-coord-mae-threshold", type=float, default=5e-3)
+    parser.add_argument("--boltz2-coord-rmse-threshold", type=float, default=5e-3)
+    parser.add_argument("--boltz2-coord-max-abs-threshold", type=float, default=5e-2)
+    parser.add_argument("--boltz2-plddt-mae-threshold", type=float, default=5e-3)
+    parser.add_argument("--boltz2-summary-metric-abs-threshold", type=float, default=5e-3)
     parser.add_argument("--e1-repeat-tolerance", type=float, default=1e-7)
     parser.add_argument("--skip-reference", action="store_true")
     parser.add_argument("--esm2-hidden-mse-threshold", type=float, default=1e-4)
