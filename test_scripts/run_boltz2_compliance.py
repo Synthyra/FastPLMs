@@ -21,7 +21,6 @@ from boltz_automodel.minimal_featurizer import build_boltz2_features
 from boltz_automodel.minimal_structures import ProteinStructureTemplate
 from test_scripts.common import build_output_dir
 from test_scripts.common import autocast_context
-from test_scripts.common import generate_sequences
 from test_scripts.common import login_if_needed
 from test_scripts.common import resolve_device
 from test_scripts.common import resolve_dtype
@@ -29,6 +28,13 @@ from test_scripts.common import set_seed
 from test_scripts.reporting import write_csv
 from test_scripts.reporting import write_json
 from test_scripts.reporting import write_summary
+
+
+SEQUENCE_OPTIONS = [
+    "MDDADPEERNYDNMLKMLSDLNKDLEKLLEEMEKISVQATWMAYDMVVMRTNPTLAESMRRLEDAFVNCKEEMEKNWQELLHETKQRL",
+    "MASLGHILVFCVGLLTMAKAESPKEHDPFTYDYQSLQIGGLVIAGILFILGILIVLSRRCRCKFNQQQRTGEPDEEEGTFRSSIRRLSTRRR",
+    "MAVESRVTQEEIKKEPEKPIDREKTCPLLLRVFTTNNGRHHRMDEFSRGNVPSSELQIYTWMDATLKELTSLVKEVYPEARKKGTHFNFAIVFTDVKRPGYRVKEIGSTMSGRKGTDDSMTLQSQKFQIGDYLDIAITPPNRAPPPSGRMRPY",
+]
 
 
 def _enforce_determinism() -> None:
@@ -340,12 +346,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
 
     output_dir = build_output_dir(args.output_dir, "boltz2_compliance")
     checkpoint_path = _download_checkpoint_if_needed(Path(args.checkpoint_path))
-    sequences = generate_sequences(
-        num_sequences=args.num_sequences,
-        min_length=args.min_length,
-        max_length=args.max_length,
-        seed=args.seed,
-    )
+    sequences = SEQUENCE_OPTIONS
 
     model = AutoModel.from_pretrained(
         args.repo_id,
@@ -563,7 +564,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         "enforce_determinism": args.enforce_determinism,
         "pass_coord_metric": args.pass_coord_metric,
         "write_cif_artifacts": args.write_cif_artifacts,
-        "num_sequences": args.num_sequences,
+        "num_sequences": len(sequences),
         "recycling_steps": args.recycling_steps,
         "num_sampling_steps": args.num_sampling_steps,
         "diffusion_samples": args.diffusion_samples,
@@ -621,9 +622,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--enforce-determinism", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--write-cif-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pass-coord-metric", type=str, default="aligned", choices=["raw", "aligned"])
-    parser.add_argument("--num-sequences", type=int, default=3)
-    parser.add_argument("--min-length", type=int, default=24)
-    parser.add_argument("--max-length", type=int, default=64)
     parser.add_argument("--recycling-steps", type=int, default=3)
     parser.add_argument("--num-sampling-steps", type=int, default=200)
     parser.add_argument("--diffusion-samples", type=int, default=1)
