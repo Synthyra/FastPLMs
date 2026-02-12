@@ -1,6 +1,9 @@
 import argparse
+import inspect
 import time
 import urllib.request
+from collections.abc import Mapping
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Dict
 from typing import List
@@ -88,15 +91,117 @@ def _extract_primary_coordinates(output: Dict[str, torch.Tensor], atom_mask: tor
     return primary[valid]
 
 
+def _to_plain_python(value):
+    if isinstance(value, Mapping):
+        output = {}
+        for key in value:
+            output[key] = _to_plain_python(value[key])
+        return output
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return [_to_plain_python(item) for item in value]
+    return value
+
+
+def _filter_kwargs_for_callable(callable_obj, kwargs: Dict[str, object], excluded: List[str] | None = None) -> Dict[str, object]:
+    signature = inspect.signature(callable_obj)
+    allowed = set(signature.parameters.keys())
+    if "self" in allowed:
+        allowed.remove("self")
+    if excluded is not None:
+        for key in excluded:
+            if key in allowed:
+                allowed.remove(key)
+
+    output: Dict[str, object] = {}
+    for key in kwargs:
+        if key in allowed:
+            output[key] = kwargs[key]
+    return output
+
+
+def _strip_prefix_from_state_dict(state_dict: Dict[str, torch.Tensor], prefix: str) -> Dict[str, torch.Tensor]:
+    output: Dict[str, torch.Tensor] = {}
+    for key in state_dict:
+        if key.startswith(prefix):
+            output[key[len(prefix):]] = state_dict[key]
+        else:
+            output[key] = state_dict[key]
+    return output
+
+
+def _choose_best_state_dict_for_model(model: torch.nn.Module, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    target_keys = set(model.state_dict().keys())
+    candidates = [
+        state_dict,
+        _strip_prefix_from_state_dict(state_dict, "model."),
+        _strip_prefix_from_state_dict(state_dict, "module."),
+    ]
+
+    best = candidates[0]
+    best_match = -1
+    for candidate in candidates:
+        match_count = 0
+        for key in candidate:
+            if key in target_keys:
+                match_count += 1
+        if match_count > best_match:
+            best_match = match_count
+            best = candidate
+    return best
+
+
 def _load_reference_model(checkpoint_path: str, device: torch.device):
     from boltz.model.models.boltz2 import Boltz2
+    from boltz.model.modules.diffusionv2 import AtomDiffusion
+    from boltz.model.modules.diffusionv2 import DiffusionModule
 
-    model = Boltz2.load_from_checkpoint(
-        checkpoint_path,
-        map_location=str(device),
-        strict=True,
-        use_kernels=False,
+    checkpoint = torch.load(checkpoint_path, map_location=str(device), weights_only=False)
+    assert isinstance(checkpoint, dict), "Expected checkpoint to deserialize to a dictionary."
+    assert "hyper_parameters" in checkpoint, "Checkpoint missing hyper_parameters."
+    assert "state_dict" in checkpoint, "Checkpoint missing state_dict."
+
+    hyper_parameters = _to_plain_python(checkpoint["hyper_parameters"])
+    assert isinstance(hyper_parameters, dict), "Expected hyper_parameters to be dict-like."
+    state_dict = checkpoint["state_dict"]
+    assert isinstance(state_dict, dict), "Expected state_dict to be a dictionary."
+
+    init_kwargs = _filter_kwargs_for_callable(Boltz2.__init__, hyper_parameters)
+    if "use_kernels" in inspect.signature(Boltz2.__init__).parameters:
+        init_kwargs["use_kernels"] = False
+
+    if "diffusion_process_args" in init_kwargs:
+        raw_diffusion_process_args = init_kwargs["diffusion_process_args"]
+        assert isinstance(raw_diffusion_process_args, dict), (
+            "Expected diffusion_process_args in hyper_parameters to be a dictionary."
+        )
+        init_kwargs["diffusion_process_args"] = _filter_kwargs_for_callable(
+            AtomDiffusion.__init__,
+            raw_diffusion_process_args,
+            excluded=["score_model_args", "compile_score"],
+        )
+
+    if "score_model_args" in init_kwargs:
+        raw_score_model_args = init_kwargs["score_model_args"]
+        assert isinstance(raw_score_model_args, dict), (
+            "Expected score_model_args in hyper_parameters to be a dictionary."
+        )
+        init_kwargs["score_model_args"] = _filter_kwargs_for_callable(
+            DiffusionModule.__init__,
+            raw_score_model_args,
+        )
+
+    model = Boltz2(**init_kwargs)
+    best_state_dict = _choose_best_state_dict_for_model(model, state_dict)
+    load_result = model.load_state_dict(best_state_dict, strict=False)
+    assert len(load_result.unexpected_keys) == 0, (
+        f"Unexpected keys when loading pip boltz reference checkpoint: {load_result.unexpected_keys[:10]}"
     )
+    num_missing = len(load_result.missing_keys)
+    assert num_missing < 32, (
+        "Too many missing keys when loading pip boltz reference checkpoint. "
+        f"Missing count: {num_missing}"
+    )
+
     model = model.to(device).eval()
     return model
 
@@ -119,7 +224,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
     model = AutoModel.from_pretrained(
         args.repo_id,
         trust_remote_code=True,
-        torch_dtype=dtype,
+        dtype=dtype,
     )
     model = model.to(device).eval()
     reference_model = _load_reference_model(str(checkpoint_path), device=device)

@@ -77,7 +77,7 @@ Build the image:
 
 Run tests inside the container from your checked-out repo:
 
-- `docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test bash`
+- `docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test python ...`
 
 Inside the container (`/workspace`):
 
