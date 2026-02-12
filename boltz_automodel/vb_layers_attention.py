@@ -1,3 +1,5 @@
+from typing import Optional
+
 import torch
 from einops.layers.torch import Rearrange
 from torch import Tensor, nn
@@ -64,6 +66,7 @@ class AttentionPairBias(nn.Module):
         s: Tensor,
         z: Tensor,
         mask: Tensor,
+        k_in: Optional[Tensor] = None,
         multiplicity: int = 1,
         to_keys=None,
         model_cache=None,
@@ -97,7 +100,8 @@ class AttentionPairBias(nn.Module):
             k_in = to_keys(s)
             mask = to_keys(mask.unsqueeze(-1)).squeeze(-1)
         else:
-            k_in = s
+            if k_in is None:
+                k_in = s
 
         # Compute projections
         q = self.proj_q(s).view(B, -1, self.num_heads, self.head_dim)
