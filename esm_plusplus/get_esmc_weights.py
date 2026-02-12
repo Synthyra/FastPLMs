@@ -86,6 +86,8 @@ if __name__ == "__main__":
             "AutoModelForSequenceClassification": "modeling_esm_plusplus.ESMplusplusForSequenceClassification",
             "AutoModelForTokenClassification": "modeling_esm_plusplus.ESMplusplusForTokenClassification"
         }
+        tokenizer = model.tokenizer
+        tokenizer.push_to_hub(model_path)
         model.push_to_hub(model_path)
         api.upload_file(
             path_or_fileobj="esm_plusplus/modeling_esm_plusplus.py",

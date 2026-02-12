@@ -48,6 +48,8 @@ if __name__ == "__main__":
         # deep copy so they are not tied 
         model.lm_head = copy.deepcopy(model.lm_head)
         repo_id = 'Synthyra/' + model_name
+        tokenizer = model.tokenizer
+        tokenizer.push_to_hub(repo_id)
         model.push_to_hub(repo_id)
         api.upload_file(
             path_or_fileobj="esm2/modeling_fastesm.py",
