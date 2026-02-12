@@ -40,6 +40,7 @@ COPY requirements.txt .
 
 RUN pip install --upgrade pip setuptools && \
     pip install -r requirements.txt && \
+    pip install boltz[cuda] -U && \
     pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U && \
     pip install --force-reinstall numpy==1.26.4
 
