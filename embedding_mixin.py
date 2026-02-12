@@ -135,6 +135,7 @@ class Pooler:
             final_emb.append(self.pooling_options[pooling_type](emb=emb, attention_mask=attention_mask, attentions=attentions)) # (b, d)
         return torch.cat(final_emb, dim=-1) # (b, n_pooling_types * d)
 
+
 class ProteinDataset(TorchDataset):
     """Simple dataset for protein sequences."""
     def __init__(self, sequences: list[str]):

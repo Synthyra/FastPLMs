@@ -29,7 +29,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTokenizerBase, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
-from pooler import EmbeddingMixin, Pooler
+from embedding_mixin import EmbeddingMixin, Pooler
 
 try:
     from torch.nn.attention.flex_attention import create_block_mask

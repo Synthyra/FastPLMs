@@ -26,7 +26,7 @@ from transformers.models.esm.modeling_esm import (
     EsmClassificationHead,
 )
 from tqdm.auto import tqdm
-from pooler import EmbeddingMixin, Pooler
+from embedding_mixin import EmbeddingMixin, Pooler
 
 try:
     from torch.nn.attention.flex_attention import create_block_mask

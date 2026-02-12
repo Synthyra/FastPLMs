@@ -594,7 +594,7 @@ class Boltz2Model(PreTrainedModel):
         out: dict[str, Tensor] = {}
         for key, tensor in raw_state.items():
             if torch.is_tensor(tensor):
-                ptr = tensor.storage().data_ptr()
+                ptr = tensor.untyped_storage().data_ptr()
                 if ptr in seen_ptrs:
                     out[key] = tensor.clone()
                 else:

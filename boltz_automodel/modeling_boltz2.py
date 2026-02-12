@@ -579,6 +579,7 @@ class Boltz2InferenceCore(nn.Module):
 class Boltz2Model(PreTrainedModel):
     config_class = Boltz2Config
     base_model_prefix = "core"
+    all_tied_weights_keys = {}
 
     def __init__(self, config: Boltz2Config) -> None:
         super().__init__(config)

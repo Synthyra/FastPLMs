@@ -18,7 +18,7 @@ from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
 from tqdm.auto import tqdm
-from pooler import EmbeddingMixin, Pooler
+from embedding_mixin import EmbeddingMixin, Pooler
 
 
 logger = logging.get_logger(__name__)

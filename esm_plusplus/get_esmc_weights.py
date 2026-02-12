@@ -84,8 +84,8 @@ if __name__ == "__main__":
             repo_type="model",
         )
         api.upload_file(
-            path_or_fileobj="pooler.py",
-            path_in_repo="pooler.py",
+            path_or_fileobj="embedding_mixin.py",
+            path_in_repo="embedding_mixin.py",
             repo_id=model_path,
             repo_type="model",
         )

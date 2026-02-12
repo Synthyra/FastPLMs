@@ -36,7 +36,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint_path", type=str, default="boltz_automodel/weights/boltz2_conf.ckpt")
     parser.add_argument("--output_dir", type=str, default="boltz2_automodel_export")
-    parser.add_argument("--repo_id", type=str, default=None)
+    parser.add_argument("--repo_id", type=str, default="Synthyra/Boltz2")
     parser.add_argument("--token", type=str, default=None)
     parser.add_argument("--use_kernels", action="store_true")
     args = parser.parse_args()
@@ -60,6 +60,7 @@ if __name__ == "__main__":
         if args.token is not None:
             login(token=args.token)
         api = HfApi()
+        api.create_repo(repo_id=args.repo_id, repo_type="model", exist_ok=True)
         api.upload_folder(
             folder_path=str(output_dir),
             repo_id=args.repo_id,
