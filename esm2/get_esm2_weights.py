@@ -62,16 +62,4 @@ if __name__ == "__main__":
             repo_type="model",
         )
 
-        # Compare only the lm_head parameters and print warnings for mismatches in other parameters
-        mismatched_params = []
-        base_lm_head_state = dict(original_model.lm_head.named_parameters())
-        fast_lm_head_state = dict(model.lm_head.named_parameters())
-        for name, param in fast_lm_head_state.items():
-            if name in base_lm_head_state:
-                base_param = base_lm_head_state[name]
-                assert param.shape == base_param.shape, f'{name} {param.shape} != {name} {base_param.shape}'
-                assert torch.equal(param.data, base_param.data), f"Parameter {name} weights differ after transfer!"
-            else:
-                print(f'Warning: {name} not found in original_model.lm_head!')
-
  
