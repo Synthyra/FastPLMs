@@ -43,7 +43,7 @@ if __name__ == "__main__":
         config.tie_word_embeddings = False
         original_model = EsmForMaskedLM.from_pretrained(model_dict[model_name])
         model = FastEsmForMaskedLM(config=config).from_pretrained(model_dict[model_name], config=config)
-        model.lm_head.load_state_dict(original_model.embeddings.word_embeddings.state_dict())
+        model.lm_head.load_state_dict(original_model.esm.embeddings.word_embeddings.state_dict())
         model.lm_head = copy.deepcopy(model.lm_head)
         repo_id = 'Synthyra/' + model_name
         model.push_to_hub(repo_id)
