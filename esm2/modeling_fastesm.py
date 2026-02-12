@@ -4,12 +4,10 @@ import os
 import warnings
 import networkx as nx
 from torch.nn import functional as F
-from torch.utils.data import Dataset as TorchDataset
-from torch.utils.data import DataLoader as DataLoader
-from typing import Optional, Tuple, Union, Callable, List, Dict, Any
+from typing import Optional, Tuple, Union, Dict, Any
 from einops import rearrange
 from dataclasses import dataclass
-from transformers import PreTrainedModel, PretrainedConfig, EsmTokenizer, PreTrainedTokenizerBase
+from transformers import PreTrainedModel, PretrainedConfig, EsmTokenizer
 from transformers.modeling_outputs import (
     ModelOutput,
     BaseModelOutputWithPastAndCrossAttentions,
@@ -25,8 +23,8 @@ from transformers.models.esm.modeling_esm import (
     EsmSelfOutput,
     EsmClassificationHead,
 )
-from tqdm.auto import tqdm
-from embedding_mixin import EmbeddingMixin, Pooler
+
+from .embedding_mixin import EmbeddingMixin
 
 try:
     from torch.nn.attention.flex_attention import create_block_mask
@@ -583,6 +581,224 @@ class EsmEncoder(nn.Module):
             last_hidden_state=hidden_states,
             hidden_states=all_hidden_states,
             attentions=all_attentions,
+        )
+
+
+class FastEsmPreTrainedModel(PreTrainedModel):
+    """
+    An abstract class to handle weights initialization and a simple interface for downloading and loading pretrained
+    models.
+    """
+    config_class = FastEsmConfig
+    base_model_prefix = "fastesm"
+    supports_gradient_checkpointing = True
+    tokenizer = EsmTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
+    all_tied_weights_keys = {}
+    
+    def _init_weights(self, module):
+        """Initialize the weights"""
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, nn.LayerNorm):
+            if module.bias is not None:
+                module.bias.data.zero_()
+            module.weight.data.fill_(1.0)
+
+    def get_input_embeddings(self) -> nn.Module:
+        try:
+            return self.embeddings.word_embeddings
+        except AttributeError:
+            return self.esm.embeddings.word_embeddings
+
+
+class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
+    def __init__(self, config, add_pooling_layer: Optional[bool] = True, **kwargs):
+        FastEsmPreTrainedModel.__init__(self, config, **kwargs)
+        self.config = config
+        self.embeddings = EsmEmbeddings(config)
+        self.encoder = EsmEncoder(config)
+        self.contact_head = EsmContactPredictionHead(
+            in_features=config.num_hidden_layers * config.num_attention_heads, bias=True
+        )
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.embeddings.word_embeddings = value
+
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        token_embedding_output = self.embeddings(input_ids, attention_mask=attention_mask)
+        batch_size, seq_length = input_ids.shape
+        if attention_mask is not None:
+            extended_attention_mask = attention_mask[:, None, None, :].expand(
+                batch_size, 1, seq_length, seq_length
+            ).bool()
+        else:
+            extended_attention_mask = None
+        encoder_outputs = self.encoder(
+            token_embedding_output,
+            attention_mask=extended_attention_mask,
+            output_hidden_states=False,
+            output_attentions=False,
+        )
+        return encoder_outputs.last_hidden_state
+
+    def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        attns = self(input_ids, attention_mask=attention_mask, output_attentions=True).attentions
+        attns = torch.stack(attns, dim=1)
+        attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+        attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(4)
+        return self.contact_head(input_ids, attns)
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+    ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
+        """Forward pass for base model.
+        
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Optional attention mask
+            position_ids: Optional position IDs
+            inputs_embeds: Optional input embeddings
+            output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            Model outputs including hidden states and optionally attention weights
+        """
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        elif input_ids is not None:
+            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
+            input_shape = input_ids.size()
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+        else:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+        batch_size, seq_length = input_shape
+        token_embedding_output = self.embeddings(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+        )
+
+        if attention_mask is not None:
+            extended_attention_mask = attention_mask[:, None, None, :].expand(
+                batch_size, 1, seq_length, seq_length
+            ).bool()
+        else:
+            extended_attention_mask = None
+
+        encoder_outputs = self.encoder(
+            token_embedding_output,
+            attention_mask=extended_attention_mask,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+        )
+        sequence_output = encoder_outputs.last_hidden_state
+
+        return BaseModelOutputWithPoolingAndCrossAttentions(
+            last_hidden_state=sequence_output,
+            hidden_states=encoder_outputs.hidden_states,
+            attentions=encoder_outputs.attentions,
+        )
+
+
+class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
+    def __init__(self, config, add_pooling_layer: Optional[bool] = True, **kwargs):
+        FastEsmPreTrainedModel.__init__(self, config, **kwargs)
+        self.config = config
+        self.esm = FAST_ESM_ENCODER(config)
+        self.pooler = EsmPooler(config) if add_pooling_layer else None
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.embeddings.word_embeddings = value
+
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.esm._embed(input_ids, attention_mask)
+
+    def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        return self.esm.predict_contacts(input_ids, attention_mask=attention_mask)
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        **kwargs,
+    ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
+        """Forward pass for base model.
+        
+        Args:
+            input_ids: Input token IDs
+            attention_mask: Optional attention mask
+            position_ids: Optional position IDs
+            inputs_embeds: Optional input embeddings
+            output_hidden_states: Whether to return all hidden states
+            output_attentions: Whether to return attention weights
+            
+        Returns:
+            Model outputs including hidden states and optionally attention weights
+        """
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
+        output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
+
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        elif input_ids is not None:
+            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
+            input_shape = input_ids.size()
+        elif inputs_embeds is not None:
+            input_shape = inputs_embeds.size()[:-1]
+        else:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+
+        outputs = self.esm(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+        )
+        sequence_output = outputs.last_hidden_state
+        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
+
+        return BaseModelOutputWithPoolingAndCrossAttentions(
+            last_hidden_state=sequence_output,
+            pooler_output=pooled_output,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
         )
 
 

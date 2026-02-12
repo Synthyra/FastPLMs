@@ -9,6 +9,11 @@ The GitHub with the implementation and requirements.txt can be found [here](http
 # Profluent-E1
 [Synthyra's version of Profluent-E1](https://github.com/Synthyra/Profluent-E1-300M) is a faithful implementation of Profluent's [E1](https://www.profluent.bio/showcase/e1) models ([license](https://github.com/Profluent-AI/E1/tree/main?tab=License-1-ov-file)) that integrates Huggingface AutoModel compatability and nice embedding functionality.
 
+## Attention backend defaults
+Flex Attention with a block mask that ignores pad tokens is the default attention backend. If Flex Attention is unavailable, E1 falls back to native PyTorch attention.
+
+For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when using Flex Attention.
+
 
 ## Use with 🤗 transformers
 ### Supported models

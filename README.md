@@ -6,6 +6,11 @@ FastPLMs is an open-source effort to increase the efficiency of pretrained prote
 
 All models can be loaded from Huggingface 🤗 transformers via `AutoModel`, this repository does not need to be cloned for most use cases.
 
+## Attention backend defaults
+Flex Attention with a block mask that ignores pad tokens is now the default attention backend. If Flex Attention is not available in your environment, models fall back to native PyTorch attention.
+
+For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when running with Flex Attention.
+
 ## Supported models
 The currently supported models can be found [here](https://huggingface.co/collections/Synthyra/pretrained-plms-675351ecc050f63baedd77de).
 

@@ -1,8 +1,6 @@
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 
-import numpy as np
-import networkx as nx
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,15 +8,15 @@ from torch.nn.utils.rnn import pad_sequence
 
 from einops import rearrange, repeat
 from enum import Enum
-from typing import Any, TypedDict, Callable, Optional, List
+from typing import Any, TypedDict, Callable, List
 from dataclasses import dataclass
 from tokenizers import Tokenizer
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
-from tqdm.auto import tqdm
-from embedding_mixin import EmbeddingMixin, Pooler
+
+from .embedding_mixin import EmbeddingMixin, Pooler
 
 
 logger = logging.get_logger(__name__)

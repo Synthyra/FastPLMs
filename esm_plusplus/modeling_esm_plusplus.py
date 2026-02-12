@@ -14,20 +14,16 @@ import warnings
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import networkx as nx
 from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
-from typing import Optional, Tuple, Union, List, Callable, Dict
+from typing import Optional, Tuple, Union, List
 from einops import rearrange, repeat
 from huggingface_hub import snapshot_download
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
-from torch.utils.data import Dataset as TorchDataset
-from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
-from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTokenizerBase, PretrainedConfig
+from transformers import PreTrainedModel, PreTrainedTokenizerFast, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
 
 from .embedding_mixin import EmbeddingMixin, Pooler
