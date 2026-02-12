@@ -83,6 +83,9 @@ def run_all_suites(args: argparse.Namespace) -> int:
         num_sequences=args.boltz2_num_sequences,
         min_length=args.min_length,
         max_length=args.max_length,
+        enforce_determinism=True,
+        write_cif_artifacts=True,
+        pass_coord_metric="aligned",
         recycling_steps=args.boltz2_recycling_steps,
         num_sampling_steps=args.boltz2_sampling_steps,
         diffusion_samples=args.boltz2_diffusion_samples,
@@ -92,6 +95,7 @@ def run_all_suites(args: argparse.Namespace) -> int:
         coord_max_abs_threshold=args.boltz2_coord_max_abs_threshold,
         plddt_mae_threshold=args.boltz2_plddt_mae_threshold,
         summary_metric_abs_threshold=args.boltz2_summary_metric_abs_threshold,
+        tm_pass_threshold=args.boltz2_tm_pass_threshold,
         output_dir=str(root_dir / "boltz2_compliance"),
     )
 
@@ -167,13 +171,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--boltz2-num-sequences", type=int, default=3)
     parser.add_argument("--boltz2-recycling-steps", type=int, default=3)
     parser.add_argument("--boltz2-sampling-steps", type=int, default=200)
-    parser.add_argument("--boltz2-diffusion-samples", type=int, default=1)
+    parser.add_argument("--boltz2-diffusion-samples", type=int, default=200)
     parser.add_argument("--boltz2-run-confidence-sequentially", action="store_true")
     parser.add_argument("--boltz2-coord-mae-threshold", type=float, default=5e-3)
     parser.add_argument("--boltz2-coord-rmse-threshold", type=float, default=5e-3)
     parser.add_argument("--boltz2-coord-max-abs-threshold", type=float, default=5e-2)
     parser.add_argument("--boltz2-plddt-mae-threshold", type=float, default=5e-3)
     parser.add_argument("--boltz2-summary-metric-abs-threshold", type=float, default=5e-3)
+    parser.add_argument("--boltz2-tm-pass-threshold", type=float, default=0.60)
     parser.add_argument("--e1-repeat-tolerance", type=float, default=1e-7)
     parser.add_argument("--skip-reference", action="store_true")
     parser.add_argument("--esm2-hidden-mse-threshold", type=float, default=1e-4)

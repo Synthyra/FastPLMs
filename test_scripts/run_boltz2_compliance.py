@@ -1,26 +1,31 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
+
+import biotite.structure as struc
+import matplotlib
+import numpy as np
+import torch
+
 from pathlib import Path
+from typing import Any
 from typing import Dict
 from typing import List
 from typing import Tuple
-
-import numpy as np
-import torch
 from transformers import AutoModel
 
 from boltz_automodel.cif_writer import write_cif
 from boltz_automodel.get_boltz2_weights import BOLTZ2_CKPT_URL
 from boltz_automodel.minimal_featurizer import build_boltz2_features
 from boltz_automodel.minimal_structures import ProteinStructureTemplate
-from test_scripts.common import build_output_dir
 from test_scripts.common import autocast_context
+from test_scripts.common import build_output_dir
 from test_scripts.common import login_if_needed
 from test_scripts.common import resolve_device
 from test_scripts.common import resolve_dtype
@@ -29,6 +34,18 @@ from test_scripts.reporting import write_csv
 from test_scripts.reporting import write_json
 from test_scripts.reporting import write_summary
 
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+
+assert "tm_score" in dir(struc), (
+    "biotite.structure.tm_score is unavailable. Install biotite>=1.5.0 in the target environment."
+)
+
+TM_SCORE_FN = struc.tm_score
+BOLTZ2_FIXED_RECYCLING_STEPS = 3
+BOLTZ2_FIXED_DIFFUSION_SAMPLES = 200
 
 SEQUENCE_OPTIONS = [
     "MDDADPEERNYDNMLKMLSDLNKDLEKLLEEMEKISVQATWMAYDMVVMRTNPTLAESMRRLEDAFVNCKEEMEKNWQELLHETKQRL",
@@ -53,6 +70,13 @@ def _download_checkpoint_if_needed(checkpoint_path: Path) -> Path:
     if not checkpoint_path.exists():
         urllib.request.urlretrieve(BOLTZ2_CKPT_URL, str(checkpoint_path))  # noqa: S310
     return checkpoint_path
+
+
+def _detect_no_kernels_support() -> bool:
+    command = [sys.executable, "-m", "boltz.main", "predict", "--help"]
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    combined_output = f"{completed.stdout}\n{completed.stderr}"
+    return "--no_kernels" in combined_output
 
 
 def _set_sequence_seed(seed: int, sequence_index: int) -> None:
@@ -121,9 +145,9 @@ def _run_ours_forward(
         _set_sequence_seed(args.seed, sequence_index)
         return model.forward(
             feats=feats_ours,
-            recycling_steps=args.recycling_steps,
+            recycling_steps=BOLTZ2_FIXED_RECYCLING_STEPS,
             num_sampling_steps=args.num_sampling_steps,
-            diffusion_samples=args.diffusion_samples,
+            diffusion_samples=BOLTZ2_FIXED_DIFFUSION_SAMPLES,
             run_confidence_sequentially=args.run_confidence_sequentially,
         )
 
@@ -190,36 +214,61 @@ def _parse_pdb_atom_map(path: Path) -> Dict[Tuple[str, int, str], torch.Tensor]:
         x_val = float(line[30:38])
         y_val = float(line[38:46])
         z_val = float(line[46:54])
-        atom_map[(chain_id, residue_index, atom_name)] = torch.tensor(
-            [x_val, y_val, z_val],
-            dtype=torch.float32,
-        )
-    assert len(atom_map) > 0, f"No atoms parsed from reference PDB: {path}"
+        atom_map[(chain_id, residue_index, atom_name)] = torch.tensor([x_val, y_val, z_val], dtype=torch.float32)
+    assert len(atom_map) > 0, f"No atoms parsed from PDB: {path}"
     return atom_map
 
 
-def _build_ours_atom_map(
+def _extract_model_id_from_name(filename: str) -> int:
+    match = re.search(r"_model_(\d+)\.", filename)
+    assert match is not None, f"Could not parse model id from filename: {filename}"
+    return int(match.group(1))
+
+
+def _map_paths_by_model(paths: List[Path]) -> Dict[int, Path]:
+    path_map: Dict[int, Path] = {}
+    for path in paths:
+        model_id = _extract_model_id_from_name(path.name)
+        assert model_id not in path_map, f"Found duplicate artifacts for model id {model_id}: {path}"
+        path_map[model_id] = path
+    return path_map
+
+
+def _build_ours_atom_maps(
     sample_coords: torch.Tensor,
     atom_mask: torch.Tensor,
     atom_names: List[str],
     atom_residue_index: List[int],
     atom_chain_id: List[str],
-) -> Dict[Tuple[str, int, str], torch.Tensor]:
-    coords = sample_coords[0]
-    valid_coords = coords[atom_mask > 0]
-    assert valid_coords.shape[0] >= len(atom_names), (
-        "Our model returned fewer valid atom coordinates than template atoms."
+) -> List[Dict[Tuple[str, int, str], torch.Tensor]]:
+    coords = sample_coords.detach().cpu()
+    if coords.ndim == 4:
+        assert coords.shape[0] == 1, "Expected singleton batch dimension for sample coordinates."
+        coords = coords[0]
+    if coords.ndim == 2:
+        coords = coords.unsqueeze(0)
+    assert coords.ndim == 3, f"Expected sample_atom_coords with 3 dimensions, got shape {coords.shape}."
+    assert coords.shape[0] >= BOLTZ2_FIXED_DIFFUSION_SAMPLES, (
+        f"Expected at least {BOLTZ2_FIXED_DIFFUSION_SAMPLES} samples, got {coords.shape[0]}."
     )
 
-    atom_map: Dict[Tuple[str, int, str], torch.Tensor] = {}
-    for atom_idx in range(len(atom_names)):
-        key = (
-            atom_chain_id[atom_idx],
-            atom_residue_index[atom_idx] + 1,
-            atom_names[atom_idx],
+    atom_mask_bool = atom_mask.detach().cpu() > 0
+    output: List[Dict[Tuple[str, int, str], torch.Tensor]] = []
+    for sample_index in range(BOLTZ2_FIXED_DIFFUSION_SAMPLES):
+        valid_coords = coords[sample_index][atom_mask_bool]
+        assert valid_coords.shape[0] >= len(atom_names), (
+            "Our model returned fewer valid atom coordinates than template atoms."
         )
-        atom_map[key] = valid_coords[atom_idx].float().cpu()
-    return atom_map
+        atom_map: Dict[Tuple[str, int, str], torch.Tensor] = {}
+        for atom_idx in range(len(atom_names)):
+            key = (
+                atom_chain_id[atom_idx],
+                atom_residue_index[atom_idx] + 1,
+                atom_names[atom_idx],
+            )
+            atom_map[key] = valid_coords[atom_idx].float().cpu()
+        output.append(atom_map)
+    return output
 
 
 def _build_reference_cif_tensors(
@@ -250,7 +299,8 @@ def _run_boltz_cli_reference(
     checkpoint_path: Path,
     args: argparse.Namespace,
     device: torch.device,
-) -> Tuple[Dict[Tuple[str, int, str], torch.Tensor], torch.Tensor, Dict[str, float]]:
+    supports_no_kernels: bool,
+) -> Tuple[List[Dict[Tuple[str, int, str], torch.Tensor]], List[torch.Tensor], List[Dict[str, float]]]:
     with tempfile.TemporaryDirectory(prefix=f"boltz2_ref_{sequence_index}_") as tmp_dir_str:
         tmp_dir = Path(tmp_dir_str)
         fasta_path = tmp_dir / f"seq_{sequence_index}.fasta"
@@ -271,15 +321,14 @@ def _run_boltz_cli_reference(
             "--checkpoint",
             str(checkpoint_path),
             "--recycling_steps",
-            str(args.recycling_steps),
+            str(BOLTZ2_FIXED_RECYCLING_STEPS),
             "--sampling_steps",
             str(args.num_sampling_steps),
             "--diffusion_samples",
-            str(args.diffusion_samples),
+            str(BOLTZ2_FIXED_DIFFUSION_SAMPLES),
             "--seed",
             str(args.seed + sequence_index),
             "--override",
-            "--no_kernels",
             "--output_format",
             "pdb",
             "--num_workers",
@@ -289,16 +338,12 @@ def _run_boltz_cli_reference(
             "--accelerator",
             accelerator,
         ]
+        if supports_no_kernels:
+            command.append("--no_kernels")
 
         env = os.environ.copy()
         env["PYTHONHASHSEED"] = str(args.seed + sequence_index)
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-        )
+        completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
         if completed.returncode != 0:
             stderr = completed.stderr[-4000:]
             stdout = completed.stdout[-4000:]
@@ -312,28 +357,147 @@ def _run_boltz_cli_reference(
         results_root = out_root / f"boltz_results_{fasta_path.stem}" / "predictions"
         assert results_root.exists(), f"Reference predictions directory not found: {results_root}"
 
-        pdb_candidates = sorted(results_root.rglob("*_model_0.pdb"))
-        plddt_candidates = sorted(results_root.rglob("plddt_*_model_0.npz"))
-        confidence_candidates = sorted(results_root.rglob("confidence_*_model_0.json"))
+        pdb_candidates = sorted(results_root.rglob("*_model_*.pdb"))
+        plddt_candidates = sorted(results_root.rglob("plddt_*_model_*.npz"))
+        confidence_candidates = sorted(results_root.rglob("confidence_*_model_*.json"))
 
-        assert len(pdb_candidates) > 0, f"No reference model_0 PDB found under {results_root}"
-        assert len(plddt_candidates) > 0, f"No reference pLDDT npz found under {results_root}"
-        assert len(confidence_candidates) > 0, f"No reference confidence json found under {results_root}"
+        assert len(pdb_candidates) > 0, f"No reference PDB artifacts found under {results_root}"
+        assert len(plddt_candidates) > 0, f"No reference pLDDT npz artifacts found under {results_root}"
+        assert len(confidence_candidates) > 0, f"No reference confidence json artifacts found under {results_root}"
 
-        atom_map = _parse_pdb_atom_map(pdb_candidates[0])
-        with np.load(plddt_candidates[0]) as handle:
-            plddt = torch.tensor(handle["plddt"], dtype=torch.float32)
-        confidence_summary = json.loads(confidence_candidates[0].read_text(encoding="utf-8"))
-        for key in [
-            "ptm",
-            "iptm",
-            "complex_plddt",
-            "confidence_score",
-        ]:
-            assert key in confidence_summary, (
-                f"Reference confidence summary missing key '{key}' in {confidence_candidates[0]}"
-            )
-        return atom_map, plddt, confidence_summary
+        pdb_by_model = _map_paths_by_model(pdb_candidates)
+        plddt_by_model = _map_paths_by_model(plddt_candidates)
+        confidence_by_model = _map_paths_by_model(confidence_candidates)
+
+        expected_model_ids = list(range(BOLTZ2_FIXED_DIFFUSION_SAMPLES))
+        for model_id in expected_model_ids:
+            assert model_id in pdb_by_model, f"Missing reference PDB for model {model_id}"
+            assert model_id in plddt_by_model, f"Missing reference pLDDT for model {model_id}"
+            assert model_id in confidence_by_model, f"Missing reference confidence JSON for model {model_id}"
+
+        atom_maps: List[Dict[Tuple[str, int, str], torch.Tensor]] = []
+        plddt_samples: List[torch.Tensor] = []
+        confidence_summaries: List[Dict[str, float]] = []
+        for model_id in expected_model_ids:
+            atom_maps.append(_parse_pdb_atom_map(pdb_by_model[model_id]))
+
+            with np.load(plddt_by_model[model_id]) as handle:
+                assert "plddt" in handle.files, f"Missing 'plddt' array in {plddt_by_model[model_id]}"
+                plddt_samples.append(torch.tensor(handle["plddt"], dtype=torch.float32))
+
+            confidence_summary = json.loads(confidence_by_model[model_id].read_text(encoding="utf-8"))
+            for key in ["ptm", "iptm", "complex_plddt", "confidence_score"]:
+                assert key in confidence_summary, (
+                    f"Reference confidence summary missing key '{key}' in {confidence_by_model[model_id]}"
+                )
+            confidence_summaries.append(confidence_summary)
+
+        return atom_maps, plddt_samples, confidence_summaries
+
+
+def _shared_ca_key_order(
+    ours_atom_maps: List[Dict[Tuple[str, int, str], torch.Tensor]],
+    ref_atom_maps: List[Dict[Tuple[str, int, str], torch.Tensor]],
+) -> List[Tuple[str, int, str]]:
+    shared_keys = {key for key in ours_atom_maps[0] if key[2] == "CA"}
+    for atom_map in ours_atom_maps:
+        ca_keys = {key for key in atom_map if key[2] == "CA"}
+        shared_keys = shared_keys.intersection(ca_keys)
+    for atom_map in ref_atom_maps:
+        ca_keys = {key for key in atom_map if key[2] == "CA"}
+        shared_keys = shared_keys.intersection(ca_keys)
+    assert len(shared_keys) > 0, "No shared CA atoms found across all samples."
+    ordered_keys = list(shared_keys)
+    ordered_keys.sort()
+    return ordered_keys
+
+
+def _stack_coords_for_keys(
+    atom_maps: List[Dict[Tuple[str, int, str], torch.Tensor]],
+    ordered_keys: List[Tuple[str, int, str]],
+) -> torch.Tensor:
+    stacked_samples: List[torch.Tensor] = []
+    for atom_map in atom_maps:
+        coords: List[torch.Tensor] = []
+        for key in ordered_keys:
+            assert key in atom_map, f"Missing key {key} in atom map."
+            coords.append(atom_map[key].float())
+        stacked_samples.append(torch.stack(coords, dim=0))
+    return torch.stack(stacked_samples, dim=0)
+
+
+def _tm_score_from_coords(reference_coords: torch.Tensor, subject_coords: torch.Tensor) -> float:
+    aligned_subject = _kabsch_align_mobile_to_target(subject_coords, reference_coords)
+    reference_np = reference_coords.detach().cpu().numpy().astype(np.float64)
+    aligned_np = aligned_subject.detach().cpu().numpy().astype(np.float64)
+    index_array = np.arange(reference_np.shape[0], dtype=np.int32)
+    tm_value = float(
+        TM_SCORE_FN(
+            reference=reference_np,
+            subject=aligned_np,
+            reference_indices=index_array,
+            subject_indices=index_array,
+            reference_length="shorter",
+        )
+    )
+    assert np.isfinite(tm_value), "TM-score computation produced non-finite value."
+    return tm_value
+
+
+def _build_tm_matrix(reference_stack: torch.Tensor, subject_stack: torch.Tensor, symmetric: bool) -> np.ndarray:
+    assert reference_stack.ndim == 3 and subject_stack.ndim == 3, "Expected stacks with shape [S, N, 3]."
+    assert reference_stack.shape[1:] == subject_stack.shape[1:], "Reference and subject stacks must share atom layout."
+    matrix = np.zeros((reference_stack.shape[0], subject_stack.shape[0]), dtype=np.float32)
+    if symmetric:
+        assert reference_stack.shape[0] == subject_stack.shape[0], "Symmetric matrix requires same sample count."
+        for row_idx in range(reference_stack.shape[0]):
+            for col_idx in range(row_idx, subject_stack.shape[0]):
+                tm_value = _tm_score_from_coords(reference_stack[row_idx], subject_stack[col_idx])
+                matrix[row_idx, col_idx] = tm_value
+                matrix[col_idx, row_idx] = tm_value
+        return matrix
+
+    for row_idx in range(reference_stack.shape[0]):
+        for col_idx in range(subject_stack.shape[0]):
+            matrix[row_idx, col_idx] = _tm_score_from_coords(reference_stack[row_idx], subject_stack[col_idx])
+    return matrix
+
+
+def _write_tm_matrix_heatmap(path: Path, matrix: np.ndarray, title: str) -> None:
+    fig, axis = plt.subplots(figsize=(7, 6))
+    image = axis.imshow(matrix, cmap="viridis", vmin=0.0, vmax=1.0, aspect="auto")
+    axis.set_title(title)
+    axis.set_xlabel("Column sample index")
+    axis.set_ylabel("Row sample index")
+    fig.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(path, dpi=300)
+    plt.close(fig)
+
+
+def _write_tm_matrix_artifacts(
+    matrix_dir: Path,
+    matrix_name: str,
+    title: str,
+    matrix: np.ndarray,
+) -> Tuple[str, str, str]:
+    csv_path = matrix_dir / f"{matrix_name}.csv"
+    npy_path = matrix_dir / f"{matrix_name}.npy"
+    png_path = matrix_dir / f"{matrix_name}.png"
+    np.savetxt(csv_path, matrix, delimiter=",", fmt="%.6f")
+    np.save(npy_path, matrix)
+    _write_tm_matrix_heatmap(path=png_path, matrix=matrix, title=title)
+    return str(csv_path), str(npy_path), str(png_path)
+
+
+def _matrix_stats(matrix: np.ndarray) -> Dict[str, float]:
+    flattened = matrix.reshape(-1)
+    return {
+        "mean": float(np.mean(flattened)),
+        "median": float(np.median(flattened)),
+        "min": float(np.min(flattened)),
+        "max": float(np.max(flattened)),
+    }
 
 
 def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
@@ -344,14 +508,23 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
     dtype = resolve_dtype(args.dtype, device)
     set_seed(args.seed)
 
+    if args.recycling_steps != BOLTZ2_FIXED_RECYCLING_STEPS:
+        print(
+            f"[boltz2_compliance] Ignoring --recycling-steps={args.recycling_steps}; "
+            f"using fixed value {BOLTZ2_FIXED_RECYCLING_STEPS}."
+        )
+    if args.diffusion_samples != BOLTZ2_FIXED_DIFFUSION_SAMPLES:
+        print(
+            f"[boltz2_compliance] Ignoring --diffusion-samples={args.diffusion_samples}; "
+            f"using fixed value {BOLTZ2_FIXED_DIFFUSION_SAMPLES}."
+        )
+
     output_dir = build_output_dir(args.output_dir, "boltz2_compliance")
     checkpoint_path = _download_checkpoint_if_needed(Path(args.checkpoint_path))
     sequences = SEQUENCE_OPTIONS
+    supports_no_kernels = _detect_no_kernels_support()
 
-    model = AutoModel.from_pretrained(
-        args.repo_id,
-        trust_remote_code=True,
-    )
+    model = AutoModel.from_pretrained(args.repo_id, trust_remote_code=True)
     model = model.to(device=device, dtype=torch.float32).eval()
 
     rows: List[Dict[str, object]] = []
@@ -364,6 +537,10 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             "sequence": sequence,
             "sequence_seed": args.seed + sequence_index,
             "ours_dtype_effective": str(dtype),
+            "num_ours_samples": 0,
+            "num_ref_samples": 0,
+            "shared_atoms": 0,
+            "shared_ca_atoms": 0,
             "coord_mae": float("nan"),
             "coord_rmse": float("nan"),
             "coord_max_abs": float("nan"),
@@ -376,7 +553,27 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             "iptm_abs_diff": float("nan"),
             "complex_plddt_abs_diff": float("nan"),
             "confidence_score_abs_diff": float("nan"),
-            "shared_atoms": 0,
+            "tm_cross_median": float("nan"),
+            "tm_cross_mean": float("nan"),
+            "tm_cross_min": float("nan"),
+            "tm_cross_max": float("nan"),
+            "tm_ref_within_median": float("nan"),
+            "tm_ref_within_mean": float("nan"),
+            "tm_ref_within_min": float("nan"),
+            "tm_ref_within_max": float("nan"),
+            "tm_ours_within_median": float("nan"),
+            "tm_ours_within_mean": float("nan"),
+            "tm_ours_within_min": float("nan"),
+            "tm_ours_within_max": float("nan"),
+            "tm_official_vs_ours_csv": "",
+            "tm_official_vs_ours_npy": "",
+            "tm_official_vs_ours_png": "",
+            "tm_official_vs_official_csv": "",
+            "tm_official_vs_official_npy": "",
+            "tm_official_vs_official_png": "",
+            "tm_ours_vs_ours_csv": "",
+            "tm_ours_vs_ours_npy": "",
+            "tm_ours_vs_ours_png": "",
             "ours_cif_path": "",
             "ref_cif_path": "",
             "pass": False,
@@ -418,32 +615,43 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
                 else:
                     raise
 
-            ours_atom_map = _build_ours_atom_map(
-                sample_coords=out_ours["sample_atom_coords"].detach().cpu(),
-                atom_mask=feats_ours["atom_pad_mask"][0].detach().cpu(),
+            ours_atom_maps = _build_ours_atom_maps(
+                sample_coords=out_ours["sample_atom_coords"],
+                atom_mask=feats_ours["atom_pad_mask"][0],
                 atom_names=template.atom_names,
                 atom_residue_index=template.atom_residue_index,
                 atom_chain_id=template.atom_chain_id,
             )
-
-            ref_atom_map, ref_plddt, ref_confidence = _run_boltz_cli_reference(
+            ref_atom_maps, ref_plddt_samples, ref_confidence_samples = _run_boltz_cli_reference(
                 sequence=sequence,
                 sequence_index=sequence_index,
                 checkpoint_path=checkpoint_path,
                 args=args,
                 device=device,
+                supports_no_kernels=supports_no_kernels,
             )
 
+            row["num_ours_samples"] = len(ours_atom_maps)
+            row["num_ref_samples"] = len(ref_atom_maps)
+
+            ours_atom_map_primary = ours_atom_maps[0]
+            ref_atom_map_primary = ref_atom_maps[0]
+            ref_plddt_primary = ref_plddt_samples[0].float().cpu().reshape(-1)
+            ref_confidence_primary = ref_confidence_samples[0]
+
             shared_keys = []
-            for key in ours_atom_map:
-                if key in ref_atom_map:
+            for key in ours_atom_map_primary:
+                if key in ref_atom_map_primary:
                     shared_keys.append(key)
             shared_keys.sort()
             assert len(shared_keys) > 0, "No overlapping atom keys between our output and pip boltz CLI output."
             row["shared_atoms"] = len(shared_keys)
 
-            ours_coords_stack = torch.stack([ours_atom_map[key] for key in shared_keys], dim=0)
-            ref_coords_stack = torch.stack([ref_atom_map[key] for key in shared_keys], dim=0)
+            shared_ca_keys = _shared_ca_key_order(ours_atom_maps=ours_atom_maps, ref_atom_maps=ref_atom_maps)
+            row["shared_ca_atoms"] = len(shared_ca_keys)
+
+            ours_coords_stack = torch.stack([ours_atom_map_primary[key] for key in shared_keys], dim=0)
+            ref_coords_stack = torch.stack([ref_atom_map_primary[key] for key in shared_keys], dim=0)
             coord_mae, coord_rmse, coord_max_abs = _vector_metrics(ours_coords_stack, ref_coords_stack)
             row["coord_mae"] = coord_mae
             row["coord_rmse"] = coord_rmse
@@ -459,11 +667,10 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             row["pairwise_dist_mae"] = _pairwise_distance_mae(ours_coords_stack, ref_coords_stack)
 
             ours_plddt = _extract_primary_plddt_vector(out_ours, feats_ours)
-            ref_plddt = ref_plddt.float().cpu().reshape(-1)
-            assert ours_plddt.numel() == ref_plddt.numel(), (
-                f"pLDDT size mismatch (ours={ours_plddt.numel()}, ref={ref_plddt.numel()})."
+            assert ours_plddt.numel() == ref_plddt_primary.numel(), (
+                f"pLDDT size mismatch (ours={ours_plddt.numel()}, ref={ref_plddt_primary.numel()})."
             )
-            row["plddt_mae"] = float(torch.mean(torch.abs(ours_plddt - ref_plddt)).item())
+            row["plddt_mae"] = float(torch.mean(torch.abs(ours_plddt - ref_plddt_primary)).item())
 
             ours_ptm = _summary_metric(out_ours["ptm"]).float().cpu()
             ours_iptm = _summary_metric(out_ours["iptm"]).float().cpu()
@@ -474,16 +681,10 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
                 complex_plddt=ours_complex_plddt,
             )
 
-            ref_ptm = torch.tensor([float(ref_confidence["ptm"])], dtype=torch.float32)
-            ref_iptm = torch.tensor([float(ref_confidence["iptm"])], dtype=torch.float32)
-            ref_complex_plddt = torch.tensor(
-                [float(ref_confidence["complex_plddt"])],
-                dtype=torch.float32,
-            )
-            ref_confidence_score = torch.tensor(
-                [float(ref_confidence["confidence_score"])],
-                dtype=torch.float32,
-            )
+            ref_ptm = torch.tensor([float(ref_confidence_primary["ptm"])], dtype=torch.float32)
+            ref_iptm = torch.tensor([float(ref_confidence_primary["iptm"])], dtype=torch.float32)
+            ref_complex_plddt = torch.tensor([float(ref_confidence_primary["complex_plddt"])], dtype=torch.float32)
+            ref_confidence_score = torch.tensor([float(ref_confidence_primary["confidence_score"])], dtype=torch.float32)
 
             row["ptm_abs_diff"] = float(torch.mean(torch.abs(ours_ptm - ref_ptm)).item())
             row["iptm_abs_diff"] = float(torch.mean(torch.abs(ours_iptm - ref_iptm)).item())
@@ -512,7 +713,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
                 ref_coords_cif, ref_atom_mask_cif = _build_reference_cif_tensors(
                     template=template,
                     atom_pad_mask=feats_ours["atom_pad_mask"][0].detach().cpu(),
-                    ref_atom_map=ref_atom_map,
+                    ref_atom_map=ref_atom_map_primary,
                 )
                 ref_cif_path = structure_dir / f"ref_seq{sequence_index}.cif"
                 write_cif(
@@ -520,30 +721,81 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
                     atom_coords=ref_coords_cif,
                     atom_mask=ref_atom_mask_cif,
                     output_path=str(ref_cif_path),
-                    plddt=ref_plddt,
+                    plddt=ref_plddt_primary,
                     sample_index=0,
                 )
                 row["ref_cif_path"] = str(ref_cif_path)
 
-            if args.pass_coord_metric == "aligned":
-                coord_mae_for_pass = row["coord_mae_aligned"]
-                coord_rmse_for_pass = row["coord_rmse_aligned"]
-                coord_max_for_pass = row["coord_max_abs_aligned"]
-            else:
-                coord_mae_for_pass = row["coord_mae"]
-                coord_rmse_for_pass = row["coord_rmse"]
-                coord_max_for_pass = row["coord_max_abs"]
+            ours_ca_stack = _stack_coords_for_keys(atom_maps=ours_atom_maps, ordered_keys=shared_ca_keys)
+            ref_ca_stack = _stack_coords_for_keys(atom_maps=ref_atom_maps, ordered_keys=shared_ca_keys)
 
-            row["pass"] = bool(
-                coord_mae_for_pass <= args.coord_mae_threshold
-                and coord_rmse_for_pass <= args.coord_rmse_threshold
-                and coord_max_for_pass <= args.coord_max_abs_threshold
-                and row["plddt_mae"] <= args.plddt_mae_threshold
-                and row["ptm_abs_diff"] <= args.summary_metric_abs_threshold
-                and row["iptm_abs_diff"] <= args.summary_metric_abs_threshold
-                and row["complex_plddt_abs_diff"] <= args.summary_metric_abs_threshold
-                and row["confidence_score_abs_diff"] <= args.summary_metric_abs_threshold
+            tm_official_vs_ours = _build_tm_matrix(
+                reference_stack=ref_ca_stack,
+                subject_stack=ours_ca_stack,
+                symmetric=False,
             )
+            tm_official_vs_official = _build_tm_matrix(
+                reference_stack=ref_ca_stack,
+                subject_stack=ref_ca_stack,
+                symmetric=True,
+            )
+            tm_ours_vs_ours = _build_tm_matrix(
+                reference_stack=ours_ca_stack,
+                subject_stack=ours_ca_stack,
+                symmetric=True,
+            )
+
+            matrix_dir = output_dir / "tm_matrices" / f"seq_{sequence_index}"
+            matrix_dir.mkdir(parents=True, exist_ok=True)
+            csv_path, npy_path, png_path = _write_tm_matrix_artifacts(
+                matrix_dir=matrix_dir,
+                matrix_name="official_vs_ours",
+                title=f"Sequence {sequence_index}: official vs ours TM-score",
+                matrix=tm_official_vs_ours,
+            )
+            row["tm_official_vs_ours_csv"] = csv_path
+            row["tm_official_vs_ours_npy"] = npy_path
+            row["tm_official_vs_ours_png"] = png_path
+
+            csv_path, npy_path, png_path = _write_tm_matrix_artifacts(
+                matrix_dir=matrix_dir,
+                matrix_name="official_vs_official",
+                title=f"Sequence {sequence_index}: official vs official TM-score",
+                matrix=tm_official_vs_official,
+            )
+            row["tm_official_vs_official_csv"] = csv_path
+            row["tm_official_vs_official_npy"] = npy_path
+            row["tm_official_vs_official_png"] = png_path
+
+            csv_path, npy_path, png_path = _write_tm_matrix_artifacts(
+                matrix_dir=matrix_dir,
+                matrix_name="ours_vs_ours",
+                title=f"Sequence {sequence_index}: ours vs ours TM-score",
+                matrix=tm_ours_vs_ours,
+            )
+            row["tm_ours_vs_ours_csv"] = csv_path
+            row["tm_ours_vs_ours_npy"] = npy_path
+            row["tm_ours_vs_ours_png"] = png_path
+
+            cross_stats = _matrix_stats(tm_official_vs_ours)
+            row["tm_cross_mean"] = cross_stats["mean"]
+            row["tm_cross_median"] = cross_stats["median"]
+            row["tm_cross_min"] = cross_stats["min"]
+            row["tm_cross_max"] = cross_stats["max"]
+
+            ref_within_stats = _matrix_stats(tm_official_vs_official)
+            row["tm_ref_within_mean"] = ref_within_stats["mean"]
+            row["tm_ref_within_median"] = ref_within_stats["median"]
+            row["tm_ref_within_min"] = ref_within_stats["min"]
+            row["tm_ref_within_max"] = ref_within_stats["max"]
+
+            ours_within_stats = _matrix_stats(tm_ours_vs_ours)
+            row["tm_ours_within_mean"] = ours_within_stats["mean"]
+            row["tm_ours_within_median"] = ours_within_stats["median"]
+            row["tm_ours_within_min"] = ours_within_stats["min"]
+            row["tm_ours_within_max"] = ours_within_stats["max"]
+
+            row["pass"] = bool(row["tm_cross_median"] >= args.tm_pass_threshold)
             if row["pass"] is False:
                 overall_pass = False
         except Exception as exc:
@@ -562,12 +814,13 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         "dtype": str(dtype),
         "seed": args.seed,
         "enforce_determinism": args.enforce_determinism,
-        "pass_coord_metric": args.pass_coord_metric,
         "write_cif_artifacts": args.write_cif_artifacts,
         "num_sequences": len(sequences),
-        "recycling_steps": args.recycling_steps,
+        "recycling_steps": BOLTZ2_FIXED_RECYCLING_STEPS,
         "num_sampling_steps": args.num_sampling_steps,
-        "diffusion_samples": args.diffusion_samples,
+        "diffusion_samples": BOLTZ2_FIXED_DIFFUSION_SAMPLES,
+        "tm_pass_threshold": args.tm_pass_threshold,
+        "supports_no_kernels": supports_no_kernels,
         "rows": rows,
     }
     write_json(output_dir / "metrics.json", payload)
@@ -585,22 +838,24 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         f"Output directory: {output_dir}",
         f"Device: {device}",
         f"Dtype: {dtype}",
-        f"Pass coord metric: {args.pass_coord_metric}",
+        f"Recycling steps (fixed): {BOLTZ2_FIXED_RECYCLING_STEPS}",
+        f"Diffusion samples (fixed): {BOLTZ2_FIXED_DIFFUSION_SAMPLES}",
+        f"TM pass threshold: {args.tm_pass_threshold}",
         f"Write CIF artifacts: {args.write_cif_artifacts}",
+        f"Reference CLI supports --no_kernels: {supports_no_kernels}",
     ]
     for row in rows:
         status = "PASS" if bool(row["pass"]) else "FAIL"
         summary_lines.append(
             f"{status} | idx={row['sequence_index']} | seed={row['sequence_seed']} | "
-            f"ours_dtype={row['ours_dtype_effective']} | "
-            f"shared_atoms={row['shared_atoms']} | "
-            f"coord_raw_mae={row['coord_mae']} | coord_raw_rmse={row['coord_rmse']} | "
-            f"coord_raw_max={row['coord_max_abs']} | coord_aln_mae={row['coord_mae_aligned']} | "
-            f"coord_aln_rmse={row['coord_rmse_aligned']} | coord_aln_max={row['coord_max_abs_aligned']} | "
-            f"pairwise_dist_mae={row['pairwise_dist_mae']} | plddt_mae={row['plddt_mae']} | "
-            f"ptm_diff={row['ptm_abs_diff']} | iptm_diff={row['iptm_abs_diff']} | "
-            f"cplddt_diff={row['complex_plddt_abs_diff']} | "
-            f"score_diff={row['confidence_score_abs_diff']} | "
+            f"ours_dtype={row['ours_dtype_effective']} | shared_atoms={row['shared_atoms']} | "
+            f"shared_ca={row['shared_ca_atoms']} | tm_cross_median={row['tm_cross_median']} | "
+            f"tm_ref_within_median={row['tm_ref_within_median']} | "
+            f"tm_ours_within_median={row['tm_ours_within_median']} | "
+            f"coord_aln_mae={row['coord_mae_aligned']} | plddt_mae={row['plddt_mae']} | "
+            f"official_vs_ours_csv={row['tm_official_vs_ours_csv']} | "
+            f"official_vs_official_csv={row['tm_official_vs_official_csv']} | "
+            f"ours_vs_ours_csv={row['tm_ours_vs_ours_csv']} | "
             f"ours_cif={row['ours_cif_path']} | ref_cif={row['ref_cif_path']} | error={row['error']}"
         )
     write_summary(output_dir / "summary.txt", summary_lines)
@@ -622,15 +877,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--enforce-determinism", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--write-cif-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pass-coord-metric", type=str, default="aligned", choices=["raw", "aligned"])
-    parser.add_argument("--recycling-steps", type=int, default=3)
+    parser.add_argument("--recycling-steps", type=int, default=BOLTZ2_FIXED_RECYCLING_STEPS)
     parser.add_argument("--num-sampling-steps", type=int, default=200)
-    parser.add_argument("--diffusion-samples", type=int, default=1)
+    parser.add_argument("--diffusion-samples", type=int, default=BOLTZ2_FIXED_DIFFUSION_SAMPLES)
     parser.add_argument("--run-confidence-sequentially", action="store_true")
     parser.add_argument("--coord-mae-threshold", type=float, default=5e-3)
     parser.add_argument("--coord-rmse-threshold", type=float, default=5e-3)
     parser.add_argument("--coord-max-abs-threshold", type=float, default=5e-2)
     parser.add_argument("--plddt-mae-threshold", type=float, default=5e-3)
     parser.add_argument("--summary-metric-abs-threshold", type=float, default=5e-3)
+    parser.add_argument("--tm-pass-threshold", type=float, default=0.60)
     parser.add_argument("--output-dir", type=str, default=None)
     return parser
 
