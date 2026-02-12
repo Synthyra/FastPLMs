@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,17 @@ from test_scripts.common import set_seed
 from test_scripts.reporting import write_csv
 from test_scripts.reporting import write_json
 from test_scripts.reporting import write_summary
+
+
+def _enforce_determinism() -> None:
+    if "CUBLAS_WORKSPACE_CONFIG" not in os.environ:
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.allow_tf32 = False
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = False
+    torch.use_deterministic_algorithms(True)
 
 
 def _download_checkpoint_if_needed(checkpoint_path: Path) -> Path:
@@ -62,6 +74,24 @@ def _summary_metric(value: torch.Tensor) -> torch.Tensor:
     if value.ndim == 1:
         return value
     return value.reshape(value.shape[0], -1)[:, 0]
+
+
+def _extract_primary_plddt_vector(output: Dict[str, torch.Tensor], feats: Dict[str, torch.Tensor]) -> torch.Tensor:
+    assert "plddt" in output, "Missing pLDDT in model output."
+    plddt = output["plddt"].detach().cpu()
+    if plddt.ndim == 0:
+        return plddt.reshape(1).float()
+    if plddt.ndim >= 2:
+        plddt = plddt[0]
+    plddt = plddt.reshape(-1).float()
+
+    token_mask = feats["token_pad_mask"][0].detach().cpu().reshape(-1) > 0
+    atom_mask = feats["atom_pad_mask"][0].detach().cpu().reshape(-1) > 0
+    if plddt.numel() == token_mask.numel():
+        plddt = plddt[token_mask]
+    elif plddt.numel() == atom_mask.numel():
+        plddt = plddt[atom_mask]
+    return plddt
 
 
 def _compute_confidence_score(ptm: torch.Tensor, iptm: torch.Tensor, complex_plddt: torch.Tensor) -> torch.Tensor:
@@ -173,11 +203,14 @@ def _run_boltz_cli_reference(
             accelerator,
         ]
 
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = str(args.seed + sequence_index)
         completed = subprocess.run(
             command,
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
         if completed.returncode != 0:
             stderr = completed.stderr[-4000:]
@@ -217,6 +250,8 @@ def _run_boltz_cli_reference(
 
 
 def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
+    if args.enforce_determinism:
+        _enforce_determinism()
     login_if_needed(args.token)
     device = resolve_device(args.device)
     dtype = resolve_dtype(args.dtype, device)
@@ -246,6 +281,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         row: Dict[str, object] = {
             "sequence_index": sequence_index,
             "sequence": sequence,
+            "sequence_seed": args.seed + sequence_index,
             "coord_mae": float("nan"),
             "coord_rmse": float("nan"),
             "coord_max_abs": float("nan"),
@@ -309,7 +345,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             row["coord_rmse"] = coord_rmse
             row["coord_max_abs"] = coord_max_abs
 
-            ours_plddt = _summary_metric(out_ours["plddt"]).float().cpu().reshape(-1)
+            ours_plddt = _extract_primary_plddt_vector(out_ours, feats_ours)
             ref_plddt = ref_plddt.float().cpu().reshape(-1)
             assert ours_plddt.numel() == ref_plddt.numel(), (
                 f"pLDDT size mismatch (ours={ours_plddt.numel()}, ref={ref_plddt.numel()})."
@@ -372,6 +408,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         "device": str(device),
         "dtype": str(dtype),
         "seed": args.seed,
+        "enforce_determinism": args.enforce_determinism,
         "num_sequences": args.num_sequences,
         "recycling_steps": args.recycling_steps,
         "num_sampling_steps": args.num_sampling_steps,
@@ -397,7 +434,8 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
     for row in rows:
         status = "PASS" if bool(row["pass"]) else "FAIL"
         summary_lines.append(
-            f"{status} | idx={row['sequence_index']} | shared_atoms={row['shared_atoms']} | "
+            f"{status} | idx={row['sequence_index']} | seed={row['sequence_seed']} | "
+            f"shared_atoms={row['shared_atoms']} | "
             f"coord_mae={row['coord_mae']} | coord_rmse={row['coord_rmse']} | "
             f"coord_max={row['coord_max_abs']} | plddt_mae={row['plddt_mae']} | "
             f"ptm_diff={row['ptm_abs_diff']} | iptm_diff={row['iptm_abs_diff']} | "
@@ -420,6 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--dtype", type=str, default="float32", choices=["auto", "float32", "float16", "bfloat16"])
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--enforce-determinism", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num-sequences", type=int, default=3)
     parser.add_argument("--min-length", type=int, default=24)
     parser.add_argument("--max-length", type=int, default=64)
