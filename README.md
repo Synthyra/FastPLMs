@@ -9,6 +9,59 @@ All models can be loaded from Huggingface 🤗 transformers via `AutoModel`, thi
 ## Supported models
 The currently supported models can be found [here](https://huggingface.co/collections/Synthyra/pretrained-plms-675351ecc050f63baedd77de).
 
+## Testing suite
+
+The testing workflow is now CLI-first under `test_scripts/` with clean, structured outputs.
+
+### Main test entrypoints
+
+- Compliance and correctness checks:
+  - `py -m test_scripts.run_compliance`
+- Embedding mixin behavior checks:
+  - `py -m test_scripts.run_embedding`
+- Throughput and memory benchmarks:
+  - `py -m test_scripts.run_throughput`
+- Run everything in one command:
+  - `py -m test_scripts.run_all`
+
+By default, each suite runs one representative checkpoint per family (`E1`, `ESM2`, `ESMplusplus`).
+
+### Common options
+
+- Run full checkpoint coverage:
+  - `--full-models`
+- Restrict to specific families:
+  - `--families e1 esm2 esmplusplus`
+- Select device and dtype:
+  - `--device auto|cpu|cuda`
+  - `--dtype auto|float32|float16|bfloat16`
+- Set a custom output directory:
+  - `--output-dir <path>`
+- Quick wiring check without loading models:
+  - `--dry-run`
+
+### Output artifacts
+
+Each suite writes professional artifacts to:
+
+- Default: `test_scripts/results/<timestamp>/<suite>/`
+- Files:
+  - `metrics.json` (full structured metrics)
+  - `metrics.csv` (tabular summary)
+  - `summary.txt` (human-readable pass/fail summary)
+  - `*.png` plots saved at 300 dpi
+
+### Useful examples
+
+- Full run with all model checkpoints:
+  - `py -m test_scripts.run_all --full-models`
+- Throughput benchmark on CUDA:
+  - `py -m test_scripts.run_throughput --device cuda --lengths 64,128,256 --batch-sizes 1,2,4`
+- Embedding validation for ESM2 only:
+  - `py -m test_scripts.run_embedding --families esm2`
+- Compliance checks with output directory override:
+  - `py -m test_scripts.run_compliance --output-dir test_scripts/results/manual_compliance`
+
 ## Suggestions
 Have suggestions, comments, or requests? Found a bug? Open a GitHub issue and we'll respond soon.
 

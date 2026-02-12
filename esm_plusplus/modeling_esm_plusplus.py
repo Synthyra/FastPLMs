@@ -10,6 +10,7 @@ License: https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-licen
 
 import math
 import os
+import warnings
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -28,6 +29,44 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTokenizerBase, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
+from pooler import EmbeddingMixin, Pooler
+
+try:
+    from torch.nn.attention.flex_attention import create_block_mask
+    from torch.nn.attention.flex_attention import flex_attention as _raw_flex_attention
+except ImportError:
+    create_block_mask = None
+    _raw_flex_attention = None
+
+
+def _resolve_flex_attention(attn_compile: bool):
+    if _raw_flex_attention is None:
+        return None
+    if not attn_compile:
+        return _raw_flex_attention
+    try:
+        return torch.compile(_raw_flex_attention, dynamic=True)
+    except Exception:
+        return _raw_flex_attention
+
+
+def _create_pad_block_mask(attention_mask_2d: torch.Tensor, block_size: int):
+    assert create_block_mask is not None, "Flex attention block mask requires create_block_mask."
+    token_valid = attention_mask_2d.bool()
+    batch_size, seq_len = token_valid.shape
+
+    def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+        return token_valid[batch_idx, q_idx] & token_valid[batch_idx, kv_idx]
+
+    return create_block_mask(
+        mask_mod,
+        batch_size,
+        1,
+        seq_len,
+        seq_len,
+        device=attention_mask_2d.device,
+        BLOCK_SIZE=block_size,
+    )
 
 
 class ESMplusplusConfig(PretrainedConfig):
@@ -52,6 +91,9 @@ class ESMplusplusConfig(PretrainedConfig):
         problem_type: str | None = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
+        attn_backend: str = "flex",
+        attn_compile: bool = True,
+        flex_block_size: int = 128,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -64,6 +106,9 @@ class ESMplusplusConfig(PretrainedConfig):
         self.dropout = dropout
         self.initializer_range = initializer_range
         self.tie_word_embeddings = False
+        self.attn_backend = attn_backend
+        self.attn_compile = attn_compile
+        self.flex_block_size = flex_block_size
 
 
 ### Rotary Embeddings
@@ -274,11 +319,22 @@ class MultiHeadAttention(nn.Module):
         d_model: Model dimension
         n_heads: Number of attention heads
     """
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        attn_backend: str = "flex",
+        attn_compile: bool = True,
+        flex_block_size: int = 128,
+    ):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = self.d_model // self.n_heads
+        self.attn_backend = attn_backend
+        self.flex_block_size = flex_block_size
+        self.flex_attention = _resolve_flex_attention(attn_compile)
+        self._warned_flex_fallback = False
         self.layernorm_qkv = nn.Sequential(
             nn.LayerNorm(d_model), nn.Linear(d_model, d_model * 3, bias=False)
         )
@@ -297,7 +353,13 @@ class MultiHeadAttention(nn.Module):
         k = k.flatten(-2, -1)
         return q, k
 
-    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, output_attentions: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[object] = None,
+        output_attentions: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             x: Input tensor
@@ -328,9 +390,44 @@ class MultiHeadAttention(nn.Module):
             attn_weights = F.softmax(attn_weights, dim=-1)
             context_BHLD = torch.matmul(attn_weights, value_BHLD)
         else:
-            context_BHLD = F.scaled_dot_product_attention(
-                query_BHLD, key_BHLD, value_BHLD, attention_mask
+            sdpa_mask = None
+            if attention_mask is not None:
+                sdpa_mask = torch.zeros_like(attention_mask, dtype=query_BHLD.dtype)
+                sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
+            use_flex = (
+                self.attn_backend == "flex"
+                and self.flex_attention is not None
+                and (attention_mask is None or flex_block_mask is not None)
             )
+            if use_flex:
+                try:
+                    context_BHLD = self.flex_attention(
+                        query_BHLD,
+                        key_BHLD,
+                        value_BHLD,
+                        block_mask=flex_block_mask,
+                        enable_gqa=query_BHLD.shape[1] != key_BHLD.shape[1],
+                    )
+                except Exception as exc:
+                    if not self._warned_flex_fallback:
+                        warnings.warn(
+                            f"Flex attention failed in ESM++ attention; falling back to SDPA. Error: {exc}",
+                            RuntimeWarning,
+                        )
+                        self._warned_flex_fallback = True
+                    context_BHLD = F.scaled_dot_product_attention(
+                        query_BHLD,
+                        key_BHLD,
+                        value_BHLD,
+                        attn_mask=sdpa_mask,
+                    )
+            else:
+                context_BHLD = F.scaled_dot_product_attention(
+                    query_BHLD,
+                    key_BHLD,
+                    value_BHLD,
+                    attn_mask=sdpa_mask,
+                )
             
         context_BLD = rearrange(context_BHLD, "b h s d -> b s (h d)")
         output = self.out_proj(context_BLD)
@@ -372,9 +469,18 @@ class UnifiedTransformerBlock(nn.Module):
         residue_scaling_factor: float = 1,
         expansion_ratio: float = 8 / 3,
         dropout: float = 0.0,
+        attn_backend: str = "flex",
+        attn_compile: bool = True,
+        flex_block_size: int = 128,
     ):
         super().__init__()
-        self.attn = MultiHeadAttention(d_model, n_heads)
+        self.attn = MultiHeadAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            attn_backend=attn_backend,
+            attn_compile=attn_compile,
+            flex_block_size=flex_block_size,
+        )
         self.ffn = swiglu_ln_ffn(d_model, expansion_ratio)
         self.scaling_factor = residue_scaling_factor
         self.dropout = nn.Dropout(dropout)
@@ -383,6 +489,7 @@ class UnifiedTransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[object] = None,
         output_attentions: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
@@ -394,7 +501,12 @@ class UnifiedTransformerBlock(nn.Module):
         Returns:
             Output tensor after transformer block, and optionally attention weights
         """
-        attn_output, attn_weights = self.attn(x, attention_mask, output_attentions)
+        attn_output, attn_weights = self.attn(
+            x,
+            attention_mask,
+            flex_block_mask,
+            output_attentions,
+        )
         x = x + self.dropout(attn_output) / self.scaling_factor
         x = x + self.dropout(self.ffn(x)) / self.scaling_factor
         return x, attn_weights
@@ -435,8 +547,13 @@ class TransformerStack(nn.Module):
         n_heads: int,
         n_layers: int,
         dropout: float = 0.0,
+        attn_backend: str = "flex",
+        attn_compile: bool = True,
+        flex_block_size: int = 128,
     ):
         super().__init__()
+        self.attn_backend = attn_backend
+        self.flex_block_size = flex_block_size
         self.blocks = nn.ModuleList(
             [
                 UnifiedTransformerBlock(
@@ -444,6 +561,9 @@ class TransformerStack(nn.Module):
                     n_heads,
                     residue_scaling_factor=math.sqrt(n_layers / 36),
                     dropout=dropout,
+                    attn_backend=attn_backend,
+                    attn_compile=attn_compile,
+                    flex_block_size=flex_block_size,
                 )
                 for i in range(n_layers)
             ]
@@ -474,6 +594,13 @@ class TransformerStack(nn.Module):
         
         if attention_mask is not None:
             attention_mask = attention_mask[:, None, None, :].expand(batch_size, 1, seq_len, seq_len).bool()
+            if self.attn_backend == "flex" and create_block_mask is not None and not output_attentions:
+                token_attention_mask = attention_mask[:, 0, 0, :]
+                flex_block_mask = _create_pad_block_mask(token_attention_mask, self.flex_block_size)
+            else:
+                flex_block_mask = None
+        else:
+            flex_block_mask = None
             
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
@@ -481,10 +608,11 @@ class TransformerStack(nn.Module):
                     block.__call__,
                     x,
                     attention_mask,
+                    flex_block_mask,
                     output_attentions,
                 )
             else:
-                x, attn_weights = block(x, attention_mask, output_attentions)
+                x, attn_weights = block(x, attention_mask, flex_block_mask, output_attentions)
 
             if attentions is not None:
                 attentions += (attn_weights,)
@@ -501,7 +629,7 @@ class TransformerStack(nn.Module):
 
 
 ### Support for embedding datasets with low code
-class Pooler:
+class _LegacyPooler:
     def __init__(self, pooling_types: List[str]):
         self.pooling_types = pooling_types
         self.pooling_options = {
@@ -647,7 +775,7 @@ def build_collator(tokenizer) -> Callable[[list[str]], tuple[torch.Tensor, torch
     return _collate_fn
 
 
-class EmbeddingMixin:
+class _LegacyEmbeddingMixin:
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         raise NotImplementedError
 
@@ -808,6 +936,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
     config_class = ESMplusplusConfig
     base_model_prefix = "esm++"
     supports_gradient_checkpointing = True
+    all_tied_weights_keys = {}
 
     def _init_weights(self, module):
         """Initialize the weights"""
@@ -846,7 +975,15 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
-        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers, config.dropout)
+        self.transformer = TransformerStack(
+            d_model=config.hidden_size,
+            n_heads=config.num_attention_heads,
+            n_layers=config.num_hidden_layers,
+            dropout=config.dropout,
+            attn_backend=config.attn_backend,
+            attn_compile=config.attn_compile,
+            flex_block_size=config.flex_block_size,
+        )
         self.tokenizer = EsmSequenceTokenizer()
         self.init_weights()
 
@@ -900,7 +1037,15 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
         self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
-        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers, config.dropout)
+        self.transformer = TransformerStack(
+            d_model=config.hidden_size,
+            n_heads=config.num_attention_heads,
+            n_layers=config.num_hidden_layers,
+            dropout=config.dropout,
+            attn_backend=config.attn_backend,
+            attn_compile=config.attn_compile,
+            flex_block_size=config.flex_block_size,
+        )
         self.sequence_head = RegressionHead(config.hidden_size, self.vocab_size)
         self.ce_loss = nn.CrossEntropyLoss()
         self.tokenizer = EsmSequenceTokenizer()

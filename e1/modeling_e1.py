@@ -18,6 +18,7 @@ from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
 from tqdm.auto import tqdm
+from pooler import EmbeddingMixin, Pooler
 
 
 logger = logging.get_logger(__name__)
@@ -1356,7 +1357,7 @@ class DecoderLayer(nn.Module):
 
 
 ### Support for embedding datasets with low code
-class Pooler:
+class _LegacyPooler:
     def __init__(self, pooling_types: List[str]):
         self.pooling_types = pooling_types
         self.pooling_options = {
@@ -1483,7 +1484,7 @@ class Pooler:
         return torch.cat(final_emb, dim=-1) # (b, n_pooling_types * d)
 
 
-class EmbeddingMixin:
+class _LegacyEmbeddingMixin:
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         raise NotImplementedError
 
@@ -1632,6 +1633,7 @@ class E1PreTrainedModel(PreTrainedModel):
     _no_split_modules = ["DecoderLayer"]
     _transformer_layer_cls = [DecoderLayer]
     _skip_keys_device_placement = "past_key_values"
+    all_tied_weights_keys = {}
 
     def _init_weights(self, module: nn.Module) -> None:
         std = self.config.initializer_range
