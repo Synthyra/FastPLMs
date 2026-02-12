@@ -1,14 +1,16 @@
 import argparse
-import inspect
+import json
+import subprocess
+import sys
+import tempfile
 import time
 import urllib.request
-from collections.abc import Mapping
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Dict
 from typing import List
 from typing import Tuple
 
+import numpy as np
 import torch
 from transformers import AutoModel
 
@@ -33,13 +35,13 @@ def _download_checkpoint_if_needed(checkpoint_path: Path) -> Path:
 
 
 def _set_sequence_seed(seed: int, sequence_index: int) -> None:
-    per_sequence_seed = seed + sequence_index
-    set_seed(per_sequence_seed)
+    set_seed(seed + sequence_index)
 
 
 def _to_device(feats: Dict[str, torch.Tensor], device: torch.device, dtype: torch.dtype) -> Dict[str, torch.Tensor]:
     output: Dict[str, torch.Tensor] = {}
-    for key, value in feats.items():
+    for key in feats:
+        value = feats[key]
         if value.is_floating_point():
             output[key] = value.to(device=device, dtype=dtype)
         else:
@@ -49,17 +51,9 @@ def _to_device(feats: Dict[str, torch.Tensor], device: torch.device, dtype: torc
 
 def _clone_feats(feats: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
     output: Dict[str, torch.Tensor] = {}
-    for key, value in feats.items():
-        output[key] = value.clone()
+    for key in feats:
+        output[key] = feats[key].clone()
     return output
-
-
-def _vector_metrics(lhs: torch.Tensor, rhs: torch.Tensor) -> Tuple[float, float, float]:
-    diff = (lhs.float() - rhs.float()).abs()
-    mae = float(diff.mean().item())
-    rmse = float(torch.sqrt(torch.mean((lhs.float() - rhs.float()) ** 2)).item())
-    max_abs = float(diff.max().item())
-    return mae, rmse, max_abs
 
 
 def _summary_metric(value: torch.Tensor) -> torch.Tensor:
@@ -70,140 +64,156 @@ def _summary_metric(value: torch.Tensor) -> torch.Tensor:
     return value.reshape(value.shape[0], -1)[:, 0]
 
 
-def _compute_confidence_score(output: Dict[str, torch.Tensor]) -> torch.Tensor:
-    assert "complex_plddt" in output, "Missing complex_plddt in model output."
-    assert "iptm" in output, "Missing iptm in model output."
-    assert "ptm" in output, "Missing ptm in model output."
-    complex_plddt = _summary_metric(output["complex_plddt"])
-    iptm = _summary_metric(output["iptm"])
-    ptm = _summary_metric(output["ptm"])
+def _compute_confidence_score(ptm: torch.Tensor, iptm: torch.Tensor, complex_plddt: torch.Tensor) -> torch.Tensor:
     if torch.allclose(iptm, torch.zeros_like(iptm)):
         return (4 * complex_plddt + ptm) / 5
     return (4 * complex_plddt + iptm) / 5
 
 
-def _extract_primary_coordinates(output: Dict[str, torch.Tensor], atom_mask: torch.Tensor) -> torch.Tensor:
-    assert "sample_atom_coords" in output, "Missing sample_atom_coords in model output."
-    coords = output["sample_atom_coords"]
-    assert coords.ndim == 3, "Expected sample_atom_coords with shape [samples, atoms, 3]."
-    primary = coords[0]
-    valid = atom_mask > 0
-    return primary[valid]
+def _vector_metrics(lhs: torch.Tensor, rhs: torch.Tensor) -> Tuple[float, float, float]:
+    delta = lhs.float() - rhs.float()
+    abs_delta = torch.abs(delta)
+    mae = float(abs_delta.mean().item())
+    rmse = float(torch.sqrt(torch.mean(delta * delta)).item())
+    max_abs = float(abs_delta.max().item())
+    return mae, rmse, max_abs
 
 
-def _to_plain_python(value):
-    if isinstance(value, Mapping):
-        output = {}
-        for key in value:
-            output[key] = _to_plain_python(value[key])
-        return output
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [_to_plain_python(item) for item in value]
-    return value
+def _write_single_chain_fasta(sequence: str, path: Path) -> None:
+    text = f">A|protein|empty\n{sequence}\n"
+    path.write_text(text, encoding="utf-8")
 
 
-def _filter_kwargs_for_callable(callable_obj, kwargs: Dict[str, object], excluded: List[str] | None = None) -> Dict[str, object]:
-    signature = inspect.signature(callable_obj)
-    allowed = set(signature.parameters.keys())
-    if "self" in allowed:
-        allowed.remove("self")
-    if excluded is not None:
-        for key in excluded:
-            if key in allowed:
-                allowed.remove(key)
-
-    output: Dict[str, object] = {}
-    for key in kwargs:
-        if key in allowed:
-            output[key] = kwargs[key]
-    return output
-
-
-def _strip_prefix_from_state_dict(state_dict: Dict[str, torch.Tensor], prefix: str) -> Dict[str, torch.Tensor]:
-    output: Dict[str, torch.Tensor] = {}
-    for key in state_dict:
-        if key.startswith(prefix):
-            output[key[len(prefix):]] = state_dict[key]
-        else:
-            output[key] = state_dict[key]
-    return output
-
-
-def _choose_best_state_dict_for_model(model: torch.nn.Module, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-    target_keys = set(model.state_dict().keys())
-    candidates = [
-        state_dict,
-        _strip_prefix_from_state_dict(state_dict, "model."),
-        _strip_prefix_from_state_dict(state_dict, "module."),
-    ]
-
-    best = candidates[0]
-    best_match = -1
-    for candidate in candidates:
-        match_count = 0
-        for key in candidate:
-            if key in target_keys:
-                match_count += 1
-        if match_count > best_match:
-            best_match = match_count
-            best = candidate
-    return best
-
-
-def _load_reference_model(checkpoint_path: str, device: torch.device):
-    from boltz.model.models.boltz2 import Boltz2
-    from boltz.model.modules.diffusionv2 import AtomDiffusion
-    from boltz.model.modules.diffusionv2 import DiffusionModule
-
-    checkpoint = torch.load(checkpoint_path, map_location=str(device), weights_only=False)
-    assert isinstance(checkpoint, dict), "Expected checkpoint to deserialize to a dictionary."
-    assert "hyper_parameters" in checkpoint, "Checkpoint missing hyper_parameters."
-    assert "state_dict" in checkpoint, "Checkpoint missing state_dict."
-
-    hyper_parameters = _to_plain_python(checkpoint["hyper_parameters"])
-    assert isinstance(hyper_parameters, dict), "Expected hyper_parameters to be dict-like."
-    state_dict = checkpoint["state_dict"]
-    assert isinstance(state_dict, dict), "Expected state_dict to be a dictionary."
-
-    init_kwargs = _filter_kwargs_for_callable(Boltz2.__init__, hyper_parameters)
-    if "use_kernels" in inspect.signature(Boltz2.__init__).parameters:
-        init_kwargs["use_kernels"] = False
-
-    if "diffusion_process_args" in init_kwargs:
-        raw_diffusion_process_args = init_kwargs["diffusion_process_args"]
-        assert isinstance(raw_diffusion_process_args, dict), (
-            "Expected diffusion_process_args in hyper_parameters to be a dictionary."
+def _parse_pdb_atom_map(path: Path) -> Dict[Tuple[str, int, str], torch.Tensor]:
+    atom_map: Dict[Tuple[str, int, str], torch.Tensor] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not (line.startswith("ATOM") or line.startswith("HETATM")):
+            continue
+        atom_name = line[12:16].strip()
+        chain_id = line[21:22].strip()
+        residue_index = int(line[22:26])
+        x_val = float(line[30:38])
+        y_val = float(line[38:46])
+        z_val = float(line[46:54])
+        atom_map[(chain_id, residue_index, atom_name)] = torch.tensor(
+            [x_val, y_val, z_val],
+            dtype=torch.float32,
         )
-        init_kwargs["diffusion_process_args"] = _filter_kwargs_for_callable(
-            AtomDiffusion.__init__,
-            raw_diffusion_process_args,
-            excluded=["score_model_args", "compile_score"],
-        )
+    assert len(atom_map) > 0, f"No atoms parsed from reference PDB: {path}"
+    return atom_map
 
-    if "score_model_args" in init_kwargs:
-        raw_score_model_args = init_kwargs["score_model_args"]
-        assert isinstance(raw_score_model_args, dict), (
-            "Expected score_model_args in hyper_parameters to be a dictionary."
-        )
-        init_kwargs["score_model_args"] = _filter_kwargs_for_callable(
-            DiffusionModule.__init__,
-            raw_score_model_args,
-        )
 
-    model = Boltz2(**init_kwargs)
-    best_state_dict = _choose_best_state_dict_for_model(model, state_dict)
-    load_result = model.load_state_dict(best_state_dict, strict=False)
-    assert len(load_result.unexpected_keys) == 0, (
-        f"Unexpected keys when loading pip boltz reference checkpoint: {load_result.unexpected_keys[:10]}"
-    )
-    num_missing = len(load_result.missing_keys)
-    assert num_missing < 32, (
-        "Too many missing keys when loading pip boltz reference checkpoint. "
-        f"Missing count: {num_missing}"
+def _build_ours_atom_map(
+    sample_coords: torch.Tensor,
+    atom_mask: torch.Tensor,
+    atom_names: List[str],
+    atom_residue_index: List[int],
+    atom_chain_id: List[str],
+) -> Dict[Tuple[str, int, str], torch.Tensor]:
+    coords = sample_coords[0]
+    valid_coords = coords[atom_mask > 0]
+    assert valid_coords.shape[0] >= len(atom_names), (
+        "Our model returned fewer valid atom coordinates than template atoms."
     )
 
-    model = model.to(device).eval()
-    return model
+    atom_map: Dict[Tuple[str, int, str], torch.Tensor] = {}
+    for atom_idx in range(len(atom_names)):
+        key = (
+            atom_chain_id[atom_idx],
+            atom_residue_index[atom_idx] + 1,
+            atom_names[atom_idx],
+        )
+        atom_map[key] = valid_coords[atom_idx].float().cpu()
+    return atom_map
+
+
+def _run_boltz_cli_reference(
+    sequence: str,
+    sequence_index: int,
+    checkpoint_path: Path,
+    args: argparse.Namespace,
+    device: torch.device,
+) -> Tuple[Dict[Tuple[str, int, str], torch.Tensor], torch.Tensor, Dict[str, float]]:
+    with tempfile.TemporaryDirectory(prefix=f"boltz2_ref_{sequence_index}_") as tmp_dir_str:
+        tmp_dir = Path(tmp_dir_str)
+        fasta_path = tmp_dir / f"seq_{sequence_index}.fasta"
+        out_root = tmp_dir / "ref_out"
+        _write_single_chain_fasta(sequence=sequence, path=fasta_path)
+
+        accelerator = "gpu" if device.type == "cuda" else "cpu"
+        command = [
+            sys.executable,
+            "-m",
+            "boltz.main",
+            "predict",
+            str(fasta_path),
+            "--out_dir",
+            str(out_root),
+            "--model",
+            "boltz2",
+            "--checkpoint",
+            str(checkpoint_path),
+            "--recycling_steps",
+            str(args.recycling_steps),
+            "--sampling_steps",
+            str(args.num_sampling_steps),
+            "--diffusion_samples",
+            str(args.diffusion_samples),
+            "--seed",
+            str(args.seed + sequence_index),
+            "--override",
+            "--no_kernels",
+            "--output_format",
+            "pdb",
+            "--num_workers",
+            "0",
+            "--devices",
+            "1",
+            "--accelerator",
+            accelerator,
+        ]
+
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            stderr = completed.stderr[-4000:]
+            stdout = completed.stdout[-4000:]
+            raise RuntimeError(
+                "pip boltz CLI prediction failed.\n"
+                f"Command: {' '.join(command)}\n"
+                f"STDOUT tail:\n{stdout}\n"
+                f"STDERR tail:\n{stderr}"
+            )
+
+        results_root = out_root / f"boltz_results_{fasta_path.stem}" / "predictions"
+        assert results_root.exists(), f"Reference predictions directory not found: {results_root}"
+
+        pdb_candidates = sorted(results_root.rglob("*_model_0.pdb"))
+        plddt_candidates = sorted(results_root.rglob("plddt_*_model_0.npz"))
+        confidence_candidates = sorted(results_root.rglob("confidence_*_model_0.json"))
+
+        assert len(pdb_candidates) > 0, f"No reference model_0 PDB found under {results_root}"
+        assert len(plddt_candidates) > 0, f"No reference pLDDT npz found under {results_root}"
+        assert len(confidence_candidates) > 0, f"No reference confidence json found under {results_root}"
+
+        atom_map = _parse_pdb_atom_map(pdb_candidates[0])
+        with np.load(plddt_candidates[0]) as handle:
+            plddt = torch.tensor(handle["plddt"], dtype=torch.float32)
+        confidence_summary = json.loads(confidence_candidates[0].read_text(encoding="utf-8"))
+        for key in [
+            "ptm",
+            "iptm",
+            "complex_plddt",
+            "confidence_score",
+        ]:
+            assert key in confidence_summary, (
+                f"Reference confidence summary missing key '{key}' in {confidence_candidates[0]}"
+            )
+        return atom_map, plddt, confidence_summary
 
 
 def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
@@ -227,7 +237,6 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         dtype=dtype,
     )
     model = model.to(device).eval()
-    reference_model = _load_reference_model(str(checkpoint_path), device=device)
 
     rows: List[Dict[str, object]] = []
     overall_pass = True
@@ -245,19 +254,19 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
             "iptm_abs_diff": float("nan"),
             "complex_plddt_abs_diff": float("nan"),
             "confidence_score_abs_diff": float("nan"),
+            "shared_atoms": 0,
             "pass": False,
             "seconds": 0.0,
             "error": "",
         }
 
         try:
-            feats, _ = build_boltz2_features(
+            feats, template = build_boltz2_features(
                 amino_acid_sequence=sequence,
                 num_bins=model.config.num_bins,
                 atoms_per_window_queries=model.core.input_embedder.atom_encoder.atoms_per_window_queries,
             )
             feats_ours = _to_device(_clone_feats(feats), device=device, dtype=dtype)
-            feats_ref = _to_device(_clone_feats(feats), device=device, dtype=dtype)
 
             with torch.no_grad():
                 _set_sequence_seed(args.seed, sequence_index)
@@ -268,47 +277,78 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
                     diffusion_samples=args.diffusion_samples,
                     run_confidence_sequentially=args.run_confidence_sequentially,
                 )
-                _set_sequence_seed(args.seed, sequence_index)
-                out_ref = reference_model.forward(
-                    feats=feats_ref,
-                    recycling_steps=args.recycling_steps,
-                    num_sampling_steps=args.num_sampling_steps,
-                    diffusion_samples=args.diffusion_samples,
-                    run_confidence_sequentially=args.run_confidence_sequentially,
-                )
 
-            atom_mask = feats_ours["atom_pad_mask"][0]
-            coords_ours = _extract_primary_coordinates(out_ours, atom_mask)
-            coords_ref = _extract_primary_coordinates(out_ref, atom_mask)
-            coord_mae, coord_rmse, coord_max_abs = _vector_metrics(coords_ours, coords_ref)
+            ours_atom_map = _build_ours_atom_map(
+                sample_coords=out_ours["sample_atom_coords"].detach().cpu(),
+                atom_mask=feats_ours["atom_pad_mask"][0].detach().cpu(),
+                atom_names=template.atom_names,
+                atom_residue_index=template.atom_residue_index,
+                atom_chain_id=template.atom_chain_id,
+            )
+
+            ref_atom_map, ref_plddt, ref_confidence = _run_boltz_cli_reference(
+                sequence=sequence,
+                sequence_index=sequence_index,
+                checkpoint_path=checkpoint_path,
+                args=args,
+                device=device,
+            )
+
+            shared_keys = []
+            for key in ours_atom_map:
+                if key in ref_atom_map:
+                    shared_keys.append(key)
+            shared_keys.sort()
+            assert len(shared_keys) > 0, "No overlapping atom keys between our output and pip boltz CLI output."
+            row["shared_atoms"] = len(shared_keys)
+
+            ours_coords_stack = torch.stack([ours_atom_map[key] for key in shared_keys], dim=0)
+            ref_coords_stack = torch.stack([ref_atom_map[key] for key in shared_keys], dim=0)
+            coord_mae, coord_rmse, coord_max_abs = _vector_metrics(ours_coords_stack, ref_coords_stack)
             row["coord_mae"] = coord_mae
             row["coord_rmse"] = coord_rmse
             row["coord_max_abs"] = coord_max_abs
 
-            assert "plddt" in out_ours and "plddt" in out_ref, "Missing pLDDT output."
-            plddt_ours = _summary_metric(out_ours["plddt"])
-            plddt_ref = _summary_metric(out_ref["plddt"])
-            plddt_mae = float(torch.mean(torch.abs(plddt_ours.float() - plddt_ref.float())).item())
-            row["plddt_mae"] = plddt_mae
+            ours_plddt = _summary_metric(out_ours["plddt"]).float().cpu().reshape(-1)
+            ref_plddt = ref_plddt.float().cpu().reshape(-1)
+            assert ours_plddt.numel() == ref_plddt.numel(), (
+                f"pLDDT size mismatch (ours={ours_plddt.numel()}, ref={ref_plddt.numel()})."
+            )
+            row["plddt_mae"] = float(torch.mean(torch.abs(ours_plddt - ref_plddt)).item())
 
-            ptm_ours = _summary_metric(out_ours["ptm"])
-            ptm_ref = _summary_metric(out_ref["ptm"])
-            iptm_ours = _summary_metric(out_ours["iptm"])
-            iptm_ref = _summary_metric(out_ref["iptm"])
-            cplddt_ours = _summary_metric(out_ours["complex_plddt"])
-            cplddt_ref = _summary_metric(out_ref["complex_plddt"])
-            score_ours = _compute_confidence_score(out_ours)
-            score_ref = _compute_confidence_score(out_ref)
+            ours_ptm = _summary_metric(out_ours["ptm"]).float().cpu()
+            ours_iptm = _summary_metric(out_ours["iptm"]).float().cpu()
+            ours_complex_plddt = _summary_metric(out_ours["complex_plddt"]).float().cpu()
+            ours_confidence_score = _compute_confidence_score(
+                ptm=ours_ptm,
+                iptm=ours_iptm,
+                complex_plddt=ours_complex_plddt,
+            )
 
-            row["ptm_abs_diff"] = float(torch.mean(torch.abs(ptm_ours.float() - ptm_ref.float())).item())
-            row["iptm_abs_diff"] = float(torch.mean(torch.abs(iptm_ours.float() - iptm_ref.float())).item())
-            row["complex_plddt_abs_diff"] = float(torch.mean(torch.abs(cplddt_ours.float() - cplddt_ref.float())).item())
-            row["confidence_score_abs_diff"] = float(torch.mean(torch.abs(score_ours.float() - score_ref.float())).item())
+            ref_ptm = torch.tensor([float(ref_confidence["ptm"])], dtype=torch.float32)
+            ref_iptm = torch.tensor([float(ref_confidence["iptm"])], dtype=torch.float32)
+            ref_complex_plddt = torch.tensor(
+                [float(ref_confidence["complex_plddt"])],
+                dtype=torch.float32,
+            )
+            ref_confidence_score = torch.tensor(
+                [float(ref_confidence["confidence_score"])],
+                dtype=torch.float32,
+            )
+
+            row["ptm_abs_diff"] = float(torch.mean(torch.abs(ours_ptm - ref_ptm)).item())
+            row["iptm_abs_diff"] = float(torch.mean(torch.abs(ours_iptm - ref_iptm)).item())
+            row["complex_plddt_abs_diff"] = float(
+                torch.mean(torch.abs(ours_complex_plddt - ref_complex_plddt)).item()
+            )
+            row["confidence_score_abs_diff"] = float(
+                torch.mean(torch.abs(ours_confidence_score - ref_confidence_score)).item()
+            )
 
             row["pass"] = bool(
-                coord_mae <= args.coord_mae_threshold
-                and coord_rmse <= args.coord_rmse_threshold
-                and coord_max_abs <= args.coord_max_abs_threshold
+                row["coord_mae"] <= args.coord_mae_threshold
+                and row["coord_rmse"] <= args.coord_rmse_threshold
+                and row["coord_max_abs"] <= args.coord_max_abs_threshold
                 and row["plddt_mae"] <= args.plddt_mae_threshold
                 and row["ptm_abs_diff"] <= args.summary_metric_abs_threshold
                 and row["iptm_abs_diff"] <= args.summary_metric_abs_threshold
@@ -357,10 +397,11 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
     for row in rows:
         status = "PASS" if bool(row["pass"]) else "FAIL"
         summary_lines.append(
-            f"{status} | idx={row['sequence_index']} | coord_mae={row['coord_mae']} | "
-            f"coord_rmse={row['coord_rmse']} | coord_max={row['coord_max_abs']} | "
-            f"plddt_mae={row['plddt_mae']} | ptm_diff={row['ptm_abs_diff']} | "
-            f"iptm_diff={row['iptm_abs_diff']} | cplddt_diff={row['complex_plddt_abs_diff']} | "
+            f"{status} | idx={row['sequence_index']} | shared_atoms={row['shared_atoms']} | "
+            f"coord_mae={row['coord_mae']} | coord_rmse={row['coord_rmse']} | "
+            f"coord_max={row['coord_max_abs']} | plddt_mae={row['plddt_mae']} | "
+            f"ptm_diff={row['ptm_abs_diff']} | iptm_diff={row['iptm_abs_diff']} | "
+            f"cplddt_diff={row['complex_plddt_abs_diff']} | "
             f"score_diff={row['confidence_score_abs_diff']} | error={row['error']}"
         )
     write_summary(output_dir / "summary.txt", summary_lines)
@@ -372,7 +413,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run Boltz2 compliance test against pip boltz reference.")
+    parser = argparse.ArgumentParser(description="Run Boltz2 compliance test against pip boltz CLI outputs.")
     parser.add_argument("--token", type=str, default=None)
     parser.add_argument("--repo-id", type=str, default="Synthyra/Boltz2")
     parser.add_argument("--checkpoint-path", type=str, default="boltz_automodel/weights/boltz2_conf.ckpt")
