@@ -3,12 +3,11 @@ import torch
 import copy
 from functools import cache
 from pathlib import Path
-from huggingface_hub import snapshot_download, login
+from huggingface_hub import HfApi, snapshot_download, login
 
 from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM, ESMplusplusConfig
 
 
-@staticmethod
 @cache
 def data_root(model: str):
     if "INFRA_PROVIDER" in os.environ:
@@ -36,6 +35,7 @@ def ESMplusplus_300M(device: torch.device | str = "cpu"):
         map_location=device,
     )
     model.load_state_dict(state_dict)
+    model.sequence_head = copy.deepcopy(model.sequence_head)
     return model
 
 
@@ -52,11 +52,21 @@ def ESMplusplus_600M(device: torch.device | str = "cpu"):
         map_location=device,
     )
     model.load_state_dict(state_dict)
+    model.sequence_head = copy.deepcopy(model.sequence_head)
     return model
 
 
 if __name__ == "__main__":
-    #login()
+    # py -m esm_plusplus.get_esmc_weights
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--token', type=str, default=None)
+    args = parser.parse_args()
+    api = HfApi()
+
+    if args.token:
+        login(token=args.token)
     
     model_dict = {
         # Synthyra/ESM++small
@@ -76,4 +86,18 @@ if __name__ == "__main__":
             "AutoModelForSequenceClassification": "modeling_esm_plusplus.ESMplusplusForSequenceClassification",
             "AutoModelForTokenClassification": "modeling_esm_plusplus.ESMplusplusForTokenClassification"
         }
+        tokenizer = model.tokenizer
+        tokenizer.push_to_hub(model_path)
         model.push_to_hub(model_path)
+        api.upload_file(
+            path_or_fileobj="esm_plusplus/modeling_esm_plusplus.py",
+            path_in_repo="modeling_esm_plusplus.py",
+            repo_id=model_path,
+            repo_type="model",
+        )
+        api.upload_file(
+            path_or_fileobj="embedding_mixin.py",
+            path_in_repo="embedding_mixin.py",
+            repo_id=model_path,
+            repo_type="model",
+        )

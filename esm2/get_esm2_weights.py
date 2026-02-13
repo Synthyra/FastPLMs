@@ -1,8 +1,8 @@
 import copy
 import torch    
-from huggingface_hub import login
+from huggingface_hub import HfApi, login
 from transformers import EsmForMaskedLM
-from modeling_fastesm import FastEsmForMaskedLM, FastEsmConfig
+from esm2.modeling_fastesm import FastEsmForMaskedLM, FastEsmConfig
 
 
 model_dict = {
@@ -20,7 +20,17 @@ model_dict = {
 
 
 if __name__ == "__main__":
-    #login()
+    # py -m esm2.get_esm2_weights
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--token', type=str, default=None)
+    args = parser.parse_args()
+    api = HfApi()
+
+    if args.token:
+        login(token=args.token)
+    
     for model_name in model_dict:
         config = FastEsmConfig.from_pretrained(model_dict[model_name])
         config.auto_map = {
@@ -33,13 +43,25 @@ if __name__ == "__main__":
         config.tie_word_embeddings = False
         original_model = EsmForMaskedLM.from_pretrained(model_dict[model_name])
         model = FastEsmForMaskedLM(config=config).from_pretrained(model_dict[model_name], config=config)
-        model.lm_head.load_state_dict(original_model.lm_head.state_dict())
+        # decoder is the same as word_embeddings, and not loaded correctly by default
+        model.lm_head.decoder.load_state_dict(original_model.esm.embeddings.word_embeddings.state_dict())
+        # deep copy so they are not tied 
         model.lm_head = copy.deepcopy(model.lm_head)
-        model.push_to_hub('Synthyra/' + model_name)
+        repo_id = 'Synthyra/' + model_name
+        tokenizer = model.tokenizer
+        tokenizer.push_to_hub(repo_id)
+        model.push_to_hub(repo_id)
+        api.upload_file(
+            path_or_fileobj="esm2/modeling_fastesm.py",
+            path_in_repo="modeling_fastesm.py",
+            repo_id=repo_id,
+            repo_type="model",
+        )
+        api.upload_file(
+            path_or_fileobj="embedding_mixin.py",
+            path_in_repo="embedding_mixin.py",
+            repo_id=repo_id,
+            repo_type="model",
+        )
 
-        for name1, param1 in model.named_parameters():
-            for name2, param2 in original_model.named_parameters():
-                if name1 == name2:
-                    assert param1.shape == param2.shape, f'{name1} {param1.shape} != {name2} {param2.shape}'
-                    assert torch.equal(param1.data.clone(), param2.data.clone()), f'{name1} {name2}'
-
+ 

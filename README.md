@@ -6,8 +6,89 @@ FastPLMs is an open-source effort to increase the efficiency of pretrained prote
 
 All models can be loaded from Huggingface 🤗 transformers via `AutoModel`, this repository does not need to be cloned for most use cases.
 
+## Attention backend defaults
+Flex Attention with a block mask that ignores pad tokens is now the default attention backend. If Flex Attention is not available in your environment, models fall back to native PyTorch attention.
+
+For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when running with Flex Attention.
+
 ## Supported models
 The currently supported models can be found [here](https://huggingface.co/collections/Synthyra/pretrained-plms-675351ecc050f63baedd77de).
+
+## Testing suite
+
+The testing workflow is now CLI-first under `test_scripts/` with clean, structured outputs.
+
+### Main test entrypoints
+
+- Compliance and correctness checks:
+  - `py -m test_scripts.run_compliance`
+- Boltz2 compliance vs pip boltz reference:
+  - `py -m test_scripts.run_boltz2_compliance`
+- Embedding mixin behavior checks:
+  - `py -m test_scripts.run_embedding`
+- Throughput and memory benchmarks:
+  - `py -m test_scripts.run_throughput`
+- Run everything in one command:
+  - `py -m test_scripts.run_all`
+
+By default, each suite runs one representative checkpoint per family (`E1`, `ESM2`, `ESMplusplus`).
+
+### Common options
+
+- Run full checkpoint coverage:
+  - `--full-models`
+- Restrict to specific families:
+  - `--families e1 esm2 esmplusplus`
+- Select device and dtype:
+  - `--device auto|cpu|cuda`
+  - `--dtype auto|float32|float16|bfloat16`
+- Set a custom output directory:
+  - `--output-dir <path>`
+- Quick wiring check without loading models:
+  - `--dry-run`
+
+### Output artifacts
+
+Each suite writes professional artifacts to:
+
+- Default: `test_scripts/results/<timestamp>/<suite>/`
+- Files:
+  - `metrics.json` (full structured metrics)
+  - `metrics.csv` (tabular summary)
+  - `summary.txt` (human-readable pass/fail summary)
+  - `*.png` plots saved at 300 dpi
+
+### Useful examples
+
+- Full run with all model checkpoints:
+  - `py -m test_scripts.run_all --full-models`
+- Throughput benchmark on CUDA:
+  - `py -m test_scripts.run_throughput --device cuda --lengths 64,128,256 --batch-sizes 1,2,4`
+- Embedding validation for ESM2 only:
+  - `py -m test_scripts.run_embedding --families esm2`
+- Compliance checks with output directory override:
+  - `py -m test_scripts.run_compliance --output-dir test_scripts/results/manual_compliance`
+
+### Docker-first testing
+
+Build the image:
+
+- `docker build -t fastplms-test -f Dockerfile .`
+
+Run tests inside the container from your checked-out repo:
+
+- `docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test python ...`
+
+Inside the container (`/workspace`):
+
+- Boltz2 compliance (3 sequences, 3 recycles, 200 diffusion steps, 1 sample):
+  - `python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1 --pass-coord-metric aligned --write-cif-artifacts`
+- Full suite (including Boltz2 compliance):
+  - `python -m test_scripts.run_all --device cuda --compliance-dtype float32`
+
+Boltz2 compliance writes per-sequence CIF artifacts for both predictions under:
+- `test_scripts/results/<timestamp>/boltz2_compliance/structures/seq_<idx>/ours_seq<idx>.cif`
+- `test_scripts/results/<timestamp>/boltz2_compliance/structures/seq_<idx>/ref_seq<idx>.cif`
 
 ## Suggestions
 Have suggestions, comments, or requests? Found a bug? Open a GitHub issue and we'll respond soon.

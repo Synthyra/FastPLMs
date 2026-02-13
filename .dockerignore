@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Results and logs
+results/
+*.log
+optimization_logs/
+
+# Models and data (these can be large)
+models/
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.parquet
+
+# Databases
+*.db
+*.sqlite
+
+# Text files
+# Include only requirements.txt or similarly named requirements files, ignore all other .txt files
+*.txt
+!requirements*.txt
+*.csv
+*.tsv
+*.json
+
+# Structure files
+*.cif
+*.pdb
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Git
+.git/
+.gitignore
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache
+.cache/
+*.cache
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+

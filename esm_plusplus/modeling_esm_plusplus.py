@@ -10,24 +10,60 @@ License: https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-licen
 
 import math
 import os
+import warnings
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import networkx as nx
 from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
-from typing import Optional, Tuple, Union, List, Callable, Dict
+from typing import Optional, Tuple, Union, List
 from einops import rearrange, repeat
 from huggingface_hub import snapshot_download
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
-from torch.utils.data import Dataset as TorchDataset
-from torch.utils.data import DataLoader
-from tqdm.auto import tqdm
-from transformers import PreTrainedModel, PreTrainedTokenizerFast, PreTrainedTokenizerBase, PretrainedConfig
+from transformers import PreTrainedModel, PreTrainedTokenizerFast, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
+
+from .embedding_mixin import EmbeddingMixin, Pooler
+
+try:
+    from torch.nn.attention.flex_attention import create_block_mask
+    from torch.nn.attention.flex_attention import flex_attention as _raw_flex_attention
+except ImportError:
+    create_block_mask = None
+    _raw_flex_attention = None
+
+
+def _resolve_flex_attention(attn_compile: bool):
+    if _raw_flex_attention is None:
+        return None
+    if not attn_compile:
+        return _raw_flex_attention
+    try:
+        return torch.compile(_raw_flex_attention, dynamic=True)
+    except Exception:
+        return _raw_flex_attention
+
+
+def _create_pad_block_mask(attention_mask_2d: torch.Tensor, block_size: int):
+    assert create_block_mask is not None, "Flex attention block mask requires create_block_mask."
+    token_valid = attention_mask_2d.bool()
+    batch_size, seq_len = token_valid.shape
+
+    def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+        return token_valid[batch_idx, q_idx] & token_valid[batch_idx, kv_idx]
+
+    return create_block_mask(
+        mask_mod,
+        batch_size,
+        1,
+        seq_len,
+        seq_len,
+        device=attention_mask_2d.device,
+        BLOCK_SIZE=block_size,
+    )
 
 
 class ESMplusplusConfig(PretrainedConfig):
@@ -52,6 +88,9 @@ class ESMplusplusConfig(PretrainedConfig):
         problem_type: str | None = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
+        attn_backend: str = "flex",
+        attn_compile: bool = True,
+        flex_block_size: int = 128,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -64,6 +103,9 @@ class ESMplusplusConfig(PretrainedConfig):
         self.dropout = dropout
         self.initializer_range = initializer_range
         self.tie_word_embeddings = False
+        self.attn_backend = attn_backend
+        self.attn_compile = attn_compile
+        self.flex_block_size = flex_block_size
 
 
 ### Rotary Embeddings
@@ -274,11 +316,22 @@ class MultiHeadAttention(nn.Module):
         d_model: Model dimension
         n_heads: Number of attention heads
     """
-    def __init__(self, d_model: int, n_heads: int):
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        attn_backend: str = "flex",
+        attn_compile: bool = True,
+        flex_block_size: int = 128,
+    ):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = self.d_model // self.n_heads
+        self.attn_backend = attn_backend
+        self.flex_block_size = flex_block_size
+        self.flex_attention = _resolve_flex_attention(attn_compile)
+        self._warned_flex_fallback = False
         self.layernorm_qkv = nn.Sequential(
             nn.LayerNorm(d_model), nn.Linear(d_model, d_model * 3, bias=False)
         )
@@ -297,7 +350,13 @@ class MultiHeadAttention(nn.Module):
         k = k.flatten(-2, -1)
         return q, k
 
-    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, output_attentions: bool = False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[object] = None,
+        output_attentions: bool = False,
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             x: Input tensor
@@ -328,9 +387,44 @@ class MultiHeadAttention(nn.Module):
             attn_weights = F.softmax(attn_weights, dim=-1)
             context_BHLD = torch.matmul(attn_weights, value_BHLD)
         else:
-            context_BHLD = F.scaled_dot_product_attention(
-                query_BHLD, key_BHLD, value_BHLD, attention_mask
+            sdpa_mask = None
+            if attention_mask is not None:
+                sdpa_mask = torch.zeros_like(attention_mask, dtype=query_BHLD.dtype)
+                sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
+            use_flex = (
+                self.attn_backend == "flex"
+                and self.flex_attention is not None
+                and (attention_mask is None or flex_block_mask is not None)
             )
+            if use_flex:
+                try:
+                    context_BHLD = self.flex_attention(
+                        query_BHLD,
+                        key_BHLD,
+                        value_BHLD,
+                        block_mask=flex_block_mask,
+                        enable_gqa=query_BHLD.shape[1] != key_BHLD.shape[1],
+                    )
+                except Exception as exc:
+                    if not self._warned_flex_fallback:
+                        warnings.warn(
+                            f"Flex attention failed in ESM++ attention; falling back to SDPA. Error: {exc}",
+                            RuntimeWarning,
+                        )
+                        self._warned_flex_fallback = True
+                    context_BHLD = F.scaled_dot_product_attention(
+                        query_BHLD,
+                        key_BHLD,
+                        value_BHLD,
+                        attn_mask=sdpa_mask,
+                    )
+            else:
+                context_BHLD = F.scaled_dot_product_attention(
+                    query_BHLD,
+                    key_BHLD,
+                    value_BHLD,
+                    attn_mask=sdpa_mask,
+                )
             
         context_BLD = rearrange(context_BHLD, "b h s d -> b s (h d)")
         output = self.out_proj(context_BLD)
@@ -372,9 +466,18 @@ class UnifiedTransformerBlock(nn.Module):
         residue_scaling_factor: float = 1,
         expansion_ratio: float = 8 / 3,
         dropout: float = 0.0,
+        attn_backend: str = "flex",
+        attn_compile: bool = True,
+        flex_block_size: int = 128,
     ):
         super().__init__()
-        self.attn = MultiHeadAttention(d_model, n_heads)
+        self.attn = MultiHeadAttention(
+            d_model=d_model,
+            n_heads=n_heads,
+            attn_backend=attn_backend,
+            attn_compile=attn_compile,
+            flex_block_size=flex_block_size,
+        )
         self.ffn = swiglu_ln_ffn(d_model, expansion_ratio)
         self.scaling_factor = residue_scaling_factor
         self.dropout = nn.Dropout(dropout)
@@ -383,6 +486,7 @@ class UnifiedTransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[object] = None,
         output_attentions: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
@@ -394,7 +498,12 @@ class UnifiedTransformerBlock(nn.Module):
         Returns:
             Output tensor after transformer block, and optionally attention weights
         """
-        attn_output, attn_weights = self.attn(x, attention_mask, output_attentions)
+        attn_output, attn_weights = self.attn(
+            x,
+            attention_mask,
+            flex_block_mask,
+            output_attentions,
+        )
         x = x + self.dropout(attn_output) / self.scaling_factor
         x = x + self.dropout(self.ffn(x)) / self.scaling_factor
         return x, attn_weights
@@ -435,8 +544,13 @@ class TransformerStack(nn.Module):
         n_heads: int,
         n_layers: int,
         dropout: float = 0.0,
+        attn_backend: str = "flex",
+        attn_compile: bool = True,
+        flex_block_size: int = 128,
     ):
         super().__init__()
+        self.attn_backend = attn_backend
+        self.flex_block_size = flex_block_size
         self.blocks = nn.ModuleList(
             [
                 UnifiedTransformerBlock(
@@ -444,6 +558,9 @@ class TransformerStack(nn.Module):
                     n_heads,
                     residue_scaling_factor=math.sqrt(n_layers / 36),
                     dropout=dropout,
+                    attn_backend=attn_backend,
+                    attn_compile=attn_compile,
+                    flex_block_size=flex_block_size,
                 )
                 for i in range(n_layers)
             ]
@@ -474,6 +591,13 @@ class TransformerStack(nn.Module):
         
         if attention_mask is not None:
             attention_mask = attention_mask[:, None, None, :].expand(batch_size, 1, seq_len, seq_len).bool()
+            if self.attn_backend == "flex" and create_block_mask is not None and not output_attentions:
+                token_attention_mask = attention_mask[:, 0, 0, :]
+                flex_block_mask = _create_pad_block_mask(token_attention_mask, self.flex_block_size)
+            else:
+                flex_block_mask = None
+        else:
+            flex_block_mask = None
             
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
@@ -481,10 +605,11 @@ class TransformerStack(nn.Module):
                     block.__call__,
                     x,
                     attention_mask,
+                    flex_block_mask,
                     output_attentions,
                 )
             else:
-                x, attn_weights = block(x, attention_mask, output_attentions)
+                x, attn_weights = block(x, attention_mask, flex_block_mask, output_attentions)
 
             if attentions is not None:
                 attentions += (attn_weights,)
@@ -500,307 +625,6 @@ class TransformerStack(nn.Module):
         )
 
 
-### Support for embedding datasets with low code
-class Pooler:
-    def __init__(self, pooling_types: List[str]):
-        self.pooling_types = pooling_types
-        self.pooling_options = {
-            'mean': self.mean_pooling,
-            'max': self.max_pooling,
-            'norm': self.norm_pooling,
-            'median': self.median_pooling,
-            'std': self.std_pooling,
-            'var': self.var_pooling,
-            'cls': self.cls_pooling,
-            'parti': self._pool_parti,
-        }
-
-    def _create_pooled_matrices_across_layers(self, attentions: torch.Tensor) -> torch.Tensor:
-        maxed_attentions = torch.max(attentions, dim=1)[0]
-        return maxed_attentions
-
-    def _page_rank(self, attention_matrix, personalization=None, nstart=None, prune_type="top_k_outdegree"):
-        # Run PageRank on the attention matrix converted to a graph.
-        # Raises exceptions if the graph doesn't match the token sequence or has no edges.
-        # Returns the PageRank scores for each token node.
-        G = self._convert_to_graph(attention_matrix)
-        if G.number_of_nodes() != attention_matrix.shape[0]:
-            raise Exception(
-                f"The number of nodes in the graph should be equal to the number of tokens in sequence! You have {G.number_of_nodes()} nodes for {attention_matrix.shape[0]} tokens.")
-        if G.number_of_edges() == 0:
-            raise Exception(f"You don't seem to have any attention edges left in the graph.")
-
-        return nx.pagerank(G, alpha=0.85, tol=1e-06, weight='weight', personalization=personalization, nstart=nstart, max_iter=100)
-
-    def _convert_to_graph(self, matrix):
-        # Convert a matrix (e.g., attention scores) to a directed graph using networkx.
-        # Each element in the matrix represents a directed edge with a weight.
-        G = nx.from_numpy_array(matrix, create_using=nx.DiGraph)
-        return G
-
-    def _calculate_importance_weights(self, dict_importance, attention_mask: Optional[torch.Tensor] = None):
-        # Remove keys where attention_mask is 0
-        if attention_mask is not None:
-            for k in list(dict_importance.keys()):
-                if attention_mask[k] == 0:
-                    del dict_importance[k]
-
-        #dict_importance[0] # remove cls
-        #dict_importance[-1] # remove eos
-        total = sum(dict_importance.values())
-        return np.array([v / total for _, v in dict_importance.items()])
-
-    def _pool_parti(self, emb: torch.Tensor, attentions: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
-        maxed_attentions = self._create_pooled_matrices_across_layers(attentions).numpy()
-        # emb is (b, L, d), maxed_attentions is (b, L, L)
-        emb_pooled = []
-        for e, a, mask in zip(emb, maxed_attentions, attention_mask):
-            dict_importance = self._page_rank(a)
-            importance_weights = self._calculate_importance_weights(dict_importance, mask)
-            num_tokens = int(mask.sum().item())
-            emb_pooled.append(np.average(e[:num_tokens], weights=importance_weights, axis=0))
-        pooled = torch.tensor(np.array(emb_pooled))
-        return pooled
-
-    def mean_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
-        if attention_mask is None:
-            return emb.mean(dim=1)
-        else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (emb * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
-
-    def max_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
-        if attention_mask is None:
-            return emb.max(dim=1).values
-        else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (emb * attention_mask).max(dim=1).values
-
-    def norm_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
-        if attention_mask is None:
-            return emb.norm(dim=1, p=2)
-        else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (emb * attention_mask).norm(dim=1, p=2)
-
-    def median_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
-        if attention_mask is None:
-            return emb.median(dim=1).values
-        else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (emb * attention_mask).median(dim=1).values
-    
-    def std_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
-        if attention_mask is None:
-            return emb.std(dim=1)
-        else:
-            # Compute variance correctly over non-masked positions, then take sqrt
-            var = self.var_pooling(emb, attention_mask, **kwargs)
-            return torch.sqrt(var)
-    
-    def var_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
-        if attention_mask is None:
-            return emb.var(dim=1)
-        else:
-            # Correctly compute variance over only non-masked positions
-            attention_mask = attention_mask.unsqueeze(-1)  # (b, L, 1)
-            # Compute mean over non-masked positions
-            mean = (emb * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)  # (b, d)
-            mean = mean.unsqueeze(1)  # (b, 1, d)
-            # Compute squared differences from mean, only over non-masked positions
-            squared_diff = (emb - mean) ** 2  # (b, L, d)
-            # Sum squared differences over non-masked positions and divide by count
-            var = (squared_diff * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)  # (b, d)
-            return var
-
-    def cls_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
-        return emb[:, 0, :]
-
-    def __call__(
-            self,
-            emb: torch.Tensor,
-            attention_mask: Optional[torch.Tensor] = None,
-            attentions: Optional[torch.Tensor] = None
-        ): # [mean, max]
-        final_emb = []
-        for pooling_type in self.pooling_types:
-            final_emb.append(self.pooling_options[pooling_type](emb=emb, attention_mask=attention_mask, attentions=attentions)) # (b, d)
-        return torch.cat(final_emb, dim=-1) # (b, n_pooling_types * d)
-
-
-class ProteinDataset(TorchDataset):
-    """Simple dataset for protein sequences."""
-    def __init__(self, sequences: list[str]):
-        self.sequences = sequences
-
-    def __len__(self) -> int:
-        return len(self.sequences)
-
-    def __getitem__(self, idx: int) -> str:
-        return self.sequences[idx]
-
-
-def build_collator(tokenizer) -> Callable[[list[str]], tuple[torch.Tensor, torch.Tensor]]:
-    def _collate_fn(sequences: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
-        """Collate function for batching sequences."""
-        return tokenizer(sequences, return_tensors="pt", padding='longest')
-    return _collate_fn
-
-
-class EmbeddingMixin:
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        raise NotImplementedError
-
-    @property
-    def device(self) -> torch.device:
-        """Get the device of the model."""
-        return next(self.parameters()).device
-
-    def _read_sequences_from_db(self, db_path: str) -> set[str]:
-        """Read sequences from SQLite database."""
-        import sqlite3
-        sequences = []
-        with sqlite3.connect(db_path) as conn:
-            c = conn.cursor()
-            c.execute("SELECT sequence FROM embeddings")
-            while True:
-                row = c.fetchone()
-                if row is None:
-                    break
-                sequences.append(row[0])
-        return set(sequences)
-
-    def embed_dataset(
-        self,
-        sequences: List[str],
-        tokenizer: PreTrainedTokenizerBase,
-        batch_size: int = 2,
-        max_len: int = 512,
-        truncate: bool = True,
-        full_embeddings: bool = False,
-        embed_dtype: torch.dtype = torch.float32,
-        pooling_types: List[str] = ['mean'],
-        num_workers: int = 0,
-        sql: bool = False,
-        save: bool = True,
-        sql_db_path: str = 'embeddings.db',
-        save_path: str = 'embeddings.pth',
-        **kwargs,
-    ) -> Optional[dict[str, torch.Tensor]]:
-        """Embed a dataset of protein sequences.
-        
-        Args:
-            sequences: List of protein sequences
-            batch_size: Batch size for processing
-            max_len: Maximum sequence length
-            full_embeddings: Whether to return full residue-wise (True) embeddings or pooled (False)
-            pooling_type: Type of pooling ('mean' or 'cls')
-            num_workers: Number of workers for data loading, 0 for the main process
-            sql: Whether to store embeddings in SQLite database - will be stored in float32
-            sql_db_path: Path to SQLite database
-            
-        Returns:
-            Dictionary mapping sequences to embeddings, or None if sql=True
-
-        Note:
-            - If sql=True, embeddings can only be stored in float32
-            - sql is ideal if you need to stream a very large dataset for training in real-time
-            - save=True is ideal if you can store the entire embedding dictionary in RAM
-            - sql will be used if it is True and save is True or False
-            - If your sql database or .pth file is already present, they will be scanned first for already embedded sequences
-            - Sequences will be truncated to max_len and sorted by length in descending order for faster processing
-
-        Example:
-            >>> embedder = EmbeddingMixin()
-            >>> embedding_dict = embedder.embed_dataset(
-                sequences=[
-                    'MALWMRLLPLLALLALWGPDPAAA', ... # list of protein sequences
-                ],
-                batch_size=2, # adjust for your GPU memory
-                max_len=512, # adjust for your needs
-                full_embeddings=False, # if True, no pooling is performed
-                embed_dtype=torch.float32, # cast to what dtype you want
-                pooling_type=['mean', 'cls'], # more than one pooling type will be concatenated together
-                num_workers=0, # if you have many cpu cores, we find that num_workers = 4 is fast for large datasets
-                sql=False, # if True, embeddings will be stored in SQLite database
-                sql_db_path='embeddings.db',
-                save=True, # if True, embeddings will be saved as a .pth file
-                save_path='embeddings.pth',
-            )
-            >>> # embedding_dict is a dictionary mapping sequences to their embeddings as tensors for .pth or numpy arrays for sql
-        """
-        sequences = list(set([seq[:max_len] if truncate else seq for seq in sequences]))
-        sequences = sorted(sequences, key=len, reverse=True)
-        hidden_size = self.config.hidden_size
-        collate_fn = build_collator(tokenizer)
-        device = self.device
-        pooler = Pooler(pooling_types) if not full_embeddings else None
-
-        def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-            if full_embeddings or residue_embeddings.ndim == 2: # if already pooled or want residue-wise embeddings
-                return residue_embeddings
-            else:
-                return pooler(residue_embeddings, attention_mask)
-
-        if sql:
-            import sqlite3
-            conn = sqlite3.connect(sql_db_path)
-            c = conn.cursor()
-            c.execute('CREATE TABLE IF NOT EXISTS embeddings (sequence text PRIMARY KEY, embedding blob)')
-            already_embedded = self._read_sequences_from_db(sql_db_path)
-            to_embed = [seq for seq in sequences if seq not in already_embedded]
-            print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
-            print(f"Embedding {len(to_embed)} new sequences")
-            if len(to_embed) > 0:
-                dataset = ProteinDataset(to_embed)
-                dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, shuffle=False)
-                with torch.no_grad():
-                    for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
-                        seqs = to_embed[i * batch_size:(i + 1) * batch_size]
-                        input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
-                        residue_embeddings = self._embed(input_ids, attention_mask).float() # sql requires float32
-                        embeddings = get_embeddings(residue_embeddings, attention_mask)
-                        for seq, emb, mask in zip(seqs, embeddings, attention_mask):
-                            if full_embeddings:
-                                emb = emb[mask.bool()].reshape(-1, hidden_size)
-                            c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", (seq, emb.cpu().numpy().tobytes()))
-                        
-                        if (i + 1) % 100 == 0:
-                            conn.commit()
-            
-                conn.commit()
-            conn.close()
-            return None
-
-        embeddings_dict = {}
-        if os.path.exists(save_path):
-            embeddings_dict = torch.load(save_path, map_location='cpu', weights_only=True)
-            to_embed = [seq for seq in sequences if seq not in embeddings_dict]
-            print(f"Found {len(embeddings_dict)} already embedded sequences in {save_path}")
-            print(f"Embedding {len(to_embed)} new sequences")
-        else:
-            to_embed = sequences
-            print(f"Embedding {len(to_embed)} new sequences")
-
-        if len(to_embed) > 0:
-            dataset = ProteinDataset(to_embed)
-            dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, shuffle=False)
-            with torch.no_grad():
-                for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
-                    seqs = to_embed[i * batch_size:(i + 1) * batch_size]
-                    input_ids, attention_mask = batch['input_ids'].to(device), batch['attention_mask'].to(device)
-                    residue_embeddings = self._embed(input_ids, attention_mask)
-                    embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
-                    for seq, emb, mask in zip(seqs, embeddings, attention_mask):
-                        if full_embeddings:
-                            emb = emb[mask.bool()].reshape(-1, hidden_size)
-                        embeddings_dict[seq] = emb.cpu()
-
-        if save:
-            torch.save(embeddings_dict, save_path)
-
-        return embeddings_dict
-
 class PreTrainedESMplusplusModel(PreTrainedModel):
     """
     init weights for ESM++ models
@@ -808,6 +632,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
     config_class = ESMplusplusConfig
     base_model_prefix = "esm++"
     supports_gradient_checkpointing = True
+    all_tied_weights_keys = {}
 
     def _init_weights(self, module):
         """Initialize the weights"""
@@ -846,7 +671,15 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
-        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers, config.dropout)
+        self.transformer = TransformerStack(
+            d_model=config.hidden_size,
+            n_heads=config.num_attention_heads,
+            n_layers=config.num_hidden_layers,
+            dropout=config.dropout,
+            attn_backend=config.attn_backend,
+            attn_compile=config.attn_compile,
+            flex_block_size=config.flex_block_size,
+        )
         self.tokenizer = EsmSequenceTokenizer()
         self.init_weights()
 
@@ -900,7 +733,15 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
         self.config = config
         self.vocab_size = config.vocab_size
         self.embed = nn.Embedding(self.vocab_size, config.hidden_size)
-        self.transformer = TransformerStack(config.hidden_size, config.num_attention_heads, config.num_hidden_layers, config.dropout)
+        self.transformer = TransformerStack(
+            d_model=config.hidden_size,
+            n_heads=config.num_attention_heads,
+            n_layers=config.num_hidden_layers,
+            dropout=config.dropout,
+            attn_backend=config.attn_backend,
+            attn_compile=config.attn_compile,
+            flex_block_size=config.flex_block_size,
+        )
         self.sequence_head = RegressionHead(config.hidden_size, self.vocab_size)
         self.ce_loss = nn.CrossEntropyLoss()
         self.tokenizer = EsmSequenceTokenizer()

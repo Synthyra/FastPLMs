@@ -10,6 +10,11 @@ The GitHub with the implementation and requirements.txt can be found [here](http
 [ESM++](https://github.com/Synthyra/ESMplusplus) is a faithful implementation of [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) ([license](https://www.evolutionaryscale.ai/policies/cambrian-open-license-agreement)) that allows for batching and standard Huggingface compatibility without requiring the ESM Python package.
 The small version corresponds to the 300 million parameter version of ESMC.
 
+## Attention backend defaults
+Flex Attention with a block mask that ignores pad tokens is the default attention backend. If Flex Attention is unavailable, ESM++ falls back to native PyTorch attention.
+
+For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when using Flex Attention.
+
 
 ## Use with 🤗 transformers
 ```python
@@ -119,7 +124,7 @@ For a more thourough example of fine-tuning, check out our example script [here]
 
 
 ## Returning attention maps
-Usually F.scaled_dot_product_attention is used for the attention calculations, which is much faster than native PyTorch. However, it cannot return attention maps.
+Flex Attention with a pad-token block mask is used by default for attention calculations, and native PyTorch attention is the fallback. Optimized attention paths do not return attention maps directly.
 ESM++ has the option to ```output_attentions```, which will calculate attention manually. This is much slower, so do not use unless you need the attention maps.
 
 ```python
