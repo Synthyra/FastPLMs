@@ -73,7 +73,7 @@ class FastEsmConfig(PretrainedConfig):
         position_embedding_type: str = "absolute",
         emb_layer_norm_before: bool = None,
         token_dropout: bool = True,
-        attn_backend: str = "flex",
+        attn_backend: str = "sdpa",
         **kwargs,
     ):
         super().__init__(

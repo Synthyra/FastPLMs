@@ -12,7 +12,9 @@ FastESM is a Huggingface compatible plug in version of ESM2 rewritten with a new
 Load any ESM2 models into a FastEsm model to dramatically speed up training and inference without **ANY** cost in performance.
 
 ## Attention backend defaults
-Flex Attention with a block mask that ignores pad tokens is the default attention backend. If Flex Attention is unavailable, FastESM falls back to native PyTorch attention.
+`sdpa` is the default attention backend for FastESM.
+
+To enable Flex Attention, set `attn_backend="flex"` on the config before model initialization/loading.
 
 For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when using Flex Attention.
 

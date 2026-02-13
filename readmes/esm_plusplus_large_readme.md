@@ -11,7 +11,17 @@ The GitHub with the implementation and requirements.txt can be found [here](http
 The large version corresponds to the 600 million parameter version of ESMC.
 
 ## Attention backend defaults
-Flex Attention with a block mask that ignores pad tokens is the default attention backend. If Flex Attention is unavailable, ESM++ falls back to native PyTorch attention.
+`sdpa` is the default attention backend for ESM++.
+
+To enable Flex Attention, set `attn_backend="flex"` in the config before loading the model:
+
+```python
+from transformers import AutoConfig, AutoModelForMaskedLM
+
+config = AutoConfig.from_pretrained('Synthyra/ESMplusplus_large', trust_remote_code=True)
+config.attn_backend = "flex"
+model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_large', config=config, trust_remote_code=True)
+```
 
 For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when using Flex Attention.
 
@@ -124,7 +134,7 @@ For a more thourough example of fine-tuning, check out our example script [here]
 
 
 ## Returning attention maps
-Flex Attention with a pad-token block mask is used by default for attention calculations, and native PyTorch attention is the fallback. Optimized attention paths do not return attention maps directly.
+When `attn_backend="flex"`, Flex Attention with a pad-token block mask is used for attention calculations. Optimized attention paths do not return attention maps directly.
 ESM++ has the option to ```output_attentions```, which will calculate attention manually. This is much slower, so do not use unless you need the attention maps.
 
 ```python

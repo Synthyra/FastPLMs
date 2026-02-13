@@ -7,9 +7,27 @@ FastPLMs is an open-source effort to increase the efficiency of pretrained prote
 All models can be loaded from Huggingface 🤗 transformers via `AutoModel`, this repository does not need to be cloned for most use cases.
 
 ## Attention backend defaults
-Flex Attention with a block mask that ignores pad tokens is now the default attention backend. If Flex Attention is not available in your environment, models fall back to native PyTorch attention.
+`sdpa` is now the default attention backend for `ESM++` and `FastESM2` for stability across PyTorch versions.
 
-For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when running with Flex Attention.
+If you want Flex Attention, set `attn_backend="flex"` in the model config before loading the model:
+
+```python
+import torch
+from transformers import AutoConfig
+from transformers import AutoModel
+
+config = AutoConfig.from_pretrained("Synthyra/ESMplusplus_small", trust_remote_code=True)
+config.attn_backend = "flex"
+model = AutoModel.from_pretrained("Synthyra/ESMplusplus_small", config=config, trust_remote_code=True)
+```
+
+For throughput and memory efficiency, `torch.compile(...)` is strongly recommended, especially with Flex Attention:
+
+```python
+model = torch.compile(model, dynamic=True)
+```
+
+If your environment has a compiler regression, keep `attn_backend="sdpa"` and run without compile or with a safer backend such as `aot_eager`.
 
 ## Supported models
 The currently supported models can be found [here](https://huggingface.co/collections/Synthyra/pretrained-plms-675351ecc050f63baedd77de).

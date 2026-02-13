@@ -70,7 +70,7 @@ class ESMplusplusConfig(PretrainedConfig):
         problem_type: str | None = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
-        attn_backend: str = "flex",
+        attn_backend: str = "sdpa",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -298,7 +298,7 @@ class MultiHeadAttention(nn.Module):
         self,
         d_model: int,
         n_heads: int,
-        attn_backend: str = "flex",
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.d_model = d_model
@@ -438,7 +438,7 @@ class UnifiedTransformerBlock(nn.Module):
         residue_scaling_factor: float = 1,
         expansion_ratio: float = 8 / 3,
         dropout: float = 0.0,
-        attn_backend: str = "flex",
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.attn = MultiHeadAttention(
@@ -512,7 +512,7 @@ class TransformerStack(nn.Module):
         n_heads: int,
         n_layers: int,
         dropout: float = 0.0,
-        attn_backend: str = "flex",
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.attn_backend = attn_backend
