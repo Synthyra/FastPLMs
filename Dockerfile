@@ -38,11 +38,11 @@ WORKDIR /app
 # Copy requirements first for layer caching (matching Modal image order)
 COPY requirements.txt .
 
-RUN pip install --upgrade pip setuptools && \
-    pip install -r requirements.txt && \
-    pip install boltz[cuda] -U && \
-    pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U && \
-    pip install --force-reinstall numpy==1.26.4
+RUN pip install --upgrade pip setuptools
+RUN pip install -r requirements.txt -U
+RUN pip install boltz[cuda] -U
+RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
+RUN pip install --force-reinstall numpy==1.26.4
 
 # Copy the rest of the source
 COPY . .

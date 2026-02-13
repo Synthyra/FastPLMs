@@ -1,19 +1,19 @@
-torch>=2.9.1
-torchvision>=0.24.1
-matplotlib>=3.5.0
-transformers>=4.57.3
-datasets>=4.4.2
+torch # these are installed in the Dockerfile
+torchvision # these are installed in the Dockerfile
+matplotlib
+transformers
+datasets
 hf_transfer
 hf-xet
-numpy==1.26.4
+numpy
 einops
 esm
-scikit-learn>=1.0.0
-scipy>=1.7.0
-seaborn>=0.12.0
-peft>=0.5.0
-accelerate>=1.1.0
-biotite>=1.5.0
+scikit-learn
+scipy
+seaborn
+peft
+accelerate
+biotite
 networkx
 omegaconf
 trifast
