@@ -31,8 +31,8 @@ ENV/
 
 # Results and logs
 results/
+wandb/
 *.log
-/wandb
 
 # Models and data (these can be large)
 models/

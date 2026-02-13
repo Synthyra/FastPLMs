@@ -45,7 +45,8 @@ assert "tm_score" in dir(struc), (
 
 TM_SCORE_FN = struc.tm_score
 BOLTZ2_FIXED_RECYCLING_STEPS = 3
-BOLTZ2_FIXED_DIFFUSION_SAMPLES = 200
+BOLTZ2_FIXED_SAMPLING_STEPS = 200
+BOLTZ2_FIXED_DIFFUSION_SAMPLES = 20
 
 SEQUENCE_OPTIONS = [
     "MDDADPEERNYDNMLKMLSDLNKDLEKLLEEMEKISVQATWMAYDMVVMRTNPTLAESMRRLEDAFVNCKEEMEKNWQELLHETKQRL",
@@ -146,7 +147,7 @@ def _run_ours_forward(
         return model.forward(
             feats=feats_ours,
             recycling_steps=BOLTZ2_FIXED_RECYCLING_STEPS,
-            num_sampling_steps=args.num_sampling_steps,
+            num_sampling_steps=BOLTZ2_FIXED_SAMPLING_STEPS,
             diffusion_samples=BOLTZ2_FIXED_DIFFUSION_SAMPLES,
             run_confidence_sequentially=args.run_confidence_sequentially,
         )
@@ -526,18 +527,6 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
     device = resolve_device(args.device)
     dtype = resolve_dtype(args.dtype, device)
     set_seed(args.seed)
-
-    if args.recycling_steps != BOLTZ2_FIXED_RECYCLING_STEPS:
-        print(
-            f"[boltz2_compliance] Ignoring --recycling-steps={args.recycling_steps}; "
-            f"using fixed value {BOLTZ2_FIXED_RECYCLING_STEPS}."
-        )
-    if args.diffusion_samples != BOLTZ2_FIXED_DIFFUSION_SAMPLES:
-        print(
-            f"[boltz2_compliance] Ignoring --diffusion-samples={args.diffusion_samples}; "
-            f"using fixed value {BOLTZ2_FIXED_DIFFUSION_SAMPLES}."
-        )
-
     output_dir = build_output_dir(args.output_dir, "boltz2_compliance")
     checkpoint_path = _download_checkpoint_if_needed(Path(args.checkpoint_path))
     sequences = SEQUENCE_OPTIONS
@@ -836,7 +825,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         "write_cif_artifacts": args.write_cif_artifacts,
         "num_sequences": len(sequences),
         "recycling_steps": BOLTZ2_FIXED_RECYCLING_STEPS,
-        "num_sampling_steps": args.num_sampling_steps,
+        "num_sampling_steps": BOLTZ2_FIXED_SAMPLING_STEPS,
         "diffusion_samples": BOLTZ2_FIXED_DIFFUSION_SAMPLES,
         "tm_pass_threshold": args.tm_pass_threshold,
         "supports_no_kernels": supports_no_kernels,
@@ -896,9 +885,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--enforce-determinism", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--write-cif-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pass-coord-metric", type=str, default="aligned", choices=["raw", "aligned"])
-    parser.add_argument("--recycling-steps", type=int, default=BOLTZ2_FIXED_RECYCLING_STEPS)
-    parser.add_argument("--num-sampling-steps", type=int, default=200)
-    parser.add_argument("--diffusion-samples", type=int, default=BOLTZ2_FIXED_DIFFUSION_SAMPLES)
     parser.add_argument("--run-confidence-sequentially", action="store_true")
     parser.add_argument("--coord-mae-threshold", type=float, default=5e-3)
     parser.add_argument("--coord-rmse-threshold", type=float, default=5e-3)
