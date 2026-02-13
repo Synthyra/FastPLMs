@@ -18,6 +18,9 @@ ENV/
 # IDE
 .vscode/
 .idea/
+.cursor
+.streamlit
+.sh
 *.swp
 *.swo
 *~
@@ -29,27 +32,51 @@ ENV/
 # Results and logs
 results/
 *.log
-optimization_logs/
+/wandb
 
 # Models and data (these can be large)
 models/
 *.pth
 *.pt
+*.bin
 *.ckpt
 *.safetensors
 *.parquet
+*.zip
+*.gzip
+*.gz
+*.fasta
+*.fa
+*.pkl
+*.pickle
+*.pk
+*.npz
+*.npy
+
+# Images
+*.png
+*.jpg
 
 # Databases
 *.db
 *.sqlite
 
 # Text files
-# Include only requirements.txt or similarly named requirements files, ignore all other .txt files
 *.txt
+# Include only requirements.txt or similarly named requirements files, ignore all other .txt files
 !requirements*.txt
 *.csv
 *.tsv
 *.json
+*.pdf
+*.yaml
+*.yml
+*.md
+*.xlsx
+*.tab3
+*.tab
+*.cfg
+*.config
 
 # Structure files
 *.cif
@@ -62,11 +89,9 @@ docker-compose.yml
 
 # Git
 .git/
-.gitignore
 
 # OS
 .DS_Store
-Thumbs.db
 
 # Cache
 .cache/
