@@ -426,15 +426,34 @@ def _stack_coords_for_keys(
     return torch.stack(stacked_samples, dim=0)
 
 
+def _coords_to_ca_atom_array(coords: np.ndarray) -> struc.AtomArray:
+    assert coords.ndim == 2, "Expected coordinate array with shape [N, 3]."
+    assert coords.shape[1] == 3, "Expected coordinate array with shape [N, 3]."
+    assert coords.shape[0] > 0, "Expected at least one CA atom for TM-score."
+    assert np.all(np.isfinite(coords)), "Coordinate array for TM-score contains non-finite values."
+
+    atom_count = coords.shape[0]
+    array = struc.AtomArray(atom_count)
+    array.coord = coords.astype(np.float32, copy=False)
+    array.atom_name = np.full(atom_count, "CA")
+    array.res_name = np.full(atom_count, "GLY")
+    array.chain_id = np.full(atom_count, "A")
+    array.res_id = np.arange(1, atom_count + 1, dtype=np.int32)
+    array.element = np.full(atom_count, "C")
+    return array
+
+
 def _tm_score_from_coords(reference_coords: torch.Tensor, subject_coords: torch.Tensor) -> float:
     aligned_subject = _kabsch_align_mobile_to_target(subject_coords, reference_coords)
     reference_np = reference_coords.detach().cpu().numpy().astype(np.float64)
     aligned_np = aligned_subject.detach().cpu().numpy().astype(np.float64)
+    reference_atom_array = _coords_to_ca_atom_array(reference_np)
+    subject_atom_array = _coords_to_ca_atom_array(aligned_np)
     index_array = np.arange(reference_np.shape[0], dtype=np.int32)
     tm_value = float(
         TM_SCORE_FN(
-            reference=reference_np,
-            subject=aligned_np,
+            reference=reference_atom_array,
+            subject=subject_atom_array,
             reference_indices=index_array,
             subject_indices=index_array,
             reference_length="shorter",

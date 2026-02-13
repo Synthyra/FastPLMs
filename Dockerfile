@@ -6,12 +6,12 @@ FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
 
 # System prerequisites + Python 3.12
 # Note: Modal uses Python 3.10, but we use 3.12 for better compatibility
-ENV        DEBIAN_FRONTEND=noninteractive \
-           PYTHON_VERSION=3.12.7 \
-           PATH=/usr/local/bin:$PATH \
-           TF_CPP_MIN_LOG_LEVEL=2 \
-           TF_ENABLE_ONEDNN_OPTS=0 \
-           TOKENIZERS_PARALLELISM=true
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHON_VERSION=3.12.7 \
+    PATH=/usr/local/bin:$PATH \
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    TF_ENABLE_ONEDNN_OPTS=0 \
+    TOKENIZERS_PARALLELISM=true
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
