@@ -308,7 +308,6 @@ def _run_boltz_cli_reference(
         out_root = tmp_dir / "ref_out"
         _write_single_chain_fasta(sequence=sequence, path=fasta_path)
 
-        accelerator = "gpu" if device.type == "cuda" else "cpu"
         command = [
             sys.executable,
             "-m",
@@ -324,20 +323,11 @@ def _run_boltz_cli_reference(
             "--recycling_steps",
             str(BOLTZ2_FIXED_RECYCLING_STEPS),
             "--sampling_steps",
-            str(args.num_sampling_steps),
+            str(BOLTZ2_FIXED_SAMPLING_STEPS),
             "--diffusion_samples",
             str(BOLTZ2_FIXED_DIFFUSION_SAMPLES),
             "--seed",
             str(args.seed + sequence_index),
-            "--override",
-            "--output_format",
-            "pdb",
-            "--num_workers",
-            "0",
-            "--devices",
-            "1",
-            "--accelerator",
-            accelerator,
         ]
         if supports_no_kernels:
             command.append("--no_kernels")
@@ -847,6 +837,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
         f"Device: {device}",
         f"Dtype: {dtype}",
         f"Recycling steps (fixed): {BOLTZ2_FIXED_RECYCLING_STEPS}",
+        f"Sampling steps (fixed): {BOLTZ2_FIXED_SAMPLING_STEPS}",
         f"Diffusion samples (fixed): {BOLTZ2_FIXED_DIFFUSION_SAMPLES}",
         f"TM pass threshold: {args.tm_pass_threshold}",
         f"Write CIF artifacts: {args.write_cif_artifacts}",
