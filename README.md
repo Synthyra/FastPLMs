@@ -24,7 +24,7 @@ model = AutoModel.from_pretrained("Synthyra/ESMplusplus_small", config=config, t
 For throughput and memory efficiency, `torch.compile(...)` is strongly recommended, especially with Flex Attention:
 
 ```python
-model = torch.compile(model, dynamic=True)
+model = torch.compile(model)
 ```
 
 If your environment has a compiler regression, keep `attn_backend="sdpa"` and run without compile or with a safer backend such as `aot_eager`.
