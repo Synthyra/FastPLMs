@@ -23,32 +23,15 @@ from huggingface_hub import snapshot_download
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
+from torch.nn.attention.flex_attention import create_block_mask
+from torch.nn.attention.flex_attention import flex_attention
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
 
 from .embedding_mixin import EmbeddingMixin, Pooler
 
-try:
-    from torch.nn.attention.flex_attention import create_block_mask
-    from torch.nn.attention.flex_attention import flex_attention as _raw_flex_attention
-except ImportError:
-    create_block_mask = None
-    _raw_flex_attention = None
 
-
-def _resolve_flex_attention(attn_compile: bool):
-    if _raw_flex_attention is None:
-        return None
-    if not attn_compile:
-        return _raw_flex_attention
-    try:
-        return torch.compile(_raw_flex_attention, dynamic=True)
-    except Exception:
-        return _raw_flex_attention
-
-
-def _create_pad_block_mask(attention_mask_2d: torch.Tensor, block_size: int):
-    assert create_block_mask is not None, "Flex attention block mask requires create_block_mask."
+def _create_pad_block_mask(attention_mask_2d: torch.Tensor):
     token_valid = attention_mask_2d.bool()
     batch_size, seq_len = token_valid.shape
 
@@ -62,7 +45,6 @@ def _create_pad_block_mask(attention_mask_2d: torch.Tensor, block_size: int):
         seq_len,
         seq_len,
         device=attention_mask_2d.device,
-        BLOCK_SIZE=block_size,
     )
 
 
@@ -89,8 +71,6 @@ class ESMplusplusConfig(PretrainedConfig):
         dropout: float = 0.0,
         initializer_range: float = 0.02,
         attn_backend: str = "flex",
-        attn_compile: bool = True,
-        flex_block_size: int = 128,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -104,8 +84,6 @@ class ESMplusplusConfig(PretrainedConfig):
         self.initializer_range = initializer_range
         self.tie_word_embeddings = False
         self.attn_backend = attn_backend
-        self.attn_compile = attn_compile
-        self.flex_block_size = flex_block_size
 
 
 ### Rotary Embeddings
@@ -321,16 +299,12 @@ class MultiHeadAttention(nn.Module):
         d_model: int,
         n_heads: int,
         attn_backend: str = "flex",
-        attn_compile: bool = True,
-        flex_block_size: int = 128,
     ):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = self.d_model // self.n_heads
         self.attn_backend = attn_backend
-        self.flex_block_size = flex_block_size
-        self.flex_attention = _resolve_flex_attention(attn_compile)
         self._warned_flex_fallback = False
         self.layernorm_qkv = nn.Sequential(
             nn.LayerNorm(d_model), nn.Linear(d_model, d_model * 3, bias=False)
@@ -393,17 +367,15 @@ class MultiHeadAttention(nn.Module):
                 sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
             use_flex = (
                 self.attn_backend == "flex"
-                and self.flex_attention is not None
                 and (attention_mask is None or flex_block_mask is not None)
             )
             if use_flex:
                 try:
-                    context_BHLD = self.flex_attention(
+                    context_BHLD = flex_attention(
                         query_BHLD,
                         key_BHLD,
                         value_BHLD,
                         block_mask=flex_block_mask,
-                        enable_gqa=query_BHLD.shape[1] != key_BHLD.shape[1],
                     )
                 except Exception as exc:
                     if not self._warned_flex_fallback:
@@ -467,16 +439,12 @@ class UnifiedTransformerBlock(nn.Module):
         expansion_ratio: float = 8 / 3,
         dropout: float = 0.0,
         attn_backend: str = "flex",
-        attn_compile: bool = True,
-        flex_block_size: int = 128,
     ):
         super().__init__()
         self.attn = MultiHeadAttention(
             d_model=d_model,
             n_heads=n_heads,
             attn_backend=attn_backend,
-            attn_compile=attn_compile,
-            flex_block_size=flex_block_size,
         )
         self.ffn = swiglu_ln_ffn(d_model, expansion_ratio)
         self.scaling_factor = residue_scaling_factor
@@ -545,12 +513,9 @@ class TransformerStack(nn.Module):
         n_layers: int,
         dropout: float = 0.0,
         attn_backend: str = "flex",
-        attn_compile: bool = True,
-        flex_block_size: int = 128,
     ):
         super().__init__()
         self.attn_backend = attn_backend
-        self.flex_block_size = flex_block_size
         self.blocks = nn.ModuleList(
             [
                 UnifiedTransformerBlock(
@@ -559,8 +524,6 @@ class TransformerStack(nn.Module):
                     residue_scaling_factor=math.sqrt(n_layers / 36),
                     dropout=dropout,
                     attn_backend=attn_backend,
-                    attn_compile=attn_compile,
-                    flex_block_size=flex_block_size,
                 )
                 for i in range(n_layers)
             ]
@@ -591,9 +554,9 @@ class TransformerStack(nn.Module):
         
         if attention_mask is not None:
             attention_mask = attention_mask[:, None, None, :].expand(batch_size, 1, seq_len, seq_len).bool()
-            if self.attn_backend == "flex" and create_block_mask is not None and not output_attentions:
+            if self.attn_backend == "flex" and not output_attentions:
                 token_attention_mask = attention_mask[:, 0, 0, :]
-                flex_block_mask = _create_pad_block_mask(token_attention_mask, self.flex_block_size)
+                flex_block_mask = _create_pad_block_mask(token_attention_mask)
             else:
                 flex_block_mask = None
         else:
@@ -677,8 +640,6 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
             n_layers=config.num_hidden_layers,
             dropout=config.dropout,
             attn_backend=config.attn_backend,
-            attn_compile=config.attn_compile,
-            flex_block_size=config.flex_block_size,
         )
         self.tokenizer = EsmSequenceTokenizer()
         self.init_weights()
@@ -739,8 +700,6 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
             n_layers=config.num_hidden_layers,
             dropout=config.dropout,
             attn_backend=config.attn_backend,
-            attn_compile=config.attn_compile,
-            flex_block_size=config.flex_block_size,
         )
         self.sequence_head = RegressionHead(config.hidden_size, self.vocab_size)
         self.ce_loss = nn.CrossEntropyLoss()

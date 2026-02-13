@@ -1,9 +1,9 @@
 import torch
 import torch.nn as nn
-import os
 import warnings
-import networkx as nx
 from torch.nn import functional as F
+from torch.nn.attention.flex_attention import create_block_mask
+from torch.nn.attention.flex_attention import flex_attention
 from typing import Optional, Tuple, Union, Dict, Any
 from einops import rearrange
 from dataclasses import dataclass
@@ -26,26 +26,8 @@ from transformers.models.esm.modeling_esm import (
 
 from .embedding_mixin import EmbeddingMixin
 
-try:
-    from torch.nn.attention.flex_attention import create_block_mask
-    from torch.nn.attention.flex_attention import flex_attention as _raw_flex_attention
-except ImportError:
-    create_block_mask = None
-    _raw_flex_attention = None
 
-
-def _resolve_flex_attention(attn_compile: bool):
-    if _raw_flex_attention is None:
-        return None
-    if not attn_compile:
-        return _raw_flex_attention
-    try:
-        return torch.compile(_raw_flex_attention, dynamic=True)
-    except Exception:
-        return _raw_flex_attention
-
-
-def _create_pad_block_mask(attention_mask_2d: torch.Tensor, block_size: int):
+def _create_pad_block_mask(attention_mask_2d: torch.Tensor):
     assert create_block_mask is not None, "Flex attention block mask requires create_block_mask."
     token_valid = attention_mask_2d.bool()
     batch_size, seq_len = token_valid.shape
@@ -60,7 +42,6 @@ def _create_pad_block_mask(attention_mask_2d: torch.Tensor, block_size: int):
         seq_len,
         seq_len,
         device=attention_mask_2d.device,
-        BLOCK_SIZE=block_size,
     )
 
 
@@ -93,8 +74,6 @@ class FastEsmConfig(PretrainedConfig):
         emb_layer_norm_before: bool = None,
         token_dropout: bool = True,
         attn_backend: str = "flex",
-        attn_compile: bool = True,
-        flex_block_size: int = 128,
         **kwargs,
     ):
         super().__init__(
@@ -118,8 +97,6 @@ class FastEsmConfig(PretrainedConfig):
         self.tie_word_embeddings = False
         self.token_dropout = token_dropout
         self.attn_backend = attn_backend
-        self.attn_compile = attn_compile
-        self.flex_block_size = flex_block_size
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -327,8 +304,6 @@ class EsmSelfAttention(nn.Module):
 
         self.dropout_prob = config.attention_probs_dropout_prob
         self.attn_backend = config.attn_backend
-        self.flex_block_size = config.flex_block_size
-        self.flex_attention = _resolve_flex_attention(config.attn_compile)
         self._warned_flex_fallback = False
         self.position_embedding_type = position_embedding_type or getattr(
             config, "position_embedding_type", "absolute"
@@ -382,18 +357,16 @@ class EsmSelfAttention(nn.Module):
                 sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
             use_flex = (
                 self.attn_backend == "flex"
-                and self.flex_attention is not None
                 and (attention_mask is None or flex_block_mask is not None)
             )
             if use_flex:
                 try:
-                    context_layer = self.flex_attention(
+                    context_layer = flex_attention(
                         query_layer,
                         key_layer,
                         value_layer,
                         block_mask=flex_block_mask,
                         scale=1.0,
-                        enable_gqa=query_layer.shape[1] != key_layer.shape[1],
                     )
                 except Exception as exc:
                     if not self._warned_flex_fallback:

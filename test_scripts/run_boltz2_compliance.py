@@ -328,6 +328,8 @@ def _run_boltz_cli_reference(
             str(BOLTZ2_FIXED_DIFFUSION_SAMPLES),
             "--seed",
             str(args.seed + sequence_index),
+            "--output_format",
+            "pdb",
         ]
         if supports_no_kernels:
             command.append("--no_kernels")
