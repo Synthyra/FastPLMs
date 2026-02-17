@@ -1,10 +1,7 @@
 import entrypoint_setup
 import torch
 import torch.nn as nn
-import warnings
 from torch.nn import functional as F
-from torch.nn.attention.flex_attention import create_block_mask
-from torch.nn.attention.flex_attention import flex_attention
 from typing import Optional, Tuple, Union, Dict, Any
 from einops import rearrange
 from dataclasses import dataclass
@@ -24,6 +21,12 @@ from transformers.models.esm.modeling_esm import (
     EsmSelfOutput,
     EsmClassificationHead,
 )
+try:
+    from torch.nn.attention.flex_attention import create_block_mask
+    from torch.nn.attention.flex_attention import flex_attention
+except ImportError:
+    create_block_mask = None
+    flex_attention = None
 
 try:
     # when used from AutoModel, these are in the same directory
@@ -79,7 +82,7 @@ class FastEsmConfig(PretrainedConfig):
         position_embedding_type: str = "absolute",
         emb_layer_norm_before: bool = None,
         token_dropout: bool = True,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "flex",
         **kwargs,
     ):
         super().__init__(
@@ -310,7 +313,6 @@ class EsmSelfAttention(nn.Module):
 
         self.dropout_prob = config.attention_probs_dropout_prob
         self.attn_backend = config.attn_backend
-        self._warned_flex_fallback = False
         self.position_embedding_type = position_embedding_type or getattr(
             config, "position_embedding_type", "absolute"
         )
@@ -361,8 +363,11 @@ class EsmSelfAttention(nn.Module):
             if attention_mask is not None:
                 sdpa_mask = torch.zeros_like(attention_mask, dtype=query_layer.dtype)
                 sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
+            flex_dtype_supported = query_layer.dtype in (torch.float16, torch.bfloat16)
             use_flex = (
                 self.attn_backend == "flex"
+                and flex_attention is not None
+                and flex_dtype_supported
                 and (attention_mask is None or flex_block_mask is not None)
             )
             if use_flex:
@@ -374,13 +379,7 @@ class EsmSelfAttention(nn.Module):
                         block_mask=flex_block_mask,
                         scale=1.0,
                     )
-                except Exception as exc:
-                    if not self._warned_flex_fallback:
-                        warnings.warn(
-                            f"Flex attention failed in FastESM attention; falling back to SDPA. Error: {exc}",
-                            RuntimeWarning,
-                        )
-                        self._warned_flex_fallback = True
+                except Exception:
                     context_layer = F.scaled_dot_product_attention(
                         query_layer,
                         key_layer,
@@ -617,15 +616,19 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         token_embedding_output = self.embeddings(input_ids, attention_mask=attention_mask)
         batch_size, seq_length = input_ids.shape
+        flex_block_mask = None
         if attention_mask is not None:
             extended_attention_mask = attention_mask[:, None, None, :].expand(
                 batch_size, 1, seq_length, seq_length
             ).bool()
+            if self.config.attn_backend == "flex" and create_block_mask is not None:
+                flex_block_mask = _create_pad_block_mask(attention_mask.bool())
         else:
             extended_attention_mask = None
         encoder_outputs = self.encoder(
             token_embedding_output,
             attention_mask=extended_attention_mask,
+            flex_block_mask=flex_block_mask,
             output_hidden_states=False,
             output_attentions=False,
         )
@@ -682,16 +685,24 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
             inputs_embeds=inputs_embeds,
         )
 
+        flex_block_mask = None
         if attention_mask is not None:
             extended_attention_mask = attention_mask[:, None, None, :].expand(
                 batch_size, 1, seq_length, seq_length
             ).bool()
+            if (
+                self.config.attn_backend == "flex"
+                and not output_attentions
+                and create_block_mask is not None
+            ):
+                flex_block_mask = _create_pad_block_mask(attention_mask.bool())
         else:
             extended_attention_mask = None
 
         encoder_outputs = self.encoder(
             token_embedding_output,
             attention_mask=extended_attention_mask,
+            flex_block_mask=flex_block_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
         )

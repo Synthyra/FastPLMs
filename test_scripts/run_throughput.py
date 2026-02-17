@@ -59,16 +59,28 @@ def _random_sequence(length: int, rng: random.Random) -> str:
     return "M" + "".join(rng.choices(CANONICAL_AMINO_ACIDS, k=length - 1))
 
 
-def _build_sequence_batches(num_batches: int, batch_size: int, length: int, pad_min_ratio: float, seed: int) -> List[List[str]]:
-    min_length = max(4, int(length * pad_min_ratio))
-    min_length = min(min_length, length)
+def _build_sequence_batches(
+    num_batches: int,
+    batch_size: int,
+    length: int,
+    padded_sequence_fraction: float,
+    max_pad_fraction: float,
+    seed: int,
+) -> List[List[str]]:
+    assert 0.0 <= padded_sequence_fraction <= 1.0, "Expected padded_sequence_fraction to be in [0, 1]."
+    assert 0.0 <= max_pad_fraction <= 1.0, "Expected max_pad_fraction to be in [0, 1]."
+    min_padded_length = max(4, int(math.ceil(length * (1.0 - max_pad_fraction))))
+    min_padded_length = min(min_padded_length, length)
+    can_pad = min_padded_length < length
     rng = random.Random(seed)
     batches: List[List[str]] = []
     for _ in range(num_batches):
-        lengths = [rng.randint(min_length, length) for _ in range(batch_size)]
-        if batch_size > 1 and length > min_length:
-            lengths[0] = length
-            lengths[1] = rng.randint(min_length, length - 1)
+        lengths: List[int] = []
+        for _ in range(batch_size):
+            if can_pad and rng.random() < padded_sequence_fraction:
+                lengths.append(rng.randint(min_padded_length, length - 1))
+            else:
+                lengths.append(length)
         batch = [_random_sequence(seq_len, rng) for seq_len in lengths]
         batches.append(batch)
     return batches
@@ -185,9 +197,9 @@ def _slugify_filename(value: str) -> str:
     return slug
 
 
-def _plot_publication_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: pathlib.Path) -> List[pathlib.Path]:
-    publication_dir = output_dir / "publication_plots"
-    publication_dir.mkdir(parents=True, exist_ok=True)
+def _plot_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: pathlib.Path) -> List[pathlib.Path]:
+    per_model_dir = output_dir / "per_model_plots"
+    per_model_dir.mkdir(parents=True, exist_ok=True)
 
     model_rows_index: Dict[str, List[Dict[str, object]]] = {}
     for row in rows:
@@ -206,6 +218,10 @@ def _plot_publication_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], outp
         model_rows_index[model_group_key].append(row)
 
     generated_paths: List[pathlib.Path] = []
+    metric_configs = [
+        ("tokens_per_second", "Tokens/second", "throughput"),
+        ("peak_memory_mb", "Peak memory (MB)", "memory"),
+    ]
     for model_group_key in sorted(model_rows_index.keys()):
         model_rows = model_rows_index[model_group_key]
         has_sdpa = False
@@ -228,82 +244,61 @@ def _plot_publication_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], outp
 
         repo_id = str(model_rows[0]["repo_id"])
         compiled_model = bool(model_rows[0]["compiled_model"])
-        figure, axes = plt.subplots(
-            nrows=len(batch_sizes),
-            ncols=2,
-            figsize=(13, max(4.2, 3.8 * len(batch_sizes))),
-            squeeze=False,
-        )
         colors = {"sdpa": "#1f77b4", "flex": "#d62728"}
         markers = {"sdpa": "o", "flex": "s"}
 
-        for row_index, batch_size in enumerate(batch_sizes):
-            throughput_axis = axes[row_index][0]
-            memory_axis = axes[row_index][1]
+        for metric_key, y_label, filename_prefix in metric_configs:
+            figure, axes = plt.subplots(
+                nrows=len(batch_sizes),
+                ncols=1,
+                figsize=(7.5, max(3.8, 3.2 * len(batch_sizes))),
+                squeeze=False,
+            )
+            for row_index, batch_size in enumerate(batch_sizes):
+                axis = axes[row_index][0]
+                for backend in ["sdpa", "flex"]:
+                    lengths: List[int] = []
+                    metric_values: List[float] = []
+                    for row in model_rows:
+                        if int(row["batch_size"]) == batch_size and str(row["attn_backend"]) == backend:
+                            lengths.append(int(row["sequence_length"]))
+                            metric_values.append(float(row[metric_key]))
+                    if len(lengths) == 0:
+                        continue
+                    paired = sorted(zip(lengths, metric_values), key=lambda item: item[0])
+                    sorted_lengths = [pair[0] for pair in paired]
+                    sorted_values = [pair[1] for pair in paired]
+                    axis.plot(
+                        sorted_lengths,
+                        sorted_values,
+                        marker=markers[backend],
+                        color=colors[backend],
+                        markersize=5.5,
+                        linewidth=2.2,
+                        label=backend.upper(),
+                    )
+                axis.set_title(f"Batch size {batch_size}")
+                axis.set_xlabel("Sequence length")
+                axis.set_ylabel(y_label)
+                axis.grid(True, alpha=0.25)
+                axis.spines["top"].set_visible(False)
+                axis.spines["right"].set_visible(False)
+                if row_index == 0:
+                    axis.legend(loc="upper left", frameon=False)
 
-            for backend in ["sdpa", "flex"]:
-                lengths: List[int] = []
-                throughputs: List[float] = []
-                memories: List[float] = []
-                for row in model_rows:
-                    if int(row["batch_size"]) == batch_size and str(row["attn_backend"]) == backend:
-                        lengths.append(int(row["sequence_length"]))
-                        throughputs.append(float(row["tokens_per_second"]))
-                        memories.append(float(row["peak_memory_mb"]))
-                if len(lengths) == 0:
-                    continue
-                paired = sorted(zip(lengths, throughputs, memories), key=lambda item: item[0])
-                sorted_lengths = [pair[0] for pair in paired]
-                sorted_throughputs = [pair[1] for pair in paired]
-                sorted_memories = [pair[2] for pair in paired]
-                label = backend.upper()
-                throughput_axis.plot(
-                    sorted_lengths,
-                    sorted_throughputs,
-                    marker=markers[backend],
-                    color=colors[backend],
-                    markersize=5.5,
-                    linewidth=2.2,
-                    label=label,
-                )
-                memory_axis.plot(
-                    sorted_lengths,
-                    sorted_memories,
-                    marker=markers[backend],
-                    color=colors[backend],
-                    markersize=5.5,
-                    linewidth=2.2,
-                    label=label,
-                )
-
-            throughput_axis.set_title(f"Batch size {batch_size}: Throughput")
-            throughput_axis.set_xlabel("Sequence length")
-            throughput_axis.set_ylabel("Tokens/second")
-            throughput_axis.grid(True, alpha=0.25)
-            throughput_axis.spines["top"].set_visible(False)
-            throughput_axis.spines["right"].set_visible(False)
-
-            memory_axis.set_title(f"Batch size {batch_size}: Peak memory")
-            memory_axis.set_xlabel("Sequence length")
-            memory_axis.set_ylabel("Peak memory (MB)")
-            memory_axis.grid(True, alpha=0.25)
-            memory_axis.spines["top"].set_visible(False)
-            memory_axis.spines["right"].set_visible(False)
-
-            if row_index == 0:
-                throughput_axis.legend(loc="upper left", frameon=False)
-                memory_axis.legend(loc="upper left", frameon=False)
-
-        figure.suptitle(f"{repo_id} | SDPA vs Flex | compiled={compiled_model}", y=0.995)
-        figure.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
-        filename = (
-            f"throughput_memory_sdpa_vs_flex_{_slugify_filename(repo_id)}"
-            f"_compiled_{str(compiled_model).lower()}.png"
-        )
-        output_path = publication_dir / filename
-        figure.savefig(output_path, dpi=300)
-        plt.close(figure)
-        generated_paths.append(output_path)
+            figure.suptitle(
+                f"{repo_id} | {filename_prefix.title()} | SDPA vs Flex | compiled={compiled_model}",
+                y=0.995,
+            )
+            figure.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+            filename = (
+                f"{filename_prefix}_sdpa_vs_flex_{_slugify_filename(repo_id)}"
+                f"_compiled_{str(compiled_model).lower()}.png"
+            )
+            output_path = per_model_dir / filename
+            figure.savefig(output_path, dpi=300)
+            plt.close(figure)
+            generated_paths.append(output_path)
 
     return generated_paths
 
@@ -377,18 +372,9 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
     return delta_rows
 
 
-def _selected_backends(spec, args: argparse.Namespace, attn_backends: List[str]) -> List[str]:
-    if args.compare_attn and spec.family in ["esm2", "esmplusplus"]:
-        return list(attn_backends)
-    if spec.family in ["esm2", "esmplusplus"]:
-        return [args.attn_backend]
-    return ["model_default"]
-
-
-def _should_compile_model(spec, args: argparse.Namespace) -> bool:
-    if spec.family == "e1":
-        return False
-    return bool(args.compile_model or args.compare_attn)
+def _selected_backends(spec) -> List[str]:
+    assert spec.family in ["esm2", "esmplusplus"], f"Unexpected family for throughput compare: {spec.family}"
+    return ["sdpa", "flex"]
 
 
 def run_throughput_suite(args: argparse.Namespace) -> int:
@@ -400,18 +386,19 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
 
     lengths = parse_int_list(args.lengths)
     batch_sizes = parse_int_list(args.batch_sizes)
-    attn_backends = _parse_backend_list(args.attn_backends)
-    specs = get_model_specs(full_models=args.full_models, families=args.families)
+    benchmark_families = ["esm2", "esmplusplus"]
+    specs = get_model_specs(full_models=True, families=benchmark_families)
+    assert len(specs) > 0, "Expected at least one model spec for throughput benchmarking."
     rows: List[Dict[str, object]] = []
     all_passed = True
     total_points = 0
     for spec in specs:
-        total_points += len(_selected_backends(spec=spec, args=args, attn_backends=attn_backends)) * len(lengths) * len(batch_sizes)
+        total_points += len(_selected_backends(spec=spec)) * len(lengths) * len(batch_sizes)
     progress = tqdm(total=total_points, desc="Throughput points", unit="point")
 
     if args.dry_run:
         for spec in specs:
-            spec_backends = _selected_backends(spec=spec, args=args, attn_backends=attn_backends)
+            spec_backends = _selected_backends(spec=spec)
 
             for attn_backend in spec_backends:
                 for length in lengths:
@@ -422,8 +409,8 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                                 "family": spec.family,
                                 "repo_id": spec.repo_id,
                                 "attn_backend": attn_backend,
-                                "compiled_model": _should_compile_model(spec=spec, args=args),
-                                "series_label": f"{spec.repo_id}|{attn_backend}|compiled={_should_compile_model(spec=spec, args=args)}",
+                                "compiled_model": True,
+                                "series_label": f"{spec.repo_id}|{attn_backend}|compiled=True",
                                 "sequence_length": length,
                                 "batch_size": batch_size,
                                 "latency_seconds": 0.0,
@@ -444,11 +431,13 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             "dtype": str(dtype),
             "lengths": lengths,
             "batch_sizes": batch_sizes,
-            "full_models": args.full_models,
-            "attn_backends": attn_backends,
-            "compare_attn": args.compare_attn,
-            "compile_model": bool(args.compile_model or args.compare_attn),
-            "pad_min_ratio": args.pad_min_ratio,
+            "num_batches": args.num_batches,
+            "warmup_steps": args.warmup_steps,
+            "families": benchmark_families,
+            "attn_backends": ["sdpa", "flex"],
+            "compile_model": True,
+            "padded_sequence_fraction": args.padded_sequence_fraction,
+            "max_pad_fraction": args.max_pad_fraction,
             "dry_run": True,
             "rows": rows,
         }
@@ -461,8 +450,8 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         return 0
 
     for spec in specs:
-        spec_backends = _selected_backends(spec=spec, args=args, attn_backends=attn_backends)
-        compile_model = _should_compile_model(spec=spec, args=args)
+        spec_backends = _selected_backends(spec=spec)
+        compile_model = True
 
         for attn_backend in spec_backends:
             selected_backend = None if attn_backend == "model_default" else attn_backend
@@ -535,7 +524,8 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                             num_batches=args.num_batches,
                             batch_size=batch_size,
                             length=sampled_sequence_length,
-                            pad_min_ratio=args.pad_min_ratio,
+                            padded_sequence_fraction=args.padded_sequence_fraction,
+                            max_pad_fraction=args.max_pad_fraction,
                             seed=batch_seed,
                         )
                         prepared_batches = []
@@ -559,16 +549,14 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                                 valid_token_count += int(prepared["attention_mask"].sum().item())
                             padded_token_count += int(prepared["input_ids"].numel())
 
-                        warmup_steps = args.warmup_steps
-                        if compile_model:
-                            warmup_steps = max(warmup_steps, 4)
+                        warmup_steps = max(args.warmup_steps, 4)
 
                         with torch.no_grad():
-                            for _ in range(warmup_steps):
+                            for i in range(warmup_steps):
                                 _ = run_forward(
                                     spec=spec,
                                     model=model,
-                                    batch=prepared_batches[0],
+                                    batch=prepared_batches[i % len(prepared_batches)],
                                     output_hidden_states=False,
                                     output_attentions=False,
                                 )
@@ -620,75 +608,29 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         "batch_sizes": batch_sizes,
         "num_batches": args.num_batches,
         "warmup_steps": args.warmup_steps,
-        "full_models": args.full_models,
-        "compare_attn": args.compare_attn,
-        "attn_backend": args.attn_backend,
-        "attn_backends": attn_backends,
-        "compile_model": bool(args.compile_model or args.compare_attn),
-        "pad_min_ratio": args.pad_min_ratio,
+        "families": benchmark_families,
+        "attn_backends": ["sdpa", "flex"],
+        "compile_model": True,
+        "padded_sequence_fraction": args.padded_sequence_fraction,
+        "max_pad_fraction": args.max_pad_fraction,
         "rows": rows,
     }
 
     write_json(output_dir / "metrics.json", payload)
     write_csv(output_dir / "metrics.csv", rows)
-    _plot_throughput(rows=rows, batch_sizes=batch_sizes, output_path=output_dir / "throughput_tokens_per_second.png")
-    _plot_memory(rows=rows, batch_sizes=batch_sizes, output_path=output_dir / "throughput_peak_memory_mb.png")
-    publication_plot_paths = _plot_publication_sdpa_vs_flex_per_model(rows=rows, output_dir=output_dir)
-    delta_rows = _build_flex_sdpa_deltas(rows)
-    write_csv(output_dir / "flex_vs_sdpa_deltas.csv", delta_rows)
-    delta_payload: Dict[str, object] = {
-        "suite": "throughput_flex_vs_sdpa",
-        "rows": delta_rows,
-    }
-    write_json(output_dir / "flex_vs_sdpa_deltas.json", delta_payload)
-    if len(delta_rows) > 0:
-        _plot_flex_sdpa_delta(
-            rows=delta_rows,
-            batch_sizes=batch_sizes,
-            metric_key="throughput_gain_percent",
-            title_prefix="Flex Attention Throughput Gain vs SDPA",
-            y_label="Throughput gain (%)",
-            output_path=output_dir / "flex_vs_sdpa_throughput_gain_percent.png",
-        )
-        _plot_flex_sdpa_delta(
-            rows=delta_rows,
-            batch_sizes=batch_sizes,
-            metric_key="memory_reduction_percent",
-            title_prefix="Flex Attention Memory Reduction vs SDPA",
-            y_label="Memory reduction (%)",
-            output_path=output_dir / "flex_vs_sdpa_memory_reduction_percent.png",
-        )
+    per_model_plot_paths = _plot_sdpa_vs_flex_per_model(rows=rows, output_dir=output_dir)
 
     passed_count = 0
     for row in rows:
         if bool(row["pass"]):
             passed_count += 1
-    throughput_gain_values: List[float] = []
-    memory_reduction_values: List[float] = []
-    for row in delta_rows:
-        throughput_gain_values.append(float(row["throughput_gain_percent"]))
-        memory_reduction = float(row["memory_reduction_percent"])
-        if math.isfinite(memory_reduction):
-            memory_reduction_values.append(memory_reduction)
-
-    if len(throughput_gain_values) > 0:
-        mean_throughput_gain = sum(throughput_gain_values) / len(throughput_gain_values)
-    else:
-        mean_throughput_gain = float("nan")
-    if len(memory_reduction_values) > 0:
-        mean_memory_reduction = sum(memory_reduction_values) / len(memory_reduction_values)
-    else:
-        mean_memory_reduction = float("nan")
     summary_lines = [
         "Suite: throughput",
         f"Benchmark points: {len(rows)}",
         f"Points passed: {passed_count}",
         f"Points failed: {len(rows) - passed_count}",
-        f"Flex-vs-SDPA pairs: {len(delta_rows)}",
-        f"Publication plots generated: {len(publication_plot_paths)}",
-        f"Publication plots directory: {output_dir / 'publication_plots'}",
-        f"Mean throughput gain (%): {mean_throughput_gain}",
-        f"Mean memory reduction (%): {mean_memory_reduction}",
+        f"Per-model plots generated: {len(per_model_plot_paths)}",
+        f"Per-model plots directory: {output_dir / 'per_model_plots'}",
         f"Output directory: {output_dir}",
     ]
     for row in rows:
@@ -714,13 +656,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-sizes", type=str, default="1,2,4,8")
     parser.add_argument("--num-batches", type=int, default=100)
     parser.add_argument("--warmup-steps", type=int, default=100)
-    parser.add_argument("--attn-backend", type=str, default="flex", choices=["flex", "sdpa", "model_default"])
-    parser.add_argument("--attn-backends", type=str, default="sdpa,flex")
-    parser.add_argument("--compare-attn", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--compile-model", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--pad-min-ratio", type=float, default=0.5)
-    parser.add_argument("--full-models", action="store_true")
-    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus"])
+    parser.add_argument("--padded-sequence-fraction", type=float, default=0.3)
+    parser.add_argument("--max-pad-fraction", type=float, default=0.5)
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")
     return parser

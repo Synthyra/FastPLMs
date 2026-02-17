@@ -11,7 +11,6 @@ License: https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-licen
 import entrypoint_setup
 import math
 import os
-import warnings
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -24,10 +23,14 @@ from huggingface_hub import snapshot_download
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
-from torch.nn.attention.flex_attention import create_block_mask
-from torch.nn.attention.flex_attention import flex_attention
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
+try:
+    from torch.nn.attention.flex_attention import create_block_mask
+    from torch.nn.attention.flex_attention import flex_attention
+except ImportError:
+    create_block_mask = None
+    flex_attention = None
 
 try:
     # when used from AutoModel, these are in the same directory
@@ -38,6 +41,7 @@ except:
 
 
 def _create_pad_block_mask(attention_mask_2d: torch.Tensor):
+    assert create_block_mask is not None, "Flex attention block mask requires create_block_mask."
     token_valid = attention_mask_2d.bool()
     batch_size, seq_len = token_valid.shape
 
@@ -76,7 +80,7 @@ class ESMplusplusConfig(PretrainedConfig):
         problem_type: str | None = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "flex",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -318,14 +322,13 @@ class MultiHeadAttention(nn.Module):
         self,
         d_model: int,
         n_heads: int,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "flex",
     ):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = self.d_model // self.n_heads
         self.attn_backend = attn_backend
-        self._warned_flex_fallback = False
         self.layernorm_qkv = nn.Sequential(
             nn.LayerNorm(d_model), nn.Linear(d_model, d_model * 3, bias=False)
         )
@@ -388,15 +391,10 @@ class MultiHeadAttention(nn.Module):
             flex_dtype_supported = query_BHLD.dtype in (torch.float16, torch.bfloat16)
             use_flex = (
                 self.attn_backend == "flex"
+                and flex_attention is not None
                 and flex_dtype_supported
                 and (attention_mask is None or flex_block_mask is not None)
             )
-            if self.attn_backend == "flex" and not flex_dtype_supported and not self._warned_flex_fallback:
-                warnings.warn(
-                    "Flex attention backend requested in float32; falling back to SDPA for strict numerical parity.",
-                    RuntimeWarning,
-                )
-                self._warned_flex_fallback = True
             if use_flex:
                 try:
                     context_BHLD = flex_attention(
@@ -406,13 +404,7 @@ class MultiHeadAttention(nn.Module):
                         block_mask=flex_block_mask,
                         scale=scale,
                     )
-                except Exception as exc:
-                    if not self._warned_flex_fallback:
-                        warnings.warn(
-                            f"Flex attention failed in ESM++ attention; falling back to SDPA. Error: {exc}",
-                            RuntimeWarning,
-                        )
-                        self._warned_flex_fallback = True
+                except Exception:
                     context_BHLD = F.scaled_dot_product_attention(
                         query_BHLD,
                         key_BHLD,
@@ -469,7 +461,7 @@ class UnifiedTransformerBlock(nn.Module):
         residue_scaling_factor: float = 1,
         expansion_ratio: float = 8 / 3,
         dropout: float = 0.0,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "flex",
     ):
         super().__init__()
         self.attn = MultiHeadAttention(
@@ -543,7 +535,7 @@ class TransformerStack(nn.Module):
         n_heads: int,
         n_layers: int,
         dropout: float = 0.0,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "flex",
     ):
         super().__init__()
         self.attn_backend = attn_backend
