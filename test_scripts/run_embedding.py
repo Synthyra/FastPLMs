@@ -1,6 +1,5 @@
 import argparse
 import pathlib
-import sqlite3
 import time
 from typing import Dict, List
 
@@ -43,6 +42,17 @@ def _validate_embedding_dict(embeddings: Dict[str, torch.Tensor], hidden_size: i
             assert tensor.ndim == 1, f"Expected pooled embedding rank-1 tensor for sequence {sequence}."
         assert torch.isfinite(tensor).all(), f"Found NaN/inf embeddings for sequence {sequence}."
     return embedding_dim
+
+
+def _assert_embedding_dicts_match(expected: Dict[str, torch.Tensor], observed: Dict[str, torch.Tensor]) -> None:
+    assert len(expected) == len(observed), "Embedding dictionary size mismatch."
+    for sequence in expected:
+        assert sequence in observed, f"Missing sequence in observed embeddings: {sequence}"
+        expected_tensor = expected[sequence]
+        observed_tensor = observed[sequence]
+        assert expected_tensor.shape == observed_tensor.shape, f"Shape mismatch for sequence: {sequence}"
+        assert expected_tensor.dtype == observed_tensor.dtype, f"Dtype mismatch for sequence: {sequence}"
+        assert torch.equal(expected_tensor.cpu(), observed_tensor.cpu()), f"Tensor value mismatch for sequence: {sequence}"
 
 
 def run_embedding_suite(args: argparse.Namespace) -> int:
@@ -99,15 +109,26 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
             "full_embedding_dim": -1,
             "pooled_count": 0,
             "full_count": 0,
-            "sql_count": 0,
+            "pooled_sql_count": 0,
+            "full_sql_count": 0,
+            "pooled_pth_roundtrip_pass": False,
+            "full_pth_roundtrip_pass": False,
+            "pooled_db_roundtrip_pass": False,
+            "full_db_roundtrip_pass": False,
             "seconds": 0.0,
             "error": "",
         }
 
         tmp_dir = output_dir / "tmp" / spec.key
         ensure_dir(tmp_dir)
-        sql_db_path = tmp_dir / "embeddings.db"
-        save_path = tmp_dir / "embeddings.pth"
+        pooled_sql_db_path = tmp_dir / "pooled_embeddings.db"
+        full_sql_db_path = tmp_dir / "full_embeddings.db"
+        pooled_save_path = tmp_dir / "pooled_embeddings.pth"
+        full_save_path = tmp_dir / "full_embeddings.pth"
+        artifact_paths = [pooled_sql_db_path, full_sql_db_path, pooled_save_path, full_save_path]
+        for artifact_path in artifact_paths:
+            if artifact_path.exists():
+                artifact_path.unlink()
 
         try:
             model, _ = load_model(spec=spec, task="base", device=device, dtype=dtype)
@@ -121,15 +142,20 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
                 max_len=args.max_length,
                 truncate=True,
                 full_embeddings=False,
+                embed_dtype=torch.float32,
                 pooling_types=["mean", "cls"],
                 sql=False,
-                save=False,
-                save_path=str(save_path),
+                save=True,
+                save_path=str(pooled_save_path),
             )
             pooled_dim = _validate_embedding_dict(embeddings=pooled_embeddings, hidden_size=hidden_size, full_embeddings=False)
             row["pooled_count"] = len(pooled_embeddings)
             row["pooled_embedding_dim"] = pooled_dim
             assert int(row["pooled_count"]) == expected_count, "Pooled embedding count mismatch."
+            loaded_pooled_pth = model.load_embeddings_from_pth(str(pooled_save_path))
+            _validate_embedding_dict(embeddings=loaded_pooled_pth, hidden_size=hidden_size, full_embeddings=False)
+            _assert_embedding_dicts_match(expected=pooled_embeddings, observed=loaded_pooled_pth)
+            row["pooled_pth_roundtrip_pass"] = True
 
             full_embeddings = model.embed_dataset(
                 sequences=sequences,
@@ -138,14 +164,19 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
                 max_len=args.max_length,
                 truncate=True,
                 full_embeddings=True,
+                embed_dtype=torch.float32,
                 sql=False,
-                save=False,
-                save_path=str(save_path),
+                save=True,
+                save_path=str(full_save_path),
             )
             full_dim = _validate_embedding_dict(embeddings=full_embeddings, hidden_size=hidden_size, full_embeddings=True)
             row["full_count"] = len(full_embeddings)
             row["full_embedding_dim"] = full_dim
             assert int(row["full_count"]) == expected_count, "Full embedding count mismatch."
+            loaded_full_pth = model.load_embeddings_from_pth(str(full_save_path))
+            _validate_embedding_dict(embeddings=loaded_full_pth, hidden_size=hidden_size, full_embeddings=True)
+            _assert_embedding_dicts_match(expected=full_embeddings, observed=loaded_full_pth)
+            row["full_pth_roundtrip_pass"] = True
 
             _ = model.embed_dataset(
                 sequences=sequences,
@@ -154,19 +185,48 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
                 max_len=args.max_length,
                 truncate=True,
                 full_embeddings=False,
+                embed_dtype=torch.float32,
                 pooling_types=["mean"],
                 sql=True,
                 save=False,
-                sql_db_path=str(sql_db_path),
-                save_path=str(save_path),
+                sql_db_path=str(pooled_sql_db_path),
+                save_path=str(pooled_save_path),
             )
-            with sqlite3.connect(sql_db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM embeddings")
-                sql_count = int(cursor.fetchone()[0])
-            row["sql_count"] = sql_count
-            assert sql_count == expected_count, "SQL embedding count mismatch."
-            row["pass"] = True
+            pooled_db_embeddings = model.load_embeddings_from_db(str(pooled_sql_db_path))
+            row["pooled_sql_count"] = len(pooled_db_embeddings)
+            assert int(row["pooled_sql_count"]) == expected_count, "Pooled SQL embedding count mismatch."
+            _validate_embedding_dict(embeddings=pooled_db_embeddings, hidden_size=hidden_size, full_embeddings=False)
+            _assert_embedding_dicts_match(expected=pooled_embeddings, observed=pooled_db_embeddings)
+            row["pooled_db_roundtrip_pass"] = True
+
+            _ = model.embed_dataset(
+                sequences=sequences,
+                tokenizer=tokenizer,
+                batch_size=args.batch_size,
+                max_len=args.max_length,
+                truncate=True,
+                full_embeddings=True,
+                embed_dtype=torch.float32,
+                pooling_types=["mean"],
+                sql=True,
+                save=False,
+                sql_db_path=str(full_sql_db_path),
+                save_path=str(full_save_path),
+            )
+            full_db_embeddings = model.load_embeddings_from_db(str(full_sql_db_path))
+            row["full_sql_count"] = len(full_db_embeddings)
+            assert int(row["full_sql_count"]) == expected_count, "Full SQL embedding count mismatch."
+            _validate_embedding_dict(embeddings=full_db_embeddings, hidden_size=hidden_size, full_embeddings=True)
+            _assert_embedding_dicts_match(expected=full_embeddings, observed=full_db_embeddings)
+            row["full_db_roundtrip_pass"] = True
+
+            row["pass"] = bool(
+                row["pooled_pth_roundtrip_pass"]
+                and row["full_pth_roundtrip_pass"]
+                and row["pooled_db_roundtrip_pass"]
+                and row["full_db_roundtrip_pass"]
+            )
+            assert bool(row["pass"]), "Embedding roundtrip check failed."
         except Exception as exc:
             row["error"] = str(exc)
             all_passed = False

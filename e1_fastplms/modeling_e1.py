@@ -583,7 +583,7 @@ class E1Config(PretrainedConfig):
         hidden_act="silu",
         rms_norm_eps=1e-5,
         initializer_range=0.02,
-        torch_dtype="bfloat16",
+        dtype="bfloat16",
         gradient_checkpointing=False,
         no_ffn_gradient_checkpointing=False,
         # Tokenization
@@ -607,7 +607,7 @@ class E1Config(PretrainedConfig):
             bos_token_id=tokenizer.token_to_id("<bos>"),
             eos_token_id=tokenizer.token_to_id("<eos>"),
             tie_word_embeddings=tie_word_embeddings,
-            torch_dtype=torch_dtype,
+            dtype=dtype,
             **kwargs,
         )
 

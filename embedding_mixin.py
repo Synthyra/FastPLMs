@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import networkx as nx
 import numpy as np
 import torch
@@ -165,7 +166,6 @@ class EmbeddingMixin:
 
     def _read_sequences_from_db(self, db_path: str) -> set[str]:
         """Read sequences from SQLite database."""
-        import sqlite3
         sequences = []
         with sqlite3.connect(db_path) as conn:
             c = conn.cursor()
@@ -176,6 +176,69 @@ class EmbeddingMixin:
                     break
                 sequences.append(row[0])
         return set(sequences)
+
+    def _ensure_embeddings_table(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.cursor()
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS embeddings ("
+            "sequence TEXT PRIMARY KEY, "
+            "embedding BLOB NOT NULL, "
+            "shape TEXT, "
+            "dtype TEXT"
+            ")"
+        )
+        cursor.execute("PRAGMA table_info(embeddings)")
+        rows = cursor.fetchall()
+        column_names = [row[1] for row in rows]
+        if "shape" not in column_names:
+            cursor.execute("ALTER TABLE embeddings ADD COLUMN shape TEXT")
+        if "dtype" not in column_names:
+            cursor.execute("ALTER TABLE embeddings ADD COLUMN dtype TEXT")
+        conn.commit()
+
+    def load_embeddings_from_pth(self, save_path: str) -> dict[str, torch.Tensor]:
+        assert os.path.exists(save_path), f"Embedding file does not exist: {save_path}"
+        payload = torch.load(save_path, map_location="cpu", weights_only=True)
+        assert isinstance(payload, dict), "Expected .pth embeddings file to contain a dictionary."
+        for sequence, tensor in payload.items():
+            assert isinstance(sequence, str), "Expected embedding dictionary keys to be sequences (str)."
+            assert isinstance(tensor, torch.Tensor), "Expected embedding dictionary values to be tensors."
+        return payload
+
+    def load_embeddings_from_db(self, db_path: str, sequences: Optional[List[str]] = None) -> dict[str, torch.Tensor]:
+        assert os.path.exists(db_path), f"Embedding database does not exist: {db_path}"
+        loaded: dict[str, torch.Tensor] = {}
+        with sqlite3.connect(db_path) as conn:
+            self._ensure_embeddings_table(conn)
+            cursor = conn.cursor()
+            if sequences is None:
+                cursor.execute("SELECT sequence, embedding, shape, dtype FROM embeddings")
+            else:
+                if len(sequences) == 0:
+                    return loaded
+                placeholders = ",".join(["?"] * len(sequences))
+                cursor.execute(
+                    f"SELECT sequence, embedding, shape, dtype FROM embeddings WHERE sequence IN ({placeholders})",
+                    tuple(sequences),
+                )
+
+            rows = cursor.fetchall()
+            for row in rows:
+                sequence = row[0]
+                embedding_bytes = row[1]
+                shape_text = row[2]
+                dtype_text = row[3]
+                assert shape_text is not None, "Missing shape metadata in embeddings table."
+                assert dtype_text is not None, "Missing dtype metadata in embeddings table."
+                shape_values = [int(value) for value in shape_text.split(",") if len(value) > 0]
+                assert len(shape_values) > 0, f"Invalid shape metadata for sequence: {sequence}"
+                expected_size = int(np.prod(shape_values))
+                np_dtype = np.dtype(dtype_text)
+                array = np.frombuffer(embedding_bytes, dtype=np_dtype)
+                assert array.size == expected_size, f"Shape mismatch while reading sequence: {sequence}"
+                reshaped = array.copy().reshape(tuple(shape_values))
+                loaded[sequence] = torch.from_numpy(reshaped)
+        return loaded
 
     def embed_dataset(
         self,
@@ -241,10 +304,9 @@ class EmbeddingMixin:
                     yield seqs, residue_embeddings, attention_mask
 
         if sql:
-            import sqlite3
             conn = sqlite3.connect(sql_db_path)
+            self._ensure_embeddings_table(conn)
             c = conn.cursor()
-            c.execute('CREATE TABLE IF NOT EXISTS embeddings (sequence text PRIMARY KEY, embedding blob)')
             already_embedded = self._read_sequences_from_db(sql_db_path)
             to_embed = [seq for seq in sequences if seq not in already_embedded]
             print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
@@ -252,11 +314,17 @@ class EmbeddingMixin:
             if len(to_embed) > 0:
                 with torch.no_grad():
                     for i, (seqs, residue_embeddings, attention_mask) in enumerate(iter_batches(to_embed)):
-                        embeddings = get_embeddings(residue_embeddings, attention_mask).float()
+                        embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
                         for seq, emb, mask in zip(seqs, embeddings, attention_mask):
                             if full_embeddings:
                                 emb = emb[mask.bool()].reshape(-1, hidden_size)
-                            c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", (seq, emb.cpu().numpy().tobytes()))
+                            emb_np = emb.cpu().numpy()
+                            emb_shape = ",".join([str(dim) for dim in emb_np.shape])
+                            emb_dtype = str(emb_np.dtype)
+                            c.execute(
+                                "INSERT OR REPLACE INTO embeddings (sequence, embedding, shape, dtype) VALUES (?, ?, ?, ?)",
+                                (seq, emb_np.tobytes(), emb_shape, emb_dtype),
+                            )
                         if tokenizer_mode and (i + 1) % 100 == 0:
                             conn.commit()
                 conn.commit()
@@ -265,7 +333,7 @@ class EmbeddingMixin:
 
         embeddings_dict = {}
         if os.path.exists(save_path):
-            embeddings_dict = torch.load(save_path, map_location='cpu', weights_only=True)
+            embeddings_dict = self.load_embeddings_from_pth(save_path)
             to_embed = [seq for seq in sequences if seq not in embeddings_dict]
             print(f"Found {len(embeddings_dict)} already embedded sequences in {save_path}")
             print(f"Embedding {len(to_embed)} new sequences")

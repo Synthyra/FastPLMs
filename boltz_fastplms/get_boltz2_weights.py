@@ -5,7 +5,7 @@ from pathlib import Path
 
 from huggingface_hub import HfApi, login
 
-from boltz_automodel.modeling_boltz2 import Boltz2Model
+from boltz_fastplms.modeling_boltz2 import Boltz2Model
 
 
 BOLTZ2_CKPT_URL = "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt"
@@ -34,9 +34,9 @@ def _copy_runtime_package(output_dir: Path) -> None:
 
 
 if __name__ == "__main__":
-    # py -m boltz_automodel.get_boltz2_weights
+    # py -m boltz_fastplms.get_boltz2_weights
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint_path", type=str, default="boltz_automodel/weights/boltz2_conf.ckpt")
+    parser.add_argument("--checkpoint_path", type=str, default="boltz_fastplms/weights/boltz2_conf.ckpt")
     parser.add_argument("--output_dir", type=str, default="boltz2_automodel_export")
     parser.add_argument("--repo_id", type=str, default="Synthyra/Boltz2")
     parser.add_argument("--token", type=str, default=None)

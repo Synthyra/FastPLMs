@@ -1,4 +1,5 @@
 import argparse
+import math
 import pathlib
 import random
 import time
@@ -28,6 +29,18 @@ from test_scripts.reporting import write_summary
 
 
 matplotlib.use("Agg")
+plt.rcParams.update(
+    {
+        "font.size": 11,
+        "axes.titlesize": 13,
+        "axes.labelsize": 11,
+        "legend.fontsize": 9,
+        "figure.titlesize": 14,
+        "axes.grid": True,
+        "grid.alpha": 0.25,
+        "lines.linewidth": 2.0,
+    }
+)
 
 
 def _parse_backend_list(backends: str) -> List[str]:
@@ -129,6 +142,108 @@ def _plot_memory(rows: List[Dict[str, object]], batch_sizes: List[int], output_p
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
+
+
+def _plot_flex_sdpa_delta(rows: List[Dict[str, object]], batch_sizes: List[int], metric_key: str, title_prefix: str, y_label: str, output_path: pathlib.Path) -> None:
+    plt.figure(figsize=(14, max(4, 4 * len(batch_sizes))))
+    for index, batch_size in enumerate(batch_sizes):
+        plt.subplot(len(batch_sizes), 1, index + 1)
+        model_ids: List[str] = []
+        for row in rows:
+            if int(row["batch_size"]) == batch_size and str(row["repo_id"]) not in model_ids:
+                model_ids.append(str(row["repo_id"]))
+
+        for model_id in model_ids:
+            x_lengths: List[int] = []
+            y_values: List[float] = []
+            for row in rows:
+                if int(row["batch_size"]) == batch_size and str(row["repo_id"]) == model_id:
+                    x_lengths.append(int(row["sequence_length"]))
+                    y_values.append(float(row[metric_key]))
+            if len(x_lengths) > 0:
+                paired = sorted(zip(x_lengths, y_values), key=lambda item: item[0])
+                x_sorted = [pair[0] for pair in paired]
+                y_sorted = [pair[1] for pair in paired]
+                plt.plot(x_sorted, y_sorted, marker="o", label=model_id)
+
+        plt.axhline(y=0.0, color="black", linestyle="--", linewidth=1.0)
+        plt.title(f"{title_prefix} (batch_size={batch_size})")
+        plt.xlabel("Sequence length")
+        plt.ylabel(y_label)
+        plt.grid(True)
+        plt.legend(loc="best")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+
+
+def _is_finite(value: object) -> bool:
+    if isinstance(value, float):
+        return math.isfinite(value)
+    if isinstance(value, int):
+        return True
+    return False
+
+
+def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    pair_index: Dict[str, Dict[str, Dict[str, object]]] = {}
+    for row in rows:
+        if bool(row["pass"]) is False:
+            continue
+        family = str(row["family"])
+        if family not in ["esm2", "esmplusplus"]:
+            continue
+        backend = str(row["attn_backend"])
+        if backend not in ["sdpa", "flex"]:
+            continue
+        if _is_finite(row["tokens_per_second"]) is False:
+            continue
+        if _is_finite(row["peak_memory_mb"]) is False:
+            continue
+        pair_key = f"{row['model_key']}|{row['sequence_length']}|{row['batch_size']}|{row['compiled_model']}"
+        if pair_key not in pair_index:
+            pair_index[pair_key] = {}
+        pair_index[pair_key][backend] = row
+
+    delta_rows: List[Dict[str, object]] = []
+    for pair_key in pair_index:
+        pair = pair_index[pair_key]
+        if "sdpa" not in pair or "flex" not in pair:
+            continue
+        sdpa_row = pair["sdpa"]
+        flex_row = pair["flex"]
+        sdpa_throughput = float(sdpa_row["tokens_per_second"])
+        flex_throughput = float(flex_row["tokens_per_second"])
+        sdpa_memory = float(sdpa_row["peak_memory_mb"])
+        flex_memory = float(flex_row["peak_memory_mb"])
+        assert sdpa_throughput > 0.0, f"Expected positive SDPA throughput for pair {pair_key}"
+        throughput_ratio = flex_throughput / sdpa_throughput
+        throughput_gain_percent = 100.0 * (throughput_ratio - 1.0)
+        if sdpa_memory > 0.0:
+            memory_ratio = flex_memory / sdpa_memory
+            memory_reduction_percent = 100.0 * (1.0 - memory_ratio)
+        else:
+            memory_ratio = float("nan")
+            memory_reduction_percent = float("nan")
+        delta_rows.append(
+            {
+                "model_key": flex_row["model_key"],
+                "family": flex_row["family"],
+                "repo_id": flex_row["repo_id"],
+                "compiled_model": flex_row["compiled_model"],
+                "sequence_length": flex_row["sequence_length"],
+                "batch_size": flex_row["batch_size"],
+                "sdpa_tokens_per_second": sdpa_throughput,
+                "flex_tokens_per_second": flex_throughput,
+                "throughput_ratio_flex_over_sdpa": throughput_ratio,
+                "throughput_gain_percent": throughput_gain_percent,
+                "sdpa_peak_memory_mb": sdpa_memory,
+                "flex_peak_memory_mb": flex_memory,
+                "memory_ratio_flex_over_sdpa": memory_ratio,
+                "memory_reduction_percent": memory_reduction_percent,
+            }
+        )
+    return delta_rows
 
 
 def run_throughput_suite(args: argparse.Namespace) -> int:
@@ -376,16 +491,59 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     write_csv(output_dir / "metrics.csv", rows)
     _plot_throughput(rows=rows, batch_sizes=batch_sizes, output_path=output_dir / "throughput_tokens_per_second.png")
     _plot_memory(rows=rows, batch_sizes=batch_sizes, output_path=output_dir / "throughput_peak_memory_mb.png")
+    delta_rows = _build_flex_sdpa_deltas(rows)
+    write_csv(output_dir / "flex_vs_sdpa_deltas.csv", delta_rows)
+    delta_payload: Dict[str, object] = {
+        "suite": "throughput_flex_vs_sdpa",
+        "rows": delta_rows,
+    }
+    write_json(output_dir / "flex_vs_sdpa_deltas.json", delta_payload)
+    if len(delta_rows) > 0:
+        _plot_flex_sdpa_delta(
+            rows=delta_rows,
+            batch_sizes=batch_sizes,
+            metric_key="throughput_gain_percent",
+            title_prefix="Flex Attention Throughput Gain vs SDPA",
+            y_label="Throughput gain (%)",
+            output_path=output_dir / "flex_vs_sdpa_throughput_gain_percent.png",
+        )
+        _plot_flex_sdpa_delta(
+            rows=delta_rows,
+            batch_sizes=batch_sizes,
+            metric_key="memory_reduction_percent",
+            title_prefix="Flex Attention Memory Reduction vs SDPA",
+            y_label="Memory reduction (%)",
+            output_path=output_dir / "flex_vs_sdpa_memory_reduction_percent.png",
+        )
 
     passed_count = 0
     for row in rows:
         if bool(row["pass"]):
             passed_count += 1
+    throughput_gain_values: List[float] = []
+    memory_reduction_values: List[float] = []
+    for row in delta_rows:
+        throughput_gain_values.append(float(row["throughput_gain_percent"]))
+        memory_reduction = float(row["memory_reduction_percent"])
+        if math.isfinite(memory_reduction):
+            memory_reduction_values.append(memory_reduction)
+
+    if len(throughput_gain_values) > 0:
+        mean_throughput_gain = sum(throughput_gain_values) / len(throughput_gain_values)
+    else:
+        mean_throughput_gain = float("nan")
+    if len(memory_reduction_values) > 0:
+        mean_memory_reduction = sum(memory_reduction_values) / len(memory_reduction_values)
+    else:
+        mean_memory_reduction = float("nan")
     summary_lines = [
         "Suite: throughput",
         f"Benchmark points: {len(rows)}",
         f"Points passed: {passed_count}",
         f"Points failed: {len(rows) - passed_count}",
+        f"Flex-vs-SDPA pairs: {len(delta_rows)}",
+        f"Mean throughput gain (%): {mean_throughput_gain}",
+        f"Mean memory reduction (%): {mean_memory_reduction}",
         f"Output directory: {output_dir}",
     ]
     for row in rows:

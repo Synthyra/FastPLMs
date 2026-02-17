@@ -13,8 +13,7 @@ If you want Flex Attention, set `attn_backend="flex"` in the model config before
 
 ```python
 import torch
-from transformers import AutoConfig
-from transformers import AutoModel
+from transformers import AutoConfig, AutoModel
 
 config = AutoConfig.from_pretrained("Synthyra/ESMplusplus_small", trust_remote_code=True)
 config.attn_backend = "flex"

@@ -9,7 +9,7 @@ The GitHub with the implementation and requirements can be found [here](https://
 # Boltz2 AutoModel (Inference-only)
 This is a barebones Huggingface `AutoModel` compatible implementation of Boltz2 focused on fast inference workflows.
 
-The implementation is located in `boltz_automodel/` and exposes:
+The implementation is located in `boltz_fastplms/` and exposes:
 - `Boltz2Config`
 - `Boltz2Model`
 - `predict_structure(amino_acid_sequence, ...)`
@@ -22,7 +22,7 @@ The implementation is located in `boltz_automodel/` and exposes:
 - Confidence outputs included in prediction outputs (`plddt`, `ptm`, `iptm`, and derived confidence score when available).
 
 ## Runtime note
-This implementation is self-contained inside `boltz_automodel/` and does not require
+This implementation is self-contained inside `boltz_fastplms/` and does not require
 the original cloned `boltz` package at runtime.
 
 ## Use with transformers
@@ -61,7 +61,7 @@ model.save_as_cif(out, "prediction.cif")
 Use:
 
 ```bash
-py -m boltz_automodel.get_boltz2_weights --checkpoint_path boltz_automodel/weights/boltz2_conf.ckpt --output_dir boltz2_automodel_export
+py -m boltz_fastplms.get_boltz2_weights --checkpoint_path boltz_fastplms/weights/boltz2_conf.ckpt --output_dir boltz2_automodel_export
 ```
 
 The export directory contains:

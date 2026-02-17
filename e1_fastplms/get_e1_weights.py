@@ -1,7 +1,7 @@
 import torch    
 from huggingface_hub import HfApi, login
 
-from e1.modeling_e1 import E1ForMaskedLM, E1Config
+from e1_fastplms.modeling_e1 import E1ForMaskedLM, E1Config
 
 
 model_dict = {

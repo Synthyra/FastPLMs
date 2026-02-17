@@ -11,23 +11,23 @@ class ModelSpec:
 
 
 REPRESENTATIVE_MODELS: List[ModelSpec] = [
-    ModelSpec(key="e1_150m", family="e1", repo_id="Synthyra/Profluent-E1-150M", reference_repo_id=None),
+    ModelSpec(key="e1_150m", family="e1", repo_id="Synthyra/Profluent-E1-150M", reference_repo_id="Profluent-Bio/E1-150m"),
     ModelSpec(key="esm2_8m", family="esm2", repo_id="Synthyra/ESM2-8M", reference_repo_id="facebook/esm2_t6_8M_UR50D"),
-    ModelSpec(key="esmplusplus_small", family="esmplusplus", repo_id="Synthyra/ESMplusplus_small", reference_repo_id=None),
+    ModelSpec(key="esmplusplus_small", family="esmplusplus", repo_id="Synthyra/ESMplusplus_small", reference_repo_id="EvolutionaryScale/esmc-300m-2024-12"),
 ]
 
 
 FULL_MODELS: List[ModelSpec] = [
-    ModelSpec(key="e1_150m", family="e1", repo_id="Synthyra/Profluent-E1-150M", reference_repo_id=None),
-    ModelSpec(key="e1_300m", family="e1", repo_id="Synthyra/Profluent-E1-300M", reference_repo_id=None),
-    ModelSpec(key="e1_600m", family="e1", repo_id="Synthyra/Profluent-E1-600M", reference_repo_id=None),
+    ModelSpec(key="e1_150m", family="e1", repo_id="Synthyra/Profluent-E1-150M", reference_repo_id="Profluent-Bio/E1-150m"),
+    ModelSpec(key="e1_300m", family="e1", repo_id="Synthyra/Profluent-E1-300M", reference_repo_id="Profluent-Bio/E1-300m"),
+    ModelSpec(key="e1_600m", family="e1", repo_id="Synthyra/Profluent-E1-600M", reference_repo_id="Profluent-Bio/E1-600m"),
     ModelSpec(key="esm2_8m", family="esm2", repo_id="Synthyra/ESM2-8M", reference_repo_id="facebook/esm2_t6_8M_UR50D"),
     ModelSpec(key="esm2_35m", family="esm2", repo_id="Synthyra/ESM2-35M", reference_repo_id="facebook/esm2_t12_35M_UR50D"),
     ModelSpec(key="esm2_150m", family="esm2", repo_id="Synthyra/ESM2-150M", reference_repo_id="facebook/esm2_t30_150M_UR50D"),
     ModelSpec(key="esm2_650m", family="esm2", repo_id="Synthyra/ESM2-650M", reference_repo_id="facebook/esm2_t33_650M_UR50D"),
     ModelSpec(key="esm2_3b", family="esm2", repo_id="Synthyra/ESM2-3B", reference_repo_id="facebook/esm2_t36_3B_UR50D"),
-    ModelSpec(key="esmplusplus_small", family="esmplusplus", repo_id="Synthyra/ESMplusplus_small", reference_repo_id=None),
-    ModelSpec(key="esmplusplus_large", family="esmplusplus", repo_id="Synthyra/ESMplusplus_large", reference_repo_id=None),
+    ModelSpec(key="esmplusplus_small", family="esmplusplus", repo_id="Synthyra/ESMplusplus_small", reference_repo_id="EvolutionaryScale/esmc-300m-2024-12"),
+    ModelSpec(key="esmplusplus_large", family="esmplusplus", repo_id="Synthyra/ESMplusplus_large", reference_repo_id="EvolutionaryScale/esmc-600m-2024-12"),
 ]
 
 

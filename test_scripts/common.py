@@ -1,7 +1,9 @@
 import contextlib
 import datetime
+import importlib
 import pathlib
 import random
+import sys
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
@@ -10,6 +12,8 @@ from huggingface_hub import login
 from transformers import AutoConfig
 from transformers import AutoModel
 from transformers import AutoModelForMaskedLM
+from transformers import EsmForMaskedLM
+from transformers import EsmTokenizer
 
 from test_scripts.model_registry import ModelSpec
 
@@ -134,9 +138,9 @@ def load_model(
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "e1":
-        from e1.modeling_e1 import E1Config
-        from e1.modeling_e1 import E1ForMaskedLM
-        from e1.modeling_e1 import E1Model
+        from e1_fastplms.modeling_e1 import E1Config
+        from e1_fastplms.modeling_e1 import E1ForMaskedLM
+        from e1_fastplms.modeling_e1 import E1Model
 
         model_config = E1Config.from_pretrained(spec.repo_id)
         if task == "base":
@@ -167,6 +171,80 @@ def load_model(
     else:
         tokenizer = model.tokenizer
     return model, tokenizer
+
+
+def _ensure_local_e1_module_on_path() -> None:
+    e1_src = pathlib.Path(__file__).resolve().parents[1] / "E1" / "src"
+    assert e1_src.exists(), f"E1 submodule source directory not found: {e1_src}"
+    e1_src_str = str(e1_src)
+    if e1_src_str not in sys.path:
+        sys.path.insert(0, e1_src_str)
+
+
+def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    assert spec.reference_repo_id is not None, f"Missing official E1 repo id for {spec.key}."
+    _ensure_local_e1_module_on_path()
+    batch_preparer_module = importlib.import_module("E1.batch_preparer")
+    modeling_module = importlib.import_module("E1.modeling")
+    E1BatchPreparer = batch_preparer_module.E1BatchPreparer
+    E1ForMaskedLM = modeling_module.E1ForMaskedLM
+
+    model = E1ForMaskedLM.from_pretrained(spec.reference_repo_id, dtype=dtype).to(device).eval()
+    batch_preparer = E1BatchPreparer()
+    return model, batch_preparer
+
+
+def load_official_esmc_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    from esm_plusplus.get_esmc_weights import ESMplusplus_300M, ESMplusplus_600M
+
+    assert spec.reference_repo_id is not None, f"Missing official ESMC repo id for {spec.key}."
+    if "300" in spec.reference_repo_id:
+        model = ESMplusplus_300M(device=device)
+    elif "600" in spec.reference_repo_id:
+        model = ESMplusplus_600M(device=device)
+    else:
+        raise ValueError(f"Unsupported ESMC reference repo id: {spec.reference_repo_id}")
+    model = model.to(device).to(dtype).eval()
+    tokenizer = model.tokenizer
+    return model, tokenizer
+
+
+def load_official_esm2_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    assert spec.reference_repo_id is not None, f"Missing official ESM2 repo id for {spec.key}."
+    tokenizer = EsmTokenizer.from_pretrained(spec.reference_repo_id)
+    model = EsmForMaskedLM.from_pretrained(spec.reference_repo_id, torch_dtype=dtype).to(device).eval()
+    return model, tokenizer
+
+
+def load_official_model_for_compliance(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    if spec.family == "e1":
+        return load_official_e1_model(spec=spec, device=device, dtype=dtype)
+    if spec.family == "esmplusplus":
+        return load_official_esmc_model(spec=spec, device=device, dtype=dtype)
+    if spec.family == "esm2":
+        return load_official_esm2_model(spec=spec, device=device, dtype=dtype)
+    raise ValueError(f"Unsupported family for official loader: {spec.family}")
+
+
+def prepare_official_batch_for_compliance(
+    spec: ModelSpec,
+    sequence_batch: List[str],
+    tokenizer,
+    device: torch.device,
+) -> Dict[str, torch.Tensor]:
+    if spec.family == "e1":
+        assert tokenizer is not None, "Official E1 batch preparer is required for compliance comparison."
+        raw_batch = tokenizer.get_batch_kwargs(sequence_batch, device=device)
+        batch = {
+            "input_ids": raw_batch["input_ids"],
+            "within_seq_position_ids": raw_batch["within_seq_position_ids"],
+            "global_position_ids": raw_batch["global_position_ids"],
+            "sequence_ids": raw_batch["sequence_ids"],
+        }
+        return batch
+    assert tokenizer is not None, "Official tokenizer is required for compliance comparison."
+    batch = tokenizer(sequence_batch, return_tensors="pt", padding="longest")
+    return batch.to(device)
 
 
 def prepare_model_batch(

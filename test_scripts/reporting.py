@@ -8,6 +8,18 @@ import matplotlib.pyplot as plt
 
 
 matplotlib.use("Agg")
+plt.rcParams.update(
+    {
+        "font.size": 11,
+        "axes.titlesize": 13,
+        "axes.labelsize": 11,
+        "legend.fontsize": 9,
+        "figure.titlesize": 14,
+        "axes.grid": True,
+        "grid.alpha": 0.25,
+        "lines.linewidth": 2.0,
+    }
+)
 
 
 def write_json(path: pathlib.Path, payload: Dict[str, object]) -> None:
@@ -42,7 +54,7 @@ def write_summary(path: pathlib.Path, lines: List[str]) -> None:
 
 def plot_bar(path: pathlib.Path, labels: List[str], values: List[float], title: str, ylabel: str) -> None:
     plt.figure(figsize=(max(8, len(labels) * 1.2), 5))
-    plt.bar(labels, values)
+    plt.bar(labels, values, color="#4477AA", edgecolor="#111111", linewidth=0.6)
     plt.title(title)
     plt.ylabel(ylabel)
     plt.xticks(rotation=35, ha="right")

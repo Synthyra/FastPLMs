@@ -20,10 +20,10 @@ from typing import List
 from typing import Tuple
 from transformers import AutoModel
 
-from boltz_automodel.cif_writer import write_cif
-from boltz_automodel.get_boltz2_weights import BOLTZ2_CKPT_URL
-from boltz_automodel.minimal_featurizer import build_boltz2_features
-from boltz_automodel.minimal_structures import ProteinStructureTemplate
+from boltz_fastplms.cif_writer import write_cif
+from boltz_fastplms.get_boltz2_weights import BOLTZ2_CKPT_URL
+from boltz_fastplms.minimal_featurizer import build_boltz2_features
+from boltz_fastplms.minimal_structures import ProteinStructureTemplate
 from test_scripts.common import autocast_context
 from test_scripts.common import build_output_dir
 from test_scripts.common import login_if_needed
@@ -871,7 +871,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run Boltz2 compliance test against pip boltz CLI outputs.")
     parser.add_argument("--token", type=str, default=None)
     parser.add_argument("--repo-id", type=str, default="Synthyra/Boltz2")
-    parser.add_argument("--checkpoint-path", type=str, default="boltz_automodel/weights/boltz2_conf.ckpt")
+    parser.add_argument("--checkpoint-path", type=str, default="boltz_fastplms/weights/boltz2_conf.ckpt")
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--dtype", type=str, default="float32", choices=["auto", "float32", "float16", "bfloat16"])
     parser.add_argument("--seed", type=int, default=42)

@@ -1,3 +1,6 @@
 [submodule "boltz"]
 	path = boltz
 	url = https://github.com/jwohlwend/boltz.git
+[submodule "E1"]
+	path = E1
+	url = https://github.com/Profluent-AI/E1.git

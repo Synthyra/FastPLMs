@@ -241,10 +241,9 @@ class EmbeddingMixin:
                     yield seqs, residue_embeddings, attention_mask
 
         if sql:
-            import sqlite3
             conn = sqlite3.connect(sql_db_path)
+            self._ensure_embeddings_table(conn)
             c = conn.cursor()
-            c.execute('CREATE TABLE IF NOT EXISTS embeddings (sequence text PRIMARY KEY, embedding blob)')
             already_embedded = self._read_sequences_from_db(sql_db_path)
             to_embed = [seq for seq in sequences if seq not in already_embedded]
             print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
@@ -252,11 +251,17 @@ class EmbeddingMixin:
             if len(to_embed) > 0:
                 with torch.no_grad():
                     for i, (seqs, residue_embeddings, attention_mask) in enumerate(iter_batches(to_embed)):
-                        embeddings = get_embeddings(residue_embeddings, attention_mask).float()
+                        embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
                         for seq, emb, mask in zip(seqs, embeddings, attention_mask):
                             if full_embeddings:
                                 emb = emb[mask.bool()].reshape(-1, hidden_size)
-                            c.execute("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", (seq, emb.cpu().numpy().tobytes()))
+                            emb_np = emb.cpu().numpy()
+                            emb_shape = ",".join([str(dim) for dim in emb_np.shape])
+                            emb_dtype = str(emb_np.dtype)
+                            c.execute(
+                                "INSERT OR REPLACE INTO embeddings (sequence, embedding, shape, dtype) VALUES (?, ?, ?, ?)",
+                                (seq, emb_np.tobytes(), emb_shape, emb_dtype),
+                            )
                         if tokenizer_mode and (i + 1) % 100 == 0:
                             conn.commit()
                 conn.commit()
@@ -265,7 +270,7 @@ class EmbeddingMixin:
 
         embeddings_dict = {}
         if os.path.exists(save_path):
-            embeddings_dict = torch.load(save_path, map_location='cpu', weights_only=True)
+            embeddings_dict = self.load_embeddings_from_pth(save_path)
             to_embed = [seq for seq in sequences if seq not in embeddings_dict]
             print(f"Found {len(embeddings_dict)} already embedded sequences in {save_path}")
             print(f"Embedding {len(to_embed)} new sequences")
