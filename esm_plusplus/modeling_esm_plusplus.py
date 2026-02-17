@@ -167,13 +167,24 @@ class RotaryEmbedding(torch.nn.Module):
         self._sin_cached = None
         self._cos_k_cached = None
         self._sin_k_cached = None
+        self._inv_freq_compute_device: Optional[torch.device] = None
         self.reset_parameters()
 
     def reset_parameters(self):
         """Reset the parameters of the embedding."""
-        inv_freq = self._compute_inv_freq(self.device)
+        if "inv_freq" in self._buffers and isinstance(self._buffers["inv_freq"], torch.Tensor):
+            buffer_device = self._buffers["inv_freq"].device
+        else:
+            buffer_device = self.device
+        inv_freq = self._compute_inv_freq(buffer_device)
+        self._inv_freq_compute_device = inv_freq.device
+        self._seq_len_cached = 0
+        self._cos_cached = None
+        self._sin_cached = None
+        self._cos_k_cached = None
+        self._sin_k_cached = None
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        arange = torch.arange(0, self.dim, 2, device=self.device, dtype=torch.float32)
+        arange = torch.arange(0, self.dim, 2, device=buffer_device, dtype=torch.float32)
         scale = (
             (arange + 0.4 * self.dim) / (1.4 * self.dim)
             if self.scale_base is not None
@@ -240,6 +251,9 @@ class RotaryEmbedding(torch.nn.Module):
         Returns:
             Tuple of rotated query and key tensors
         """
+        assert self._inv_freq_compute_device is not None, "Rotary inv_freq compute device should be set after initialization."
+        if self._inv_freq_compute_device != q.device:
+            self.reset_parameters()
         self._update_cos_sin_cache(q.shape[1], device=q.device, dtype=q.dtype)
         assert self._cos_cached is not None
         assert self._sin_cached is not None
@@ -371,10 +385,18 @@ class MultiHeadAttention(nn.Module):
             if attention_mask is not None:
                 sdpa_mask = torch.zeros_like(attention_mask, dtype=query_BHLD.dtype)
                 sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
+            flex_dtype_supported = query_BHLD.dtype in (torch.float16, torch.bfloat16)
             use_flex = (
                 self.attn_backend == "flex"
+                and flex_dtype_supported
                 and (attention_mask is None or flex_block_mask is not None)
             )
+            if self.attn_backend == "flex" and not flex_dtype_supported and not self._warned_flex_fallback:
+                warnings.warn(
+                    "Flex attention backend requested in float32; falling back to SDPA for strict numerical parity.",
+                    RuntimeWarning,
+                )
+                self._warned_flex_fallback = True
             if use_flex:
                 try:
                     context_BHLD = flex_attention(
@@ -609,18 +631,42 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
 
     def _init_weights(self, module):
         """Initialize the weights"""
+        # HF from_pretrained marks loaded parameters with `_is_hf_initialized`.
+        # Skip this module if any local parameter is already marked as loaded.
+        for parameter in module.parameters(recurse=False):
+            if "_is_hf_initialized" in parameter.__dict__ and parameter.__dict__["_is_hf_initialized"]:
+                return
+
         if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
             if module.bias is not None:
-                module.bias.data.zero_()
+                nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            nn.init.normal_(module.weight, mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
+                with torch.no_grad():
+                    module.weight[module.padding_idx].zero_()
         elif isinstance(module, nn.LayerNorm):
             if module.bias is not None:
-                module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
+                nn.init.zeros_(module.bias)
+            nn.init.ones_(module.weight)
+
+    def _reset_rotary_embeddings(self):
+        """Refresh non-persistent rotary buffers after checkpoint loading."""
+        for module in self.modules():
+            if isinstance(module, RotaryEmbedding):
+                module.reset_parameters()
+
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        output_loading_info = bool(kwargs["output_loading_info"]) if "output_loading_info" in kwargs else False
+        loaded = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        if output_loading_info:
+            model, loading_info = loaded
+            model._reset_rotary_embeddings()
+            return model, loading_info
+        loaded._reset_rotary_embeddings()
+        return loaded
 
     @classmethod
     def from_pretrained_esm(cls, model_name: str):
@@ -931,51 +977,88 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
 
 
 ### Loading from EvolutionaryScale
+_ESMC_CHECKPOINT_SPECS = {
+    "esmc-300": {
+        "repo_id": "EvolutionaryScale/esmc-300m-2024-12",
+        "weights_relpath": "data/weights/esmc_300m_2024_12_v0.pth",
+        "hidden_size": 960,
+        "num_attention_heads": 15,
+        "num_hidden_layers": 30,
+    },
+    "esmc-600": {
+        "repo_id": "EvolutionaryScale/esmc-600m-2024-12",
+        "weights_relpath": "data/weights/esmc_600m_2024_12_v0.pth",
+        "hidden_size": 1152,
+        "num_attention_heads": 18,
+        "num_hidden_layers": 36,
+    },
+}
+
+
+def _resolve_esmc_checkpoint_key(model: str) -> str:
+    if "esmc-300" in model:
+        return "esmc-300"
+    if "esmc-600" in model:
+        return "esmc-600"
+    raise ValueError(f"{model=} is an invalid ESMC model name.")
+
+
 @staticmethod
 @cache
 def data_root(model: str):
     if "INFRA_PROVIDER" in os.environ:
         return Path("")
-    # Try to download from hugginface if it doesn't exist
-    if model.startswith("esmc-300"):
-        path = Path(snapshot_download(repo_id="EvolutionaryScale/esmc-300m-2024-12"))
-    elif model.startswith("esmc-600"):
-        path = Path(snapshot_download(repo_id="EvolutionaryScale/esmc-600m-2024-12"))
-    else:
-        raise ValueError(f"{model=} is an invalid model name.")
-    return path
+    key = _resolve_esmc_checkpoint_key(model)
+    return Path(snapshot_download(repo_id=_ESMC_CHECKPOINT_SPECS[key]["repo_id"]))
+
+
+def get_esmc_checkpoint_path(model: str) -> Path:
+    key = _resolve_esmc_checkpoint_key(model)
+    return data_root(key) / _ESMC_CHECKPOINT_SPECS[key]["weights_relpath"]
+
+
+def _load_esmc_checkpoint_model(
+    config: ESMplusplusConfig,
+    model: str,
+    device: torch.device | str = "cpu",
+) -> ESMplusplusForMaskedLM:
+    key = _resolve_esmc_checkpoint_key(model)
+    spec = _ESMC_CHECKPOINT_SPECS[key]
+    assert config.hidden_size == spec["hidden_size"], (
+        f"ESMC loader expected hidden_size={spec['hidden_size']} for {key}, "
+        f"but got {config.hidden_size}."
+    )
+    assert config.num_attention_heads == spec["num_attention_heads"], (
+        f"ESMC loader expected num_attention_heads={spec['num_attention_heads']} for {key}, "
+        f"but got {config.num_attention_heads}."
+    )
+    assert config.num_hidden_layers == spec["num_hidden_layers"], (
+        f"ESMC loader expected num_hidden_layers={spec['num_hidden_layers']} for {key}, "
+        f"but got {config.num_hidden_layers}."
+    )
+    with torch.device(device):
+        model_obj = ESMplusplusForMaskedLM(config)
+    state_dict = torch.load(get_esmc_checkpoint_path(key), map_location=device)
+    model_obj.load_state_dict(state_dict)
+    return model_obj
 
 
 def ESMplusplus_300M(device: torch.device | str = "cpu"):
-    with torch.device(device):
-        config = ESMplusplusConfig(
-            hidden_size=960,
-            num_attention_heads=15,
-            num_hidden_layers=30,
-        )
-        model = ESMplusplusForMaskedLM(config)
-    state_dict = torch.load(
-        data_root("esmc-300") / "data/weights/esmc_300m_2024_12_v0.pth",
-        map_location=device,
+    config = ESMplusplusConfig(
+        hidden_size=960,
+        num_attention_heads=15,
+        num_hidden_layers=30,
     )
-    model.load_state_dict(state_dict)
-    return model
+    return _load_esmc_checkpoint_model(config=config, model="esmc-300", device=device)
 
 
 def ESMplusplus_600M(device: torch.device | str = "cpu"):
-    with torch.device(device):
-        config = ESMplusplusConfig(
-            hidden_size=1152,
-            num_attention_heads=18,
-            num_hidden_layers=36,
-        )
-        model = ESMplusplusForMaskedLM(config)
-    state_dict = torch.load(
-        data_root("esmc-600") / "data/weights/esmc_600m_2024_12_v0.pth",
-        map_location=device,
+    config = ESMplusplusConfig(
+        hidden_size=1152,
+        num_attention_heads=18,
+        num_hidden_layers=36,
     )
-    model.load_state_dict(state_dict)
-    return model
+    return _load_esmc_checkpoint_model(config=config, model="esmc-600", device=device)
 
 
 ### Tokenization
