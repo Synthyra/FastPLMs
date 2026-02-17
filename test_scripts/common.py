@@ -4,11 +4,13 @@ import importlib
 import importlib.util
 import pathlib
 import random
+import shutil
 import sys
 import types
 import numpy as np
 import torch
 from typing import Dict, Iterable, List, Optional
+from huggingface_hub import hf_hub_download
 from huggingface_hub import login
 from transformers import (
     AutoConfig,
@@ -213,9 +215,30 @@ def _ensure_local_e1_module_on_path() -> None:
     )
 
 
+def _ensure_local_e1_tokenizer_json(spec: ModelSpec) -> None:
+    e1_spec = importlib.util.find_spec("E1")
+    assert e1_spec is not None, "E1 module spec was not found after path setup."
+    assert e1_spec.origin is not None, "E1 module origin is required to resolve tokenizer path."
+    e1_package_dir = pathlib.Path(e1_spec.origin).resolve().parent
+    tokenizer_path = e1_package_dir / "tokenizer.json"
+    if tokenizer_path.exists():
+        return
+
+    assert spec.reference_repo_id is not None, f"Missing official e1 repo id for {spec.key}."
+    print(
+        "[test_scripts.common] Missing E1 tokenizer file at "
+        f"{tokenizer_path}. Downloading tokenizer.json from {spec.reference_repo_id}."
+    )
+    downloaded_path = pathlib.Path(hf_hub_download(repo_id=spec.reference_repo_id, filename="tokenizer.json"))
+    tokenizer_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(downloaded_path, tokenizer_path)
+    assert tokenizer_path.exists(), f"Failed to materialize E1 tokenizer file at {tokenizer_path}"
+
+
 def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
     assert spec.reference_repo_id is not None, f"Missing official e1 repo id for {spec.key}."
     _ensure_local_e1_module_on_path()
+    _ensure_local_e1_tokenizer_json(spec)
     if "kernels" not in sys.modules:
         kernels_spec = importlib.util.find_spec("kernels")
         if kernels_spec is None:
