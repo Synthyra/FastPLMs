@@ -257,7 +257,7 @@ def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.d
     E1BatchPreparer = batch_preparer_module.E1BatchPreparer
     E1ForMaskedLM = modeling_module.E1ForMaskedLM
 
-    model = E1ForMaskedLM.from_pretrained(spec.reference_repo_id, dtype=dtype).to(device).eval()
+    model = E1ForMaskedLM.from_pretrained(spec.reference_repo_id).to(device=device, dtype=dtype).eval()
     batch_preparer = E1BatchPreparer()
     return model, batch_preparer
 
@@ -280,7 +280,7 @@ def load_official_esmc_model(spec: ModelSpec, device: torch.device, dtype: torch
 def load_official_esm2_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
     assert spec.reference_repo_id is not None, f"Missing official ESM2 repo id for {spec.key}."
     tokenizer = EsmTokenizer.from_pretrained(spec.reference_repo_id)
-    model = EsmForMaskedLM.from_pretrained(spec.reference_repo_id, torch_dtype=dtype).to(device).eval()
+    model = EsmForMaskedLM.from_pretrained(spec.reference_repo_id).to(device=device, dtype=dtype).eval()
     return model, tokenizer
 
 
