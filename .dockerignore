@@ -42,6 +42,7 @@ models/
 *.ckpt
 *.safetensors
 *.parquet
+*.pq
 *.zip
 *.gzip
 *.gz
