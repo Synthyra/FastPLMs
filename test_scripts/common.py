@@ -114,10 +114,11 @@ def load_model(
     compile_model: bool = False,
 ):
     if spec.family == "esm2":
-        from esm2.modeling_fastesm import FastEsmConfig
-        from esm2.modeling_fastesm import FastEsmForMaskedLM
-        from esm2.modeling_fastesm import FastEsmModel
-
+        from esm2.modeling_fastesm import (
+            FastEsmConfig,
+            FastEsmModel,   
+            FastEsmForMaskedLM,
+        )
         model_config = FastEsmConfig.from_pretrained(spec.repo_id)
         if attn_backend is not None:
             model_config.attn_backend = attn_backend
@@ -128,10 +129,11 @@ def load_model(
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "esmplusplus":
-        from esm_plusplus.modeling_esm_plusplus import ESMplusplusConfig
-        from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
-        from esm_plusplus.modeling_esm_plusplus import ESMplusplusModel
-
+        from esm_plusplus.modeling_esm_plusplus import (
+            ESMplusplusConfig,
+            ESMplusplusModel,
+            ESMplusplusForMaskedLM,
+        )
         model_config = ESMplusplusConfig.from_pretrained(spec.repo_id)
         if attn_backend is not None:
             model_config.attn_backend = attn_backend
@@ -142,9 +144,11 @@ def load_model(
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "e1":
-        from e1_fastplms.modeling_e1 import E1Config
-        from e1_fastplms.modeling_e1 import E1ForMaskedLM
-        from e1_fastplms.modeling_e1 import E1Model
+        from e1_fastplms.modeling_e1 import (
+            E1Config,
+            E1ForMaskedLM,
+            E1Model,
+        )
 
         model_config = E1Config.from_pretrained(spec.repo_id)
         if task == "base":
