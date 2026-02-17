@@ -5,16 +5,17 @@ import importlib.util
 import pathlib
 import random
 import sys
-from typing import Dict, Iterable, List, Optional, Tuple
-
 import numpy as np
 import torch
+from typing import Dict, Iterable, List, Optional
 from huggingface_hub import login
-from transformers import AutoConfig
-from transformers import AutoModel
-from transformers import AutoModelForMaskedLM
-from transformers import EsmForMaskedLM
-from transformers import EsmTokenizer
+from transformers import (
+    AutoConfig,
+    AutoModel,
+    AutoModelForMaskedLM,
+    EsmForMaskedLM,
+    EsmTokenizer,
+)
 
 from test_scripts.model_registry import ModelSpec
 
@@ -175,16 +176,16 @@ def load_model(
 
 
 def _ensure_local_e1_module_on_path() -> None:
-    if importlib.util.find_spec("E1") is not None:
+    if importlib.util.find_spec("e1") is not None:
         return
 
     candidates: List[pathlib.Path] = []
     script_root = pathlib.Path(__file__).resolve().parents[1]
-    candidates.append(script_root / "E1" / "src")
+    candidates.append(script_root / "e1" / "src")
 
     cwd = pathlib.Path.cwd().resolve()
     for parent in [cwd, *cwd.parents]:
-        candidates.append(parent / "E1" / "src")
+        candidates.append(parent / "e1" / "src")
 
     deduplicated_candidates: List[pathlib.Path] = []
     seen_paths = set()
@@ -200,22 +201,22 @@ def _ensure_local_e1_module_on_path() -> None:
             candidate_str = str(candidate)
             if candidate_str not in sys.path:
                 sys.path.insert(0, candidate_str)
-            if importlib.util.find_spec("E1") is not None:
+            if importlib.util.find_spec("e1") is not None:
                 return
 
     checked_paths = ", ".join([str(path) for path in deduplicated_candidates])
     raise FileNotFoundError(
-        "E1 module import failed. Expected local submodule at one of: "
+        "e1 module import failed. Expected local submodule at one of: "
         f"{checked_paths}. "
-        "Run `git submodule update --init --recursive E1` or install E1 package."
+        "Run `git submodule update --init --recursive e1` or install e1 package."
     )
 
 
 def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
-    assert spec.reference_repo_id is not None, f"Missing official E1 repo id for {spec.key}."
+    assert spec.reference_repo_id is not None, f"Missing official e1 repo id for {spec.key}."
     _ensure_local_e1_module_on_path()
-    batch_preparer_module = importlib.import_module("E1.batch_preparer")
-    modeling_module = importlib.import_module("E1.modeling")
+    batch_preparer_module = importlib.import_module("e1.batch_preparer")
+    modeling_module = importlib.import_module("e1.modeling")
     E1BatchPreparer = batch_preparer_module.E1BatchPreparer
     E1ForMaskedLM = modeling_module.E1ForMaskedLM
 
@@ -263,7 +264,7 @@ def prepare_official_batch_for_compliance(
     device: torch.device,
 ) -> Dict[str, torch.Tensor]:
     if spec.family == "e1":
-        assert tokenizer is not None, "Official E1 batch preparer is required for compliance comparison."
+        assert tokenizer is not None, "Official e1 batch preparer is required for compliance comparison."
         raw_batch = tokenizer.get_batch_kwargs(sequence_batch, device=device)
         batch = {
             "input_ids": raw_batch["input_ids"],
@@ -288,7 +289,7 @@ def prepare_model_batch(
     if spec.family == "e1":
         batch = model.prep_tokens.get_batch_kwargs(sequence_batch, device=device)
         return batch
-    assert tokenizer is not None, "Tokenizer is required for non-E1 families."
+    assert tokenizer is not None, "Tokenizer is required for non-e1 families."
     if pad_to_length is None:
         batch = tokenizer(sequence_batch, return_tensors="pt", padding="longest")
     else:
