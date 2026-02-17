@@ -36,6 +36,8 @@ BOLTZ_MODELS = [
 
 
 def _run_get_weights_scripts(hf_token: str | None) -> None:
+    import platform
+    python_cmd = "python" if platform.system().lower() == "linux" else "py"
     modules = [
         "boltz_fastplms.get_boltz2_weights",
         "e1_fastplms.get_e1_weights",
@@ -43,7 +45,7 @@ def _run_get_weights_scripts(hf_token: str | None) -> None:
         "esm2.get_esm2_weights",
     ]
     for module in modules:
-        command = ["py", "-m", module]
+        command = [python_cmd, "-m", module]
         if hf_token is not None:
             command.extend(["--hf_token", hf_token])
         print(f"Running {' '.join(command)}")
