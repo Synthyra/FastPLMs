@@ -14,10 +14,8 @@ from test_scripts.common import load_model
 from test_scripts.common import load_official_model_for_compliance
 from test_scripts.common import login_if_needed
 from test_scripts.common import prepare_official_batch_for_compliance
-from test_scripts.common import prepare_model_batch
 from test_scripts.common import resolve_device
 from test_scripts.common import resolve_dtype
-from test_scripts.common import run_forward
 from test_scripts.common import set_seed
 from test_scripts.model_registry import ModelSpec
 from test_scripts.model_registry import get_model_specs
@@ -37,40 +35,43 @@ def _tensor_diff_metrics(reference: torch.Tensor, candidate: torch.Tensor) -> Di
     }
 
 
-def _forward_contract_check(spec: ModelSpec, model, tokenizer, device: torch.device, sequences: List[str], batch_size: int, attn_tolerance: float) -> Dict[str, object]:
-    batches = chunk_sequences(sequences, batch_size)
-    assert len(batches) > 0, "Need at least one batch for contract checks."
-
-    first_batch = prepare_model_batch(spec=spec, model=model, tokenizer=tokenizer, sequence_batch=batches[0], device=device)
-    outputs_no_attn = run_forward(spec=spec, model=model, batch=first_batch, output_hidden_states=True, output_attentions=False)
-    hidden_no_attn = outputs_no_attn.last_hidden_state
-
-    assert hidden_no_attn.ndim == 3, "Expected 3D last_hidden_state."
-    assert hidden_no_attn.shape[0] == len(batches[0]), "Batch dimension mismatch."
-    finite_pass = bool(torch.isfinite(hidden_no_attn).all())
-
-    attn_pass = True
-    max_hidden_diff_attn = float("nan")
-    if spec.family == "esmplusplus":
-        outputs_with_attn = run_forward(spec=spec, model=model, batch=first_batch, output_hidden_states=True, output_attentions=True)
-        hidden_with_attn = outputs_with_attn.last_hidden_state
-        max_hidden_diff_attn = float(torch.max(torch.abs(hidden_no_attn - hidden_with_attn)).item())
-        attn_pass = max_hidden_diff_attn <= attn_tolerance
-
-    result: Dict[str, object] = {
-        "forward_pass": True,
-        "finite_pass": finite_pass,
-        "attn_pass": attn_pass,
-        "max_hidden_diff_attn": max_hidden_diff_attn,
+def _masked_token_diff_metrics(reference: torch.Tensor, candidate: torch.Tensor, token_mask: torch.Tensor) -> Dict[str, float]:
+    assert reference.ndim == 3, f"Expected 3D reference hidden states, got {reference.ndim}D."
+    assert candidate.ndim == 3, f"Expected 3D candidate hidden states, got {candidate.ndim}D."
+    assert token_mask.ndim == 2, f"Expected 2D token mask, got {token_mask.ndim}D."
+    assert reference.shape == candidate.shape, "Reference/candidate shapes must match."
+    assert reference.shape[:2] == token_mask.shape, "Token mask must match hidden state batch/sequence dims."
+    valid_positions = token_mask.bool()
+    assert bool(valid_positions.any()), "Expected at least one valid token position for masked diff metrics."
+    difference = candidate.float() - reference.float()
+    valid_difference = difference[valid_positions]
+    valid_abs_difference = torch.abs(valid_difference)
+    return {
+        "mse": float(torch.mean(valid_difference * valid_difference).item()),
+        "mean_abs": float(torch.mean(valid_abs_difference).item()),
+        "max_abs": float(torch.max(valid_abs_difference).item()),
     }
-    return result
+
+
+def _masked_argmax_accuracy(reference_logits: torch.Tensor, candidate_logits: torch.Tensor, token_mask: torch.Tensor) -> float:
+    assert reference_logits.ndim == 3, f"Expected 3D reference logits, got {reference_logits.ndim}D."
+    assert candidate_logits.ndim == 3, f"Expected 3D candidate logits, got {candidate_logits.ndim}D."
+    assert token_mask.ndim == 2, f"Expected 2D token mask, got {token_mask.ndim}D."
+    assert reference_logits.shape == candidate_logits.shape, "Reference/candidate logits shapes must match."
+    assert reference_logits.shape[:2] == token_mask.shape, "Token mask must match logits batch/sequence dims."
+    valid_positions = token_mask.bool()
+    assert bool(valid_positions.any()), "Expected at least one valid token for argmax accuracy."
+    reference_argmax = torch.argmax(reference_logits, dim=-1)
+    candidate_argmax = torch.argmax(candidate_logits, dim=-1)
+    return float((reference_argmax[valid_positions] == candidate_argmax[valid_positions]).float().mean().item())
 
 
 def _reference_check(
     spec: ModelSpec,
     test_model,
+    official_model,
+    official_tokenizer,
     device: torch.device,
-    dtype: torch.dtype,
     sequences: List[str],
     batch_size: int,
     hidden_mse_threshold: float,
@@ -82,8 +83,6 @@ def _reference_check(
     argmax_threshold: float,
     strict_reference: bool,
 ) -> Dict[str, object]:
-    official_model, official_tokenizer = load_official_model_for_compliance(spec=spec, device=device, dtype=dtype)
-
     hidden_mse_sum = 0.0
     hidden_mean_abs_sum = 0.0
     hidden_max_abs = 0.0
@@ -96,25 +95,20 @@ def _reference_check(
     batches = chunk_sequences(sequences, batch_size)
     for sequence_batch in tqdm(batches, desc=f"Reference compare ({spec.key})", unit="batch", leave=False):
         inputs = prepare_official_batch_for_compliance(spec=spec, sequence_batch=sequence_batch, tokenizer=official_tokenizer, device=device)
+        token_mask = inputs["attention_mask"]
         official_outputs = official_model(**inputs, output_hidden_states=True)
         test_outputs = test_model(**inputs, output_hidden_states=True)
-        hidden_metrics = _tensor_diff_metrics(official_outputs.hidden_states[-1], test_outputs.hidden_states[-1])
-        logits_metrics = _tensor_diff_metrics(official_outputs.logits, test_outputs.logits)
+        hidden_metrics = _masked_token_diff_metrics(official_outputs.hidden_states[-1], test_outputs.hidden_states[-1], token_mask)
+        logits_metrics = _masked_token_diff_metrics(official_outputs.logits, test_outputs.logits, token_mask)
         hidden_mse_sum += hidden_metrics["mse"]
         hidden_mean_abs_sum += hidden_metrics["mean_abs"]
         hidden_max_abs = max(hidden_max_abs, hidden_metrics["max_abs"])
         logits_mse_sum += logits_metrics["mse"]
         logits_mean_abs_sum += logits_metrics["mean_abs"]
         logits_max_abs = max(logits_max_abs, logits_metrics["max_abs"])
-        ref_argmax = torch.argmax(official_outputs.logits, dim=-1)
-        test_argmax = torch.argmax(test_outputs.logits, dim=-1)
-        argmax_acc_sum += float((ref_argmax == test_argmax).float().mean().item())
+        argmax_acc_sum += _masked_argmax_accuracy(official_outputs.logits, test_outputs.logits, token_mask)
         steps += 1
     assert steps > 0, "Reference check requires at least one batch."
-
-    del official_model
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
 
     mean_hidden_mse = hidden_mse_sum / steps
     mean_hidden_abs = hidden_mean_abs_sum / steps
@@ -145,68 +139,10 @@ def _reference_check(
     }
 
 
-def _e1_repeatability_check(spec: ModelSpec, model, tokenizer, device: torch.device, sequences: List[str], batch_size: int, repeat_tolerance: float) -> Dict[str, object]:
-    assert spec.family == "e1", "Repeatability check is only for E1."
-    batch = prepare_model_batch(spec=spec, model=model, tokenizer=tokenizer, sequence_batch=sequences[:batch_size], device=device)
-    output_a = run_forward(spec=spec, model=model, batch=batch, output_hidden_states=True, output_attentions=False).last_hidden_state
-    output_b = run_forward(spec=spec, model=model, batch=batch, output_hidden_states=True, output_attentions=False).last_hidden_state
-    max_diff = float(torch.max(torch.abs(output_a - output_b)).item())
-    passed = max_diff <= repeat_tolerance
-    return {
-        "e1_repeat_pass": passed,
-        "e1_repeat_max_diff": max_diff,
-    }
-
-
-def _attn_equivalence_check(
-    spec: ModelSpec,
-    device: torch.device,
-    dtype: torch.dtype,
-    sequences: List[str],
-    batch_size: int,
-    mse_threshold: float,
-    mean_abs_threshold: float,
-    max_abs_threshold: float,
-) -> Dict[str, object]:
-    assert spec.family in ["esm2", "esmplusplus"], "Attention equivalence check is only for ESM2/ESM++."
-    model_sdpa, tokenizer_sdpa = load_model(spec=spec, task="base", device=device, dtype=dtype, attn_backend="sdpa")
-    model_flex, tokenizer_flex = load_model(spec=spec, task="base", device=device, dtype=dtype, attn_backend="flex")
-    if tokenizer_sdpa is None:
-        tokenizer = tokenizer_flex
-    else:
-        tokenizer = tokenizer_sdpa
-    assert tokenizer is not None, "Tokenizer is required for attention backend equivalence check."
-
-    mse_sum = 0.0
-    mean_abs_sum = 0.0
-    max_abs = 0.0
-    steps = 0
-    batches = chunk_sequences(sequences, batch_size)
-    for sequence_batch in tqdm(batches, desc=f"Attn equiv ({spec.key})", unit="batch", leave=False):
-        prepared = prepare_model_batch(spec=spec, model=model_sdpa, tokenizer=tokenizer, sequence_batch=sequence_batch, device=device)
-        output_sdpa = run_forward(spec=spec, model=model_sdpa, batch=prepared, output_hidden_states=True, output_attentions=False).last_hidden_state
-        output_flex = run_forward(spec=spec, model=model_flex, batch=prepared, output_hidden_states=True, output_attentions=False).last_hidden_state
-        diff_metrics = _tensor_diff_metrics(output_sdpa, output_flex)
-        mse_sum += diff_metrics["mse"]
-        mean_abs_sum += diff_metrics["mean_abs"]
-        max_abs = max(max_abs, diff_metrics["max_abs"])
-        steps += 1
-    assert steps > 0, "Attention equivalence check requires at least one batch."
-
-    del model_sdpa
-    del model_flex
-    if device.type == "cuda":
-        torch.cuda.empty_cache()
-
-    mean_mse = mse_sum / steps
-    mean_abs = mean_abs_sum / steps
-    passed = mean_mse <= mse_threshold and mean_abs <= mean_abs_threshold and max_abs <= max_abs_threshold
-    return {
-        "attn_equiv_pass": passed,
-        "attn_equiv_mse": mean_mse,
-        "attn_equiv_mean_abs": mean_abs,
-        "attn_equiv_max_abs": max_abs,
-    }
+def _reference_backends(spec: ModelSpec) -> List[str]:
+    if spec.family in ["esm2", "esmplusplus"]:
+        return ["sdpa", "flex"]
+    return ["model_default"]
 
 
 def run_compliance_suite(args: argparse.Namespace) -> int:
@@ -244,151 +180,133 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
 
     rows: List[Dict[str, object]] = []
     labels: List[str] = []
-    attn_diffs: List[float] = []
+    hidden_max_abs_values: List[float] = []
+    logits_max_abs_values: List[float] = []
+    argmax_values: List[float] = []
 
     for spec in tqdm(specs, desc="Compliance models", unit="model"):
-        print(f"[compliance] Testing {spec.repo_id} on {device} with {dtype}")
-        start = time.perf_counter()
-        row: Dict[str, object] = {
-            "model_key": spec.key,
-            "family": spec.family,
-            "repo_id": spec.repo_id,
-            "auto_load_pass": False,
-            "forward_pass": False,
-            "finite_pass": False,
-            "attn_pass": False,
-            "max_hidden_diff_attn": float("nan"),
-            "reference_pass": True,
-            "reference_hidden_mse": float("nan"),
-            "reference_hidden_mean_abs": float("nan"),
-            "reference_hidden_max_abs": float("nan"),
-            "reference_logits_mse": float("nan"),
-            "reference_logits_mean_abs": float("nan"),
-            "reference_logits_max_abs": float("nan"),
-            "reference_argmax_accuracy": float("nan"),
-            "e1_repeat_pass": True,
-            "e1_repeat_max_diff": float("nan"),
-            "attn_equiv_pass": True,
-            "attn_equiv_mse": float("nan"),
-            "attn_equiv_mean_abs": float("nan"),
-            "attn_equiv_max_abs": float("nan"),
-            "overall_pass": False,
-            "seconds": 0.0,
-            "error": "",
-            "error_type": "",
-            "traceback": "",
-        }
-
+        official_model = None
+        official_tokenizer = None
         try:
-            base_model, tokenizer = load_model(spec=spec, task="base", device=device, dtype=dtype)
-            row["auto_load_pass"] = True
-
-            contract = _forward_contract_check(
-                spec=spec,
-                model=base_model,
-                tokenizer=tokenizer,
-                device=device,
-                sequences=sequences,
-                batch_size=args.batch_size,
-                attn_tolerance=args.attn_tolerance,
-            )
-            row["forward_pass"] = bool(contract["forward_pass"])
-            row["finite_pass"] = bool(contract["finite_pass"])
-            row["attn_pass"] = bool(contract["attn_pass"])
-            row["max_hidden_diff_attn"] = float(contract["max_hidden_diff_attn"])
-
-            if spec.family == "e1":
-                repeat_metrics = _e1_repeatability_check(
-                    spec=spec,
-                    model=base_model,
-                    tokenizer=tokenizer,
-                    device=device,
-                    sequences=sequences,
-                    batch_size=args.batch_size,
-                    repeat_tolerance=args.e1_repeat_tolerance,
-                )
-                row["e1_repeat_pass"] = bool(repeat_metrics["e1_repeat_pass"])
-                row["e1_repeat_max_diff"] = float(repeat_metrics["e1_repeat_max_diff"])
-
-            if args.check_attn_equivalence and spec.family in ["esm2", "esmplusplus"]:
-                attn_metrics = _attn_equivalence_check(
-                    spec=spec,
-                    device=device,
-                    dtype=dtype,
-                    sequences=sequences,
-                    batch_size=args.batch_size,
-                    mse_threshold=args.attn_equivalence_mse_threshold,
-                    mean_abs_threshold=args.attn_equivalence_mean_abs_threshold,
-                    max_abs_threshold=args.attn_equivalence_max_abs_threshold,
-                )
-                row["attn_equiv_pass"] = bool(attn_metrics["attn_equiv_pass"])
-                row["attn_equiv_mse"] = float(attn_metrics["attn_equiv_mse"])
-                row["attn_equiv_mean_abs"] = float(attn_metrics["attn_equiv_mean_abs"])
-                row["attn_equiv_max_abs"] = float(attn_metrics["attn_equiv_max_abs"])
-
-            del base_model
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
-
             if args.skip_reference is False:
-                row["reference_pass"] = False
-                mlm_model, _ = load_model(spec=spec, task="masked_lm", device=device, dtype=dtype)
-                reference_metrics = _reference_check(
-                    spec=spec,
-                    test_model=mlm_model,
-                    device=device,
-                    dtype=dtype,
-                    sequences=sequences,
-                    batch_size=args.batch_size,
-                    hidden_mse_threshold=args.hidden_mse_threshold,
-                    hidden_mean_abs_threshold=args.hidden_mean_abs_threshold,
-                    hidden_max_abs_threshold=args.hidden_max_abs_threshold,
-                    logits_mse_threshold=args.logits_mse_threshold,
-                    logits_mean_abs_threshold=args.logits_mean_abs_threshold,
-                    logits_max_abs_threshold=args.logits_max_abs_threshold,
-                    argmax_threshold=args.argmax_threshold,
-                    strict_reference=args.strict_reference,
-                )
-                row["reference_pass"] = bool(reference_metrics["reference_pass"])
-                row["reference_hidden_mse"] = float(reference_metrics["reference_hidden_mse"])
-                row["reference_hidden_mean_abs"] = float(reference_metrics["reference_hidden_mean_abs"])
-                row["reference_hidden_max_abs"] = float(reference_metrics["reference_hidden_max_abs"])
-                row["reference_logits_mse"] = float(reference_metrics["reference_logits_mse"])
-                row["reference_logits_mean_abs"] = float(reference_metrics["reference_logits_mean_abs"])
-                row["reference_logits_max_abs"] = float(reference_metrics["reference_logits_max_abs"])
-                row["reference_argmax_accuracy"] = float(reference_metrics["reference_argmax_accuracy"])
-                del mlm_model
-                if device.type == "cuda":
-                    torch.cuda.empty_cache()
+                official_model, official_tokenizer = load_official_model_for_compliance(spec=spec, device=device, dtype=dtype)
 
-            row["overall_pass"] = bool(
-                row["auto_load_pass"]
-                and row["forward_pass"]
-                and row["finite_pass"]
-                and row["attn_pass"]
-                and row["reference_pass"]
-                and row["e1_repeat_pass"]
-                and row["attn_equiv_pass"]
-            )
-            if bool(row["overall_pass"]) is False:
-                all_passed = False
+            for backend in _reference_backends(spec):
+                print(f"[compliance] Testing {spec.repo_id} backend={backend} on {device} with {dtype}")
+                start = time.perf_counter()
+                selected_backend = None if backend == "model_default" else backend
+                test_model = None
+                row: Dict[str, object] = {
+                    "model_key": spec.key,
+                    "family": spec.family,
+                    "repo_id": spec.repo_id,
+                    "attn_backend": backend,
+                    "auto_load_pass": False,
+                    "reference_pass": False,
+                    "reference_hidden_mse": float("nan"),
+                    "reference_hidden_mean_abs": float("nan"),
+                    "reference_hidden_max_abs": float("nan"),
+                    "reference_logits_mse": float("nan"),
+                    "reference_logits_mean_abs": float("nan"),
+                    "reference_logits_max_abs": float("nan"),
+                    "reference_argmax_accuracy": float("nan"),
+                    "overall_pass": False,
+                    "seconds": 0.0,
+                    "error": "",
+                    "error_type": "",
+                    "traceback": "",
+                }
+                try:
+                    test_model, _ = load_model(spec=spec, task="masked_lm", device=device, dtype=dtype, attn_backend=selected_backend)
+                    row["auto_load_pass"] = True
+                    if args.skip_reference:
+                        row["reference_pass"] = True
+                    else:
+                        assert official_model is not None, "Official model must be loaded when reference check is enabled."
+                        assert official_tokenizer is not None, "Official tokenizer must be loaded when reference check is enabled."
+                        reference_metrics = _reference_check(
+                            spec=spec,
+                            test_model=test_model,
+                            official_model=official_model,
+                            official_tokenizer=official_tokenizer,
+                            device=device,
+                            sequences=sequences,
+                            batch_size=args.batch_size,
+                            hidden_mse_threshold=args.hidden_mse_threshold,
+                            hidden_mean_abs_threshold=args.hidden_mean_abs_threshold,
+                            hidden_max_abs_threshold=args.hidden_max_abs_threshold,
+                            logits_mse_threshold=args.logits_mse_threshold,
+                            logits_mean_abs_threshold=args.logits_mean_abs_threshold,
+                            logits_max_abs_threshold=args.logits_max_abs_threshold,
+                            argmax_threshold=args.argmax_threshold,
+                            strict_reference=args.strict_reference,
+                        )
+                        row["reference_pass"] = bool(reference_metrics["reference_pass"])
+                        row["reference_hidden_mse"] = float(reference_metrics["reference_hidden_mse"])
+                        row["reference_hidden_mean_abs"] = float(reference_metrics["reference_hidden_mean_abs"])
+                        row["reference_hidden_max_abs"] = float(reference_metrics["reference_hidden_max_abs"])
+                        row["reference_logits_mse"] = float(reference_metrics["reference_logits_mse"])
+                        row["reference_logits_mean_abs"] = float(reference_metrics["reference_logits_mean_abs"])
+                        row["reference_logits_max_abs"] = float(reference_metrics["reference_logits_max_abs"])
+                        row["reference_argmax_accuracy"] = float(reference_metrics["reference_argmax_accuracy"])
+                    row["overall_pass"] = bool(row["auto_load_pass"] and row["reference_pass"])
+                    if bool(row["overall_pass"]) is False:
+                        all_passed = False
+                except Exception as exc:
+                    row["error"] = str(exc)
+                    row["error_type"] = type(exc).__name__
+                    row["traceback"] = traceback.format_exc()
+                    if args.print_tracebacks:
+                        print(f"[compliance] Exception while testing {spec.repo_id} backend={backend} ({row['error_type']}): {row['error']}")
+                        print(row["traceback"])
+                    all_passed = False
+                finally:
+                    row["seconds"] = round(time.perf_counter() - start, 4)
+                    rows.append(row)
+                    labels.append(f"{spec.key}|{backend}")
+                    hidden_value = row["reference_hidden_max_abs"]
+                    logits_value = row["reference_logits_max_abs"]
+                    argmax_value = row["reference_argmax_accuracy"]
+                    hidden_max_abs_values.append(0.0 if isinstance(hidden_value, float) and math.isnan(hidden_value) else float(hidden_value))
+                    logits_max_abs_values.append(0.0 if isinstance(logits_value, float) and math.isnan(logits_value) else float(logits_value))
+                    argmax_values.append(0.0 if isinstance(argmax_value, float) and math.isnan(argmax_value) else float(argmax_value))
+                    if test_model is not None:
+                        del test_model
+                        if device.type == "cuda":
+                            torch.cuda.empty_cache()
         except Exception as exc:
-            row["error"] = str(exc)
-            row["error_type"] = type(exc).__name__
-            row["traceback"] = traceback.format_exc()
-            if args.print_tracebacks:
-                print(f"[compliance] Exception while testing {spec.repo_id} ({row['error_type']}): {row['error']}")
-                print(row["traceback"])
+            for backend in _reference_backends(spec):
+                row = {
+                    "model_key": spec.key,
+                    "family": spec.family,
+                    "repo_id": spec.repo_id,
+                    "attn_backend": backend,
+                    "auto_load_pass": False,
+                    "reference_pass": False,
+                    "reference_hidden_mse": float("nan"),
+                    "reference_hidden_mean_abs": float("nan"),
+                    "reference_hidden_max_abs": float("nan"),
+                    "reference_logits_mse": float("nan"),
+                    "reference_logits_mean_abs": float("nan"),
+                    "reference_logits_max_abs": float("nan"),
+                    "reference_argmax_accuracy": float("nan"),
+                    "overall_pass": False,
+                    "seconds": 0.0,
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "traceback": traceback.format_exc(),
+                }
+                rows.append(row)
+                labels.append(f"{spec.key}|{backend}")
+                hidden_max_abs_values.append(0.0)
+                logits_max_abs_values.append(0.0)
+                argmax_values.append(0.0)
             all_passed = False
         finally:
-            row["seconds"] = round(time.perf_counter() - start, 4)
-            rows.append(row)
-            labels.append(spec.key)
-            value = row["max_hidden_diff_attn"]
-            if isinstance(value, float) and math.isnan(value):
-                attn_diffs.append(0.0)
-            else:
-                attn_diffs.append(float(value))
+            if official_model is not None:
+                del official_model
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
 
     payload: Dict[str, object] = {
         "suite": "compliance",
@@ -404,32 +322,9 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
     }
     write_json(output_dir / "metrics.json", payload)
     write_csv(output_dir / "metrics.csv", rows)
-    plot_bar(output_dir / "attention_max_diff.png", labels, attn_diffs, "Max Hidden-State Diff (attentions off vs on)", "Max abs diff")
-    equivalence_rows: List[Dict[str, object]] = []
-    for row in rows:
-        if row["family"] in ["esm2", "esmplusplus"]:
-            equivalence_rows.append(
-                {
-                    "model_key": row["model_key"],
-                    "family": row["family"],
-                    "repo_id": row["repo_id"],
-                    "attn_equiv_pass": row["attn_equiv_pass"],
-                    "attn_equiv_mse": row["attn_equiv_mse"],
-                    "attn_equiv_mean_abs": row["attn_equiv_mean_abs"],
-                    "attn_equiv_max_abs": row["attn_equiv_max_abs"],
-                }
-            )
-    equivalence_payload: Dict[str, object] = {
-        "suite": "compliance_attention_equivalence",
-        "rows": equivalence_rows,
-        "thresholds": {
-            "mse": args.attn_equivalence_mse_threshold,
-            "mean_abs": args.attn_equivalence_mean_abs_threshold,
-            "max_abs": args.attn_equivalence_max_abs_threshold,
-        },
-    }
-    write_json(output_dir / "attention_equivalence_metrics.json", equivalence_payload)
-    write_csv(output_dir / "attention_equivalence_metrics.csv", equivalence_rows)
+    plot_bar(output_dir / "reference_hidden_max_abs_nonpad.png", labels, hidden_max_abs_values, "Hidden-state max abs diff vs official (non-pad tokens)", "Max abs diff")
+    plot_bar(output_dir / "reference_logits_max_abs_nonpad.png", labels, logits_max_abs_values, "Logits max abs diff vs official (non-pad tokens)", "Max abs diff")
+    plot_bar(output_dir / "reference_argmax_accuracy_nonpad.png", labels, argmax_values, "Argmax accuracy vs official (non-pad tokens)", "Accuracy")
 
     passed_count = 0
     for row in rows:
@@ -445,7 +340,7 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
     for row in rows:
         status = "PASS" if bool(row["overall_pass"]) else "FAIL"
         summary_lines.append(
-            f"{status} | {row['repo_id']} | attn_diff={row['max_hidden_diff_attn']} | attn_equiv_max_abs={row['attn_equiv_max_abs']} | ref_logits_mse={row['reference_logits_mse']} | ref_logits_max_abs={row['reference_logits_max_abs']} | argmax={row['reference_argmax_accuracy']} | error_type={row['error_type']} | error={row['error']}"
+            f"{status} | {row['repo_id']} | backend={row['attn_backend']} | ref_hidden_mse={row['reference_hidden_mse']} | ref_hidden_max_abs={row['reference_hidden_max_abs']} | ref_logits_mse={row['reference_logits_mse']} | ref_logits_max_abs={row['reference_logits_max_abs']} | argmax={row['reference_argmax_accuracy']} | error_type={row['error_type']} | error={row['error']}"
         )
     write_summary(output_dir / "summary.txt", summary_lines)
     print("\n".join(summary_lines))
