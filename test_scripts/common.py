@@ -177,16 +177,15 @@ def load_model(
 
 
 def _ensure_local_e1_module_on_path() -> None:
-    if importlib.util.find_spec("E1") is not None:
-        return
-
     candidates: List[pathlib.Path] = []
     script_root = pathlib.Path(__file__).resolve().parents[1]
     candidates.append(script_root / "e1" / "src")
+    candidates.append(script_root / "E1" / "src")
 
     cwd = pathlib.Path.cwd().resolve()
     for parent in [cwd, *cwd.parents]:
         candidates.append(parent / "e1" / "src")
+        candidates.append(parent / "E1" / "src")
 
     deduplicated_candidates: List[pathlib.Path] = []
     seen_paths = set()
@@ -202,8 +201,9 @@ def _ensure_local_e1_module_on_path() -> None:
             candidate_str = str(candidate)
             if candidate_str not in sys.path:
                 sys.path.insert(0, candidate_str)
-            if importlib.util.find_spec("E1") is not None:
-                return
+
+    if importlib.util.find_spec("E1") is not None:
+        return
 
     checked_paths = ", ".join([str(path) for path in deduplicated_candidates])
     raise FileNotFoundError(
