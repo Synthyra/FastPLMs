@@ -13,6 +13,7 @@ import biotite.structure as struc
 import matplotlib
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 
 from pathlib import Path
 from typing import Any
@@ -558,7 +559,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
     rows: List[Dict[str, object]] = []
     overall_pass = True
 
-    for sequence_index, sequence in enumerate(sequences):
+    for sequence_index, sequence in tqdm(list(enumerate(sequences)), desc="Boltz2 sequences", unit="seq"):
         started = time.perf_counter()
         row: Dict[str, object] = {
             "sequence_index": sequence_index,

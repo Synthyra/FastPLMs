@@ -4,6 +4,7 @@ import time
 from typing import Dict, List
 
 import torch
+from tqdm.auto import tqdm
 
 from test_scripts.common import build_output_dir
 from test_scripts.common import ensure_dir
@@ -95,7 +96,7 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
     labels: List[str] = []
     all_passed = True
 
-    for spec in specs:
+    for spec in tqdm(specs, desc="Embedding models", unit="model"):
         print(f"[embedding] Testing {spec.repo_id} on {device} with {dtype}")
         model_start = time.perf_counter()
         row: Dict[str, object] = {

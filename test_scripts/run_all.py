@@ -5,6 +5,8 @@ import math
 import pathlib
 from typing import Dict, List
 
+from tqdm.auto import tqdm
+
 from test_scripts.common import ensure_dir
 from test_scripts.common import now_timestamp
 from test_scripts.reporting import write_json
@@ -385,30 +387,37 @@ def run_all_suites(args: argparse.Namespace) -> int:
     root_dir = cfg.resolve_root_dir()
 
     results: List[Dict[str, object]] = []
+    suite_progress = tqdm(total=4, desc="Run-all suites", unit="suite")
 
     print("[run_all] Running compliance suite...")
     compliance_rc = run_compliance_suite(cfg.compliance_args(root_dir))
     compliance_metrics = _suite_headline_metrics("compliance", root_dir / "compliance")
     results.append({"suite": "compliance", "exit_code": compliance_rc, "output_dir": str(root_dir / "compliance"), "headline_metrics": compliance_metrics})
+    suite_progress.update(1)
 
     if cfg.skip_boltz2_compliance:
         print("[run_all] Skipping boltz2 compliance suite...")
         results.append({"suite": "boltz2_compliance", "exit_code": 0, "output_dir": str(root_dir / "boltz2_compliance")})
+        suite_progress.update(1)
     else:
         print("[run_all] Running boltz2 compliance suite...")
         boltz2_compliance_rc = run_boltz2_compliance_suite(cfg.boltz2_compliance_args(root_dir))
         boltz2_metrics = _suite_headline_metrics("boltz2_compliance", root_dir / "boltz2_compliance")
         results.append({"suite": "boltz2_compliance", "exit_code": boltz2_compliance_rc, "output_dir": str(root_dir / "boltz2_compliance"), "headline_metrics": boltz2_metrics})
+        suite_progress.update(1)
 
     print("[run_all] Running embedding suite...")
     embedding_rc = run_embedding_suite(cfg.embedding_args(root_dir))
     embedding_metrics = _suite_headline_metrics("embedding", root_dir / "embedding")
     results.append({"suite": "embedding", "exit_code": embedding_rc, "output_dir": str(root_dir / "embedding"), "headline_metrics": embedding_metrics})
+    suite_progress.update(1)
 
     print("[run_all] Running throughput suite...")
     throughput_rc = run_throughput_suite(cfg.throughput_args(root_dir))
     throughput_metrics = _suite_headline_metrics("throughput", root_dir / "throughput")
     results.append({"suite": "throughput", "exit_code": throughput_rc, "output_dir": str(root_dir / "throughput"), "headline_metrics": throughput_metrics})
+    suite_progress.update(1)
+    suite_progress.close()
 
     payload: Dict[str, object] = {
         "suite": "run_all",

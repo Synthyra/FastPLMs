@@ -4,6 +4,7 @@ import time
 from typing import Dict, List
 
 import torch
+from tqdm.auto import tqdm
 
 from test_scripts.common import build_output_dir
 from test_scripts.common import chunk_sequences
@@ -91,7 +92,8 @@ def _reference_check(
     argmax_acc_sum = 0.0
     steps = 0
 
-    for sequence_batch in chunk_sequences(sequences, batch_size):
+    batches = chunk_sequences(sequences, batch_size)
+    for sequence_batch in tqdm(batches, desc=f"Reference compare ({spec.key})", unit="batch", leave=False):
         inputs = prepare_official_batch_for_compliance(spec=spec, sequence_batch=sequence_batch, tokenizer=official_tokenizer, device=device)
         official_outputs = official_model(**inputs, output_hidden_states=True)
         test_outputs = test_model(**inputs, output_hidden_states=True)
@@ -178,7 +180,8 @@ def _attn_equivalence_check(
     mean_abs_sum = 0.0
     max_abs = 0.0
     steps = 0
-    for sequence_batch in chunk_sequences(sequences, batch_size):
+    batches = chunk_sequences(sequences, batch_size)
+    for sequence_batch in tqdm(batches, desc=f"Attn equiv ({spec.key})", unit="batch", leave=False):
         prepared = prepare_model_batch(spec=spec, model=model_sdpa, tokenizer=tokenizer, sequence_batch=sequence_batch, device=device)
         output_sdpa = run_forward(spec=spec, model=model_sdpa, batch=prepared, output_hidden_states=True, output_attentions=False).last_hidden_state
         output_flex = run_forward(spec=spec, model=model_flex, batch=prepared, output_hidden_states=True, output_attentions=False).last_hidden_state
@@ -242,7 +245,7 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
     labels: List[str] = []
     attn_diffs: List[float] = []
 
-    for spec in specs:
+    for spec in tqdm(specs, desc="Compliance models", unit="model"):
         print(f"[compliance] Testing {spec.repo_id} on {device} with {dtype}")
         start = time.perf_counter()
         row: Dict[str, object] = {

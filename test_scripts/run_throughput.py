@@ -8,6 +8,7 @@ from typing import Dict, List
 import matplotlib
 import matplotlib.pyplot as plt
 import torch
+from tqdm.auto import tqdm
 
 from test_scripts.common import build_output_dir
 from test_scripts.common import CANONICAL_AMINO_ACIDS
@@ -246,6 +247,14 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
     return delta_rows
 
 
+def _selected_backends(spec, args: argparse.Namespace, attn_backends: List[str]) -> List[str]:
+    if args.compare_attn and spec.family in ["esm2", "esmplusplus"]:
+        return list(attn_backends)
+    if spec.family in ["esm2", "esmplusplus"]:
+        return [args.attn_backend]
+    return ["model_default"]
+
+
 def run_throughput_suite(args: argparse.Namespace) -> int:
     login_if_needed(args.token)
     device = resolve_device(args.device)
@@ -260,15 +269,14 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     rows: List[Dict[str, object]] = []
     all_passed = True
     compile_model = args.compile_model or args.compare_attn
+    total_points = 0
+    for spec in specs:
+        total_points += len(_selected_backends(spec=spec, args=args, attn_backends=attn_backends)) * len(lengths) * len(batch_sizes)
+    progress = tqdm(total=total_points, desc="Throughput points", unit="point")
 
     if args.dry_run:
         for spec in specs:
-            if args.compare_attn and spec.family in ["esm2", "esmplusplus"]:
-                spec_backends = list(attn_backends)
-            elif spec.family in ["esm2", "esmplusplus"]:
-                spec_backends = [args.attn_backend]
-            else:
-                spec_backends = ["model_default"]
+            spec_backends = _selected_backends(spec=spec, args=args, attn_backends=attn_backends)
 
             for attn_backend in spec_backends:
                 for length in lengths:
@@ -293,6 +301,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                                 "error": "",
                             }
                         )
+                        progress.update(1)
         payload: Dict[str, object] = {
             "suite": "throughput",
             "all_passed": True,
@@ -313,15 +322,11 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         summary_lines = [f"Suite: throughput (dry-run)", f"Benchmark points: {len(rows)}", f"Output directory: {output_dir}"]
         write_summary(output_dir / "summary.txt", summary_lines)
         print("\n".join(summary_lines))
+        progress.close()
         return 0
 
     for spec in specs:
-        if args.compare_attn and spec.family in ["esm2", "esmplusplus"]:
-            spec_backends = list(attn_backends)
-        elif spec.family in ["esm2", "esmplusplus"]:
-            spec_backends = [args.attn_backend]
-        else:
-            spec_backends = ["model_default"]
+        spec_backends = _selected_backends(spec=spec, args=args, attn_backends=attn_backends)
 
         for attn_backend in spec_backends:
             selected_backend = None if attn_backend == "model_default" else attn_backend
@@ -362,6 +367,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                                 "error": str(exc),
                             }
                         )
+                        progress.update(1)
                 continue
 
             for length in lengths:
@@ -463,10 +469,12 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                         row["pass"] = False
                         all_passed = False
                     rows.append(row)
+                    progress.update(1)
 
             del model
             if device.type == "cuda":
                 torch.cuda.empty_cache()
+    progress.close()
 
     payload: Dict[str, object] = {
         "suite": "throughput",
