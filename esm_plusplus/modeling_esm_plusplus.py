@@ -355,10 +355,10 @@ class MultiHeadAttention(nn.Module):
         )
         query_BLD, key_BLD = self._apply_rotary(query_BLD, key_BLD)
         query_BHLD, key_BHLD, value_BHLD = map(self.reshaper, (query_BLD, key_BLD, value_BLD))
+        scale = 1 / math.sqrt(self.d_head)
 
         if output_attentions: # Manual attention computation
-            b, h, l, d = query_BHLD.shape
-            scale = 1 / math.sqrt(d)
+            b, h, l, _ = query_BHLD.shape
             attn_bias = torch.zeros(b, h, l, l, dtype=query_BLD.dtype, device=query_BLD.device)
             if attention_mask is not None:
                 attn_bias.masked_fill_(attention_mask.logical_not(), float('-inf'))
@@ -382,6 +382,7 @@ class MultiHeadAttention(nn.Module):
                         key_BHLD,
                         value_BHLD,
                         block_mask=flex_block_mask,
+                        scale=scale,
                     )
                 except Exception as exc:
                     if not self._warned_flex_fallback:
@@ -395,6 +396,7 @@ class MultiHeadAttention(nn.Module):
                         key_BHLD,
                         value_BHLD,
                         attn_mask=sdpa_mask,
+                        scale=scale,
                     )
             else:
                 context_BHLD = F.scaled_dot_product_attention(
@@ -402,6 +404,7 @@ class MultiHeadAttention(nn.Module):
                     key_BHLD,
                     value_BHLD,
                     attn_mask=sdpa_mask,
+                    scale=scale,
                 )
             
         context_BLD = rearrange(context_BHLD, "b h s d -> b s (h d)")
