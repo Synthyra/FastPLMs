@@ -29,7 +29,12 @@ from torch.nn.attention.flex_attention import flex_attention
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
 
-from .embedding_mixin import EmbeddingMixin, Pooler
+try:
+    # when used from AutoModel, these are in the same directory
+    from .embedding_mixin import EmbeddingMixin, Pooler
+except:
+    # when running from our repo, these are in the base directory
+    from embedding_mixin import EmbeddingMixin, Pooler
 
 
 def _create_pad_block_mask(attention_mask_2d: torch.Tensor):

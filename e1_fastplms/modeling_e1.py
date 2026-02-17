@@ -17,8 +17,12 @@ from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
 
-from .embedding_mixin import EmbeddingMixin, Pooler
-
+try:
+    # when used from AutoModel, these are in the same directory
+    from .embedding_mixin import EmbeddingMixin, Pooler
+except:
+    # when running from our repo, these are in the base directory
+    from embedding_mixin import EmbeddingMixin, Pooler
 
 logger = logging.get_logger(__name__)
 
