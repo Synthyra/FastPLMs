@@ -51,6 +51,7 @@ DEFAULTS: Dict[str, object] = {
     "compile_model": True,
     "pad_min_ratio": 0.5,
     "strict_reference": True,
+    "print_tracebacks": True,
     "boltz2_repo_id": "Synthyra/Boltz2",
     "boltz2_checkpoint_path": "boltz_fastplms/weights/boltz2_conf.ckpt",
     "boltz2_num_sequences": 3,
@@ -120,6 +121,7 @@ class RunAllConfig:
     compile_model: bool
     pad_min_ratio: float
     strict_reference: bool
+    print_tracebacks: bool
     dry_run: bool
 
     @classmethod
@@ -177,6 +179,7 @@ class RunAllConfig:
             compile_model=args.compile_model,
             pad_min_ratio=args.pad_min_ratio,
             strict_reference=args.strict_reference,
+            print_tracebacks=args.print_tracebacks,
             dry_run=args.dry_run,
         )
 
@@ -213,6 +216,7 @@ class RunAllConfig:
             logits_max_abs_threshold=self.logits_max_abs_threshold,
             argmax_threshold=self.argmax_threshold,
             strict_reference=self.strict_reference,
+            print_tracebacks=self.print_tracebacks,
             dry_run=self.dry_run,
         )
 
@@ -504,6 +508,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compile-model", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compile_model"]))
     parser.add_argument("--pad-min-ratio", type=float, default=float(DEFAULTS["pad_min_ratio"]))
     parser.add_argument("--strict-reference", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["strict_reference"]))
+    parser.add_argument("--print-tracebacks", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["print_tracebacks"]))
     parser.add_argument("--dry-run", action="store_true")
     return parser
 

@@ -1,6 +1,7 @@
 import argparse
 import math
 import time
+import traceback
 from typing import Dict, List
 
 import torch
@@ -274,6 +275,8 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
             "overall_pass": False,
             "seconds": 0.0,
             "error": "",
+            "error_type": "",
+            "traceback": "",
         }
 
         try:
@@ -371,6 +374,11 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
                 all_passed = False
         except Exception as exc:
             row["error"] = str(exc)
+            row["error_type"] = type(exc).__name__
+            row["traceback"] = traceback.format_exc()
+            if args.print_tracebacks:
+                print(f"[compliance] Exception while testing {spec.repo_id} ({row['error_type']}): {row['error']}")
+                print(row["traceback"])
             all_passed = False
         finally:
             row["seconds"] = round(time.perf_counter() - start, 4)
@@ -437,7 +445,7 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
     for row in rows:
         status = "PASS" if bool(row["overall_pass"]) else "FAIL"
         summary_lines.append(
-            f"{status} | {row['repo_id']} | attn_diff={row['max_hidden_diff_attn']} | attn_equiv_max_abs={row['attn_equiv_max_abs']} | ref_logits_mse={row['reference_logits_mse']} | ref_logits_max_abs={row['reference_logits_max_abs']} | argmax={row['reference_argmax_accuracy']} | error={row['error']}"
+            f"{status} | {row['repo_id']} | attn_diff={row['max_hidden_diff_attn']} | attn_equiv_max_abs={row['attn_equiv_max_abs']} | ref_logits_mse={row['reference_logits_mse']} | ref_logits_max_abs={row['reference_logits_max_abs']} | argmax={row['reference_argmax_accuracy']} | error_type={row['error_type']} | error={row['error']}"
         )
     write_summary(output_dir / "summary.txt", summary_lines)
     print("\n".join(summary_lines))
@@ -475,6 +483,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--logits-max-abs-threshold", type=float, default=8e-2)
     parser.add_argument("--argmax-threshold", type=float, default=0.99)
     parser.add_argument("--strict-reference", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--print-tracebacks", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
