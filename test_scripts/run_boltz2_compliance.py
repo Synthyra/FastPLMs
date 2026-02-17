@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
+from typing import Optional
 from typing import Tuple
 from transformers import AutoModel
 
@@ -29,7 +31,6 @@ from test_scripts.common import build_output_dir
 from test_scripts.common import login_if_needed
 from test_scripts.common import resolve_device
 from test_scripts.common import resolve_dtype
-from test_scripts.common import set_seed
 from test_scripts.reporting import write_csv
 from test_scripts.reporting import write_json
 from test_scripts.reporting import write_summary
@@ -47,6 +48,8 @@ TM_SCORE_FN = struc.tm_score
 BOLTZ2_FIXED_RECYCLING_STEPS = 3
 BOLTZ2_FIXED_SAMPLING_STEPS = 200
 BOLTZ2_FIXED_DIFFUSION_SAMPLES = 20
+MIN_SEED_VALUE = int(np.iinfo(np.uint32).min)
+MAX_SEED_VALUE = int(np.iinfo(np.uint32).max)
 
 SEQUENCE_OPTIONS = [
     "MDDADPEERNYDNMLKMLSDLNKDLEKLLEEMEKISVQATWMAYDMVVMRTNPTLAESMRRLEDAFVNCKEEMEKNWQELLHETKQRL",
@@ -66,6 +69,28 @@ def _enforce_determinism() -> None:
     torch.use_deterministic_algorithms(True)
 
 
+def _seed_everything(seed: Optional[int] = None, workers: bool = False) -> int:
+    if seed is None:
+        env_seed = os.environ.get("PL_GLOBAL_SEED")
+        if env_seed is None:
+            seed = 0
+        else:
+            seed = int(env_seed)
+    elif isinstance(seed, int) is False:
+        seed = int(seed)
+
+    if not (MIN_SEED_VALUE <= seed <= MAX_SEED_VALUE):
+        raise ValueError(f"{seed} is not in bounds, numpy accepts from {MIN_SEED_VALUE} to {MAX_SEED_VALUE}")
+
+    os.environ["PL_GLOBAL_SEED"] = str(seed)
+    os.environ["PL_SEED_WORKERS"] = f"{int(workers)}"
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    return seed
+
+
 def _download_checkpoint_if_needed(checkpoint_path: Path) -> Path:
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     if not checkpoint_path.exists():
@@ -81,7 +106,7 @@ def _detect_no_kernels_support() -> bool:
 
 
 def _set_sequence_seed(seed: int, sequence_index: int) -> None:
-    set_seed(seed + sequence_index)
+    _seed_everything(seed=seed + sequence_index, workers=False)
 
 
 def _to_device(feats: Dict[str, torch.Tensor], device: torch.device, dtype: torch.dtype) -> Dict[str, torch.Tensor]:
@@ -302,6 +327,7 @@ def _run_boltz_cli_reference(
     device: torch.device,
     supports_no_kernels: bool,
 ) -> Tuple[List[Dict[Tuple[str, int, str], torch.Tensor]], List[torch.Tensor], List[Dict[str, float]]]:
+    sequence_seed = args.seed + sequence_index
     with tempfile.TemporaryDirectory(prefix=f"boltz2_ref_{sequence_index}_") as tmp_dir_str:
         tmp_dir = Path(tmp_dir_str)
         fasta_path = tmp_dir / f"seq_{sequence_index}.fasta"
@@ -327,7 +353,7 @@ def _run_boltz_cli_reference(
             "--diffusion_samples",
             str(BOLTZ2_FIXED_DIFFUSION_SAMPLES),
             "--seed",
-            str(args.seed + sequence_index),
+            str(sequence_seed),
             "--output_format",
             "pdb",
         ]
@@ -335,7 +361,9 @@ def _run_boltz_cli_reference(
             command.append("--no_kernels")
 
         env = os.environ.copy()
-        env["PYTHONHASHSEED"] = str(args.seed + sequence_index)
+        env["PL_GLOBAL_SEED"] = str(sequence_seed)
+        env["PL_SEED_WORKERS"] = "0"
+        env["PYTHONHASHSEED"] = str(sequence_seed)
         completed = subprocess.run(command, capture_output=True, text=True, check=False, env=env)
         if completed.returncode != 0:
             stderr = completed.stderr[-4000:]
@@ -518,7 +546,7 @@ def run_boltz2_compliance_suite(args: argparse.Namespace) -> int:
     login_if_needed(args.token)
     device = resolve_device(args.device)
     dtype = resolve_dtype(args.dtype, device)
-    set_seed(args.seed)
+    _seed_everything(seed=args.seed, workers=False)
     output_dir = build_output_dir(args.output_dir, "boltz2_compliance")
     checkpoint_path = _download_checkpoint_if_needed(Path(args.checkpoint_path))
     sequences = SEQUENCE_OPTIONS

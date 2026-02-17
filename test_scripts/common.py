@@ -1,6 +1,7 @@
 import contextlib
 import datetime
 import importlib
+import importlib.util
 import pathlib
 import random
 import sys
@@ -174,11 +175,40 @@ def load_model(
 
 
 def _ensure_local_e1_module_on_path() -> None:
-    e1_src = pathlib.Path(__file__).resolve().parents[1] / "E1" / "src"
-    assert e1_src.exists(), f"E1 submodule source directory not found: {e1_src}"
-    e1_src_str = str(e1_src)
-    if e1_src_str not in sys.path:
-        sys.path.insert(0, e1_src_str)
+    if importlib.util.find_spec("E1") is not None:
+        return
+
+    candidates: List[pathlib.Path] = []
+    script_root = pathlib.Path(__file__).resolve().parents[1]
+    candidates.append(script_root / "E1" / "src")
+
+    cwd = pathlib.Path.cwd().resolve()
+    for parent in [cwd, *cwd.parents]:
+        candidates.append(parent / "E1" / "src")
+
+    deduplicated_candidates: List[pathlib.Path] = []
+    seen_paths = set()
+    for candidate in candidates:
+        candidate_resolved = candidate.resolve()
+        candidate_key = str(candidate_resolved)
+        if candidate_key not in seen_paths:
+            seen_paths.add(candidate_key)
+            deduplicated_candidates.append(candidate_resolved)
+
+    for candidate in deduplicated_candidates:
+        if candidate.exists():
+            candidate_str = str(candidate)
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+            if importlib.util.find_spec("E1") is not None:
+                return
+
+    checked_paths = ", ".join([str(path) for path in deduplicated_candidates])
+    raise FileNotFoundError(
+        "E1 module import failed. Expected local submodule at one of: "
+        f"{checked_paths}. "
+        "Run `git submodule update --init --recursive E1` or install E1 package."
+    )
 
 
 def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):

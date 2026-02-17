@@ -1,3 +1,6 @@
+import argparse
+import subprocess
+
 from huggingface_hub import HfApi, login
 
 
@@ -32,15 +35,31 @@ BOLTZ_MODELS = [
 ]
 
 
+def _run_get_weights_scripts(hf_token: str | None) -> None:
+    modules = [
+        "boltz_fastplms.get_boltz2_weights",
+        "e1_fastplms.get_e1_weights",
+        "esm_plusplus.get_esmc_weights",
+        "esm2.get_esm2_weights",
+    ]
+    for module in modules:
+        command = ["py", "-m", module]
+        if hf_token is not None:
+            command.extend(["--hf_token", hf_token])
+        print(f"Running {' '.join(command)}")
+        subprocess.run(command, check=True)
+
+
 if __name__ == "__main__":
     # py -m update_HF
-    import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--token', type=str, default=None)
+    parser.add_argument('--hf_token', type=str, default=None)
     args = parser.parse_args()
 
-    if args.token:
-        login(token=args.token)
+    if args.hf_token:
+        login(token=args.hf_token)
+
+    _run_get_weights_scripts(hf_token=args.hf_token)
 
     api = HfApi()
 

@@ -20,6 +20,7 @@ def _download_checkpoint_if_needed(checkpoint_path: Path) -> Path:
 
 def _copy_runtime_package(output_dir: Path) -> None:
     source_pkg = Path(__file__).resolve().parent
+    project_root = source_pkg.parent
     runtime_files = [
         "__init__.py",
         "modeling_boltz2.py",
@@ -29,6 +30,7 @@ def _copy_runtime_package(output_dir: Path) -> None:
     ]
     for filename in runtime_files:
         shutil.copyfile(source_pkg / filename, output_dir / filename)
+    shutil.copyfile(project_root / "entrypoint_setup.py", output_dir / "entrypoint_setup.py")
     for flat_module in source_pkg.glob("vb_*.py"):
         shutil.copyfile(flat_module, output_dir / flat_module.name)
 
@@ -39,7 +41,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint_path", type=str, default="boltz_fastplms/weights/boltz2_conf.ckpt")
     parser.add_argument("--output_dir", type=str, default="boltz2_automodel_export")
     parser.add_argument("--repo_id", type=str, default="Synthyra/Boltz2")
-    parser.add_argument("--token", type=str, default=None)
+    parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--use_kernels", action="store_true")
     args = parser.parse_args()
 
@@ -59,8 +61,8 @@ if __name__ == "__main__":
     _copy_runtime_package(output_dir=output_dir)
 
     if args.repo_id is not None:
-        if args.token is not None:
-            login(token=args.token)
+        if args.hf_token is not None:
+            login(token=args.hf_token)
         api = HfApi()
         api.create_repo(repo_id=args.repo_id, repo_type="model", exist_ok=True)
         api.upload_folder(

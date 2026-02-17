@@ -1,3 +1,4 @@
+import entrypoint_setup
 import copy
 import inspect
 from collections.abc import Mapping, Sequence

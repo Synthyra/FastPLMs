@@ -1,3 +1,4 @@
+import entrypoint_setup
 import torch
 import torch.nn as nn
 import warnings

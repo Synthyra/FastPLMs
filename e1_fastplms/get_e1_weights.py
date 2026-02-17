@@ -16,12 +16,12 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--token', type=str, default=None)
+    parser.add_argument('--hf_token', type=str, default=None)
     args = parser.parse_args()
     api = HfApi()
 
-    if args.token:
-        login(token=args.token)
+    if args.hf_token:
+        login(token=args.hf_token)
         
     for model_name in model_dict:
         config = E1Config.from_pretrained(model_dict[model_name])
@@ -50,6 +50,12 @@ if __name__ == "__main__":
         api.upload_file(
             path_or_fileobj="e1/tokenizer.json",
             path_in_repo="tokenizer.json",
+            repo_id=repo_id,
+            repo_type="model",
+        )
+        api.upload_file(
+            path_or_fileobj="entrypoint_setup.py",
+            path_in_repo="entrypoint_setup.py",
             repo_id=repo_id,
             repo_type="model",
         )
