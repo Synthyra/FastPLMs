@@ -1,0 +1,133 @@
+{
+    "version": "1.0",
+    "truncation": null,
+    "padding": {
+      "strategy": "BatchLongest",
+      "direction": "Right",
+      "pad_to_multiple_of": null,
+      "pad_id": 0,
+      "pad_type_id": 0,
+      "pad_token": "<pad>"
+    },
+    "added_tokens": [
+      {
+        "id": 0,
+        "content": "<pad>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 1,
+        "content": "<bos>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 2,
+        "content": "<eos>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 3,
+        "content": "<bos_glm>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 4,
+        "content": "<eos_span>",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      },
+      {
+        "id": 5,
+        "content": "?",
+        "single_word": false,
+        "lstrip": false,
+        "rstrip": false,
+        "normalized": false,
+        "special": true
+      }
+    ],
+    "normalizer": null,
+    "pre_tokenizer": {
+      "type": "ByteLevel",
+      "add_prefix_space": false,
+      "trim_offsets": true,
+      "use_regex": true
+    },
+    "post_processor": {
+      "type": "ByteLevel",
+      "add_prefix_space": true,
+      "trim_offsets": true,
+      "use_regex": true
+    },
+    "decoder": {
+      "type": "ByteLevel",
+      "add_prefix_space": true,
+      "trim_offsets": true,
+      "use_regex": true
+    },
+    "model": {
+      "type": "BPE",
+      "dropout": null,
+      "unk_token": "X",
+      "continuing_subword_prefix": null,
+      "end_of_word_suffix": null,
+      "fuse_unk": false,
+      "byte_fallback": false,
+      "vocab": {
+        "<pad>": 0,
+        "<bos>": 1,
+        "<eos>": 2,
+        "<bos_glm>": 3,
+        "<eos_span>": 4,
+        "?": 5,
+        "1": 6,
+        "2": 7,
+        "A": 8,
+        "B": 9,
+        "C": 10,
+        "D": 11,
+        "E": 12,
+        "F": 13,
+        "G": 14,
+        "H": 15,
+        "I": 16,
+        "J": 17,
+        "K": 18,
+        "L": 19,
+        "M": 20,
+        "N": 21,
+        "O": 22,
+        "P": 23,
+        "Q": 24,
+        "R": 25,
+        "S": 26,
+        "T": 27,
+        "U": 28,
+        "V": 29,
+        "W": 30,
+        "X": 31,
+        "Y": 32,
+        "Z": 33
+      },
+      "merges": []
+    }
+  }

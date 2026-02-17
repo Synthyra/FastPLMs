@@ -36,7 +36,7 @@ if __name__ == "__main__":
         repo_id = 'Synthyra/' + model_name
         model.push_to_hub(repo_id)
         api.upload_file(
-            path_or_fileobj="e1/modeling_e1.py",
+            path_or_fileobj="e1_fastplms/modeling_e1.py",
             path_in_repo="modeling_e1.py",
             repo_id=repo_id,
             repo_type="model",
@@ -48,7 +48,7 @@ if __name__ == "__main__":
             repo_type="model",
         )
         api.upload_file(
-            path_or_fileobj="e1/tokenizer.json",
+            path_or_fileobj="e1_fastplms/tokenizer.json",
             path_in_repo="tokenizer.json",
             repo_id=repo_id,
             repo_type="model",
