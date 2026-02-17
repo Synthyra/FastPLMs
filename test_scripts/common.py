@@ -5,6 +5,7 @@ import importlib.util
 import pathlib
 import random
 import sys
+import types
 import numpy as np
 import torch
 from typing import Dict, Iterable, List, Optional
@@ -215,6 +216,16 @@ def _ensure_local_e1_module_on_path() -> None:
 def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
     assert spec.reference_repo_id is not None, f"Missing official e1 repo id for {spec.key}."
     _ensure_local_e1_module_on_path()
+    if "kernels" not in sys.modules:
+        kernels_spec = importlib.util.find_spec("kernels")
+        if kernels_spec is None:
+            kernels_module = types.ModuleType("kernels")
+
+            def _missing_get_kernel(_kernel_name: str):
+                raise ModuleNotFoundError("No module named 'kernels'")
+
+            kernels_module.get_kernel = _missing_get_kernel
+            sys.modules["kernels"] = kernels_module
     batch_preparer_module = importlib.import_module("E1.batch_preparer")
     modeling_module = importlib.import_module("E1.modeling")
     E1BatchPreparer = batch_preparer_module.E1BatchPreparer
