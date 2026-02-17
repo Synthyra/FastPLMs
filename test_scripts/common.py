@@ -176,7 +176,7 @@ def load_model(
 
 
 def _ensure_local_e1_module_on_path() -> None:
-    if importlib.util.find_spec("e1") is not None or importlib.util.find_spec("E1") is not None:
+    if importlib.util.find_spec("E1") is not None:
         return
 
     candidates: List[pathlib.Path] = []
@@ -201,7 +201,7 @@ def _ensure_local_e1_module_on_path() -> None:
             candidate_str = str(candidate)
             if candidate_str not in sys.path:
                 sys.path.insert(0, candidate_str)
-            if importlib.util.find_spec("e1") is not None or importlib.util.find_spec("E1") is not None:
+            if importlib.util.find_spec("E1") is not None:
                 return
 
     checked_paths = ", ".join([str(path) for path in deduplicated_candidates])
@@ -215,14 +215,8 @@ def _ensure_local_e1_module_on_path() -> None:
 def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
     assert spec.reference_repo_id is not None, f"Missing official e1 repo id for {spec.key}."
     _ensure_local_e1_module_on_path()
-    if importlib.util.find_spec("E1") is not None:
-        batch_preparer_module = importlib.import_module("E1.batch_preparer")
-        modeling_module = importlib.import_module("E1.modeling")
-    elif importlib.util.find_spec("e1") is not None:
-        batch_preparer_module = importlib.import_module("e1.batch_preparer")
-        modeling_module = importlib.import_module("e1.modeling")
-    else:
-        raise ModuleNotFoundError("Unable to import E1 module from either 'E1' or 'e1'.")
+    batch_preparer_module = importlib.import_module("E1.batch_preparer")
+    modeling_module = importlib.import_module("E1.modeling")
     E1BatchPreparer = batch_preparer_module.E1BatchPreparer
     E1ForMaskedLM = modeling_module.E1ForMaskedLM
 

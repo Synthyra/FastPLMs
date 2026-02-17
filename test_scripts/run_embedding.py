@@ -187,7 +187,7 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
                 truncate=True,
                 full_embeddings=False,
                 embed_dtype=torch.float32,
-                pooling_types=["mean"],
+                pooling_types=["mean", "cls"],
                 sql=True,
                 save=False,
                 sql_db_path=str(pooled_sql_db_path),
