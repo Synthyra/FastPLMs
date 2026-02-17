@@ -9,6 +9,7 @@ from tqdm.auto import tqdm
 
 from test_scripts.common import build_output_dir
 from test_scripts.common import chunk_sequences
+from test_scripts.common import compare_model_state_dicts_fp32
 from test_scripts.common import generate_sequences
 from test_scripts.common import load_model
 from test_scripts.common import load_official_model_for_compliance
@@ -96,8 +97,11 @@ def _reference_check(
     for sequence_batch in tqdm(batches, desc=f"Reference compare ({spec.key})", unit="batch", leave=False):
         inputs = prepare_official_batch_for_compliance(spec=spec, sequence_batch=sequence_batch, tokenizer=official_tokenizer, device=device)
         token_mask = inputs["attention_mask"]
-        official_outputs = official_model(**inputs, output_hidden_states=True)
-        test_outputs = test_model(**inputs, output_hidden_states=True)
+        model_inputs = dict(inputs)
+        if spec.family == "e1":
+            del model_inputs["attention_mask"]
+        official_outputs = official_model(**model_inputs, output_hidden_states=True)
+        test_outputs = test_model(**model_inputs, output_hidden_states=True)
         hidden_metrics = _masked_token_diff_metrics(official_outputs.hidden_states[-1], test_outputs.hidden_states[-1], token_mask)
         logits_metrics = _masked_token_diff_metrics(official_outputs.logits, test_outputs.logits, token_mask)
         hidden_mse_sum += hidden_metrics["mse"]
@@ -215,6 +219,9 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
                     "error": "",
                     "error_type": "",
                     "traceback": "",
+                    "esmplusplus_fp32_parity": "",
+                    "esmplusplus_fp32_parity_max_abs_diff": float("nan"),
+                    "esmplusplus_fp32_parity_max_abs_diff_param": "",
                 }
                 try:
                     test_model, _ = load_model(spec=spec, task="masked_lm", device=device, dtype=dtype, attn_backend=selected_backend)
@@ -224,6 +231,26 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
                     else:
                         assert official_model is not None, "Official model must be loaded when reference check is enabled."
                         assert official_tokenizer is not None, "Official tokenizer must be loaded when reference check is enabled."
+                        if args.strict_reference and spec.family == "esmplusplus":
+                            parity = compare_model_state_dicts_fp32(
+                                reference_model=official_model,
+                                candidate_model=test_model,
+                                max_report=5,
+                            )
+                            row["esmplusplus_fp32_parity"] = bool(parity["match"])
+                            row["esmplusplus_fp32_parity_max_abs_diff"] = float(parity["max_abs_diff"])
+                            row["esmplusplus_fp32_parity_max_abs_diff_param"] = str(parity["max_abs_diff_param"])
+                            if bool(parity["match"]) is False:
+                                raise AssertionError(
+                                    "Strict ESMplusplus reference requires float32-identical checkpoints. "
+                                    f"diff_param_count={parity['diff_param_count']} "
+                                    f"max_abs_diff={parity['max_abs_diff']} "
+                                    f"max_abs_diff_param={parity['max_abs_diff_param']} "
+                                    f"only_in_reference={parity['only_in_reference']} "
+                                    f"only_in_candidate={parity['only_in_candidate']} "
+                                    f"shape_mismatches={parity['shape_mismatches']} "
+                                    f"diff_params_sample={parity['diff_params_sample']}"
+                                )
                         reference_metrics = _reference_check(
                             spec=spec,
                             test_model=test_model,
@@ -295,6 +322,9 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
                     "error": str(exc),
                     "error_type": type(exc).__name__,
                     "traceback": traceback.format_exc(),
+                "esmplusplus_fp32_parity": "",
+                "esmplusplus_fp32_parity_max_abs_diff": float("nan"),
+                "esmplusplus_fp32_parity_max_abs_diff_param": "",
                 }
                 rows.append(row)
                 labels.append(f"{spec.key}|{backend}")
@@ -319,6 +349,11 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
         "batch_size": args.batch_size,
         "full_models": args.full_models,
         "rows": rows,
+        "strict_reference_note": (
+            "For esmplusplus, strict_reference validates float32 state_dict equality against official ESMC before metric checks."
+            if args.strict_reference
+            else ""
+        ),
     }
     write_json(output_dir / "metrics.json", payload)
     write_csv(output_dir / "metrics.csv", rows)
@@ -337,6 +372,10 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
         f"Models failed: {len(rows) - passed_count}",
         f"Output directory: {output_dir}",
     ]
+    if args.strict_reference:
+        summary_lines.append(
+            "Strict reference note: esmplusplus requires float32 state_dict equality against official ESMC before metrics."
+        )
     for row in rows:
         status = "PASS" if bool(row["overall_pass"]) else "FAIL"
         summary_lines.append(

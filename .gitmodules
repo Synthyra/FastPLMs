@@ -4,3 +4,6 @@
 [submodule "e1"]
 	path = e1
 	url = https://github.com/Profluent-AI/E1.git
+[submodule "esm"]
+	path = esm
+	url = https://github.com/evolutionaryscale/esm.git

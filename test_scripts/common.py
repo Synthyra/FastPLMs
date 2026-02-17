@@ -298,6 +298,60 @@ def load_official_model_for_compliance(spec: ModelSpec, device: torch.device, dt
     raise ValueError(f"Unsupported family for official loader: {spec.family}")
 
 
+def compare_model_state_dicts_fp32(reference_model, candidate_model, max_report: int = 5) -> Dict[str, object]:
+    reference_state = reference_model.state_dict()
+    candidate_state = candidate_model.state_dict()
+    reference_keys = set(reference_state.keys())
+    candidate_keys = set(candidate_state.keys())
+    only_in_reference = sorted(reference_keys - candidate_keys)
+    only_in_candidate = sorted(candidate_keys - reference_keys)
+    common_keys = sorted(reference_keys & candidate_keys)
+    shape_mismatches: List[Dict[str, object]] = []
+    differing_tensors: List[Dict[str, object]] = []
+    max_abs_diff = 0.0
+    max_abs_diff_param = ""
+
+    for name in common_keys:
+        reference_tensor = reference_state[name].detach().cpu().to(torch.float32)
+        candidate_tensor = candidate_state[name].detach().cpu().to(torch.float32)
+        if reference_tensor.shape != candidate_tensor.shape:
+            shape_mismatches.append(
+                {
+                    "name": name,
+                    "reference_shape": list(reference_tensor.shape),
+                    "candidate_shape": list(candidate_tensor.shape),
+                }
+            )
+            continue
+        if torch.equal(reference_tensor, candidate_tensor):
+            continue
+        abs_diff = torch.abs(reference_tensor - candidate_tensor)
+        param_max_abs_diff = float(torch.max(abs_diff).item())
+        param_mean_abs_diff = float(torch.mean(abs_diff).item())
+        differing_tensors.append(
+            {
+                "name": name,
+                "max_abs_diff": param_max_abs_diff,
+                "mean_abs_diff": param_mean_abs_diff,
+            }
+        )
+        if param_max_abs_diff > max_abs_diff:
+            max_abs_diff = param_max_abs_diff
+            max_abs_diff_param = name
+
+    match = len(only_in_reference) == 0 and len(only_in_candidate) == 0 and len(shape_mismatches) == 0 and len(differing_tensors) == 0
+    return {
+        "match": match,
+        "only_in_reference": only_in_reference[:max_report],
+        "only_in_candidate": only_in_candidate[:max_report],
+        "shape_mismatches": shape_mismatches[:max_report],
+        "diff_param_count": len(differing_tensors),
+        "diff_params_sample": differing_tensors[:max_report],
+        "max_abs_diff": max_abs_diff,
+        "max_abs_diff_param": max_abs_diff_param,
+    }
+
+
 def prepare_official_batch_for_compliance(
     spec: ModelSpec,
     sequence_batch: List[str],
@@ -312,6 +366,7 @@ def prepare_official_batch_for_compliance(
             "within_seq_position_ids": raw_batch["within_seq_position_ids"],
             "global_position_ids": raw_batch["global_position_ids"],
             "sequence_ids": raw_batch["sequence_ids"],
+            "attention_mask": (raw_batch["sequence_ids"] != -1).long(),
         }
         return batch
     assert tokenizer is not None, "Official tokenizer is required for compliance comparison."

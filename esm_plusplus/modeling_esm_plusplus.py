@@ -557,14 +557,15 @@ class TransformerStack(nn.Module):
         Returns:
             TransformerOutput containing last hidden state and optionally all hidden states and attention weights
         """
-        batch_size, seq_len, _ = x.shape
         hidden_states = () if output_hidden_states else None
         attentions = () if output_attentions else None
         
         if attention_mask is not None:
-            attention_mask = attention_mask[:, None, None, :].expand(batch_size, 1, seq_len, seq_len).bool()
+            assert attention_mask.ndim == 2, f"Expected 2D token attention mask, got shape {attention_mask.shape}."
+            token_attention_mask = attention_mask.bool()
+            pairwise_attention_mask = token_attention_mask.unsqueeze(-1) & token_attention_mask.unsqueeze(-2)
+            attention_mask = pairwise_attention_mask.unsqueeze(1)
             if self.attn_backend == "flex" and not output_attentions:
-                token_attention_mask = attention_mask[:, 0, 0, :]
                 flex_block_mask = _create_pad_block_mask(token_attention_mask)
             else:
                 flex_block_mask = None
