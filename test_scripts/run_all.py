@@ -27,11 +27,10 @@ DEFAULTS: Dict[str, object] = {
     "batch_size": 2,
     "embedding_num_sequences": 24,
     "compliance_num_sequences": 12,
-    "lengths": "64,128,256",
-    "batch_sizes": "1,2,4",
-    "num_batches": 8,
-    "warmup_steps": 2,
-    "timing_runs": 4,
+    "lengths": "64,128,256,512,1024,2048",
+    "batch_sizes": "1,2,4,8",
+    "num_batches": 100,
+    "warmup_steps": 100,
     "attn_tolerance": 5e-3,
     "check_attn_equivalence": True,
     "attn_equivalence_mse_threshold": 1e-4,
@@ -86,7 +85,6 @@ class RunAllConfig:
     batch_sizes: str
     num_batches: int
     warmup_steps: int
-    timing_runs: int
     attn_tolerance: float
     check_attn_equivalence: bool
     attn_equivalence_mse_threshold: float
@@ -144,7 +142,6 @@ class RunAllConfig:
             batch_sizes=args.batch_sizes,
             num_batches=args.num_batches,
             warmup_steps=args.warmup_steps,
-            timing_runs=args.timing_runs,
             attn_tolerance=args.attn_tolerance,
             check_attn_equivalence=args.check_attn_equivalence,
             attn_equivalence_mse_threshold=args.attn_equivalence_mse_threshold,
@@ -246,7 +243,6 @@ class RunAllConfig:
             batch_sizes=self.batch_sizes,
             num_batches=self.num_batches,
             warmup_steps=self.warmup_steps,
-            timing_runs=self.timing_runs,
             attn_backend=self.attn_backend,
             attn_backends=self.attn_backends,
             compare_attn=self.compare_attn,
@@ -473,7 +469,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-sizes", type=str, default=str(DEFAULTS["batch_sizes"]))
     parser.add_argument("--num-batches", type=int, default=int(DEFAULTS["num_batches"]))
     parser.add_argument("--warmup-steps", type=int, default=int(DEFAULTS["warmup_steps"]))
-    parser.add_argument("--timing-runs", type=int, default=int(DEFAULTS["timing_runs"]))
     parser.add_argument("--attn-tolerance", type=float, default=float(DEFAULTS["attn_tolerance"]))
     parser.add_argument("--check-attn-equivalence", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["check_attn_equivalence"]))
     parser.add_argument("--attn-equivalence-mse-threshold", type=float, default=float(DEFAULTS["attn_equivalence_mse_threshold"]))

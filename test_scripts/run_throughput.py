@@ -2,6 +2,7 @@ import argparse
 import math
 import pathlib
 import random
+import re
 import time
 from typing import Dict, List
 
@@ -176,6 +177,135 @@ def _plot_flex_sdpa_delta(rows: List[Dict[str, object]], batch_sizes: List[int],
     plt.tight_layout()
     plt.savefig(output_path, dpi=300)
     plt.close()
+
+
+def _slugify_filename(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+    assert len(slug) > 0, f"Failed to build filename slug from value: {value}"
+    return slug
+
+
+def _plot_publication_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: pathlib.Path) -> List[pathlib.Path]:
+    publication_dir = output_dir / "publication_plots"
+    publication_dir.mkdir(parents=True, exist_ok=True)
+
+    model_rows_index: Dict[str, List[Dict[str, object]]] = {}
+    for row in rows:
+        if bool(row["pass"]) is False:
+            continue
+        backend = str(row["attn_backend"])
+        if backend not in ["sdpa", "flex"]:
+            continue
+        if _is_finite(row["tokens_per_second"]) is False:
+            continue
+        if _is_finite(row["peak_memory_mb"]) is False:
+            continue
+        model_group_key = f"{row['repo_id']}|compiled={row['compiled_model']}"
+        if model_group_key not in model_rows_index:
+            model_rows_index[model_group_key] = []
+        model_rows_index[model_group_key].append(row)
+
+    generated_paths: List[pathlib.Path] = []
+    for model_group_key in sorted(model_rows_index.keys()):
+        model_rows = model_rows_index[model_group_key]
+        has_sdpa = False
+        has_flex = False
+        for row in model_rows:
+            backend = str(row["attn_backend"])
+            if backend == "sdpa":
+                has_sdpa = True
+            if backend == "flex":
+                has_flex = True
+        if has_sdpa is False or has_flex is False:
+            continue
+
+        batch_sizes: List[int] = []
+        for row in model_rows:
+            batch_size = int(row["batch_size"])
+            if batch_size not in batch_sizes:
+                batch_sizes.append(batch_size)
+        batch_sizes = sorted(batch_sizes)
+
+        repo_id = str(model_rows[0]["repo_id"])
+        compiled_model = bool(model_rows[0]["compiled_model"])
+        figure, axes = plt.subplots(
+            nrows=len(batch_sizes),
+            ncols=2,
+            figsize=(13, max(4.2, 3.8 * len(batch_sizes))),
+            squeeze=False,
+        )
+        colors = {"sdpa": "#1f77b4", "flex": "#d62728"}
+        markers = {"sdpa": "o", "flex": "s"}
+
+        for row_index, batch_size in enumerate(batch_sizes):
+            throughput_axis = axes[row_index][0]
+            memory_axis = axes[row_index][1]
+
+            for backend in ["sdpa", "flex"]:
+                lengths: List[int] = []
+                throughputs: List[float] = []
+                memories: List[float] = []
+                for row in model_rows:
+                    if int(row["batch_size"]) == batch_size and str(row["attn_backend"]) == backend:
+                        lengths.append(int(row["sequence_length"]))
+                        throughputs.append(float(row["tokens_per_second"]))
+                        memories.append(float(row["peak_memory_mb"]))
+                if len(lengths) == 0:
+                    continue
+                paired = sorted(zip(lengths, throughputs, memories), key=lambda item: item[0])
+                sorted_lengths = [pair[0] for pair in paired]
+                sorted_throughputs = [pair[1] for pair in paired]
+                sorted_memories = [pair[2] for pair in paired]
+                label = backend.upper()
+                throughput_axis.plot(
+                    sorted_lengths,
+                    sorted_throughputs,
+                    marker=markers[backend],
+                    color=colors[backend],
+                    markersize=5.5,
+                    linewidth=2.2,
+                    label=label,
+                )
+                memory_axis.plot(
+                    sorted_lengths,
+                    sorted_memories,
+                    marker=markers[backend],
+                    color=colors[backend],
+                    markersize=5.5,
+                    linewidth=2.2,
+                    label=label,
+                )
+
+            throughput_axis.set_title(f"Batch size {batch_size}: Throughput")
+            throughput_axis.set_xlabel("Sequence length")
+            throughput_axis.set_ylabel("Tokens/second")
+            throughput_axis.grid(True, alpha=0.25)
+            throughput_axis.spines["top"].set_visible(False)
+            throughput_axis.spines["right"].set_visible(False)
+
+            memory_axis.set_title(f"Batch size {batch_size}: Peak memory")
+            memory_axis.set_xlabel("Sequence length")
+            memory_axis.set_ylabel("Peak memory (MB)")
+            memory_axis.grid(True, alpha=0.25)
+            memory_axis.spines["top"].set_visible(False)
+            memory_axis.spines["right"].set_visible(False)
+
+            if row_index == 0:
+                throughput_axis.legend(loc="upper left", frameon=False)
+                memory_axis.legend(loc="upper left", frameon=False)
+
+        figure.suptitle(f"{repo_id} | SDPA vs Flex | compiled={compiled_model}", y=0.995)
+        figure.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
+        filename = (
+            f"throughput_memory_sdpa_vs_flex_{_slugify_filename(repo_id)}"
+            f"_compiled_{str(compiled_model).lower()}.png"
+        )
+        output_path = publication_dir / filename
+        figure.savefig(output_path, dpi=300)
+        plt.close(figure)
+        generated_paths.append(output_path)
+
+    return generated_paths
 
 
 def _is_finite(value: object) -> bool:
@@ -446,21 +576,20 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                             reset_peak_memory(device)
                             sync_cuda(device)
                             start = time.perf_counter()
-                            for _ in range(args.timing_runs):
-                                for prepared in prepared_batches:
-                                    _ = run_forward(
-                                        spec=spec,
-                                        model=model,
-                                        batch=prepared,
-                                        output_hidden_states=False,
-                                        output_attentions=False,
-                                    )
+                            for prepared in prepared_batches:
+                                _ = run_forward(
+                                    spec=spec,
+                                    model=model,
+                                    batch=prepared,
+                                    output_hidden_states=False,
+                                    output_attentions=False,
+                                )
                             sync_cuda(device)
                             elapsed = time.perf_counter() - start
 
-                        batches_processed = args.timing_runs * len(prepared_batches)
-                        valid_tokens_processed = args.timing_runs * valid_token_count
-                        padded_tokens_processed = args.timing_runs * padded_token_count
+                        batches_processed = len(prepared_batches)
+                        valid_tokens_processed = valid_token_count
+                        padded_tokens_processed = padded_token_count
                         sequences_processed = batches_processed * batch_size
                         latency_seconds = elapsed / batches_processed
                         row["latency_seconds"] = latency_seconds
@@ -491,7 +620,6 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         "batch_sizes": batch_sizes,
         "num_batches": args.num_batches,
         "warmup_steps": args.warmup_steps,
-        "timing_runs": args.timing_runs,
         "full_models": args.full_models,
         "compare_attn": args.compare_attn,
         "attn_backend": args.attn_backend,
@@ -505,6 +633,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     write_csv(output_dir / "metrics.csv", rows)
     _plot_throughput(rows=rows, batch_sizes=batch_sizes, output_path=output_dir / "throughput_tokens_per_second.png")
     _plot_memory(rows=rows, batch_sizes=batch_sizes, output_path=output_dir / "throughput_peak_memory_mb.png")
+    publication_plot_paths = _plot_publication_sdpa_vs_flex_per_model(rows=rows, output_dir=output_dir)
     delta_rows = _build_flex_sdpa_deltas(rows)
     write_csv(output_dir / "flex_vs_sdpa_deltas.csv", delta_rows)
     delta_payload: Dict[str, object] = {
@@ -556,6 +685,8 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         f"Points passed: {passed_count}",
         f"Points failed: {len(rows) - passed_count}",
         f"Flex-vs-SDPA pairs: {len(delta_rows)}",
+        f"Publication plots generated: {len(publication_plot_paths)}",
+        f"Publication plots directory: {output_dir / 'publication_plots'}",
         f"Mean throughput gain (%): {mean_throughput_gain}",
         f"Mean memory reduction (%): {mean_memory_reduction}",
         f"Output directory: {output_dir}",
@@ -579,11 +710,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "float32", "float16", "bfloat16"])
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--lengths", type=str, default="64,128,256")
-    parser.add_argument("--batch-sizes", type=str, default="1,2,4")
-    parser.add_argument("--num-batches", type=int, default=8)
-    parser.add_argument("--warmup-steps", type=int, default=2)
-    parser.add_argument("--timing-runs", type=int, default=4)
+    parser.add_argument("--lengths", type=str, default="64,128,256,512,1024,2048")
+    parser.add_argument("--batch-sizes", type=str, default="1,2,4,8")
+    parser.add_argument("--num-batches", type=int, default=100)
+    parser.add_argument("--warmup-steps", type=int, default=100)
     parser.add_argument("--attn-backend", type=str, default="flex", choices=["flex", "sdpa", "model_default"])
     parser.add_argument("--attn-backends", type=str, default="sdpa,flex")
     parser.add_argument("--compare-attn", action=argparse.BooleanOptionalAction, default=True)
