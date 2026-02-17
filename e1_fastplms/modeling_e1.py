@@ -187,7 +187,7 @@ def block_min_max_seq_ids(SLEN: torch.Tensor, block_size: int = 128) -> tuple[to
     total_tokens = torch.sum(SLEN)
     B = (total_tokens + block_size - 1) // block_size
     padding_tokens = B * block_size - total_tokens
-    SLEN = torch.cat([SLEN, torch.Tensor([padding_tokens]).to(device)], dim=0)
+    SLEN = torch.cat([SLEN, padding_tokens.reshape(1).to(device=device, dtype=SLEN.dtype)], dim=0)
 
     assert torch.sum(SLEN) == B * block_size
 

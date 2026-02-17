@@ -255,6 +255,12 @@ def _selected_backends(spec, args: argparse.Namespace, attn_backends: List[str])
     return ["model_default"]
 
 
+def _should_compile_model(spec, args: argparse.Namespace) -> bool:
+    if spec.family == "e1":
+        return False
+    return bool(args.compile_model or args.compare_attn)
+
+
 def run_throughput_suite(args: argparse.Namespace) -> int:
     login_if_needed(args.token)
     device = resolve_device(args.device)
@@ -268,7 +274,6 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     specs = get_model_specs(full_models=args.full_models, families=args.families)
     rows: List[Dict[str, object]] = []
     all_passed = True
-    compile_model = args.compile_model or args.compare_attn
     total_points = 0
     for spec in specs:
         total_points += len(_selected_backends(spec=spec, args=args, attn_backends=attn_backends)) * len(lengths) * len(batch_sizes)
@@ -287,8 +292,8 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                                 "family": spec.family,
                                 "repo_id": spec.repo_id,
                                 "attn_backend": attn_backend,
-                                "compiled_model": compile_model,
-                                "series_label": f"{spec.repo_id}|{attn_backend}|compiled={compile_model}",
+                                "compiled_model": _should_compile_model(spec=spec, args=args),
+                                "series_label": f"{spec.repo_id}|{attn_backend}|compiled={_should_compile_model(spec=spec, args=args)}",
                                 "sequence_length": length,
                                 "batch_size": batch_size,
                                 "latency_seconds": 0.0,
@@ -312,7 +317,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             "full_models": args.full_models,
             "attn_backends": attn_backends,
             "compare_attn": args.compare_attn,
-            "compile_model": compile_model,
+            "compile_model": bool(args.compile_model or args.compare_attn),
             "pad_min_ratio": args.pad_min_ratio,
             "dry_run": True,
             "rows": rows,
@@ -327,6 +332,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
 
     for spec in specs:
         spec_backends = _selected_backends(spec=spec, args=args, attn_backends=attn_backends)
+        compile_model = _should_compile_model(spec=spec, args=args)
 
         for attn_backend in spec_backends:
             selected_backend = None if attn_backend == "model_default" else attn_backend
@@ -490,7 +496,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         "compare_attn": args.compare_attn,
         "attn_backend": args.attn_backend,
         "attn_backends": attn_backends,
-        "compile_model": compile_model,
+        "compile_model": bool(args.compile_model or args.compare_attn),
         "pad_min_ratio": args.pad_min_ratio,
         "rows": rows,
     }

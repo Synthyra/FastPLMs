@@ -10,7 +10,6 @@ import types
 import numpy as np
 import torch
 from typing import Dict, Iterable, List, Optional
-from huggingface_hub import hf_hub_download
 from huggingface_hub import login
 from transformers import (
     AutoConfig,
@@ -224,14 +223,18 @@ def _ensure_local_e1_tokenizer_json(spec: ModelSpec) -> None:
     if tokenizer_path.exists():
         return
 
-    assert spec.reference_repo_id is not None, f"Missing official e1 repo id for {spec.key}."
+    script_root = pathlib.Path(__file__).resolve().parents[1]
+    fallback_tokenizer_path = script_root / "e1_fastplms" / "tokenizer.json"
+    assert fallback_tokenizer_path.exists(), (
+        "Missing E1 tokenizer.json in both locations. "
+        f"Expected either {tokenizer_path} or {fallback_tokenizer_path}."
+    )
     print(
         "[test_scripts.common] Missing E1 tokenizer file at "
-        f"{tokenizer_path}. Downloading tokenizer.json from {spec.reference_repo_id}."
+        f"{tokenizer_path}. Copying from local fallback {fallback_tokenizer_path}."
     )
-    downloaded_path = pathlib.Path(hf_hub_download(repo_id=spec.reference_repo_id, filename="tokenizer.json"))
     tokenizer_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(downloaded_path, tokenizer_path)
+    shutil.copy2(fallback_tokenizer_path, tokenizer_path)
     assert tokenizer_path.exists(), f"Failed to materialize E1 tokenizer file at {tokenizer_path}"
 
 
