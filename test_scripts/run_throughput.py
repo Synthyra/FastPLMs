@@ -653,7 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "float32", "float16", "bfloat16"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--lengths", type=str, default="64,128,256,512,1024,2048")
-    parser.add_argument("--batch-sizes", type=str, default="1,2,4,8")
+    parser.add_argument("--batch-sizes", type=str, default="1,2,4,8,16")
     parser.add_argument("--num-batches", type=int, default=100)
     parser.add_argument("--warmup-steps", type=int, default=100)
     parser.add_argument("--padded-sequence-fraction", type=float, default=0.3)
