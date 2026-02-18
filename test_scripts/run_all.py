@@ -46,6 +46,7 @@ DEFAULTS: Dict[str, object] = {
     "argmax_threshold": 0.99,
     "attn_backend": "flex",
     "attn_backends": "sdpa,flex",
+    "enable_dplm_flex": False,
     "compare_attn": True,
     "compile_model": True,
     "compile_backend": "inductor",
@@ -122,6 +123,7 @@ class RunAllConfig:
     attn_backends: str
     compare_attn: bool
     compile_model: bool
+    enable_dplm_flex: bool
     compile_backend: str
     compile_dynamic: bool
     padded_sequence_fraction: float
@@ -184,6 +186,7 @@ class RunAllConfig:
             attn_backends=args.attn_backends,
             compare_attn=args.compare_attn,
             compile_model=args.compile_model,
+            enable_dplm_flex=args.enable_dplm_flex,
             compile_backend=args.compile_backend,
             compile_dynamic=args.compile_dynamic,
             padded_sequence_fraction=args.padded_sequence_fraction,
@@ -262,6 +265,7 @@ class RunAllConfig:
             attn_backends=self.attn_backends,
             compare_attn=self.compare_attn,
             compile_model=self.compile_model,
+            enable_dplm_flex=self.enable_dplm_flex,
             compile_backend=self.compile_backend,
             compile_dynamic=self.compile_dynamic,
             padded_sequence_fraction=self.padded_sequence_fraction,
@@ -521,6 +525,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attn-backends", type=str, default=str(DEFAULTS["attn_backends"]))
     parser.add_argument("--compare-attn", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compare_attn"]))
     parser.add_argument("--compile-model", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compile_model"]))
+    parser.add_argument("--enable-dplm-flex", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["enable_dplm_flex"]))
     parser.add_argument("--compile-backend", type=str, default=str(DEFAULTS["compile_backend"]), choices=["default", "inductor", "aot_eager"])
     parser.add_argument("--compile-dynamic", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compile_dynamic"]))
     parser.add_argument("--padded-sequence-fraction", type=float, default=float(DEFAULTS["padded_sequence_fraction"]))

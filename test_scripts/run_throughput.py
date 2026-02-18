@@ -340,7 +340,7 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
         if bool(row["pass"]) is False:
             continue
         family = str(row["family"])
-        if family not in ["esm2", "esmplusplus"]:
+        if family not in ["esm2", "esmplusplus", "dplm", "dplm2"]:
             continue
         backend = str(row["attn_backend"])
         if backend not in ["sdpa", "flex"]:
@@ -401,9 +401,14 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
     return delta_rows
 
 
-def _selected_backends(spec) -> List[str]:
-    assert spec.family in ["esm2", "esmplusplus"], f"Unexpected family for throughput compare: {spec.family}"
-    return ["sdpa", "flex"]
+def _selected_backends(spec, enable_dplm_flex: bool) -> List[str]:
+    if spec.family in ["esm2", "esmplusplus"]:
+        return ["sdpa", "flex"]
+    if spec.family in ["dplm", "dplm2"]:
+        if enable_dplm_flex:
+            return ["sdpa", "flex"]
+        return ["model_default"]
+    raise ValueError(f"Unexpected family for throughput compare: {spec.family}")
 
 
 def run_throughput_suite(args: argparse.Namespace) -> int:
@@ -422,7 +427,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     compile_model = bool(args.compile_model)
     compile_backend = str(args.compile_backend)
     compile_dynamic = bool(args.compile_dynamic)
-    benchmark_families = ["esm2", "esmplusplus"]
+    benchmark_families = ["esm2", "esmplusplus", "dplm", "dplm2"]
     specs = get_model_specs(full_models=True, families=benchmark_families)
     assert len(specs) > 0, "Expected at least one model spec for throughput benchmarking."
     rows: List[Dict[str, object]] = []
@@ -430,7 +435,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     total_points = 0
     for spec in specs:
         total_points += (
-            len(_selected_backends(spec=spec))
+            len(_selected_backends(spec=spec, enable_dplm_flex=args.enable_dplm_flex))
             * len(pad_fraction_settings)
             * len(lengths)
             * len(batch_sizes)
@@ -439,7 +444,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         for spec in specs:
-            spec_backends = _selected_backends(spec=spec)
+            spec_backends = _selected_backends(spec=spec, enable_dplm_flex=args.enable_dplm_flex)
 
             for attn_backend in spec_backends:
                 for padded_sequence_fraction_setting in pad_fraction_settings:
@@ -483,13 +488,14 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             "num_batches": args.num_batches,
             "warmup_steps": args.warmup_steps,
             "families": benchmark_families,
-            "attn_backends": ["sdpa", "flex"],
+            "attn_backends": sorted(list({str(row["attn_backend"]) for row in rows})),
             "compile_model": compile_model,
             "compile_backend": compile_backend,
             "compile_dynamic": compile_dynamic,
             "padded_sequence_fraction": args.padded_sequence_fraction,
             "pad_fraction_settings": pad_fraction_settings,
             "max_pad_fraction": args.max_pad_fraction,
+            "enable_dplm_flex": args.enable_dplm_flex,
             "dry_run": True,
             "rows": rows,
         }
@@ -509,7 +515,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         return 0
 
     for spec in specs:
-        spec_backends = _selected_backends(spec=spec)
+        spec_backends = _selected_backends(spec=spec, enable_dplm_flex=args.enable_dplm_flex)
 
         for attn_backend in spec_backends:
             selected_backend = None if attn_backend == "model_default" else attn_backend
@@ -596,7 +602,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                             pad_seed_offset = int(round(padded_sequence_fraction_setting * 10000))
                             batch_seed = args.seed + (pad_seed_offset * 1000000) + (length * 1000) + batch_size
                             sampled_sequence_length = length
-                            if spec.family in ["esm2", "esmplusplus"]:
+                            if spec.family in ["esm2", "esmplusplus", "dplm", "dplm2"]:
                                 sampled_sequence_length = max(4, length - 2)
                             sequence_batches = _build_sequence_batches(
                                 num_batches=args.num_batches,
@@ -688,13 +694,14 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         "num_batches": args.num_batches,
         "warmup_steps": args.warmup_steps,
         "families": benchmark_families,
-        "attn_backends": ["sdpa", "flex"],
+        "attn_backends": sorted(list({str(row["attn_backend"]) for row in rows})),
         "compile_model": compile_model,
         "compile_backend": compile_backend,
         "compile_dynamic": compile_dynamic,
         "padded_sequence_fraction": args.padded_sequence_fraction,
         "pad_fraction_settings": pad_fraction_settings,
         "max_pad_fraction": args.max_pad_fraction,
+        "enable_dplm_flex": args.enable_dplm_flex,
         "rows": rows,
     }
 
@@ -753,6 +760,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--padded-sequence-fraction", type=float, default=0.3)
     parser.add_argument("--pad-fractions", type=str, default=None)
     parser.add_argument("--max-pad-fraction", type=float, default=0.5)
+    parser.add_argument("--enable-dplm-flex", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")
     return parser
