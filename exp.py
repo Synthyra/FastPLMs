@@ -1,22 +1,15 @@
-import torch
-from transformers import AutoModel
+from dplm_fastplms.dplm2 import DPLM2ForMaskedLM
+from transformers import AutoTokenizer
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = AutoModel.from_pretrained(
-    "Synthyra/Boltz2",
-    trust_remote_code=True,
-    dtype=torch.float32,
-    device_map="cuda"
-).eval()
+model = DPLM2ForMaskedLM.from_pretrained('airkingbd/dplm2_150m')
+tokenizer = AutoTokenizer.from_pretrained('airkingbd/dplm2_150m')
+
+print(tokenizer)
+print(model)
 
 
-out = model.predict_structure(
-    amino_acid_sequence="MSTNPKPQRKTKRNTNRRPQDVKFPGG",
-    recycling_steps=3,
-    num_sampling_steps=200,
-    diffusion_samples=1,
-)
-
-print(out.sample_atom_coords.shape)
-print(None if out.plddt is None else out.plddt.shape)
+seq = "MSTNPKPQRKTKRNTNRRPQDVKFPGG"
+input_ids = tokenizer.encode(seq, add_special_tokens=True)
+decoded = tokenizer.decode(input_ids)
+print(decoded)

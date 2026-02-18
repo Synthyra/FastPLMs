@@ -5,6 +5,7 @@ import types
 
 import torch
 from huggingface_hub import HfApi, login
+import transformers
 from test_scripts.common import (
     LOAD_DTYPE,
     _ensure_local_dplm_module_on_path,
@@ -56,6 +57,15 @@ def _load_official_dplm2_source_model(source_repo: str) -> torch.nn.Module:
     dplm2_modeling_module = importlib.import_module(
         "byprot.models.dplm2.modules.dplm2_modeling_esm"
     )
+    tokenized_protein_module = importlib.import_module(
+        "byprot.datamodules.dataset.tokenized_protein"
+    )
+    DPLM2Tokenizer = tokenized_protein_module.DPLM2Tokenizer
+    setattr(transformers, "DPLM2Tokenizer", DPLM2Tokenizer)
+    tokenization_auto_module = importlib.import_module(
+        "transformers.models.auto.tokenization_auto"
+    )
+    setattr(tokenization_auto_module, "DPLM2Tokenizer", DPLM2Tokenizer)
     EsmForDPLM2 = dplm2_modeling_module.EsmForDPLM2
     EsmForDPLM2.all_tied_weights_keys = {}
     dplm_modeling_module = _import_byprot_module_with_dataclass_patch(
