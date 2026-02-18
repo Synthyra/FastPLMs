@@ -16,4 +16,5 @@ accelerate
 biotite
 networkx
 omegaconf
+rich
 trifast
