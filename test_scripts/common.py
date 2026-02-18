@@ -360,7 +360,25 @@ def _ensure_local_dplm_module_on_path() -> pathlib.Path:
         f"Checked: {', '.join([str(path) for path in deduplicated_candidates])}"
     )
 
-    if importlib.util.find_spec("byprot") is not None:
+    byprot_spec = None
+    try:
+        byprot_spec = importlib.util.find_spec("byprot")
+    except ValueError as exc:
+        # Some shimmed byprot modules can exist in sys.modules with __spec__ = None,
+        # which makes importlib.util.find_spec raise ValueError on subsequent checks.
+        message = str(exc)
+        if "byprot.__spec__ is None" not in message:
+            raise
+        stale_module_names = [
+            module_name
+            for module_name in list(sys.modules.keys())
+            if module_name == "byprot" or module_name.startswith("byprot.")
+        ]
+        for module_name in stale_module_names:
+            del sys.modules[module_name]
+        byprot_spec = importlib.util.find_spec("byprot")
+
+    if byprot_spec is not None:
         return existing_candidates[0]
 
     checked_paths = ", ".join([str(path) for path in deduplicated_candidates])
