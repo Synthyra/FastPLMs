@@ -58,6 +58,18 @@ def _load_official_dplm2_source_model(source_repo: str) -> torch.nn.Module:
     )
     EsmForDPLM2 = dplm2_modeling_module.EsmForDPLM2
     EsmForDPLM2.all_tied_weights_keys = {}
+    dplm_modeling_module = _import_byprot_module_with_dataclass_patch(
+        module_name="byprot.models.dplm.modules.dplm_modeling_esm",
+        purge_prefixes=[
+            "byprot.models.utils",
+            "byprot.models.dplm",
+        ],
+    )
+    EsmForDPLM = dplm_modeling_module.EsmForDPLM
+    EsmForDPLM.all_tied_weights_keys = {}
+    byprot_models_module = importlib.import_module("byprot.models")
+    byprot_models_module.MODEL_REGISTRY["dplm_esm"] = EsmForDPLM
+    byprot_models_module.MODEL_REGISTRY["dplm2_esm"] = EsmForDPLM2
     MultimodalDiffusionProteinLanguageModel = (
         dplm2_module.MultimodalDiffusionProteinLanguageModel
     )
