@@ -1,9 +1,9 @@
 from dplm_fastplms.dplm2 import DPLM2ForMaskedLM
-from transformers import AutoTokenizer
 
 
 model = DPLM2ForMaskedLM.from_pretrained('airkingbd/dplm2_150m')
-tokenizer = AutoTokenizer.from_pretrained('airkingbd/dplm2_150m')
+tokenizer = model.tokenizer
+#tokenizer = AutoTokenizer.from_pretrained('airkingbd/dplm2_150m')
 
 print(tokenizer)
 print(model)
