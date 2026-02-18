@@ -1,4 +1,6 @@
+import argparse
 import contextlib
+import dataclasses
 import datetime
 import importlib
 import importlib.util
@@ -24,6 +26,9 @@ from test_scripts.model_registry import ModelSpec
 
 
 CANONICAL_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
+MODEL_FAMILY_CHOICES = ["e1", "esm2", "esmplusplus", "dplm", "dplm2"]
+LOAD_DTYPE = torch.float32
+RUNTIME_DTYPE = torch.bfloat16
 
 
 def set_seed(seed: int) -> None:
@@ -42,6 +47,30 @@ def parse_int_list(values: str) -> List[int]:
         output.append(value)
     assert len(output) > 0, "Expected at least one integer value."
     return output
+
+
+def add_base_args(parser: argparse.ArgumentParser, include_dry_run: bool = True) -> None:
+    parser.add_argument("--token", type=str, default=None)
+    parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--full-models", action="store_true")
+    parser.add_argument("--families", nargs="+", default=None, choices=MODEL_FAMILY_CHOICES)
+    parser.add_argument("--output-dir", type=str, default=None)
+    if include_dry_run:
+        parser.add_argument("--dry-run", action="store_true")
+
+
+def add_data_args(
+    parser: argparse.ArgumentParser,
+    num_sequences_default: int,
+    min_length_default: int,
+    max_length_default: int,
+    batch_size_default: int,
+) -> None:
+    parser.add_argument("--num-sequences", type=int, default=num_sequences_default)
+    parser.add_argument("--min-length", type=int, default=min_length_default)
+    parser.add_argument("--max-length", type=int, default=max_length_default)
+    parser.add_argument("--batch-size", type=int, default=batch_size_default)
 
 
 def resolve_device(device: str) -> torch.device:
@@ -64,6 +93,10 @@ def resolve_dtype(dtype: str, device: torch.device) -> torch.dtype:
     if dtype == "bfloat16":
         return torch.bfloat16
     raise ValueError(f"Unsupported dtype: {dtype}")
+
+
+def resolve_runtime_dtype() -> torch.dtype:
+    return RUNTIME_DTYPE
 
 
 def now_timestamp() -> str:
@@ -110,25 +143,24 @@ def load_model(
     spec: ModelSpec,
     task: str,
     device: torch.device,
-    dtype: torch.dtype,
+    runtime_dtype: torch.dtype = RUNTIME_DTYPE,
     attn_backend: Optional[str] = None,
     compile_model: bool = True,
-    compile_backend: Optional[str] = None,
-    compile_dynamic: Optional[bool] = None,
+    prepare_for_runtime: bool = True,
 ):
     if spec.family == "esm2":
         from esm2.modeling_fastesm import (
             FastEsmConfig,
-            FastEsmModel,   
+            FastEsmModel,
             FastEsmForMaskedLM,
         )
         model_config = FastEsmConfig.from_pretrained(spec.repo_id)
         if attn_backend is not None:
             model_config.attn_backend = attn_backend
         if task == "base":
-            model = FastEsmModel.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = FastEsmModel.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         elif task == "masked_lm":
-            model = FastEsmForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = FastEsmForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "esmplusplus":
@@ -141,9 +173,9 @@ def load_model(
         if attn_backend is not None:
             model_config.attn_backend = attn_backend
         if task == "base":
-            model = ESMplusplusModel.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = ESMplusplusModel.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         elif task == "masked_lm":
-            model = ESMplusplusForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = ESMplusplusForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "e1":
@@ -155,9 +187,9 @@ def load_model(
 
         model_config = E1Config.from_pretrained(spec.repo_id)
         if task == "base":
-            model = E1Model.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = E1Model.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         elif task == "masked_lm":
-            model = E1ForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = E1ForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "dplm":
@@ -171,9 +203,9 @@ def load_model(
         if attn_backend is not None:
             model_config.attn_backend = attn_backend
         if task == "base":
-            model = DPLMModel.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = DPLMModel.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         elif task == "masked_lm":
-            model = DPLMForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = DPLMForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "dplm2":
@@ -187,9 +219,9 @@ def load_model(
         if attn_backend is not None:
             model_config.attn_backend = attn_backend
         if task == "base":
-            model = DPLM2Model.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = DPLM2Model.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         elif task == "masked_lm":
-            model = DPLM2ForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+            model = DPLM2ForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=LOAD_DTYPE)
         else:
             raise ValueError(f"Unsupported task: {task}")
     else:
@@ -198,30 +230,51 @@ def load_model(
             model_config = AutoConfig.from_pretrained(spec.repo_id, trust_remote_code=True)
             model_config.attn_backend = attn_backend
         if task == "base":
-            model = AutoModel.from_pretrained(spec.repo_id, trust_remote_code=True, torch_dtype=dtype, config=model_config)
+            model = AutoModel.from_pretrained(spec.repo_id, trust_remote_code=True, torch_dtype=LOAD_DTYPE, config=model_config)
         elif task == "masked_lm":
-            model = AutoModelForMaskedLM.from_pretrained(spec.repo_id, trust_remote_code=True, torch_dtype=dtype, config=model_config)
+            model = AutoModelForMaskedLM.from_pretrained(
+                spec.repo_id,
+                trust_remote_code=True,
+                torch_dtype=LOAD_DTYPE,
+                config=model_config,
+            )
         else:
             raise ValueError(f"Unsupported task: {task}")
 
-    model = model.to(device).eval()
+    model = model.to(device=device, dtype=LOAD_DTYPE).eval()
+    assert next(model.parameters()).dtype == LOAD_DTYPE, "Models must be loaded in float32 before runtime casting."
     if spec.family == "esmplusplus":
         model.all_tied_weights_keys = {}
-    if compile_model:
-        if compile_backend is None and compile_dynamic is None:
-            model = torch.compile(model)
-        elif compile_backend is None:
-            model = torch.compile(model, dynamic=compile_dynamic)
-        elif compile_dynamic is None:
-            model = torch.compile(model, backend=compile_backend)
-        else:
-            model = torch.compile(model, backend=compile_backend, dynamic=compile_dynamic)
-
     if spec.family == "e1":
         tokenizer = None
     else:
         tokenizer = model.tokenizer
+
+    if prepare_for_runtime:
+        model = prepare_model_for_runtime(
+            model=model,
+            device=device,
+            runtime_dtype=runtime_dtype,
+            compile_model=compile_model,
+        )
     return model, tokenizer
+
+
+def prepare_model_for_runtime(
+    model,
+    device: torch.device,
+    runtime_dtype: torch.dtype = RUNTIME_DTYPE,
+    compile_model: bool = True,
+):
+    assert runtime_dtype == RUNTIME_DTYPE, (
+        f"Expected runtime dtype torch.bfloat16, got {runtime_dtype}. "
+        "The test suite enforces fp32 load -> bf16 runtime."
+    )
+    model = model.to(device=device, dtype=runtime_dtype).eval()
+    assert next(model.parameters()).dtype == runtime_dtype, "Runtime model must be cast to bfloat16."
+    if compile_model:
+        model = torch.compile(model)
+    return model
 
 
 def _ensure_local_e1_module_on_path() -> None:
@@ -261,7 +314,7 @@ def _ensure_local_e1_module_on_path() -> None:
     )
 
 
-def _ensure_local_dplm_module_on_path() -> None:
+def _ensure_local_dplm_module_on_path() -> pathlib.Path:
     candidates: List[pathlib.Path] = []
     script_root = pathlib.Path(__file__).resolve().parents[1]
     candidates.append(script_root / "dplm" / "src")
@@ -281,14 +334,21 @@ def _ensure_local_dplm_module_on_path() -> None:
             seen_paths.add(candidate_key)
             deduplicated_candidates.append(candidate_resolved)
 
+    existing_candidates: List[pathlib.Path] = []
     for candidate in deduplicated_candidates:
         if candidate.exists():
+            existing_candidates.append(candidate)
             candidate_str = str(candidate)
             if candidate_str not in sys.path:
                 sys.path.insert(0, candidate_str)
 
+    assert len(existing_candidates) > 0, (
+        "Expected local dplm/src path for byprot imports. "
+        f"Checked: {', '.join([str(path) for path in deduplicated_candidates])}"
+    )
+
     if importlib.util.find_spec("byprot") is not None:
-        return
+        return existing_candidates[0]
 
     checked_paths = ", ".join([str(path) for path in deduplicated_candidates])
     raise FileNotFoundError(
@@ -308,6 +368,101 @@ def _patch_lightning_fabric_fsdp_for_byprot() -> None:
         "_has_meta_device_parameters_or_buffers for byprot compatibility."
     )
     fsdp_module._has_meta_device_parameters = fsdp_module._has_meta_device_parameters_or_buffers
+
+
+def _patch_transformers_esm_star_exports_for_byprot() -> None:
+    esm_module = importlib.import_module("transformers.models.esm.modeling_esm")
+    esm_module.__all__ = [name for name in dir(esm_module) if name.startswith("_") is False]
+
+
+def _install_byprot_package_shims(dplm_src_path: pathlib.Path) -> None:
+    byprot_root = dplm_src_path / "byprot"
+    models_root = byprot_root / "models"
+    datamodules_root = byprot_root / "datamodules"
+    dataset_root = datamodules_root / "dataset"
+    assert byprot_root.exists(), f"Expected byprot package at {byprot_root}"
+    assert models_root.exists(), f"Expected byprot.models package at {models_root}"
+    assert datamodules_root.exists(), f"Expected byprot.datamodules package at {datamodules_root}"
+    assert dataset_root.exists(), f"Expected byprot.datamodules.dataset package at {dataset_root}"
+
+    if "byprot" in sys.modules:
+        byprot_module = sys.modules["byprot"]
+    else:
+        byprot_module = types.ModuleType("byprot")
+        sys.modules["byprot"] = byprot_module
+    byprot_module.__path__ = [str(byprot_root)]
+    byprot_module.__file__ = str(byprot_root / "__init__.py")
+
+    if "byprot.models" in sys.modules:
+        models_module = sys.modules["byprot.models"]
+    else:
+        models_module = types.ModuleType("byprot.models")
+        sys.modules["byprot.models"] = models_module
+    models_module.__path__ = [str(models_root)]
+    models_module.__file__ = str(models_root / "__init__.py")
+    if "MODEL_REGISTRY" not in models_module.__dict__:
+        models_module.MODEL_REGISTRY = {}
+    if "register_model" not in models_module.__dict__:
+        def register_model(name):
+            def decorator(cls):
+                models_module.MODEL_REGISTRY[name] = cls
+                return cls
+
+            return decorator
+
+        models_module.register_model = register_model
+
+    if "byprot.datamodules" in sys.modules:
+        datamodules_module = sys.modules["byprot.datamodules"]
+    else:
+        datamodules_module = types.ModuleType("byprot.datamodules")
+        sys.modules["byprot.datamodules"] = datamodules_module
+    datamodules_module.__path__ = [str(datamodules_root)]
+    datamodules_module.__file__ = str(datamodules_root / "__init__.py")
+
+    if "byprot.datamodules.dataset" in sys.modules:
+        dataset_module = sys.modules["byprot.datamodules.dataset"]
+    else:
+        dataset_module = types.ModuleType("byprot.datamodules.dataset")
+        sys.modules["byprot.datamodules.dataset"] = dataset_module
+    dataset_module.__path__ = [str(dataset_root)]
+    dataset_module.__file__ = str(dataset_root / "__init__.py")
+
+    byprot_module.models = models_module
+    byprot_module.datamodules = datamodules_module
+    datamodules_module.dataset = dataset_module
+
+
+def _purge_modules(module_prefixes: List[str]) -> None:
+    module_names = list(sys.modules.keys())
+    for module_name in module_names:
+        for module_prefix in module_prefixes:
+            if module_name == module_prefix or module_name.startswith(module_prefix + "."):
+                del sys.modules[module_name]
+                break
+
+
+def _import_byprot_module_with_dataclass_patch(module_name: str, purge_prefixes: List[str]):
+    _purge_modules(purge_prefixes)
+    original_dataclass = dataclasses.dataclass
+
+    def _patched_dataclass(_cls=None, **kwargs):
+        if _cls is None:
+            def _decorator(cls):
+                return _patched_dataclass(cls, **kwargs)
+
+            return _decorator
+        patched_kwargs = dict(kwargs)
+        if _cls.__module__.startswith("byprot.") and "unsafe_hash" not in patched_kwargs:
+            patched_kwargs["unsafe_hash"] = True
+        return original_dataclass(_cls, **patched_kwargs)
+
+    dataclasses.dataclass = _patched_dataclass
+    try:
+        module = importlib.import_module(module_name)
+    finally:
+        dataclasses.dataclass = original_dataclass
+    return module
 
 
 def _ensure_local_e1_tokenizer_json(spec: ModelSpec) -> None:
@@ -335,6 +490,7 @@ def _ensure_local_e1_tokenizer_json(spec: ModelSpec) -> None:
 
 
 def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    assert dtype == LOAD_DTYPE, f"Official models must load in float32, got {dtype}."
     assert spec.reference_repo_id is not None, f"Missing official e1 repo id for {spec.key}."
     _ensure_local_e1_module_on_path()
     _ensure_local_e1_tokenizer_json(spec)
@@ -353,12 +509,13 @@ def load_official_e1_model(spec: ModelSpec, device: torch.device, dtype: torch.d
     E1BatchPreparer = batch_preparer_module.E1BatchPreparer
     E1ForMaskedLM = modeling_module.E1ForMaskedLM
 
-    model = E1ForMaskedLM.from_pretrained(spec.reference_repo_id).to(device=device, dtype=dtype).eval()
+    model = E1ForMaskedLM.from_pretrained(spec.reference_repo_id).to(device=device, dtype=LOAD_DTYPE).eval()
     batch_preparer = E1BatchPreparer()
     return model, batch_preparer
 
 
 def load_official_esmc_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    assert dtype == LOAD_DTYPE, f"Official models must load in float32, got {dtype}."
     from esm_plusplus.get_esmc_weights import ESMplusplus_300M, ESMplusplus_600M
 
     assert spec.reference_repo_id is not None, f"Missing official ESMC repo id for {spec.key}."
@@ -368,15 +525,16 @@ def load_official_esmc_model(spec: ModelSpec, device: torch.device, dtype: torch
         model = ESMplusplus_600M(device=device)
     else:
         raise ValueError(f"Unsupported ESMC reference repo id: {spec.reference_repo_id}")
-    model = model.to(device).to(dtype).eval()
+    model = model.to(device=device, dtype=LOAD_DTYPE).eval()
     tokenizer = model.tokenizer
     return model, tokenizer
 
 
 def load_official_esm2_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    assert dtype == LOAD_DTYPE, f"Official models must load in float32, got {dtype}."
     assert spec.reference_repo_id is not None, f"Missing official ESM2 repo id for {spec.key}."
     tokenizer = EsmTokenizer.from_pretrained(spec.reference_repo_id)
-    model = EsmForMaskedLM.from_pretrained(spec.reference_repo_id).to(device=device, dtype=dtype).eval()
+    model = EsmForMaskedLM.from_pretrained(spec.reference_repo_id).to(device=device, dtype=LOAD_DTYPE).eval()
     return model, tokenizer
 
 
@@ -440,28 +598,46 @@ class _OfficialDPLM2ComplianceWrapper(torch.nn.Module):
 
 
 def load_official_dplm_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    assert dtype == LOAD_DTYPE, f"Official models must load in float32, got {dtype}."
     assert spec.reference_repo_id is not None, f"Missing official DPLM repo id for {spec.key}."
-    _ensure_local_dplm_module_on_path()
+    dplm_src_path = _ensure_local_dplm_module_on_path()
     _patch_lightning_fabric_fsdp_for_byprot()
-    dplm_module = importlib.import_module("byprot.models.dplm.dplm")
+    _patch_transformers_esm_star_exports_for_byprot()
+    _install_byprot_package_shims(dplm_src_path)
+    dplm_module = _import_byprot_module_with_dataclass_patch(
+        module_name="byprot.models.dplm.dplm",
+        purge_prefixes=[
+            "byprot.models.utils",
+            "byprot.models.dplm",
+        ],
+    )
     DiffusionProteinLanguageModel = dplm_module.DiffusionProteinLanguageModel
 
-    official_model = DiffusionProteinLanguageModel.from_pretrained(spec.reference_repo_id).to(device=device, dtype=dtype).eval()
+    official_model = DiffusionProteinLanguageModel.from_pretrained(spec.reference_repo_id).to(device=device, dtype=LOAD_DTYPE).eval()
     model = _OfficialDPLMComplianceWrapper(official_model).eval()
     tokenizer = official_model.tokenizer
     return model, tokenizer
 
 
 def load_official_dplm2_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    assert dtype == LOAD_DTYPE, f"Official models must load in float32, got {dtype}."
     assert spec.reference_repo_id is not None, f"Missing official DPLM2 repo id for {spec.key}."
-    _ensure_local_dplm_module_on_path()
+    dplm_src_path = _ensure_local_dplm_module_on_path()
     _patch_lightning_fabric_fsdp_for_byprot()
-    dplm2_module = importlib.import_module("byprot.models.dplm2.dplm2")
+    _patch_transformers_esm_star_exports_for_byprot()
+    _install_byprot_package_shims(dplm_src_path)
+    dplm2_module = _import_byprot_module_with_dataclass_patch(
+        module_name="byprot.models.dplm2.dplm2",
+        purge_prefixes=[
+            "byprot.models.utils",
+            "byprot.models.dplm2",
+        ],
+    )
     MultimodalDiffusionProteinLanguageModel = dplm2_module.MultimodalDiffusionProteinLanguageModel
 
     official_model = MultimodalDiffusionProteinLanguageModel.from_pretrained(spec.reference_repo_id).to(
         device=device,
-        dtype=dtype,
+        dtype=LOAD_DTYPE,
     ).eval()
     model = _OfficialDPLM2ComplianceWrapper(official_model).eval()
     tokenizer = official_model.tokenizer
@@ -483,8 +659,14 @@ def load_official_model_for_compliance(spec: ModelSpec, device: torch.device, dt
 
 
 def compare_model_state_dicts_fp32(reference_model, candidate_model, max_report: int = 5) -> Dict[str, object]:
-    reference_state = reference_model.state_dict()
-    candidate_state = candidate_model.state_dict()
+    if isinstance(reference_model, dict):
+        reference_state = reference_model
+    else:
+        reference_state = reference_model.state_dict()
+    if isinstance(candidate_model, dict):
+        candidate_state = candidate_model
+    else:
+        candidate_state = candidate_model.state_dict()
     reference_keys = set(reference_state.keys())
     candidate_keys = set(candidate_state.keys())
     only_in_reference = sorted(reference_keys - candidate_keys)
@@ -523,11 +705,16 @@ def compare_model_state_dicts_fp32(reference_model, candidate_model, max_report:
             max_abs_diff = param_max_abs_diff
             max_abs_diff_param = name
 
-    match = len(only_in_reference) == 0 and len(only_in_candidate) == 0 and len(shape_mismatches) == 0 and len(differing_tensors) == 0
+    overlap_param_count = len(common_keys)
+    match = overlap_param_count > 0 and len(shape_mismatches) == 0 and len(differing_tensors) == 0
     return {
         "match": match,
+        "overlap_param_count": overlap_param_count,
+        "only_in_reference_count": len(only_in_reference),
+        "only_in_candidate_count": len(only_in_candidate),
         "only_in_reference": only_in_reference[:max_report],
         "only_in_candidate": only_in_candidate[:max_report],
+        "shape_mismatch_count": len(shape_mismatches),
         "shape_mismatches": shape_mismatches[:max_report],
         "diff_param_count": len(differing_tensors),
         "diff_params_sample": differing_tensors[:max_report],

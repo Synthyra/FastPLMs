@@ -389,7 +389,7 @@ class EsmSelfAttention(nn.Module):
                     key_layer,
                     value_layer,
                     attn_mask=sdpa_mask,
-                    dropout_p=self.dropout_prob,
+                    dropout_p=self.dropout_prob if self.training else 0.0,
                     scale=1.0
                 )
             context_layer = rearrange(context_layer, 'b h s d -> b s (h d)')

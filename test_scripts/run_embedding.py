@@ -1,19 +1,21 @@
 import argparse
-import pathlib
 import time
 from typing import Dict, List
 
 import torch
 from tqdm.auto import tqdm
 
+from test_scripts.common import add_base_args
+from test_scripts.common import add_data_args
 from test_scripts.common import build_output_dir
 from test_scripts.common import ensure_dir
 from test_scripts.common import generate_sequences
 from test_scripts.common import load_model
+from test_scripts.common import LOAD_DTYPE
 from test_scripts.common import login_if_needed
 from test_scripts.common import maybe_tokenizer_for_embedding
 from test_scripts.common import resolve_device
-from test_scripts.common import resolve_dtype
+from test_scripts.common import resolve_runtime_dtype
 from test_scripts.common import set_seed
 from test_scripts.model_registry import get_model_specs
 from test_scripts.reporting import plot_bar
@@ -22,7 +24,12 @@ from test_scripts.reporting import write_json
 from test_scripts.reporting import write_summary
 
 
-def _validate_embedding_dict(embeddings: Dict[str, torch.Tensor], hidden_size: int, full_embeddings: bool) -> int:
+def _validate_embedding_dict(
+    embeddings: Dict[str, torch.Tensor],
+    hidden_size: int,
+    full_embeddings: bool,
+    expected_dtype: torch.dtype,
+) -> int:
     assert len(embeddings) > 0, "Embedding dictionary is empty."
     first_key = next(iter(embeddings))
     sample = embeddings[first_key]
@@ -41,6 +48,7 @@ def _validate_embedding_dict(embeddings: Dict[str, torch.Tensor], hidden_size: i
             assert int(tensor.shape[1]) == hidden_size, f"Full embedding hidden size mismatch for sequence {sequence}."
         else:
             assert tensor.ndim == 1, f"Expected pooled embedding rank-1 tensor for sequence {sequence}."
+        assert tensor.dtype == expected_dtype, f"Unexpected embedding dtype for sequence {sequence}: {tensor.dtype}"
         assert torch.isfinite(tensor).all(), f"Found NaN/inf embeddings for sequence {sequence}."
     return embedding_dim
 
@@ -56,10 +64,39 @@ def _assert_embedding_dicts_match(expected: Dict[str, torch.Tensor], observed: D
         assert torch.equal(expected_tensor.cpu(), observed_tensor.cpu()), f"Tensor value mismatch for sequence: {sequence}"
 
 
+def _new_row(spec, device: torch.device, runtime_dtype: torch.dtype) -> Dict[str, object]:
+    return {
+        "model_key": spec.key,
+        "family": spec.family,
+        "repo_id": spec.repo_id,
+        "device": str(device),
+        "load_dtype": str(LOAD_DTYPE),
+        "runtime_dtype": str(runtime_dtype),
+        "pass": False,
+        "pooled_embedding_dim": -1,
+        "full_embedding_dim": -1,
+        "pooled_count": 0,
+        "full_count": 0,
+        "pooled_sql_count": 0,
+        "full_sql_count": 0,
+        "dedup_contract_pass": False,
+        "pooled_dtype_contract_pass": False,
+        "full_dtype_contract_pass": False,
+        "full_vs_pooled_contract_pass": False,
+        "deterministic_repeat_pass": False,
+        "pooled_pth_roundtrip_pass": False,
+        "full_pth_roundtrip_pass": False,
+        "pooled_db_roundtrip_pass": False,
+        "full_db_roundtrip_pass": False,
+        "seconds": 0.0,
+        "error": "",
+    }
+
+
 def run_embedding_suite(args: argparse.Namespace) -> int:
     login_if_needed(args.token)
     device = resolve_device(args.device)
-    dtype = resolve_dtype(args.dtype, device)
+    runtime_dtype = resolve_runtime_dtype()
     set_seed(args.seed)
 
     output_dir = build_output_dir(args.output_dir, "embedding")
@@ -72,12 +109,24 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
     if args.dry_run:
         dry_rows: List[Dict[str, object]] = []
         for spec in specs:
-            dry_rows.append({"model_key": spec.key, "family": spec.family, "repo_id": spec.repo_id, "pass": True, "seconds": 0.0, "error": ""})
+            row = _new_row(spec=spec, device=device, runtime_dtype=runtime_dtype)
+            row["pass"] = True
+            row["dedup_contract_pass"] = True
+            row["pooled_dtype_contract_pass"] = True
+            row["full_dtype_contract_pass"] = True
+            row["full_vs_pooled_contract_pass"] = True
+            row["deterministic_repeat_pass"] = True
+            row["pooled_pth_roundtrip_pass"] = True
+            row["full_pth_roundtrip_pass"] = True
+            row["pooled_db_roundtrip_pass"] = True
+            row["full_db_roundtrip_pass"] = True
+            dry_rows.append(row)
         payload: Dict[str, object] = {
             "suite": "embedding",
             "all_passed": True,
             "device": str(device),
-            "dtype": str(dtype),
+            "load_dtype": str(LOAD_DTYPE),
+            "runtime_dtype": str(runtime_dtype),
             "full_models": args.full_models,
             "dry_run": True,
             "rows": dry_rows,
@@ -97,28 +146,10 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
     all_passed = True
 
     for spec in tqdm(specs, desc="Embedding models", unit="model"):
-        print(f"[embedding] Testing {spec.repo_id} on {device} with {dtype}")
+        print(f"[embedding] Testing {spec.repo_id} on {device} with runtime {runtime_dtype}")
         model_start = time.perf_counter()
-        row: Dict[str, object] = {
-            "model_key": spec.key,
-            "family": spec.family,
-            "repo_id": spec.repo_id,
-            "device": str(device),
-            "dtype": str(dtype),
-            "pass": False,
-            "pooled_embedding_dim": -1,
-            "full_embedding_dim": -1,
-            "pooled_count": 0,
-            "full_count": 0,
-            "pooled_sql_count": 0,
-            "full_sql_count": 0,
-            "pooled_pth_roundtrip_pass": False,
-            "full_pth_roundtrip_pass": False,
-            "pooled_db_roundtrip_pass": False,
-            "full_db_roundtrip_pass": False,
-            "seconds": 0.0,
-            "error": "",
-        }
+        row = _new_row(spec=spec, device=device, runtime_dtype=runtime_dtype)
+        model = None
 
         tmp_dir = output_dir / "tmp" / spec.key
         ensure_dir(tmp_dir)
@@ -126,13 +157,14 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
         full_sql_db_path = tmp_dir / "full_embeddings.db"
         pooled_save_path = tmp_dir / "pooled_embeddings.pth"
         full_save_path = tmp_dir / "full_embeddings.pth"
-        artifact_paths = [pooled_sql_db_path, full_sql_db_path, pooled_save_path, full_save_path]
+        deterministic_save_path = tmp_dir / "deterministic_pooled_embeddings.pth"
+        artifact_paths = [pooled_sql_db_path, full_sql_db_path, pooled_save_path, full_save_path, deterministic_save_path]
         for artifact_path in artifact_paths:
             if artifact_path.exists():
                 artifact_path.unlink()
 
         try:
-            model, _ = load_model(spec=spec, task="base", device=device, dtype=dtype)
+            model, _ = load_model(spec=spec, task="base", device=device, runtime_dtype=runtime_dtype)
             tokenizer = maybe_tokenizer_for_embedding(spec, model)
             hidden_size = int(model.config.hidden_size)
 
@@ -149,12 +181,24 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
                 save=True,
                 save_path=str(pooled_save_path),
             )
-            pooled_dim = _validate_embedding_dict(embeddings=pooled_embeddings, hidden_size=hidden_size, full_embeddings=False)
+            pooled_dim = _validate_embedding_dict(
+                embeddings=pooled_embeddings,
+                hidden_size=hidden_size,
+                full_embeddings=False,
+                expected_dtype=torch.float32,
+            )
             row["pooled_count"] = len(pooled_embeddings)
             row["pooled_embedding_dim"] = pooled_dim
-            assert int(row["pooled_count"]) == expected_count, "Pooled embedding count mismatch."
+            row["pooled_dtype_contract_pass"] = True
+            assert int(row["pooled_count"]) == expected_count, "Pooled embedding count mismatch after dedup/truncate."
+
             loaded_pooled_pth = model.load_embeddings_from_pth(str(pooled_save_path))
-            _validate_embedding_dict(embeddings=loaded_pooled_pth, hidden_size=hidden_size, full_embeddings=False)
+            _validate_embedding_dict(
+                embeddings=loaded_pooled_pth,
+                hidden_size=hidden_size,
+                full_embeddings=False,
+                expected_dtype=torch.float32,
+            )
             _assert_embedding_dicts_match(expected=pooled_embeddings, observed=loaded_pooled_pth)
             row["pooled_pth_roundtrip_pass"] = True
 
@@ -170,12 +214,24 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
                 save=True,
                 save_path=str(full_save_path),
             )
-            full_dim = _validate_embedding_dict(embeddings=full_embeddings, hidden_size=hidden_size, full_embeddings=True)
+            full_dim = _validate_embedding_dict(
+                embeddings=full_embeddings,
+                hidden_size=hidden_size,
+                full_embeddings=True,
+                expected_dtype=torch.float32,
+            )
             row["full_count"] = len(full_embeddings)
             row["full_embedding_dim"] = full_dim
-            assert int(row["full_count"]) == expected_count, "Full embedding count mismatch."
+            row["full_dtype_contract_pass"] = True
+            assert int(row["full_count"]) == expected_count, "Full embedding count mismatch after dedup/truncate."
+
             loaded_full_pth = model.load_embeddings_from_pth(str(full_save_path))
-            _validate_embedding_dict(embeddings=loaded_full_pth, hidden_size=hidden_size, full_embeddings=True)
+            _validate_embedding_dict(
+                embeddings=loaded_full_pth,
+                hidden_size=hidden_size,
+                full_embeddings=True,
+                expected_dtype=torch.float32,
+            )
             _assert_embedding_dicts_match(expected=full_embeddings, observed=loaded_full_pth)
             row["full_pth_roundtrip_pass"] = True
 
@@ -196,7 +252,12 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
             pooled_db_embeddings = model.load_embeddings_from_db(str(pooled_sql_db_path))
             row["pooled_sql_count"] = len(pooled_db_embeddings)
             assert int(row["pooled_sql_count"]) == expected_count, "Pooled SQL embedding count mismatch."
-            _validate_embedding_dict(embeddings=pooled_db_embeddings, hidden_size=hidden_size, full_embeddings=False)
+            _validate_embedding_dict(
+                embeddings=pooled_db_embeddings,
+                hidden_size=hidden_size,
+                full_embeddings=False,
+                expected_dtype=torch.float32,
+            )
             _assert_embedding_dicts_match(expected=pooled_embeddings, observed=pooled_db_embeddings)
             row["pooled_db_roundtrip_pass"] = True
 
@@ -217,17 +278,62 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
             full_db_embeddings = model.load_embeddings_from_db(str(full_sql_db_path))
             row["full_sql_count"] = len(full_db_embeddings)
             assert int(row["full_sql_count"]) == expected_count, "Full SQL embedding count mismatch."
-            _validate_embedding_dict(embeddings=full_db_embeddings, hidden_size=hidden_size, full_embeddings=True)
+            _validate_embedding_dict(
+                embeddings=full_db_embeddings,
+                hidden_size=hidden_size,
+                full_embeddings=True,
+                expected_dtype=torch.float32,
+            )
             _assert_embedding_dicts_match(expected=full_embeddings, observed=full_db_embeddings)
             row["full_db_roundtrip_pass"] = True
 
+            deterministic_embeddings = model.embed_dataset(
+                sequences=sequences,
+                tokenizer=tokenizer,
+                batch_size=args.batch_size,
+                max_len=args.max_length,
+                truncate=True,
+                full_embeddings=False,
+                embed_dtype=torch.float32,
+                pooling_types=["mean", "cls"],
+                sql=False,
+                save=False,
+                save_path=str(deterministic_save_path),
+            )
+            _validate_embedding_dict(
+                embeddings=deterministic_embeddings,
+                hidden_size=hidden_size,
+                full_embeddings=False,
+                expected_dtype=torch.float32,
+            )
+            _assert_embedding_dicts_match(expected=pooled_embeddings, observed=deterministic_embeddings)
+            row["deterministic_repeat_pass"] = True
+
+            row["dedup_contract_pass"] = bool(
+                int(row["pooled_count"]) == expected_count
+                and int(row["full_count"]) == expected_count
+                and int(row["pooled_sql_count"]) == expected_count
+                and int(row["full_sql_count"]) == expected_count
+            )
+            assert bool(row["dedup_contract_pass"]), "Dedup contract failed."
+
+            row["full_vs_pooled_contract_pass"] = bool(
+                int(row["full_embedding_dim"]) == hidden_size and int(row["pooled_embedding_dim"]) == hidden_size * 2
+            )
+            assert bool(row["full_vs_pooled_contract_pass"]), "Full-vs-pooled dimension contract failed."
+
             row["pass"] = bool(
-                row["pooled_pth_roundtrip_pass"]
+                row["dedup_contract_pass"]
+                and row["pooled_dtype_contract_pass"]
+                and row["full_dtype_contract_pass"]
+                and row["full_vs_pooled_contract_pass"]
+                and row["deterministic_repeat_pass"]
+                and row["pooled_pth_roundtrip_pass"]
                 and row["full_pth_roundtrip_pass"]
                 and row["pooled_db_roundtrip_pass"]
                 and row["full_db_roundtrip_pass"]
             )
-            assert bool(row["pass"]), "Embedding roundtrip check failed."
+            assert bool(row["pass"]), "Embedding mixin contract check failed."
         except Exception as exc:
             row["error"] = str(exc)
             all_passed = False
@@ -237,7 +343,7 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
             rows.append(row)
             labels.append(spec.key)
             total_time_values.append(float(row["seconds"]))
-            if "model" in locals():
+            if model is not None:
                 del model
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
@@ -246,7 +352,8 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
         "suite": "embedding",
         "all_passed": all_passed,
         "device": str(device),
-        "dtype": str(dtype),
+        "load_dtype": str(LOAD_DTYPE),
+        "runtime_dtype": str(runtime_dtype),
         "num_sequences": args.num_sequences,
         "min_length": args.min_length,
         "max_length": args.max_length,
@@ -263,7 +370,7 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
         if bool(row["pass"]):
             passed_count += 1
     summary_lines = [
-        f"Suite: embedding",
+        "Suite: embedding",
         f"Models tested: {len(rows)}",
         f"Models passed: {passed_count}",
         f"Models failed: {len(rows) - passed_count}",
@@ -271,7 +378,11 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
     ]
     for row in rows:
         status = "PASS" if bool(row["pass"]) else "FAIL"
-        summary_lines.append(f"{status} | {row['repo_id']} | seconds={row['seconds']} | error={row['error']}")
+        summary_lines.append(
+            f"{status} | {row['repo_id']} | dedup={row['dedup_contract_pass']} "
+            f"| shape_contract={row['full_vs_pooled_contract_pass']} | deterministic={row['deterministic_repeat_pass']} "
+            f"| seconds={row['seconds']} | error={row['error']}"
+        )
     write_summary(output_dir / "summary.txt", summary_lines)
 
     print("\n".join(summary_lines))
@@ -281,19 +392,9 @@ def run_embedding_suite(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run embedding/mixin validation suite.")
-    parser.add_argument("--token", type=str, default=None)
-    parser.add_argument("--device", type=str, default="auto")
-    parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "float32", "float16", "bfloat16"])
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num-sequences", type=int, default=24)
-    parser.add_argument("--min-length", type=int, default=12)
-    parser.add_argument("--max-length", type=int, default=64)
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--full-models", action="store_true")
-    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus", "dplm", "dplm2"])
-    parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--dry-run", action="store_true")
+    parser = argparse.ArgumentParser(description="Run embedding mixin contract checks.")
+    add_base_args(parser)
+    add_data_args(parser, num_sequences_default=24, min_length_default=12, max_length_default=64, batch_size_default=4)
     return parser
 
 
@@ -305,4 +406,3 @@ def main(argv: List[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

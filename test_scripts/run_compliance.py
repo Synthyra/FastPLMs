@@ -7,16 +7,20 @@ from typing import Dict, List
 import torch
 from tqdm.auto import tqdm
 
+from test_scripts.common import add_base_args
+from test_scripts.common import add_data_args
 from test_scripts.common import build_output_dir
 from test_scripts.common import chunk_sequences
 from test_scripts.common import compare_model_state_dicts_fp32
 from test_scripts.common import generate_sequences
 from test_scripts.common import load_model
 from test_scripts.common import load_official_model_for_compliance
+from test_scripts.common import LOAD_DTYPE
 from test_scripts.common import login_if_needed
+from test_scripts.common import prepare_model_for_runtime
 from test_scripts.common import prepare_official_batch_for_compliance
 from test_scripts.common import resolve_device
-from test_scripts.common import resolve_dtype
+from test_scripts.common import resolve_runtime_dtype
 from test_scripts.common import set_seed
 from test_scripts.model_registry import ModelSpec
 from test_scripts.model_registry import get_model_specs
@@ -24,6 +28,15 @@ from test_scripts.reporting import plot_bar
 from test_scripts.reporting import write_csv
 from test_scripts.reporting import write_json
 from test_scripts.reporting import write_summary
+
+
+STRICT_HIDDEN_MSE_THRESHOLD = 1e-4
+STRICT_HIDDEN_MEAN_ABS_THRESHOLD = 2e-3
+STRICT_HIDDEN_MAX_ABS_THRESHOLD = 8e-2
+STRICT_LOGITS_MSE_THRESHOLD = 1e-4
+STRICT_LOGITS_MEAN_ABS_THRESHOLD = 2e-3
+STRICT_LOGITS_MAX_ABS_THRESHOLD = 8e-2
+ARGMAX_THRESHOLD = 0.99
 
 
 def _tensor_diff_metrics(reference: torch.Tensor, candidate: torch.Tensor) -> Dict[str, float]:
@@ -75,13 +88,6 @@ def _reference_check(
     device: torch.device,
     sequences: List[str],
     batch_size: int,
-    hidden_mse_threshold: float,
-    hidden_mean_abs_threshold: float,
-    hidden_max_abs_threshold: float,
-    logits_mse_threshold: float,
-    logits_mean_abs_threshold: float,
-    logits_max_abs_threshold: float,
-    argmax_threshold: float,
     strict_reference: bool,
 ) -> Dict[str, object]:
     hidden_mse_sum = 0.0
@@ -121,16 +127,16 @@ def _reference_check(
     mean_argmax_acc = argmax_acc_sum / steps
     if strict_reference:
         passed = (
-            mean_hidden_mse <= hidden_mse_threshold
-            and mean_hidden_abs <= hidden_mean_abs_threshold
-            and hidden_max_abs <= hidden_max_abs_threshold
-            and mean_logits_mse <= logits_mse_threshold
-            and mean_logits_abs <= logits_mean_abs_threshold
-            and logits_max_abs <= logits_max_abs_threshold
-            and mean_argmax_acc >= argmax_threshold
+            mean_hidden_mse <= STRICT_HIDDEN_MSE_THRESHOLD
+            and mean_hidden_abs <= STRICT_HIDDEN_MEAN_ABS_THRESHOLD
+            and hidden_max_abs <= STRICT_HIDDEN_MAX_ABS_THRESHOLD
+            and mean_logits_mse <= STRICT_LOGITS_MSE_THRESHOLD
+            and mean_logits_abs <= STRICT_LOGITS_MEAN_ABS_THRESHOLD
+            and logits_max_abs <= STRICT_LOGITS_MAX_ABS_THRESHOLD
+            and mean_argmax_acc >= ARGMAX_THRESHOLD
         )
     else:
-        passed = mean_argmax_acc >= argmax_threshold
+        passed = mean_argmax_acc >= ARGMAX_THRESHOLD
     return {
         "reference_pass": passed,
         "reference_hidden_mse": mean_hidden_mse,
@@ -149,10 +155,65 @@ def _reference_backends(spec: ModelSpec) -> List[str]:
     return ["model_default"]
 
 
+def _blank_weight_parity_metrics() -> Dict[str, object]:
+    return {
+        "match": False,
+        "overlap_param_count": 0,
+        "only_in_reference_count": 0,
+        "only_in_candidate_count": 0,
+        "shape_mismatch_count": 0,
+        "diff_param_count": 0,
+        "max_abs_diff": float("nan"),
+        "max_abs_diff_param": "",
+    }
+
+
+def _apply_weight_parity_to_row(row: Dict[str, object], parity: Dict[str, object]) -> None:
+    row["weight_parity_pass"] = bool(parity["match"])
+    row["weight_parity_overlap_param_count"] = int(parity["overlap_param_count"])
+    row["weight_parity_only_in_reference_count"] = int(parity["only_in_reference_count"])
+    row["weight_parity_only_in_candidate_count"] = int(parity["only_in_candidate_count"])
+    row["weight_parity_shape_mismatch_count"] = int(parity["shape_mismatch_count"])
+    row["weight_parity_diff_param_count"] = int(parity["diff_param_count"])
+    row["weight_parity_max_abs_diff"] = float(parity["max_abs_diff"])
+    row["weight_parity_max_abs_diff_param"] = str(parity["max_abs_diff_param"])
+
+
+def _new_row(spec: ModelSpec, backend: str) -> Dict[str, object]:
+    return {
+        "model_key": spec.key,
+        "family": spec.family,
+        "repo_id": spec.repo_id,
+        "attn_backend": backend,
+        "auto_load_pass": False,
+        "weight_parity_pass": False,
+        "weight_parity_overlap_param_count": 0,
+        "weight_parity_only_in_reference_count": 0,
+        "weight_parity_only_in_candidate_count": 0,
+        "weight_parity_shape_mismatch_count": 0,
+        "weight_parity_diff_param_count": 0,
+        "weight_parity_max_abs_diff": float("nan"),
+        "weight_parity_max_abs_diff_param": "",
+        "reference_pass": False,
+        "reference_hidden_mse": float("nan"),
+        "reference_hidden_mean_abs": float("nan"),
+        "reference_hidden_max_abs": float("nan"),
+        "reference_logits_mse": float("nan"),
+        "reference_logits_mean_abs": float("nan"),
+        "reference_logits_max_abs": float("nan"),
+        "reference_argmax_accuracy": float("nan"),
+        "overall_pass": False,
+        "seconds": 0.0,
+        "error": "",
+        "error_type": "",
+        "traceback": "",
+    }
+
+
 def run_compliance_suite(args: argparse.Namespace) -> int:
     login_if_needed(args.token)
     device = resolve_device(args.device)
-    dtype = resolve_dtype(args.dtype, device)
+    runtime_dtype = resolve_runtime_dtype()
     set_seed(args.seed)
     output_dir = build_output_dir(args.output_dir, "compliance")
 
@@ -163,12 +224,19 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
     if args.dry_run:
         dry_rows: List[Dict[str, object]] = []
         for spec in specs:
-            dry_rows.append({"model_key": spec.key, "family": spec.family, "repo_id": spec.repo_id, "overall_pass": True, "seconds": 0.0, "error": ""})
+            for backend in _reference_backends(spec):
+                row = _new_row(spec=spec, backend=backend)
+                row["auto_load_pass"] = True
+                row["weight_parity_pass"] = True
+                row["reference_pass"] = True
+                row["overall_pass"] = True
+                dry_rows.append(row)
         payload: Dict[str, object] = {
             "suite": "compliance",
             "all_passed": True,
             "device": str(device),
-            "dtype": str(dtype),
+            "load_dtype": str(LOAD_DTYPE),
+            "runtime_dtype": str(runtime_dtype),
             "full_models": args.full_models,
             "dry_run": True,
             "rows": dry_rows,
@@ -177,7 +245,7 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
         write_csv(output_dir / "metrics.csv", dry_rows)
         summary_lines = [f"Suite: compliance (dry-run)", f"Models selected: {len(dry_rows)}", f"Output directory: {output_dir}"]
         for row in dry_rows:
-            summary_lines.append(f"SELECTED | {row['repo_id']}")
+            summary_lines.append(f"SELECTED | {row['repo_id']} | backend={row['attn_backend']}")
         write_summary(output_dir / "summary.txt", summary_lines)
         print("\n".join(summary_lines))
         return 0
@@ -191,66 +259,69 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
     for spec in tqdm(specs, desc="Compliance models", unit="model"):
         official_model = None
         official_tokenizer = None
+        official_runtime_ready = False
+        weight_parity = None
         try:
             if args.skip_reference is False:
-                official_model, official_tokenizer = load_official_model_for_compliance(spec=spec, device=device, dtype=dtype)
+                official_model, official_tokenizer = load_official_model_for_compliance(spec=spec, device=device, dtype=LOAD_DTYPE)
 
             for backend in _reference_backends(spec):
-                print(f"[compliance] Testing {spec.repo_id} backend={backend} on {device} with {dtype}")
+                print(f"[compliance] Testing {spec.repo_id} backend={backend} on {device} with runtime {runtime_dtype}")
                 start = time.perf_counter()
                 selected_backend = None if backend == "model_default" else backend
+                row = _new_row(spec=spec, backend=backend)
                 test_model = None
-                row: Dict[str, object] = {
-                    "model_key": spec.key,
-                    "family": spec.family,
-                    "repo_id": spec.repo_id,
-                    "attn_backend": backend,
-                    "auto_load_pass": False,
-                    "reference_pass": False,
-                    "reference_hidden_mse": float("nan"),
-                    "reference_hidden_mean_abs": float("nan"),
-                    "reference_hidden_max_abs": float("nan"),
-                    "reference_logits_mse": float("nan"),
-                    "reference_logits_mean_abs": float("nan"),
-                    "reference_logits_max_abs": float("nan"),
-                    "reference_argmax_accuracy": float("nan"),
-                    "overall_pass": False,
-                    "seconds": 0.0,
-                    "error": "",
-                    "error_type": "",
-                    "traceback": "",
-                    "esmplusplus_fp32_parity": "",
-                    "esmplusplus_fp32_parity_max_abs_diff": float("nan"),
-                    "esmplusplus_fp32_parity_max_abs_diff_param": "",
-                }
                 try:
-                    test_model, _ = load_model(spec=spec, task="masked_lm", device=device, dtype=dtype, attn_backend=selected_backend)
+                    test_model, _ = load_model(
+                        spec=spec,
+                        task="masked_lm",
+                        device=device,
+                        runtime_dtype=runtime_dtype,
+                        attn_backend=selected_backend,
+                        compile_model=False,
+                        prepare_for_runtime=False,
+                    )
                     row["auto_load_pass"] = True
                     if args.skip_reference:
+                        row["weight_parity_pass"] = True
                         row["reference_pass"] = True
                     else:
                         assert official_model is not None, "Official model must be loaded when reference check is enabled."
                         assert official_tokenizer is not None, "Official tokenizer must be loaded when reference check is enabled."
-                        if args.strict_reference and spec.family == "esmplusplus":
-                            parity = compare_model_state_dicts_fp32(
+
+                        if weight_parity is None:
+                            weight_parity = compare_model_state_dicts_fp32(
                                 reference_model=official_model,
                                 candidate_model=test_model,
                                 max_report=5,
                             )
-                            row["esmplusplus_fp32_parity"] = bool(parity["match"])
-                            row["esmplusplus_fp32_parity_max_abs_diff"] = float(parity["max_abs_diff"])
-                            row["esmplusplus_fp32_parity_max_abs_diff_param"] = str(parity["max_abs_diff_param"])
-                            if bool(parity["match"]) is False:
-                                raise AssertionError(
-                                    "Strict ESMplusplus reference requires float32-identical checkpoints. "
-                                    f"diff_param_count={parity['diff_param_count']} "
-                                    f"max_abs_diff={parity['max_abs_diff']} "
-                                    f"max_abs_diff_param={parity['max_abs_diff_param']} "
-                                    f"only_in_reference={parity['only_in_reference']} "
-                                    f"only_in_candidate={parity['only_in_candidate']} "
-                                    f"shape_mismatches={parity['shape_mismatches']} "
-                                    f"diff_params_sample={parity['diff_params_sample']}"
-                                )
+                        _apply_weight_parity_to_row(row=row, parity=weight_parity)
+                        if args.strict_reference and bool(weight_parity["match"]) is False:
+                            raise AssertionError(
+                                "Strict reference requires matching-name float32 weights for all families. "
+                                f"overlap_param_count={weight_parity['overlap_param_count']} "
+                                f"diff_param_count={weight_parity['diff_param_count']} "
+                                f"shape_mismatch_count={weight_parity['shape_mismatch_count']} "
+                                f"max_abs_diff={weight_parity['max_abs_diff']} "
+                                f"max_abs_diff_param={weight_parity['max_abs_diff_param']} "
+                                f"only_in_reference_count={weight_parity['only_in_reference_count']} "
+                                f"only_in_candidate_count={weight_parity['only_in_candidate_count']}"
+                            )
+
+                        if official_runtime_ready is False:
+                            official_model = prepare_model_for_runtime(
+                                model=official_model,
+                                device=device,
+                                runtime_dtype=runtime_dtype,
+                                compile_model=True,
+                            )
+                            official_runtime_ready = True
+                        test_model = prepare_model_for_runtime(
+                            model=test_model,
+                            device=device,
+                            runtime_dtype=runtime_dtype,
+                            compile_model=True,
+                        )
                         reference_metrics = _reference_check(
                             spec=spec,
                             test_model=test_model,
@@ -259,13 +330,6 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
                             device=device,
                             sequences=sequences,
                             batch_size=args.batch_size,
-                            hidden_mse_threshold=args.hidden_mse_threshold,
-                            hidden_mean_abs_threshold=args.hidden_mean_abs_threshold,
-                            hidden_max_abs_threshold=args.hidden_max_abs_threshold,
-                            logits_mse_threshold=args.logits_mse_threshold,
-                            logits_mean_abs_threshold=args.logits_mean_abs_threshold,
-                            logits_max_abs_threshold=args.logits_max_abs_threshold,
-                            argmax_threshold=args.argmax_threshold,
                             strict_reference=args.strict_reference,
                         )
                         row["reference_pass"] = bool(reference_metrics["reference_pass"])
@@ -276,7 +340,7 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
                         row["reference_logits_mean_abs"] = float(reference_metrics["reference_logits_mean_abs"])
                         row["reference_logits_max_abs"] = float(reference_metrics["reference_logits_max_abs"])
                         row["reference_argmax_accuracy"] = float(reference_metrics["reference_argmax_accuracy"])
-                    row["overall_pass"] = bool(row["auto_load_pass"] and row["reference_pass"])
+                    row["overall_pass"] = bool(row["auto_load_pass"] and row["weight_parity_pass"] and row["reference_pass"])
                     if bool(row["overall_pass"]) is False:
                         all_passed = False
                 except Exception as exc:
@@ -302,30 +366,15 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
                         if device.type == "cuda":
                             torch.cuda.empty_cache()
         except Exception as exc:
+            fallback_weight_parity = _blank_weight_parity_metrics()
+            if weight_parity is not None:
+                fallback_weight_parity = weight_parity
             for backend in _reference_backends(spec):
-                row = {
-                    "model_key": spec.key,
-                    "family": spec.family,
-                    "repo_id": spec.repo_id,
-                    "attn_backend": backend,
-                    "auto_load_pass": False,
-                    "reference_pass": False,
-                    "reference_hidden_mse": float("nan"),
-                    "reference_hidden_mean_abs": float("nan"),
-                    "reference_hidden_max_abs": float("nan"),
-                    "reference_logits_mse": float("nan"),
-                    "reference_logits_mean_abs": float("nan"),
-                    "reference_logits_max_abs": float("nan"),
-                    "reference_argmax_accuracy": float("nan"),
-                    "overall_pass": False,
-                    "seconds": 0.0,
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                    "traceback": traceback.format_exc(),
-                "esmplusplus_fp32_parity": "",
-                "esmplusplus_fp32_parity_max_abs_diff": float("nan"),
-                "esmplusplus_fp32_parity_max_abs_diff_param": "",
-                }
+                row = _new_row(spec=spec, backend=backend)
+                _apply_weight_parity_to_row(row=row, parity=fallback_weight_parity)
+                row["error"] = str(exc)
+                row["error_type"] = type(exc).__name__
+                row["traceback"] = traceback.format_exc()
                 rows.append(row)
                 labels.append(f"{spec.key}|{backend}")
                 hidden_max_abs_values.append(0.0)
@@ -342,18 +391,15 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
         "suite": "compliance",
         "all_passed": all_passed,
         "device": str(device),
-        "dtype": str(dtype),
+        "load_dtype": str(LOAD_DTYPE),
+        "runtime_dtype": str(runtime_dtype),
         "num_sequences": args.num_sequences,
         "min_length": args.min_length,
         "max_length": args.max_length,
         "batch_size": args.batch_size,
         "full_models": args.full_models,
+        "strict_reference": args.strict_reference,
         "rows": rows,
-        "strict_reference_note": (
-            "For esmplusplus, strict_reference validates float32 state_dict equality against official ESMC before metric checks."
-            if args.strict_reference
-            else ""
-        ),
     }
     write_json(output_dir / "metrics.json", payload)
     write_csv(output_dir / "metrics.csv", rows)
@@ -372,14 +418,13 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
         f"Models failed: {len(rows) - passed_count}",
         f"Output directory: {output_dir}",
     ]
-    if args.strict_reference:
-        summary_lines.append(
-            "Strict reference note: esmplusplus requires float32 state_dict equality against official ESMC before metrics."
-        )
     for row in rows:
         status = "PASS" if bool(row["overall_pass"]) else "FAIL"
         summary_lines.append(
-            f"{status} | {row['repo_id']} | backend={row['attn_backend']} | ref_hidden_mse={row['reference_hidden_mse']} | ref_hidden_max_abs={row['reference_hidden_max_abs']} | ref_logits_mse={row['reference_logits_mse']} | ref_logits_max_abs={row['reference_logits_max_abs']} | argmax={row['reference_argmax_accuracy']} | error_type={row['error_type']} | error={row['error']}"
+            f"{status} | {row['repo_id']} | backend={row['attn_backend']} | weight_parity={row['weight_parity_pass']} "
+            f"| parity_overlap={row['weight_parity_overlap_param_count']} | parity_max_abs={row['weight_parity_max_abs_diff']} "
+            f"| ref_hidden_max_abs={row['reference_hidden_max_abs']} | ref_logits_max_abs={row['reference_logits_max_abs']} "
+            f"| argmax={row['reference_argmax_accuracy']} | error_type={row['error_type']} | error={row['error']}"
         )
     write_summary(output_dir / "summary.txt", summary_lines)
     print("\n".join(summary_lines))
@@ -390,35 +435,12 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run model compliance and correctness checks.")
-    parser.add_argument("--token", type=str, default=None)
-    parser.add_argument("--device", type=str, default="auto")
-    parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "float32", "float16", "bfloat16"])
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num-sequences", type=int, default=12)
-    parser.add_argument("--min-length", type=int, default=16)
-    parser.add_argument("--max-length", type=int, default=96)
-    parser.add_argument("--batch-size", type=int, default=2)
-    parser.add_argument("--full-models", action="store_true")
-    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus", "dplm", "dplm2"])
-    parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--attn-tolerance", type=float, default=5e-3)
-    parser.add_argument("--check-attn-equivalence", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--attn-equivalence-mse-threshold", type=float, default=1e-4)
-    parser.add_argument("--attn-equivalence-mean-abs-threshold", type=float, default=2e-3)
-    parser.add_argument("--attn-equivalence-max-abs-threshold", type=float, default=8e-2)
-    parser.add_argument("--e1-repeat-tolerance", type=float, default=1e-7)
+    parser = argparse.ArgumentParser(description="Run model parity/compliance checks against official references.")
+    add_base_args(parser)
+    add_data_args(parser, num_sequences_default=12, min_length_default=16, max_length_default=96, batch_size_default=2)
     parser.add_argument("--skip-reference", action="store_true")
-    parser.add_argument("--hidden-mse-threshold", type=float, default=1e-4)
-    parser.add_argument("--hidden-mean-abs-threshold", type=float, default=2e-3)
-    parser.add_argument("--hidden-max-abs-threshold", type=float, default=8e-2)
-    parser.add_argument("--logits-mse-threshold", type=float, default=1e-4)
-    parser.add_argument("--logits-mean-abs-threshold", type=float, default=2e-3)
-    parser.add_argument("--logits-max-abs-threshold", type=float, default=8e-2)
-    parser.add_argument("--argmax-threshold", type=float, default=0.99)
     parser.add_argument("--strict-reference", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--print-tracebacks", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -430,4 +452,3 @@ def main(argv: List[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

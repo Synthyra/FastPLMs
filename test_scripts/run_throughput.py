@@ -11,16 +11,18 @@ import matplotlib.pyplot as plt
 import torch
 from tqdm.auto import tqdm
 
+from test_scripts.common import add_base_args
 from test_scripts.common import build_output_dir
 from test_scripts.common import CANONICAL_AMINO_ACIDS
 from test_scripts.common import load_model
+from test_scripts.common import LOAD_DTYPE
 from test_scripts.common import login_if_needed
 from test_scripts.common import parse_int_list
 from test_scripts.common import peak_memory_mb
 from test_scripts.common import prepare_model_batch
 from test_scripts.common import reset_peak_memory
 from test_scripts.common import resolve_device
-from test_scripts.common import resolve_dtype
+from test_scripts.common import resolve_runtime_dtype
 from test_scripts.common import run_forward
 from test_scripts.common import set_seed
 from test_scripts.common import sync_cuda
@@ -43,16 +45,6 @@ plt.rcParams.update(
         "lines.linewidth": 2.0,
     }
 )
-
-
-def _parse_backend_list(backends: str) -> List[str]:
-    parsed: List[str] = []
-    for chunk in backends.split(","):
-        backend = chunk.strip()
-        if len(backend) > 0:
-            parsed.append(backend)
-    assert len(parsed) > 0, "Expected at least one attention backend."
-    return parsed
 
 
 def _parse_pad_fraction_list(values: str) -> List[float]:
@@ -360,9 +352,12 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
         flex_throughput = float(flex_row["tokens_per_second"])
         sdpa_memory = float(sdpa_row["peak_memory_mb"])
         flex_memory = float(flex_row["peak_memory_mb"])
-        assert sdpa_throughput > 0.0, f"Expected positive SDPA throughput for pair {pair_key}"
-        throughput_ratio = flex_throughput / sdpa_throughput
-        throughput_gain_percent = 100.0 * (throughput_ratio - 1.0)
+        if sdpa_throughput > 0.0:
+            throughput_ratio = flex_throughput / sdpa_throughput
+            throughput_gain_percent = 100.0 * (throughput_ratio - 1.0)
+        else:
+            throughput_ratio = float("nan")
+            throughput_gain_percent = float("nan")
         if sdpa_memory > 0.0:
             memory_ratio = flex_memory / sdpa_memory
             memory_reduction_percent = 100.0 * (1.0 - memory_ratio)
@@ -403,7 +398,7 @@ def _selected_backends(spec, enable_dplm_flex: bool) -> List[str]:
 def run_throughput_suite(args: argparse.Namespace) -> int:
     login_if_needed(args.token)
     device = resolve_device(args.device)
-    dtype = resolve_dtype(args.dtype, device)
+    runtime_dtype = resolve_runtime_dtype()
     set_seed(args.seed)
     output_dir = build_output_dir(args.output_dir, "throughput")
 
@@ -413,8 +408,19 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         pad_fraction_settings = [args.padded_sequence_fraction]
     else:
         pad_fraction_settings = _parse_pad_fraction_list(args.pad_fractions)
-    benchmark_families = ["esm2", "esmplusplus", "dplm", "dplm2"]
-    specs = get_model_specs(full_models=True, families=benchmark_families)
+    default_benchmark_families = ["esm2", "esmplusplus", "dplm", "dplm2"]
+    if args.families is None:
+        benchmark_families = default_benchmark_families
+    else:
+        benchmark_families = []
+        for family in args.families:
+            if family in default_benchmark_families:
+                benchmark_families.append(family)
+    assert len(benchmark_families) > 0, (
+        "Throughput supports families: "
+        f"{default_benchmark_families}, got {args.families}."
+    )
+    specs = get_model_specs(full_models=args.full_models, families=benchmark_families)
     assert len(specs) > 0, "Expected at least one model spec for throughput benchmarking."
     rows: List[Dict[str, object]] = []
     all_passed = True
@@ -464,7 +470,8 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             "suite": "throughput",
             "all_passed": True,
             "device": str(device),
-            "dtype": str(dtype),
+            "load_dtype": str(LOAD_DTYPE),
+            "runtime_dtype": str(runtime_dtype),
             "lengths": lengths,
             "batch_sizes": batch_sizes,
             "num_batches": args.num_batches,
@@ -500,14 +507,14 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             selected_backend = None if attn_backend == "model_default" else attn_backend
             print(
                 f"[throughput] Testing {spec.repo_id} "
-                f"(attn_backend={attn_backend}) on {device} with {dtype}"
+                f"(attn_backend={attn_backend}) on {device} with runtime {runtime_dtype}"
             )
             try:
                 model, tokenizer = load_model(
                     spec=spec,
                     task="base",
                     device=device,
-                    dtype=dtype,
+                    runtime_dtype=runtime_dtype,
                     attn_backend=selected_backend,
                 )
             except Exception as exc:
@@ -655,7 +662,8 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         "suite": "throughput",
         "all_passed": all_passed,
         "device": str(device),
-        "dtype": str(dtype),
+        "load_dtype": str(LOAD_DTYPE),
+        "runtime_dtype": str(runtime_dtype),
         "lengths": lengths,
         "batch_sizes": batch_sizes,
         "num_batches": args.num_batches,
@@ -709,10 +717,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run model throughput benchmarks.")
-    parser.add_argument("--token", type=str, default=None)
-    parser.add_argument("--device", type=str, default="auto")
-    parser.add_argument("--dtype", type=str, default="auto", choices=["auto", "float32", "float16", "bfloat16"])
-    parser.add_argument("--seed", type=int, default=42)
+    add_base_args(parser)
     parser.add_argument("--lengths", type=str, default="64,128,256,512,1024,2048")
     parser.add_argument("--batch-sizes", type=str, default="1,2,4,8,16")
     parser.add_argument("--num-batches", type=int, default=100)
@@ -721,8 +726,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pad-fractions", type=str, default=None)
     parser.add_argument("--max-pad-fraction", type=float, default=0.5)
     parser.add_argument("--enable-dplm-flex", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--output-dir", type=str, default=None)
-    parser.add_argument("--dry-run", action="store_true")
     return parser
 
 
