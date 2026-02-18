@@ -61,6 +61,7 @@ def _load_official_dplm2_source_model(source_repo: str) -> torch.nn.Module:
         "byprot.datamodules.dataset.tokenized_protein"
     )
     DPLM2Tokenizer = tokenized_protein_module.DPLM2Tokenizer
+    _install_dplm2_tokenizer_hf_compat(DPLM2Tokenizer)
     setattr(transformers, "DPLM2Tokenizer", DPLM2Tokenizer)
     tokenization_auto_module = importlib.import_module(
         "transformers.models.auto.tokenization_auto"
@@ -95,6 +96,44 @@ def _load_official_dplm2_source_model(source_repo: str) -> torch.nn.Module:
         model_name=f"official DPLM2 net ({source_repo})",
     )
     return official_model
+
+
+def _install_dplm2_tokenizer_hf_compat(tokenizer_cls) -> None:
+    if "mask_token_id" in tokenizer_cls.__dict__:
+        return
+
+    def _get_mask_token(self):
+        return self.aa_mask_token
+
+    def _get_mask_token_id(self):
+        return self._token_to_id[self.aa_mask_token]
+
+    def _get_cls_token(self):
+        return self.aa_cls_token
+
+    def _get_cls_token_id(self):
+        return self._token_to_id[self.aa_cls_token]
+
+    def _get_eos_token(self):
+        return self.aa_eos_token
+
+    def _get_eos_token_id(self):
+        return self._token_to_id[self.aa_eos_token]
+
+    def _get_unk_token(self):
+        return self.aa_unk_token
+
+    def _get_unk_token_id(self):
+        return self._token_to_id[self.aa_unk_token]
+
+    tokenizer_cls.mask_token = property(_get_mask_token)
+    tokenizer_cls.mask_token_id = property(_get_mask_token_id)
+    tokenizer_cls.cls_token = property(_get_cls_token)
+    tokenizer_cls.cls_token_id = property(_get_cls_token_id)
+    tokenizer_cls.eos_token = property(_get_eos_token)
+    tokenizer_cls.eos_token_id = property(_get_eos_token_id)
+    tokenizer_cls.unk_token = property(_get_unk_token)
+    tokenizer_cls.unk_token_id = property(_get_unk_token_id)
 
 
 def _ensure_imp_module_stub() -> None:
