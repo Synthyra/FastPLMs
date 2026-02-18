@@ -36,8 +36,13 @@ try:
     # when used from AutoModel, these are in the same directory
     from .embedding_mixin import EmbeddingMixin, Pooler
 except:
-    # when running from our repo, these are in the base directory
-    from embedding_mixin import EmbeddingMixin, Pooler
+    try:
+        # whem importing as a submodule, embedding mixin is in the FastPLMs directory
+        from ..embedding_mixin import EmbeddingMixin, Pooler
+    except:
+        # when running from our repo, these are in the base directory
+        from embedding_mixin import EmbeddingMixin, Pooler
+
 
 
 def _create_pad_block_mask(attention_mask_2d: torch.Tensor):
