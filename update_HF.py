@@ -39,8 +39,8 @@ def _run_get_weights_scripts(hf_token: str | None) -> None:
     import platform
     python_cmd = "python" if platform.system().lower() == "linux" else "py"
     modules = [
-        "boltz_fastplms.get_boltz2_weights",
-        "e1_fastplms.get_e1_weights",
+        #"boltz_fastplms.get_boltz2_weights",
+        #"e1_fastplms.get_e1_weights",
         "esm_plusplus.get_esmc_weights",
         "esm2.get_esm2_weights",
     ]
