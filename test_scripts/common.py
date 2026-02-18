@@ -112,6 +112,8 @@ def load_model(
     dtype: torch.dtype,
     attn_backend: Optional[str] = None,
     compile_model: bool = False,
+    compile_backend: str = "inductor",
+    compile_dynamic: bool = False,
 ):
     if spec.family == "esm2":
         from esm2.modeling_fastesm import (
@@ -157,6 +159,38 @@ def load_model(
             model = E1ForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
         else:
             raise ValueError(f"Unsupported task: {task}")
+    elif spec.family == "dplm":
+        from dplm.dplm import (
+            DPLMConfig,
+            DPLMForMaskedLM,
+            DPLMModel,
+        )
+
+        model_config = DPLMConfig.from_pretrained(spec.repo_id)
+        if attn_backend is not None:
+            model_config.attn_backend = attn_backend
+        if task == "base":
+            model = DPLMModel.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+        elif task == "masked_lm":
+            model = DPLMForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+        else:
+            raise ValueError(f"Unsupported task: {task}")
+    elif spec.family == "dplm2":
+        from dplm.dplm2 import (
+            DPLM2Config,
+            DPLM2ForMaskedLM,
+            DPLM2Model,
+        )
+
+        model_config = DPLM2Config.from_pretrained(spec.repo_id)
+        if attn_backend is not None:
+            model_config.attn_backend = attn_backend
+        if task == "base":
+            model = DPLM2Model.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+        elif task == "masked_lm":
+            model = DPLM2ForMaskedLM.from_pretrained(spec.repo_id, config=model_config, dtype=dtype)
+        else:
+            raise ValueError(f"Unsupported task: {task}")
     else:
         model_config = None
         if attn_backend is not None:
@@ -173,7 +207,10 @@ def load_model(
     if spec.family == "esmplusplus":
         model.all_tied_weights_keys = {}
     if compile_model:
-        model = torch.compile(model, dynamic=True, backend="aot_eager")
+        if compile_backend == "default":
+            model = torch.compile(model, dynamic=compile_dynamic)
+        else:
+            model = torch.compile(model, dynamic=compile_dynamic, backend=compile_backend)
     if spec.family == "e1":
         tokenizer = None
     else:
@@ -288,6 +325,28 @@ def load_official_esm2_model(spec: ModelSpec, device: torch.device, dtype: torch
     return model, tokenizer
 
 
+def load_official_dplm_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    from dplm.dplm import DPLMConfig
+    from dplm.dplm import DPLMForMaskedLM
+
+    assert spec.reference_repo_id is not None, f"Missing official DPLM repo id for {spec.key}."
+    config = DPLMConfig.from_pretrained(spec.reference_repo_id)
+    model = DPLMForMaskedLM.from_pretrained(spec.reference_repo_id, config=config).to(device=device, dtype=dtype).eval()
+    tokenizer = model.tokenizer
+    return model, tokenizer
+
+
+def load_official_dplm2_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
+    from dplm.dplm2 import DPLM2Config
+    from dplm.dplm2 import DPLM2ForMaskedLM
+
+    assert spec.reference_repo_id is not None, f"Missing official DPLM2 repo id for {spec.key}."
+    config = DPLM2Config.from_pretrained(spec.reference_repo_id)
+    model = DPLM2ForMaskedLM.from_pretrained(spec.reference_repo_id, config=config).to(device=device, dtype=dtype).eval()
+    tokenizer = model.tokenizer
+    return model, tokenizer
+
+
 def load_official_model_for_compliance(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
     if spec.family == "e1":
         return load_official_e1_model(spec=spec, device=device, dtype=dtype)
@@ -295,6 +354,10 @@ def load_official_model_for_compliance(spec: ModelSpec, device: torch.device, dt
         return load_official_esmc_model(spec=spec, device=device, dtype=dtype)
     if spec.family == "esm2":
         return load_official_esm2_model(spec=spec, device=device, dtype=dtype)
+    if spec.family == "dplm":
+        return load_official_dplm_model(spec=spec, device=device, dtype=dtype)
+    if spec.family == "dplm2":
+        return load_official_dplm2_model(spec=spec, device=device, dtype=dtype)
     raise ValueError(f"Unsupported family for official loader: {spec.family}")
 
 

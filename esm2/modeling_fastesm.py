@@ -363,36 +363,27 @@ class EsmSelfAttention(nn.Module):
             context_layer = rearrange(context_layer, 'b h s d -> b s (h d)')
             return context_layer, attention_probs
         else:
-            sdpa_mask = None
-            if attention_mask is not None:
-                sdpa_mask = torch.zeros_like(attention_mask, dtype=query_layer.dtype)
-                sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
-            flex_dtype_supported = query_layer.dtype in (torch.float16, torch.bfloat16)
-            use_flex = (
-                self.attn_backend == "flex"
-                and flex_attention is not None
-                and flex_dtype_supported
-                and (attention_mask is None or flex_block_mask is not None)
-            )
-            if use_flex:
-                try:
-                    context_layer = flex_attention(
-                        query_layer,
-                        key_layer,
-                        value_layer,
-                        block_mask=flex_block_mask,
-                        scale=1.0,
+            if self.attn_backend == "flex":
+                assert flex_attention is not None, "Flex attention backend requested but torch.flex_attention is unavailable."
+                assert query_layer.dtype in (torch.float16, torch.bfloat16), (
+                    f"Flex attention backend requires float16 or bfloat16, got {query_layer.dtype}."
+                )
+                if attention_mask is not None:
+                    assert flex_block_mask is not None, (
+                        "Flex attention backend requires a block mask when attention_mask is provided."
                     )
-                except Exception:
-                    context_layer = F.scaled_dot_product_attention(
-                        query_layer,
-                        key_layer,
-                        value_layer,
-                        attn_mask=sdpa_mask,
-                        dropout_p=self.dropout_prob,
-                        scale=1.0,
-                    )
+                context_layer = flex_attention(
+                    query_layer,
+                    key_layer,
+                    value_layer,
+                    block_mask=flex_block_mask,
+                    scale=1.0,
+                )
             else:
+                sdpa_mask = None
+                if attention_mask is not None:
+                    sdpa_mask = torch.zeros_like(attention_mask, dtype=query_layer.dtype)
+                    sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
                 context_layer = F.scaled_dot_product_attention(
                     query_layer,
                     key_layer,
@@ -622,11 +613,17 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
         batch_size, seq_length = input_ids.shape
         flex_block_mask = None
         if attention_mask is not None:
-            extended_attention_mask = attention_mask[:, None, None, :].expand(
-                batch_size, 1, seq_length, seq_length
-            ).bool()
-            if self.config.attn_backend == "flex" and create_block_mask is not None:
-                flex_block_mask = _create_pad_block_mask(attention_mask.bool())
+            token_attention_mask = attention_mask.bool()
+            if self.config.attn_backend == "flex":
+                assert create_block_mask is not None, (
+                    "Flex attention backend requested but torch.create_block_mask is unavailable."
+                )
+                flex_block_mask = _create_pad_block_mask(token_attention_mask)
+                extended_attention_mask = None
+            else:
+                extended_attention_mask = token_attention_mask[:, None, None, :].expand(
+                    batch_size, 1, seq_length, seq_length
+                )
         else:
             extended_attention_mask = None
         encoder_outputs = self.encoder(
@@ -691,15 +688,20 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
 
         flex_block_mask = None
         if attention_mask is not None:
-            extended_attention_mask = attention_mask[:, None, None, :].expand(
-                batch_size, 1, seq_length, seq_length
-            ).bool()
+            token_attention_mask = attention_mask.bool()
             if (
                 self.config.attn_backend == "flex"
                 and not output_attentions
-                and create_block_mask is not None
             ):
-                flex_block_mask = _create_pad_block_mask(attention_mask.bool())
+                assert create_block_mask is not None, (
+                    "Flex attention backend requested but torch.create_block_mask is unavailable."
+                )
+                flex_block_mask = _create_pad_block_mask(token_attention_mask)
+                extended_attention_mask = None
+            else:
+                extended_attention_mask = token_attention_mask[:, None, None, :].expand(
+                    batch_size, 1, seq_length, seq_length
+                )
         else:
             extended_attention_mask = None
 

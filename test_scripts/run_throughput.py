@@ -55,6 +55,16 @@ def _parse_backend_list(backends: str) -> List[str]:
     return parsed
 
 
+def _parse_pad_fraction_list(values: str) -> List[float]:
+    parsed: List[float] = []
+    for chunk in values.split(","):
+        value = float(chunk.strip())
+        assert 0.0 <= value <= 1.0, f"Expected pad fraction in [0, 1], got {value}."
+        parsed.append(value)
+    assert len(parsed) > 0, "Expected at least one pad fraction."
+    return parsed
+
+
 def _random_sequence(length: int, rng: random.Random) -> str:
     return "M" + "".join(rng.choices(CANONICAL_AMINO_ACIDS, k=length - 1))
 
@@ -212,7 +222,10 @@ def _plot_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: path
             continue
         if _is_finite(row["peak_memory_mb"]) is False:
             continue
-        model_group_key = f"{row['repo_id']}|compiled={row['compiled_model']}"
+        model_group_key = (
+            f"{row['repo_id']}|compiled={row['compiled_model']}|compile_backend={row['compile_backend']}"
+            f"|compile_dynamic={row['compile_dynamic']}|pad={row['padded_sequence_fraction_setting']}"
+        )
         if model_group_key not in model_rows_index:
             model_rows_index[model_group_key] = []
         model_rows_index[model_group_key].append(row)
@@ -244,6 +257,9 @@ def _plot_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: path
 
         repo_id = str(model_rows[0]["repo_id"])
         compiled_model = bool(model_rows[0]["compiled_model"])
+        compile_backend = str(model_rows[0]["compile_backend"])
+        compile_dynamic = bool(model_rows[0]["compile_dynamic"])
+        padded_sequence_fraction_setting = float(model_rows[0]["padded_sequence_fraction_setting"])
         colors = {"sdpa": "#1f77b4", "flex": "#d62728"}
         markers = {"sdpa": "o", "flex": "s"}
 
@@ -287,13 +303,20 @@ def _plot_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: path
                     axis.legend(loc="upper left", frameon=False)
 
             figure.suptitle(
-                f"{repo_id} | {filename_prefix.title()} | SDPA vs Flex | compiled={compiled_model}",
+                (
+                    f"{repo_id} | {filename_prefix.title()} | SDPA vs Flex | compiled={compiled_model} | "
+                    f"compile_backend={compile_backend} | compile_dynamic={compile_dynamic} | "
+                    f"pad_setting={padded_sequence_fraction_setting}"
+                ),
                 y=0.995,
             )
             figure.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
             filename = (
                 f"{filename_prefix}_sdpa_vs_flex_{_slugify_filename(repo_id)}"
-                f"_compiled_{str(compiled_model).lower()}.png"
+                f"_compiled_{str(compiled_model).lower()}"
+                f"_backend_{_slugify_filename(compile_backend)}"
+                f"_dynamic_{str(compile_dynamic).lower()}"
+                f"_pad_{_slugify_filename(str(padded_sequence_fraction_setting))}.png"
             )
             output_path = per_model_dir / filename
             figure.savefig(output_path, dpi=300)
@@ -326,7 +349,10 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
             continue
         if _is_finite(row["peak_memory_mb"]) is False:
             continue
-        pair_key = f"{row['model_key']}|{row['sequence_length']}|{row['batch_size']}|{row['compiled_model']}"
+        pair_key = (
+            f"{row['model_key']}|{row['sequence_length']}|{row['batch_size']}|{row['compiled_model']}"
+            f"|{row['compile_backend']}|{row['compile_dynamic']}|{row['padded_sequence_fraction_setting']}"
+        )
         if pair_key not in pair_index:
             pair_index[pair_key] = {}
         pair_index[pair_key][backend] = row
@@ -357,6 +383,9 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
                 "family": flex_row["family"],
                 "repo_id": flex_row["repo_id"],
                 "compiled_model": flex_row["compiled_model"],
+                "compile_backend": flex_row["compile_backend"],
+                "compile_dynamic": flex_row["compile_dynamic"],
+                "padded_sequence_fraction_setting": flex_row["padded_sequence_fraction_setting"],
                 "sequence_length": flex_row["sequence_length"],
                 "batch_size": flex_row["batch_size"],
                 "sdpa_tokens_per_second": sdpa_throughput,
@@ -386,6 +415,13 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
 
     lengths = parse_int_list(args.lengths)
     batch_sizes = parse_int_list(args.batch_sizes)
+    if args.pad_fractions is None:
+        pad_fraction_settings = [args.padded_sequence_fraction]
+    else:
+        pad_fraction_settings = _parse_pad_fraction_list(args.pad_fractions)
+    compile_model = bool(args.compile_model)
+    compile_backend = str(args.compile_backend)
+    compile_dynamic = bool(args.compile_dynamic)
     benchmark_families = ["esm2", "esmplusplus"]
     specs = get_model_specs(full_models=True, families=benchmark_families)
     assert len(specs) > 0, "Expected at least one model spec for throughput benchmarking."
@@ -393,7 +429,12 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     all_passed = True
     total_points = 0
     for spec in specs:
-        total_points += len(_selected_backends(spec=spec)) * len(lengths) * len(batch_sizes)
+        total_points += (
+            len(_selected_backends(spec=spec))
+            * len(pad_fraction_settings)
+            * len(lengths)
+            * len(batch_sizes)
+        )
     progress = tqdm(total=total_points, desc="Throughput points", unit="point")
 
     if args.dry_run:
@@ -401,29 +442,37 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             spec_backends = _selected_backends(spec=spec)
 
             for attn_backend in spec_backends:
-                for length in lengths:
-                    for batch_size in batch_sizes:
-                        rows.append(
-                            {
-                                "model_key": spec.key,
-                                "family": spec.family,
-                                "repo_id": spec.repo_id,
-                                "attn_backend": attn_backend,
-                                "compiled_model": True,
-                                "series_label": f"{spec.repo_id}|{attn_backend}|compiled=True",
-                                "sequence_length": length,
-                                "batch_size": batch_size,
-                                "latency_seconds": 0.0,
-                                "tokens_per_second": 0.0,
-                                "tokens_per_second_with_padding": 0.0,
-                                "sequences_per_second": 0.0,
-                                "pad_fraction": 0.0,
-                                "peak_memory_mb": 0.0,
-                                "pass": True,
-                                "error": "",
-                            }
-                        )
-                        progress.update(1)
+                for padded_sequence_fraction_setting in pad_fraction_settings:
+                    for length in lengths:
+                        for batch_size in batch_sizes:
+                            rows.append(
+                                {
+                                    "model_key": spec.key,
+                                    "family": spec.family,
+                                    "repo_id": spec.repo_id,
+                                    "attn_backend": attn_backend,
+                                    "compiled_model": compile_model,
+                                    "compile_backend": compile_backend,
+                                    "compile_dynamic": compile_dynamic,
+                                    "padded_sequence_fraction_setting": padded_sequence_fraction_setting,
+                                    "flex_path_used": bool(attn_backend == "flex"),
+                                    "series_label": (
+                                        f"{spec.repo_id}|{attn_backend}|compiled={compile_model}"
+                                        f"|pad={padded_sequence_fraction_setting}"
+                                    ),
+                                    "sequence_length": length,
+                                    "batch_size": batch_size,
+                                    "latency_seconds": 0.0,
+                                    "tokens_per_second": 0.0,
+                                    "tokens_per_second_with_padding": 0.0,
+                                    "sequences_per_second": 0.0,
+                                    "pad_fraction": 0.0,
+                                    "peak_memory_mb": 0.0,
+                                    "pass": True,
+                                    "error": "",
+                                }
+                            )
+                            progress.update(1)
         payload: Dict[str, object] = {
             "suite": "throughput",
             "all_passed": True,
@@ -435,15 +484,25 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             "warmup_steps": args.warmup_steps,
             "families": benchmark_families,
             "attn_backends": ["sdpa", "flex"],
-            "compile_model": True,
+            "compile_model": compile_model,
+            "compile_backend": compile_backend,
+            "compile_dynamic": compile_dynamic,
             "padded_sequence_fraction": args.padded_sequence_fraction,
+            "pad_fraction_settings": pad_fraction_settings,
             "max_pad_fraction": args.max_pad_fraction,
             "dry_run": True,
             "rows": rows,
         }
+        delta_rows = _build_flex_sdpa_deltas(rows)
         write_json(output_dir / "metrics.json", payload)
         write_csv(output_dir / "metrics.csv", rows)
-        summary_lines = [f"Suite: throughput (dry-run)", f"Benchmark points: {len(rows)}", f"Output directory: {output_dir}"]
+        write_json(output_dir / "flex_vs_sdpa_deltas.json", {"suite": "throughput", "rows": delta_rows, "dry_run": True})
+        summary_lines = [
+            "Suite: throughput (dry-run)",
+            f"Benchmark points: {len(rows)}",
+            f"Flex-vs-SDPA pairs: {len(delta_rows)}",
+            f"Output directory: {output_dir}",
+        ]
         write_summary(output_dir / "summary.txt", summary_lines)
         print("\n".join(summary_lines))
         progress.close()
@@ -451,13 +510,13 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
 
     for spec in specs:
         spec_backends = _selected_backends(spec=spec)
-        compile_model = True
 
         for attn_backend in spec_backends:
             selected_backend = None if attn_backend == "model_default" else attn_backend
             print(
                 f"[throughput] Testing {spec.repo_id} "
-                f"(attn_backend={attn_backend}, compiled_model={compile_model}) on {device} with {dtype}"
+                f"(attn_backend={attn_backend}, compiled_model={compile_model}, compile_backend={compile_backend}, "
+                f"compile_dynamic={compile_dynamic}) on {device} with {dtype}"
             )
             try:
                 model, tokenizer = load_model(
@@ -467,132 +526,152 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                     dtype=dtype,
                     attn_backend=selected_backend,
                     compile_model=compile_model,
+                    compile_backend=compile_backend,
+                    compile_dynamic=compile_dynamic,
                 )
             except Exception as exc:
                 all_passed = False
-                for length in lengths:
-                    for batch_size in batch_sizes:
-                        rows.append(
-                            {
-                                "model_key": spec.key,
-                                "family": spec.family,
-                                "repo_id": spec.repo_id,
-                                "attn_backend": attn_backend,
-                                "compiled_model": compile_model,
-                                "series_label": f"{spec.repo_id}|{attn_backend}|compiled={compile_model}",
-                                "sequence_length": length,
-                                "batch_size": batch_size,
-                                "latency_seconds": float("nan"),
-                                "tokens_per_second": float("nan"),
-                                "tokens_per_second_with_padding": float("nan"),
-                                "sequences_per_second": float("nan"),
-                                "pad_fraction": float("nan"),
-                                "peak_memory_mb": float("nan"),
-                                "pass": False,
-                                "error": str(exc),
-                            }
-                        )
-                        progress.update(1)
+                for padded_sequence_fraction_setting in pad_fraction_settings:
+                    for length in lengths:
+                        for batch_size in batch_sizes:
+                            rows.append(
+                                {
+                                    "model_key": spec.key,
+                                    "family": spec.family,
+                                    "repo_id": spec.repo_id,
+                                    "attn_backend": attn_backend,
+                                    "compiled_model": compile_model,
+                                    "compile_backend": compile_backend,
+                                    "compile_dynamic": compile_dynamic,
+                                    "padded_sequence_fraction_setting": padded_sequence_fraction_setting,
+                                    "flex_path_used": False,
+                                    "series_label": (
+                                        f"{spec.repo_id}|{attn_backend}|compiled={compile_model}"
+                                        f"|pad={padded_sequence_fraction_setting}"
+                                    ),
+                                    "sequence_length": length,
+                                    "batch_size": batch_size,
+                                    "latency_seconds": float("nan"),
+                                    "tokens_per_second": float("nan"),
+                                    "tokens_per_second_with_padding": float("nan"),
+                                    "sequences_per_second": float("nan"),
+                                    "pad_fraction": float("nan"),
+                                    "peak_memory_mb": float("nan"),
+                                    "pass": False,
+                                    "error": str(exc),
+                                }
+                            )
+                            progress.update(1)
                 continue
 
-            for length in lengths:
-                for batch_size in batch_sizes:
-                    row: Dict[str, object] = {
-                        "model_key": spec.key,
-                        "family": spec.family,
-                        "repo_id": spec.repo_id,
-                        "attn_backend": attn_backend,
-                        "compiled_model": compile_model,
-                        "series_label": f"{spec.repo_id}|{attn_backend}|compiled={compile_model}",
-                        "sequence_length": length,
-                        "batch_size": batch_size,
-                        "latency_seconds": float("nan"),
-                        "tokens_per_second": float("nan"),
-                        "tokens_per_second_with_padding": float("nan"),
-                        "sequences_per_second": float("nan"),
-                        "pad_fraction": float("nan"),
-                        "peak_memory_mb": float("nan"),
-                        "pass": False,
-                        "error": "",
-                    }
-                    try:
-                        batch_seed = args.seed + (length * 1000) + batch_size
-                        sampled_sequence_length = length
-                        if spec.family in ["esm2", "esmplusplus"]:
-                            sampled_sequence_length = max(4, length - 2)
-                        sequence_batches = _build_sequence_batches(
-                            num_batches=args.num_batches,
-                            batch_size=batch_size,
-                            length=sampled_sequence_length,
-                            padded_sequence_fraction=args.padded_sequence_fraction,
-                            max_pad_fraction=args.max_pad_fraction,
-                            seed=batch_seed,
-                        )
-                        prepared_batches = []
-                        batch_pad_fractions: List[float] = []
-                        valid_token_count = 0
-                        padded_token_count = 0
-                        for sequence_batch in sequence_batches:
-                            prepared = prepare_model_batch(
-                                spec=spec,
-                                model=model,
-                                tokenizer=tokenizer,
-                                sequence_batch=sequence_batch,
-                                device=device,
-                                pad_to_length=length,
+            for padded_sequence_fraction_setting in pad_fraction_settings:
+                for length in lengths:
+                    for batch_size in batch_sizes:
+                        row: Dict[str, object] = {
+                            "model_key": spec.key,
+                            "family": spec.family,
+                            "repo_id": spec.repo_id,
+                            "attn_backend": attn_backend,
+                            "compiled_model": compile_model,
+                            "compile_backend": compile_backend,
+                            "compile_dynamic": compile_dynamic,
+                            "padded_sequence_fraction_setting": padded_sequence_fraction_setting,
+                            "flex_path_used": False,
+                            "series_label": (
+                                f"{spec.repo_id}|{attn_backend}|compiled={compile_model}"
+                                f"|pad={padded_sequence_fraction_setting}"
+                            ),
+                            "sequence_length": length,
+                            "batch_size": batch_size,
+                            "latency_seconds": float("nan"),
+                            "tokens_per_second": float("nan"),
+                            "tokens_per_second_with_padding": float("nan"),
+                            "sequences_per_second": float("nan"),
+                            "pad_fraction": float("nan"),
+                            "peak_memory_mb": float("nan"),
+                            "pass": False,
+                            "error": "",
+                        }
+                        try:
+                            pad_seed_offset = int(round(padded_sequence_fraction_setting * 10000))
+                            batch_seed = args.seed + (pad_seed_offset * 1000000) + (length * 1000) + batch_size
+                            sampled_sequence_length = length
+                            if spec.family in ["esm2", "esmplusplus"]:
+                                sampled_sequence_length = max(4, length - 2)
+                            sequence_batches = _build_sequence_batches(
+                                num_batches=args.num_batches,
+                                batch_size=batch_size,
+                                length=sampled_sequence_length,
+                                padded_sequence_fraction=padded_sequence_fraction_setting,
+                                max_pad_fraction=args.max_pad_fraction,
+                                seed=batch_seed,
                             )
-                            prepared_batches.append(prepared)
-                            batch_pad_fractions.append(_batch_pad_fraction(spec, prepared))
-                            if spec.family == "e1":
-                                valid_token_count += int((prepared["sequence_ids"] != -1).sum().item())
-                            else:
-                                valid_token_count += int(prepared["attention_mask"].sum().item())
-                            padded_token_count += int(prepared["input_ids"].numel())
-
-                        warmup_steps = max(args.warmup_steps, 4)
-
-                        with torch.no_grad():
-                            for i in range(warmup_steps):
-                                _ = run_forward(
+                            prepared_batches = []
+                            batch_pad_fractions: List[float] = []
+                            valid_token_count = 0
+                            padded_token_count = 0
+                            for sequence_batch in sequence_batches:
+                                prepared = prepare_model_batch(
                                     spec=spec,
                                     model=model,
-                                    batch=prepared_batches[i % len(prepared_batches)],
-                                    output_hidden_states=False,
-                                    output_attentions=False,
+                                    tokenizer=tokenizer,
+                                    sequence_batch=sequence_batch,
+                                    device=device,
+                                    pad_to_length=length,
                                 )
+                                prepared_batches.append(prepared)
+                                batch_pad_fractions.append(_batch_pad_fraction(spec, prepared))
+                                if spec.family == "e1":
+                                    valid_token_count += int((prepared["sequence_ids"] != -1).sum().item())
+                                else:
+                                    valid_token_count += int(prepared["attention_mask"].sum().item())
+                                padded_token_count += int(prepared["input_ids"].numel())
 
-                            reset_peak_memory(device)
-                            sync_cuda(device)
-                            start = time.perf_counter()
-                            for prepared in prepared_batches:
-                                _ = run_forward(
-                                    spec=spec,
-                                    model=model,
-                                    batch=prepared,
-                                    output_hidden_states=False,
-                                    output_attentions=False,
-                                )
-                            sync_cuda(device)
-                            elapsed = time.perf_counter() - start
+                            warmup_steps = max(args.warmup_steps, 4)
 
-                        batches_processed = len(prepared_batches)
-                        valid_tokens_processed = valid_token_count
-                        padded_tokens_processed = padded_token_count
-                        sequences_processed = batches_processed * batch_size
-                        latency_seconds = elapsed / batches_processed
-                        row["latency_seconds"] = latency_seconds
-                        row["tokens_per_second"] = valid_tokens_processed / elapsed
-                        row["tokens_per_second_with_padding"] = padded_tokens_processed / elapsed
-                        row["sequences_per_second"] = sequences_processed / elapsed
-                        row["pad_fraction"] = sum(batch_pad_fractions) / len(batch_pad_fractions)
-                        row["peak_memory_mb"] = peak_memory_mb(device)
-                        row["pass"] = True
-                    except Exception as exc:
-                        row["error"] = str(exc)
-                        row["pass"] = False
-                        all_passed = False
-                    rows.append(row)
-                    progress.update(1)
+                            with torch.no_grad():
+                                for i in range(warmup_steps):
+                                    _ = run_forward(
+                                        spec=spec,
+                                        model=model,
+                                        batch=prepared_batches[i % len(prepared_batches)],
+                                        output_hidden_states=False,
+                                        output_attentions=False,
+                                    )
+
+                                reset_peak_memory(device)
+                                sync_cuda(device)
+                                start = time.perf_counter()
+                                for prepared in prepared_batches:
+                                    _ = run_forward(
+                                        spec=spec,
+                                        model=model,
+                                        batch=prepared,
+                                        output_hidden_states=False,
+                                        output_attentions=False,
+                                    )
+                                sync_cuda(device)
+                                elapsed = time.perf_counter() - start
+
+                            batches_processed = len(prepared_batches)
+                            valid_tokens_processed = valid_token_count
+                            padded_tokens_processed = padded_token_count
+                            sequences_processed = batches_processed * batch_size
+                            latency_seconds = elapsed / batches_processed
+                            row["latency_seconds"] = latency_seconds
+                            row["tokens_per_second"] = valid_tokens_processed / elapsed
+                            row["tokens_per_second_with_padding"] = padded_tokens_processed / elapsed
+                            row["sequences_per_second"] = sequences_processed / elapsed
+                            row["pad_fraction"] = sum(batch_pad_fractions) / len(batch_pad_fractions)
+                            row["peak_memory_mb"] = peak_memory_mb(device)
+                            row["pass"] = True
+                            row["flex_path_used"] = bool(attn_backend == "flex")
+                        except Exception as exc:
+                            row["error"] = str(exc)
+                            row["pass"] = False
+                            all_passed = False
+                        rows.append(row)
+                        progress.update(1)
 
             del model
             if device.type == "cuda":
@@ -610,14 +689,19 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         "warmup_steps": args.warmup_steps,
         "families": benchmark_families,
         "attn_backends": ["sdpa", "flex"],
-        "compile_model": True,
+        "compile_model": compile_model,
+        "compile_backend": compile_backend,
+        "compile_dynamic": compile_dynamic,
         "padded_sequence_fraction": args.padded_sequence_fraction,
+        "pad_fraction_settings": pad_fraction_settings,
         "max_pad_fraction": args.max_pad_fraction,
         "rows": rows,
     }
 
     write_json(output_dir / "metrics.json", payload)
     write_csv(output_dir / "metrics.csv", rows)
+    delta_rows = _build_flex_sdpa_deltas(rows)
+    write_json(output_dir / "flex_vs_sdpa_deltas.json", {"suite": "throughput", "rows": delta_rows})
     per_model_plot_paths = _plot_sdpa_vs_flex_per_model(rows=rows, output_dir=output_dir)
 
     passed_count = 0
@@ -629,6 +713,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         f"Benchmark points: {len(rows)}",
         f"Points passed: {passed_count}",
         f"Points failed: {len(rows) - passed_count}",
+        f"Flex-vs-SDPA pairs: {len(delta_rows)}",
         f"Per-model plots generated: {len(per_model_plot_paths)}",
         f"Per-model plots directory: {output_dir / 'per_model_plots'}",
         f"Output directory: {output_dir}",
@@ -636,7 +721,13 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     for row in rows:
         status = "PASS" if bool(row["pass"]) else "FAIL"
         summary_lines.append(
-            f"{status} | {row['repo_id']} | backend={row['attn_backend']} | compiled={row['compiled_model']} | len={row['sequence_length']} | bs={row['batch_size']} | pad_fraction={row['pad_fraction']} | tok_s={row['tokens_per_second']} | mem_mb={row['peak_memory_mb']} | error={row['error']}"
+            (
+                f"{status} | {row['repo_id']} | backend={row['attn_backend']} | compiled={row['compiled_model']} "
+                f"| compile_backend={row['compile_backend']} | compile_dynamic={row['compile_dynamic']} "
+                f"| flex_path_used={row['flex_path_used']} | pad_setting={row['padded_sequence_fraction_setting']} "
+                f"| len={row['sequence_length']} | bs={row['batch_size']} | pad_fraction={row['pad_fraction']} "
+                f"| tok_s={row['tokens_per_second']} | mem_mb={row['peak_memory_mb']} | error={row['error']}"
+            )
         )
     write_summary(output_dir / "summary.txt", summary_lines)
     print("\n".join(summary_lines))
@@ -656,7 +747,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-sizes", type=str, default="1,2,4,8,16")
     parser.add_argument("--num-batches", type=int, default=100)
     parser.add_argument("--warmup-steps", type=int, default=100)
+    parser.add_argument("--compile-model", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--compile-backend", type=str, default="inductor", choices=["default", "inductor", "aot_eager"])
+    parser.add_argument("--compile-dynamic", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--padded-sequence-fraction", type=float, default=0.3)
+    parser.add_argument("--pad-fractions", type=str, default=None)
     parser.add_argument("--max-pad-fraction", type=float, default=0.5)
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")

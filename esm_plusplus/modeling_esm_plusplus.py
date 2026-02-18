@@ -389,35 +389,27 @@ class MultiHeadAttention(nn.Module):
             attn_weights = F.softmax(attn_weights, dim=-1)
             context_BHLD = torch.matmul(attn_weights, value_BHLD)
         else:
-            sdpa_mask = None
-            if attention_mask is not None:
-                sdpa_mask = torch.zeros_like(attention_mask, dtype=query_BHLD.dtype)
-                sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
-            flex_dtype_supported = query_BHLD.dtype in (torch.float16, torch.bfloat16)
-            use_flex = (
-                self.attn_backend == "flex"
-                and flex_attention is not None
-                and flex_dtype_supported
-                and (attention_mask is None or flex_block_mask is not None)
-            )
-            if use_flex:
-                try:
-                    context_BHLD = flex_attention(
-                        query_BHLD,
-                        key_BHLD,
-                        value_BHLD,
-                        block_mask=flex_block_mask,
-                        scale=scale,
+            if self.attn_backend == "flex":
+                assert flex_attention is not None, "Flex attention backend requested but torch.flex_attention is unavailable."
+                assert query_BHLD.dtype in (torch.float16, torch.bfloat16), (
+                    f"Flex attention backend requires float16 or bfloat16, got {query_BHLD.dtype}."
+                )
+                if attention_mask is not None:
+                    assert flex_block_mask is not None, (
+                        "Flex attention backend requires a block mask when attention_mask is provided."
                     )
-                except Exception:
-                    context_BHLD = F.scaled_dot_product_attention(
-                        query_BHLD,
-                        key_BHLD,
-                        value_BHLD,
-                        attn_mask=sdpa_mask,
-                        scale=scale,
-                    )
+                context_BHLD = flex_attention(
+                    query_BHLD,
+                    key_BHLD,
+                    value_BHLD,
+                    block_mask=flex_block_mask,
+                    scale=scale,
+                )
             else:
+                sdpa_mask = None
+                if attention_mask is not None:
+                    sdpa_mask = torch.zeros_like(attention_mask, dtype=query_BHLD.dtype)
+                    sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
                 context_BHLD = F.scaled_dot_product_attention(
                     query_BHLD,
                     key_BHLD,
@@ -582,11 +574,15 @@ class TransformerStack(nn.Module):
         if attention_mask is not None:
             assert attention_mask.ndim == 2, f"Expected 2D token attention mask, got shape {attention_mask.shape}."
             token_attention_mask = attention_mask.bool()
-            pairwise_attention_mask = token_attention_mask.unsqueeze(-1) & token_attention_mask.unsqueeze(-2)
-            attention_mask = pairwise_attention_mask.unsqueeze(1)
             if self.attn_backend == "flex" and not output_attentions:
+                assert create_block_mask is not None, (
+                    "Flex attention backend requested but torch.create_block_mask is unavailable."
+                )
                 flex_block_mask = _create_pad_block_mask(token_attention_mask)
+                attention_mask = None
             else:
+                pairwise_attention_mask = token_attention_mask.unsqueeze(-1) & token_attention_mask.unsqueeze(-2)
+                attention_mask = pairwise_attention_mask.unsqueeze(1)
                 flex_block_mask = None
         else:
             flex_block_mask = None

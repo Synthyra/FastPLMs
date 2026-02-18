@@ -48,6 +48,11 @@ DEFAULTS: Dict[str, object] = {
     "attn_backends": "sdpa,flex",
     "compare_attn": True,
     "compile_model": True,
+    "compile_backend": "inductor",
+    "compile_dynamic": False,
+    "padded_sequence_fraction": 0.3,
+    "max_pad_fraction": 0.5,
+    "pad_fractions": None,
     "pad_min_ratio": 0.5,
     "strict_reference": True,
     "print_tracebacks": True,
@@ -117,6 +122,11 @@ class RunAllConfig:
     attn_backends: str
     compare_attn: bool
     compile_model: bool
+    compile_backend: str
+    compile_dynamic: bool
+    padded_sequence_fraction: float
+    max_pad_fraction: float
+    pad_fractions: str | None
     pad_min_ratio: float
     strict_reference: bool
     print_tracebacks: bool
@@ -174,6 +184,11 @@ class RunAllConfig:
             attn_backends=args.attn_backends,
             compare_attn=args.compare_attn,
             compile_model=args.compile_model,
+            compile_backend=args.compile_backend,
+            compile_dynamic=args.compile_dynamic,
+            padded_sequence_fraction=args.padded_sequence_fraction,
+            max_pad_fraction=args.max_pad_fraction,
+            pad_fractions=args.pad_fractions,
             pad_min_ratio=args.pad_min_ratio,
             strict_reference=args.strict_reference,
             print_tracebacks=args.print_tracebacks,
@@ -247,6 +262,11 @@ class RunAllConfig:
             attn_backends=self.attn_backends,
             compare_attn=self.compare_attn,
             compile_model=self.compile_model,
+            compile_backend=self.compile_backend,
+            compile_dynamic=self.compile_dynamic,
+            padded_sequence_fraction=self.padded_sequence_fraction,
+            max_pad_fraction=self.max_pad_fraction,
+            pad_fractions=self.pad_fractions,
             pad_min_ratio=self.pad_min_ratio,
             full_models=self.full_models,
             families=self.families,
@@ -458,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--compliance-dtype", type=str, default=str(DEFAULTS["compliance_dtype"]), choices=["auto", "float32", "float16", "bfloat16"])
     parser.add_argument("--seed", type=int, default=int(DEFAULTS["seed"]))
     parser.add_argument("--full-models", action="store_true")
-    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus"])
+    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus", "dplm", "dplm2"])
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--min-length", type=int, default=int(DEFAULTS["min_length"]))
     parser.add_argument("--max-length", type=int, default=int(DEFAULTS["max_length"]))
@@ -501,6 +521,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attn-backends", type=str, default=str(DEFAULTS["attn_backends"]))
     parser.add_argument("--compare-attn", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compare_attn"]))
     parser.add_argument("--compile-model", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compile_model"]))
+    parser.add_argument("--compile-backend", type=str, default=str(DEFAULTS["compile_backend"]), choices=["default", "inductor", "aot_eager"])
+    parser.add_argument("--compile-dynamic", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compile_dynamic"]))
+    parser.add_argument("--padded-sequence-fraction", type=float, default=float(DEFAULTS["padded_sequence_fraction"]))
+    parser.add_argument("--max-pad-fraction", type=float, default=float(DEFAULTS["max_pad_fraction"]))
+    parser.add_argument("--pad-fractions", type=str, default=DEFAULTS["pad_fractions"])
     parser.add_argument("--pad-min-ratio", type=float, default=float(DEFAULTS["pad_min_ratio"]))
     parser.add_argument("--strict-reference", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["strict_reference"]))
     parser.add_argument("--print-tracebacks", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["print_tracebacks"]))

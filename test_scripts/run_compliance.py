@@ -400,7 +400,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-length", type=int, default=96)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--full-models", action="store_true")
-    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus"])
+    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus", "dplm", "dplm2"])
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--attn-tolerance", type=float, default=5e-3)
     parser.add_argument("--check-attn-equivalence", action=argparse.BooleanOptionalAction, default=True)

@@ -291,7 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-length", type=int, default=64)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--full-models", action="store_true")
-    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus"])
+    parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus", "dplm", "dplm2"])
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true")
     return parser
