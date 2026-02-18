@@ -1,4 +1,7 @@
 import importlib
+import importlib.util
+import sys
+import types
 
 import torch
 from huggingface_hub import HfApi, login
@@ -37,6 +40,7 @@ def _resolve_model_items(repo_ids: list[str] | None) -> list[tuple[str, str]]:
 
 
 def _load_official_dplm_source_model(source_repo: str) -> torch.nn.Module:
+    _ensure_imp_module_stub()
     dplm_src_path = _ensure_local_dplm_module_on_path()
     _patch_lightning_fabric_fsdp_for_byprot()
     _patch_transformers_esm_star_exports_for_byprot()
@@ -65,6 +69,51 @@ def _load_official_dplm_source_model(source_repo: str) -> torch.nn.Module:
         model_name=f"official DPLM net ({source_repo})",
     )
     return official_model
+
+
+def _ensure_imp_module_stub() -> None:
+    try:
+        import imp  # noqa: F401
+
+        return
+    except ModuleNotFoundError:
+        pass
+
+    if "imp" in sys.modules:
+        return
+
+    imp_module = types.ModuleType("imp")
+
+    def _new_module(name: str):
+        return types.ModuleType(name)
+
+    def _reload(module):
+        return importlib.reload(module)
+
+    def _find_module(name, path=None):
+        spec = importlib.util.find_spec(name)
+        if spec is None:
+            raise ImportError(f"Cannot find module {name}")
+        return None, spec.origin, (None, None, None)
+
+    def _load_module(name, file=None, filename=None, details=None):  # noqa: ARG001
+        return importlib.import_module(name)
+
+    def _load_source(name, pathname, file=None):  # noqa: ARG001
+        spec = importlib.util.spec_from_file_location(name, pathname)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load source for module {name} from {pathname}")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    imp_module.new_module = _new_module
+    imp_module.reload = _reload
+    imp_module.find_module = _find_module
+    imp_module.load_module = _load_module
+    imp_module.load_source = _load_source
+    sys.modules["imp"] = imp_module
 
 
 if __name__ == "__main__":
