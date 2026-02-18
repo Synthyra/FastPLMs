@@ -30,7 +30,6 @@ DEFAULTS: Dict[str, object] = {
     "padded_sequence_fraction": 0.3,
     "pad_fractions": None,
     "max_pad_fraction": 0.5,
-    "enable_dplm_flex": False,
     "strict_reference": True,
     "print_tracebacks": True,
 }
@@ -60,7 +59,6 @@ class RunAllConfig:
     padded_sequence_fraction: float
     pad_fractions: str | None
     max_pad_fraction: float
-    enable_dplm_flex: bool
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> "RunAllConfig":
@@ -87,7 +85,6 @@ class RunAllConfig:
             padded_sequence_fraction=args.padded_sequence_fraction,
             pad_fractions=args.pad_fractions,
             max_pad_fraction=args.max_pad_fraction,
-            enable_dplm_flex=args.enable_dplm_flex,
         )
 
     def resolve_root_dir(self) -> pathlib.Path:
@@ -144,7 +141,6 @@ class RunAllConfig:
             padded_sequence_fraction=self.padded_sequence_fraction,
             pad_fractions=self.pad_fractions,
             max_pad_fraction=self.max_pad_fraction,
-            enable_dplm_flex=self.enable_dplm_flex,
         )
 
 
@@ -289,7 +285,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--padded-sequence-fraction", type=float, default=float(DEFAULTS["padded_sequence_fraction"]))
     parser.add_argument("--pad-fractions", type=str, default=DEFAULTS["pad_fractions"])
     parser.add_argument("--max-pad-fraction", type=float, default=float(DEFAULTS["max_pad_fraction"]))
-    parser.add_argument("--enable-dplm-flex", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["enable_dplm_flex"]))
     return parser
 
 

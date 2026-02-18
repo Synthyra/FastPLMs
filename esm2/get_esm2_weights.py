@@ -1,5 +1,5 @@
 import copy
-import torch    
+import torch
 from huggingface_hub import HfApi, login
 from transformers import EsmForMaskedLM
 from esm2.modeling_fastesm import FastEsmForMaskedLM, FastEsmConfig
@@ -45,8 +45,18 @@ if __name__ == "__main__":
         model = FastEsmForMaskedLM(config=config).from_pretrained(model_dict[model_name], config=config)
         # decoder is the same as word_embeddings, and not loaded correctly by default
         model.lm_head.decoder.load_state_dict(original_model.esm.embeddings.word_embeddings.state_dict())
+        # contact head is used for contact prediction and must match reference exactly
+        model.esm.contact_head.load_state_dict(original_model.esm.contact_head.state_dict())
         # deep copy so they are not tied 
         model.lm_head = copy.deepcopy(model.lm_head)
+        assert torch.equal(
+            model.esm.contact_head.regression.weight.float().cpu(),
+            original_model.esm.contact_head.regression.weight.float().cpu(),
+        ), f"contact head regression weight mismatch for {model_name}"
+        assert torch.equal(
+            model.esm.contact_head.regression.bias.float().cpu(),
+            original_model.esm.contact_head.regression.bias.float().cpu(),
+        ), f"contact head regression bias mismatch for {model_name}"
         repo_id = 'Synthyra/' + model_name
         tokenizer = model.tokenizer
         tokenizer.push_to_hub(repo_id)

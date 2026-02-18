@@ -29,6 +29,7 @@ CANONICAL_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 MODEL_FAMILY_CHOICES = ["e1", "esm2", "esmplusplus", "dplm", "dplm2"]
 LOAD_DTYPE = torch.float32
 RUNTIME_DTYPE = torch.bfloat16
+_TORCH_DYNAMO_CONFIGURED = False
 
 
 def set_seed(seed: int) -> None:
@@ -97,6 +98,17 @@ def resolve_dtype(dtype: str, device: torch.device) -> torch.dtype:
 
 def resolve_runtime_dtype() -> torch.dtype:
     return RUNTIME_DTYPE
+
+
+def configure_torch_compile_runtime() -> None:
+    global _TORCH_DYNAMO_CONFIGURED
+    if _TORCH_DYNAMO_CONFIGURED:
+        return
+    import torch._dynamo
+
+    torch._dynamo.config.suppress_errors = True
+    _TORCH_DYNAMO_CONFIGURED = True
+    print("[test_scripts.common] Enabled torch.compile fallback (TORCHDYNAMO suppress_errors=True).")
 
 
 def now_timestamp() -> str:
@@ -273,6 +285,7 @@ def prepare_model_for_runtime(
     model = model.to(device=device, dtype=runtime_dtype).eval()
     assert next(model.parameters()).dtype == runtime_dtype, "Runtime model must be cast to bfloat16."
     if compile_model:
+        configure_torch_compile_runtime()
         model = torch.compile(model)
     return model
 

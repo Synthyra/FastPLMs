@@ -13,26 +13,30 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Union
 
 from transformers import EsmTokenizer
-from transformers.modeling_outputs import BaseModelOutputWithPastAndCrossAttentions
-from transformers.modeling_outputs import BaseModelOutputWithPoolingAndCrossAttentions
-from transformers.modeling_outputs import ModelOutput
-from transformers.modeling_outputs import SequenceClassifierOutput
-from transformers.modeling_outputs import TokenClassifierOutput
+from transformers.modeling_outputs import (
+    BaseModelOutputWithPastAndCrossAttentions,
+    BaseModelOutputWithPoolingAndCrossAttentions,
+    ModelOutput,
+    SequenceClassifierOutput,
+    TokenClassifierOutput,
+)
 from transformers.models.esm.configuration_esm import EsmConfig
-from transformers.models.esm.modeling_esm import EsmAttention
-from transformers.models.esm.modeling_esm import EsmClassificationHead
-from transformers.models.esm.modeling_esm import EsmEmbeddings
-from transformers.models.esm.modeling_esm import EsmEncoder
-from transformers.models.esm.modeling_esm import EsmIntermediate
-from transformers.models.esm.modeling_esm import EsmLayer
-from transformers.models.esm.modeling_esm import EsmLMHead
-from transformers.models.esm.modeling_esm import EsmOutput
-from transformers.models.esm.modeling_esm import EsmPooler
-from transformers.models.esm.modeling_esm import EsmPreTrainedModel
-from transformers.models.esm.modeling_esm import EsmSelfAttention
-from transformers.models.esm.modeling_esm import EsmSelfOutput
-from transformers.models.esm.modeling_esm import RotaryEmbedding
-from transformers.models.esm.modeling_esm import apply_rotary_pos_emb
+from transformers.models.esm.modeling_esm import (
+    EsmAttention,
+    EsmClassificationHead,
+    EsmEmbeddings,
+    EsmEncoder,
+    EsmIntermediate,
+    EsmLayer,
+    EsmLMHead,
+    EsmOutput,
+    EsmPooler,
+    EsmPreTrainedModel,
+    EsmSelfAttention,
+    EsmSelfOutput,
+    RotaryEmbedding,
+    apply_rotary_pos_emb,
+)
 
 try:
     from torch.nn.attention.flex_attention import create_block_mask
@@ -274,32 +278,24 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
             context_layer = torch.matmul(attention_probs, value_layer)
         else:
             attention_probs = None
-            flex_dtype_supported = query_layer.dtype in [torch.float16, torch.bfloat16]
-            use_flex = (
-                self.attn_backend == "flex"
-                and flex_attention is not None
-                and flex_dtype_supported
-                and flex_block_mask is not None
-                and is_cross_attention is False
-                and past_key_value is None
-            )
-            if use_flex:
-                try:
-                    context_layer = flex_attention(
-                        query_layer,
-                        key_layer,
-                        value_layer,
-                        block_mask=flex_block_mask,
-                        scale=1.0,
+            if self.attn_backend == "flex":
+                assert flex_attention is not None, "Flex attention backend requested but torch.flex_attention is unavailable."
+                assert query_layer.dtype in (torch.float16, torch.bfloat16), (
+                    f"Flex attention backend requires float16 or bfloat16, got {query_layer.dtype}."
+                )
+                assert is_cross_attention is False, "Flex attention backend currently does not support cross-attention."
+                assert past_key_value is None, "Flex attention backend currently does not support KV caching."
+                if attention_mask is not None:
+                    assert flex_block_mask is not None, (
+                        "Flex attention backend requires a block mask when attention_mask is provided."
                     )
-                except Exception:
-                    context_layer = F.scaled_dot_product_attention(
-                        query_layer,
-                        key_layer,
-                        value_layer,
-                        attn_mask=attention_mask,
-                        scale=1.0,
-                    )
+                context_layer = flex_attention(
+                    query_layer,
+                    key_layer,
+                    value_layer,
+                    block_mask=flex_block_mask,
+                    scale=1.0,
+                )
             else:
                 context_layer = F.scaled_dot_product_attention(
                     query_layer,
@@ -628,9 +624,15 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
         token_attention_mask = None
         if attention_mask.dim() == 2:
             token_attention_mask = attention_mask.bool()
-            extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape)
+            if self.config.attn_backend == "flex" and output_attentions is False:
+                extended_attention_mask = None
+            else:
+                extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape)
         elif attention_mask.dim() == 4:
-            extended_attention_mask = attention_mask
+            if self.config.attn_backend == "flex" and output_attentions is False:
+                extended_attention_mask = None
+            else:
+                extended_attention_mask = attention_mask
             if input_ids is not None:
                 token_attention_mask = input_ids.ne(self.config.pad_token_id)
         else:
@@ -654,10 +656,12 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
         flex_block_mask = None
         if (
             self.config.attn_backend == "flex"
-            and create_block_mask is not None
             and token_attention_mask is not None
             and output_attentions is False
         ):
+            assert create_block_mask is not None, (
+                "Flex attention backend requested but torch.create_block_mask is unavailable."
+            )
             flex_block_mask = _create_pad_block_mask(token_attention_mask)
 
         embedding_output = self.embeddings(
@@ -923,95 +927,3 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-
-@register_model("dplm2_esm")
-class EsmForDPLM2(DPLM2ForMaskedLM):
-    pass
-
-
-presets = {
-    "DPLM2-150": "airkingbd/dplm2_150m",
-    "DPLM2-650": "airkingbd/dplm2_650m",
-    "DPLM2-3B": "airkingbd/dplm2_3b",
-}
-
-
-class DPLM2TokenizerWrapper(BaseSequenceTokenizer):
-    def __init__(self, tokenizer: EsmTokenizer):
-        super().__init__(tokenizer)
-
-    def __call__(self, sequences: Union[str, List[str]], **kwargs) -> Dict[str, torch.Tensor]:
-        if isinstance(sequences, str):
-            sequences = [sequences]
-        kwargs.setdefault("return_tensors", "pt")
-        kwargs.setdefault("padding", "longest")
-        kwargs.setdefault("add_special_tokens", True)
-        tokenized = self.tokenizer(sequences, **kwargs)
-        return tokenized
-
-
-class DPLM2ForEmbedding(nn.Module):
-    def __init__(self, model_path: str, return_logits: bool = False):
-        super().__init__()
-        self.dplm2 = DPLM2ForMaskedLM.from_pretrained(model_path)
-        self.return_logits = return_logits
-
-    def forward(
-        self,
-        input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = False,
-        **kwargs,
-    ) -> torch.Tensor:
-        out = self.dplm2(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states,
-            return_dict=True,
-        )
-        if output_attentions:
-            return out.last_hidden_state, out.attentions
-        if self.return_logits:
-            return out.last_hidden_state, out.logits
-        return out.last_hidden_state
-
-
-def get_dplm2_tokenizer(preset: str):
-    return DPLM2TokenizerWrapper(EsmTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D"))
-
-
-def build_dplm2_model(preset: str, masked_lm: bool = False, **kwargs):
-    model_path = presets[preset]
-    if masked_lm:
-        model = DPLM2ForMaskedLM.from_pretrained(model_path).eval()
-    else:
-        model = DPLM2ForEmbedding(model_path).eval()
-    tokenizer = get_dplm2_tokenizer(preset)
-    return model, tokenizer
-
-
-def get_dplm2_for_training(
-    preset: str,
-    tokenwise: bool = False,
-    num_labels: int = None,
-    hybrid: bool = False,
-):
-    model_path = presets[preset]
-    if hybrid:
-        model = DPLM2ForMaskedLM.from_pretrained(model_path).eval()
-    elif tokenwise:
-        model = DPLM2ForTokenClassification.from_pretrained(model_path, num_labels=num_labels).eval()
-    else:
-        model = DPLM2ForSequenceClassification.from_pretrained(model_path, num_labels=num_labels).eval()
-    tokenizer = get_dplm2_tokenizer(preset)
-    return model, tokenizer
-
-
-if __name__ == "__main__":
-    model, tokenizer = build_dplm2_model("DPLM2-150")
-    print(model)
-    print(tokenizer)
-    print(tokenizer("MEKVQYLTRSAIRRASTIEMPQQARQKLQNLFINFCLILICBBOLLICIIVMLL"))

@@ -385,13 +385,9 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
     return delta_rows
 
 
-def _selected_backends(spec, enable_dplm_flex: bool) -> List[str]:
-    if spec.family in ["esm2", "esmplusplus"]:
+def _selected_backends(spec) -> List[str]:
+    if spec.family in ["esm2", "esmplusplus", "dplm", "dplm2"]:
         return ["sdpa", "flex"]
-    if spec.family in ["dplm", "dplm2"]:
-        if enable_dplm_flex:
-            return ["sdpa", "flex"]
-        return ["model_default"]
     raise ValueError(f"Unexpected family for throughput compare: {spec.family}")
 
 
@@ -427,7 +423,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
     total_points = 0
     for spec in specs:
         total_points += (
-            len(_selected_backends(spec=spec, enable_dplm_flex=args.enable_dplm_flex))
+            len(_selected_backends(spec=spec))
             * len(pad_fraction_settings)
             * len(lengths)
             * len(batch_sizes)
@@ -436,7 +432,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         for spec in specs:
-            spec_backends = _selected_backends(spec=spec, enable_dplm_flex=args.enable_dplm_flex)
+            spec_backends = _selected_backends(spec=spec)
 
             for attn_backend in spec_backends:
                 for padded_sequence_fraction_setting in pad_fraction_settings:
@@ -481,7 +477,6 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             "padded_sequence_fraction": args.padded_sequence_fraction,
             "pad_fraction_settings": pad_fraction_settings,
             "max_pad_fraction": args.max_pad_fraction,
-            "enable_dplm_flex": args.enable_dplm_flex,
             "dry_run": True,
             "rows": rows,
         }
@@ -501,7 +496,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         return 0
 
     for spec in specs:
-        spec_backends = _selected_backends(spec=spec, enable_dplm_flex=args.enable_dplm_flex)
+        spec_backends = _selected_backends(spec=spec)
 
         for attn_backend in spec_backends:
             selected_backend = None if attn_backend == "model_default" else attn_backend
@@ -673,7 +668,6 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         "padded_sequence_fraction": args.padded_sequence_fraction,
         "pad_fraction_settings": pad_fraction_settings,
         "max_pad_fraction": args.max_pad_fraction,
-        "enable_dplm_flex": args.enable_dplm_flex,
         "rows": rows,
     }
 
@@ -725,7 +719,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--padded-sequence-fraction", type=float, default=0.3)
     parser.add_argument("--pad-fractions", type=str, default=None)
     parser.add_argument("--max-pad-fraction", type=float, default=0.5)
-    parser.add_argument("--enable-dplm-flex", action=argparse.BooleanOptionalAction, default=False)
     return parser
 
 
