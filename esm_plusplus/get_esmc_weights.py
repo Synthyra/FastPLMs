@@ -1,66 +1,123 @@
+import importlib.util
+import pathlib
+import sys
+import types
+
 import torch
-from huggingface_hub import HfApi
-from huggingface_hub import login
+from huggingface_hub import HfApi, login
 
-from esm_plusplus.modeling_esm_plusplus import ESMplusplus_300M
-from esm_plusplus.modeling_esm_plusplus import ESMplusplus_600M
-from esm_plusplus.modeling_esm_plusplus import get_esmc_checkpoint_path
+from esm_plusplus.modeling_esm_plusplus import ESMplusplusConfig, ESMplusplusForMaskedLM
+from weight_parity_utils import assert_fp32_state_dict_equal, assert_model_parameters_fp32
 
 
-def _load_reference_state_dict(esmc_model_key: str) -> dict[str, torch.Tensor]:
-    checkpoint_path = get_esmc_checkpoint_path(esmc_model_key)
-    return torch.load(checkpoint_path, map_location="cpu")
+MODEL_DICT = {
+    "Synthyra/ESMplusplus_small": "esmc-300",
+    "Synthyra/ESMplusplus_large": "esmc-600",
+}
 
 
-def _assert_fp32_state_dict_equal(reference_state_dict: dict[str, torch.Tensor], candidate_model: torch.nn.Module) -> None:
-    candidate_state_dict = candidate_model.state_dict()
-    reference_keys = set(reference_state_dict.keys())
-    candidate_keys = set(candidate_state_dict.keys())
-    only_in_reference = sorted(reference_keys - candidate_keys)
-    only_in_candidate = sorted(candidate_keys - reference_keys)
-    shape_mismatches = []
-    differing_tensors = []
-    max_abs_diff = 0.0
-    max_abs_diff_param = ""
+def _resolve_model_items(model_paths: list[str] | None) -> list[tuple[str, str]]:
+    if model_paths is None:
+        return list(MODEL_DICT.items())
 
-    for name in sorted(reference_keys & candidate_keys):
-        reference_tensor = reference_state_dict[name].detach().cpu().to(torch.float32)
-        candidate_tensor = candidate_state_dict[name].detach().cpu().to(torch.float32)
-        if reference_tensor.shape != candidate_tensor.shape:
-            shape_mismatches.append(
-                {
-                    "name": name,
-                    "reference_shape": list(reference_tensor.shape),
-                    "candidate_shape": list(candidate_tensor.shape),
-                }
-            )
-            continue
-        if torch.equal(reference_tensor, candidate_tensor):
-            continue
-        abs_diff = torch.abs(reference_tensor - candidate_tensor)
-        param_max_abs_diff = float(torch.max(abs_diff).item())
-        param_mean_abs_diff = float(torch.mean(abs_diff).item())
-        differing_tensors.append(
-            {
-                "name": name,
-                "max_abs_diff": param_max_abs_diff,
-                "mean_abs_diff": param_mean_abs_diff,
-            }
+    selected_items: list[tuple[str, str]] = []
+    for model_path in model_paths:
+        assert model_path in MODEL_DICT, (
+            f"Unknown model path {model_path}. "
+            f"Valid options: {sorted(MODEL_DICT.keys())}"
         )
-        if param_max_abs_diff > max_abs_diff:
-            max_abs_diff = param_max_abs_diff
-            max_abs_diff_param = name
+        selected_items.append((model_path, MODEL_DICT[model_path]))
+    return selected_items
 
-    assert len(only_in_reference) == 0 and len(only_in_candidate) == 0 and len(shape_mismatches) == 0 and len(differing_tensors) == 0, (
-        "Strict ESMplusplus reference requires float32-identical checkpoints. "
-        f"diff_param_count={len(differing_tensors)} "
-        f"max_abs_diff={max_abs_diff} "
-        f"max_abs_diff_param={max_abs_diff_param} "
-        f"only_in_reference={only_in_reference[:5]} "
-        f"only_in_candidate={only_in_candidate[:5]} "
-        f"shape_mismatches={shape_mismatches[:5]} "
-        f"diff_params_sample={differing_tensors[:5]}"
+
+def _ensure_local_esm_module_on_path() -> pathlib.Path:
+    script_root = pathlib.Path(__file__).resolve().parents[1]
+    candidates = [script_root / "esm"]
+
+    cwd = pathlib.Path.cwd().resolve()
+    for parent in [cwd, *cwd.parents]:
+        candidates.append(parent / "esm")
+
+    deduplicated_candidates: list[pathlib.Path] = []
+    seen = set()
+    for candidate in candidates:
+        candidate_resolved = candidate.resolve()
+        candidate_key = str(candidate_resolved)
+        if candidate_key not in seen:
+            seen.add(candidate_key)
+            deduplicated_candidates.append(candidate_resolved)
+
+    for candidate in deduplicated_candidates:
+        package_marker = candidate / "esm" / "__init__.py"
+        if package_marker.exists():
+            candidate_str = str(candidate)
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+            return candidate
+
+    raise FileNotFoundError(
+        "Unable to locate local esm submodule. "
+        f"Checked: {', '.join([str(path) for path in deduplicated_candidates])}"
     )
+
+
+def _load_official_esmc_model(esmc_model_key: str) -> torch.nn.Module:
+    _ensure_local_esm_module_on_path()
+    _ensure_zstd_module_stub()
+    from esm.pretrained import ESMC_300M_202412, ESMC_600M_202412
+
+    if esmc_model_key == "esmc-300":
+        official_model = ESMC_300M_202412(device="cpu", use_flash_attn=False)
+    elif esmc_model_key == "esmc-600":
+        official_model = ESMC_600M_202412(device="cpu", use_flash_attn=False)
+    else:
+        raise ValueError(f"Unsupported official ESMC model key: {esmc_model_key}")
+
+    official_model = official_model.eval().cpu().to(torch.float32)
+    assert_model_parameters_fp32(
+        model=official_model,
+        model_name=f"official ESMC model ({esmc_model_key})",
+    )
+    return official_model
+
+
+def _ensure_zstd_module_stub() -> None:
+    zstd_spec = importlib.util.find_spec("zstd")
+    if zstd_spec is not None:
+        return
+    if "zstd" in sys.modules:
+        return
+
+    zstd_module = types.ModuleType("zstd")
+
+    def _missing_zstd_uncompress(data: bytes) -> bytes:
+        raise ModuleNotFoundError(
+            "No module named 'zstd'. Install zstd if compressed tensor "
+            "deserialization is required."
+        )
+
+    zstd_module.ZSTD_uncompress = _missing_zstd_uncompress
+    sys.modules["zstd"] = zstd_module
+
+
+def _build_local_esmplusplus_model(esmc_model_key: str) -> ESMplusplusForMaskedLM:
+    if esmc_model_key == "esmc-300":
+        config = ESMplusplusConfig(
+            hidden_size=960,
+            num_attention_heads=15,
+            num_hidden_layers=30,
+        )
+    elif esmc_model_key == "esmc-600":
+        config = ESMplusplusConfig(
+            hidden_size=1152,
+            num_attention_heads=18,
+            num_hidden_layers=36,
+        )
+    else:
+        raise ValueError(f"Unsupported local ESM++ model key: {esmc_model_key}")
+
+    model = ESMplusplusForMaskedLM(config).eval().cpu().to(torch.float32)
+    return model
 
 
 if __name__ == "__main__":
@@ -69,6 +126,8 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--hf_token", type=str, default=None)
+    parser.add_argument("--model_paths", nargs="*", type=str, default=None)
+    parser.add_argument("--dry_run", action="store_true")
     args = parser.parse_args()
     api = HfApi()
 
@@ -76,18 +135,32 @@ if __name__ == "__main__":
         assert len(args.hf_token) > 0, "--hf_token cannot be empty."
         login(token=args.hf_token)
 
-    model_dict = {
-        "Synthyra/ESMplusplus_small": (ESMplusplus_300M, "esmc-300"),
-        "Synthyra/ESMplusplus_large": (ESMplusplus_600M, "esmc-600"),
-    }
+    for model_path, esmc_model_key in _resolve_model_items(args.model_paths):
+        official_model = _load_official_esmc_model(esmc_model_key)
+        model = _build_local_esmplusplus_model(esmc_model_key)
+        load_result = model.load_state_dict(official_model.state_dict(), strict=False)
+        assert len(load_result.missing_keys) == 0, (
+            f"Missing keys while mapping official ESMC weights for {esmc_model_key}: "
+            f"{load_result.missing_keys[:20]}"
+        )
+        assert len(load_result.unexpected_keys) == 0, (
+            f"Unexpected keys while mapping official ESMC weights for {esmc_model_key}: "
+            f"{load_result.unexpected_keys[:20]}"
+        )
+        assert_model_parameters_fp32(
+            model=model,
+            model_name=f"mapped ESM++ model ({esmc_model_key})",
+        )
+        assert_fp32_state_dict_equal(
+            reference_state_dict=official_model.state_dict(),
+            candidate_state_dict=model.state_dict(),
+            context=f"ESMC/ESM++ weight parity ({esmc_model_key})",
+        )
 
-    for model_path, model_spec in model_dict.items():
-        model_fn, esmc_model_key = model_spec
-        reference_state_dict = _load_reference_state_dict(esmc_model_key)
-        model = model_fn(device="cpu")
-        _assert_fp32_state_dict_equal(reference_state_dict, model)
-        model = model.eval().cpu().to(torch.float32)
-        _assert_fp32_state_dict_equal(reference_state_dict, model)
+        if args.dry_run:
+            print(f"[dry_run] validated ESM++ parity for {model_path} <- {esmc_model_key}")
+            continue
+
         model.config.auto_map = {
             "AutoConfig": "modeling_esm_plusplus.ESMplusplusConfig",
             "AutoModel": "modeling_esm_plusplus.ESMplusplusModel",
