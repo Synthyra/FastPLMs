@@ -48,9 +48,6 @@ DEFAULTS: Dict[str, object] = {
     "attn_backends": "sdpa,flex",
     "enable_dplm_flex": False,
     "compare_attn": True,
-    "compile_model": True,
-    "compile_backend": "inductor",
-    "compile_dynamic": False,
     "padded_sequence_fraction": 0.3,
     "max_pad_fraction": 0.5,
     "pad_fractions": None,
@@ -122,10 +119,7 @@ class RunAllConfig:
     attn_backend: str
     attn_backends: str
     compare_attn: bool
-    compile_model: bool
     enable_dplm_flex: bool
-    compile_backend: str
-    compile_dynamic: bool
     padded_sequence_fraction: float
     max_pad_fraction: float
     pad_fractions: str | None
@@ -185,10 +179,7 @@ class RunAllConfig:
             attn_backend=args.attn_backend,
             attn_backends=args.attn_backends,
             compare_attn=args.compare_attn,
-            compile_model=args.compile_model,
             enable_dplm_flex=args.enable_dplm_flex,
-            compile_backend=args.compile_backend,
-            compile_dynamic=args.compile_dynamic,
             padded_sequence_fraction=args.padded_sequence_fraction,
             max_pad_fraction=args.max_pad_fraction,
             pad_fractions=args.pad_fractions,
@@ -264,10 +255,7 @@ class RunAllConfig:
             attn_backend=self.attn_backend,
             attn_backends=self.attn_backends,
             compare_attn=self.compare_attn,
-            compile_model=self.compile_model,
             enable_dplm_flex=self.enable_dplm_flex,
-            compile_backend=self.compile_backend,
-            compile_dynamic=self.compile_dynamic,
             padded_sequence_fraction=self.padded_sequence_fraction,
             max_pad_fraction=self.max_pad_fraction,
             pad_fractions=self.pad_fractions,
@@ -524,10 +512,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--attn-backend", type=str, default=str(DEFAULTS["attn_backend"]), choices=["flex", "sdpa", "model_default"])
     parser.add_argument("--attn-backends", type=str, default=str(DEFAULTS["attn_backends"]))
     parser.add_argument("--compare-attn", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compare_attn"]))
-    parser.add_argument("--compile-model", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compile_model"]))
     parser.add_argument("--enable-dplm-flex", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["enable_dplm_flex"]))
-    parser.add_argument("--compile-backend", type=str, default=str(DEFAULTS["compile_backend"]), choices=["default", "inductor", "aot_eager"])
-    parser.add_argument("--compile-dynamic", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["compile_dynamic"]))
     parser.add_argument("--padded-sequence-fraction", type=float, default=float(DEFAULTS["padded_sequence_fraction"]))
     parser.add_argument("--max-pad-fraction", type=float, default=float(DEFAULTS["max_pad_fraction"]))
     parser.add_argument("--pad-fractions", type=str, default=DEFAULTS["pad_fractions"])

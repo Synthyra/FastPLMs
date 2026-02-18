@@ -223,8 +223,7 @@ def _plot_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: path
         if _is_finite(row["peak_memory_mb"]) is False:
             continue
         model_group_key = (
-            f"{row['repo_id']}|compiled={row['compiled_model']}|compile_backend={row['compile_backend']}"
-            f"|compile_dynamic={row['compile_dynamic']}|pad={row['padded_sequence_fraction_setting']}"
+            f"{row['repo_id']}|pad={row['padded_sequence_fraction_setting']}"
         )
         if model_group_key not in model_rows_index:
             model_rows_index[model_group_key] = []
@@ -256,9 +255,6 @@ def _plot_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: path
         batch_sizes = sorted(batch_sizes)
 
         repo_id = str(model_rows[0]["repo_id"])
-        compiled_model = bool(model_rows[0]["compiled_model"])
-        compile_backend = str(model_rows[0]["compile_backend"])
-        compile_dynamic = bool(model_rows[0]["compile_dynamic"])
         padded_sequence_fraction_setting = float(model_rows[0]["padded_sequence_fraction_setting"])
         colors = {"sdpa": "#1f77b4", "flex": "#d62728"}
         markers = {"sdpa": "o", "flex": "s"}
@@ -304,8 +300,7 @@ def _plot_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: path
 
             figure.suptitle(
                 (
-                    f"{repo_id} | {filename_prefix.title()} | SDPA vs Flex | compiled={compiled_model} | "
-                    f"compile_backend={compile_backend} | compile_dynamic={compile_dynamic} | "
+                    f"{repo_id} | {filename_prefix.title()} | SDPA vs Flex | "
                     f"pad_setting={padded_sequence_fraction_setting}"
                 ),
                 y=0.995,
@@ -313,9 +308,6 @@ def _plot_sdpa_vs_flex_per_model(rows: List[Dict[str, object]], output_dir: path
             figure.tight_layout(rect=[0.0, 0.0, 1.0, 0.97])
             filename = (
                 f"{filename_prefix}_sdpa_vs_flex_{_slugify_filename(repo_id)}"
-                f"_compiled_{str(compiled_model).lower()}"
-                f"_backend_{_slugify_filename(compile_backend)}"
-                f"_dynamic_{str(compile_dynamic).lower()}"
                 f"_pad_{_slugify_filename(str(padded_sequence_fraction_setting))}.png"
             )
             output_path = per_model_dir / filename
@@ -350,8 +342,8 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
         if _is_finite(row["peak_memory_mb"]) is False:
             continue
         pair_key = (
-            f"{row['model_key']}|{row['sequence_length']}|{row['batch_size']}|{row['compiled_model']}"
-            f"|{row['compile_backend']}|{row['compile_dynamic']}|{row['padded_sequence_fraction_setting']}"
+            f"{row['model_key']}|{row['sequence_length']}|{row['batch_size']}"
+            f"|{row['padded_sequence_fraction_setting']}"
         )
         if pair_key not in pair_index:
             pair_index[pair_key] = {}
@@ -382,9 +374,6 @@ def _build_flex_sdpa_deltas(rows: List[Dict[str, object]]) -> List[Dict[str, obj
                 "model_key": flex_row["model_key"],
                 "family": flex_row["family"],
                 "repo_id": flex_row["repo_id"],
-                "compiled_model": flex_row["compiled_model"],
-                "compile_backend": flex_row["compile_backend"],
-                "compile_dynamic": flex_row["compile_dynamic"],
                 "padded_sequence_fraction_setting": flex_row["padded_sequence_fraction_setting"],
                 "sequence_length": flex_row["sequence_length"],
                 "batch_size": flex_row["batch_size"],
@@ -424,9 +413,6 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         pad_fraction_settings = [args.padded_sequence_fraction]
     else:
         pad_fraction_settings = _parse_pad_fraction_list(args.pad_fractions)
-    compile_model = bool(args.compile_model)
-    compile_backend = str(args.compile_backend)
-    compile_dynamic = bool(args.compile_dynamic)
     benchmark_families = ["esm2", "esmplusplus", "dplm", "dplm2"]
     specs = get_model_specs(full_models=True, families=benchmark_families)
     assert len(specs) > 0, "Expected at least one model spec for throughput benchmarking."
@@ -456,14 +442,10 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                                     "family": spec.family,
                                     "repo_id": spec.repo_id,
                                     "attn_backend": attn_backend,
-                                    "compiled_model": compile_model,
-                                    "compile_backend": compile_backend,
-                                    "compile_dynamic": compile_dynamic,
                                     "padded_sequence_fraction_setting": padded_sequence_fraction_setting,
                                     "flex_path_used": bool(attn_backend == "flex"),
                                     "series_label": (
-                                        f"{spec.repo_id}|{attn_backend}|compiled={compile_model}"
-                                        f"|pad={padded_sequence_fraction_setting}"
+                                        f"{spec.repo_id}|{attn_backend}|pad={padded_sequence_fraction_setting}"
                                     ),
                                     "sequence_length": length,
                                     "batch_size": batch_size,
@@ -489,9 +471,6 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             "warmup_steps": args.warmup_steps,
             "families": benchmark_families,
             "attn_backends": sorted(list({str(row["attn_backend"]) for row in rows})),
-            "compile_model": compile_model,
-            "compile_backend": compile_backend,
-            "compile_dynamic": compile_dynamic,
             "padded_sequence_fraction": args.padded_sequence_fraction,
             "pad_fraction_settings": pad_fraction_settings,
             "max_pad_fraction": args.max_pad_fraction,
@@ -521,8 +500,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
             selected_backend = None if attn_backend == "model_default" else attn_backend
             print(
                 f"[throughput] Testing {spec.repo_id} "
-                f"(attn_backend={attn_backend}, compiled_model={compile_model}, compile_backend={compile_backend}, "
-                f"compile_dynamic={compile_dynamic}) on {device} with {dtype}"
+                f"(attn_backend={attn_backend}) on {device} with {dtype}"
             )
             try:
                 model, tokenizer = load_model(
@@ -531,9 +509,6 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                     device=device,
                     dtype=dtype,
                     attn_backend=selected_backend,
-                    compile_model=compile_model,
-                    compile_backend=compile_backend,
-                    compile_dynamic=compile_dynamic,
                 )
             except Exception as exc:
                 all_passed = False
@@ -546,14 +521,10 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                                     "family": spec.family,
                                     "repo_id": spec.repo_id,
                                     "attn_backend": attn_backend,
-                                    "compiled_model": compile_model,
-                                    "compile_backend": compile_backend,
-                                    "compile_dynamic": compile_dynamic,
                                     "padded_sequence_fraction_setting": padded_sequence_fraction_setting,
                                     "flex_path_used": False,
                                     "series_label": (
-                                        f"{spec.repo_id}|{attn_backend}|compiled={compile_model}"
-                                        f"|pad={padded_sequence_fraction_setting}"
+                                        f"{spec.repo_id}|{attn_backend}|pad={padded_sequence_fraction_setting}"
                                     ),
                                     "sequence_length": length,
                                     "batch_size": batch_size,
@@ -578,14 +549,10 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
                             "family": spec.family,
                             "repo_id": spec.repo_id,
                             "attn_backend": attn_backend,
-                            "compiled_model": compile_model,
-                            "compile_backend": compile_backend,
-                            "compile_dynamic": compile_dynamic,
                             "padded_sequence_fraction_setting": padded_sequence_fraction_setting,
                             "flex_path_used": False,
                             "series_label": (
-                                f"{spec.repo_id}|{attn_backend}|compiled={compile_model}"
-                                f"|pad={padded_sequence_fraction_setting}"
+                                f"{spec.repo_id}|{attn_backend}|pad={padded_sequence_fraction_setting}"
                             ),
                             "sequence_length": length,
                             "batch_size": batch_size,
@@ -695,9 +662,6 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         "warmup_steps": args.warmup_steps,
         "families": benchmark_families,
         "attn_backends": sorted(list({str(row["attn_backend"]) for row in rows})),
-        "compile_model": compile_model,
-        "compile_backend": compile_backend,
-        "compile_dynamic": compile_dynamic,
         "padded_sequence_fraction": args.padded_sequence_fraction,
         "pad_fraction_settings": pad_fraction_settings,
         "max_pad_fraction": args.max_pad_fraction,
@@ -729,8 +693,7 @@ def run_throughput_suite(args: argparse.Namespace) -> int:
         status = "PASS" if bool(row["pass"]) else "FAIL"
         summary_lines.append(
             (
-                f"{status} | {row['repo_id']} | backend={row['attn_backend']} | compiled={row['compiled_model']} "
-                f"| compile_backend={row['compile_backend']} | compile_dynamic={row['compile_dynamic']} "
+                f"{status} | {row['repo_id']} | backend={row['attn_backend']} "
                 f"| flex_path_used={row['flex_path_used']} | pad_setting={row['padded_sequence_fraction_setting']} "
                 f"| len={row['sequence_length']} | bs={row['batch_size']} | pad_fraction={row['pad_fraction']} "
                 f"| tok_s={row['tokens_per_second']} | mem_mb={row['peak_memory_mb']} | error={row['error']}"
@@ -754,9 +717,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--batch-sizes", type=str, default="1,2,4,8,16")
     parser.add_argument("--num-batches", type=int, default=100)
     parser.add_argument("--warmup-steps", type=int, default=100)
-    parser.add_argument("--compile-model", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--compile-backend", type=str, default="inductor", choices=["default", "inductor", "aot_eager"])
-    parser.add_argument("--compile-dynamic", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--padded-sequence-fraction", type=float, default=0.3)
     parser.add_argument("--pad-fractions", type=str, default=None)
     parser.add_argument("--max-pad-fraction", type=float, default=0.5)

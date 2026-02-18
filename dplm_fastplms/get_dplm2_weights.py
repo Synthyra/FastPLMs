@@ -1,8 +1,8 @@
 import torch
 from huggingface_hub import HfApi, login
 
-from dplm.dplm2 import DPLM2Config
-from dplm.dplm2 import DPLM2ForMaskedLM
+from dplm_fastplms.dplm2 import DPLM2Config
+from dplm_fastplms.dplm2 import DPLM2ForMaskedLM
 
 
 MODEL_DICT = {
@@ -13,7 +13,7 @@ MODEL_DICT = {
 
 
 if __name__ == "__main__":
-    # py -m dplm.get_dplm2_weights
+    # py -m dplm_fastplms.get_dplm2_weights
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -40,13 +40,13 @@ if __name__ == "__main__":
         tokenizer.push_to_hub(repo_id)
         model.push_to_hub(repo_id)
         api.upload_file(
-            path_or_fileobj="dplm/dplm2.py",
+            path_or_fileobj="dplm_fastplms/dplm2.py",
             path_in_repo="dplm2.py",
             repo_id=repo_id,
             repo_type="model",
         )
         api.upload_file(
-            path_or_fileobj="dplm/base_tokenizer.py",
+            path_or_fileobj="dplm_fastplms/base_tokenizer.py",
             path_in_repo="base_tokenizer.py",
             repo_id=repo_id,
             repo_type="model",

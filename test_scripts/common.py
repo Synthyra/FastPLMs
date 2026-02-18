@@ -7,10 +7,11 @@ import random
 import shutil
 import sys
 import types
+
 import numpy as np
 import torch
-from typing import Dict, Iterable, List, Optional
 from huggingface_hub import login
+from typing import Dict, Iterable, List, Optional
 from transformers import (
     AutoConfig,
     AutoModel,
@@ -111,9 +112,9 @@ def load_model(
     device: torch.device,
     dtype: torch.dtype,
     attn_backend: Optional[str] = None,
-    compile_model: bool = False,
-    compile_backend: str = "inductor",
-    compile_dynamic: bool = False,
+    compile_model: bool = True,
+    compile_backend: Optional[str] = None,
+    compile_dynamic: Optional[bool] = None,
 ):
     if spec.family == "esm2":
         from esm2.modeling_fastesm import (
@@ -160,7 +161,7 @@ def load_model(
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "dplm":
-        from dplm.dplm import (
+        from dplm_fastplms.dplm import (
             DPLMConfig,
             DPLMForMaskedLM,
             DPLMModel,
@@ -176,7 +177,7 @@ def load_model(
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "dplm2":
-        from dplm.dplm2 import (
+        from dplm_fastplms.dplm2 import (
             DPLM2Config,
             DPLM2ForMaskedLM,
             DPLM2Model,
@@ -207,10 +208,15 @@ def load_model(
     if spec.family == "esmplusplus":
         model.all_tied_weights_keys = {}
     if compile_model:
-        if compile_backend == "default":
+        if compile_backend is None and compile_dynamic is None:
+            model = torch.compile(model)
+        elif compile_backend is None:
             model = torch.compile(model, dynamic=compile_dynamic)
+        elif compile_dynamic is None:
+            model = torch.compile(model, backend=compile_backend)
         else:
-            model = torch.compile(model, dynamic=compile_dynamic, backend=compile_backend)
+            model = torch.compile(model, backend=compile_backend, dynamic=compile_dynamic)
+
     if spec.family == "e1":
         tokenizer = None
     else:
@@ -253,6 +259,55 @@ def _ensure_local_e1_module_on_path() -> None:
         f"{checked_paths}. "
         "Run `git submodule update --init --recursive e1` or install e1 package."
     )
+
+
+def _ensure_local_dplm_module_on_path() -> None:
+    candidates: List[pathlib.Path] = []
+    script_root = pathlib.Path(__file__).resolve().parents[1]
+    candidates.append(script_root / "dplm" / "src")
+    candidates.append(script_root / "DPLM" / "src")
+
+    cwd = pathlib.Path.cwd().resolve()
+    for parent in [cwd, *cwd.parents]:
+        candidates.append(parent / "dplm" / "src")
+        candidates.append(parent / "DPLM" / "src")
+
+    deduplicated_candidates: List[pathlib.Path] = []
+    seen_paths = set()
+    for candidate in candidates:
+        candidate_resolved = candidate.resolve()
+        candidate_key = str(candidate_resolved)
+        if candidate_key not in seen_paths:
+            seen_paths.add(candidate_key)
+            deduplicated_candidates.append(candidate_resolved)
+
+    for candidate in deduplicated_candidates:
+        if candidate.exists():
+            candidate_str = str(candidate)
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+
+    if importlib.util.find_spec("byprot") is not None:
+        return
+
+    checked_paths = ", ".join([str(path) for path in deduplicated_candidates])
+    raise FileNotFoundError(
+        "byprot module import failed. Expected local dplm submodule at one of: "
+        f"{checked_paths}. "
+        "Run `git submodule update --init --recursive dplm`."
+    )
+
+
+def _patch_lightning_fabric_fsdp_for_byprot() -> None:
+    fsdp_module = importlib.import_module("lightning_fabric.strategies.fsdp")
+    fsdp_symbols = dir(fsdp_module)
+    if "_has_meta_device_parameters" in fsdp_symbols:
+        return
+    assert "_has_meta_device_parameters_or_buffers" in fsdp_symbols, (
+        "Expected lightning_fabric.strategies.fsdp to expose "
+        "_has_meta_device_parameters_or_buffers for byprot compatibility."
+    )
+    fsdp_module._has_meta_device_parameters = fsdp_module._has_meta_device_parameters_or_buffers
 
 
 def _ensure_local_e1_tokenizer_json(spec: ModelSpec) -> None:
@@ -325,25 +380,91 @@ def load_official_esm2_model(spec: ModelSpec, device: torch.device, dtype: torch
     return model, tokenizer
 
 
-def load_official_dplm_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
-    from dplm.dplm import DPLMConfig
-    from dplm.dplm import DPLMForMaskedLM
+class _OfficialComplianceOutput:
+    def __init__(self, logits: torch.Tensor, last_hidden_state: torch.Tensor):
+        self.logits = logits
+        self.hidden_states = (last_hidden_state,)
 
+
+class _OfficialDPLMComplianceWrapper(torch.nn.Module):
+    def __init__(self, model: torch.nn.Module):
+        super().__init__()
+        self.model = model
+        self.tokenizer = model.tokenizer
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+        **kwargs,
+    ) -> _OfficialComplianceOutput:
+        del attention_mask
+        del output_hidden_states
+        del output_attentions
+        del kwargs
+        outputs = self.model(input_ids=input_ids, return_last_hidden_state=True)
+        assert isinstance(outputs, tuple), f"Expected tuple output from official DPLM, got {type(outputs)}."
+        assert len(outputs) == 2, f"Expected 2-tuple output from official DPLM, got {len(outputs)} values."
+        logits, last_hidden_state = outputs
+        return _OfficialComplianceOutput(logits=logits, last_hidden_state=last_hidden_state)
+
+
+class _OfficialDPLM2ComplianceWrapper(torch.nn.Module):
+    def __init__(self, model: torch.nn.Module):
+        super().__init__()
+        self.model = model
+        self.tokenizer = model.tokenizer
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        output_hidden_states: bool = False,
+        output_attentions: bool = False,
+        **kwargs,
+    ) -> _OfficialComplianceOutput:
+        del attention_mask
+        del output_hidden_states
+        del output_attentions
+        del kwargs
+        outputs = self.model(input_ids=input_ids)
+        assert isinstance(outputs, dict), f"Expected dict output from official DPLM2, got {type(outputs)}."
+        assert "logits" in outputs, "Official DPLM2 output is missing 'logits'."
+        assert "last_hidden_state" in outputs, "Official DPLM2 output is missing 'last_hidden_state'."
+        return _OfficialComplianceOutput(
+            logits=outputs["logits"],
+            last_hidden_state=outputs["last_hidden_state"],
+        )
+
+
+def load_official_dplm_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
     assert spec.reference_repo_id is not None, f"Missing official DPLM repo id for {spec.key}."
-    config = DPLMConfig.from_pretrained(spec.reference_repo_id)
-    model = DPLMForMaskedLM.from_pretrained(spec.reference_repo_id, config=config).to(device=device, dtype=dtype).eval()
-    tokenizer = model.tokenizer
+    _ensure_local_dplm_module_on_path()
+    _patch_lightning_fabric_fsdp_for_byprot()
+    dplm_module = importlib.import_module("byprot.models.dplm.dplm")
+    DiffusionProteinLanguageModel = dplm_module.DiffusionProteinLanguageModel
+
+    official_model = DiffusionProteinLanguageModel.from_pretrained(spec.reference_repo_id).to(device=device, dtype=dtype).eval()
+    model = _OfficialDPLMComplianceWrapper(official_model).eval()
+    tokenizer = official_model.tokenizer
     return model, tokenizer
 
 
 def load_official_dplm2_model(spec: ModelSpec, device: torch.device, dtype: torch.dtype):
-    from dplm.dplm2 import DPLM2Config
-    from dplm.dplm2 import DPLM2ForMaskedLM
-
     assert spec.reference_repo_id is not None, f"Missing official DPLM2 repo id for {spec.key}."
-    config = DPLM2Config.from_pretrained(spec.reference_repo_id)
-    model = DPLM2ForMaskedLM.from_pretrained(spec.reference_repo_id, config=config).to(device=device, dtype=dtype).eval()
-    tokenizer = model.tokenizer
+    _ensure_local_dplm_module_on_path()
+    _patch_lightning_fabric_fsdp_for_byprot()
+    dplm2_module = importlib.import_module("byprot.models.dplm2.dplm2")
+    MultimodalDiffusionProteinLanguageModel = dplm2_module.MultimodalDiffusionProteinLanguageModel
+
+    official_model = MultimodalDiffusionProteinLanguageModel.from_pretrained(spec.reference_repo_id).to(
+        device=device,
+        dtype=dtype,
+    ).eval()
+    model = _OfficialDPLM2ComplianceWrapper(official_model).eval()
+    tokenizer = official_model.tokenizer
     return model, tokenizer
 
 

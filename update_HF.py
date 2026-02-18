@@ -52,8 +52,8 @@ def _run_get_weights_scripts(hf_token: str | None) -> None:
     python_cmd = "python" if platform.system().lower() == "linux" else "py"
     modules = [
         "boltz_fastplms.get_boltz2_weights",
-        "dplm.get_dplm_weights",
-        "dplm.get_dplm2_weights",
+        "dplm_fastplms.get_dplm_weights",
+        "dplm_fastplms.get_dplm2_weights",
         "e1_fastplms.get_e1_weights",
         "esm_plusplus.get_esmc_weights",
         "esm2.get_esm2_weights",
@@ -187,13 +187,13 @@ if __name__ == "__main__":
     for path in DPLM_MODELS:
         print(path)
         api.upload_file(
-            path_or_fileobj="dplm/dplm.py",
+            path_or_fileobj="dplm_fastplms/dplm.py",
             path_in_repo="dplm.py",
             repo_id=path,
             repo_type="model",
         )
         api.upload_file(
-            path_or_fileobj="dplm/base_tokenizer.py",
+            path_or_fileobj="dplm_fastplms/base_tokenizer.py",
             path_in_repo="base_tokenizer.py",
             repo_id=path,
             repo_type="model",
@@ -214,13 +214,13 @@ if __name__ == "__main__":
     for path in DPLM2_MODELS:
         print(path)
         api.upload_file(
-            path_or_fileobj="dplm/dplm2.py",
+            path_or_fileobj="dplm_fastplms/dplm2.py",
             path_in_repo="dplm2.py",
             repo_id=path,
             repo_type="model",
         )
         api.upload_file(
-            path_or_fileobj="dplm/base_tokenizer.py",
+            path_or_fileobj="dplm_fastplms/base_tokenizer.py",
             path_in_repo="base_tokenizer.py",
             repo_id=path,
             repo_type="model",
@@ -233,12 +233,6 @@ if __name__ == "__main__":
         )
         api.upload_file(
             path_or_fileobj="readmes/dplm2_readme.md",
-            path_in_repo="README.md",
-            repo_id=path,
-            repo_type="model",
-        )
-        api.upload_file(
-            path_or_fileobj="readmes/boltz2_readme.md",
             path_in_repo="README.md",
             repo_id=path,
             repo_type="model",

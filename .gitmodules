@@ -7,3 +7,6 @@
 [submodule "esm"]
 	path = esm
 	url = https://github.com/evolutionaryscale/esm.git
+[submodule "dplm"]
+	path = dplm
+	url = https://github.com/bytedance/dplm.git
