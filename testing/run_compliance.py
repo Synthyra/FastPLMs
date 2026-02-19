@@ -443,7 +443,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-flex", action="store_true")
     parser.add_argument("--strict-reference", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--print-tracebacks", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--skip-flex", action="store_true")
     return parser
 
 
