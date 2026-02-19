@@ -102,29 +102,47 @@ def _install_dplm2_tokenizer_hf_compat(tokenizer_cls) -> None:
     if "mask_token_id" in tokenizer_cls.__dict__:
         return
 
+    def _resolve_token_id(self, attribute_name: str, fallback_token: str) -> int:
+        token_value = getattr(self, attribute_name)
+        if token_value is None:
+            token_value = fallback_token
+        return self._token_to_id[token_value]
+
     def _get_mask_token(self):
-        return self.aa_mask_token
+        token_value = self.aa_mask_token
+        if token_value is None:
+            token_value = "<mask_aa>"
+        return token_value
 
     def _get_mask_token_id(self):
-        return self._token_to_id[self.aa_mask_token]
+        return _resolve_token_id(self, "aa_mask_token", "<mask_aa>")
 
     def _get_cls_token(self):
-        return self.aa_cls_token
+        token_value = self.aa_cls_token
+        if token_value is None:
+            token_value = "<cls_aa>"
+        return token_value
 
     def _get_cls_token_id(self):
-        return self._token_to_id[self.aa_cls_token]
+        return _resolve_token_id(self, "aa_cls_token", "<cls_aa>")
 
     def _get_eos_token(self):
-        return self.aa_eos_token
+        token_value = self.aa_eos_token
+        if token_value is None:
+            token_value = "<eos_aa>"
+        return token_value
 
     def _get_eos_token_id(self):
-        return self._token_to_id[self.aa_eos_token]
+        return _resolve_token_id(self, "aa_eos_token", "<eos_aa>")
 
     def _get_unk_token(self):
-        return self.aa_unk_token
+        token_value = self.aa_unk_token
+        if token_value is None:
+            token_value = "<unk_aa>"
+        return token_value
 
     def _get_unk_token_id(self):
-        return self._token_to_id[self.aa_unk_token]
+        return _resolve_token_id(self, "aa_unk_token", "<unk_aa>")
 
     tokenizer_cls.mask_token = property(_get_mask_token)
     tokenizer_cls.mask_token_id = property(_get_mask_token_id)
