@@ -1,4 +1,4 @@
-﻿import entrypoint_setup
+import entrypoint_setup
 
 import argparse
 import math
@@ -265,7 +265,8 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
             if args.skip_reference is False:
                 official_model, official_tokenizer = load_official_model_for_compliance(spec=spec, device=device, dtype=LOAD_DTYPE)
 
-            for backend in _reference_backends(spec):
+            backends = [b for b in _reference_backends(spec) if not (args.skip_flex and b == "flex")]
+            for backend in backends:
                 print(f"[compliance] Testing {spec.repo_id} backend={backend} on {device} with runtime {runtime_dtype}")
                 start = time.perf_counter()
                 selected_backend = None if backend == "model_default" else backend
@@ -320,7 +321,7 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
                             model=test_model,
                             device=device,
                             runtime_dtype=runtime_dtype,
-                            compile_model=True,
+                            compile_model=(backend == "flex"),
                         )
                         reference_metrics = _reference_check(
                             spec=spec,
@@ -369,7 +370,7 @@ def run_compliance_suite(args: argparse.Namespace) -> int:
             fallback_weight_parity = _blank_weight_parity_metrics()
             if weight_parity is not None:
                 fallback_weight_parity = weight_parity
-            for backend in _reference_backends(spec):
+            for backend in [b for b in _reference_backends(spec) if not (args.skip_flex and b == "flex")]:
                 row = _new_row(spec=spec, backend=backend)
                 _apply_weight_parity_to_row(row=row, parity=fallback_weight_parity)
                 row["error"] = str(exc)
@@ -439,6 +440,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_base_args(parser)
     add_data_args(parser, num_sequences_default=12, min_length_default=16, max_length_default=96, batch_size_default=2)
     parser.add_argument("--skip-reference", action="store_true")
+    parser.add_argument("--skip-flex", action="store_true")
     parser.add_argument("--strict-reference", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--print-tracebacks", action=argparse.BooleanOptionalAction, default=True)
     return parser

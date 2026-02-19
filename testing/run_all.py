@@ -1,4 +1,4 @@
-﻿import entrypoint_setup
+import entrypoint_setup
 
 import argparse
 import dataclasses
@@ -30,6 +30,7 @@ DEFAULTS: Dict[str, object] = {
     "pad_fractions": None,
     "max_pad_fraction": 0.5,
     "strict_reference": True,
+    "skip_flex": False,
     "print_tracebacks": True,
 }
 
@@ -50,6 +51,7 @@ class RunAllConfig:
     embedding_num_sequences: int
     strict_reference: bool
     skip_reference: bool
+    skip_flex: bool
     print_tracebacks: bool
     lengths: str
     batch_sizes: str
@@ -76,6 +78,7 @@ class RunAllConfig:
             embedding_num_sequences=args.embedding_num_sequences,
             strict_reference=args.strict_reference,
             skip_reference=args.skip_reference,
+            skip_flex=args.skip_flex,
             print_tracebacks=args.print_tracebacks,
             lengths=args.lengths,
             batch_sizes=args.batch_sizes,
@@ -105,6 +108,7 @@ class RunAllConfig:
             max_length=self.max_length,
             batch_size=self.batch_size,
             skip_reference=self.skip_reference,
+            skip_flex=self.skip_flex,
             strict_reference=self.strict_reference,
             print_tracebacks=self.print_tracebacks,
         )
@@ -276,6 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--embedding-num-sequences", type=int, default=int(DEFAULTS["embedding_num_sequences"]))
     parser.add_argument("--strict-reference", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["strict_reference"]))
     parser.add_argument("--skip-reference", action="store_true")
+    parser.add_argument("--skip-flex", action="store_true")
     parser.add_argument("--print-tracebacks", action=argparse.BooleanOptionalAction, default=bool(DEFAULTS["print_tracebacks"]))
     parser.add_argument("--lengths", type=str, default=str(DEFAULTS["lengths"]))
     parser.add_argument("--batch-sizes", type=str, default=str(DEFAULTS["batch_sizes"]))
