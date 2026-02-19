@@ -85,10 +85,10 @@ def _ensure_local_e1_tokenizer_json() -> None:
 
 
 def _ensure_kernels_module_stub() -> None:
+    if "kernels" in sys.modules:
+        return
     kernels_spec = importlib.util.find_spec("kernels")
     if kernels_spec is not None:
-        return
-    if "kernels" in sys.modules:
         return
 
     kernels_module = types.ModuleType("kernels")
