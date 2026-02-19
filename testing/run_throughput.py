@@ -1,6 +1,4 @@
 ﻿import entrypoint_setup
-import warnings
-warnings.filterwarnings("ignore")
 
 import argparse
 import math

@@ -1,6 +1,4 @@
 ﻿import entrypoint_setup
-import warnings
-warnings.filterwarnings("ignore")
 
 import argparse
 import math
@@ -13,6 +11,7 @@ from tqdm.auto import tqdm
 
 from testing.common import (
     add_base_args,
+    add_data_args,
     build_output_dir,
     chunk_sequences,
     compare_model_state_dicts_fp32,
