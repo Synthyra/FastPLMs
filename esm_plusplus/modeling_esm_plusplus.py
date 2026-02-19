@@ -8,7 +8,6 @@ Modified from https://github.com/evolutionaryscale/esm
 License: https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-license-agreement
 """
 
-import entrypoint_setup
 import math
 import os
 import torch

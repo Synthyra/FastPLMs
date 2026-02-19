@@ -1,12 +1,8 @@
-import entrypoint_setup
 import os
-os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
-
 from einops import rearrange, repeat
 from enum import Enum
 from typing import Any, TypedDict, Callable, List

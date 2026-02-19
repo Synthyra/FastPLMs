@@ -7,7 +7,6 @@ This module is based on:
 https://github.com/bytedance/dplm/blob/main/src/byprot/models/lm/esm_dplm.py
 """
 
-import entrypoint_setup
 import torch
 import torch.nn as nn
 from torch.nn import functional as F

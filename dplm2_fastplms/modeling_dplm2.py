@@ -5,7 +5,6 @@ This module is based on:
 https://github.com/bytedance/dplm
 """
 
-import entrypoint_setup
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
