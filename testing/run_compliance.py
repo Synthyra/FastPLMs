@@ -7,27 +7,24 @@ from typing import Dict, List
 import torch
 from tqdm.auto import tqdm
 
-from testing.common import add_base_args
-from testing.common import add_data_args
-from testing.common import build_output_dir
-from testing.common import chunk_sequences
-from testing.common import compare_model_state_dicts_fp32
-from testing.common import generate_sequences
-from testing.common import load_model
-from testing.common import load_official_model_for_compliance
-from testing.common import LOAD_DTYPE
-from testing.common import login_if_needed
-from testing.common import prepare_model_for_runtime
-from testing.common import prepare_official_batch_for_compliance
-from testing.common import resolve_device
-from testing.common import resolve_runtime_dtype
-from testing.common import set_seed
-from testing.model_registry import ModelSpec
-from testing.model_registry import get_model_specs
-from testing.reporting import plot_bar
-from testing.reporting import write_csv
-from testing.reporting import write_json
-from testing.reporting import write_summary
+from testing.common import (
+    add_base_args,
+    build_output_dir,
+    chunk_sequences,
+    compare_model_state_dicts_fp32,
+    generate_sequences,
+    load_model,
+    load_official_model_for_compliance,
+    login_if_needed,
+    prepare_model_for_runtime,
+    prepare_official_batch_for_compliance,
+    resolve_device,
+    resolve_runtime_dtype,
+    set_seed,
+    LOAD_DTYPE,
+)
+from testing.model_registry import ModelSpec, get_model_specs
+from testing.reporting import plot_bar, write_csv, write_json, write_summary
 
 
 STRICT_HIDDEN_MSE_THRESHOLD = 1e-4

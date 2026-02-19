@@ -11,25 +11,22 @@ import matplotlib.pyplot as plt
 import torch
 from tqdm.auto import tqdm
 
-from testing.common import add_base_args
-from testing.common import build_output_dir
-from testing.common import CANONICAL_AMINO_ACIDS
-from testing.common import load_model
-from testing.common import LOAD_DTYPE
-from testing.common import login_if_needed
-from testing.common import parse_int_list
-from testing.common import peak_memory_mb
-from testing.common import prepare_model_batch
-from testing.common import reset_peak_memory
-from testing.common import resolve_device
-from testing.common import resolve_runtime_dtype
-from testing.common import run_forward
-from testing.common import set_seed
-from testing.common import sync_cuda
+from testing.common import (
+    add_base_args,
+    add_data_args,
+    build_output_dir,
+    ensure_dir,
+    generate_sequences,
+    load_model,
+    LOAD_DTYPE,
+    login_if_needed,
+    maybe_tokenizer_for_embedding,
+    resolve_device,
+    resolve_runtime_dtype,
+    set_seed,
+)
 from testing.model_registry import get_model_specs
-from testing.reporting import write_csv
-from testing.reporting import write_json
-from testing.reporting import write_summary
+from testing.reporting import write_csv, write_json, write_summary
 
 
 matplotlib.use("Agg")

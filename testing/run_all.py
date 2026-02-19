@@ -1,4 +1,8 @@
-﻿import argparse
+﻿import entrypoint_setup
+import torch._dynamo as dynamo
+dynamo.config.suppress_errors = True
+
+import argparse
 import dataclasses
 import json
 import pathlib
@@ -6,11 +10,8 @@ from typing import Dict, List
 
 from tqdm.auto import tqdm
 
-from testing.common import add_base_args
-from testing.common import ensure_dir
-from testing.common import now_timestamp
-from testing.reporting import write_json
-from testing.reporting import write_summary
+from testing.common import add_base_args, ensure_dir, now_timestamp
+from testing.reporting import write_json, write_summary
 from testing.run_compliance import run_compliance_suite
 from testing.run_embedding import run_embedding_suite
 from testing.run_throughput import run_throughput_suite

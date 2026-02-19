@@ -1,58 +1,89 @@
 # FastPLMs
 
-<img width="2816" height="1536" alt="Gemini_Generated_Image_5bmmdc5bmmdc5bmm" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
+<img width="2816" height="1536" alt="FastPLMs Hero Image" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
 
-FastPLMs is an open-source effort to increase the efficiency of pretrained protein language models (pLMs), switching out native attention implementations for **Flash Attention** or **Flex Attention**.
-
-All models can be loaded from HuggingFace 🤗 transformers via `AutoModel`, and this repository does not need to be cloned for most use cases.
+FastPLMs is an open-source initiative dedicated to accelerating pretrained protein language models (pLMs). By replacing native, often suboptimal attention implementations with **Flash Attention** or **Flex Attention**, we provide high-performance alternatives that are fully compatible with the HuggingFace `transformers` ecosystem.
 
 ---
 
-<details>
-<summary><b>What are Protein Language Models (pLMs)?</b></summary>
+## Table of Contents
+1. [Introduction](#introduction)
+2. [Supported Models](#supported-models)
+3. [Efficiency: Flex & Flash Attention](#efficiency-flex--flash-attention)
+4. [Embedding & Pooling](#embedding--pooling)
+5. [Concrete Examples](#concrete-examples)
+6. [Testing & Benchmarking](#testing--benchmarking)
+7. [Installation & Docker](#installation--docker)
 
-Protein Language Models (pLMs) are transformer-based models trained on large datasets of protein sequences (e.g., UniProt). By treating amino acids like words in a language, these models learn to:
-- **Learn Representations**: Extract high-dimensional features (embeddings) that capture evolutionary information, structural constraints, and functional properties.
-- **Protein Generation**: Design new-to-nature sequences for therapeutic or industrial applications.
-- **Predict Properties**: Enable downstream tasks like thermostability prediction, protein-protein interactions, and enzyme classification.
-- **Structure & Inverse Folding**: Map sequences to 3D structures or vice versa.
+---
 
-FastPLMs focuses on making these powerful models easier to use.
-</details>
+## Introduction
 
-<details>
-<summary><b>What is this repo?</b></summary>
+### What are Protein Language Models (pLMs)?
+Protein Language Models are transformer-based architectures trained on massive datasets of protein sequences (such as UniProt). These models learn the "grammar" of proteins, capturing evolutionary information, structural constraints, and functional motifs. They are used for:
+- **Representation Learning**: Generating high-dimensional embeddings for downstream tasks (e.g., stability, function prediction).
+- **Protein Generation**: Designing novel sequences with specific properties.
+- **Structure Prediction**: Mapping sequences to their 3D folds (e.g., Boltz2).
 
-FastPLMs provides optimized implementations of popular pLMs. We get rid of unnecessary requirements, integrate with Huggingface `AutoModel`, utilize efficient attention implementations, and add nice to have functions to easy embeddings of entire datasets:
-- **Efficiency**: Faster inference and significantly lower memory footprint.
-- **Compatibility**: Direct integration with HuggingFace `transformers`.
-- **Flexibility**: Support for both `sdpa` (which will automatically call Flash Attention when possible) and PyTorch's new `Flex Attention`.
-- **Dataset Scale**: Built-in tools for embedding millions of sequences efficiently.
-</details>
+### What is this repository?
+FastPLMs provides optimized versions of these models. Our focus is on:
+- **Speed**: Drastically faster inference through optimized attention kernels.
+- **Memory Efficiency**: Lower VRAM usage, enabling larger batch sizes or longer sequences.
+- **Seamless Integration**: Use `AutoModel.from_pretrained(..., trust_remote_code=True)` to load our optimized weights directly from HuggingFace.
 
-<details>
-<summary><b>Supported Models & Families</b></summary>
+---
 
-The currently supported models can be found in our [HuggingFace Collection](https://huggingface.co/collections/Synthyra/pretrained-plms-675351ecc050f63baedd77de).
+## Supported Models
 
-Major families included:
-- **E1 (Profluent)**: 150M, 300M, 600M parameters.
-- **ESM2 (Meta)**: 8M, 35M, 150M, 650M, 3B parameters.
-- **ESMC (called ESM++) (EvolutionaryScale)**: Small (300M), Large (600M).
-- **DPLM / DPLM2 (ByteDance)**: Diffusion Protein Language Models, 150M to 3B.
-- **Boltz2 (Boltz)**: High-performance structure prediction.
-</details>
+We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/collections/Synthyra/pretrained-plms-675351ecc050f63baedd77de) of optimized models. Below is a summary of the supported families and their origins.
 
-<details>
-<summary><b>What is Flex Attention?</b></summary>
+### Model Registry Summary
 
-**Flex Attention** is a flexible and efficient attention mechanism introduced in PyTorch. In FastPLMs, we use it to:
-- **Dynamic Masking**: Efficiently handle padding via block masks, avoiding unnecessary computation on pad tokens.
-- **Block-Causal Patterns**: Support specialized attention patterns, such as the ones used in E1.
-- **Performance**: High throughput when used with `torch.compile`.
+| Model Family | Organization | Official Implementation | FastPLMs Optimization | Checkpoints |
+| :--- | :--- | :--- | :--- | :--- |
+| **E1** | Profluent Bio | [Profluent-Bio/E1](https://github.com/Profluent-Bio/E1) | Flex Attention, Block-Causal | 150M, 300M, 600M |
+| **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
+| **ESM++** | EvolutionaryScale | [EvolutionaryScale/esm](https://github.com/evolutionaryscale/esm) | Optimized SDPA / Flex | Small (300M), Large (600M) |
+| **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
+| **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
+| **Boltz2** | MIT / Various | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) | Optimized Structure Prediction | Standard |
 
-**How to enable it:**
-Set `attn_backend="flex"` in the model config before loading:
+### Full Model List
+
+| Model Key | Family | Parameters | Organization | FastPLMs Repo ID | Official Reference |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `e1_150m` | E1 | 150M | Profluent Bio | [Synthyra/Profluent-E1-150M](https://huggingface.co/Synthyra/Profluent-E1-150M) | [Profluent-Bio/E1-150m](https://huggingface.co/Profluent-Bio/E1-150m) |
+| `e1_300m` | E1 | 300M | Profluent Bio | [Synthyra/Profluent-E1-300M](https://huggingface.co/Synthyra/Profluent-E1-300M) | [Profluent-Bio/E1-300m](https://huggingface.co/Profluent-Bio/E1-300m) |
+| `e1_600m` | E1 | 600M | Profluent Bio | [Synthyra/Profluent-E1-600M](https://huggingface.co/Synthyra/Profluent-E1-600M) | [Profluent-Bio/E1-600m](https://huggingface.co/Profluent-Bio/E1-600m) |
+| `esm2_8m` | ESM2 | 8M | Meta AI | [Synthyra/ESM2-8M](https://huggingface.co/Synthyra/ESM2-8M) | [facebook/esm2_t6_8M_UR50D](https://huggingface.co/facebook/esm2_t6_8M_UR50D) |
+| `esm2_35m` | ESM2 | 35M | Meta AI | [Synthyra/ESM2-35M](https://huggingface.co/Synthyra/ESM2-35M) | [facebook/esm2_t12_35M_UR50D](https://huggingface.co/facebook/esm2_t12_35M_UR50D) |
+| `esm2_150m` | ESM2 | 150M | Meta AI | [Synthyra/ESM2-150M](https://huggingface.co/Synthyra/ESM2-150M) | [facebook/esm2_t30_150M_UR50D](https://huggingface.co/facebook/esm2_t30_150M_UR50D) |
+| `esm2_650m` | ESM2 | 650M | Meta AI | [Synthyra/ESM2-650M](https://huggingface.co/Synthyra/ESM2-650M) | [facebook/esm2_t33_650M_UR50D](https://huggingface.co/facebook/esm2_t33_650M_UR50D) |
+| `esm2_3b` | ESM2 | 3B | Meta AI | [Synthyra/ESM2-3B](https://huggingface.co/Synthyra/ESM2-3B) | [facebook/esm2_t36_3B_UR50D](https://huggingface.co/facebook/esm2_t36_3B_UR50D) |
+| `esmplusplus_small` | ESM++ | 300M | EvolutionaryScale | [Synthyra/ESMplusplus_small](https://huggingface.co/Synthyra/ESMplusplus_small) | [EvolutionaryScale/esmc-300m](https://huggingface.co/EvolutionaryScale/esmc-300m-2024-12) |
+| `esmplusplus_large` | ESM++ | 600M | EvolutionaryScale | [Synthyra/ESMplusplus_large](https://huggingface.co/Synthyra/ESMplusplus_large) | [EvolutionaryScale/esmc-600m](https://huggingface.co/EvolutionaryScale/esmc-600m-2024-12) |
+| `dplm_150m` | DPLM | 150M | ByteDance | [Synthyra/DPLM-150M](https://huggingface.co/Synthyra/DPLM-150M) | [airkingbd/dplm_150m](https://huggingface.co/airkingbd/dplm_150m) |
+| `dplm_650m` | DPLM | 650M | ByteDance | [Synthyra/DPLM-650M](https://huggingface.co/Synthyra/DPLM-650M) | [airkingbd/dplm_650m](https://huggingface.co/airkingbd/dplm_650m) |
+| `dplm_3b` | DPLM | 3B | ByteDance | [Synthyra/DPLM-3B](https://huggingface.co/Synthyra/DPLM-3B) | [airkingbd/dplm_3b](https://huggingface.co/airkingbd/dplm_3b) |
+| `dplm2_150m` | DPLM2 | 150M | ByteDance | [Synthyra/DPLM2-150M](https://huggingface.co/Synthyra/DPLM2-150M) | [airkingbd/dplm2_150m](https://huggingface.co/airkingbd/dplm2_150m) |
+| `dplm2_650m` | DPLM2 | 650M | ByteDance | [Synthyra/DPLM2-650M](https://huggingface.co/Synthyra/DPLM2-650M) | [airkingbd/dplm2_650m](https://huggingface.co/airkingbd/dplm2_650m) |
+| `dplm2_3b` | DPLM2 | 3B | ByteDance | [Synthyra/DPLM2-3B](https://huggingface.co/Synthyra/DPLM2-3B) | [airkingbd/dplm2_3b](https://huggingface.co/airkingbd/dplm2_3b) |
+| `boltz2` | Boltz2 | - | MIT / Various | [Synthyra/Boltz2](https://huggingface.co/Synthyra/Boltz2) | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) |
+
+---
+
+## Efficiency: Flex & Flash Attention
+
+### Flash Attention (SDPA)
+We use PyTorch's `Scaled Dot Product Attention` (SDPA) as the default backend for most models. It provides significant speedups over native implementations while maintaining stability across different GPU architectures.
+
+### Flex Attention
+**Flex Attention** is a cutting-edge mechanism in PyTorch that allows for:
+- **Dynamic Masking**: Efficiently ignoring padding without redundant compute.
+- **Custom Patterns**: Supporting specialized masks (like E1's block-causal) with native performance.
+- **Extreme Speed**: When combined with `torch.compile`, Flex Attention often provides the best possible throughput.
+
+**To enable Flex Attention:**
 ```python
 from transformers import AutoConfig, AutoModel
 
@@ -60,106 +91,126 @@ config = AutoConfig.from_pretrained("Synthyra/ESMplusplus_small", trust_remote_c
 config.attn_backend = "flex"
 model = AutoModel.from_pretrained("Synthyra/ESMplusplus_small", config=config, trust_remote_code=True)
 ```
-*Note: Flex Attention requires float16 or bfloat16 and works best with `torch.compile`.*
-</details>
-
-<details>
-<summary><b>How does the Embedding Mixin work?</b></summary>
-
-The `EmbeddingMixin` (defined in `embedding_mixin.py`) provides a unified interface for extracting representations from any supported model.
-
-**Key Feature: `embed_dataset()`**
-This method allows for high-throughput embedding of sequence lists:
-- **Automatic Sorting**: Sequences are sorted by length to minimize padding overhead.
-- **Batching**: Optimized batch processing with progress tracking.
-- **Caching**: Automatically skips sequences already found in an existing SQLite database or `.pth` file.
-- **Storage**: Supports saving to standard PyTorch files or SQLite databases for streaming large datasets.
-
-Example usage:
-```python
-embedding_dict = model.embed_dataset(
-    sequences=['MALWMRLLPLLALLALWGPDPAAA', 'MKTIIALSYIFCLVFA'],
-    batch_size=32,
-    pooling_type=['mean', 'cls'], # Multi-pooling concatenated
-    save=True,
-    save_path='embeddings.pth'
-)
-```
-</details>
-
-<details>
-<summary><b>How does the Pooler work?</b></summary>
-
-The `Pooler` class provides a flexible way to aggregate sequence-level information into a single vector.
-
-**Supported Pooling Strategies:**
-- `mean`: Average of all non-pad tokens (mask-aware).
-- `max`: Element-wise maximum across tokens.
-- `cls`: The representation of the first token (usually the CLS token).
-- `var` / `std`: Variance or Standard Deviation of the representations.
-- `norm`: L2 normalization of the representation.
-- `median`: Element-wise median across the sequence.
-- `parti`: PageRank-based attention pooling (experimental).
-
-You can specify multiple types (e.g., `['mean', 'var']`), which will be concatenated into a single embedding vector of size `num_pools * hidden_size`.
-</details>
-
-<details>
-<summary><b>Which models can you specify pooling?</b></summary>
-
-- **Custom Pooler Support**: E1 and ESM++ natively support the custom `Pooler` strategies via the `pooling_types` argument in their initialization or via `embed_dataset`.
-- **HuggingFace Standard**: ESM2, DPLM, and DPLM2 use the standard HuggingFace pooling (usually mean or CLS), but they all support full custom pooling when using the `embed_dataset` method provided by `EmbeddingMixin`.
-</details>
-
-<details>
-<summary><b>How can I run the tests?</b></summary>
-
-The testing suite is CLI-first and located under `testing/`.
-
-**Main Entrypoints:**
-- **Full Suite**: `py -m testing.run_all`
-- **Compliance**: `py -m testing.run_compliance` (Ensures outputs match reference models)
-- **Benchmarks**: `py -m testing.run_throughput` (Memory and speed metrics)
-- **Embeddings**: `py -m testing.run_embedding` (Mixin validation)
-
-**Common CLI Options:**
-- `--full-models`: Run across all supported checkpoints (not just representative ones).
-- `--device cuda`: Specify hardware (auto-detects by default).
-- `--dtype bfloat16`: Set calculation precision.
-
-**Docker Execution:**
-```bash
-docker build -t fastplms-test -f Dockerfile .
-docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test python -m testing.run_all
-```
-Results are saved as structured JSON, CSV, and high-resolution PNG plots in `testing/results/`.
-</details>
 
 ---
 
-## Quick Start
+## Embedding & Pooling
 
-### Loading a Model
+The `EmbeddingMixin` (shared across all models) provides a standardized way to extract representations from proteins.
+
+### The Pooler
+The `Pooler` class aggregates sequence-level residue representations into a single fixed-size vector. Supported strategies include:
+- `mean`: Mask-aware average of all residues.
+- `cls`: The first token's representation (Standard for classification).
+- `max`: Element-wise maximum across the sequence.
+- `var` / `std`: Variance or Standard Deviation of representations.
+- `norm`: L2 normalization.
+- `median`: Element-wise median.
+- `parti`: Experimental PageRank-based attention pooling.
+
+---
+
+## Concrete Examples
+
+### 1. Batch Embedding with SQLite (Scalable)
+Ideal for embedding millions of sequences where you need to stream data or avoid OOM on RAM.
+
 ```python
 import torch
 from transformers import AutoModel
 
-# Load optimized ESM++ with standard SDPA attention
-model = AutoModel.from_pretrained("Synthyra/ESMplusplus_small", trust_remote_code=True)
+model = AutoModel.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True).cuda()
 
-# Recommended for speed:
-model = torch.compile(model)
+sequences = ["MALWMRLLPLLALLALWGPDPAAA", "MKTIIALSYIFCLVFA", ...]
+
+# Embed and store in SQLite
+model.embed_dataset(
+    sequences=sequences,
+    batch_size=64,
+    pooling_types=['mean', 'cls'], # Concatenates both
+    sql=True,
+    sql_db_path='large_protein_db.db',
+    embed_dtype=torch.float32
+)
 ```
 
-### Switching Attention Backend
-`sdpa` (Flash Attention) is the default for stability. For `Flex Attention`:
+### 2. High-Throughput In-Memory Embedding
+Perfect for medium-sized datasets that fit in memory.
+
 ```python
-from transformers import AutoConfig, AutoModel
+# Embed and return as a dictionary
+embeddings = model.embed_dataset(
+    sequences=sequences,
+    batch_size=128,
+    pooling_types=['mean'],
+    save=True,
+    save_path='my_embeddings.pth'
+)
 
-config = AutoConfig.from_pretrained("Synthyra/ESMplusplus_small", trust_remote_code=True)
-config.attn_backend = "flex"
-model = AutoModel.from_pretrained("Synthyra/ESMplusplus_small", config=config, trust_remote_code=True)
+# Access embedding
+seq_vector = embeddings["MALWMRLLPLLALLALWGPDPAAA"] # torch.Tensor
 ```
 
-## Suggestions
-Have suggestions, comments, or requests? Found a bug? Open a GitHub issue and we'll respond soon.
+### 3. Custom Pooling & Multi-Strategy
+Concatenate multiple mathematical representations for richer downstream features.
+
+```python
+# Use a variety of pooling types
+embeddings = model.embed_dataset(
+    sequences=sequences,
+    pooling_types=['mean', 'max', 'std', 'var'], # All 4 concatenated
+    batch_size=32,
+    full_embeddings=False
+)
+
+# Resulting vector size: 4 * hidden_size
+print(embeddings[sequences[0]].shape)
+```
+
+---
+
+## Testing & Benchmarking
+
+FastPLMs includes a robust CLI-based testing suite under `testing/`.
+
+### Running the Suite
+- **Compliance Checks**: Verify that optimized models match reference outputs.
+  ```bash
+  py -m testing.run_compliance --families esm2
+  ```
+- **Throughput Benchmarks**: Measure tokens/sec and peak memory.
+  ```bash
+  py -m testing.run_throughput --device cuda --lengths 512,1024
+  ```
+- **Run Everything**: Execute the full suite across all families.
+  ```bash
+  py -m testing.run_all --full-models
+  ```
+
+Results are saved to `testing/results/<timestamp>/` as `metrics.json`, `metrics.csv`, and high-resolution plots.
+
+---
+
+## Installation & Docker
+
+### Local Installation
+```bash
+git clone https://github.com/Synthyra/FastPLMs.git
+cd FastPLMs
+pip install -r requirements.txt
+```
+
+### Docker (Recommended for Testing)
+```bash
+# Build the image
+docker build -t fastplms-test -f Dockerfile .
+
+# Run benchmarks inside container
+docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test \
+    python -m testing.run_throughput --device cuda
+```
+
+---
+
+## Suggestions & Contributions
+Found a bug or have a feature request? Please open a [GitHub Issue](https://github.com/Synthyra/FastPLMs/issues). We are actively looking for contributions to optimize more pLM architectures!
