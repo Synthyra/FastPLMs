@@ -112,12 +112,6 @@ def _install_dplm2_tokenizer_hf_compat(tokenizer_cls) -> None:
     if "mask_token_id" in tokenizer_cls.__dict__:
         return
 
-    @classmethod
-    def _from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
-        return cls()
-
-    tokenizer_cls.from_pretrained = _from_pretrained
-
     def _resolve_token_id(self, attribute_name: str, fallback_token: str) -> int:
         token_value = getattr(self, attribute_name)
         if token_value is None:
