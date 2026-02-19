@@ -149,7 +149,8 @@ def extract_official_state_dict(spec: ModelSpec, official_model) -> dict[str, to
         sd = {k[len("model."):]: v for k, v in sd.items()}
 
     if spec.family == "esm2":
-        sd = {k: v for k, v in sd.items() if "position_embeddings" not in k}
+        sd = {k: v for k, v in sd.items()
+              if "position_embeddings" not in k and "position_ids" not in k}
 
     if spec.family in ("dplm", "dplm2"):
         # Official DPLM wraps the ESM model inside .net

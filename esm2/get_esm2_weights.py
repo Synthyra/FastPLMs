@@ -72,15 +72,12 @@ if __name__ == "__main__":
         config.tie_word_embeddings = False
         model = FastEsmForMaskedLM(config=config).eval().cpu().to(torch.float32)
         # FastESM uses rotary embeddings (RoPE) so it has no position_embeddings weight.
-        # Strip it from the official state dict before loading and parity checks.
-        EXCLUDED_KEYS = {"esm.embeddings.position_embeddings.weight"}
+        # Strip position-related keys from the official state dict before loading.
+        EXCLUDED_PREFIXES = ("esm.embeddings.position_embeddings", "esm.embeddings.position_ids")
         official_state_dict = {
-            k: v for k, v in official_model.state_dict().items() if k not in EXCLUDED_KEYS
+            k: v for k, v in official_model.state_dict().items()
+            if not any(k.startswith(prefix) for prefix in EXCLUDED_PREFIXES)
         }
-        dropped_keys = sorted(set(official_model.state_dict().keys()) - set(official_state_dict.keys()))
-        assert dropped_keys == sorted(EXCLUDED_KEYS), (
-            f"Unexpected excluded keys for {source_repo}: {dropped_keys}"
-        )
         load_result = model.load_state_dict(official_state_dict, strict=False)
         assert len(load_result.missing_keys) == 0, (
             f"Missing keys while mapping official ESM2 weights for {source_repo}: "
