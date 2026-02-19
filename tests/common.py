@@ -121,11 +121,17 @@ def tokenize_official_batch(
             "within_seq_position_ids": raw_batch["within_seq_position_ids"],
             "global_position_ids": raw_batch["global_position_ids"],
             "sequence_ids": raw_batch["sequence_ids"],
-            "attention_mask": (raw_batch["sequence_ids"] != -1).long(),
         }
     assert tokenizer_or_preparer is not None
     batch = tokenizer_or_preparer(sequences, return_tensors="pt", padding="longest")
     return batch.to(device)
+
+
+def get_non_pad_mask(spec: ModelSpec, batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    """Get a boolean mask for non-pad positions. Returns (batch, seq_len) bool tensor on CPU."""
+    if spec.family == "e1":
+        return (batch["sequence_ids"] != -1).cpu()
+    return batch["attention_mask"].cpu().bool()
 
 
 def compare_state_dicts(

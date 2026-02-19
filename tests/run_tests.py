@@ -23,9 +23,9 @@ from tests.common import (
     RUNTIME_DTYPE,
     compare_state_dicts,
     generate_sequences,
+    get_non_pad_mask,
     load_official_model,
     load_our_model,
-    resolve_device,
     set_seed,
     tokenize_batch,
     tokenize_official_batch,
@@ -66,7 +66,7 @@ def test_weight_parity(spec: ModelSpec, device: torch.device) -> bool:
     if result["match"]:
         print(f"  [Weight Parity] PASS - {result['common_params']} params match exactly")
         del our_model, official_model
-        torch.cuda.empty_cache() if device.type == "cuda" else None
+        torch.cuda.empty_cache()
         return True
     else:
         print(f"  [Weight Parity] FAIL")
@@ -79,8 +79,20 @@ def test_weight_parity(spec: ModelSpec, device: torch.device) -> bool:
             for d in result["diffs"]:
                 print(f"    {d}")
         del our_model, official_model
-        torch.cuda.empty_cache() if device.type == "cuda" else None
+        torch.cuda.empty_cache()
         return False
+
+
+def _extract_hidden_and_logits(outputs, spec: ModelSpec, is_official: bool):
+    """Extract last hidden state and logits from model outputs, handling per-family differences."""
+    logits = outputs.logits.detach().cpu().float()
+    if outputs.hidden_states is not None:
+        hidden = outputs.hidden_states[-1].detach().cpu().float()
+    elif is_official and spec.family == "e1":
+        hidden = outputs.embeddings.detach().cpu().float()
+    else:
+        hidden = outputs.last_hidden_state.detach().cpu().float()
+    return hidden, logits
 
 
 def test_output_parity(
@@ -101,17 +113,11 @@ def test_output_parity(
         our_outputs = our_model(**our_batch, output_hidden_states=True)
         official_outputs = official_model(**official_batch, output_hidden_states=True)
 
-    our_hidden = our_outputs.hidden_states[-1].detach().cpu().float()
-    our_logits = our_outputs.logits.detach().cpu().float()
+    our_hidden, our_logits = _extract_hidden_and_logits(our_outputs, spec, is_official=False)
+    official_hidden, official_logits = _extract_hidden_and_logits(official_outputs, spec, is_official=True)
 
-    official_hidden = official_outputs.hidden_states[-1].detach().cpu().float()
-    official_logits = official_outputs.logits.detach().cpu().float()
-
-    # Compute attention mask for non-pad comparison
-    if spec.family == "e1":
-        mask = (our_batch["sequence_ids"] != -1).unsqueeze(-1).cpu()
-    else:
-        mask = our_batch["attention_mask"].unsqueeze(-1).cpu().bool()
+    mask_2d = get_non_pad_mask(spec, our_batch)
+    mask = mask_2d.unsqueeze(-1)
 
     hidden_diff = torch.abs(our_hidden - official_hidden)
     masked_hidden_diff = hidden_diff * mask
@@ -123,10 +129,8 @@ def test_output_parity(
     logits_mse = float((masked_logits_diff ** 2).sum() / mask.sum() / our_logits.shape[-1])
     logits_max_abs = float(masked_logits_diff.max())
 
-    # Argmax accuracy (non-pad tokens)
     our_argmax = our_logits.argmax(dim=-1)
     official_argmax = official_logits.argmax(dim=-1)
-    mask_2d = mask.squeeze(-1)
     argmax_match = float(((our_argmax == official_argmax) * mask_2d).sum() / mask_2d.sum())
 
     print(f"  [Output Parity] Hidden: MSE={hidden_mse:.2e}, MaxAbs={hidden_max_abs:.2e}")
@@ -141,7 +145,7 @@ def test_output_parity(
     print(f"  [Output Parity] {'PASS' if passed else 'FAIL'}")
 
     del our_model, official_model
-    torch.cuda.empty_cache() if device.type == "cuda" else None
+    torch.cuda.empty_cache()
     return passed
 
 
@@ -151,10 +155,6 @@ def test_flex_attention(
     sequences: list[str],
 ) -> bool:
     """Test 3: Cast our model to bfloat16, run flex attention, compare to SDPA fp32 baseline."""
-    if device.type != "cuda":
-        print(f"\n  [Flex Attention] SKIP - requires CUDA device")
-        return True
-
     print(f"\n  [Flex Attention] Loading our model (SDPA, fp32 baseline): {spec.repo_id}")
     baseline_model, tokenizer = load_our_model(spec, device=device, dtype=LOAD_DTYPE, attn_backend="sdpa")
     batch = tokenize_batch(spec, sequences, baseline_model, tokenizer, device)
@@ -175,11 +175,7 @@ def test_flex_attention(
         flex_outputs = flex_model(**flex_batch, output_hidden_states=True)
     flex_logits = flex_outputs.logits.detach().cpu().float()
 
-    if spec.family == "e1":
-        mask_2d = (batch["sequence_ids"] != -1).cpu()
-    else:
-        mask_2d = batch["attention_mask"].cpu().bool()
-
+    mask_2d = get_non_pad_mask(spec, batch)
     mask_3d = mask_2d.unsqueeze(-1)
     diff = torch.abs(flex_logits - baseline_logits) * mask_3d
     max_abs_diff = float(diff.max())
@@ -200,8 +196,9 @@ def test_flex_attention(
 
 
 def main():
+    assert torch.cuda.is_available(), "CUDA is required to run the test suite."
+
     parser = argparse.ArgumentParser(description="FastPLMs test suite")
-    parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus", "dplm", "dplm2"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-sequences", type=int, default=8)
@@ -211,7 +208,7 @@ def main():
     parser.add_argument("--skip-official", action="store_true", help="Skip official model loading (weight/output parity)")
     args = parser.parse_args()
 
-    device = resolve_device(args.device)
+    device = torch.device("cuda")
     set_seed(args.seed)
     sequences = generate_sequences(args.num_sequences, args.min_length, args.max_length, args.seed)
 
