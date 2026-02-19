@@ -144,9 +144,6 @@ class EsmSelfAttention(nn.Module):
         if self.position_embedding_type == "rotary":
             self.rotary_embeddings = RotaryEmbedding(dim=self.attention_head_size)
 
-    def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
-        return rearrange(x, 'b s (h d) -> b h s d', h=self.num_attention_heads)
-
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -164,9 +161,13 @@ class EsmSelfAttention(nn.Module):
         Returns:
             Output tensor and optionally attention weights
         """
-        query_layer = self.transpose_for_scores(self.query(hidden_states)) * self.scale
-        key_layer = self.transpose_for_scores(self.key(hidden_states))
-        value_layer = self.transpose_for_scores(self.value(hidden_states))
+        batch_size, seq_length = hidden_states.shape[:-1]
+        hidden_shape = (batch_size, seq_length, -1, self.attention_head_size)
+        query_layer = self.query(hidden_states).view(hidden_shape).transpose(1, 2)
+        key_layer = self.key(hidden_states).view(hidden_shape).transpose(1, 2)
+        value_layer = self.value(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        query_layer = query_layer * self.scale
 
         if self.position_embedding_type == "rotary":
             query_layer, key_layer = self.rotary_embeddings(query_layer, key_layer)
@@ -185,32 +186,23 @@ class EsmSelfAttention(nn.Module):
         else:
             if self.attn_backend == "flex":
                 assert flex_attention is not None, "Flex attention backend requested but torch.flex_attention is unavailable."
-                assert query_layer.dtype in (torch.float16, torch.bfloat16), (
-                    f"Flex attention backend requires float16 or bfloat16, got {query_layer.dtype}."
-                )
-                if attention_mask is not None:
-                    assert flex_block_mask is not None, (
-                        "Flex attention backend requires a block mask when attention_mask is provided."
-                    )
+                assert query_layer.dtype in (torch.float16, torch.bfloat16), f"Flex attention backend requires float16 or bfloat16, got {query_layer.dtype}."
+                assert flex_block_mask is not None, "Flex attention backend requires a block mask"
                 context_layer = flex_attention(
                     query_layer,
                     key_layer,
                     value_layer,
                     block_mask=flex_block_mask,
-                    scale=1.0,
+                    scale=1.0, # applied before rotary
                 )
             else:
-                sdpa_mask = None
-                if attention_mask is not None:
-                    sdpa_mask = torch.zeros_like(attention_mask, dtype=query_layer.dtype)
-                    sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
                 context_layer = F.scaled_dot_product_attention(
                     query_layer,
                     key_layer,
                     value_layer,
-                    attn_mask=sdpa_mask,
+                    attn_mask=attention_mask,
                     dropout_p=self.dropout_prob if self.training else 0.0,
-                    scale=1.0
+                    scale=1.0 # applied before rotary
                 )
             context_layer = rearrange(context_layer, 'b h s d -> b s (h d)')
             return context_layer
@@ -406,7 +398,6 @@ class FastEsmPreTrainedModel(PreTrainedModel):
         return None
 
 
-
 class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
     def __init__(self, config, add_pooling_layer: Optional[bool] = True, **kwargs):
         FastEsmPreTrainedModel.__init__(self, config, **kwargs)
@@ -502,25 +493,19 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
         )
-
-        flex_block_mask = None
-        if attention_mask is not None:
-            token_attention_mask = attention_mask.bool()
-            if (
-                self.config.attn_backend == "flex"
-                and not output_attentions
-            ):
-                assert create_block_mask is not None, (
-                    "Flex attention backend requested but torch.create_block_mask is unavailable."
-                )
-                flex_block_mask = _create_pad_block_mask(token_attention_mask)
-                extended_attention_mask = None
-            else:
-                extended_attention_mask = token_attention_mask[:, None, None, :].expand(
-                    batch_size, 1, seq_length, seq_length
-                )
+        
+        if attention_mask is None:
+            token_attention_mask = torch.ones((batch_size, seq_length), device=input_ids.device).bool() 
         else:
+            token_attention_mask = attention_mask.bool()
+        
+        if self.config.attn_backend == "flex" and not output_attentions:
+            assert create_block_mask is not None, "Flex attention backend requested but torch.create_block_mask is unavailable."
+            flex_block_mask = _create_pad_block_mask(token_attention_mask)
             extended_attention_mask = None
+        else:
+            flex_block_mask = None
+            extended_attention_mask = token_attention_mask[:, None, None, :].expand(batch_size, 1, seq_length, seq_length)
 
         encoder_outputs = self.encoder(
             token_embedding_output,
@@ -620,7 +605,7 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel, EmbeddingMixin):
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.lm_head = EsmLMHead(config)
         self.loss_fct = nn.CrossEntropyLoss()
-        self.init_weights()
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.esm.embeddings.word_embeddings
@@ -684,7 +669,7 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
-        self.init_weights()
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.esm.embeddings.word_embeddings
@@ -755,7 +740,7 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.loss_fct = nn.CrossEntropyLoss()
-        self.init_weights()
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.esm.embeddings.word_embeddings

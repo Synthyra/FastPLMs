@@ -1,3 +1,4 @@
+import copy
 import importlib
 import importlib.util
 import sys
@@ -5,6 +6,7 @@ import types
 
 import torch
 from huggingface_hub import HfApi, login
+from transformers import AutoModelForMaskedLM
 from tests.common import (
     LOAD_DTYPE,
     _ensure_local_dplm_module_on_path,
@@ -154,6 +156,12 @@ if __name__ == "__main__":
             f"Unexpected keys while mapping official DPLM weights for {source_repo}: "
             f"{load_result.unexpected_keys[:20]}"
         )
+        model.lm_head.dense.weight = copy.deepcopy(official_model.net.lm_head.dense.weight)
+        model.lm_head.dense.bias = copy.deepcopy(official_model.net.lm_head.dense.bias)
+        model.lm_head.decoder.weight = copy.deepcopy(official_model.net.lm_head.decoder.weight)
+        model.lm_head.decoder.bias = copy.deepcopy(official_model.net.lm_head.decoder.bias)
+        model.lm_head.layer_norm.weight = copy.deepcopy(official_model.net.lm_head.layer_norm.weight)
+        model.lm_head.layer_norm.bias = copy.deepcopy(official_model.net.lm_head.layer_norm.bias)
         assert_model_parameters_fp32(
             model=model,
             model_name=f"mapped DPLM model ({source_repo})",
@@ -194,4 +202,16 @@ if __name__ == "__main__":
             path_in_repo="entrypoint_setup.py",
             repo_id=repo_id,
             repo_type="model",
+        )
+        downloaded_model = AutoModelForMaskedLM.from_pretrained(
+            repo_id,
+            dtype=torch.float32,
+            device_map="cpu",
+            force_download=True,
+            trust_remote_code=True,
+        )
+        assert_state_dict_equal(
+            reference_state_dict=official_state_dict,
+            candidate_state_dict=downloaded_model.state_dict(),
+            context=f"DPLM weight parity post-download ({repo_id})",
         )

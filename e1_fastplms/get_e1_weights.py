@@ -1,3 +1,4 @@
+import copy
 import importlib
 import importlib.util
 import pathlib
@@ -7,6 +8,7 @@ import types
 
 import torch
 from huggingface_hub import HfApi, login
+from transformers import AutoModelForMaskedLM
 
 from e1_fastplms.modeling_e1 import E1Config, E1ForMaskedLM
 from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
@@ -156,6 +158,12 @@ if __name__ == "__main__":
             f"Unexpected keys while mapping official E1 weights for {source_repo}: "
             f"{load_result.unexpected_keys[:20]}"
         )
+        model.mlm_head[0].weight = copy.deepcopy(official_model.mlm_head[0].weight)
+        model.mlm_head[0].bias = copy.deepcopy(official_model.mlm_head[0].bias)
+        model.mlm_head[2].weight = copy.deepcopy(official_model.mlm_head[2].weight)
+        model.mlm_head[2].bias = copy.deepcopy(official_model.mlm_head[2].bias)
+        model.mlm_head[3].weight = copy.deepcopy(official_model.mlm_head[3].weight)
+        model.mlm_head[3].bias = copy.deepcopy(official_model.mlm_head[3].bias)
         assert_model_parameters_fp32(
             model=model,
             model_name=f"mapped E1 model ({source_repo})",
@@ -195,4 +203,16 @@ if __name__ == "__main__":
             path_in_repo="entrypoint_setup.py",
             repo_id=repo_id,
             repo_type="model",
+        )
+        downloaded_model = AutoModelForMaskedLM.from_pretrained(
+            repo_id,
+            dtype=torch.float32,
+            device_map="cpu",
+            force_download=True,
+            trust_remote_code=True,
+        )
+        assert_state_dict_equal(
+            reference_state_dict=official_model.state_dict(),
+            candidate_state_dict=downloaded_model.state_dict(),
+            context=f"E1 weight parity post-download ({repo_id})",
         )

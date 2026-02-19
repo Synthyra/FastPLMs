@@ -53,6 +53,7 @@ if __name__ == "__main__":
 
     for model_name, source_repo in _resolve_model_items(args.model_names):
         official_config = EsmConfig.from_pretrained(source_repo)
+        # Makes sure the esm2 word and lm head are correctly loaded
         official_config.tie_word_embeddings = True
 
         official_model = EsmForMaskedLM.from_pretrained(
@@ -61,11 +62,6 @@ if __name__ == "__main__":
             dtype=torch.float32,
             device_map="cpu",
             force_download=True
-        )
-
-        assert_model_parameters_fp32(
-            model=official_model,
-            model_name=f"official ESM2 model ({source_repo})",
         )
 
         config = FastEsmConfig.from_pretrained(source_repo)
@@ -84,7 +80,12 @@ if __name__ == "__main__":
             device_map="cpu",
         )
         model.load_state_dict(official_model.state_dict(), strict=True)
+        model.lm_head.dense.weight = copy.deepcopy(official_model.lm_head.dense.weight)
+        model.lm_head.dense.bias = copy.deepcopy(official_model.lm_head.dense.bias)
         model.lm_head.decoder.weight = copy.deepcopy(official_model.lm_head.decoder.weight)
+        model.lm_head.decoder.bias = copy.deepcopy(official_model.lm_head.decoder.bias)
+        model.lm_head.layer_norm.weight = copy.deepcopy(official_model.lm_head.layer_norm.weight)
+        model.lm_head.layer_norm.bias = copy.deepcopy(official_model.lm_head.layer_norm.bias)
 
         assert_model_parameters_fp32(
             model=official_model,
