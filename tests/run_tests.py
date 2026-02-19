@@ -199,6 +199,7 @@ def main():
     assert torch.cuda.is_available(), "CUDA is required to run the test suite."
 
     parser = argparse.ArgumentParser(description="FastPLMs test suite")
+    parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--families", nargs="+", default=None, choices=["e1", "esm2", "esmplusplus", "dplm", "dplm2"])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-sequences", type=int, default=8)
@@ -207,6 +208,10 @@ def main():
     parser.add_argument("--skip-flex", action="store_true", help="Skip flex attention tests")
     parser.add_argument("--skip-official", action="store_true", help="Skip official model loading (weight/output parity)")
     args = parser.parse_args()
+
+    if args.hf_token:
+        from huggingface_hub import login
+        login(token=args.hf_token)
 
     device = torch.device("cuda")
     set_seed(args.seed)
