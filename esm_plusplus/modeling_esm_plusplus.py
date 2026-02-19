@@ -1487,5 +1487,3 @@ class EsmSequenceTokenizer(PreTrainedTokenizerFast):
     @property
     def special_token_ids(self):
         return self.all_special_ids
-
-
