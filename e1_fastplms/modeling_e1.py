@@ -18,14 +18,11 @@ from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
 
 try:
-    # when used from AutoModel, these are in the same directory
     from .embedding_mixin import EmbeddingMixin, Pooler
-except:
+except ImportError:
     try:
-        # whem importing as a submodule, embedding mixin is in the FastPLMs directory
         from ..embedding_mixin import EmbeddingMixin, Pooler
-    except:
-        # when running from our repo, these are in the base directory
+    except ImportError:
         from embedding_mixin import EmbeddingMixin, Pooler
 
 
@@ -415,7 +412,7 @@ def get_tokenizer() -> Tokenizer:
     try:
         fname = os.path.join(os.path.dirname(__file__), "tokenizer.json")
         tokenizer: Tokenizer = Tokenizer.from_file(fname)
-    except:
+    except (FileNotFoundError, OSError):
         print("E1 Tokenizer not found in local directory, downloading from Hugging Face")
         from huggingface_hub import hf_hub_download
         fname = hf_hub_download(repo_id="Synthyra/Profluent-E1-150M", filename="tokenizer.json")
@@ -564,7 +561,7 @@ class E1BatchPreparer:
         return {"input_ids": tokens, "labels": tokens, "position_ids": position_ids}
 
     def get_boundary_token_mask(self, tokens: torch.Tensor) -> torch.BoolTensor:
-        return torch.isin(tokens, self.boundary_token_ids)
+        return torch.isin(tokens, self.boundary_token_ids.to(tokens.device))
 
     def get_mask_positions_mask(self, tokens: torch.Tensor) -> torch.BoolTensor:
         return tokens == self.mask_token_id
@@ -1857,20 +1854,3 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         )
 
 
-if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = E1ForSequenceClassification.from_pretrained("Profluent-Bio/E1-150m", dtype=torch.bfloat16, num_labels=1).eval().to(device)
-    print(model)
-
-    seqs = [
-    "MRHGDISSSNDTVGVAVVNYKMPRLHTAAEVLDNARKIAEMIVGMKQGLPGMDLVVFPEYSLQGIMYDPAEMMETAVAIPGEETE",
-    "IFSRACRKANVWGVFSLTGERHEEHPRKAPYNTLVLIDNNGEIVQKYRKIIPWCPIEGWYPGGQTYVSEGPKGMKISLIICDDGNY",
-    "PEIWRDCAMKGAELIVRCQGYMYPAKDQQVMMAKAMAWANNCYVAVANAAGFDGVYSYFGHSAIIGFDGRTLGECGEEEMGIQYAQL",
-    "SLSQIRDARANDQSQNHLFKILHRGYSGLQASGDGDRGLAECPFEFYRTWVTDAEKARENVERLTRSTTGVAQCPVGRLPYEGLEKEA",
-    ]
-
-    batch = model.prep_tokens.get_batch_kwargs(seqs, device=device)
-    batch['labels'] = torch.tensor([0.0, 0.0, 0.0, 0.0], device=device)
-
-    last_hidden_state = model(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
-    print(last_hidden_state.shape)

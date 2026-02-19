@@ -33,14 +33,11 @@ except ImportError:
     flex_attention = None
 
 try:
-    # when used from AutoModel, these are in the same directory
     from .embedding_mixin import EmbeddingMixin, Pooler
-except:
+except ImportError:
     try:
-        # whem importing as a submodule, embedding mixin is in the FastPLMs directory
         from ..embedding_mixin import EmbeddingMixin, Pooler
-    except:
-        # when running from our repo, these are in the base directory
+    except ImportError:
         from embedding_mixin import EmbeddingMixin, Pooler
 
 
@@ -1142,95 +1139,3 @@ class EsmSequenceTokenizer(PreTrainedTokenizerFast):
         return self.all_special_ids
 
 
-if __name__ == "__main__":    
-    # Set device to CPU for testing
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-    
-    # Test tokenizer
-    tokenizer = EsmSequenceTokenizer()
-    sample_sequence = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
-    encoding = tokenizer(sample_sequence, return_tensors="pt")
-    print(f"Input sequence length: {len(sample_sequence)}")
-    print(f"Tokenized sequence: {encoding['input_ids'].shape}")
-    
-    # Prepare inputs
-    input_ids = encoding['input_ids'].to(device)
-    attention_mask = encoding['attention_mask'].to(device)
-    
-    # Test base model with smaller config for quick testing
-    print("\n=== Testing ESMplusplus Base Model ===")
-    base_config = ESMplusplusConfig(
-        hidden_size=384,
-        num_attention_heads=6,
-        num_hidden_layers=4
-    )
-    base_model = ESMplusplusModel(base_config).to(device)
-    
-    with torch.no_grad():
-        outputs = base_model(input_ids=input_ids, attention_mask=attention_mask)
-    
-    print(f"Last hidden state shape: {outputs.last_hidden_state.shape}")
-    
-    # Test embedding functionality
-    print("\nTesting embedding functionality:")
-    with torch.no_grad():
-        embeddings = base_model._embed(input_ids, attention_mask)
-    print(f"Embedding shape: {embeddings.shape}")
-    
-    # Test masked language modeling
-    print("\n=== Testing ESMplusplus For Masked LM ===")
-    mlm_model = ESMplusplusForMaskedLM(base_config).to(device)
-    
-    with torch.no_grad():
-        outputs = mlm_model(input_ids=input_ids, attention_mask=attention_mask)
-    
-    print(f"Last hidden state shape: {outputs.last_hidden_state.shape}")
-    print(f"Logits shape: {outputs.logits.shape}")
-    
-    # Test sequence classification model
-    print("\n=== Testing Sequence Classification Model ===")
-    classification_model = ESMplusplusForSequenceClassification(base_config).to(device)
-    
-    with torch.no_grad():
-        outputs = classification_model(input_ids=input_ids, attention_mask=attention_mask)
-    
-    print(f"Last hidden state shape: {outputs.last_hidden_state.shape}")
-    print(f"Logits shape: {outputs.logits.shape}")
-    
-    # Test token classification model
-    print("\n=== Testing Token Classification Model ===")
-    token_model = ESMplusplusForTokenClassification(base_config).to(device)
-    
-    with torch.no_grad():
-        outputs = token_model(input_ids=input_ids, attention_mask=attention_mask)
-    
-    print(f"Last hidden state shape: {outputs.last_hidden_state.shape}")
-    print(f"Logits shape: {outputs.logits.shape}")
-    
-    # Test embedding dataset functionality with a mini dataset
-    print("\n=== Testing Embed Dataset Functionality ===")
-    mini_dataset = [sample_sequence, sample_sequence[:50], sample_sequence[:30]]
-    print(f"Creating embeddings for {len(mini_dataset)} sequences")
-    
-    # Only run this if save path doesn't exist to avoid overwriting
-    if not os.path.exists("test_embeddings.pth"):
-        embeddings = mlm_model.embed_dataset(
-            sequences=mini_dataset,
-            tokenizer=tokenizer,
-            batch_size=2,
-            max_len=100,
-            full_embeddings=False,
-            pooling_types=['mean'],
-            save_path="test_embeddings.pth"
-        )
-        if embeddings:
-            print(f"Embedding dictionary size: {len(embeddings)}")
-            for seq, emb in embeddings.items():
-                print(f"Sequence length: {len(seq)}, Embedding shape: {emb.shape}")
-                break
-    else:
-        print("Skipping embedding test as test_embeddings.pth already exists")
-    
-    print("\nAll tests completed successfully!")
-    

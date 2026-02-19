@@ -5,7 +5,7 @@ import types
 
 import torch
 from huggingface_hub import HfApi, login
-from test_scripts.common import (
+from tests.common import (
     LOAD_DTYPE,
     _ensure_local_dplm_module_on_path,
     _import_byprot_module_with_dataclass_patch,
@@ -14,7 +14,7 @@ from test_scripts.common import (
     _patch_transformers_esm_star_exports_for_byprot,
 )
 
-from dplm_fastplms.dplm import DPLMConfig, DPLMForMaskedLM
+from dplm_fastplms.modeling_dplm import DPLMConfig, DPLMForMaskedLM
 from weight_parity_utils import assert_fp32_state_dict_equal, assert_model_parameters_fp32
 
 
@@ -137,11 +137,11 @@ if __name__ == "__main__":
 
         config = DPLMConfig.from_pretrained(source_repo)
         config.auto_map = {
-            "AutoConfig": "dplm.DPLMConfig",
-            "AutoModel": "dplm.DPLMModel",
-            "AutoModelForMaskedLM": "dplm.DPLMForMaskedLM",
-            "AutoModelForSequenceClassification": "dplm.DPLMForSequenceClassification",
-            "AutoModelForTokenClassification": "dplm.DPLMForTokenClassification",
+            "AutoConfig": "modeling_dplm.DPLMConfig",
+            "AutoModel": "modeling_dplm.DPLMModel",
+            "AutoModelForMaskedLM": "modeling_dplm.DPLMForMaskedLM",
+            "AutoModelForSequenceClassification": "modeling_dplm.DPLMForSequenceClassification",
+            "AutoModelForTokenClassification": "modeling_dplm.DPLMForTokenClassification",
         }
         config.tie_word_embeddings = False
         model = DPLMForMaskedLM(config=config).eval().cpu().to(torch.float32)
@@ -172,8 +172,8 @@ if __name__ == "__main__":
         tokenizer.push_to_hub(repo_id)
         model.push_to_hub(repo_id)
         api.upload_file(
-            path_or_fileobj="dplm_fastplms/dplm.py",
-            path_in_repo="dplm.py",
+            path_or_fileobj="dplm_fastplms/modeling_dplm.py",
+            path_in_repo="modeling_dplm.py",
             repo_id=repo_id,
             repo_type="model",
         )

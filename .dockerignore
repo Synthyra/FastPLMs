@@ -1,4 +1,8 @@
-**
-!*/
+# Ignore everything by default
+*
+
+# Keep Python source files anywhere in the tree
 !**/*.py
+
+# Keep dependency manifest used during build
 !requirements.txt

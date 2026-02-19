@@ -205,7 +205,7 @@ def load_model(
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "dplm":
-        from dplm_fastplms.dplm import (
+        from dplm_fastplms.modeling_dplm import (
             DPLMConfig,
             DPLMForMaskedLM,
             DPLMModel,
@@ -221,7 +221,7 @@ def load_model(
         else:
             raise ValueError(f"Unsupported task: {task}")
     elif spec.family == "dplm2":
-        from dplm_fastplms.dplm2 import (
+        from dplm2_fastplms.modeling_dplm2 import (
             DPLM2Config,
             DPLM2ForMaskedLM,
             DPLM2Model,

@@ -29,14 +29,11 @@ except ImportError:
     flex_attention = None
 
 try:
-    # when used from AutoModel, these are in the same directory
     from .embedding_mixin import EmbeddingMixin
-except:
+except ImportError:
     try:
-        # whem importing as a submodule, embedding mixin is in the FastPLMs directory
         from ..embedding_mixin import EmbeddingMixin
-    except:
-        # when running from our repo, these are in the base directory
+    except ImportError:
         from embedding_mixin import EmbeddingMixin
 
 
@@ -236,12 +233,13 @@ class EsmEmbeddings(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
+        self.padding_idx = config.pad_token_id
+        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=self.padding_idx)
         if config.emb_layer_norm_before:
             self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         else:
             self.layer_norm = None
-        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
+        self.position_embedding_type = config.position_embedding_type
         self.register_buffer(
             "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
         )
@@ -583,11 +581,6 @@ class FastEsmPreTrainedModel(PreTrainedModel):
                 module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def get_input_embeddings(self) -> nn.Module:
-        try:
-            return self.embeddings.word_embeddings
-        except AttributeError:
-            return self.esm.embeddings.word_embeddings
 
 
 class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
@@ -727,14 +720,13 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
         self.config = config
         self.esm = FAST_ESM_ENCODER(config)
         self.pooler = EsmPooler(config) if add_pooling_layer else None
-        # Initialize weights and apply final processing
         self.post_init()
 
     def get_input_embeddings(self):
-        return self.embeddings.word_embeddings
+        return self.esm.embeddings.word_embeddings
 
     def set_input_embeddings(self, value):
-        self.embeddings.word_embeddings = value
+        self.esm.embeddings.word_embeddings = value
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.esm._embed(input_ids, attention_mask)
@@ -806,6 +798,9 @@ class FastEsmForMaskedLM(FastEsmPreTrainedModel, EmbeddingMixin):
         self.loss_fct = nn.CrossEntropyLoss()
         self.init_weights()
 
+    def get_input_embeddings(self):
+        return self.esm.embeddings.word_embeddings
+
     def get_output_embeddings(self):
         return self.lm_head.decoder
 
@@ -866,6 +861,9 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
         self.init_weights()
+
+    def get_input_embeddings(self):
+        return self.esm.embeddings.word_embeddings
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.esm._embed(input_ids, attention_mask)
@@ -935,6 +933,9 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         self.loss_fct = nn.CrossEntropyLoss()
         self.init_weights()
 
+    def get_input_embeddings(self):
+        return self.esm.embeddings.word_embeddings
+
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.esm._embed(input_ids, attention_mask)
 
@@ -978,61 +979,3 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         )
 
 
-if __name__ == "__main__":
-    """
-    Test the hidden state differences between the FastEsmModel and the HF EsmModel.
-    In full precision, the differences are very very small, but nonzero due to floating point issues with F.scaled_dot_product_attention.
-    In Pytorch 2.5+ (and linux kernel), this implementation is very fast and uses less memory than the HF implementation.
-    """
-    import random
-    from transformers import EsmForMaskedLM as TransformersEsmModel, EsmTokenizer
-
-    model_paths = [
-        "facebook/esm2_t6_8M_UR50D",
-        "facebook/esm2_t12_35M_UR50D",
-        #"facebook/esm2_t30_150M_UR50D",
-        #"facebook/esm2_t33_650M_UR50D",
-    ]
-    canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
-    length = 64
-    seq_count = 100
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    tolerances = [1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 1e-8]
-
-    def generate_random_sequence(length: int) -> str:
-        return 'M' + "".join(random.choices(canonical_amino_acids, k=length))
-
-    print("Percentage of hidden states that are within the tolerance:")
-    for model_path in model_paths:
-        print(f"Testing {model_path}...")
-        tokenizer = EsmTokenizer.from_pretrained(model_path)
-        config = FastEsmConfig.from_pretrained(model_path)
-        fast_model = FastEsmForMaskedLM(config).from_pretrained(model_path).to(device)
-        print('fast model')
-        print(fast_model)
-        model = TransformersEsmModel.from_pretrained(model_path, token_dropout=False).to(device)
-        print('transformers model')
-        print(model)
-
-        counts = [0] * len(tolerances)
-        for _ in range(seq_count):
-            example_seq = generate_random_sequence(length)
-            fast_tokens = tokenizer(example_seq, return_tensors="pt").input_ids.to(device)
-            fast_output = fast_model(fast_tokens, output_hidden_states=True).hidden_states[-1].detach().cpu()
-
-            model_tokens = tokenizer(example_seq, return_tensors="pt").input_ids.to(device)
-            model_output = model(model_tokens, output_hidden_states=True).hidden_states[-1].detach().cpu()
-
-            for i, atol in enumerate(tolerances):
-                if torch.allclose(fast_output, model_output, atol=atol):
-                    counts[i] += 1
-
-        print(f"{model_path}:")
-        for i, atol in enumerate(tolerances):
-            print(f"    tolerance={atol}: {counts[i] / seq_count * 100}%")
-    
-        model.cpu()
-        fast_model.cpu()
-        del model
-        del fast_model
-        torch.cuda.empty_cache()

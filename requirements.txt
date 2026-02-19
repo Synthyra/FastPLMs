@@ -1,7 +1,7 @@
 torch # these are installed in the Dockerfile
 torchvision # these are installed in the Dockerfile
 matplotlib
-transformers
+transformers>=5.0.0s
 datasets
 hf_transfer
 hf-xet

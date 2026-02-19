@@ -6,7 +6,7 @@ import types
 import torch
 from huggingface_hub import HfApi, login
 import transformers
-from test_scripts.common import (
+from tests.common import (
     LOAD_DTYPE,
     _ensure_local_dplm_module_on_path,
     _import_byprot_module_with_dataclass_patch,
@@ -15,7 +15,7 @@ from test_scripts.common import (
     _patch_transformers_esm_star_exports_for_byprot,
 )
 
-from dplm_fastplms.dplm2 import DPLM2Config, DPLM2ForMaskedLM
+from dplm2_fastplms.modeling_dplm2 import DPLM2Config, DPLM2ForMaskedLM
 from weight_parity_utils import assert_fp32_state_dict_equal, assert_model_parameters_fp32
 
 
@@ -200,7 +200,7 @@ def _ensure_imp_module_stub() -> None:
 
 
 if __name__ == "__main__":
-    # py -m dplm_fastplms.get_dplm2_weights
+    # py -m dplm2_fastplms.get_dplm2_weights
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -235,11 +235,11 @@ if __name__ == "__main__":
 
         config = DPLM2Config.from_pretrained(source_repo)
         config.auto_map = {
-            "AutoConfig": "dplm2.DPLM2Config",
-            "AutoModel": "dplm2.DPLM2Model",
-            "AutoModelForMaskedLM": "dplm2.DPLM2ForMaskedLM",
-            "AutoModelForSequenceClassification": "dplm2.DPLM2ForSequenceClassification",
-            "AutoModelForTokenClassification": "dplm2.DPLM2ForTokenClassification",
+            "AutoConfig": "modeling_dplm2.DPLM2Config",
+            "AutoModel": "modeling_dplm2.DPLM2Model",
+            "AutoModelForMaskedLM": "modeling_dplm2.DPLM2ForMaskedLM",
+            "AutoModelForSequenceClassification": "modeling_dplm2.DPLM2ForSequenceClassification",
+            "AutoModelForTokenClassification": "modeling_dplm2.DPLM2ForTokenClassification",
         }
         config.tie_word_embeddings = False
         model = DPLM2ForMaskedLM(config=config).eval().cpu().to(torch.float32)
@@ -270,13 +270,13 @@ if __name__ == "__main__":
         tokenizer.push_to_hub(repo_id)
         model.push_to_hub(repo_id)
         api.upload_file(
-            path_or_fileobj="dplm_fastplms/dplm2.py",
-            path_in_repo="dplm2.py",
+            path_or_fileobj="dplm2_fastplms/modeling_dplm2.py",
+            path_in_repo="modeling_dplm2.py",
             repo_id=repo_id,
             repo_type="model",
         )
         api.upload_file(
-            path_or_fileobj="dplm_fastplms/base_tokenizer.py",
+            path_or_fileobj="dplm2_fastplms/base_tokenizer.py",
             path_in_repo="base_tokenizer.py",
             repo_id=repo_id,
             repo_type="model",
