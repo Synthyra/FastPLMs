@@ -289,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--padded-sequence-fraction", type=float, default=float(DEFAULTS["padded_sequence_fraction"]))
     parser.add_argument("--pad-fractions", type=str, default=DEFAULTS["pad_fractions"])
     parser.add_argument("--max-pad-fraction", type=float, default=float(DEFAULTS["max_pad_fraction"]))
+    parser.add_argument("--skip-flex", action="store_true")
     return parser
 
 
