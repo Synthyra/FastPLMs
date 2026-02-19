@@ -4,6 +4,7 @@ from torch.nn.functional import mse_loss
 from tqdm import tqdm
 from transformers import EsmForMaskedLM, EsmTokenizer
 from esm2.modeling_fastesm import FastEsmForMaskedLM
+from weight_parity_utils import assert_state_dict_equal
 
 
 CANONICAL_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
@@ -16,16 +17,26 @@ FAST_MODEL_PATH = "Synthyra/ESM2-8M"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-official_model = EsmForMaskedLM.from_pretrained(OFFICIAL_MODEL_PATH, dtype=torch.float32).to(DEVICE).eval()
-fast_model = FastEsmForMaskedLM.from_pretrained(FAST_MODEL_PATH, trust_remote_code=True, dtype=torch.float32).to(DEVICE).eval()
+official_model = EsmForMaskedLM.from_pretrained(
+    OFFICIAL_MODEL_PATH,
+    dtype=torch.float32,
+    device_map="cpu",
+    force_download=True
+).to(DEVICE).eval()
+fast_model = FastEsmForMaskedLM.from_pretrained(
+    FAST_MODEL_PATH,
+    trust_remote_code=True,
+    dtype=torch.float32,
+    device_map="cpu",
+    force_download=True
+).to(DEVICE).eval()
 fast_model.attn_backend = "sdpa"
 
-with torch.no_grad():
-    for official_name, official_param in official_model.named_parameters():
-        for fast_name, fast_param in fast_model.named_parameters():
-            if official_name == fast_name:
-                print(f"Parameter {official_name} - MSE: {mse_loss(official_param, fast_param).item()}")
-
+assert_state_dict_equal(
+    reference_state_dict=official_model.state_dict(),
+    candidate_state_dict=fast_model.state_dict(),
+    context="Weight Parity",
+)
 
 tokenizer = EsmTokenizer.from_pretrained(OFFICIAL_MODEL_PATH)
 
@@ -70,3 +81,5 @@ with torch.inference_mode():
 print(f"Average last hidden state MSE: {cumulative_last_hidden_state_mse / TEST_NUMBER_BATCHES}")
 print(f"Average logits MSE: {cumulative_logits_mse / TEST_NUMBER_BATCHES}")
 print(f"Average preds accuracy: {cumulative_preds_accuracy / TEST_NUMBER_BATCHES}")
+
+

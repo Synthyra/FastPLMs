@@ -14,7 +14,7 @@ from boltz_fastplms.modeling_boltz2 import (
     _state_dict_without_wrappers,
     _to_plain_python,
 )
-from weight_parity_utils import assert_fp32_state_dict_equal, assert_model_parameters_fp32
+from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
 BOLTZ2_CKPT_URL = "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt"
@@ -217,7 +217,7 @@ if __name__ == "__main__":
     filtered_official_state_dict: dict[str, torch.Tensor] = {}
     for key in candidate_state_dict:
         filtered_official_state_dict[key] = official_state_dict[key]
-    assert_fp32_state_dict_equal(
+    assert_state_dict_equal(
         reference_state_dict=filtered_official_state_dict,
         candidate_state_dict=candidate_state_dict,
         context="Boltz2 weight parity",

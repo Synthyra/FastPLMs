@@ -6,6 +6,7 @@ from typing import Optional, Tuple, Union, Dict, Any
 from einops import rearrange
 from dataclasses import dataclass
 from transformers import PreTrainedModel, PretrainedConfig, EsmTokenizer
+from transformers import initialization as init
 from transformers.modeling_outputs import (
     ModelOutput,
     BaseModelOutputWithPastAndCrossAttentions,
@@ -20,6 +21,9 @@ from transformers.models.esm.modeling_esm import (
     EsmLMHead,
     EsmSelfOutput,
     EsmClassificationHead,
+    EsmContactPredictionHead,
+    EsmEmbeddings,
+    RotaryEmbedding,
 )
 try:
     from torch.nn.attention.flex_attention import create_block_mask
@@ -28,13 +32,7 @@ except ImportError:
     create_block_mask = None
     flex_attention = None
 
-try:
-    from .embedding_mixin import EmbeddingMixin
-except ImportError:
-    try:
-        from ..embedding_mixin import EmbeddingMixin
-    except ImportError:
-        from embedding_mixin import EmbeddingMixin
+from embedding_mixin import EmbeddingMixin
 
 
 def _create_pad_block_mask(attention_mask_2d: torch.Tensor):
@@ -80,7 +78,7 @@ class FastEsmConfig(PretrainedConfig):
         max_position_embeddings: int = 1026,
         initializer_range: float = 0.02,
         layer_norm_eps: float = 1e-12,
-        position_embedding_type: str = "absolute",
+        position_embedding_type: str = "rotary",
         emb_layer_norm_before: bool = None,
         token_dropout: bool = True,
         attn_backend: str = "sdpa",
@@ -117,182 +115,6 @@ class FastEsmConfig(PretrainedConfig):
         """
         output = super().to_dict()
         return output
-
-
-def rotate_half(x: torch.Tensor) -> torch.Tensor:
-    x1, x2 = x.chunk(2, dim=-1)
-    return torch.cat((-x2, x1), dim=-1)
-
-
-def apply_rotary_pos_emb(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    cos = cos[:, :, : x.shape[-2], :]
-    sin = sin[:, :, : x.shape[-2], :]
-
-    return (x * cos) + (rotate_half(x) * sin)
-
-
-def symmetrize(x: torch.Tensor) -> torch.Tensor:
-    "Make layer symmetric in final two dimensions, used for contact prediction."
-    return x + x.transpose(-1, -2)
-
-
-def average_product_correct(x: torch.Tensor) -> torch.Tensor:
-    "Perform average product correct, used for contact prediction."
-    a1 = x.sum(-1, keepdims=True)
-    a2 = x.sum(-2, keepdims=True)
-    a12 = x.sum((-1, -2), keepdims=True)
-
-    avg = a1 * a2
-    avg.div_(a12)  # in-place to reduce memory
-    normalized = x - avg
-    return normalized
-
-
-class EsmContactPredictionHead(nn.Module):
-    """Performs symmetrization, apc, and computes a logistic regression on the output features"""
-
-    def __init__(
-        self,
-        in_features: int,
-        bias: bool = True,
-        eos_idx: int = 2,
-    ):
-        super().__init__()
-        self.in_features = in_features
-        self.eos_idx = eos_idx
-        self.regression = nn.Linear(in_features, 1, bias=bias)
-        self.activation = nn.Sigmoid()
-
-    def forward(self, input_ids: torch.Tensor, attentions: torch.Tensor) -> torch.Tensor:
-        # remove eos token attentions
-        eos_mask = input_ids.ne(self.eos_idx).to(attentions)
-        eos_mask = eos_mask.unsqueeze(1) * eos_mask.unsqueeze(2)
-        attentions = attentions * eos_mask[:, None, None, :, :]
-        attentions = attentions[..., :-1, :-1]
-        # remove cls token attentions
-        attentions = attentions[..., 1:, 1:]
-        batch_size, layers, heads, seqlen, _ = attentions.size()
-        attentions = attentions.view(batch_size, layers * heads, seqlen, seqlen)
-
-        # features: batch x channels x tokens x tokens (symmetric)
-        attentions = attentions.to(
-            self.regression.weight.device
-        )  # attentions always float32, may need to convert to float16
-        attentions = average_product_correct(symmetrize(attentions))
-        attentions = attentions.permute(0, 2, 3, 1)
-        return self.activation(self.regression(attentions).squeeze(3))
-
-
-class RotaryEmbedding(torch.nn.Module):
-    """
-    Rotary position embeddings based on those in
-    [RoFormer](https://huggingface.co/docs/transformers/model_doc/roformer). Query and keys are transformed by rotation
-    matrices which depend on their relative positions.
-    """
-
-    def __init__(self, dim: int):
-        super().__init__()
-        # Generate and save the inverse frequency buffer (non trainable)
-        inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2, dtype=torch.int64).float() / dim))
-        inv_freq = inv_freq
-        self.register_buffer("inv_freq", inv_freq)
-
-        self._seq_len_cached = None
-        self._cos_cached = None
-        self._sin_cached = None
-
-    def _update_cos_sin_tables(self, x: torch.Tensor, seq_dimension: int = 2) -> Tuple[torch.Tensor, torch.Tensor]:
-        seq_len = x.shape[seq_dimension]
-
-        # Reset the tables if the sequence length has changed,
-        # or if we're on a new device (possibly due to tracing for instance)
-        if seq_len != self._seq_len_cached or self._cos_cached.device != x.device:
-            self._seq_len_cached = seq_len
-            t = torch.arange(x.shape[seq_dimension], device=x.device).type_as(self.inv_freq)
-            freqs = torch.outer(t, self.inv_freq)
-            emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
-
-            self._cos_cached = emb.cos()[None, None, :, :].to(x.dtype)
-            self._sin_cached = emb.sin()[None, None, :, :].to(x.dtype)
-
-        return self._cos_cached, self._sin_cached
-
-    def forward(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        self._cos_cached, self._sin_cached = self._update_cos_sin_tables(k, seq_dimension=-2)
-
-        return (
-            apply_rotary_pos_emb(q, self._cos_cached, self._sin_cached),
-            apply_rotary_pos_emb(k, self._cos_cached, self._sin_cached),
-        )
-
-
-class EsmEmbeddings(nn.Module):
-    """
-    Same as BertEmbeddings with a tiny tweak for positional embeddings indexing.
-    """
-
-    def __init__(self, config):
-        super().__init__()
-        self.padding_idx = config.pad_token_id
-        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=self.padding_idx)
-        if config.emb_layer_norm_before:
-            self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        else:
-            self.layer_norm = None
-        self.position_embedding_type = config.position_embedding_type
-        self.register_buffer(
-            "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
-        )
-        self.token_dropout = config.token_dropout
-        self.mask_token_id = config.mask_token_id
-
-    def forward(
-        self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        past_key_values_length: Optional[int] = 0,
-    ):
-        if inputs_embeds is None:
-            inputs_embeds = self.word_embeddings(input_ids)
-
-        embeddings = inputs_embeds
-
-        if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
-
-        if self.token_dropout:
-            embeddings = embeddings.masked_fill((input_ids == self.mask_token_id).unsqueeze(-1), 0)
-            mask_ratio_train = 0.15 * 0.8
-            src_lengths = attention_mask.sum(-1)
-            mask_ratio_observed = (input_ids == self.mask_token_id).sum(-1).float() / src_lengths
-            embeddings = (embeddings * (1 - mask_ratio_train) / (1 - mask_ratio_observed)[:, None, None]).to(
-                embeddings.dtype
-            )
-
-        if self.layer_norm is not None:
-            embeddings = self.layer_norm(embeddings)
-        if attention_mask is not None:
-            embeddings = (embeddings * attention_mask.unsqueeze(-1)).to(embeddings.dtype)
-        return embeddings
-
-    def create_position_ids_from_inputs_embeds(self, inputs_embeds):
-        """
-        We are provided embeddings directly. We cannot infer which are padded so just generate sequential position ids.
-
-        Args:
-            inputs_embeds: torch.Tensor
-
-        Returns: torch.Tensor
-        """
-        input_shape = inputs_embeds.size()[:-1]
-        sequence_length = input_shape[1]
-
-        position_ids = torch.arange(
-            self.padding_idx + 1, sequence_length + self.padding_idx + 1, dtype=torch.long, device=inputs_embeds.device
-        )
-        return position_ids.unsqueeze(0).expand(input_shape)
 
 
 class EsmSelfAttention(nn.Module):
@@ -565,21 +387,23 @@ class FastEsmPreTrainedModel(PreTrainedModel):
     supports_gradient_checkpointing = True
     tokenizer = EsmTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
     all_tied_weights_keys = {}
-    
+
+    @torch.no_grad()
     def _init_weights(self, module):
         """Initialize the weights"""
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.bias is not None:
-                module.bias.data.zero_()
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
-            if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
-        elif isinstance(module, nn.LayerNorm):
-            if module.bias is not None:
-                module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
+        super()._init_weights(module)
+        if isinstance(module, EsmLMHead):
+            init.zeros_(module.bias)
+        elif isinstance(module, EsmEmbeddings):
+            init.copy_(module.position_ids, torch.arange(module.position_ids.shape[-1]).expand((1, -1)))
+        elif isinstance(module, RotaryEmbedding):
+            inv_freq = 1.0 / (10000 ** (torch.arange(0, module.dim, 2, dtype=torch.int64).float() / module.dim))
+            init.copy_(module.inv_freq, inv_freq)
+
+    def get_output_embeddings(self):
+        # NOTE: get_output_embeddings() must return None to prevent accidental weight tying.
+        # See e.g. https://github.com/huggingface/transformers/pull/39339#discussion_r2219126400
+        return None
 
 
 

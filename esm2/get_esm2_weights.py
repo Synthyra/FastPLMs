@@ -1,9 +1,11 @@
 import torch
+import copy
+import shutil
 from huggingface_hub import HfApi, login
-from transformers import EsmForMaskedLM
+from transformers import EsmConfig, EsmForMaskedLM, AutoModelForMaskedLM
 
 from esm2.modeling_fastesm import FastEsmConfig, FastEsmForMaskedLM
-from weight_parity_utils import assert_fp32_state_dict_equal, assert_model_parameters_fp32
+from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
 MODEL_DICT = {
@@ -50,12 +52,17 @@ if __name__ == "__main__":
         login(token=args.hf_token)
 
     for model_name, source_repo in _resolve_model_items(args.model_names):
-        official_model = (
-            EsmForMaskedLM.from_pretrained(source_repo)
-            .eval()
-            .cpu()
-            .to(torch.float32)
+        official_config = EsmConfig.from_pretrained(source_repo)
+        official_config.tie_word_embeddings = True
+
+        official_model = EsmForMaskedLM.from_pretrained(
+            source_repo,
+            config=official_config,
+            dtype=torch.float32,
+            device_map="cpu",
+            force_download=True
         )
+
         assert_model_parameters_fp32(
             model=official_model,
             model_name=f"official ESM2 model ({source_repo})",
@@ -70,29 +77,25 @@ if __name__ == "__main__":
             "AutoModelForTokenClassification": "modeling_fastesm.FastEsmForTokenClassification",
         }
         config.tie_word_embeddings = False
-        model = FastEsmForMaskedLM(config=config).eval().cpu().to(torch.float32)
-        # FastESM uses rotary embeddings (RoPE) so it has no position_embeddings weight.
-        # Strip position-related keys from the official state dict before loading.
-        EXCLUDED_PREFIXES = ("esm.embeddings.position_embeddings", "esm.embeddings.position_ids")
-        official_state_dict = {
-            k: v for k, v in official_model.state_dict().items()
-            if not any(k.startswith(prefix) for prefix in EXCLUDED_PREFIXES)
-        }
-        load_result = model.load_state_dict(official_state_dict, strict=False)
-        assert len(load_result.missing_keys) == 0, (
-            f"Missing keys while mapping official ESM2 weights for {source_repo}: "
-            f"{load_result.missing_keys[:20]}"
+        model = FastEsmForMaskedLM.from_pretrained(
+            source_repo,
+            config=config,
+            dtype=torch.float32,
+            device_map="cpu",
         )
-        assert len(load_result.unexpected_keys) == 0, (
-            f"Unexpected keys while mapping official ESM2 weights for {source_repo}: "
-            f"{load_result.unexpected_keys[:20]}"
+        model.load_state_dict(official_model.state_dict(), strict=True)
+        model.lm_head.decoder.weight = copy.deepcopy(official_model.lm_head.decoder.weight)
+
+        assert_model_parameters_fp32(
+            model=official_model,
+            model_name=f"official ESM2 model ({source_repo})",
         )
         assert_model_parameters_fp32(
             model=model,
             model_name=f"mapped ESM2 model ({source_repo})",
         )
-        assert_fp32_state_dict_equal(
-            reference_state_dict=official_state_dict,
+        assert_state_dict_equal(
+            reference_state_dict=official_model.state_dict(),
             candidate_state_dict=model.state_dict(),
             context=f"ESM2 weight parity ({source_repo})",
         )
@@ -104,15 +107,19 @@ if __name__ == "__main__":
 
         tokenizer = model.tokenizer
         tokenizer.push_to_hub(repo_id)
+
         model.push_to_hub(repo_id)
+
         api.upload_file(
             path_or_fileobj="esm2/modeling_fastesm.py",
             path_in_repo="modeling_fastesm.py",
             repo_id=repo_id,
             repo_type="model",
         )
+        ### Copy the embedding mixin file from base to esm2
+        shutil.copy("embedding_mixin.py", "esm2/embedding_mixin.py")
         api.upload_file(
-            path_or_fileobj="embedding_mixin.py",
+            path_or_fileobj="esm2/embedding_mixin.py",
             path_in_repo="embedding_mixin.py",
             repo_id=repo_id,
             repo_type="model",
@@ -122,6 +129,19 @@ if __name__ == "__main__":
             path_in_repo="entrypoint_setup.py",
             repo_id=repo_id,
             repo_type="model",
+        )
+
+        downloaded_model = AutoModelForMaskedLM.from_pretrained(
+            repo_id,
+            dtype=torch.float32,
+            device_map="cpu",
+            force_download=True,
+            trust_remote_code=True,
+        )
+        assert_state_dict_equal(
+            reference_state_dict=official_model.state_dict(),
+            candidate_state_dict=downloaded_model.state_dict(),
+            context=f"ESM2 weight parity post-download ({repo_id})",
         )
 
  

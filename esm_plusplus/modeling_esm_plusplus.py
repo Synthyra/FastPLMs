@@ -32,13 +32,7 @@ except ImportError:
     create_block_mask = None
     flex_attention = None
 
-try:
-    from .embedding_mixin import EmbeddingMixin, Pooler
-except ImportError:
-    try:
-        from ..embedding_mixin import EmbeddingMixin, Pooler
-    except ImportError:
-        from embedding_mixin import EmbeddingMixin, Pooler
+from embedding_mixin import EmbeddingMixin, Pooler
 
 
 

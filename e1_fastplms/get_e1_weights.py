@@ -9,7 +9,7 @@ import torch
 from huggingface_hub import HfApi, login
 
 from e1_fastplms.modeling_e1 import E1Config, E1ForMaskedLM
-from weight_parity_utils import assert_fp32_state_dict_equal, assert_model_parameters_fp32
+from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
 MODEL_DICT = {
@@ -160,7 +160,7 @@ if __name__ == "__main__":
             model=model,
             model_name=f"mapped E1 model ({source_repo})",
         )
-        assert_fp32_state_dict_equal(
+        assert_state_dict_equal(
             reference_state_dict=official_model.state_dict(),
             candidate_state_dict=model.state_dict(),
             context=f"E1 weight parity ({source_repo})",

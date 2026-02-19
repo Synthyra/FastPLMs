@@ -15,7 +15,7 @@ from tests.common import (
 )
 
 from dplm_fastplms.modeling_dplm import DPLMConfig, DPLMForMaskedLM
-from weight_parity_utils import assert_fp32_state_dict_equal, assert_model_parameters_fp32
+from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
 MODEL_DICT = {
@@ -158,7 +158,7 @@ if __name__ == "__main__":
             model=model,
             model_name=f"mapped DPLM model ({source_repo})",
         )
-        assert_fp32_state_dict_equal(
+        assert_state_dict_equal(
             reference_state_dict=official_state_dict,
             candidate_state_dict=model.state_dict(),
             context=f"DPLM weight parity ({source_repo})",

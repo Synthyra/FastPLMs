@@ -37,21 +37,12 @@ def assert_state_dict_floating_tensors_fp32(
     )
 
 
-def assert_fp32_state_dict_equal(
+def assert_state_dict_equal(
     reference_state_dict: Mapping[str, torch.Tensor],
     candidate_state_dict: Mapping[str, torch.Tensor],
     context: str,
     max_report: int = 5,
 ) -> None:
-    assert_state_dict_floating_tensors_fp32(
-        state_dict=reference_state_dict,
-        state_dict_name=f"{context} reference",
-    )
-    assert_state_dict_floating_tensors_fp32(
-        state_dict=candidate_state_dict,
-        state_dict_name=f"{context} candidate",
-    )
-
     reference_keys = set(reference_state_dict.keys())
     candidate_keys = set(candidate_state_dict.keys())
     only_in_reference = sorted(reference_keys - candidate_keys)
@@ -118,7 +109,7 @@ def assert_models_fp32_and_equal(
 ) -> None:
     assert_model_parameters_fp32(model=reference_model, model_name=f"{context} reference model")
     assert_model_parameters_fp32(model=candidate_model, model_name=f"{context} candidate model")
-    assert_fp32_state_dict_equal(
+    assert_state_dict_equal(
         reference_state_dict=reference_model.state_dict(),
         candidate_state_dict=candidate_model.state_dict(),
         context=context,

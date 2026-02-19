@@ -17,13 +17,7 @@ from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
 
-try:
-    from .embedding_mixin import EmbeddingMixin, Pooler
-except ImportError:
-    try:
-        from ..embedding_mixin import EmbeddingMixin, Pooler
-    except ImportError:
-        from embedding_mixin import EmbeddingMixin, Pooler
+from embedding_mixin import EmbeddingMixin, Pooler
 
 
 logger = logging.get_logger(__name__)

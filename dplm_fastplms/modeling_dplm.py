@@ -50,13 +50,7 @@ try:
 except ImportError:
     from base_tokenizer import BaseSequenceTokenizer
 
-try:
-    from .embedding_mixin import EmbeddingMixin
-except ImportError:
-    try:
-        from ..embedding_mixin import EmbeddingMixin
-    except ImportError:
-        from embedding_mixin import EmbeddingMixin
+from embedding_mixin import EmbeddingMixin
 
 
 def _create_pad_block_mask(attention_mask_2d: torch.Tensor):

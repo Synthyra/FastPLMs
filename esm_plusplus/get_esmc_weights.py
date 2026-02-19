@@ -7,7 +7,7 @@ import torch
 from huggingface_hub import HfApi, login
 
 from esm_plusplus.modeling_esm_plusplus import ESMplusplusConfig, ESMplusplusForMaskedLM
-from weight_parity_utils import assert_fp32_state_dict_equal, assert_model_parameters_fp32
+from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
 MODEL_DICT = {
@@ -154,7 +154,7 @@ if __name__ == "__main__":
             model=model,
             model_name=f"mapped ESM++ model ({esmc_model_key})",
         )
-        assert_fp32_state_dict_equal(
+        assert_state_dict_equal(
             reference_state_dict=official_model.state_dict(),
             candidate_state_dict=model.state_dict(),
             context=f"ESMC/ESM++ weight parity ({esmc_model_key})",
