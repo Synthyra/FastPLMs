@@ -3,7 +3,6 @@ import random
 from torch.nn.functional import mse_loss
 from tqdm import tqdm
 from transformers import EsmForMaskedLM, EsmTokenizer, AutoModelForMaskedLM
-from esm2.modeling_fastesm import FastEsmForMaskedLM
 
 
 CANONICAL_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
@@ -22,14 +21,14 @@ official_model = EsmForMaskedLM.from_pretrained(
     device_map=DEVICE,
     attn_implementation="sdpa",
     position_embedding_type="rotary",
-    #force_download=True
+    force_download=True
 ).eval()
-fast_model = FastEsmForMaskedLM.from_pretrained(
+fast_model = AutoModelForMaskedLM.from_pretrained(
     FAST_MODEL_PATH,
     dtype=torch.float32,
     device_map=DEVICE,
-    #trust_remote_code=True,
-    #force_download=True
+    trust_remote_code=True,
+    force_download=True
 ).eval()
 fast_model.attn_backend = "sdpa"
 

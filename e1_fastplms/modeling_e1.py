@@ -406,7 +406,7 @@ def get_tokenizer() -> Tokenizer:
     try:
         fname = os.path.join(os.path.dirname(__file__), "tokenizer.json")
         tokenizer: Tokenizer = Tokenizer.from_file(fname)
-    except (FileNotFoundError, OSError):
+    except Exception:
         print("E1 Tokenizer not found in local directory, downloading from Hugging Face")
         from huggingface_hub import hf_hub_download
         fname = hf_hub_download(repo_id="Synthyra/Profluent-E1-150M", filename="tokenizer.json")
