@@ -8,7 +8,7 @@ import torch
 from huggingface_hub import HfApi, login
 import transformers
 from transformers import AutoModelForMaskedLM
-from tests.common import (
+from testing.common import (
     LOAD_DTYPE,
     _ensure_local_dplm_module_on_path,
     _import_byprot_module_with_dataclass_patch,

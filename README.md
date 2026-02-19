@@ -1,4 +1,4 @@
-# FastPLMs
+﻿# FastPLMs
 
 <img width="2816" height="1536" alt="Gemini_Generated_Image_5bmmdc5bmmdc5bmm" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
 
@@ -33,20 +33,20 @@ The currently supported models can be found [here](https://huggingface.co/collec
 
 ## Testing suite
 
-The testing workflow is now CLI-first under `test_scripts/` with clean, structured outputs.
+The testing workflow is now CLI-first under `testing/` with clean, structured outputs.
 
 ### Main test entrypoints
 
 - Compliance and correctness checks:
-  - `py -m test_scripts.run_compliance`
+  - `py -m testing.run_compliance`
 - Boltz2 compliance vs pip boltz reference:
-  - `py -m test_scripts.run_boltz2_compliance`
+  - `py -m testing.run_boltz2_compliance`
 - Embedding mixin behavior checks:
-  - `py -m test_scripts.run_embedding`
+  - `py -m testing.run_embedding`
 - Throughput and memory benchmarks:
-  - `py -m test_scripts.run_throughput`
+  - `py -m testing.run_throughput`
 - Run everything in one command:
-  - `py -m test_scripts.run_all`
+  - `py -m testing.run_all`
 
 By default, each suite runs one representative checkpoint per family (`E1`, `ESM2`, `ESMplusplus`).
 
@@ -68,7 +68,7 @@ By default, each suite runs one representative checkpoint per family (`E1`, `ESM
 
 Each suite writes professional artifacts to:
 
-- Default: `test_scripts/results/<timestamp>/<suite>/`
+- Default: `testing/results/<timestamp>/<suite>/`
 - Files:
   - `metrics.json` (full structured metrics)
   - `metrics.csv` (tabular summary)
@@ -78,13 +78,13 @@ Each suite writes professional artifacts to:
 ### Useful examples
 
 - Full run with all model checkpoints:
-  - `py -m test_scripts.run_all --full-models`
+  - `py -m testing.run_all --full-models`
 - Throughput benchmark on CUDA:
-  - `py -m test_scripts.run_throughput --device cuda --lengths 64,128,256 --batch-sizes 1,2,4`
+  - `py -m testing.run_throughput --device cuda --lengths 64,128,256 --batch-sizes 1,2,4`
 - Embedding validation for ESM2 only:
-  - `py -m test_scripts.run_embedding --families esm2`
+  - `py -m testing.run_embedding --families esm2`
 - Compliance checks with output directory override:
-  - `py -m test_scripts.run_compliance --output-dir test_scripts/results/manual_compliance`
+  - `py -m testing.run_compliance --output-dir testing/results/manual_compliance`
 
 ### Docker-first testing
 
@@ -99,13 +99,13 @@ Run tests inside the container from your checked-out repo:
 Inside the container (`/workspace`):
 
 - Boltz2 compliance (3 sequences, 3 recycles, 200 diffusion steps, 1 sample):
-  - `python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1 --pass-coord-metric aligned --write-cif-artifacts`
+  - `python -m testing.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1 --pass-coord-metric aligned --write-cif-artifacts`
 - Full suite (including Boltz2 compliance):
-  - `python -m test_scripts.run_all --device cuda --compliance-dtype float32`
+  - `python -m testing.run_all --device cuda --compliance-dtype float32`
 
 Boltz2 compliance writes per-sequence CIF artifacts for both predictions under:
-- `test_scripts/results/<timestamp>/boltz2_compliance/structures/seq_<idx>/ours_seq<idx>.cif`
-- `test_scripts/results/<timestamp>/boltz2_compliance/structures/seq_<idx>/ref_seq<idx>.cif`
+- `testing/results/<timestamp>/boltz2_compliance/structures/seq_<idx>/ours_seq<idx>.cif`
+- `testing/results/<timestamp>/boltz2_compliance/structures/seq_<idx>/ref_seq<idx>.cif`
 
 ## Suggestions
 Have suggestions, comments, or requests? Found a bug? Open a GitHub issue and we'll respond soon.

@@ -51,4 +51,3 @@ def get_model_specs(full_models: bool, families: Optional[List[str]]) -> List[Mo
             selected.append(spec)
     assert len(selected) > 0, "No models selected for requested families."
     return selected
-

@@ -1,4 +1,4 @@
----
+﻿---
 library_name: transformers
 tags: []
 ---
@@ -105,10 +105,10 @@ docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test bash
 Inside the container, run Boltz2 compliance against pip `boltz`:
 
 ```bash
-python -m test_scripts.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1 --pass-coord-metric aligned --write-cif-artifacts
+python -m testing.run_boltz2_compliance --device cuda --dtype float32 --seed 42 --num-sequences 3 --recycling-steps 3 --num-sampling-steps 200 --diffusion-samples 1 --pass-coord-metric aligned --write-cif-artifacts
 ```
 
-Artifacts are written to `test_scripts/results/<timestamp>/boltz2_compliance/` by default:
+Artifacts are written to `testing/results/<timestamp>/boltz2_compliance/` by default:
 - `metrics.json`
 - `metrics.csv`
 - `summary.txt`

@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import math
 import time
 import traceback
@@ -7,27 +7,27 @@ from typing import Dict, List
 import torch
 from tqdm.auto import tqdm
 
-from test_scripts.common import add_base_args
-from test_scripts.common import add_data_args
-from test_scripts.common import build_output_dir
-from test_scripts.common import chunk_sequences
-from test_scripts.common import compare_model_state_dicts_fp32
-from test_scripts.common import generate_sequences
-from test_scripts.common import load_model
-from test_scripts.common import load_official_model_for_compliance
-from test_scripts.common import LOAD_DTYPE
-from test_scripts.common import login_if_needed
-from test_scripts.common import prepare_model_for_runtime
-from test_scripts.common import prepare_official_batch_for_compliance
-from test_scripts.common import resolve_device
-from test_scripts.common import resolve_runtime_dtype
-from test_scripts.common import set_seed
-from test_scripts.model_registry import ModelSpec
-from test_scripts.model_registry import get_model_specs
-from test_scripts.reporting import plot_bar
-from test_scripts.reporting import write_csv
-from test_scripts.reporting import write_json
-from test_scripts.reporting import write_summary
+from testing.common import add_base_args
+from testing.common import add_data_args
+from testing.common import build_output_dir
+from testing.common import chunk_sequences
+from testing.common import compare_model_state_dicts_fp32
+from testing.common import generate_sequences
+from testing.common import load_model
+from testing.common import load_official_model_for_compliance
+from testing.common import LOAD_DTYPE
+from testing.common import login_if_needed
+from testing.common import prepare_model_for_runtime
+from testing.common import prepare_official_batch_for_compliance
+from testing.common import resolve_device
+from testing.common import resolve_runtime_dtype
+from testing.common import set_seed
+from testing.model_registry import ModelSpec
+from testing.model_registry import get_model_specs
+from testing.reporting import plot_bar
+from testing.reporting import write_csv
+from testing.reporting import write_json
+from testing.reporting import write_summary
 
 
 STRICT_HIDDEN_MSE_THRESHOLD = 1e-4

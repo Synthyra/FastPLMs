@@ -22,7 +22,7 @@ from transformers import (
     EsmTokenizer,
 )
 
-from test_scripts.model_registry import ModelSpec
+from testing.model_registry import ModelSpec
 
 
 CANONICAL_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
@@ -108,7 +108,7 @@ def configure_torch_compile_runtime() -> None:
 
     torch._dynamo.config.suppress_errors = True
     _TORCH_DYNAMO_CONFIGURED = True
-    print("[test_scripts.common] Enabled torch.compile fallback (TORCHDYNAMO suppress_errors=True).")
+    print("[testing.common] Enabled torch.compile fallback (TORCHDYNAMO suppress_errors=True).")
 
 
 def now_timestamp() -> str:
@@ -122,7 +122,7 @@ def ensure_dir(path: pathlib.Path) -> pathlib.Path:
 
 def build_output_dir(output_dir: Optional[str], suite_name: str) -> pathlib.Path:
     if output_dir is None:
-        root = pathlib.Path("test_scripts") / "results" / now_timestamp()
+        root = pathlib.Path("testing") / "results" / now_timestamp()
         return ensure_dir(root / suite_name)
     root = pathlib.Path(output_dir)
     return ensure_dir(root)
@@ -512,7 +512,7 @@ def _ensure_local_e1_tokenizer_json(spec: ModelSpec) -> None:
         f"Expected either {tokenizer_path} or {fallback_tokenizer_path}."
     )
     print(
-        "[test_scripts.common] Missing E1 tokenizer file at "
+        "[testing.common] Missing E1 tokenizer file at "
         f"{tokenizer_path}. Copying from local fallback {fallback_tokenizer_path}."
     )
     tokenizer_path.parent.mkdir(parents=True, exist_ok=True)
@@ -689,6 +689,34 @@ def load_official_model_for_compliance(spec: ModelSpec, device: torch.device, dt
     raise ValueError(f"Unsupported family for official loader: {spec.family}")
 
 
+def extract_official_state_dict(spec: ModelSpec, official_model) -> Dict[str, torch.Tensor]:
+    """Extract the comparable state dict from a wrapped official model.
+
+    Strips wrapper prefixes and applies family-specific key filtering:
+    - Strips leading 'model.' prefix added by compliance wrapper nn.Modules.
+    - Strips 'net.' prefix for DPLM/DPLM2 (official model wraps ESM inside .net).
+    - Filters position_embeddings/position_ids keys for ESM2.
+    - Filters contact_head keys for DPLM2.
+    """
+    sd = official_model.state_dict()
+
+    if sd and all(k.startswith("model.") for k in sd):
+        sd = {k[len("model."):]: v for k, v in sd.items()}
+
+    if spec.family == "esm2":
+        sd = {k: v for k, v in sd.items()
+              if "position_embeddings" not in k and "position_ids" not in k}
+
+    if spec.family in ("dplm", "dplm2"):
+        sd = {k[len("net."):]: v for k, v in sd.items() if k.startswith("net.")}
+
+    if spec.family == "dplm2":
+        excluded = {"esm.contact_head.regression.weight", "esm.contact_head.regression.bias"}
+        sd = {k: v for k, v in sd.items() if k not in excluded}
+
+    return sd
+
+
 def compare_model_state_dicts_fp32(reference_model, candidate_model, max_report: int = 5) -> Dict[str, object]:
     if isinstance(reference_model, dict):
         reference_state = reference_model
@@ -848,4 +876,3 @@ def flatten_rows(rows: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
     for row in rows:
         output.append(row)
     return output
-

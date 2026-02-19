@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import dataclasses
 import json
 import pathlib
@@ -6,14 +6,14 @@ from typing import Dict, List
 
 from tqdm.auto import tqdm
 
-from test_scripts.common import add_base_args
-from test_scripts.common import ensure_dir
-from test_scripts.common import now_timestamp
-from test_scripts.reporting import write_json
-from test_scripts.reporting import write_summary
-from test_scripts.run_compliance import run_compliance_suite
-from test_scripts.run_embedding import run_embedding_suite
-from test_scripts.run_throughput import run_throughput_suite
+from testing.common import add_base_args
+from testing.common import ensure_dir
+from testing.common import now_timestamp
+from testing.reporting import write_json
+from testing.reporting import write_summary
+from testing.run_compliance import run_compliance_suite
+from testing.run_embedding import run_embedding_suite
+from testing.run_throughput import run_throughput_suite
 
 
 DEFAULTS: Dict[str, object] = {
@@ -89,7 +89,7 @@ class RunAllConfig:
 
     def resolve_root_dir(self) -> pathlib.Path:
         if self.output_dir is None:
-            return ensure_dir(pathlib.Path("test_scripts") / "results" / now_timestamp() / "run_all")
+            return ensure_dir(pathlib.Path("testing") / "results" / now_timestamp() / "run_all")
         return ensure_dir(pathlib.Path(self.output_dir))
 
     def compliance_args(self, root_dir: pathlib.Path) -> argparse.Namespace:
@@ -240,14 +240,14 @@ def run_all_suites(args: argparse.Namespace) -> int:
         "output_dir": str(root_dir),
         "config": dataclasses.asdict(cfg),
         "results": results,
-        "boltz2_note": "Boltz2 is intentionally separate. Run py -m test_scripts.run_boltz2_compliance.",
+        "boltz2_note": "Boltz2 is intentionally separate. Run py -m testing.run_boltz2_compliance.",
     }
     write_json(root_dir / "run_all_metrics.json", payload)
 
     all_success = True
     summary_lines = [
         f"Run-all output directory: {root_dir}",
-        "Boltz2 note: run py -m test_scripts.run_boltz2_compliance separately.",
+        "Boltz2 note: run py -m testing.run_boltz2_compliance separately.",
     ]
     for row in results:
         status = "PASS" if int(row["exit_code"]) == 0 else "FAIL"

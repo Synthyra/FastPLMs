@@ -35,7 +35,6 @@ except ImportError:
 from embedding_mixin import EmbeddingMixin, Pooler
 
 
-
 def _create_pad_block_mask(attention_mask_2d: torch.Tensor):
     assert create_block_mask is not None, "Flex attention block mask requires create_block_mask."
     token_valid = attention_mask_2d.bool()
@@ -823,7 +822,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         if 'pooling_types' in kwargs and isinstance(kwargs['pooling_types'], List[str]) and len(kwargs['pooling_types']) > 0:
             pooling_types = kwargs['pooling_types']
         else:
-            pooling_types = ['cls', 'mean']
+            pooling_types = ['mean', 'var']
         self.pooler = Pooler(pooling_types)
         self.init_weights()
 

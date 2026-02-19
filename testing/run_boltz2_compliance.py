@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import json
 import os
 import random
@@ -27,14 +27,14 @@ from boltz_fastplms.cif_writer import write_cif
 from boltz_fastplms.get_boltz2_weights import BOLTZ2_CKPT_URL
 from boltz_fastplms.minimal_featurizer import build_boltz2_features
 from boltz_fastplms.minimal_structures import ProteinStructureTemplate
-from test_scripts.common import autocast_context
-from test_scripts.common import build_output_dir
-from test_scripts.common import login_if_needed
-from test_scripts.common import resolve_device
-from test_scripts.common import resolve_dtype
-from test_scripts.reporting import write_csv
-from test_scripts.reporting import write_json
-from test_scripts.reporting import write_summary
+from testing.common import autocast_context
+from testing.common import build_output_dir
+from testing.common import login_if_needed
+from testing.common import resolve_device
+from testing.common import resolve_dtype
+from testing.reporting import write_csv
+from testing.reporting import write_json
+from testing.reporting import write_summary
 
 
 matplotlib.use("Agg")

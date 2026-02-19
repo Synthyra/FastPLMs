@@ -1,6 +1,5 @@
 import torch
 import copy
-import shutil
 from huggingface_hub import HfApi, login
 from transformers import EsmConfig, EsmForMaskedLM, AutoModelForMaskedLM
 
@@ -117,10 +116,8 @@ if __name__ == "__main__":
             repo_id=repo_id,
             repo_type="model",
         )
-        ### Copy the embedding mixin file from base to esm2
-        shutil.copy("embedding_mixin.py", "esm2/embedding_mixin.py")
         api.upload_file(
-            path_or_fileobj="esm2/embedding_mixin.py",
+            path_or_fileobj="embedding_mixin.py",
             path_in_repo="embedding_mixin.py",
             repo_id=repo_id,
             repo_type="model",

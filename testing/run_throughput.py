@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import math
 import pathlib
 import random
@@ -11,25 +11,25 @@ import matplotlib.pyplot as plt
 import torch
 from tqdm.auto import tqdm
 
-from test_scripts.common import add_base_args
-from test_scripts.common import build_output_dir
-from test_scripts.common import CANONICAL_AMINO_ACIDS
-from test_scripts.common import load_model
-from test_scripts.common import LOAD_DTYPE
-from test_scripts.common import login_if_needed
-from test_scripts.common import parse_int_list
-from test_scripts.common import peak_memory_mb
-from test_scripts.common import prepare_model_batch
-from test_scripts.common import reset_peak_memory
-from test_scripts.common import resolve_device
-from test_scripts.common import resolve_runtime_dtype
-from test_scripts.common import run_forward
-from test_scripts.common import set_seed
-from test_scripts.common import sync_cuda
-from test_scripts.model_registry import get_model_specs
-from test_scripts.reporting import write_csv
-from test_scripts.reporting import write_json
-from test_scripts.reporting import write_summary
+from testing.common import add_base_args
+from testing.common import build_output_dir
+from testing.common import CANONICAL_AMINO_ACIDS
+from testing.common import load_model
+from testing.common import LOAD_DTYPE
+from testing.common import login_if_needed
+from testing.common import parse_int_list
+from testing.common import peak_memory_mb
+from testing.common import prepare_model_batch
+from testing.common import reset_peak_memory
+from testing.common import resolve_device
+from testing.common import resolve_runtime_dtype
+from testing.common import run_forward
+from testing.common import set_seed
+from testing.common import sync_cuda
+from testing.model_registry import get_model_specs
+from testing.reporting import write_csv
+from testing.reporting import write_json
+from testing.reporting import write_summary
 
 
 matplotlib.use("Agg")

@@ -14,5 +14,5 @@
 *.ckpt
 /results_classification_lora
 /results_regression_lora
-/test_scripts/results
+/testing/results
 draft.md

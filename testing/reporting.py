@@ -61,4 +61,3 @@ def plot_bar(path: pathlib.Path, labels: List[str], values: List[float], title: 
     plt.tight_layout()
     plt.savefig(path, dpi=300)
     plt.close()
-
