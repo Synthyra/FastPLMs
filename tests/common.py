@@ -134,6 +134,34 @@ def get_non_pad_mask(spec: ModelSpec, batch: dict[str, torch.Tensor]) -> torch.T
     return batch["attention_mask"].cpu().bool()
 
 
+def extract_official_state_dict(spec: ModelSpec, official_model) -> dict[str, torch.Tensor]:
+    """Extract the comparable state dict from the wrapped official model.
+
+    Handles: wrapper nn.Module prefix stripping, family-specific key
+    filtering (position_embeddings for ESM2, contact_head for DPLM2,
+    net. prefix for DPLM/DPLM2).
+    """
+    sd = official_model.state_dict()
+
+    # All our load_official wrappers are nn.Modules with self.model,
+    # which adds a 'model.' prefix to every key.
+    if sd and all(k.startswith("model.") for k in sd):
+        sd = {k[len("model."):]: v for k, v in sd.items()}
+
+    if spec.family == "esm2":
+        sd = {k: v for k, v in sd.items() if "position_embeddings" not in k}
+
+    if spec.family in ("dplm", "dplm2"):
+        # Official DPLM wraps the ESM model inside .net
+        sd = {k[len("net."):]: v for k, v in sd.items() if k.startswith("net.")}
+
+    if spec.family == "dplm2":
+        excluded = {"esm.contact_head.regression.weight", "esm.contact_head.regression.bias"}
+        sd = {k: v for k, v in sd.items() if k not in excluded}
+
+    return sd
+
+
 def compare_state_dicts(
     reference: dict[str, torch.Tensor],
     candidate: dict[str, torch.Tensor],

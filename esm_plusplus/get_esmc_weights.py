@@ -82,10 +82,13 @@ def _load_official_esmc_model(esmc_model_key: str) -> torch.nn.Module:
 
 
 def _ensure_zstd_module_stub() -> None:
-    zstd_spec = importlib.util.find_spec("zstd")
-    if zstd_spec is not None:
-        return
     if "zstd" in sys.modules:
+        return
+    try:
+        zstd_spec = importlib.util.find_spec("zstd")
+    except ValueError:
+        zstd_spec = None
+    if zstd_spec is not None:
         return
 
     zstd_module = types.ModuleType("zstd")

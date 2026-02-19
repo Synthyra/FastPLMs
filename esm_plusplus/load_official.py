@@ -41,10 +41,13 @@ def _ensure_local_esm_module_on_path() -> pathlib.Path:
 
 
 def _ensure_zstd_module_stub() -> None:
-    zstd_spec = importlib.util.find_spec("zstd")
-    if zstd_spec is not None:
-        return
     if "zstd" in sys.modules:
+        return
+    try:
+        zstd_spec = importlib.util.find_spec("zstd")
+    except ValueError:
+        zstd_spec = None
+    if zstd_spec is not None:
         return
 
     zstd_module = types.ModuleType("zstd")
@@ -59,6 +62,14 @@ def _ensure_zstd_module_stub() -> None:
     sys.modules["zstd"] = zstd_module
 
 
+class _ESMCComplianceOutput:
+    """Mimics HuggingFace model output so the test suite can access .logits and .hidden_states."""
+    def __init__(self, logits: torch.Tensor, last_hidden_state: torch.Tensor, hidden_states: tuple):
+        self.logits = logits
+        self.last_hidden_state = last_hidden_state
+        self.hidden_states = hidden_states
+
+
 class _OfficialESMCForwardWrapper(nn.Module):
     """Wraps official ESMC model to produce outputs compatible with our test suite."""
     def __init__(self, model: nn.Module, tokenizer):
@@ -67,8 +78,22 @@ class _OfficialESMCForwardWrapper(nn.Module):
         self.tokenizer = tokenizer
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor = None, **kwargs):
-        outputs = self.model(input_ids)
-        return outputs
+        esmc_output = self.model(input_ids)
+        # ESMC returns: sequence_logits, embeddings, hidden_states (stacked [n_layers, B, L, D])
+        logits = esmc_output.sequence_logits
+        embeddings = esmc_output.embeddings
+        raw_hiddens = esmc_output.hidden_states
+        # Convert stacked tensor to tuple for compatibility with hidden_states[-1]
+        if raw_hiddens is not None:
+            hidden_states = tuple(raw_hiddens[i] for i in range(raw_hiddens.shape[0]))
+            hidden_states = hidden_states + (embeddings,)
+        else:
+            hidden_states = (embeddings,)
+        return _ESMCComplianceOutput(
+            logits=logits,
+            last_hidden_state=embeddings,
+            hidden_states=hidden_states,
+        )
 
 
 def load_official_model(
