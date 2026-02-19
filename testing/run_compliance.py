@@ -1,4 +1,8 @@
-﻿import argparse
+﻿import entrypoint_setup
+import warnings
+warnings.filterwarnings("ignore")
+
+import argparse
 import math
 import time
 import traceback

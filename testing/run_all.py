@@ -1,6 +1,6 @@
 ﻿import entrypoint_setup
-import torch._dynamo as dynamo
-dynamo.config.suppress_errors = True
+import warnings
+warnings.filterwarnings("ignore")
 
 import argparse
 import dataclasses

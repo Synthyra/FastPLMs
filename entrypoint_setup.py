@@ -19,4 +19,4 @@ torch.backends.cudnn.deterministic = False
 inductor_config.max_autotune_gemm_backends = "ATEN,CUTLASS,FBGEMM"    
 
 dynamo.config.capture_scalar_outputs = True
-torch._dynamo.config.recompile_limit = 32
+torch._dynamo.config.recompile_limit = 16
