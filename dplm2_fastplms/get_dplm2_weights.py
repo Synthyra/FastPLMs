@@ -7,7 +7,7 @@ import types
 import torch
 from huggingface_hub import HfApi, login
 import transformers
-from transformers import AutoModelForMaskedLM
+from transformers import AutoModelForMaskedLM, EsmTokenizer
 from testing.common import (
     LOAD_DTYPE,
     _ensure_local_dplm_module_on_path,
@@ -69,6 +69,14 @@ def _load_official_dplm2_source_model(source_repo: str) -> torch.nn.Module:
         "transformers.models.auto.tokenization_auto"
     )
     setattr(tokenization_auto_module, "DPLM2Tokenizer", DPLM2Tokenizer)
+    _orig_class_from_name = tokenization_auto_module.tokenizer_class_from_name
+
+    def _patched_class_from_name(class_name):
+        if class_name == "DPLM2Tokenizer":
+            return DPLM2Tokenizer
+        return _orig_class_from_name(class_name)
+
+    tokenization_auto_module.tokenizer_class_from_name = _patched_class_from_name
     EsmForDPLM2 = dplm2_modeling_module.EsmForDPLM2
     EsmForDPLM2.all_tied_weights_keys = {}
     dplm_modeling_module = _import_byprot_module_with_dataclass_patch(
@@ -103,6 +111,12 @@ def _load_official_dplm2_source_model(source_repo: str) -> torch.nn.Module:
 def _install_dplm2_tokenizer_hf_compat(tokenizer_cls) -> None:
     if "mask_token_id" in tokenizer_cls.__dict__:
         return
+
+    @classmethod
+    def _from_pretrained(cls, pretrained_model_name_or_path, *args, **kwargs):
+        return cls()
+
+    tokenizer_cls.from_pretrained = _from_pretrained
 
     def _resolve_token_id(self, attribute_name: str, fallback_token: str) -> int:
         token_value = getattr(self, attribute_name)
@@ -244,7 +258,16 @@ if __name__ == "__main__":
             "AutoModelForTokenClassification": "modeling_dplm2.DPLM2ForTokenClassification",
         }
         config.tie_word_embeddings = False
+        # Clear _name_or_path so __init__ does not attempt to load DPLM2Tokenizer
+        # from the byprot source repo (which is not a HuggingFace-compatible tokenizer).
+        source_name_or_path = config._name_or_path
+        config._name_or_path = ""
         model = DPLM2ForMaskedLM(config=config).eval().cpu().to(torch.float32)
+        config._name_or_path = source_name_or_path
+        # Use the official DPLM amino-acid tokenizer (EsmTokenizer) that underlies DPLM2.
+        # DPLM2 models share the same AA vocabulary as their DPLM counterparts.
+        dplm_source_repo = source_repo.replace("dplm2_", "dplm_")
+        model.tokenizer = EsmTokenizer.from_pretrained(dplm_source_repo)
         load_result = model.load_state_dict(filtered_official_state_dict, strict=False)
         assert len(load_result.missing_keys) == 0, (
             f"Missing keys while mapping official DPLM2 weights for {source_repo}: "

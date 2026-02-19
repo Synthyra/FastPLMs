@@ -147,6 +147,7 @@ if __name__ == "__main__":
         }
         config.tie_word_embeddings = False
         model = DPLMForMaskedLM(config=config).eval().cpu().to(torch.float32)
+        model.tokenizer = official_model.net.tokenizer
         load_result = model.load_state_dict(official_state_dict, strict=False)
         assert len(load_result.missing_keys) == 0, (
             f"Missing keys while mapping official DPLM weights for {source_repo}: "
