@@ -188,18 +188,6 @@ if __name__ == "__main__":
             repo_id=model_path,
             repo_type="model",
         )
-        api.upload_file(
-            path_or_fileobj="embedding_mixin.py",
-            path_in_repo="embedding_mixin.py",
-            repo_id=model_path,
-            repo_type="model",
-        )
-        api.upload_file(
-            path_or_fileobj="entrypoint_setup.py",
-            path_in_repo="entrypoint_setup.py",
-            repo_id=model_path,
-            repo_type="model",
-        )
         downloaded_model = AutoModelForMaskedLM.from_pretrained(
             model_path,
             dtype=torch.float32,
