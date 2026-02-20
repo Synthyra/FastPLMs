@@ -22,14 +22,14 @@ official_model = EsmForMaskedLM.from_pretrained(
     device_map=DEVICE,
     attn_implementation="sdpa",
     position_embedding_type="rotary",
-    force_download=True
+    #force_download=True
 ).eval()
 fast_model = FastEsmForMaskedLM.from_pretrained(
     FAST_MODEL_PATH,
     dtype=torch.float32,
     device_map=DEVICE,
     trust_remote_code=True,
-    force_download=True
+    #force_download=True
 ).eval()
 fast_model.attn_backend = "sdpa"
 
@@ -37,7 +37,8 @@ fast_model.attn_backend = "sdpa"
 for (official_name, official_param), (fast_name, fast_param) in zip(official_model.state_dict().items(), fast_model.state_dict().items()):
     if official_name == fast_name:
         diff = mse_loss(official_param, fast_param).item()
-        print(f"{official_name}: {diff}")
+        if diff > 0.0:
+            print(f"{official_name}: {diff}")
     else:
         print(f"Name mismatch: {official_name} != {fast_name}")
 
