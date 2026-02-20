@@ -420,7 +420,7 @@ def get_attention_mask(
         extended_attention_mask = None
     else:
         flex_block_mask = None
-        extended_attention_mask = token_attention_mask[:, None, None, :].expand(batch_size, 1, seq_len, seq_len)
+        extended_attention_mask = token_attention_mask[:, None, :, None] & token_attention_mask[:, None, None, :]
 
     return extended_attention_mask, flex_block_mask
 
