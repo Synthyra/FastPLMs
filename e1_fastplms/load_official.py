@@ -83,7 +83,6 @@ class _OfficialE1ForwardWrapper(nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
-        self.tokenizer = model.tokenizer
 
     def forward(
         self,
