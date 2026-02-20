@@ -197,11 +197,16 @@ class ComplianceChecker:
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--only_non_pad_tokens", action="store_true")
     parser.add_argument("--force_download", action="store_true")
     parser.add_argument("--from_auto_model", action="store_true")
     parser.add_argument("--model_types", nargs="+", default=["ESMC", "ESM2", "E1"])
     args = parser.parse_args()
+
+    if args.hf_token is not None:
+        from huggingface_hub import login
+        login(token=args.hf_token)
 
     checker = ComplianceChecker()
     for model_type in args.model_types:
