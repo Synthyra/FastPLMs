@@ -111,11 +111,11 @@ class ComplianceChecker:
             if model_type == "E1":
                 tokenized = tokenizer.get_batch_kwargs(batch, device=self.device)
                 tokenized = {
-                    "input_ids": batch["input_ids"],
-                    "within_seq_position_ids": batch["within_seq_position_ids"],
-                    "global_position_ids": batch["global_position_ids"],
-                    "sequence_ids": batch["sequence_ids"],
-                    "attention_mask": (batch["sequence_ids"] != -1).long(),
+                    "input_ids": tokenized["input_ids"],
+                    "within_seq_position_ids": tokenized["within_seq_position_ids"],
+                    "global_position_ids": tokenized["global_position_ids"],
+                    "sequence_ids": tokenized["sequence_ids"],
+                    "attention_mask": (tokenized["sequence_ids"] != -1).long(),
                 }
             else:
                 tokenized = tokenizer(batch, return_tensors="pt", padding=True)
