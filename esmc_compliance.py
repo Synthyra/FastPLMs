@@ -22,7 +22,7 @@ official_model, tokenizer = load_official_model(
     reference_repo_id=OFFICIAL_MODEL_PATH,
     device=DEVICE,
     dtype=torch.float32,
-).eval()
+)
 
 fast_model = ESMplusplusForMaskedLM.from_pretrained(
     FAST_MODEL_PATH,
