@@ -20,14 +20,18 @@ pip install pip setuptools -U
 
 # Install requirements with force reinstall
 echo "Installing requirements"
-pip install -r requirements.txt -U
-
 # Install torch and torchvision
 echo "Installing torch and torchvision..."
 git clone https://github.com/huggingface/transformers.git
 cd transformers
 pip install -e .
 cd ..
+git clone https://github.com/Profluent-AI/E1.git
+cd E1
+pip install -e .
+cd ..
+pip install esm
+pip install -r requirements.txt -U
 pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 pip install --force-reinstall numpy==1.26.4
 
