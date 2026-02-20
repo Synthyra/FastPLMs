@@ -78,9 +78,12 @@ with torch.inference_mode():
         #assert torch.allclose(official_logits, fast_logits, atol=1e-3), "Logits mismatch"
         #assert torch.allclose(official_preds, fast_preds, atol=1e-3), "Preds mismatch"
 
-        cumulative_last_hidden_state_mse += mse_loss(official_last_hidden_state, fast_last_hidden_state)
-        cumulative_logits_mse += mse_loss(official_logits, fast_logits)
-        cumulative_preds_accuracy += (official_preds == fast_preds).float().mean()
+        attention_mask = tokenized["attention_mask"].detach().cpu()
+        mask = attention_mask.bool()
+
+        cumulative_last_hidden_state_mse += mse_loss(official_last_hidden_state[mask], fast_last_hidden_state[mask])
+        cumulative_logits_mse += mse_loss(official_logits[mask], fast_logits[mask])
+        cumulative_preds_accuracy += (official_preds[mask] == fast_preds[mask]).float().mean()
 
 
 print(f"Average last hidden state MSE: {cumulative_last_hidden_state_mse / TEST_NUMBER_BATCHES}")

@@ -39,6 +39,7 @@ for (official_name, official_param), (fast_name, fast_param) in zip(official_mod
         diff = mse_loss(official_param, fast_param).item()
         if diff > 0.0:
             print(f"{official_name}: {diff}")
+            assert diff < 1e-3, f"Parameter {official_name} has a large difference: {diff}"
     else:
         print(f"Name mismatch: {official_name} != {fast_name}")
 
