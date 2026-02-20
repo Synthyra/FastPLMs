@@ -44,6 +44,7 @@ class ComplianceChecker:
             dtype=torch.float32,
             device_map=self.device,
             force_download=force_download,
+            trust_remote_code=True,
         ).eval()
         fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer
@@ -62,6 +63,7 @@ class ComplianceChecker:
             dtype=torch.float32,
             device_map=self.device,
             force_download=force_download,
+            trust_remote_code=True,
         ).eval()
         fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer
@@ -80,6 +82,7 @@ class ComplianceChecker:
             dtype=torch.float32,
             device_map=self.device,
             force_download=force_download,
+            trust_remote_code=True,
         ).eval()
         fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer

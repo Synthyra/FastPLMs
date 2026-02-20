@@ -76,6 +76,7 @@ if __name__ == "__main__":
             repo_id=repo_id,
             repo_type="model",
         )
+        
         downloaded_model = AutoModelForMaskedLM.from_pretrained(
             repo_id,
             dtype=torch.float32,
