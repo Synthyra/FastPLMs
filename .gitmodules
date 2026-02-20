@@ -1,6 +1,3 @@
 [submodule "boltz"]
 	path = boltz
 	url = https://github.com/jwohlwend/boltz.git
-[submodule "dplm"]
-	path = dplm
-	url = https://github.com/bytedance/dplm.git
