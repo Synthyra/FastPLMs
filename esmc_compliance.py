@@ -4,18 +4,21 @@ from torch.nn.functional import mse_loss
 from tqdm import tqdm
 from transformers import EsmForMaskedLM, EsmTokenizer, AutoModelForMaskedLM
 
+from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
+from esm_plusplus.load_official import load_official_model
+
 
 CANONICAL_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 TEST_NUMBER_BATCHES = 10
 BATCH_SIZE = 4
 MIN_SEQUENCE_LENGTH = 16
 MAX_SEQUENCE_LENGTH = 64
-OFFICIAL_MODEL_PATH = "facebook/esm2_t6_8M_UR50D"
-FAST_MODEL_PATH = "Synthyra/ESM2-8M"
+OFFICIAL_MODEL_PATH = "esmc-300"
+FAST_MODEL_PATH = "Synthyra/ESMplusplus_small"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-official_model = EsmForMaskedLM.from_pretrained(
+official_model = ESMplusplusForMaskedLM.from_pretrained(
     OFFICIAL_MODEL_PATH,
     dtype=torch.float32,
     device_map=DEVICE,
@@ -23,12 +26,10 @@ official_model = EsmForMaskedLM.from_pretrained(
     position_embedding_type="rotary",
     force_download=True
 ).eval()
-fast_model = AutoModelForMaskedLM.from_pretrained(
-    FAST_MODEL_PATH,
+fast_model = load_official_model(
+    reference_repo_id=FAST_MODEL_PATH,
+    device=DEVICE,
     dtype=torch.float32,
-    device_map=DEVICE,
-    trust_remote_code=True,
-    force_download=True
 ).eval()
 fast_model.attn_backend = "sdpa"
 
