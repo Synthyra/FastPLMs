@@ -391,23 +391,38 @@ except ImportError:
     flex_attention = None
 
 
+def get_attention_mask(
+    attn_backend: str, 
+    batch_size: int, 
+    seq_len: int, 
+    device: torch.device,
+    attention_mask: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    if attention_mask is None:
+        token_attention_mask = torch.ones((batch_size, seq_len), device=device).bool() 
+    else:
+        token_attention_mask = attention_mask.bool()
+    
+    if attn_backend == "flex":
+        assert create_block_mask is not None, "Flex attention backend requested but torch.create_block_mask is unavailable."
 
-def _create_pad_block_mask(attention_mask_2d: torch.Tensor):
-    assert create_block_mask is not None, "Flex attention block mask requires create_block_mask."
-    token_valid = attention_mask_2d.bool()
-    batch_size, seq_len = token_valid.shape
+        def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+            return token_attention_mask[batch_idx, q_idx] & token_attention_mask[batch_idx, kv_idx]
 
-    def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-        return token_valid[batch_idx, q_idx] & token_valid[batch_idx, kv_idx]
+        flex_block_mask = create_block_mask(
+            mask_mod,
+            batch_size,
+            1,
+            seq_len,
+            seq_len,
+            device=device,
+        )
+        extended_attention_mask = None
+    else:
+        flex_block_mask = None
+        extended_attention_mask = token_attention_mask[:, None, None, :].expand(batch_size, 1, seq_len, seq_len)
 
-    return create_block_mask(
-        mask_mod,
-        batch_size,
-        1,
-        seq_len,
-        seq_len,
-        device=attention_mask_2d.device,
-    )
+    return extended_attention_mask, flex_block_mask
 
 
 class ESMplusplusConfig(PretrainedConfig):
@@ -702,14 +717,15 @@ class MultiHeadAttention(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
+        attention_mask: torch.Tensor,
+        flex_block_mask: object,
         output_attentions: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             x: Input tensor
-            attention_mask: Optional attention mask
+            attention_mask: 4D attention mask
+            flex_block_mask: Flex attention block mask
             output_attentions: Whether to return attention weights
             
         Returns:
@@ -727,24 +743,15 @@ class MultiHeadAttention(nn.Module):
         scale = 1 / math.sqrt(self.d_head)
 
         if output_attentions: # Manual attention computation
-            b, h, l, _ = query_BHLD.shape
-            attn_bias = torch.zeros(b, h, l, l, dtype=query_BLD.dtype, device=query_BLD.device)
-            if attention_mask is not None:
-                attn_bias.masked_fill_(attention_mask.logical_not(), float('-inf'))
             attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-2, -1)) * scale
-            attn_weights += attn_bias
+            attn_weights = attn_weights.masked_fill(attention_mask.logical_not(), float('-inf'))
             attn_weights = F.softmax(attn_weights, dim=-1)
             context_BHLD = torch.matmul(attn_weights, value_BHLD)
         else:
             if self.attn_backend == "flex":
                 assert flex_attention is not None, "Flex attention backend requested but torch.flex_attention is unavailable."
-                assert query_BHLD.dtype in (torch.float16, torch.bfloat16), (
-                    f"Flex attention backend requires float16 or bfloat16, got {query_BHLD.dtype}."
-                )
-                if attention_mask is not None:
-                    assert flex_block_mask is not None, (
-                        "Flex attention backend requires a block mask when attention_mask is provided."
-                    )
+                assert query_BHLD.dtype in (torch.float16, torch.bfloat16), f"Flex attention backend requires float16 or bfloat16, got {query_BHLD.dtype}."
+                assert flex_block_mask is not None, "Flex attention backend requires a block mask when attention_mask is provided."
                 context_BHLD = flex_attention(
                     query_BHLD,
                     key_BHLD,
@@ -753,15 +760,11 @@ class MultiHeadAttention(nn.Module):
                     scale=scale,
                 )
             else:
-                sdpa_mask = None
-                if attention_mask is not None:
-                    sdpa_mask = torch.zeros_like(attention_mask, dtype=query_BHLD.dtype)
-                    sdpa_mask.masked_fill_(attention_mask.logical_not(), float("-inf"))
                 context_BHLD = F.scaled_dot_product_attention(
                     query_BHLD,
                     key_BHLD,
                     value_BHLD,
-                    attn_mask=sdpa_mask,
+                    attn_mask=attention_mask,
                     scale=scale,
                 )
             
@@ -820,14 +823,15 @@ class UnifiedTransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
+        attention_mask: torch.Tensor,
+        flex_block_mask: object,
         output_attentions: bool = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
             x: Input tensor
-            attention_mask: Optional attention mask
+            attention_mask: 4D attention mask
+            flex_block_mask: Flex attention block mask
             output_attentions: Whether to return attention weights
             
         Returns:
@@ -902,13 +906,13 @@ class TransformerStack(nn.Module):
         self,
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        output_hidden_states: bool = False,
-        output_attentions: bool = False,
+        output_hidden_states: Optional[bool] = False,
+        output_attentions: Optional[bool] = False,
     ) -> TransformerOutput:
         """
         Args:
             x: Input tensor
-            attention_mask: Optional attention mask
+            attention_mask: Optional 2D attention mask
             output_hidden_states: Whether to return all hidden states
             output_attentions: Whether to return attention weights
             
@@ -918,33 +922,31 @@ class TransformerStack(nn.Module):
         hidden_states = () if output_hidden_states else None
         attentions = () if output_attentions else None
         
-        if attention_mask is not None:
-            assert attention_mask.ndim == 2, f"Expected 2D token attention mask, got shape {attention_mask.shape}."
-            token_attention_mask = attention_mask.bool()
-            if self.attn_backend == "flex" and not output_attentions:
-                assert create_block_mask is not None, (
-                    "Flex attention backend requested but torch.create_block_mask is unavailable."
-                )
-                flex_block_mask = _create_pad_block_mask(token_attention_mask)
-                attention_mask = None
-            else:
-                pairwise_attention_mask = token_attention_mask.unsqueeze(-1) & token_attention_mask.unsqueeze(-2)
-                attention_mask = pairwise_attention_mask.unsqueeze(1)
-                flex_block_mask = None
-        else:
-            flex_block_mask = None
+        # move to 4D attention mask or flex block mask
+        attention_mask, flex_block_mask = get_attention_mask(
+            attn_backend=self.attn_backend,
+            batch_size=x.shape[0],
+            seq_len=x.shape[1],
+            device=x.device,
+            attention_mask=attention_mask,
+        )
             
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
                 x, attn_weights = self._gradient_checkpointing_func(
                     block.__call__,
-                    x,
-                    attention_mask,
-                    flex_block_mask,
-                    output_attentions,
+                    x=x,
+                    attention_mask=attention_mask,
+                    flex_block_mask=flex_block_mask,
+                    output_attentions=output_attentions,
                 )
             else:
-                x, attn_weights = block(x, attention_mask, flex_block_mask, output_attentions)
+                x, attn_weights = block(
+                    x=x,
+                    attention_mask=attention_mask,
+                    flex_block_mask=flex_block_mask,
+                    output_attentions=output_attentions,
+                )
 
             if attentions is not None:
                 attentions += (attn_weights,)
@@ -1048,7 +1050,12 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = self.embed(input_ids)
-        return self.transformer(x, attention_mask, output_hidden_states=False, output_attentions=False).last_hidden_state
+        return self.transformer(
+            x=x,
+            attention_mask=attention_mask,
+            output_hidden_states=False,
+            output_attentions=False,
+        ).last_hidden_state
 
     def forward(
         self,
@@ -1072,11 +1079,20 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         Returns:
             TransformerOutput containing last hidden state and optionally all hidden states and attention weights
         """
+        assert input_ids is not None or inputs_embeds is not None, "You have to specify either input_ids or inputs_embeds"
+        assert not (input_ids is not None and inputs_embeds is not None), "You cannot specify both input_ids and inputs_embeds at the same time"
+        
         if inputs_embeds is None:
             x = self.embed(input_ids)
         else:
             x = inputs_embeds
-        return self.transformer(x, attention_mask, output_hidden_states, output_attentions)
+        
+        return self.transformer(
+            x=x,
+            attention_mask=attention_mask,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+        ).last_hidden_state
         
 
 class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
@@ -1116,7 +1132,12 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = self.embed(input_ids)
-        return self.transformer(x, attention_mask, output_hidden_states=False, output_attentions=False).last_hidden_state
+        return self.transformer(
+            x=x,
+            attention_mask=attention_mask,
+            output_hidden_states=False,
+            output_attentions=False,
+        ).last_hidden_state
 
     def forward(
         self,
@@ -1146,16 +1167,24 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
             x = self.embed(input_ids)
         else:
             x = inputs_embeds
-        output = self.transformer(x, attention_mask, output_hidden_states, output_attentions)
-        x = output.last_hidden_state
-        logits = self.sequence_head(x)
+    
+        output = self.transformer(
+            x=x,
+            attention_mask=attention_mask,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+        )
+
+        last_hidden_state = output.last_hidden_state
+        logits = self.sequence_head(last_hidden_state)
         loss = None
         if labels is not None:
             loss = self.ce_loss(logits.view(-1, self.vocab_size), labels.view(-1))
+        
         return ESMplusplusOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=x,
+            last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
         )
@@ -1185,7 +1214,12 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         x = self.embed(input_ids)
-        return self.transformer(x, attention_mask, output_hidden_states=False, output_attentions=False).last_hidden_state
+        return self.transformer(
+            x=x,
+            attention_mask=attention_mask,
+            output_hidden_states=False,
+            output_attentions=False,
+        ).last_hidden_state
 
     def forward(
         self,
@@ -1219,9 +1253,11 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states
         )
-        x = output.last_hidden_state
-        features = self.pooler(x, attention_mask)
+
+        last_hidden_state = output.last_hidden_state
+        features = self.pooler(last_hidden_state, attention_mask) # pooler expects 2d attention mask
         logits = self.classifier(features)
+
         loss = None
         if labels is not None:
             labels = labels.to(logits.device)
@@ -1246,7 +1282,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         return ESMplusplusOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=x,
+            last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
         )
@@ -1302,15 +1338,17 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states
         )
-        x = output.last_hidden_state
-        logits = self.classifier(x)
+
+        last_hidden_state = output.last_hidden_state
+        logits = self.classifier(last_hidden_state)
         loss = None
         if labels is not None:
             loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+        
         return ESMplusplusOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=x,
+            last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
         )
