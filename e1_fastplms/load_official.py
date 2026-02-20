@@ -118,14 +118,8 @@ def load_official_model(
     Returns (official_model, batch_preparer) where batch_preparer is an E1BatchPreparer.
     The official model is E1ForMaskedLM with standard HF forward interface.
     """
-    _ensure_local_e1_module_on_path()
-    _ensure_local_e1_tokenizer_json()
-    _ensure_kernels_module_stub()
-
-    batch_preparer_module = importlib.import_module("E1.batch_preparer")
-    modeling_module = importlib.import_module("E1.modeling")
-    E1BatchPreparer = batch_preparer_module.E1BatchPreparer
-    E1ForMaskedLM = modeling_module.E1ForMaskedLM
+    from e1.src.E1.modeling import E1ForMaskedLM
+    from e1.src.E1.batch_preparer import E1BatchPreparer
 
     model = E1ForMaskedLM.from_pretrained(
         reference_repo_id,
