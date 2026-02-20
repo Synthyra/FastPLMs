@@ -41,13 +41,7 @@ RUN pip install --upgrade pip setuptools
 RUN pip install boltz[cuda] -U
 RUN git clone https://github.com/Profluent-AI/E1.git && cd E1 && pip install -e . && cd ..
 RUN git clone https://github.com/evolutionaryscale/esm.git && cd esm && pip install -e . && cd ..
-RUN git clone --recursive https://github.com/bytedance/dplm.git && \
-    cd dplm && \
-    # This removes the torchtext line from requirements or setup files
-    sed -i '/torchtext/d' setup.py || true && \
-    sed -i '/torchtext/d' requirements.txt || true && \
-    pip install -e . && \
-    cd ..
+RUN git clone --recursive https://github.com/bytedance/dplm.git && cd dplm && pip install -e . --no-deps && cd ..
 RUN pip install -r requirements.txt -U
 RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 RUN pip install --force-reinstall numpy==1.26.4
