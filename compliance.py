@@ -111,7 +111,7 @@ class ComplianceChecker:
 
             for i in range(len(official_hidden_states)):
                 official_state, fast_state = official_hidden_states[i], fast_hidden_states[i]
-                if self.only_non_pad_tokens:
+                if only_non_pad_tokens:
                     official_state, fast_state = official_state[attention_mask], fast_state[attention_mask]
                 hidden_state_diff_dict[i] += mse_loss(official_state, fast_state).item()
                 assert hidden_state_diff_dict[i] < 1e-3, f"Hidden state {i} MSE is too large: {hidden_state_diff_dict[i]}"
