@@ -109,8 +109,8 @@ class ComplianceChecker:
         for _ in tqdm(range(self.test_number_batches)):
             batch = self._generate_random_batch(self.batch_size, self.min_sequence_length, self.max_sequence_length)
             if model_type == "E1":
-                batch = tokenizer.get_batch_kwargs(batch, device=self.device)
-                batch = {
+                tokenized = tokenizer.get_batch_kwargs(batch, device=self.device)
+                tokenized = {
                     "input_ids": batch["input_ids"],
                     "within_seq_position_ids": batch["within_seq_position_ids"],
                     "global_position_ids": batch["global_position_ids"],
