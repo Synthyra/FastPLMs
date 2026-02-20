@@ -3,7 +3,7 @@ import random
 from torch.nn.functional import mse_loss
 from tqdm import tqdm
 from collections import defaultdict
-from transformers import EsmForMaskedLM, EsmTokenizer, AutoModelForMaskedLM
+#from transformers import AutoModelForMaskedLM
 
 from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
 from esm_plusplus.load_official import load_official_model
@@ -64,31 +64,24 @@ with torch.inference_mode():
         tokenized = {k: v.to(DEVICE) for k, v in tokenized.items()}
         official_output = official_model(**tokenized, output_hidden_states=True)
         official_hidden_states = official_output.hidden_states
-        official_last_hidden_state = official_output.hidden_states[-1].detach().cpu()
         official_logits = official_output.logits.detach().cpu()
         official_preds = official_logits.argmax(dim=-1)
         
         fast_output = fast_model(**tokenized, output_hidden_states=True)
         fast_hidden_states = fast_output.hidden_states
-        fast_last_hidden_state = fast_output.hidden_states[-1].detach().cpu()
         fast_logits = fast_output.logits.detach().cpu()
         fast_preds = fast_logits.argmax(dim=-1)
         
-        #assert torch.allclose(official_last_hidden_state, fast_last_hidden_state, atol=1e-3), "Last hidden state mismatch"
         #assert torch.allclose(official_logits, fast_logits, atol=1e-3), "Logits mismatch"
         #assert torch.allclose(official_preds, fast_preds, atol=1e-3), "Preds mismatch"
 
-        cumulative_last_hidden_state_mse += mse_loss(official_last_hidden_state, fast_last_hidden_state)
         cumulative_logits_mse += mse_loss(official_logits, fast_logits)
         cumulative_preds_accuracy += (official_preds == fast_preds).float().mean()
-
-        print(len(official_hidden_states), len(fast_hidden_states))
 
         for i in range(len(official_hidden_states)):
             hidden_state_diff_dict[i] += mse_loss(official_hidden_states[i], fast_hidden_states[i]).item()
 
 
-print(f"Average last hidden state MSE: {cumulative_last_hidden_state_mse / TEST_NUMBER_BATCHES}")
 print(f"Average logits MSE: {cumulative_logits_mse / TEST_NUMBER_BATCHES}")
 print(f"Average preds accuracy: {cumulative_preds_accuracy / TEST_NUMBER_BATCHES}")
 
