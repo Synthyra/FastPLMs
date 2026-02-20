@@ -219,6 +219,10 @@ class ComplianceChecker:
             official_model, fast_model, tokenizer = self._load_esm2(from_auto_model, force_download)
         elif model_type == "E1":
             official_model, fast_model, tokenizer = self._load_e1(from_auto_model, force_download)
+        elif model_type == "DPLM":
+            official_model, fast_model, tokenizer = self._load_dplm(from_auto_model, force_download)
+        elif model_type == "DPLM2":
+            official_model, fast_model, tokenizer = self._load_dplm2(from_auto_model, force_download)
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
         assert_model_parameters_fp32(
@@ -254,4 +258,5 @@ if __name__ == "__main__":
 
     checker = ComplianceChecker()
     for model_type in args.model_types:
+        print(f"Checking {model_type}...")
         checker(model_type=model_type, from_auto_model=args.from_auto_model, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)

@@ -7,7 +7,6 @@ hf_transfer
 hf-xet
 numpy
 einops
-esm
 scikit-learn
 scipy
 seaborn
