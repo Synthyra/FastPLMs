@@ -82,6 +82,8 @@ with torch.inference_mode():
         cumulative_logits_mse += mse_loss(official_logits, fast_logits)
         cumulative_preds_accuracy += (official_preds == fast_preds).float().mean()
 
+        print(len(official_hidden_states), len(fast_hidden_states))
+
         for i in range(len(official_hidden_states)):
             hidden_state_diff_dict[i] += mse_loss(official_hidden_states[i], fast_hidden_states[i]).item()
 
