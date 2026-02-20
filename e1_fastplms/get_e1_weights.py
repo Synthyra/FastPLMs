@@ -41,7 +41,7 @@ if __name__ == "__main__":
         }
         config.tie_word_embeddings = False
         model = E1ForMaskedLM(config=config).eval().cpu().to(torch.float32)
-        load_result = model.load_state_dict(official_model.model.state_dict(), strict=False)
+        load_result = model.load_state_dict(official_model.model.state_dict(), strict=True)
 
         model.mlm_head[0].weight = copy.deepcopy(official_model.model.mlm_head[0].weight)
         model.mlm_head[0].bias = copy.deepcopy(official_model.model.mlm_head[0].bias)
@@ -49,6 +49,7 @@ if __name__ == "__main__":
         model.mlm_head[2].bias = copy.deepcopy(official_model.model.mlm_head[2].bias)
         model.mlm_head[3].weight = copy.deepcopy(official_model.model.mlm_head[3].weight)
         model.mlm_head[3].bias = copy.deepcopy(official_model.model.mlm_head[3].bias)
+        
         assert_model_parameters_fp32(
             model=official_model.model,
             model_name=f"official E1 model ({source_repo})",
