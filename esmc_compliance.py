@@ -18,18 +18,17 @@ FAST_MODEL_PATH = "Synthyra/ESMplusplus_small"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-official_model = ESMplusplusForMaskedLM.from_pretrained(
-    OFFICIAL_MODEL_PATH,
-    dtype=torch.float32,
-    device_map=DEVICE,
-    attn_implementation="sdpa",
-    position_embedding_type="rotary",
-    force_download=True
-).eval()
-fast_model = load_official_model(
-    reference_repo_id=FAST_MODEL_PATH,
+official_model, tokenizer = load_official_model(
+    reference_repo_id=OFFICIAL_MODEL_PATH,
     device=DEVICE,
     dtype=torch.float32,
+).eval()
+
+fast_model = ESMplusplusForMaskedLM.from_pretrained(
+    FAST_MODEL_PATH,
+    dtype=torch.float32,
+    device_map=DEVICE,
+    force_download=True
 ).eval()
 fast_model.attn_backend = "sdpa"
 
@@ -40,9 +39,6 @@ for (official_name, official_param), (fast_name, fast_param) in zip(official_mod
         print(f"{official_name}: {diff}")
     else:
         print(f"Name mismatch: {official_name} != {fast_name}")
-
-
-tokenizer = EsmTokenizer.from_pretrained(OFFICIAL_MODEL_PATH)
 
 
 def generate_random_sequence(length: int) -> str:
