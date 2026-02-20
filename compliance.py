@@ -167,7 +167,7 @@ class ComplianceChecker:
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
         self._weight_compliance(official_model, fast_model)
-        self._foward_compliance(official_model, fast_model, tokenizer, only_non_pad_tokens)
+        self._foward_compliance(model_type, official_model, fast_model, tokenizer, only_non_pad_tokens)
 
 
 if __name__ == "__main__":
