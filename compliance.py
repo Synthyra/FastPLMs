@@ -182,9 +182,9 @@ if __name__ == "__main__":
     parser.add_argument("--only_non_pad_tokens", action="store_true")
     parser.add_argument("--force_download", action="store_true")
     parser.add_argument("--from_auto_model", action="store_true")
+    parser.add_argument("--model_types", nargs="+", default=["ESMC", "ESM2", "E1"])
     args = parser.parse_args()
 
     checker = ComplianceChecker()
-    checker(model_type="ESMC", from_auto_model=args.from_auto_model, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)
-    checker(model_type="ESM2", from_auto_model=args.from_auto_model, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)
-    checker(model_type="E1", from_auto_model=args.from_auto_model, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)
+    for model_type in args.model_types:
+        checker(model_type=model_type, from_auto_model=args.from_auto_model, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)
