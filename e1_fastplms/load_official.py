@@ -121,11 +121,7 @@ def load_official_model(
     from e1.src.E1.modeling import E1ForMaskedLM
     from e1.src.E1.batch_preparer import E1BatchPreparer
 
-    model = E1ForMaskedLM.from_pretrained(
-        reference_repo_id,
-        device_map=device,
-        dtype=dtype,
-    ).eval()
+    model = E1ForMaskedLM.from_pretrained(reference_repo_id).to(device=device, dtype=dtype).eval()
     batch_preparer = E1BatchPreparer()
     wrapped = _OfficialE1ForwardWrapper(model).eval()
     return wrapped, batch_preparer
