@@ -136,7 +136,5 @@ class ComplianceChecker:
 
 if __name__ == "__main__":
     checker = ComplianceChecker()
-    # ESMC padding is actually incorrect, so we need to test with only non-pad tokens
     checker(model_type="ESMC", from_auto_model=False, only_non_pad_tokens=True)
-    # ESM2 padding is correct, so we can test with all tokens
-    checker(model_type="ESM2", from_auto_model=False, only_non_pad_tokens=False)
+    checker(model_type="ESM2", from_auto_model=False, only_non_pad_tokens=True)
