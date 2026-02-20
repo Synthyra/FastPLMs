@@ -954,9 +954,13 @@ class TransformerStack(nn.Module):
             if output_hidden_states:
                 assert hidden_states is not None
                 hidden_states += (x,)
+        
+        last_hidden_state = self.norm(x)
+        if output_hidden_states:
+            hidden_states += (last_hidden_state,)
                 
         return TransformerOutput(
-            last_hidden_state=self.norm(x), 
+            last_hidden_state=last_hidden_state, 
             hidden_states=hidden_states,
             attentions=attentions
         )
