@@ -5,7 +5,6 @@
 FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
 
 # System prerequisites + Python 3.12
-# Note: Modal uses Python 3.10, but we use 3.12 for better compatibility
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHON_VERSION=3.12.7 \
     PATH=/usr/local/bin:$PATH \
@@ -40,6 +39,12 @@ COPY requirements.txt .
 
 RUN pip install --upgrade pip setuptools
 RUN pip install boltz[cuda] -U
+RUN pip install esm
+RUN git clone https://github.com/Profluent-AI/E1.git
+RUN cd E1
+RUN pip install -e .
+RUN cd ..
+RUN rm -rf E1
 RUN pip install -r requirements.txt -U
 RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 RUN pip install --force-reinstall numpy==1.26.4
