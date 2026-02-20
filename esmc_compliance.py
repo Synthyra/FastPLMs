@@ -33,7 +33,7 @@ fast_model = ESMplusplusForMaskedLM.from_pretrained(
 fast_model.attn_backend = "sdpa"
 
 
-for (official_name, official_param), (fast_name, fast_param) in zip(official_model.state_dict().items(), fast_model.state_dict().items()):
+for (official_name, official_param), (fast_name, fast_param) in zip(official_model.model.state_dict().items(), fast_model.state_dict().items()):
     if official_name == fast_name:
         diff = mse_loss(official_param, fast_param).item()
         print(f"{official_name}: {diff}")
