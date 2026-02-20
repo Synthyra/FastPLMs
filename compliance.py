@@ -70,7 +70,7 @@ class ComplianceChecker:
         return [self._generate_random_sequence(random.randint(min_length, max_length)) for _ in range(batch_size)]
 
     def _weight_compliance(self, official_model, fast_model):
-        for (official_name, official_param), (fast_name, fast_param) in zip(official_model.model.state_dict().items(), fast_model.state_dict().items()):
+        for (official_name, official_param), (fast_name, fast_param) in zip(official_model.state_dict().items(), fast_model.state_dict().items()):
             if official_name == fast_name:
                 diff = mse_loss(official_param, fast_param).item()
                 if diff > 0.0:
