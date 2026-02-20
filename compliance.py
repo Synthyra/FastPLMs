@@ -14,6 +14,8 @@ from esm_plusplus.load_official import load_official_model as load_official_esmc
 from e1_fastplms.load_official import load_official_model as load_official_e1_model
 from e1_fastplms.modeling_e1 import E1ForMaskedLM
 
+from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
+
 
 class ComplianceChecker:
     def __init__(
@@ -175,6 +177,19 @@ class ComplianceChecker:
             official_model, fast_model, tokenizer = self._load_e1(from_auto_model, force_download)
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
+        assert_model_parameters_fp32(
+            model=official_model.model,
+            model_name=f"official {model_type} model",
+        )
+        assert_model_parameters_fp32(
+            model=fast_model,
+            model_name=f"fast {model_type} model",
+        )
+        assert_state_dict_equal(
+            reference_state_dict=official_model.model.state_dict(),
+            candidate_state_dict=fast_model.state_dict(),
+            context=f"{model_type} weight parity",
+        )
         self._weight_compliance(official_model, fast_model)
         self._foward_compliance(model_type, official_model, fast_model, tokenizer, only_non_pad_tokens)
 
