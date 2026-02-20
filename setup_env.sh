@@ -26,11 +26,19 @@ git clone https://github.com/huggingface/transformers.git
 cd transformers
 pip install -e .
 cd ..
+# Delete transformers folder
+rm -rf transformers
+# Clone E1
 git clone https://github.com/Profluent-AI/E1.git
 cd E1
+# Install E1
 pip install -e .
 cd ..
+# Delete E1 folder
+rm -rf E1
+# Install esm
 pip install esm
+# Install requirements
 pip install -r requirements.txt -U
 pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 pip install --force-reinstall numpy==1.26.4
