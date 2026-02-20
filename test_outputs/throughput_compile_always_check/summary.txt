@@ -1,3 +1,0 @@
-Suite: throughput (dry-run)
-Benchmark points: 14
-Output directory: test_outputs\throughput_compile_always_check

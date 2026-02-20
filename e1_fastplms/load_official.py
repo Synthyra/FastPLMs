@@ -6,7 +6,6 @@ import pathlib
 import shutil
 import sys
 import types
-
 import torch
 import torch.nn as nn
 
@@ -80,6 +79,31 @@ def _ensure_kernels_module_stub() -> None:
     sys.modules["kernels"] = kernels_module
 
 
+class _OfficialE1ForwardWrapper(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.tokenizer = model.tokenizer
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        within_seq_position_ids: torch.LongTensor,
+        global_position_ids: torch.LongTensor,
+        sequence_ids: torch.LongTensor,
+        attention_mask: torch.LongTensor,
+        **kwargs,
+    ):
+        batch = {
+            "input_ids": input_ids,
+            "within_seq_position_ids": within_seq_position_ids,
+            "global_position_ids": global_position_ids,
+            "sequence_ids": sequence_ids,
+        }
+        outputs = self.model(**batch, output_hidden_states=True)
+        return outputs
+
+
 def load_official_model(
     reference_repo_id: str,
     device: torch.device,
@@ -104,6 +128,11 @@ def load_official_model(
     E1BatchPreparer = batch_preparer_module.E1BatchPreparer
     E1ForMaskedLM = modeling_module.E1ForMaskedLM
 
-    model = E1ForMaskedLM.from_pretrained(reference_repo_id).to(device=device, dtype=dtype).eval()
+    model = E1ForMaskedLM.from_pretrained(
+        reference_repo_id,
+        device_map=device,
+        dtype=dtype,
+    ).eval()
     batch_preparer = E1BatchPreparer()
-    return model, batch_preparer
+    wrapped = _OfficialE1ForwardWrapper(model).eval()
+    return wrapped, batch_preparer
