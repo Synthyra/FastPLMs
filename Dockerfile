@@ -46,7 +46,7 @@ RUN git clone --recursive https://github.com/bytedance/dplm.git && \
     # Empty out the requirements file so readlines() returns an empty list
     echo "" > requirements.txt && \
     pip install -e . && \
-    pip install -e vendor/openfold && \
+    #pip install -e vendor/openfold && \
     cd ..
 RUN pip install -r requirements.txt -U
 RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
