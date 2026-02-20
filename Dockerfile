@@ -41,10 +41,7 @@ RUN pip install --upgrade pip setuptools
 RUN pip install boltz[cuda] -U
 RUN pip install esm
 RUN git clone https://github.com/Profluent-AI/E1.git
-RUN cd E1
-RUN pip install -e .
-RUN cd ..
-RUN rm -rf E1
+RUN cd E1 && pip install -e . && cd .. && rm -rf E1
 RUN pip install -r requirements.txt -U
 RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 RUN pip install --force-reinstall numpy==1.26.4
