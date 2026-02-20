@@ -76,11 +76,14 @@ with torch.inference_mode():
         #assert torch.allclose(official_logits, fast_logits, atol=1e-3), "Logits mismatch"
         #assert torch.allclose(official_preds, fast_preds, atol=1e-3), "Preds mismatch"
 
-        cumulative_logits_mse += mse_loss(official_logits, fast_logits)
-        cumulative_preds_accuracy += (official_preds == fast_preds).float().mean()
+        attention_mask = tokenized["attention_mask"].detach().cpu()
+        mask = attention_mask.bool()
+
+        cumulative_logits_mse += mse_loss(official_logits[mask], fast_logits[mask])
+        cumulative_preds_accuracy += (official_preds[mask] == fast_preds[mask]).float().mean()
 
         for i in range(len(official_hidden_states)):
-            hidden_state_diff_dict[i] += mse_loss(official_hidden_states[i], fast_hidden_states[i]).item()
+            hidden_state_diff_dict[i] += mse_loss(official_hidden_states[i][mask], fast_hidden_states[i][mask]).item()
 
 
 print(f"Average logits MSE: {cumulative_logits_mse / TEST_NUMBER_BATCHES}")
