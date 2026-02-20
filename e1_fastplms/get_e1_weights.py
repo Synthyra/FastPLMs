@@ -84,6 +84,10 @@ if __name__ == "__main__":
             force_download=True,
             trust_remote_code=True,
         )
+        assert_model_parameters_fp32(
+            model=downloaded_model,
+            model_name=f"downloaded E1 model ({repo_id})",
+        )
         assert_state_dict_equal(
             reference_state_dict=official_model.model.state_dict(),
             candidate_state_dict=downloaded_model.state_dict(),
