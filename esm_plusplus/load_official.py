@@ -53,9 +53,9 @@ def load_official_model(
     from esm.pretrained import ESMC_300M_202412, ESMC_600M_202412
 
     if "300" in reference_repo_id:
-        official_model = ESMC_300M_202412(device=str(device), use_flash_attn=False)
+        official_model = ESMC_300M_202412()
     elif "600" in reference_repo_id:
-        official_model = ESMC_600M_202412(device=str(device), use_flash_attn=False)
+        official_model = ESMC_600M_202412()
     else:
         raise ValueError(f"Unsupported ESMC reference repo id: {reference_repo_id}")
 
@@ -63,3 +63,9 @@ def load_official_model(
     tokenizer = official_model.tokenizer
     wrapped = _OfficialESMCForwardWrapper(official_model, tokenizer).to(device=device, dtype=dtype).eval()
     return wrapped, tokenizer
+
+
+if __name__ == "__main__":
+    model, tokenizer = load_official_model(reference_repo_id="EvolutionaryScale/esmc-300m-2024-12", device=torch.device("cuda"), dtype=torch.float32)
+    print(model)
+    print(tokenizer)

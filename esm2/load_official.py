@@ -40,3 +40,9 @@ def load_official_model(
     tokenizer = EsmTokenizer.from_pretrained(reference_repo_id)
     wrapped = _OfficialESM2ForwardWrapper(model)
     return wrapped, tokenizer
+
+
+if __name__ == "__main__":
+    model, tokenizer = load_official_model(reference_repo_id="facebook/esm2_t6_8M_UR50D", device=torch.device("cuda"), dtype=torch.float32)
+    print(model)
+    print(tokenizer)
