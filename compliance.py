@@ -30,7 +30,7 @@ class ComplianceChecker:
         self.max_sequence_length = max_sequence_length
         self.canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
 
-    def _load_esmc(self, from_auto_model: bool = False):
+    def _load_esmc(self, from_auto_model: bool = False, force_download: bool = False):
         official_model_path = "esmc-300"
         fast_model_path = "Synthyra/ESMplusplus_small"
         official_model, tokenizer = load_official_esmc_model(
@@ -43,12 +43,12 @@ class ComplianceChecker:
             fast_model_path,
             dtype=torch.float32,
             device_map=self.device,
-            force_download=True,
+            force_download=force_download,
         ).eval()
         fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer
 
-    def _load_esm2(self, from_auto_model: bool = False):
+    def _load_esm2(self, from_auto_model: bool = False, force_download: bool = False):
         official_model_path = "facebook/esm2_t6_8M_UR50D"
         fast_model_path = "Synthyra/ESM2-8M"
         official_model, tokenizer = load_official_esm2_model(
@@ -61,14 +61,14 @@ class ComplianceChecker:
             fast_model_path,
             dtype=torch.float32,
             device_map=self.device,
-            force_download=True,
+            force_download=force_download,
         ).eval()
         fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer
 
-    def _load_e1(self, from_auto_model: bool = False):
+    def _load_e1(self, from_auto_model: bool = False, force_download: bool = False):
         official_model_path = "Profluent-Bio/E1-150m"
-        fast_model_path = "Synthyra/E1-150m"
+        fast_model_path = "Synthyra/Profluent-E1-150M"
         official_model, tokenizer = load_official_e1_model(
             reference_repo_id=official_model_path,
             device=self.device,
@@ -79,7 +79,7 @@ class ComplianceChecker:
             fast_model_path,
             dtype=torch.float32,
             device_map=self.device,
-            force_download=True,
+            force_download=force_download,
         ).eval()
         fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer
@@ -157,13 +157,19 @@ class ComplianceChecker:
                 print(f"Hidden state {k} Avg MSE: {v / self.test_number_batches}")
 
 
-    def __call__(self, model_type: str = "ESMC", from_auto_model: bool = False, only_non_pad_tokens: bool = False):
+    def __call__(
+        self,
+        model_type: str = "ESMC",
+        force_download: bool = False,
+        from_auto_model: bool = False,
+        only_non_pad_tokens: bool = False,
+    ):
         if model_type == "ESMC":
-            official_model, fast_model, tokenizer = self._load_esmc(from_auto_model)
+            official_model, fast_model, tokenizer = self._load_esmc(from_auto_model, force_download)
         elif model_type == "ESM2":
-            official_model, fast_model, tokenizer = self._load_esm2(from_auto_model)
+            official_model, fast_model, tokenizer = self._load_esm2(from_auto_model, force_download)
         elif model_type == "E1":
-            official_model, fast_model, tokenizer = self._load_e1(from_auto_model)
+            official_model, fast_model, tokenizer = self._load_e1(from_auto_model, force_download)
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
         self._weight_compliance(official_model, fast_model)
@@ -172,6 +178,8 @@ class ComplianceChecker:
 
 if __name__ == "__main__":
     checker = ComplianceChecker()
-    checker(model_type="ESMC", from_auto_model=False, only_non_pad_tokens=True)
-    checker(model_type="ESM2", from_auto_model=False, only_non_pad_tokens=True)
-    checker(model_type="E1", from_auto_model=False, only_non_pad_tokens=True)
+    ONLY_NON_PAD_TOKENS = True
+    FORCE_DOWNLOAD = False
+    checker(model_type="ESMC", from_auto_model=False, only_non_pad_tokens=ONLY_NON_PAD_TOKENS, force_download=FORCE_DOWNLOAD)
+    checker(model_type="ESM2", from_auto_model=False, only_non_pad_tokens=ONLY_NON_PAD_TOKENS, force_download=FORCE_DOWNLOAD)
+    checker(model_type="E1", from_auto_model=False, only_non_pad_tokens=ONLY_NON_PAD_TOKENS, force_download=FORCE_DOWNLOAD)
