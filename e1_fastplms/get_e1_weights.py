@@ -50,6 +50,10 @@ if __name__ == "__main__":
         model.mlm_head[3].weight = copy.deepcopy(official_model.model.mlm_head[3].weight)
         model.mlm_head[3].bias = copy.deepcopy(official_model.model.mlm_head[3].bias)
         assert_model_parameters_fp32(
+            model=official_model.model,
+            model_name=f"official E1 model ({source_repo})",
+        )
+        assert_model_parameters_fp32(
             model=model,
             model_name=f"mapped E1 model ({source_repo})",
         )

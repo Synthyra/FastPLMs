@@ -177,9 +177,13 @@ class ComplianceChecker:
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--only_non_pad_tokens", action="store_true")
+    parser.add_argument("--force_download", action="store_true")
+    args = parser.parse_args()
+
     checker = ComplianceChecker()
-    ONLY_NON_PAD_TOKENS = True
-    FORCE_DOWNLOAD = False
-    checker(model_type="ESMC", from_auto_model=False, only_non_pad_tokens=ONLY_NON_PAD_TOKENS, force_download=FORCE_DOWNLOAD)
-    checker(model_type="ESM2", from_auto_model=False, only_non_pad_tokens=ONLY_NON_PAD_TOKENS, force_download=FORCE_DOWNLOAD)
-    checker(model_type="E1", from_auto_model=False, only_non_pad_tokens=ONLY_NON_PAD_TOKENS, force_download=FORCE_DOWNLOAD)
+    checker(model_type="ESMC", from_auto_model=False, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)
+    checker(model_type="ESM2", from_auto_model=False, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)
+    checker(model_type="E1", from_auto_model=False, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)
