@@ -78,8 +78,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         -e 's/\besm\./fair_esm\./g' {} + && \
     # Avoid eager datamodule imports from byprot/__init__.py (pulls training-only deps like OpenFold)
     sed -i '/^import byprot\.datamodules$/d' src/byprot/__init__.py && \
-    # Python 3.12 dataclass compatibility: mutable default LoRAConfig -> default_factory
-    python -c "from pathlib import Path; p=Path('src/byprot/models/dplm/dplm.py'); s=p.read_text(); s2=s.replace('from dataclasses import dataclass', 'from dataclasses import dataclass, field').replace('lora: LoRAConfig = LoRAConfig()', 'lora: LoRAConfig = field(default_factory=LoRAConfig)'); assert s2 != s, 'Expected DPLM dataclass patch target not found'; p.write_text(s2)" && \
+    # Python 3.12 dataclass compatibility: convert LoRAConfig mutable defaults to default_factory
+    python -c "import re; from pathlib import Path; p=Path('src/byprot/models/dplm/dplm.py'); s=p.read_text(); s2=s; s2=re.sub(r'from dataclasses import ([^\\n]+)', lambda m: 'from dataclasses import ' + (m.group(1) if 'field' in m.group(1) else m.group(1) + ', field'), s2, count=1); s2,n=re.subn(r'(\\blora\\s*:\\s*[^=\\n]*LoRAConfig[^=\\n]*=\\s*)LoRAConfig\\(\\)', r'\\1field(default_factory=LoRAConfig)', s2); assert n >= 1, 'Expected LoRAConfig default assignment not found in dplm.py'; p.write_text(s2)" && \
     # Empty out the requirements file so readlines() returns an empty list
     echo "" > requirements.txt && \
     pip install -e . && \
