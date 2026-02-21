@@ -64,7 +64,7 @@ RUN git clone https://github.com/facebookresearch/esm.git fair-esm-repo && \
     cd ..
 
 # Install Bytedance DPLM and patch it to use 'fair_esm' instead of 'esm'
-RUN git clone --recursive https://github.com/bytedance/dplm.git && \
+RUN git clone https://github.com/bytedance/dplm.git && \
     cd dplm && \
     # Patch DPLM imports to point to our vendored fair_esm
     find . -type f -name "*.py" -exec sed -i \
@@ -75,11 +75,6 @@ RUN git clone --recursive https://github.com/bytedance/dplm.git && \
     echo "" > requirements.txt && \
     pip install -e . && \
     cd ..
-
-RUN pip install -r requirements.txt -U
-RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
-RUN pip install --force-reinstall numpy==1.26.4
-RUN pip install "lightning<2.2.0" "pytorch-lightning<2.2.0" "lightning-fabric<2.2.0" "torchmetrics<1.3.0"
 
 # Inject a zero-dependency local 'imp' shim using modern standard library
 RUN printf 'import importlib\n\
@@ -103,6 +98,11 @@ def load_source(name, pathname, file=None):\n\
     return module\n' > /usr/local/lib/python3.12/site-packages/imp.py
 
 RUN git clone https://github.com/aqlaboratory/openfold.git && cd openfold && pip install -e . --no-deps && cd ..
+
+RUN pip install -r requirements.txt -U
+RUN pip install "lightning<2.2.0" "pytorch-lightning<2.2.0" "lightning-fabric<2.2.0" "torchmetrics<1.3.0"
+RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
+RUN pip install --force-reinstall numpy==1.26.4
 
 # Copy the rest of the source
 COPY . .
