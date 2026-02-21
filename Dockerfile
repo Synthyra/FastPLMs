@@ -51,7 +51,9 @@ RUN git clone https://github.com/facebookresearch/esm.git fair-esm-repo && \
     cd fair-esm-repo && \
     # Rename the inner module directory
     mv esm fair_esm && \
-    # Patch all Python files and setup.py to use the new namespace
+    # Fix the hardcoded version path in setup.py
+    sed -i 's/esm\/version\.py/fair_esm\/version.py/g' setup.py && \
+    # Patch all Python files to use the new namespace
     find . -type f -name "*.py" -exec sed -i \
         -e 's/\bfrom esm\b/from fair_esm/g' \
         -e 's/\bimport esm\b/import fair_esm/g' \
