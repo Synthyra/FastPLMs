@@ -104,11 +104,6 @@ def load_source(name, pathname, file=None):\n\
     loader.exec_module(module)\n\
     return module\n' > /usr/local/lib/python3.12/site-packages/imp.py
 
-# Inject a dummy 'openfold' package to bypass DPLM's dynamic dataloader imports
-RUN mkdir -p /usr/local/lib/python3.12/site-packages/openfold && \
-    touch /usr/local/lib/python3.12/site-packages/openfold/__init__.py && \
-    printf "from unittest.mock import MagicMock\nconfig = MagicMock()\n" > /usr/local/lib/python3.12/site-packages/openfold/config.py
-
 # Copy the rest of the source
 COPY . .
 
