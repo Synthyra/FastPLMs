@@ -88,7 +88,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -U torch torchvision --index-url https://download.pytorch.org/whl/cu128 && \
     pip install numpy==1.26.4 && \
     pip install "lightning<2.2.0" "pytorch-lightning<2.2.0" "lightning-fabric<2.2.0" "torchmetrics<1.3.0" && \
-    pip install -U setuptools wheel && \
+    pip install "setuptools<81" wheel && \
     python -c "import pkg_resources"
 
 # Inject a zero-dependency local 'imp' shim using modern standard library
