@@ -75,7 +75,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     find . -type f -name "*.py" -exec sed -i \
         -e 's/\bfrom esm\b/from fair_esm/g' \
         -e 's/\bimport esm\b/import fair_esm/g' \
-        -e 's/\besm\./fair_esm\./g' {} + && \
+        -e 's/\besm\./fair_esm\./g' \
+        -e 's/\btransformers\.models\.fair_esm\b/transformers.models.esm/g' {} + && \
     # Avoid eager datamodule imports from byprot/__init__.py (pulls training-only deps like OpenFold)
     sed -i '/^import byprot\.datamodules$/d' src/byprot/__init__.py && \
     # Empty out the requirements file so readlines() returns an empty list
