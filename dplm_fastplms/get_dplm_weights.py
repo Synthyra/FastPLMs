@@ -1,12 +1,14 @@
 import copy
+import os
+import sys
 import torch
 from huggingface_hub import HfApi, login
 from transformers import AutoModelForMaskedLM
 
-from dplm_fastplms.modeling_dplm import DPLMForMaskedLM
+from dplm_fastplms.modeling_dplm import DPLMConfig as FastDPLMConfig, DPLMForMaskedLM
 from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
-from byprot.models.dplm.dplm import DPLMConfig, DiffusionProteinLanguageModel
+from byprot.models.dplm.dplm import DiffusionProteinLanguageModel
 
 
 MODEL_DICT = {
@@ -14,6 +16,21 @@ MODEL_DICT = {
     "Synthyra/DPLM-650M": "airkingbd/dplm_650m",
     "Synthyra/DPLM-3B": "airkingbd/dplm_3b",
 }
+
+
+def _resolve_repo_items(repo_ids: list[str] | None) -> list[tuple[str, str]]:
+    if repo_ids is None or len(repo_ids) == 0:
+        return list(MODEL_DICT.items())
+
+    selected_items: list[tuple[str, str]] = []
+    for repo_id in repo_ids:
+        assert repo_id in MODEL_DICT, (
+            f"Unknown repo_id {repo_id}. "
+            f"Valid options: {sorted(MODEL_DICT.keys())}"
+        )
+        selected_items.append((repo_id, MODEL_DICT[repo_id]))
+    return selected_items
+
 
 if __name__ == "__main__":
     # py -m dplm_fastplms.get_dplm_weights
@@ -30,15 +47,13 @@ if __name__ == "__main__":
         assert len(args.hf_token) > 0, "--hf_token cannot be empty."
         login(token=args.hf_token)
 
-    for repo_id, source_repo in MODEL_DICT.items():
+    for repo_id, source_repo in _resolve_repo_items(args.repo_ids):
         official_model = DiffusionProteinLanguageModel.from_pretrained(
             source_repo,
-            device_map="cpu",
-            dtype=torch.float32,
         ).eval().cpu().to(torch.float32)
         official_state_dict = official_model.net.state_dict()
 
-        config = DPLMConfig.from_pretrained(source_repo)
+        config = FastDPLMConfig.from_pretrained(source_repo)
         config.auto_map = {
             "AutoConfig": "modeling_dplm.DPLMConfig",
             "AutoModel": "modeling_dplm.DPLMModel",
@@ -51,12 +66,15 @@ if __name__ == "__main__":
 
         model.tokenizer = official_model.net.tokenizer
         load_result = model.load_state_dict(official_state_dict, strict=True)
+        
+        # Manually load LM head to prevent weight tying issues
         model.lm_head.dense.weight = copy.deepcopy(official_model.net.lm_head.dense.weight)
         model.lm_head.dense.bias = copy.deepcopy(official_model.net.lm_head.dense.bias)
         model.lm_head.decoder.weight = copy.deepcopy(official_model.net.lm_head.decoder.weight)
         model.lm_head.decoder.bias = copy.deepcopy(official_model.net.lm_head.decoder.bias)
         model.lm_head.layer_norm.weight = copy.deepcopy(official_model.net.lm_head.layer_norm.weight)
         model.lm_head.layer_norm.bias = copy.deepcopy(official_model.net.lm_head.layer_norm.bias)
+        
         assert_model_parameters_fp32(
             model=model,
             model_name=f"mapped DPLM model ({source_repo})",

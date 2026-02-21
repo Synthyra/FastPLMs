@@ -1,5 +1,6 @@
 import torch
 import copy
+import os
 from huggingface_hub import HfApi, login
 from transformers import EsmConfig, EsmForMaskedLM, AutoModelForMaskedLM
 
@@ -21,17 +22,20 @@ MODEL_DICT = {
 }
 
 
-def _resolve_model_items(model_names: list[str] | None) -> list[tuple[str, str]]:
-    if model_names is None:
+def _resolve_repo_items(repo_ids: list[str] | None) -> list[tuple[str, str]]:
+    if repo_ids is None or len(repo_ids) == 0:
         return list(MODEL_DICT.items())
 
     selected_items: list[tuple[str, str]] = []
-    for model_name in model_names:
-        assert model_name in MODEL_DICT, (
-            f"Unknown model name {model_name}. "
-            f"Valid options: {sorted(MODEL_DICT.keys())}"
-        )
-        selected_items.append((model_name, MODEL_DICT[model_name]))
+    for repo_id in repo_ids:
+        # Check if repo_id is a key in MODEL_DICT
+        if repo_id in MODEL_DICT:
+            selected_items.append((repo_id, MODEL_DICT[repo_id]))
+        else:
+            assert repo_id in MODEL_DICT, (
+                f"Unknown model name {repo_id}. "
+                f"Valid options: {sorted(MODEL_DICT.keys())}"
+            )
     return selected_items
 
 
@@ -41,7 +45,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--hf_token", type=str, default=None)
-    parser.add_argument("--model_names", nargs="*", type=str, default=None)
+    parser.add_argument("--repo_ids", nargs="*", type=str, default=None)
     parser.add_argument("--dry_run", action="store_true")
     args = parser.parse_args()
     api = HfApi()
@@ -50,7 +54,9 @@ if __name__ == "__main__":
         assert len(args.hf_token) > 0, "--hf_token cannot be empty."
         login(token=args.hf_token)
 
-    for model_name, source_repo in _resolve_model_items(args.model_names):
+    script_root = os.path.dirname(os.path.abspath(__file__))
+
+    for model_name, source_repo in _resolve_repo_items(args.repo_ids):
         official_config = EsmConfig.from_pretrained(source_repo)
         # Makes sure the esm2 word and lm head are correctly loaded
         official_config.tie_word_embeddings = True
@@ -79,6 +85,8 @@ if __name__ == "__main__":
             device_map="cpu",
         )
         model.load_state_dict(official_model.state_dict(), strict=True)
+        
+        # Manually load LM head to prevent weight tying issues
         model.lm_head.dense.weight = copy.deepcopy(official_model.lm_head.dense.weight)
         model.lm_head.dense.bias = copy.deepcopy(official_model.lm_head.dense.bias)
         model.lm_head.decoder.weight = copy.deepcopy(official_model.lm_head.decoder.weight)
@@ -111,7 +119,7 @@ if __name__ == "__main__":
         model.push_to_hub(repo_id)
 
         api.upload_file(
-            path_or_fileobj="esm2/modeling_fastesm.py",
+            path_or_fileobj=os.path.join(script_root, "modeling_fastesm.py"),
             path_in_repo="modeling_fastesm.py",
             repo_id=repo_id,
             repo_type="model",
