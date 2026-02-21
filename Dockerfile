@@ -78,6 +78,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         -e 's/\besm\./fair_esm\./g' {} + && \
     # Avoid eager datamodule imports from byprot/__init__.py (pulls training-only deps like OpenFold)
     sed -i '/^import byprot\.datamodules$/d' src/byprot/__init__.py && \
+    # Python 3.12 dataclass compatibility: mutable default LoRAConfig -> default_factory
+    python -c "from pathlib import Path; p=Path('src/byprot/models/dplm/dplm.py'); s=p.read_text(); s2=s.replace('from dataclasses import dataclass', 'from dataclasses import dataclass, field').replace('lora: LoRAConfig = LoRAConfig()', 'lora: LoRAConfig = field(default_factory=LoRAConfig)'); assert s2 != s, 'Expected DPLM dataclass patch target not found'; p.write_text(s2)" && \
     # Empty out the requirements file so readlines() returns an empty list
     echo "" > requirements.txt && \
     pip install -e . && \
