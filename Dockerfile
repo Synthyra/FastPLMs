@@ -102,7 +102,7 @@ def load_source(name, pathname, file=None):\n\
     loader.exec_module(module)\n\
     return module\n' > /usr/local/lib/python3.12/site-packages/imp.py
 
-RUN git clone https://github.com/aqlaboratory/openfold.git && cd openfold && pip install -e . && cd ..
+RUN git clone https://github.com/aqlaboratory/openfold.git && cd openfold && pip install -e . --no-deps && cd ..
 
 # Copy the rest of the source
 COPY . .
