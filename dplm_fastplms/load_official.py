@@ -1,4 +1,6 @@
 """Load official DPLM model from the dplm/byprot submodule for comparison."""
+import re
+from pathlib import Path
 import torch
 import torch.nn as nn
 from typing import Optional
@@ -32,6 +34,41 @@ class _OfficialDPLMComplianceWrapper(nn.Module):
         return _OfficialComplianceOutput(logits=logits, last_hidden_state=last_hidden_state)
 
 
+def _patch_py312_dplm_dataclass_default() -> None:
+    candidate_paths = [
+        Path("/app/dplm/src/byprot/models/dplm/dplm.py"),
+        Path(__file__).resolve().parents[1] / "dplm" / "src" / "byprot" / "models" / "dplm" / "dplm.py",
+    ]
+    pattern = r"(?m)^(\s*lora\s*:\s*[^=\n]*LoRAConfig[^=\n]*=\s*)LoRAConfig(?:\((.*?)\))?\s*$"
+
+    for path in candidate_paths:
+        if not path.exists():
+            continue
+
+        source = path.read_text()
+        if "field(default_factory=LoRAConfig)" in source or "field(default_factory=lambda: LoRAConfig(" in source:
+            return
+
+        patched = source
+        if "from dataclasses import dataclass, field" not in patched and "from dataclasses import dataclass" in patched:
+            patched = patched.replace(
+                "from dataclasses import dataclass",
+                "from dataclasses import dataclass, field",
+            )
+
+        def _replace(match: re.Match[str]) -> str:
+            prefix = match.group(1)
+            args = match.group(2)
+            if args is None or args.strip() == "":
+                return f"{prefix}field(default_factory=LoRAConfig)"
+            return f"{prefix}field(default_factory=lambda: LoRAConfig({args}))"
+
+        patched, replacements = re.subn(pattern, _replace, patched)
+        if replacements > 0 and patched != source:
+            path.write_text(patched)
+            return
+
+
 def load_official_model(
     reference_repo_id: str,
     device: torch.device,
@@ -46,6 +83,7 @@ def load_official_model(
 
     Returns (wrapped_model, tokenizer).
     """
+    _patch_py312_dplm_dataclass_default()
     from byprot.models.dplm.dplm import DiffusionProteinLanguageModel
 
     official_model = DiffusionProteinLanguageModel.from_pretrained(reference_repo_id).to(device=device, dtype=dtype).eval()
