@@ -89,7 +89,7 @@ def load_official_model(
     from byprot.models.dplm.dplm import DiffusionProteinLanguageModel
 
     config = DPLMConfig.from_pretrained(reference_repo_id)
-    official_model = DiffusionProteinLanguageModel(config=config)
+    official_model = DiffusionProteinLanguageModel(cfg=config.to_dict())
     official_model.all_tied_weights_keys = {}
     official_model = official_model.from_pretrained(reference_repo_id).to(device=device, dtype=dtype).eval()
     wrapped = _OfficialDPLMComplianceWrapper(official_model)
