@@ -76,6 +76,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         -e 's/\bfrom esm\b/from fair_esm/g' \
         -e 's/\bimport esm\b/import fair_esm/g' \
         -e 's/\besm\./fair_esm\./g' {} + && \
+    # Avoid eager datamodule imports from byprot/__init__.py (pulls training-only deps like OpenFold)
+    sed -i '/^import byprot\.datamodules$/d' src/byprot/__init__.py && \
     # Empty out the requirements file so readlines() returns an empty list
     echo "" > requirements.txt && \
     pip install -e . && \
