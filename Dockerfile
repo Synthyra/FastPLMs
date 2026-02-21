@@ -76,6 +76,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     find . -type f -name "*.py" -exec sed -i \
         -e 's/\bfrom esm\b/from fair_esm/g' \
         -e 's/\bimport esm\b/import fair_esm/g' {} + && \
+    # Transformers compatibility: avoid star-import from modeling_esm (misses EsmSelfAttention on newer versions)
+    sed -i 's|from transformers.models.esm.modeling_esm import \*|from transformers.models.esm.modeling_esm import EsmAttention, EsmContactPredictionHead, EsmEmbeddings, EsmEncoder, EsmForMaskedLM, EsmIntermediate, EsmLMHead, EsmLayer, EsmModel, EsmOutput, EsmPooler, EsmPreTrainedModel, EsmSelfAttention, EsmSelfOutput|g' src/byprot/models/dplm/modules/dplm_modeling_esm.py && \
     # Avoid eager datamodule imports from byprot/__init__.py (pulls training-only deps like OpenFold)
     sed -i '/^import byprot\.datamodules$/d' src/byprot/__init__.py && \
     # Empty out the requirements file so readlines() returns an empty list
