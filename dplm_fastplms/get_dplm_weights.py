@@ -2,6 +2,8 @@ import copy
 import torch
 from huggingface_hub import HfApi, login
 from transformers import AutoModelForMaskedLM
+
+from dplm_fastplms.modeling_dplm import DPLMForMaskedLM
 from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 from byprot.models.dplm.dplm import DiffusionProteinLanguageModel, DPLMConfig
@@ -30,7 +32,10 @@ if __name__ == "__main__":
 
     for repo_id, source_repo in MODEL_DICT.items():
         official_model = DiffusionProteinLanguageModel.from_pretrained(
-            source_repo).to(device=torch.device("cpu"), dtype=torch.float32).eval()
+            source_repo,
+            device_map="cpu",
+            dtype=torch.float32,
+        ).eval().cpu().to(torch.float32)
         official_state_dict = official_model.net.state_dict()
 
         config = DPLMConfig.from_pretrained(source_repo)
@@ -43,16 +48,9 @@ if __name__ == "__main__":
         }
         config.tie_word_embeddings = False
         model = DPLMForMaskedLM(config=config).eval().cpu().to(torch.float32)
+
         model.tokenizer = official_model.net.tokenizer
-        load_result = model.load_state_dict(official_state_dict, strict=False)
-        assert len(load_result.missing_keys) == 0, (
-            f"Missing keys while mapping official DPLM weights for {source_repo}: "
-            f"{load_result.missing_keys[:20]}"
-        )
-        assert len(load_result.unexpected_keys) == 0, (
-            f"Unexpected keys while mapping official DPLM weights for {source_repo}: "
-            f"{load_result.unexpected_keys[:20]}"
-        )
+        load_result = model.load_state_dict(official_state_dict, strict=True)
         model.lm_head.dense.weight = copy.deepcopy(official_model.net.lm_head.dense.weight)
         model.lm_head.dense.bias = copy.deepcopy(official_model.net.lm_head.dense.bias)
         model.lm_head.decoder.weight = copy.deepcopy(official_model.net.lm_head.decoder.weight)
@@ -62,6 +60,10 @@ if __name__ == "__main__":
         assert_model_parameters_fp32(
             model=model,
             model_name=f"mapped DPLM model ({source_repo})",
+        )
+        assert_model_parameters_fp32(
+            model=official_model,
+            model_name=f"official DPLM model ({source_repo})",
         )
         assert_state_dict_equal(
             reference_state_dict=official_state_dict,
@@ -88,6 +90,10 @@ if __name__ == "__main__":
             device_map="cpu",
             force_download=True,
             trust_remote_code=True,
+        )
+        assert_model_parameters_fp32(
+            model=downloaded_model,
+            model_name=f"downloaded DPLM model ({repo_id})",
         )
         assert_state_dict_equal(
             reference_state_dict=official_state_dict,

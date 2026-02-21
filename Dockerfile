@@ -51,8 +51,8 @@ RUN git clone https://github.com/facebookresearch/esm.git fair-esm-repo && \
     cd fair-esm-repo && \
     # Rename the inner module directory
     mv esm fair_esm && \
-    # Fix the hardcoded version path in setup.py
-    sed -i 's/esm\/version\.py/fair_esm\/version.py/g' setup.py && \
+    # Comprehensively patch setup.py to rename the package and all subpackages
+    sed -i 's/\besm\b/fair_esm/g' setup.py && \
     # Patch all Python files to use the new namespace
     find . -type f -name "*.py" -exec sed -i \
         -e 's/\bfrom esm\b/from fair_esm/g' \
