@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 # Lightweight Docker container for Protein Design Environment
 # Provides a standardized Linux environment for testing and inference with torch.compile support
 
@@ -7,48 +8,50 @@ FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
 # System prerequisites + Python 3.12
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONPATH=/app:/app/dplm/vendor/openfold \
-    PYTHON_VERSION=3.12.7 \
-    PATH=/usr/local/bin:$PATH \
+    PATH=/opt/venv/bin:/usr/local/bin:$PATH \
     TF_CPP_MIN_LOG_LEVEL=2 \
     TF_ENABLE_ONEDNN_OPTS=0 \
     TOKENIZERS_PARALLELISM=true
 
-RUN apt-get update && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential curl git ca-certificates wget \
+        python3.12 python3.12-dev python3.12-venv python3-pip \
         libssl-dev zlib1g-dev libbz2-dev libreadline-dev \
         libsqlite3-dev libncursesw5-dev xz-utils tk-dev \
         libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev \
         ninja-build && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-RUN curl -fsSLO https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tgz && \
-    tar -xzf Python-${PYTHON_VERSION}.tgz && \
-    cd Python-${PYTHON_VERSION} && \
-    ./configure --enable-optimizations && \
-    make -j"$(nproc)" && \
-    make altinstall && \
-    cd .. && rm -rf Python-${PYTHON_VERSION}* && \
-    ln -s /usr/local/bin/python3.12 /usr/local/bin/python && \
-    ln -s /usr/local/bin/pip3.12    /usr/local/bin/pip
+    python3.12 -m venv /opt/venv && \
+    ln -sf /opt/venv/bin/python /usr/local/bin/python && \
+    ln -sf /opt/venv/bin/pip /usr/local/bin/pip
 
 # Location of project code (inside image) – NOT shared with host
 WORKDIR /app
 
-# Copy requirements first for layer caching (matching Modal image order)
-COPY requirements.txt .
-
-RUN pip install --upgrade pip setuptools
-RUN pip install boltz[cuda] -U
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -U boltz[cuda]
 
 # Install E1
-RUN git clone https://github.com/Profluent-AI/E1.git && cd E1 && pip install -e . && cd ..
+RUN --mount=type=cache,target=/root/.cache/pip \
+    git clone --depth 1 https://github.com/Profluent-AI/E1.git && \
+    cd E1 && \
+    pip install -e . && \
+    cd ..
 
 # Install EvolutionaryScale ESM (keeps the standard 'esm' namespace)
-RUN git clone https://github.com/evolutionaryscale/esm.git && cd esm && pip install -e . && cd ..
+RUN --mount=type=cache,target=/root/.cache/pip \
+    git clone --depth 1 https://github.com/evolutionaryscale/esm.git && \
+    cd esm && \
+    pip install -e . && \
+    cd ..
 
 # Vendor Facebook Research FAIR-ESM as 'fair_esm'
-RUN git clone https://github.com/facebookresearch/esm.git fair-esm-repo && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    git clone --depth 1 https://github.com/facebookresearch/esm.git fair-esm-repo && \
     cd fair-esm-repo && \
     # Rename the inner module directory
     mv esm fair_esm && \
@@ -65,7 +68,8 @@ RUN git clone https://github.com/facebookresearch/esm.git fair-esm-repo && \
     cd ..
 
 # Install Bytedance DPLM and patch it to use 'fair_esm' instead of 'esm'
-RUN git clone --recursive https://github.com/bytedance/dplm.git && \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/bytedance/dplm.git && \
     cd dplm && \
     # Patch DPLM imports to point to our vendored fair_esm
     find . -type f -name "*.py" -exec sed -i \
@@ -77,10 +81,13 @@ RUN git clone --recursive https://github.com/bytedance/dplm.git && \
     pip install -e . && \
     cd ..
 
-RUN pip install -r requirements.txt -U
-RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
-RUN pip install --force-reinstall numpy==1.26.4
-RUN pip install "lightning<2.2.0" "pytorch-lightning<2.2.0" "lightning-fabric<2.2.0" "torchmetrics<1.3.0"
+COPY requirements.txt .
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -U -r requirements.txt && \
+    pip install -U torch torchvision --index-url https://download.pytorch.org/whl/cu128 && \
+    pip install numpy==1.26.4 && \
+    pip install "lightning<2.2.0" "pytorch-lightning<2.2.0" "lightning-fabric<2.2.0" "torchmetrics<1.3.0"
 
 # Inject a zero-dependency local 'imp' shim using modern standard library
 RUN printf 'import importlib\n\
@@ -101,7 +108,7 @@ def load_source(name, pathname, file=None):\n\
     module = importlib.util.module_from_spec(spec)\n\
     sys.modules[name] = module\n\
     loader.exec_module(module)\n\
-    return module\n' > /usr/local/lib/python3.12/site-packages/imp.py
+    return module\n' > /opt/venv/lib/python3.12/site-packages/imp.py
 
 # Copy the rest of the source
 COPY . .
@@ -115,7 +122,6 @@ WORKDIR /workspace
 # ──────────────────────────────────────────────────────────────────────────────
 ENV PROJECT_ROOT=/workspace \
     PYTHONPATH=/app:/app/dplm/vendor/openfold \
-    CHAI_DOWNLOADS_DIR=/workspace/models/chai1 \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
     DISABLE_PANDERA_IMPORT_WARNING=True \
     HF_HOME=/workspace/.cache/huggingface \
