@@ -80,6 +80,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     sed -i 's|from transformers.models.esm.modeling_esm import \*|from transformers.models.esm.modeling_esm import EsmAttention, EsmContactPredictionHead, EsmEmbeddings, EsmEncoder, EsmForMaskedLM, EsmIntermediate, EsmLMHead, EsmLayer, EsmModel, EsmOutput, EsmPooler, EsmPreTrainedModel, EsmSelfAttention, EsmSelfOutput|g' src/byprot/models/dplm/modules/dplm_modeling_esm.py && \
     # Avoid eager datamodule imports from byprot/__init__.py (pulls training-only deps like OpenFold)
     sed -i '/^import byprot\.datamodules$/d' src/byprot/__init__.py && \
+    sed -i '/^import byprot\.tasks$/d' src/byprot/__init__.py && \
+    # Avoid eager model-family imports; compliance only needs explicit DPLM modules
+    python -c "from pathlib import Path; p=Path('src/byprot/models/__init__.py'); s=p.read_text(); m='# automatically import any Python files in the models/ directory'; i=s.find(m); p.write_text((s[:i].rstrip() + '\n') if i != -1 else s)" && \
     # Empty out the requirements file so readlines() returns an empty list
     echo "" > requirements.txt && \
     pip install -e . && \
