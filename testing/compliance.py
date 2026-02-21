@@ -14,12 +14,6 @@ from esm_plusplus.load_official import load_official_model as load_official_esmc
 from e1_fastplms.load_official import load_official_model as load_official_e1_model
 from e1_fastplms.modeling_e1 import E1ForMaskedLM
 
-from dplm_fastplms.load_official import load_official_model as load_official_dplm_model
-from dplm_fastplms.modeling_dplm import DPLMForMaskedLM
-
-from dplm2_fastplms.load_official import load_official_model as load_official_dplm2_model
-from dplm2_fastplms.modeling_dplm2 import DPLM2ForMaskedLM
-
 from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
@@ -85,44 +79,6 @@ class ComplianceChecker:
             dtype=torch.float32,
         )
         load_class = AutoModelForMaskedLM if from_auto_model else E1ForMaskedLM
-        fast_model = load_class.from_pretrained(
-            fast_model_path,
-            dtype=torch.float32,
-            device_map=self.device,
-            force_download=force_download,
-            trust_remote_code=True,
-        ).eval()
-        fast_model.attn_backend = "sdpa"
-        return official_model, fast_model, tokenizer
-
-    def _load_dplm(self, from_auto_model: bool = False, force_download: bool = False):
-        official_model_path = "airkingbd/dplm_150m"
-        fast_model_path = "Synthyra/DPLM-150M"
-        official_model, tokenizer = load_official_dplm_model(
-            reference_repo_id=official_model_path,
-            device=self.device,
-            dtype=torch.float32,
-        )
-        load_class = AutoModelForMaskedLM if from_auto_model else DPLMForMaskedLM
-        fast_model = load_class.from_pretrained(
-            fast_model_path,
-            dtype=torch.float32,
-            device_map=self.device,
-            force_download=force_download,
-            trust_remote_code=True,
-        ).eval()
-        fast_model.attn_backend = "sdpa"
-        return official_model, fast_model, tokenizer
-
-    def _load_dplm2(self, from_auto_model: bool = False, force_download: bool = False):
-        official_model_path = "airkingbd/dplm2_150m"
-        fast_model_path = "Synthyra/DPLM2-150M"
-        official_model, tokenizer = load_official_dplm2_model(
-            reference_repo_id=official_model_path,
-            device=self.device,
-            dtype=torch.float32,
-        )
-        load_class = AutoModelForMaskedLM if from_auto_model else DPLM2ForMaskedLM
         fast_model = load_class.from_pretrained(
             fast_model_path,
             dtype=torch.float32,
@@ -219,12 +175,8 @@ class ComplianceChecker:
             official_model, fast_model, tokenizer = self._load_esm2(from_auto_model, force_download)
         elif model_type == "E1":
             official_model, fast_model, tokenizer = self._load_e1(from_auto_model, force_download)
-        elif model_type == "DPLM":
-            official_model, fast_model, tokenizer = self._load_dplm(from_auto_model, force_download)
-        elif model_type == "DPLM2":
-            official_model, fast_model, tokenizer = self._load_dplm2(from_auto_model, force_download)
         else:
-            raise ValueError(f"Unsupported model type: {model_type}")
+            raise ValueError(f"Unsupported model type: {model_type}. Supported: ESMC, ESM2, E1")
         assert_model_parameters_fp32(
             model=official_model.model,
             model_name=f"official {model_type} model",
@@ -249,7 +201,7 @@ if __name__ == "__main__":
     parser.add_argument("--only_non_pad_tokens", action="store_true")
     parser.add_argument("--force_download", action="store_true")
     parser.add_argument("--from_auto_model", action="store_true")
-    parser.add_argument("--model_types", nargs="+", default=["ESMC", "ESM2", "E1", "DPLM", "DPLM2"])
+    parser.add_argument("--model_types", nargs="+", default=["ESMC", "ESM2", "E1"])
     args = parser.parse_args()
 
     if args.hf_token is not None:

@@ -359,9 +359,6 @@ class EmbeddingMixin:
 
 """
 FastPLMs-compatible DPLM2 implementation.
-
-This module is based on:
-https://github.com/bytedance/dplm
 """
 
 import torch

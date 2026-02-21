@@ -44,8 +44,8 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | **E1** | Profluent Bio | [Profluent-Bio/E1](https://github.com/Profluent-Bio/E1) | Flex Attention, Block-Causal | 150M, 300M, 600M |
 | **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
 | **ESM++** | EvolutionaryScale | [EvolutionaryScale/esm](https://github.com/evolutionaryscale/esm) | Optimized SDPA / Flex | Small (300M), Large (600M) |
-| **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
-| **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
+| **DPLM** | ByteDance | N/A | Diffusion Optimized Attention | 150M, 650M, 3B |
+| **DPLM2** | ByteDance | N/A | Multimodal Diffusion | 150M, 650M, 3B |
 | **Boltz2** | MIT / Various | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) | Optimized Structure Prediction | Standard |
 
 ### Full Model List

@@ -2,7 +2,7 @@ import copy
 import os
 import torch
 from huggingface_hub import HfApi, login
-from transformers import AutoModelForMaskedLM
+from transformers import AutoModelForMaskedLM, AutoConfig
 
 from esm_plusplus.load_official import load_official_model
 from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     for repo_id, esmc_model_key in _resolve_repo_items(args.repo_ids):
         official_model, tokenizer = load_official_model(esmc_model_key, device=torch.device("cpu"), dtype=torch.float32)
         # load_official_model returns a wrapper, access the underlying model via .model
-        config = copy.deepcopy(official_model.model.config)
+        config = AutoConfig.from_pretrained(repo_id, trust_remote_code=True)
         config.auto_map = {
             "AutoConfig": "modeling_esm_plusplus.ESMplusplusConfig",
             "AutoModel": "modeling_esm_plusplus.ESMplusplusModel",

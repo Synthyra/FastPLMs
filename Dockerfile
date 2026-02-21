@@ -7,7 +7,7 @@ FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
 
 # System prerequisites + Python 3.12
 ENV DEBIAN_FRONTEND=noninteractive \
-    PYTHONPATH=/app:/app/dplm/vendor/openfold \
+    PYTHONPATH=/app \
     PATH=/opt/venv/bin:/usr/local/bin:$PATH \
     TF_CPP_MIN_LOG_LEVEL=2 \
     TF_ENABLE_ONEDNN_OPTS=0 \
@@ -67,27 +67,6 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -e . && \
     cd ..
 
-# Install Bytedance DPLM and patch it to use 'fair_esm' instead of 'esm'
-RUN --mount=type=cache,target=/root/.cache/pip \
-    git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/bytedance/dplm.git && \
-    cd dplm && \
-    # Patch only top-level ESM imports to point to vendored fair_esm.
-    # Keep dotted module paths untouched (e.g. transformers.models.esm.*).
-    find . -type f -name "*.py" -exec sed -i \
-        -e 's/\bfrom esm\b/from fair_esm/g' \
-        -e 's/\bimport esm\b/import fair_esm/g' {} + && \
-    # Transformers compatibility: avoid star-import from modeling_esm (misses EsmSelfAttention on newer versions)
-    sed -i 's|from transformers.models.esm.modeling_esm import \*|from transformers.models.esm.modeling_esm import EsmAttention, EsmContactPredictionHead, EsmEmbeddings, EsmEncoder, EsmForMaskedLM, EsmIntermediate, EsmLMHead, EsmLayer, EsmModel, EsmOutput, EsmPooler, EsmPreTrainedModel, EsmSelfAttention, EsmSelfOutput|g' src/byprot/models/dplm/modules/dplm_modeling_esm.py && \
-    # Avoid eager datamodule imports from byprot/__init__.py (pulls training-only deps like OpenFold)
-    sed -i '/^import byprot\.datamodules$/d' src/byprot/__init__.py && \
-    sed -i '/^import byprot\.tasks$/d' src/byprot/__init__.py && \
-    # Avoid eager model-family imports; compliance only needs explicit DPLM modules
-    python -c "from pathlib import Path; p=Path('src/byprot/models/__init__.py'); s=p.read_text(); m='# automatically import any Python files in the models/ directory'; i=s.find(m); p.write_text((s[:i].rstrip() + '\n') if i != -1 else s)" && \
-    # Empty out the requirements file so readlines() returns an empty list
-    echo "" > requirements.txt && \
-    pip install -e . && \
-    cd ..
-
 COPY requirements.txt .
 
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -130,7 +109,7 @@ WORKDIR /workspace
 #    Bind-mount it when you run the container:  -v ${PWD}:/workspace
 # ──────────────────────────────────────────────────────────────────────────────
 ENV PROJECT_ROOT=/workspace \
-    PYTHONPATH=/app:/app/dplm/vendor/openfold \
+    PYTHONPATH=/app \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
     DISABLE_PANDERA_IMPORT_WARNING=True \
     HF_HOME=/workspace/.cache/huggingface \

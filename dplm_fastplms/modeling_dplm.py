@@ -361,9 +361,6 @@ class EmbeddingMixin:
 # SPDX-License-Identifier: Apache-2.0
 """
 FastPLMs-compatible DPLM implementation.
-
-This module is based on:
-https://github.com/bytedance/dplm/blob/main/src/byprot/models/lm/esm_dplm.py
 """
 
 import torch
