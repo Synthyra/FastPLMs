@@ -97,11 +97,10 @@ def load_source(name, pathname, file=None):\n\
     loader.exec_module(module)\n\
     return module\n' > /usr/local/lib/python3.12/site-packages/imp.py
 
-RUN git clone https://github.com/aqlaboratory/openfold.git && cd openfold && pip install -e . --no-deps && cd ..
-
 RUN pip install -r requirements.txt -U
 RUN pip install "lightning<2.2.0" "pytorch-lightning<2.2.0" "lightning-fabric<2.2.0" "torchmetrics<1.3.0"
 RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
+RUN git clone https://github.com/aqlaboratory/openfold.git && cd openfold && pip install -e . --no-deps && cd ..
 RUN pip install --force-reinstall numpy==1.26.4
 
 # Copy the rest of the source
