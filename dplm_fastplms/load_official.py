@@ -85,7 +85,8 @@ def load_official_model(
     Returns (wrapped_model, tokenizer).
     """
     _patch_py312_dplm_dataclass_default()
-    from byprot.models.dplm.dplm import DiffusionProteinLanguageModel, DPLMConfig
+    from dplm_fastplms.modeling_dplm import DPLMConfig
+    from byprot.models.dplm.dplm import DiffusionProteinLanguageModel
 
     config = DPLMConfig.from_pretrained(reference_repo_id)
     official_model = DiffusionProteinLanguageModel(config=config)
