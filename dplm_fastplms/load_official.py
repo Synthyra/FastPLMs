@@ -87,10 +87,9 @@ def load_official_model(
     _patch_py312_dplm_dataclass_default()
     from byprot.models.dplm.dplm import DiffusionProteinLanguageModel
 
-    official_model = DiffusionProteinLanguageModel.from_pretrained(
-        reference_repo_id,
-        all_tied_weights_keys={}
-    ).to(device=device, dtype=dtype).eval()
+    official_model = DiffusionProteinLanguageModel()
+    official_model.all_tied_weights_keys = {}
+    official_model.from_pretrained(reference_repo_id).to(device=device, dtype=dtype).eval()
     wrapped = _OfficialDPLMComplianceWrapper(official_model)
     tokenizer = official_model.tokenizer
     return wrapped, tokenizer
