@@ -1,23 +1,14 @@
 import copy
-import importlib
-import importlib.util
+import os
 import sys
-import types
-
 import torch
 from huggingface_hub import HfApi, login
 from transformers import AutoModelForMaskedLM
-from testing.common import (
-    LOAD_DTYPE,
-    _ensure_local_dplm_module_on_path,
-    _import_byprot_module_with_dataclass_patch,
-    _install_byprot_package_shims,
-    _patch_lightning_fabric_fsdp_for_byprot,
-    _patch_transformers_esm_star_exports_for_byprot,
-)
 
-from dplm_fastplms.modeling_dplm import DPLMConfig, DPLMForMaskedLM
+from dplm_fastplms.modeling_dplm import DPLMConfig as FastDPLMConfig, DPLMForMaskedLM
 from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
+
+from byprot.models.dplm.dplm import DiffusionProteinLanguageModel
 
 
 MODEL_DICT = {
@@ -27,95 +18,18 @@ MODEL_DICT = {
 }
 
 
-def _resolve_model_items(repo_ids: list[str] | None) -> list[tuple[str, str]]:
-    if repo_ids is None:
+def _resolve_repo_items(repo_ids: list[str] | None) -> list[tuple[str, str]]:
+    if repo_ids is None or len(repo_ids) == 0:
         return list(MODEL_DICT.items())
 
     selected_items: list[tuple[str, str]] = []
     for repo_id in repo_ids:
         assert repo_id in MODEL_DICT, (
-            f"Unknown repo id {repo_id}. "
+            f"Unknown repo_id {repo_id}. "
             f"Valid options: {sorted(MODEL_DICT.keys())}"
         )
         selected_items.append((repo_id, MODEL_DICT[repo_id]))
     return selected_items
-
-
-def _load_official_dplm_source_model(source_repo: str) -> torch.nn.Module:
-    _ensure_imp_module_stub()
-    dplm_src_path = _ensure_local_dplm_module_on_path()
-    _patch_lightning_fabric_fsdp_for_byprot()
-    _patch_transformers_esm_star_exports_for_byprot()
-    _install_byprot_package_shims(dplm_src_path)
-
-    dplm_module = _import_byprot_module_with_dataclass_patch(
-        module_name="byprot.models.dplm.dplm",
-        purge_prefixes=[
-            "byprot.models.utils",
-            "byprot.models.dplm",
-        ],
-    )
-    dplm_modeling_module = importlib.import_module(
-        "byprot.models.dplm.modules.dplm_modeling_esm"
-    )
-    EsmForDPLM = dplm_modeling_module.EsmForDPLM
-    EsmForDPLM.all_tied_weights_keys = {}
-    DiffusionProteinLanguageModel = dplm_module.DiffusionProteinLanguageModel
-    official_model = DiffusionProteinLanguageModel.from_pretrained(source_repo).to(
-        device=torch.device("cpu"),
-        dtype=LOAD_DTYPE,
-    ).eval()
-    official_model = official_model.eval().cpu().to(torch.float32)
-    assert_model_parameters_fp32(
-        model=official_model.net,
-        model_name=f"official DPLM net ({source_repo})",
-    )
-    return official_model
-
-
-def _ensure_imp_module_stub() -> None:
-    try:
-        import imp  # noqa: F401
-
-        return
-    except ModuleNotFoundError:
-        pass
-
-    if "imp" in sys.modules:
-        return
-
-    imp_module = types.ModuleType("imp")
-
-    def _new_module(name: str):
-        return types.ModuleType(name)
-
-    def _reload(module):
-        return importlib.reload(module)
-
-    def _find_module(name, path=None):
-        spec = importlib.util.find_spec(name)
-        if spec is None:
-            raise ImportError(f"Cannot find module {name}")
-        return None, spec.origin, (None, None, None)
-
-    def _load_module(name, file=None, filename=None, details=None):  # noqa: ARG001
-        return importlib.import_module(name)
-
-    def _load_source(name, pathname, file=None):  # noqa: ARG001
-        spec = importlib.util.spec_from_file_location(name, pathname)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load source for module {name} from {pathname}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-        return module
-
-    imp_module.new_module = _new_module
-    imp_module.reload = _reload
-    imp_module.find_module = _find_module
-    imp_module.load_module = _load_module
-    imp_module.load_source = _load_source
-    sys.modules["imp"] = imp_module
 
 
 if __name__ == "__main__":
@@ -133,11 +47,13 @@ if __name__ == "__main__":
         assert len(args.hf_token) > 0, "--hf_token cannot be empty."
         login(token=args.hf_token)
 
-    for repo_id, source_repo in _resolve_model_items(args.repo_ids):
-        official_model = _load_official_dplm_source_model(source_repo)
+    for repo_id, source_repo in _resolve_repo_items(args.repo_ids):
+        official_model = DiffusionProteinLanguageModel.from_pretrained(
+            source_repo,
+        ).eval().cpu().to(torch.float32)
         official_state_dict = official_model.net.state_dict()
 
-        config = DPLMConfig.from_pretrained(source_repo)
+        config = FastDPLMConfig.from_pretrained(source_repo)
         config.auto_map = {
             "AutoConfig": "modeling_dplm.DPLMConfig",
             "AutoModel": "modeling_dplm.DPLMModel",
@@ -147,25 +63,25 @@ if __name__ == "__main__":
         }
         config.tie_word_embeddings = False
         model = DPLMForMaskedLM(config=config).eval().cpu().to(torch.float32)
+
         model.tokenizer = official_model.net.tokenizer
-        load_result = model.load_state_dict(official_state_dict, strict=False)
-        assert len(load_result.missing_keys) == 0, (
-            f"Missing keys while mapping official DPLM weights for {source_repo}: "
-            f"{load_result.missing_keys[:20]}"
-        )
-        assert len(load_result.unexpected_keys) == 0, (
-            f"Unexpected keys while mapping official DPLM weights for {source_repo}: "
-            f"{load_result.unexpected_keys[:20]}"
-        )
+        load_result = model.load_state_dict(official_state_dict, strict=True)
+        
+        # Manually load LM head to prevent weight tying issues
         model.lm_head.dense.weight = copy.deepcopy(official_model.net.lm_head.dense.weight)
         model.lm_head.dense.bias = copy.deepcopy(official_model.net.lm_head.dense.bias)
         model.lm_head.decoder.weight = copy.deepcopy(official_model.net.lm_head.decoder.weight)
         model.lm_head.decoder.bias = copy.deepcopy(official_model.net.lm_head.decoder.bias)
         model.lm_head.layer_norm.weight = copy.deepcopy(official_model.net.lm_head.layer_norm.weight)
         model.lm_head.layer_norm.bias = copy.deepcopy(official_model.net.lm_head.layer_norm.bias)
+        
         assert_model_parameters_fp32(
             model=model,
             model_name=f"mapped DPLM model ({source_repo})",
+        )
+        assert_model_parameters_fp32(
+            model=official_model,
+            model_name=f"official DPLM model ({source_repo})",
         )
         assert_state_dict_equal(
             reference_state_dict=official_state_dict,
@@ -192,6 +108,10 @@ if __name__ == "__main__":
             device_map="cpu",
             force_download=True,
             trust_remote_code=True,
+        )
+        assert_model_parameters_fp32(
+            model=downloaded_model,
+            model_name=f"downloaded DPLM model ({repo_id})",
         )
         assert_state_dict_equal(
             reference_state_dict=official_state_dict,

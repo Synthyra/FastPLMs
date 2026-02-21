@@ -1,20 +1,21 @@
-torch # these are installed in the Dockerfile
-torchvision # these are installed in the Dockerfile
+torch>=2.5.1 # this is force reinstalled in the Dockerfile with cuda
 matplotlib
-transformers>=5.0.0
-datasets
-hf_transfer
-hf-xet
+# standard
 numpy
 einops
-esm
 scikit-learn
 scipy
 seaborn
-peft
+# huggingface
+transformers>=5.0.0
 accelerate
-biotite
+datasets
+hf_transfer
+hf-xet
+peft
+# embedding mixin
 networkx
+# for boltz
 omegaconf
 rich
 trifast

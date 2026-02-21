@@ -391,22 +391,38 @@ except ImportError:
     flex_attention = None
 
 
-def _create_pad_block_mask(attention_mask_2d: torch.Tensor):
-    assert create_block_mask is not None, "Flex attention block mask requires create_block_mask."
-    token_valid = attention_mask_2d.bool()
-    batch_size, seq_len = token_valid.shape
+def get_attention_mask(
+    attn_backend: str, 
+    batch_size: int, 
+    seq_len: int, 
+    device: torch.device,
+    attention_mask: Optional[torch.Tensor] = None
+) -> torch.Tensor:
+    if attention_mask is None:
+        token_attention_mask = torch.ones((batch_size, seq_len), device=device).bool() 
+    else:
+        token_attention_mask = attention_mask.bool()
+    
+    if attn_backend == "flex":
+        assert create_block_mask is not None, "Flex attention backend requested but torch.create_block_mask is unavailable."
 
-    def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-        return token_valid[batch_idx, q_idx] & token_valid[batch_idx, kv_idx]
+        def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+            return token_attention_mask[batch_idx, q_idx] & token_attention_mask[batch_idx, kv_idx]
 
-    return create_block_mask(
-        mask_mod,
-        batch_size,
-        1,
-        seq_len,
-        seq_len,
-        device=attention_mask_2d.device,
-    )
+        flex_block_mask = create_block_mask(
+            mask_mod,
+            batch_size,
+            1,
+            seq_len,
+            seq_len,
+            device=device,
+        )
+        extended_attention_mask = None
+    else:
+        flex_block_mask = None
+        extended_attention_mask = token_attention_mask[:, None, :, None] & token_attention_mask[:, None, None, :]
+
+    return extended_attention_mask, flex_block_mask
 
 
 @dataclass
@@ -503,15 +519,16 @@ class EsmSelfAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
+        attention_mask: torch.Tensor,
+        flex_block_mask: object,
         output_attentions: Optional[bool] = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Forward pass for self attention.
         
         Args:
             hidden_states: Input tensor
-            attention_mask: Optional attention mask
+            attention_mask: 4D attention mask
+            flex_block_mask: Flex attention block mask
             output_attentions: Whether to return attention weights
             
         Returns:
@@ -529,12 +546,10 @@ class EsmSelfAttention(nn.Module):
             query_layer, key_layer = self.rotary_embeddings(query_layer, key_layer)
 
         if output_attentions:
-            # Manual attention computation - apply scaling here
-            attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
-            if attention_mask is not None:
-                attention_scores = attention_scores.masked_fill(attention_mask.logical_not(), float("-inf"))
+            attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2)) # (b, h, l, l)
+            attention_scores = attention_scores.masked_fill(attention_mask.logical_not(), float("-inf"))
             attention_probs = F.softmax(attention_scores, dim=-1)
-            if self.dropout_prob > 0:
+            if self.dropout_prob > 0 and self.training:
                 attention_probs = F.dropout(attention_probs, p=self.dropout_prob, training=self.training)
             context_layer = torch.matmul(attention_probs, value_layer)
             context_layer = rearrange(context_layer, 'b h s d -> b s (h d)')
@@ -574,15 +589,16 @@ class EsmAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
+        attention_mask: torch.Tensor,
+        flex_block_mask: object,
         output_attentions: Optional[bool] = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Forward pass for attention layer.
         
         Args:
             hidden_states: Input tensor
-            attention_mask: Optional attention mask
+            attention_mask: 4D attention mask
+            flex_block_mask: Flex attention block mask
             output_attentions: Whether to return attention weights
             
         Returns:
@@ -617,15 +633,16 @@ class EsmLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
+        attention_mask: torch.Tensor,
+        flex_block_mask: object,
         output_attentions: Optional[bool] = False,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Forward pass for transformer layer.
         
         Args:
             hidden_states: Input tensor
-            attention_mask: Optional attention mask
+            attention_mask: 4D attention mask
+            flex_block_mask: Flex attention block mask
             output_attentions: Whether to return attention weights
             
         Returns:
@@ -667,8 +684,8 @@ class EsmEncoder(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
+        attention_mask: torch.Tensor,
+        flex_block_mask: object,
         output_hidden_states: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
     ) -> BaseModelOutputWithPastAndCrossAttentions:
@@ -676,7 +693,8 @@ class EsmEncoder(nn.Module):
         
         Args:
             hidden_states: Input tensor
-            attention_mask: Optional attention mask
+            attention_mask: 4D attention mask
+            flex_block_mask: Flex attention block mask
             output_hidden_states: Whether to return all hidden states
             output_attentions: Whether to return attention weights
             
@@ -774,25 +792,16 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         token_embedding_output = self.embeddings(input_ids, attention_mask=attention_mask)
-        batch_size, seq_length = input_ids.shape
-        flex_block_mask = None
-        if attention_mask is not None:
-            token_attention_mask = attention_mask.bool()
-            if self.config.attn_backend == "flex":
-                assert create_block_mask is not None, (
-                    "Flex attention backend requested but torch.create_block_mask is unavailable."
-                )
-                flex_block_mask = _create_pad_block_mask(token_attention_mask)
-                extended_attention_mask = None
-            else:
-                extended_attention_mask = token_attention_mask[:, None, None, :].expand(
-                    batch_size, 1, seq_length, seq_length
-                )
-        else:
-            extended_attention_mask = None
+        attention_mask, flex_block_mask = get_attention_mask(
+            attn_backend=self.config.attn_backend,
+            batch_size=input_ids.shape[0],
+            seq_len=input_ids.shape[1],
+            device=input_ids.device,
+            attention_mask=attention_mask,
+        )
         encoder_outputs = self.encoder(
             token_embedding_output,
-            attention_mask=extended_attention_mask,
+            attention_mask=attention_mask,
             flex_block_mask=flex_block_mask,
             output_hidden_states=False,
             output_attentions=False,
@@ -842,30 +851,22 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
-        batch_size, seq_length = input_shape
         token_embedding_output = self.embeddings(
             input_ids=input_ids,
             position_ids=position_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
         )
-        
-        if attention_mask is None:
-            token_attention_mask = torch.ones((batch_size, seq_length), device=input_ids.device).bool() 
-        else:
-            token_attention_mask = attention_mask.bool()
-        
-        if self.config.attn_backend == "flex" and not output_attentions:
-            assert create_block_mask is not None, "Flex attention backend requested but torch.create_block_mask is unavailable."
-            flex_block_mask = _create_pad_block_mask(token_attention_mask)
-            extended_attention_mask = None
-        else:
-            flex_block_mask = None
-            extended_attention_mask = token_attention_mask[:, None, None, :].expand(batch_size, 1, seq_length, seq_length)
-
+        attention_mask, flex_block_mask = get_attention_mask(
+            attn_backend=self.config.attn_backend,
+            batch_size=input_ids.shape[0],
+            seq_len=input_ids.shape[1],
+            device=input_ids.device,
+            attention_mask=attention_mask,
+        )
         encoder_outputs = self.encoder(
             token_embedding_output,
-            attention_mask=extended_attention_mask,
+            attention_mask=attention_mask,
             flex_block_mask=flex_block_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
@@ -926,15 +927,9 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
 
-        if input_ids is not None and inputs_embeds is not None:
-            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        elif input_ids is not None:
-            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
-            input_shape = input_ids.size()
-        elif inputs_embeds is not None:
-            input_shape = inputs_embeds.size()[:-1]
-        else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
+        assert input_ids or inputs_embeds, "You have to specify either input_ids or inputs_embeds"
+        assert not (input_ids and inputs_embeds), "You cannot specify both input_ids and inputs_embeds at the same time"
+        self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
 
         outputs = self.esm(
             input_ids,
@@ -1142,5 +1137,3 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-

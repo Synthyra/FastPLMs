@@ -164,11 +164,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint_path", type=str, default="boltz_fastplms/weights/boltz2_conf.ckpt")
     parser.add_argument("--output_dir", type=str, default="boltz2_automodel_export")
-    parser.add_argument("--repo_id", type=str, default="Synthyra/Boltz2")
+    parser.add_argument("--repo_ids", nargs="*", type=str, default=["Synthyra/Boltz2"])
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--use_kernels", action="store_true")
     parser.add_argument("--dry_run", action="store_true")
     args = parser.parse_args()
+
+    # Standardization: use the first repo_id from repo_ids
+    repo_id = args.repo_ids[0] if args.repo_ids else "Synthyra/Boltz2"
 
     checkpoint_path = _download_checkpoint_if_needed(Path(args.checkpoint_path))
     output_dir = Path(args.output_dir)

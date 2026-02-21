@@ -1,66 +1,6 @@
-"""Load official ESMC model from the esm submodule for comparison."""
-
-import importlib.util
-import pathlib
-import sys
-import types
-
+"""Load official ESMC model from the esm package for comparison."""
 import torch
 import torch.nn as nn
-
-
-def _ensure_local_esm_module_on_path() -> pathlib.Path:
-    script_root = pathlib.Path(__file__).resolve().parents[1]
-    candidates = [script_root / "esm"]
-
-    cwd = pathlib.Path.cwd().resolve()
-    for parent in [cwd, *cwd.parents]:
-        candidates.append(parent / "esm")
-
-    deduplicated: list[pathlib.Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        resolved = candidate.resolve()
-        key = str(resolved)
-        if key not in seen:
-            seen.add(key)
-            deduplicated.append(resolved)
-
-    for candidate in deduplicated:
-        package_marker = candidate / "esm" / "__init__.py"
-        if package_marker.exists():
-            candidate_str = str(candidate)
-            if candidate_str not in sys.path:
-                sys.path.insert(0, candidate_str)
-            return candidate
-
-    raise FileNotFoundError(
-        "Unable to locate local esm submodule. "
-        f"Checked: {', '.join(str(p) for p in deduplicated)}"
-    )
-
-
-def _ensure_zstd_module_stub() -> None:
-    if "zstd" in sys.modules:
-        return
-    try:
-        zstd_spec = importlib.util.find_spec("zstd")
-    except ValueError:
-        zstd_spec = None
-    if zstd_spec is not None:
-        return
-
-    zstd_module = types.ModuleType("zstd")
-
-    def _missing_zstd_uncompress(data: bytes) -> bytes:
-        raise ModuleNotFoundError(
-            "No module named 'zstd'. Install zstd if compressed tensor "
-            "deserialization is required."
-        )
-
-    zstd_module.ZSTD_uncompress = _missing_zstd_uncompress
-    sys.modules["zstd"] = zstd_module
-
 
 class _ESMCComplianceOutput:
     """Mimics HuggingFace model output so the test suite can access .logits and .hidden_states."""
@@ -110,14 +50,12 @@ def load_official_model(
 
     Returns (wrapped_model, tokenizer).
     """
-    _ensure_local_esm_module_on_path()
-    _ensure_zstd_module_stub()
     from esm.pretrained import ESMC_300M_202412, ESMC_600M_202412
 
     if "300" in reference_repo_id:
-        official_model = ESMC_300M_202412(device=str(device), use_flash_attn=False)
+        official_model = ESMC_300M_202412()
     elif "600" in reference_repo_id:
-        official_model = ESMC_600M_202412(device=str(device), use_flash_attn=False)
+        official_model = ESMC_600M_202412()
     else:
         raise ValueError(f"Unsupported ESMC reference repo id: {reference_repo_id}")
 
@@ -125,3 +63,9 @@ def load_official_model(
     tokenizer = official_model.tokenizer
     wrapped = _OfficialESMCForwardWrapper(official_model, tokenizer).to(device=device, dtype=dtype).eval()
     return wrapped, tokenizer
+
+
+if __name__ == "__main__":
+    model, tokenizer = load_official_model(reference_repo_id="EvolutionaryScale/esmc-300m-2024-12", device=torch.device("cuda"), dtype=torch.float32)
+    print(model)
+    print(tokenizer)

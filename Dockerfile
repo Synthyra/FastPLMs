@@ -5,8 +5,8 @@
 FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
 
 # System prerequisites + Python 3.12
-# Note: Modal uses Python 3.10, but we use 3.12 for better compatibility
 ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONPATH=/app:/app/dplm/vendor/openfold \
     PYTHON_VERSION=3.12.7 \
     PATH=/usr/local/bin:$PATH \
     TF_CPP_MIN_LOG_LEVEL=2 \
@@ -40,9 +40,68 @@ COPY requirements.txt .
 
 RUN pip install --upgrade pip setuptools
 RUN pip install boltz[cuda] -U
+
+# Install E1
+RUN git clone https://github.com/Profluent-AI/E1.git && cd E1 && pip install -e . && cd ..
+
+# Install EvolutionaryScale ESM (keeps the standard 'esm' namespace)
+RUN git clone https://github.com/evolutionaryscale/esm.git && cd esm && pip install -e . && cd ..
+
+# Vendor Facebook Research FAIR-ESM as 'fair_esm'
+RUN git clone https://github.com/facebookresearch/esm.git fair-esm-repo && \
+    cd fair-esm-repo && \
+    # Rename the inner module directory
+    mv esm fair_esm && \
+    # Comprehensively patch setup.py to rename the package and all subpackages
+    sed -i 's/\besm\b/fair_esm/g' setup.py && \
+    # Patch all Python files to use the new namespace
+    find . -type f -name "*.py" -exec sed -i \
+        -e 's/\bfrom esm\b/from fair_esm/g' \
+        -e 's/\bimport esm\b/import fair_esm/g' \
+        -e 's/\besm\./fair_esm\./g' \
+        -e 's/"esm"/"fair_esm"/g' \
+        -e "s/'esm'/'fair_esm'/g" {} + && \
+    pip install -e . && \
+    cd ..
+
+# Install Bytedance DPLM and patch it to use 'fair_esm' instead of 'esm'
+RUN git clone --recursive https://github.com/bytedance/dplm.git && \
+    cd dplm && \
+    # Patch DPLM imports to point to our vendored fair_esm
+    find . -type f -name "*.py" -exec sed -i \
+        -e 's/\bfrom esm\b/from fair_esm/g' \
+        -e 's/\bimport esm\b/import fair_esm/g' \
+        -e 's/\besm\./fair_esm\./g' {} + && \
+    # Empty out the requirements file so readlines() returns an empty list
+    echo "" > requirements.txt && \
+    pip install -e . && \
+    cd ..
+
 RUN pip install -r requirements.txt -U
 RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 RUN pip install --force-reinstall numpy==1.26.4
+RUN pip install "lightning<2.2.0" "pytorch-lightning<2.2.0" "lightning-fabric<2.2.0" "torchmetrics<1.3.0"
+
+# Inject a zero-dependency local 'imp' shim using modern standard library
+RUN printf 'import importlib\n\
+import importlib.util\n\
+import importlib.machinery\n\
+import sys\n\
+import types\n\
+\n\
+def reload(module):\n\
+    return importlib.reload(module)\n\
+\n\
+def new_module(name):\n\
+    return types.ModuleType(name)\n\
+\n\
+def load_source(name, pathname, file=None):\n\
+    loader = importlib.machinery.SourceFileLoader(name, pathname)\n\
+    spec = importlib.util.spec_from_file_location(name, pathname, loader=loader)\n\
+    module = importlib.util.module_from_spec(spec)\n\
+    sys.modules[name] = module\n\
+    loader.exec_module(module)\n\
+    return module\n' > /usr/local/lib/python3.12/site-packages/imp.py
 
 # Copy the rest of the source
 COPY . .
@@ -52,7 +111,7 @@ WORKDIR /workspace
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Single persistent host volume (/workspace) for *all* artefacts & caches
-#     Bind-mount it when you run the container:  -v ${PWD}:/workspace
+#    Bind-mount it when you run the container:  -v ${PWD}:/workspace
 # ──────────────────────────────────────────────────────────────────────────────
 ENV PROJECT_ROOT=/workspace \
     PYTHONPATH=/app \
