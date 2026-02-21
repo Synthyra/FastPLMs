@@ -1,6 +1,5 @@
 import copy
 import torch
-import torch.nn as nn
 from huggingface_hub import HfApi, login
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
@@ -56,12 +55,12 @@ if __name__ == "__main__":
         model.tokenizer = AutoTokenizer.from_pretrained(source_repo)
 
         # Break any potential embedding/LM-head parameter aliasing before export.
-        model.lm_head.dense.weight = nn.Parameter(copy.deepcopy(model.lm_head.dense.weight.detach()))
-        model.lm_head.dense.bias = nn.Parameter(copy.deepcopy(model.lm_head.dense.bias.detach()))
-        model.lm_head.decoder.weight = nn.Parameter(copy.deepcopy(model.lm_head.decoder.weight.detach()))
-        model.lm_head.decoder.bias = nn.Parameter(copy.deepcopy(model.lm_head.decoder.bias.detach()))
-        model.lm_head.layer_norm.weight = nn.Parameter(copy.deepcopy(model.lm_head.layer_norm.weight.detach()))
-        model.lm_head.layer_norm.bias = nn.Parameter(copy.deepcopy(model.lm_head.layer_norm.bias.detach()))
+        model.lm_head.dense.weight = copy.deepcopy(model.lm_head.dense.weight)
+        model.lm_head.dense.bias = copy.deepcopy(model.lm_head.dense.bias)
+        model.lm_head.decoder.weight = copy.deepcopy(model.lm_head.decoder.weight)
+        model.lm_head.decoder.bias = copy.deepcopy(model.lm_head.decoder.bias)
+        model.lm_head.layer_norm.weight = copy.deepcopy(model.lm_head.layer_norm.weight)
+        model.lm_head.layer_norm.bias = copy.deepcopy(model.lm_head.layer_norm.bias)
 
         assert_model_parameters_fp32(
             model=model,
