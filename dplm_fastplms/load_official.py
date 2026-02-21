@@ -39,7 +39,7 @@ def _patch_py312_dplm_dataclass_default() -> None:
         Path("/app/dplm/src/byprot/models/dplm/dplm.py"),
         Path(__file__).resolve().parents[1] / "dplm" / "src" / "byprot" / "models" / "dplm" / "dplm.py",
     ]
-    pattern = r"(?m)^(\s*lora\s*:\s*[^=\n]*LoRAConfig[^=\n]*=\s*).*$"
+    pattern = r"(?m)^(\s*[A-Za-z_]\w*\s*:\s*([A-Za-z_]\w*Config)\s*=\s*).*$"
 
     for path in candidate_paths:
         if not path.exists():
@@ -57,7 +57,8 @@ def _patch_py312_dplm_dataclass_default() -> None:
             )
 
         def _replace(match: re.Match[str]) -> str:
-            return f"{match.group(1)}field(default_factory=LoRAConfig)"
+            prefix, config_type = match.group(1), match.group(2)
+            return f"{prefix}field(default_factory={config_type})"
 
         patched, replacements = re.subn(pattern, _replace, patched)
         if replacements > 0 and patched != source:
