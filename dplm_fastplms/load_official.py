@@ -35,35 +35,39 @@ class _OfficialDPLMComplianceWrapper(nn.Module):
 
 
 def _patch_py312_dplm_dataclass_default() -> None:
-    candidate_paths = [
-        Path("/app/dplm/src/byprot/models/dplm/dplm.py"),
-        Path(__file__).resolve().parents[1] / "dplm" / "src" / "byprot" / "models" / "dplm" / "dplm.py",
+    candidate_roots = [
+        Path("/app/dplm/src/byprot/models/dplm"),
+        Path(__file__).resolve().parents[1] / "dplm" / "src" / "byprot" / "models" / "dplm",
     ]
     pattern = r"(?m)^(\s*[A-Za-z_]\w*\s*:\s*([A-Za-z_]\w*Config)\s*=\s*).*$"
 
-    for path in candidate_paths:
-        if not path.exists():
+    for root in candidate_roots:
+        if not root.exists():
             continue
 
-        source = path.read_text()
-        if "field(default_factory=LoRAConfig)" in source or "field(default_factory=lambda: LoRAConfig(" in source:
-            return
+        for path in root.glob("**/*.py"):
+            source = path.read_text()
+            patched = source
 
-        patched = source
-        if "from dataclasses import dataclass, field" not in patched and "from dataclasses import dataclass" in patched:
-            patched = patched.replace(
-                "from dataclasses import dataclass",
-                "from dataclasses import dataclass, field",
+            def _ensure_field_import(match: re.Match[str]) -> str:
+                imported_names = [item.strip() for item in match.group(1).split(",")]
+                if "field" in imported_names:
+                    return match.group(0)
+                return f"from dataclasses import {match.group(1)}, field"
+
+            patched = re.sub(
+                r"(?m)^from dataclasses import ([^\n]+)$",
+                _ensure_field_import,
+                patched,
             )
 
-        def _replace(match: re.Match[str]) -> str:
-            prefix, config_type = match.group(1), match.group(2)
-            return f"{prefix}field(default_factory={config_type})"
+            def _replace(match: re.Match[str]) -> str:
+                prefix, config_type = match.group(1), match.group(2)
+                return f"{prefix}field(default_factory={config_type})"
 
-        patched, replacements = re.subn(pattern, _replace, patched)
-        if replacements > 0 and patched != source:
-            path.write_text(patched)
-            return
+            patched, replacements = re.subn(pattern, _replace, patched)
+            if replacements > 0 and patched != source:
+                path.write_text(patched)
 
 
 def load_official_model(
