@@ -114,7 +114,7 @@ WORKDIR /workspace
 #    Bind-mount it when you run the container:  -v ${PWD}:/workspace
 # ──────────────────────────────────────────────────────────────────────────────
 ENV PROJECT_ROOT=/workspace \
-    PYTHONPATH=/app \
+    PYTHONPATH=/app:/app/dplm/vendor/openfold \
     CHAI_DOWNLOADS_DIR=/workspace/models/chai1 \
     HF_HUB_ENABLE_HF_TRANSFER=1 \
     DISABLE_PANDERA_IMPORT_WARNING=True \
