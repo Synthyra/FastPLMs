@@ -6,6 +6,7 @@ FROM nvidia/cuda:12.8.0-cudnn-devel-ubuntu24.04
 
 # System prerequisites + Python 3.12
 ENV DEBIAN_FRONTEND=noninteractive \
+    #PYTHONPATH=/app:/app/dplm/vendor/openfold \
     PYTHON_VERSION=3.12.7 \
     PATH=/usr/local/bin:$PATH \
     TF_CPP_MIN_LOG_LEVEL=2 \
@@ -74,6 +75,7 @@ RUN git clone --recursive https://github.com/bytedance/dplm.git && \
     # Empty out the requirements file so readlines() returns an empty list
     echo "" > requirements.txt && \
     pip install -e . && \
+    pip install -e vendor/openfold && \
     cd ..
 
 RUN pip install -r requirements.txt -U
