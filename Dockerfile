@@ -71,12 +71,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 RUN --mount=type=cache,target=/root/.cache/pip \
     git clone --depth 1 --recurse-submodules --shallow-submodules https://github.com/bytedance/dplm.git && \
     cd dplm && \
-    # Patch DPLM imports to point to our vendored fair_esm
+    # Patch only top-level ESM imports to point to vendored fair_esm.
+    # Keep dotted module paths untouched (e.g. transformers.models.esm.*).
     find . -type f -name "*.py" -exec sed -i \
         -e 's/\bfrom esm\b/from fair_esm/g' \
-        -e 's/\bimport esm\b/import fair_esm/g' \
-        -e 's/\besm\./fair_esm\./g' \
-        -e 's/\btransformers\.models\.fair_esm\b/transformers.models.esm/g' {} + && \
+        -e 's/\bimport esm\b/import fair_esm/g' {} + && \
     # Avoid eager datamodule imports from byprot/__init__.py (pulls training-only deps like OpenFold)
     sed -i '/^import byprot\.datamodules$/d' src/byprot/__init__.py && \
     # Empty out the requirements file so readlines() returns an empty list
