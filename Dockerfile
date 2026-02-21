@@ -39,15 +39,41 @@ COPY requirements.txt .
 
 RUN pip install --upgrade pip setuptools
 RUN pip install boltz[cuda] -U
+
+# Install E1
 RUN git clone https://github.com/Profluent-AI/E1.git && cd E1 && pip install -e . && cd ..
+
+# Install EvolutionaryScale ESM (keeps the standard 'esm' namespace)
 RUN git clone https://github.com/evolutionaryscale/esm.git && cd esm && pip install -e . && cd ..
+
+# Vendor Facebook Research FAIR-ESM as 'fair_esm'
+RUN git clone https://github.com/facebookresearch/esm.git fair-esm-repo && \
+    cd fair-esm-repo && \
+    # Rename the inner module directory
+    mv esm fair_esm && \
+    # Patch all Python files and setup.py to use the new namespace
+    find . -type f -name "*.py" -exec sed -i \
+        -e 's/\bfrom esm\b/from fair_esm/g' \
+        -e 's/\bimport esm\b/import fair_esm/g' \
+        -e 's/\besm\./fair_esm\./g' \
+        -e 's/"esm"/"fair_esm"/g' \
+        -e "s/'esm'/'fair_esm'/g" {} + && \
+    pip install -e . && \
+    cd ..
+
+# Install Bytedance DPLM and patch it to use 'fair_esm' instead of 'esm'
 RUN git clone --recursive https://github.com/bytedance/dplm.git && \
     cd dplm && \
+    # Patch DPLM imports to point to our vendored fair_esm
+    find . -type f -name "*.py" -exec sed -i \
+        -e 's/\bfrom esm\b/from fair_esm/g' \
+        -e 's/\bimport esm\b/import fair_esm/g' \
+        -e 's/\besm\./fair_esm\./g' {} + && \
     # Empty out the requirements file so readlines() returns an empty list
     echo "" > requirements.txt && \
     pip install -e . && \
-    #pip install -e vendor/openfold && \
     cd ..
+
 RUN pip install -r requirements.txt -U
 RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 RUN pip install --force-reinstall numpy==1.26.4
@@ -61,7 +87,7 @@ WORKDIR /workspace
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Single persistent host volume (/workspace) for *all* artefacts & caches
-#     Bind-mount it when you run the container:  -v ${PWD}:/workspace
+#    Bind-mount it when you run the container:  -v ${PWD}:/workspace
 # ──────────────────────────────────────────────────────────────────────────────
 ENV PROJECT_ROOT=/workspace \
     PYTHONPATH=/app \
