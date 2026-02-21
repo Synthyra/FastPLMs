@@ -49,7 +49,7 @@ def load_official_model(
 
     Returns (wrapped_model, tokenizer).
     """
-    from dplm.src.byprot.models.dplm2.dplm2 import MultimodalDiffusionProteinLanguageModel
+    from byprot.models.dplm2.dplm2 import MultimodalDiffusionProteinLanguageModel
 
     official_model = MultimodalDiffusionProteinLanguageModel.from_pretrained(reference_repo_id).to(device=device, dtype=dtype).eval()
     wrapped = _OfficialDPLM2ComplianceWrapper(official_model)

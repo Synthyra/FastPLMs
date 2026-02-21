@@ -6,7 +6,7 @@ from transformers import AutoModelForMaskedLM
 from dplm_fastplms.modeling_dplm import DPLMForMaskedLM
 from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
-from byprot.models.dplm.dplm import DiffusionProteinLanguageModel, DPLMConfig
+from byprot.models.dplm.dplm import DPLMConfig, DiffusionProteinLanguageModel
 
 
 MODEL_DICT = {

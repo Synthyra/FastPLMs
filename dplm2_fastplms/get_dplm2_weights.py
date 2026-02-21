@@ -1,24 +1,12 @@
 import copy
-import importlib
-import importlib.util
-import sys
-import types
-
 import torch
 from huggingface_hub import HfApi, login
-import transformers
 from transformers import AutoModelForMaskedLM, EsmTokenizer
-from testing.common import (
-    LOAD_DTYPE,
-    _ensure_local_dplm_module_on_path,
-    _import_byprot_module_with_dataclass_patch,
-    _install_byprot_package_shims,
-    _patch_lightning_fabric_fsdp_for_byprot,
-    _patch_transformers_esm_star_exports_for_byprot,
-)
 
-from dplm2_fastplms.modeling_dplm2 import DPLM2Config, DPLM2ForMaskedLM
+from dplm2_fastplms.modeling_dplm2 import DPLM2ForMaskedLM
 from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
+
+from byprot.models.dplm2.dplm2 import DPLM2Config, MultimodalDiffusionProteinLanguageModel
 
 
 MODEL_DICT = {
@@ -26,187 +14,6 @@ MODEL_DICT = {
     "Synthyra/DPLM2-650M": "airkingbd/dplm2_650m",
     "Synthyra/DPLM2-3B": "airkingbd/dplm2_3b",
 }
-
-
-def _resolve_model_items(repo_ids: list[str] | None) -> list[tuple[str, str]]:
-    if repo_ids is None:
-        return list(MODEL_DICT.items())
-
-    selected_items: list[tuple[str, str]] = []
-    for repo_id in repo_ids:
-        assert repo_id in MODEL_DICT, (
-            f"Unknown repo id {repo_id}. "
-            f"Valid options: {sorted(MODEL_DICT.keys())}"
-        )
-        selected_items.append((repo_id, MODEL_DICT[repo_id]))
-    return selected_items
-
-
-def _load_official_dplm2_source_model(source_repo: str) -> torch.nn.Module:
-    _ensure_imp_module_stub()
-    dplm_src_path = _ensure_local_dplm_module_on_path()
-    _patch_lightning_fabric_fsdp_for_byprot()
-    _patch_transformers_esm_star_exports_for_byprot()
-    _install_byprot_package_shims(dplm_src_path)
-
-    dplm2_module = _import_byprot_module_with_dataclass_patch(
-        module_name="byprot.models.dplm2.dplm2",
-        purge_prefixes=[
-            "byprot.models.utils",
-            "byprot.models.dplm2",
-        ],
-    )
-    dplm2_modeling_module = importlib.import_module(
-        "byprot.models.dplm2.modules.dplm2_modeling_esm"
-    )
-    tokenized_protein_module = importlib.import_module(
-        "byprot.datamodules.dataset.tokenized_protein"
-    )
-    DPLM2Tokenizer = tokenized_protein_module.DPLM2Tokenizer
-    _install_dplm2_tokenizer_hf_compat(DPLM2Tokenizer)
-    setattr(transformers, "DPLM2Tokenizer", DPLM2Tokenizer)
-    tokenization_auto_module = importlib.import_module(
-        "transformers.models.auto.tokenization_auto"
-    )
-    setattr(tokenization_auto_module, "DPLM2Tokenizer", DPLM2Tokenizer)
-    _orig_class_from_name = tokenization_auto_module.tokenizer_class_from_name
-
-    def _patched_class_from_name(class_name):
-        if class_name == "DPLM2Tokenizer":
-            return DPLM2Tokenizer
-        return _orig_class_from_name(class_name)
-
-    tokenization_auto_module.tokenizer_class_from_name = _patched_class_from_name
-    EsmForDPLM2 = dplm2_modeling_module.EsmForDPLM2
-    EsmForDPLM2.all_tied_weights_keys = {}
-    dplm_modeling_module = _import_byprot_module_with_dataclass_patch(
-        module_name="byprot.models.dplm.modules.dplm_modeling_esm",
-        purge_prefixes=[
-            "byprot.models.utils",
-            "byprot.models.dplm",
-        ],
-    )
-    EsmForDPLM = dplm_modeling_module.EsmForDPLM
-    EsmForDPLM.all_tied_weights_keys = {}
-    byprot_models_module = importlib.import_module("byprot.models")
-    byprot_models_module.MODEL_REGISTRY["dplm_esm"] = EsmForDPLM
-    byprot_models_module.MODEL_REGISTRY["dplm2_esm"] = EsmForDPLM2
-    MultimodalDiffusionProteinLanguageModel = (
-        dplm2_module.MultimodalDiffusionProteinLanguageModel
-    )
-    official_model = MultimodalDiffusionProteinLanguageModel.from_pretrained(
-        source_repo
-    ).to(
-        device=torch.device("cpu"),
-        dtype=LOAD_DTYPE,
-    ).eval()
-    official_model = official_model.eval().cpu().to(torch.float32)
-    assert_model_parameters_fp32(
-        model=official_model.net,
-        model_name=f"official DPLM2 net ({source_repo})",
-    )
-    return official_model
-
-
-def _install_dplm2_tokenizer_hf_compat(tokenizer_cls) -> None:
-    if "mask_token_id" in tokenizer_cls.__dict__:
-        return
-
-    def _resolve_token_id(self, attribute_name: str, fallback_token: str) -> int:
-        token_value = getattr(self, attribute_name)
-        if token_value is None:
-            token_value = fallback_token
-        return self._token_to_id[token_value]
-
-    def _get_mask_token(self):
-        token_value = self.aa_mask_token
-        if token_value is None:
-            token_value = "<mask_aa>"
-        return token_value
-
-    def _get_mask_token_id(self):
-        return _resolve_token_id(self, "aa_mask_token", "<mask_aa>")
-
-    def _get_cls_token(self):
-        token_value = self.aa_cls_token
-        if token_value is None:
-            token_value = "<cls_aa>"
-        return token_value
-
-    def _get_cls_token_id(self):
-        return _resolve_token_id(self, "aa_cls_token", "<cls_aa>")
-
-    def _get_eos_token(self):
-        token_value = self.aa_eos_token
-        if token_value is None:
-            token_value = "<eos_aa>"
-        return token_value
-
-    def _get_eos_token_id(self):
-        return _resolve_token_id(self, "aa_eos_token", "<eos_aa>")
-
-    def _get_unk_token(self):
-        token_value = self.aa_unk_token
-        if token_value is None:
-            token_value = "<unk_aa>"
-        return token_value
-
-    def _get_unk_token_id(self):
-        return _resolve_token_id(self, "aa_unk_token", "<unk_aa>")
-
-    tokenizer_cls.mask_token = property(_get_mask_token)
-    tokenizer_cls.mask_token_id = property(_get_mask_token_id)
-    tokenizer_cls.cls_token = property(_get_cls_token)
-    tokenizer_cls.cls_token_id = property(_get_cls_token_id)
-    tokenizer_cls.eos_token = property(_get_eos_token)
-    tokenizer_cls.eos_token_id = property(_get_eos_token_id)
-    tokenizer_cls.unk_token = property(_get_unk_token)
-    tokenizer_cls.unk_token_id = property(_get_unk_token_id)
-
-
-def _ensure_imp_module_stub() -> None:
-    try:
-        import imp  # noqa: F401
-
-        return
-    except ModuleNotFoundError:
-        pass
-
-    if "imp" in sys.modules:
-        return
-
-    imp_module = types.ModuleType("imp")
-
-    def _new_module(name: str):
-        return types.ModuleType(name)
-
-    def _reload(module):
-        return importlib.reload(module)
-
-    def _find_module(name, path=None):
-        spec = importlib.util.find_spec(name)
-        if spec is None:
-            raise ImportError(f"Cannot find module {name}")
-        return None, spec.origin, (None, None, None)
-
-    def _load_module(name, file=None, filename=None, details=None):  # noqa: ARG001
-        return importlib.import_module(name)
-
-    def _load_source(name, pathname, file=None):  # noqa: ARG001
-        spec = importlib.util.spec_from_file_location(name, pathname)
-        if spec is None or spec.loader is None:
-            raise ImportError(f"Cannot load source for module {name} from {pathname}")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-        return module
-
-    imp_module.new_module = _new_module
-    imp_module.reload = _reload
-    imp_module.find_module = _find_module
-    imp_module.load_module = _load_module
-    imp_module.load_source = _load_source
-    sys.modules["imp"] = imp_module
 
 
 if __name__ == "__main__":
@@ -224,25 +31,13 @@ if __name__ == "__main__":
         assert len(args.hf_token) > 0, "--hf_token cannot be empty."
         login(token=args.hf_token)
 
-    for repo_id, source_repo in _resolve_model_items(args.repo_ids):
-        official_model = _load_official_dplm2_source_model(source_repo)
-        official_state_dict = official_model.net.state_dict()
-        excluded_official_keys = {
-            "esm.contact_head.regression.weight",
-            "esm.contact_head.regression.bias",
-        }
-        filtered_official_state_dict: dict[str, torch.Tensor] = {}
-        for tensor_name in official_state_dict:
-            if tensor_name in excluded_official_keys:
-                continue
-            filtered_official_state_dict[tensor_name] = official_state_dict[tensor_name]
-        dropped_official_keys = sorted(
-            set(official_state_dict.keys()) - set(filtered_official_state_dict.keys())
-        )
-        assert dropped_official_keys == sorted(excluded_official_keys), (
-            f"Unexpected excluded official keys for {source_repo}: {dropped_official_keys}"
-        )
-
+    for repo_id, source_repo in MODEL_DICT.items():
+        official_model = MultimodalDiffusionProteinLanguageModel.from_pretrained(
+            source_repo,
+            device_map="cpu",
+            dtype=torch.float32,
+        ).eval().cpu().to(torch.float32)
+        official_state_dict = official_model.state_dict()
         config = DPLM2Config.from_pretrained(source_repo)
         config.auto_map = {
             "AutoConfig": "modeling_dplm2.DPLM2Config",
@@ -251,26 +46,10 @@ if __name__ == "__main__":
             "AutoModelForSequenceClassification": "modeling_dplm2.DPLM2ForSequenceClassification",
             "AutoModelForTokenClassification": "modeling_dplm2.DPLM2ForTokenClassification",
         }
-        config.tie_word_embeddings = False
-        # Clear _name_or_path so __init__ does not attempt to load DPLM2Tokenizer
-        # from the byprot source repo (which is not a HuggingFace-compatible tokenizer).
-        source_name_or_path = config._name_or_path
-        config._name_or_path = ""
         model = DPLM2ForMaskedLM(config=config).eval().cpu().to(torch.float32)
-        config._name_or_path = source_name_or_path
-        # Use the official DPLM amino-acid tokenizer (EsmTokenizer) that underlies DPLM2.
-        # DPLM2 models share the same AA vocabulary as their DPLM counterparts.
-        dplm_source_repo = source_repo.replace("dplm2_", "dplm_")
-        model.tokenizer = EsmTokenizer.from_pretrained(dplm_source_repo)
-        load_result = model.load_state_dict(filtered_official_state_dict, strict=False)
-        assert len(load_result.missing_keys) == 0, (
-            f"Missing keys while mapping official DPLM2 weights for {source_repo}: "
-            f"{load_result.missing_keys[:20]}"
-        )
-        assert len(load_result.unexpected_keys) == 0, (
-            f"Unexpected keys while mapping official DPLM2 weights for {source_repo}: "
-            f"{load_result.unexpected_keys[:20]}"
-        )
+
+        model.tokenizer = official_model.tokenizer
+        load_result = model.load_state_dict(official_state_dict, strict=True)
         model.lm_head.dense.weight = copy.deepcopy(official_model.net.lm_head.dense.weight)
         model.lm_head.dense.bias = copy.deepcopy(official_model.net.lm_head.dense.bias)
         model.lm_head.decoder.weight = copy.deepcopy(official_model.net.lm_head.decoder.weight)
@@ -281,8 +60,12 @@ if __name__ == "__main__":
             model=model,
             model_name=f"mapped DPLM2 model ({source_repo})",
         )
+        assert_model_parameters_fp32(
+            model=official_model,
+            model_name=f"official DPLM2 model ({source_repo})",
+        )
         assert_state_dict_equal(
-            reference_state_dict=filtered_official_state_dict,
+            reference_state_dict=official_state_dict,
             candidate_state_dict=model.state_dict(),
             context=f"DPLM2 weight parity ({source_repo})",
         )
@@ -307,8 +90,12 @@ if __name__ == "__main__":
             force_download=True,
             trust_remote_code=True,
         )
+        assert_model_parameters_fp32(
+            model=downloaded_model,
+            model_name=f"downloaded DPLM2 model ({repo_id})",
+        )
         assert_state_dict_equal(
-            reference_state_dict=filtered_official_state_dict,
+            reference_state_dict=official_state_dict,
             candidate_state_dict=downloaded_model.state_dict(),
             context=f"DPLM2 weight parity post-download ({repo_id})",
         )
