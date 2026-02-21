@@ -80,6 +80,7 @@ RUN pip install -r requirements.txt -U
 RUN pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 RUN pip install --force-reinstall numpy==1.26.4
 RUN pip install "lightning<2.2.0" "pytorch-lightning<2.2.0" "lightning-fabric<2.2.0" "torchmetrics<1.3.0"
+RUN pip install imp
 
 # Copy the rest of the source
 COPY . .
