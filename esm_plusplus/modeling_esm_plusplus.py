@@ -886,7 +886,7 @@ class TransformerStack(nn.Module):
         attn_backend: str = "sdpa",
     ):
         super().__init__()
-        self.attn_backend = attn_backend
+        self._attn_backend = attn_backend
         self.blocks = nn.ModuleList(
             [
                 UnifiedTransformerBlock(
@@ -901,6 +901,18 @@ class TransformerStack(nn.Module):
         )
         self.norm = nn.LayerNorm(d_model, bias=False)
         self.gradient_checkpointing = False
+        self.attn_backend = attn_backend
+
+    @property
+    def attn_backend(self) -> str:
+        return self._attn_backend
+
+    @attn_backend.setter
+    def attn_backend(self, backend: str) -> None:
+        assert backend in ("sdpa", "flex"), f"Unsupported attn_backend: {backend}"
+        self._attn_backend = backend
+        for block in self.blocks:
+            block.attn.attn_backend = backend
 
     def forward(
         self,
@@ -924,7 +936,7 @@ class TransformerStack(nn.Module):
         
         # move to 4D attention mask or flex block mask
         attention_mask, flex_block_mask = get_attention_mask(
-            attn_backend=self.attn_backend,
+            attn_backend=self._attn_backend,
             batch_size=x.shape[0],
             seq_len=x.shape[1],
             device=x.device,
@@ -996,6 +1008,18 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
             nn.init.ones_(module.weight)
+
+    @property
+    def attn_backend(self) -> str:
+        return self.config.attn_backend
+
+    @attn_backend.setter
+    def attn_backend(self, backend: str) -> None:
+        assert backend in ("sdpa", "flex"), f"Unsupported attn_backend: {backend}"
+        self.config.attn_backend = backend
+        for module in self.modules():
+            if isinstance(module, TransformerStack):
+                module.attn_backend = backend
 
     def _reset_rotary_embeddings(self):
         """Refresh non-persistent rotary buffers after checkpoint loading."""

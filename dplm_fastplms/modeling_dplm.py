@@ -475,11 +475,20 @@ class DPLMPreTrainedModel(EsmPreTrainedModel):
     tokenizer = EsmTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
     all_tied_weights_keys = {}
 
+    @property
+    def attn_backend(self) -> str:
+        return self.config.attn_backend
+
+    @attn_backend.setter
+    def attn_backend(self, backend: str) -> None:
+        assert backend in ("sdpa", "flex"), f"Unsupported attn_backend: {backend}"
+        self.config.attn_backend = backend
+
 
 class ModifiedEsmSelfAttention(EsmSelfAttention):
     def __init__(self, config, position_embedding_type=None):
         super().__init__(config, position_embedding_type)
-        self.attn_backend = config.attn_backend
+        self.config = config
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -545,7 +554,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
             context_layer = torch.matmul(attention_probs, value_layer)
         else:
             attention_probs = None
-            if self.attn_backend == "flex":
+            if self.config.attn_backend == "flex":
                 assert flex_attention is not None, "Flex attention backend requested but torch.flex_attention is unavailable."
                 assert query_layer.dtype in (torch.float16, torch.bfloat16), (
                     f"Flex attention backend requires float16 or bfloat16, got {query_layer.dtype}."

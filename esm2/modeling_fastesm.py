@@ -508,7 +508,7 @@ class EsmSelfAttention(nn.Module):
         self.scale = self.attention_head_size**-0.5
 
         self.dropout_prob = config.attention_probs_dropout_prob
-        self.attn_backend = config.attn_backend
+        self.config = config
         self.position_embedding_type = position_embedding_type or getattr(
             config, "position_embedding_type", "absolute"
         )
@@ -555,7 +555,7 @@ class EsmSelfAttention(nn.Module):
             context_layer = rearrange(context_layer, 'b h s d -> b s (h d)')
             return context_layer, attention_probs
         else:
-            if self.attn_backend == "flex":
+            if self.config.attn_backend == "flex":
                 assert flex_attention is not None, "Flex attention backend requested but torch.flex_attention is unavailable."
                 assert query_layer.dtype in (torch.float16, torch.bfloat16), f"Flex attention backend requires float16 or bfloat16, got {query_layer.dtype}."
                 assert flex_block_mask is not None, "Flex attention backend requires a block mask"
@@ -770,6 +770,15 @@ class FastEsmPreTrainedModel(PreTrainedModel):
         # NOTE: get_output_embeddings() must return None to prevent accidental weight tying.
         # See e.g. https://github.com/huggingface/transformers/pull/39339#discussion_r2219126400
         return None
+
+    @property
+    def attn_backend(self) -> str:
+        return self.config.attn_backend
+
+    @attn_backend.setter
+    def attn_backend(self, backend: str) -> None:
+        assert backend in ("sdpa", "flex"), f"Unsupported attn_backend: {backend}"
+        self.config.attn_backend = backend
 
 
 class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):

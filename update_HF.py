@@ -89,7 +89,6 @@ MODEL_REGISTRY = [
         ],
         "files": {
             "dplm_fastplms/modeling_dplm.py": "modeling_dplm.py",
-            "dplm_fastplms/base_tokenizer.py": "base_tokenizer.py",
         },
         "readme_map": {
             "Synthyra/DPLM-150M": "readmes/dplm_readme.md",
@@ -108,7 +107,6 @@ MODEL_REGISTRY = [
         ],
         "files": {
             "dplm2_fastplms/modeling_dplm2.py": "modeling_dplm2.py",
-            "dplm2_fastplms/base_tokenizer.py": "base_tokenizer.py",
         },
         "readme_map": {
             "Synthyra/DPLM2-150M": "readmes/dplm2_readme.md",
