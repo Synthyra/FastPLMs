@@ -39,7 +39,7 @@ class ThroughputChecker:
         return model
 
     def _generate_random_sequence(self, length: int) -> str:
-        return 'M' + "".join(random.choices(self.canonical_amino_acids, k=length))
+        return 'M' + "".join(random.choices(self.canonical_amino_acids, k=length-1))
     
     def _generate_random_batch(self, batch_size: int, min_length: int, max_length: int) -> list[str]:
         return [self._generate_random_sequence(random.randint(min_length, max_length)) for _ in range(batch_size)]
