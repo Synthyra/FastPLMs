@@ -1091,13 +1091,17 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         else:
             x = inputs_embeds
         
-        return self.transformer(
+        transformer_output = self.transformer(
             x=x,
             attention_mask=attention_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
-        ).last_hidden_state
-        
+        )
+        return ESMplusplusOutput(
+            last_hidden_state=transformer_output.last_hidden_state,
+            hidden_states=transformer_output.hidden_states,
+            attentions=transformer_output.attentions,
+        )
 
 class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
     """

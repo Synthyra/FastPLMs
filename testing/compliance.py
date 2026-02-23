@@ -211,4 +211,9 @@ if __name__ == "__main__":
     checker = ComplianceChecker()
     for model_type in args.model_types:
         print(f"Checking {model_type}...")
-        checker(model_type=model_type, from_auto_model=args.from_auto_model, only_non_pad_tokens=args.only_non_pad_tokens, force_download=args.force_download)
+        checker(
+            model_type=model_type,
+            from_auto_model=args.from_auto_model,
+            only_non_pad_tokens=args.only_non_pad_tokens,
+            force_download=args.force_download
+        )

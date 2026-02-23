@@ -10,6 +10,7 @@ Usage:
     py -m update_HF --hf_token YOUR_TOKEN
     py -m update_HF --families esm2 dplm
     py -m update_HF --skip-weights
+    py -m update_HF --files-only
 """
 
 import argparse
@@ -134,8 +135,40 @@ MODEL_REGISTRY = [
         "repo_ids": [
             "Synthyra/Boltz2",
         ],
-        "files": {},
-        "readme_map": {},
+        "files": {
+            "boltz_fastplms/modeling_boltz2.py": "modeling_boltz2.py",
+            "boltz_fastplms/__init__.py": "__init__.py",
+            "boltz_fastplms/minimal_featurizer.py": "minimal_featurizer.py",
+            "boltz_fastplms/minimal_structures.py": "minimal_structures.py",
+            "boltz_fastplms/cif_writer.py": "cif_writer.py",
+            "boltz_fastplms/vb_const.py": "vb_const.py",
+            "boltz_fastplms/vb_layers_attention.py": "vb_layers_attention.py",
+            "boltz_fastplms/vb_layers_attentionv2.py": "vb_layers_attentionv2.py",
+            "boltz_fastplms/vb_layers_confidence_utils.py": "vb_layers_confidence_utils.py",
+            "boltz_fastplms/vb_layers_dropout.py": "vb_layers_dropout.py",
+            "boltz_fastplms/vb_layers_initialize.py": "vb_layers_initialize.py",
+            "boltz_fastplms/vb_layers_outer_product_mean.py": "vb_layers_outer_product_mean.py",
+            "boltz_fastplms/vb_layers_pair_averaging.py": "vb_layers_pair_averaging.py",
+            "boltz_fastplms/vb_layers_pairformer.py": "vb_layers_pairformer.py",
+            "boltz_fastplms/vb_layers_transition.py": "vb_layers_transition.py",
+            "boltz_fastplms/vb_layers_triangular_mult.py": "vb_layers_triangular_mult.py",
+            "boltz_fastplms/vb_loss_diffusionv2.py": "vb_loss_diffusionv2.py",
+            "boltz_fastplms/vb_modules_confidencev2.py": "vb_modules_confidencev2.py",
+            "boltz_fastplms/vb_modules_diffusion_conditioning.py": "vb_modules_diffusion_conditioning.py",
+            "boltz_fastplms/vb_modules_diffusionv2.py": "vb_modules_diffusionv2.py",
+            "boltz_fastplms/vb_modules_encodersv2.py": "vb_modules_encodersv2.py",
+            "boltz_fastplms/vb_modules_transformersv2.py": "vb_modules_transformersv2.py",
+            "boltz_fastplms/vb_modules_trunkv2.py": "vb_modules_trunkv2.py",
+            "boltz_fastplms/vb_modules_utils.py": "vb_modules_utils.py",
+            "boltz_fastplms/vb_potentials_potentials.py": "vb_potentials_potentials.py",
+            "boltz_fastplms/vb_potentials_schedules.py": "vb_potentials_schedules.py",
+            "boltz_fastplms/vb_tri_attn_attention.py": "vb_tri_attn_attention.py",
+            "boltz_fastplms/vb_tri_attn_primitives.py": "vb_tri_attn_primitives.py",
+            "boltz_fastplms/vb_tri_attn_utils.py": "vb_tri_attn_utils.py",
+        },
+        "readme_map": {
+            "Synthyra/Boltz2": "readmes/boltz2_readme.md",
+        },
         "license": "LICENSE",
         "weight_module": "boltz_fastplms.get_boltz2_weights",
     },
@@ -209,12 +242,13 @@ if __name__ == "__main__":
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--families", nargs="+", default=None)
     parser.add_argument("--skip-weights", action="store_true", help="Skip weight conversion scripts")
+    parser.add_argument("--files-only", action="store_true", help="Only upload files, skip weight conversion")
     args = parser.parse_args()
 
     if args.hf_token:
         login(token=args.hf_token)
 
-    if not args.skip_weights:
+    if not args.skip_weights and not args.files_only:
         _run_weight_scripts(args.families, args.hf_token)
 
     api = HfApi()

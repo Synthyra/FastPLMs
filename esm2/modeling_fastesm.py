@@ -927,10 +927,6 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
 
-        assert input_ids or inputs_embeds, "You have to specify either input_ids or inputs_embeds"
-        assert not (input_ids and inputs_embeds), "You cannot specify both input_ids and inputs_embeds at the same time"
-        self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
-
         outputs = self.esm(
             input_ids,
             attention_mask=attention_mask,
