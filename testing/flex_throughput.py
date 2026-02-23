@@ -65,7 +65,7 @@ class ThroughputChecker:
         torch.cuda.empty_cache()
         return time_taken
 
-    def evaluate(self, model_path: str, batch_sizes: list[int], sequence_lengths: list[int]):
+    def evaluate(self, model_path: str, batch_sizes: list[int], min_length: int, sequence_lengths: List[int]):
         results = {"sdpa": {}, "flex": {}}
         
         # Benchmark SDPA
@@ -75,17 +75,17 @@ class ThroughputChecker:
         
         print(f"Benchmarking {model_path} with SDPA...")
         for bs in batch_sizes:
-            for sl in sequence_lengths:
-                t = self._time(model, tokenizer, bs, sl)
-                results["sdpa"][(bs, sl)] = t
+            for max_length in sequence_lengths:
+                t = self._time(model, tokenizer, bs, min_length, max_length)
+                results["sdpa"][(bs, max_length)] = t
         
         # Benchmark Flex
         model.attn_backend = "flex"
         print(f"Benchmarking {model_path} with Flex...")
         for bs in batch_sizes:
-            for sl in sequence_lengths:
-                t = self._time(model, tokenizer, bs, sl)
-                results["flex"][(bs, sl)] = t
+            for max_length in sequence_lengths:
+                t = self._time(model, tokenizer, bs, min_length, max_length)
+                results["flex"][(bs, max_length)] = t
         
         del model
         torch.cuda.empty_cache()
@@ -99,13 +99,13 @@ def plot_results(all_results: dict, output_path: str):
     for model_path, results in all_results.items():
         model_name = model_path.split("/")[-1]
         for backend in ["sdpa", "flex"]:
-            for (bs, sl), t in results[backend].items():
+            for (bs, max_length), t in results[backend].items():
                 plot_data.append({
                     "Model": f"{model_name} ({backend})",
-                    "Combination": f"BS={bs}, L={sl}",
+                    "Combination": f"BS={bs}, L={max_length}",
                     "Time (s)": t,
                     "BS": bs,
-                    "L": sl
+                    "L": max_length
                 })
     
     if not plot_data:
@@ -114,7 +114,7 @@ def plot_results(all_results: dict, output_path: str):
     plt.figure(figsize=(12, 6))
     # Sort by BS then L for the x-axis labels
     combinations = sorted(list(set(d["Combination"] for d in plot_data)), 
-                         key=lambda x: (int(x.split("=")[1].split(",")[0]), int(x.split("=")[2])))
+                         key=lambda x: (int(x.split("=")[1].split(",")[0]), int(x.split("=")[2].split(",")[0])))
     
     sns.barplot(data=plot_data, x="Combination", y="Time (s)", hue="Model", order=combinations)
     plt.title("Model Throughput Comparison: SDPA vs Flex")
@@ -144,6 +144,6 @@ if __name__ == "__main__":
     
     all_results = {}
     for path in args.model_paths:
-        all_results[path] = checker.evaluate(path, args.batch_sizes, args.sequence_lengths)
+        all_results[path] = checker.evaluate(path, args.batch_sizes, min_length=32, sequence_lengths=args.sequence_lengths)
     
     plot_results(all_results, args.output_path)
