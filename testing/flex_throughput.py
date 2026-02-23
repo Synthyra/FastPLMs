@@ -5,6 +5,7 @@ import copy
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pandas as pd
 from transformers import AutoModelForMaskedLM
 from tqdm.auto import tqdm
 
@@ -111,12 +112,15 @@ def plot_results(all_results: dict, output_path: str):
     if not plot_data:
         return
 
+    # Convert list of dicts to pandas DataFrame
+    plot_df = pd.DataFrame(plot_data)
+
     plt.figure(figsize=(12, 6))
     # Sort by BS then L for the x-axis labels
     combinations = sorted(list(set(d["Combination"] for d in plot_data)), 
                          key=lambda x: (int(x.split("=")[1].split(",")[0]), int(x.split("=")[2].split(",")[0])))
     
-    sns.barplot(data=plot_data, x="Combination", y="Time (s)", hue="Model", order=combinations)
+    sns.barplot(data=plot_df, x="Combination", y="Time (s)", hue="Model", order=combinations)
     plt.title("Model Throughput Comparison: SDPA vs Flex")
     plt.xticks(rotation=45)
     plt.tight_layout()
