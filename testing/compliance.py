@@ -1,3 +1,5 @@
+import entrypoint_setup
+
 import torch
 import random
 from torch.nn.functional import mse_loss

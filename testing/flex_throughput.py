@@ -1,3 +1,5 @@
+import entrypoint_setup
+
 import time
 import torch
 import random
