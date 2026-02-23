@@ -45,6 +45,7 @@ class ThroughputChecker:
 
     @torch.inference_mode()
     def _time(self, model, tokenizer, batch_size: int, min_length: int, max_length: int):
+        model = model.to(self.device).eval()
         set_seed(42)
         def time_batches(num_batches: int, message: str):
             start_time = time.time()
@@ -65,29 +66,28 @@ class ThroughputChecker:
         torch.cuda.empty_cache()
         return time_taken
 
-    def evaluate(self, model_path: str, batch_sizes: list[int], min_length: int, sequence_lengths: List[int]):
+    def evaluate(self, model_path: str, batch_sizes: list[int], min_length: int, sequence_lengths: list[int]):
         results = {"sdpa": {}, "flex": {}}
         
-        # Benchmark SDPA
-        model = self._load_model(model_path)
-        tokenizer = model.tokenizer
-        model.attn_backend = "sdpa"
+        original_model = self._load_model(model_path)
+        tokenizer = original_model.tokenizer
         
         print(f"Benchmarking {model_path} with SDPA...")
         for bs in batch_sizes:
             for max_length in sequence_lengths:
-                t = self._time(model, tokenizer, bs, min_length, max_length)
+                original_model.attn_backend = "sdpa"
+                t = self._time(copy.deepcopy(original_model), tokenizer, bs, min_length, max_length)
                 results["sdpa"][(bs, max_length)] = t
-        
-        # Benchmark Flex
-        model.attn_backend = "flex"
+
         print(f"Benchmarking {model_path} with Flex...")
         for bs in batch_sizes:
             for max_length in sequence_lengths:
-                t = self._time(model, tokenizer, bs, min_length, max_length)
+                original_model.attn_backend = "flex"
+                t = self._time(copy.deepcopy(original_model), tokenizer, bs, min_length, max_length)
                 results["flex"][(bs, max_length)] = t
         
-        del model
+        original_model.cpu()
+        del original_model
         torch.cuda.empty_cache()
         return results
 
