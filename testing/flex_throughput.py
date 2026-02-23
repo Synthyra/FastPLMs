@@ -50,49 +50,78 @@ class ThroughputChecker:
     def _time(self, model, tokenizer, batch_size: int, min_length: int, max_length: int):
         model = model.to(self.device).eval()
         set_seed(42)
-        nonpad_tokens_sum = 0
-        timed_tokens_sum = 0
+        min_dynamic_warmup_batches = self.warmup_batches
+        max_dynamic_warmup_batches = self.warmup_batches * 10
+        stability_window = 3
+        relative_stability_tolerance = 0.10
+
+        def synchronize():
+            if self.device.type == "cuda":
+                torch.cuda.synchronize()
+
+        def run_one_batch() -> int:
+            batch = self._generate_random_batch(batch_size, min_length, max_length)
+            tokenized = tokenizer(
+                batch,
+                return_tensors="pt",
+                padding="max_length",
+                max_length=max_length,
+                truncation=True,
+            )
+            # Count the number of non-pad tokens in the batch.
+            input_ids = tokenized["input_ids"]
+            if "attention_mask" in tokenized:
+                attention_mask = tokenized["attention_mask"]
+                nonpad_tokens_this = attention_mask.sum().item()
+            else:
+                # Fallback: count non-<pad> tokens (assuming pad_token_id exists).
+                pad_token_id = tokenizer.pad_token_id
+                if pad_token_id is not None:
+                    nonpad_tokens_this = (input_ids != pad_token_id).sum().item()
+                else:
+                    nonpad_tokens_this = input_ids.numel()
+            tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
+            _ = model(**tokenized, output_hidden_states=True)
+            return nonpad_tokens_this
 
         def time_batches(num_batches: int, message: str):
-            nonlocal nonpad_tokens_sum
+            processed_tokens = 0
+            synchronize()
             start_time = time.time()
             for _ in tqdm(range(num_batches), desc=message, leave=False):
-                batch = self._generate_random_batch(batch_size, min_length, max_length)
-                tokenized = tokenizer(
-                    batch,
-                    return_tensors="pt",
-                    padding="max_length",
-                    max_length=max_length,
-                    truncation=True,
-                )
-                # Count the number of non-pad tokens in the batch
-                input_ids = tokenized["input_ids"]
-                attention_mask = tokenized.get("attention_mask", None)
-                if attention_mask is not None:
-                    nonpad_tokens_this = attention_mask.sum().item()
-                else:
-                    # fallback: count non-<pad> tokens (assuming pad_token_id exists)
-                    pad_token_id = tokenizer.pad_token_id
-                    if pad_token_id is not None:
-                        nonpad_tokens_this = (input_ids != pad_token_id).sum().item()
-                    else:
-                        nonpad_tokens_this = input_ids.numel()
-                nonpad_tokens_sum += nonpad_tokens_this
-                tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
-                _ = model(**tokenized, output_hidden_states=True)
+                processed_tokens += run_one_batch()
+            synchronize()
             end_time = time.time()
-            return end_time - start_time
+            return end_time - start_time, processed_tokens
 
-        # Warmup and timing
-        torch.compile(model)
-        _ = time_batches(self.warmup_batches, "Warmup")
-        torch.cuda.synchronize()
-        start_tokens_count = nonpad_tokens_sum
-        time_taken = time_batches(self.timed_batches, "Timed")
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        # Only tokens processed during timed_batches, not during warmup_batches
-        timed_tokens_sum = nonpad_tokens_sum - start_tokens_count
+        # Compile first, then keep warming up until the compiled path stabilizes.
+        model = torch.compile(model)
+        warmup_latencies = []
+        for warmup_idx in tqdm(range(max_dynamic_warmup_batches), desc="Warmup (dynamic)", leave=False):
+            synchronize()
+            warmup_start = time.time()
+            _ = run_one_batch()
+            synchronize()
+            warmup_latency = time.time() - warmup_start
+            warmup_latencies.append(warmup_latency)
+
+            if warmup_idx + 1 < min_dynamic_warmup_batches:
+                continue
+            if len(warmup_latencies) < 2 * stability_window:
+                continue
+
+            previous_window = warmup_latencies[-2 * stability_window:-stability_window]
+            current_window = warmup_latencies[-stability_window:]
+            previous_mean = sum(previous_window) / stability_window
+            current_mean = sum(current_window) / stability_window
+            assert previous_mean > 0.0, "Warmup latency mean should be positive."
+            relative_change = abs(current_mean - previous_mean) / previous_mean
+            if relative_change <= relative_stability_tolerance:
+                break
+
+        time_taken, timed_tokens_sum = time_batches(self.timed_batches, "Timed")
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
         return time_taken, timed_tokens_sum
 
     def evaluate(self, model_path: str, batch_sizes: list[int], min_length: int, sequence_lengths: list[int]):
