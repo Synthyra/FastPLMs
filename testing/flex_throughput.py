@@ -1,6 +1,7 @@
 import entrypoint_setup
 
 import time
+import hashlib
 import torch
 import random
 import copy
@@ -43,6 +44,23 @@ class ThroughputChecker:
     def _generate_random_sequence(self, length: int) -> str:
         return 'M' + "".join(random.choices(self.canonical_amino_acids, k=length-1))
     
+    def _build_length_pattern(self, batch_size: int, min_length: int, max_length: int) -> list[int]:
+        assert batch_size >= 1, "batch_size must be >= 1."
+        assert min_length <= max_length, "min_length must be <= max_length."
+
+        if batch_size == 1:
+            return [max_length]
+
+        assert min_length < max_length, (
+            "For batch_size > 1, min_length must be < max_length so each batch contains pad tokens."
+        )
+        padded_length = max(max_length - 1, min_length)
+        length_pattern = [max_length] + [padded_length for _ in range(batch_size - 1)]
+        assert any(length < max_length for length in length_pattern), (
+            "Expected at least one sequence shorter than max_length to create pad tokens."
+        )
+        return length_pattern
+
     def _generate_random_batch(self, batch_size: int, min_length: int, max_length: int) -> list[str]:
         return [self._generate_random_sequence(random.randint(min_length, max_length)) for _ in range(batch_size)]
 
@@ -54,13 +72,23 @@ class ThroughputChecker:
         max_dynamic_warmup_batches = self.warmup_batches * 10
         stability_window = 3
         relative_stability_tolerance = 0.10
+        length_pattern = self._build_length_pattern(batch_size, min_length, max_length)
+        seen_batch_fingerprints = set()
 
         def synchronize():
             if self.device.type == "cuda":
                 torch.cuda.synchronize()
 
         def run_one_batch() -> int:
-            batch = self._generate_random_batch(batch_size, min_length, max_length)
+            unique_found = False
+            for _ in range(32):
+                batch = [self._generate_random_sequence(length) for length in length_pattern]
+                batch_fingerprint = hashlib.sha1("||".join(batch).encode("ascii")).hexdigest()
+                if batch_fingerprint not in seen_batch_fingerprints:
+                    seen_batch_fingerprints.add(batch_fingerprint)
+                    unique_found = True
+                    break
+            assert unique_found, "Failed to generate a unique batch after 32 attempts."
             tokenized = tokenizer(
                 batch,
                 return_tensors="pt",
@@ -68,6 +96,11 @@ class ThroughputChecker:
                 max_length=max_length,
                 truncation=True,
             )
+            if batch_size > 1:
+                assert tokenizer.pad_token_id is not None, "Tokenizer must define pad_token_id for padded batches."
+                assert (tokenized["input_ids"] == tokenizer.pad_token_id).any().item(), (
+                    "Expected pad tokens in each batch for batch_size > 1."
+                )
             # Count the number of non-pad tokens in the batch.
             input_ids = tokenized["input_ids"]
             if "attention_mask" in tokenized:
