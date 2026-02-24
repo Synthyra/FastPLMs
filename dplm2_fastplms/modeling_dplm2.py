@@ -426,17 +426,21 @@ def get_attention_mask(
     if attn_backend == "flex":
         assert create_block_mask is not None, "Flex attention backend requested but torch.create_block_mask is unavailable."
 
-        def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-            return token_attention_mask[batch_idx, q_idx] & token_attention_mask[batch_idx, kv_idx]
-
-        flex_block_mask = create_block_mask(
-            mask_mod,
-            batch_size,
-            1,
-            seq_len,
-            seq_len,
-            device=device,
-        )
+        if attention_mask is None:
+            flex_block_mask = None
+        else:
+            sequence_ids = torch.where(token_attention_mask, 1, -1)
+            def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+                return (sequence_ids[batch_idx, q_idx] == sequence_ids[batch_idx, kv_idx]) & (sequence_ids[batch_idx, q_idx] != -1)
+    
+            flex_block_mask = create_block_mask(
+                mask_mod,
+                batch_size,
+                1,
+                seq_len,
+                seq_len,
+                device=device,
+            )
         extended_attention_mask = None
     else:
         flex_block_mask = None
