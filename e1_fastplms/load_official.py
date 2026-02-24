@@ -45,7 +45,17 @@ def load_official_model(
     from E1.modeling import E1ForMaskedLM
     from E1.batch_preparer import E1BatchPreparer
 
-    model = E1ForMaskedLM.from_pretrained(reference_repo_id).to(device=device, dtype=dtype).eval()
+    model = E1ForMaskedLM.from_pretrained(
+        reference_repo_id,
+        tie_word_embeddings=False,
+        device_map=device,
+        dtype=dtype,
+    ).eval()
     batch_preparer = E1BatchPreparer()
     wrapped = _OfficialE1ForwardWrapper(model).eval()
     return wrapped, batch_preparer
+
+
+if __name__ == "__main__":
+    model, batch_preparer = load_official_model("Profluent-Bio/E1-150m", torch.device("cpu"))
+    print(model)

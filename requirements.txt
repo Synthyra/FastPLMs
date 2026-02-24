@@ -19,3 +19,5 @@ networkx
 omegaconf
 rich
 trifast
+# E1
+kernels

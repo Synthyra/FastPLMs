@@ -60,12 +60,7 @@ if __name__ == "__main__":
         load_result = model.load_state_dict(official_model.model.state_dict(), strict=True)
 
         # Manually load MLM head to prevent weight tying issues
-        model.mlm_head[0].weight = copy.deepcopy(official_model.model.mlm_head[0].weight)
-        model.mlm_head[0].bias = copy.deepcopy(official_model.model.mlm_head[0].bias)
-        model.mlm_head[2].weight = copy.deepcopy(official_model.model.mlm_head[2].weight)
-        model.mlm_head[2].bias = copy.deepcopy(official_model.model.mlm_head[2].bias)
-        model.mlm_head[3].weight = copy.deepcopy(official_model.model.mlm_head[3].weight)
-        model.mlm_head[3].bias = copy.deepcopy(official_model.model.mlm_head[3].bias)
+        model.mlm_head = copy.deepcopy(official_model.model.mlm_head)
         
         assert_model_parameters_fp32(
             model=official_model.model,
@@ -93,13 +88,17 @@ if __name__ == "__main__":
             repo_type="model",
         )
         
-        # Push tokenizer
-        batch_preparer.tokenizer.save(os.path.join(script_root, "tokenizer.json"))
-        api.upload_file(
-            path_or_fileobj=os.path.join(script_root, "tokenizer.json"),
-            path_in_repo="tokenizer.json",
-            repo_id=repo_id,
-            repo_type="model",
+        try:
+            tokenizer = batch_preparer.tokenizer
+            tokenizer.push_to_hub(repo_id)
+        except Exception as e:
+            print("Tokenizer push failed, saving to Hub manually")
+            batch_preparer.tokenizer.save(os.path.join(script_root, "tokenizer.json"))
+            api.upload_file(
+                path_or_fileobj=os.path.join(script_root, "tokenizer.json"),
+                path_in_repo="tokenizer.json",
+                repo_id=repo_id,
+                repo_type="model",
         )
         
         downloaded_model = AutoModelForMaskedLM.from_pretrained(
