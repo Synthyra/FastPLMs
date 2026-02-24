@@ -409,9 +409,8 @@ def get_attention_mask(
         if attention_mask is None:
             flex_block_mask = None
         else:
-            sequence_ids = torch.where(token_attention_mask, 1, -1)
             def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-                return (sequence_ids[batch_idx, q_idx] == sequence_ids[batch_idx, kv_idx]) & (sequence_ids[batch_idx, q_idx] != -1)
+                return (token_attention_mask[batch_idx, q_idx] == token_attention_mask[batch_idx, kv_idx]) & (token_attention_mask[batch_idx, q_idx] != 0)
     
             flex_block_mask = create_block_mask(
                 mask_mod,
