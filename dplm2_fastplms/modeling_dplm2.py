@@ -1139,7 +1139,7 @@ class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
             self.tokenizer = AutoTokenizer.from_pretrained(config._name_or_path)
 
     def get_input_embeddings(self) -> nn.Module:
-        return self.esm.embeddings.word_embeddings
+        return self.esm.get_input_embeddings()
 
     def get_output_embeddings(self):
         return self.lm_head.decoder
@@ -1238,7 +1238,7 @@ class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
-        return self.esm.embeddings.word_embeddings
+        return self.esm.get_input_embeddings()
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.esm._embed(input_ids, attention_mask)
@@ -1314,7 +1314,7 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Module:
-        return self.esm.embeddings.word_embeddings
+        return self.esm.get_input_embeddings()
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.esm._embed(input_ids, attention_mask)
