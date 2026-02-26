@@ -1,89 +1,111 @@
-import time
-import random
+import argparse
+import os
 import torch
-import copy
-import numpy as np
-from transformers import AutoModel
-from tqdm.auto import tqdm
+from safetensors.torch import load_file
+from rich.console import Console
+from rich.table import Table
+
+from e1_fastplms.modeling_e1 import E1ForMaskedLM
 
 
-BATCH_SIZE = 4
-NUM_WARMUP_BATCHES = 10
-NUM_BATCHES = 100
-
-
-model = ESMplusplusModel.from_pretrained("Synthyra/ESMplusplus_small")
-model.attn_backend = "flex"
-
-
-def set_seed(seed: int):
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-
-
-class ThroughputChecker:
-    def __init__(
-        self,
-        warmup_batches: int = 10,
-        batch_size: int = 4,
-        timed_batches: int = 100,
-        min_sequence_length: int = 16,
-        max_sequence_length: int = 64,
-    ):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.warmup_batches = warmup_batches
-        self.batch_size = batch_size
-        self.timed_batches = timed_batches
-        self.min_sequence_length = min_sequence_length
-        self.max_sequence_length = max_sequence_length
-
-    def _load_model(self, model_path: str):
-        load_class = AutoModel
-        model = load_class.from_pretrained(
-            model_path,
-            dtype=torch.float32,
-            device_map=self.device,
-            trust_remote_code=True,
-        ).eval()
-        return model
-
-    def _generate_random_sequence(self, length: int) -> str:
-        return 'M' + "".join(random.choices(self.canonical_amino_acids, k=length))
+def load_weights(path, cast_fp32=True):
+    assert os.path.exists(path), f"File {path} not found."
+    if path.endswith(".safetensors"):
+        sd = load_file(path)
+    elif path.endswith(".pth") or path.endswith(".pt"):
+        sd = torch.load(path, map_location="cpu", weights_only=True)
+        if isinstance(sd, dict) and "state_dict" in sd:
+            sd = sd["state_dict"]
+        elif isinstance(sd, dict) and "model" in sd:
+            sd = sd["model"]
+    else:
+        try:
+            sd = load_file(path)
+        except Exception:
+            sd = torch.load(path, map_location="cpu", weights_only=True)
     
-    def _generate_random_batch(self, batch_size: int, min_length: int, max_length: int) -> list[str]:
-        return [self._generate_random_sequence(random.randint(min_length, max_length)) for _ in range(batch_size)]
+    if cast_fp32:
+        return {k: v.float() if isinstance(v, torch.Tensor) else v for k, v in sd.items()}
+    return sd
 
-    @torch.inference_mode()
-    def _time(self, model, tokenizer):
-        def time_batches(num_batches: int, message: str):
-            start_time = time.time()
-            for _ in tqdm(range(num_batches), desc=message):
-                batch = self._generate_random_batch(self.batch_size, self.min_sequence_length, self.max_sequence_length)
-                tokenized = tokenizer(batch, return_tensors="pt", padding=True)
-                tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
-                output = model(**tokenized, output_hidden_states=True)
-            end_time = time.time()
-            return end_time - start_time
 
-        torch.compile(model)
-        warmup_time = time_batches(self.warmup_batches, "Warmup")
-        torch.cuda.synchronize()
-        time_taken = time_batches(self.timed_batches, "Timed")
-        torch.cuda.synchronize()
-        torch.cuda.empty_cache()
-        return time_taken
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file1", type=str, default=None)
+    parser.add_argument("--files", type=str, nargs="+", default=None)
+    parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--assert_exact", action="store_true")
+    args = parser.parse_args()
 
-    def __call__(self, model_path: str):
-        model = self._load_model(model_path)
-        tokenizer = model.tokenizer
-        sdpa_time = self._time(model, tokenizer)
-        model.attn_backend = "flex"
-        new_model = copy.deepcopy(model)
-        model.cpu()
-        del model
-        torch.cuda.empty_cache()
-        flex_time = self._time(new_model, tokenizer)
-        return sdpa_time, flex_time
+    model = E1ForMaskedLM.from_pretrained('Synthyra/Profluent-E1-150M', dtype=torch.float32).eval()
+    torch.save(model.state_dict(), 'load_from_pretrained_1.pth')
+    model = E1ForMaskedLM.from_pretrained('Synthyra/Profluent-E1-150M', dtype=torch.float32).eval()
+    torch.save(model.state_dict(), 'load_from_pretrained_2.pth')
+
+    if args.file1 is None:
+        args.file1 = 'load_from_pretrained_1.pth'
+    if args.files is None:
+        args.files = ['load_from_pretrained_2.pth']
+
+    paths = [args.file1] + args.files
+    sds = [load_weights(p, cast_fp32=not args.strict) for p in paths]
+    all_keys = sorted(set().union(*(sd.keys() for sd in sds)))
+    strict_mismatches = []
+
+    console = Console()
+    table = Table(title=f"Weights Comparison (Reference: {os.path.basename(paths[0])})")
+    table.add_column("Tensor Name", style="cyan", no_wrap=True)
+    
+    for p in paths[1:]:
+        table.add_column(f"{os.path.basename(p)} == Ref", justify="center")
+    
+    sd1 = sds[0]
+    for k in all_keys:
+        row = [k]
+        
+        has_ref = k in sd1
+        ref_w = sd1[k] if has_ref else None
+        
+        for sd in sds[1:]:
+            has_other = k in sd
+            other_w = sd[k] if has_other else None
+            
+            if not has_ref or not has_other:
+                if not has_ref and not has_other:
+                    row.append("[dim]✔[/dim]")
+                else:
+                    row.append("[red]✘[/red]")
+            else:
+                # Both present, compare shapes and MSE
+                assert isinstance(ref_w, torch.Tensor), f"Weight {k} in reference is not a tensor."
+                assert isinstance(other_w, torch.Tensor), f"Weight {k} in comparison file is not a tensor."
+                
+                if ref_w.shape != other_w.shape:
+                    row.append("[red]✘ (Shape)[/red]")
+                else:
+                    if args.strict:
+                        if torch.equal(ref_w, other_w):
+                            row.append("[green]✔[/green]")
+                        else:
+                            mse = torch.mean((ref_w.float() - other_w.float())**2).item()
+                            row.append(f"[red]✘ (Strict, MSE: {mse:.2e})[/red]")
+                            strict_mismatches.append(k)
+                    else:
+                        mse = torch.mean((ref_w - other_w)**2).item()
+                        if mse == 0:
+                            row.append("[green]✔[/green]")
+                        else:
+                            row.append(f"[red]✘ (MSE: {mse:.2e})[/red]")
+        
+        table.add_row(*row)
+
+    console.print(table)
+    if args.strict and args.assert_exact:
+        assert len(strict_mismatches) == 0, (
+            f"Found {len(strict_mismatches)} strict mismatches. "
+            f"First mismatches: {strict_mismatches[:10]}"
+        )
+
+
+if __name__ == "__main__":
+    main()

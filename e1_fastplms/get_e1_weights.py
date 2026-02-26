@@ -31,5 +31,5 @@ if __name__ == "__main__":
             "AutoModelForSequenceClassification": "modeling_e1.E1ForSequenceClassification",
             "AutoModelForTokenClassification": "modeling_e1.E1ForTokenClassification"
         }
-        model = E1ForMaskedLM.from_pretrained(model_dict[model_name], config=config, dtype=torch.bfloat16)
+        model = E1ForMaskedLM.from_pretrained(model_dict[model_name], config=config, dtype=torch.float32)
         model.push_to_hub('Synthyra/' + model_name)

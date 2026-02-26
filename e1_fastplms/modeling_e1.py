@@ -1705,6 +1705,12 @@ class E1PreTrainedModel(PreTrainedModel):
     _skip_keys_device_placement = "past_key_values"
     all_tied_weights_keys = {}
 
+    @classmethod
+    def is_remote_code(cls) -> bool:
+        # Force remote-code-safe initialization checks for local class loads on
+        # newer Transformers versions, so loaded tensors are not reinitialized.
+        return True
+
     def _init_weights(self, module: nn.Module) -> None:
         std = self.config.initializer_range
         if isinstance(module, nn.Linear):
