@@ -383,25 +383,12 @@ except ImportError:
     flash_attn_func = None
     flash_attn_varlen_func = None
 
-try:
-    from torch.nn.attention.flex_attention import (
-        BlockMask,
-        create_block_mask,
-        flex_attention,
-        _create_sparse_block_from_block_mask
-    )
-
-    if torch.cuda.is_available():
-        # if on linux, compile the flex attention function
-        if os.name == 'posix':
-            print("Compiling flex attention")
-            flex_attention = torch.compile(flex_attention, dynamic=True)
-        else:
-            print("Not compiling flex attention, detected non-Linux environment")
-
-except ImportError:
-    logger.warning("Failed to import flex attention; Will be using PyTorch attention instead")
-    flex_attention = None
+from torch.nn.attention.flex_attention import (
+    BlockMask,
+    create_block_mask,
+    flex_attention,
+    _create_sparse_block_from_block_mask
+)
 
 try:
     from kernels import get_kernel
