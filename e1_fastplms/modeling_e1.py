@@ -1726,10 +1726,9 @@ class E1PreTrainedModel(PreTrainedModel):
         return next(self.parameters()).device
 
     @classmethod
-    def from_pretrained(  # type: ignore[no-untyped-def]
-        cls, pretrained_model_name_or_path: str | os.PathLike | None, *args, **kwargs
-    ) -> "E1PreTrainedModel":
-        return super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
+    def is_remote_code(cls) -> bool:
+        # Prevent post-load reinitialization of tensors already loaded from checkpoints.
+        return True
 
 
 class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
@@ -1745,7 +1744,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = config.gradient_checkpointing
         self.prep_tokens = E1BatchPreparer()
-        self.init_weights()
+        #self.init_weights()
 
     def get_input_embeddings(self) -> nn.Embedding:
         return self.embed_tokens
@@ -1912,7 +1911,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
     def __init__(self, config: E1Config, **kwargs):
         E1PreTrainedModel.__init__(self, config, **kwargs)
         self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
-        self.init_weights()
+        #self.init_weights()
 
     def get_input_embeddings(self) -> nn.Embedding:
         return self.model.get_input_embeddings()
@@ -1964,7 +1963,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
         )
         self.gradient_checkpointing = config.gradient_checkpointing
         self.prep_tokens = E1BatchPreparer()
-        self.init_weights()
+        #self.init_weights()
 
     @property
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
@@ -2080,7 +2079,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
         else:
             pooling_types = ['mean', 'var']
         self.pooler = Pooler(pooling_types)
-        self.init_weights()
+        #self.init_weights()
 
     @property
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
@@ -2172,7 +2171,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         self.loss_fct = nn.CrossEntropyLoss()
         self.gradient_checkpointing = config.gradient_checkpointing
         self.prep_tokens = E1BatchPreparer()
-        self.init_weights()
+        #self.init_weights()
 
     @property
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:

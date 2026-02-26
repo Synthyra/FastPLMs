@@ -7,7 +7,7 @@ from rich.table import Table
 
 from transformers import AutoModelForMaskedLM, AutoConfig, AutoModel
 
-from e1_fastplms.modeling_e1 import E1ForMaskedLM, E1Config
+from e1_fastplms.modeling_e1 import E1ForMaskedLM, E1Config, E1Model
 
 
 def load_weights(path, cast_fp32=True):
@@ -42,16 +42,16 @@ def main():
     model = E1ForMaskedLM.from_pretrained('Profluent-Bio/E1-150m', dtype=torch.float32).eval()
     torch.save(model.state_dict(), 'official.pth')
 
-    config = AutoConfig.from_pretrained('Synthyra/Profluent-E1-150M', trust_remote_code=True)
-    model1 = AutoModel.from_pretrained('Synthyra/Profluent-E1-150M', config=config, dtype=torch.float32, trust_remote_code=True).eval()
+    config = E1Config.from_pretrained('Profluent-Bio/E1-150m', trust_remote_code=True)
+    model1 = E1Model.from_pretrained('Profluent-Bio/E1-150m', config=config, dtype=torch.float32, trust_remote_code=True).eval()
     torch.save(model1.state_dict(), 'load_from_pretrained_1.pth')
-    model2 = E1ForMaskedLM.from_pretrained('Synthyra/Profluent-E1-150M', config=config, dtype=torch.float32, trust_remote_code=True).eval()
+    model2 = E1ForMaskedLM.from_pretrained('Profluent-Bio/E1-150m', config=config, dtype=torch.float32, trust_remote_code=True).eval()
     torch.save(model2.state_dict(), 'load_from_pretrained_2.pth')
 
     if args.file1 is None:
         args.file1 = 'official.pth'
     if args.files is None:
-        args.files = ['load_from_pretrained_2.pth', 'load_from_pretrained_1.pth']
+        args.files = ['load_from_pretrained_1.pth', 'load_from_pretrained_2.pth']
 
     paths = [args.file1] + args.files
     sds = [load_weights(p, cast_fp32=not args.strict) for p in paths]
