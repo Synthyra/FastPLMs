@@ -43,9 +43,9 @@ def main():
     torch.save(model.state_dict(), 'load_from_pretrained_2.pth')
 
     if args.file1 is None:
-        args.file1 = 'load_from_pretrained_1.pth'
+        args.file1 = 'old.safetensors'
     if args.files is None:
-        args.files = ['load_from_pretrained_2.pth']
+        args.files = ['load_from_pretrained_2.pth', 'load_from_pretrained_1.pth']
 
     paths = [args.file1] + args.files
     sds = [load_weights(p, cast_fp32=not args.strict) for p in paths]

@@ -1725,7 +1725,8 @@ class E1PreTrainedModel(PreTrainedModel):
             module.weight.data.fill_(1.0)
 
     def post_init(self) -> None:
-        super().post_init()
+        # this reinitializes the weights, so we need to skip it
+        pass
 
     def _backward_compatibility_gradient_checkpointing(self) -> None:
         if self.supports_gradient_checkpointing and getattr(self.config, "gradient_checkpointing", False):
