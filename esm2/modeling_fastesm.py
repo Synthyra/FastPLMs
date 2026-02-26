@@ -757,11 +757,6 @@ class FastEsmPreTrainedModel(PreTrainedModel):
     tokenizer = EsmTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
     all_tied_weights_keys = {}
 
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        # Prevent post-load reinitialization of tensors already loaded from checkpoints.
-        return True
-
     @torch.no_grad()
     def _init_weights(self, module):
         """Initialize the weights"""

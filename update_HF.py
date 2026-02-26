@@ -22,6 +22,41 @@ from huggingface_hub import HfApi, login
 
 MODEL_REGISTRY = [
     {
+        "family": "e1",
+        "repo_ids": [
+            "Synthyra/Profluent-E1-150M",
+            "Synthyra/Profluent-E1-300M",
+            "Synthyra/Profluent-E1-600M",
+        ],
+        "files": {
+            "e1_fastplms/modeling_e1.py": "modeling_e1.py",
+            "e1_fastplms/tokenizer.json": "tokenizer.json",
+        },
+        "readme_map": {
+            "Synthyra/Profluent-E1-150M": "readmes/e1_readme.md",
+            "Synthyra/Profluent-E1-300M": "readmes/e1_readme.md",
+            "Synthyra/Profluent-E1-600M": "readmes/e1_readme.md",
+        },
+        "license": "LICENSE",
+        "weight_module": "e1_fastplms.get_e1_weights",
+    },
+    {
+        "family": "esmplusplus",
+        "repo_ids": [
+            "Synthyra/ESMplusplus_small",
+            "Synthyra/ESMplusplus_large",
+        ],
+        "files": {
+            "esm_plusplus/modeling_esm_plusplus.py": "modeling_esm_plusplus.py",
+        },
+        "readme_map": {
+            "Synthyra/ESMplusplus_small": "readmes/esm_plusplus_small_readme.md",
+            "Synthyra/ESMplusplus_large": "readmes/esm_plusplus_large_readme.md",
+        },
+        "license": "LICENSE",
+        "weight_module": "esm_plusplus.get_esmc_weights",
+    },
+    {
         "family": "esm2",
         "repo_ids": [
             "Synthyra/ESM2-8M",
@@ -44,41 +79,6 @@ MODEL_REGISTRY = [
         },
         "license": "LICENSE",
         "weight_module": "esm2.get_esm2_weights",
-    },
-    {
-        "family": "esmplusplus",
-        "repo_ids": [
-            "Synthyra/ESMplusplus_small",
-            "Synthyra/ESMplusplus_large",
-        ],
-        "files": {
-            "esm_plusplus/modeling_esm_plusplus.py": "modeling_esm_plusplus.py",
-        },
-        "readme_map": {
-            "Synthyra/ESMplusplus_small": "readmes/esm_plusplus_small_readme.md",
-            "Synthyra/ESMplusplus_large": "readmes/esm_plusplus_large_readme.md",
-        },
-        "license": "LICENSE",
-        "weight_module": "esm_plusplus.get_esmc_weights",
-    },
-    {
-        "family": "e1",
-        "repo_ids": [
-            "Synthyra/Profluent-E1-150M",
-            "Synthyra/Profluent-E1-300M",
-            "Synthyra/Profluent-E1-600M",
-        ],
-        "files": {
-            "e1_fastplms/modeling_e1.py": "modeling_e1.py",
-            "e1_fastplms/tokenizer.json": "tokenizer.json",
-        },
-        "readme_map": {
-            "Synthyra/Profluent-E1-150M": "readmes/e1_readme.md",
-            "Synthyra/Profluent-E1-300M": "readmes/e1_readme.md",
-            "Synthyra/Profluent-E1-600M": "readmes/e1_readme.md",
-        },
-        "license": "LICENSE",
-        "weight_module": "e1_fastplms.get_e1_weights",
     },
     {
         "family": "dplm",

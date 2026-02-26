@@ -906,7 +906,6 @@ class E1BatchPreparer:
         return sequence.isalpha() and sequence.isupper()
 
 
-
 class E1Config(PretrainedConfig):
     model_type = "E1"
     keys_to_ignore_at_inference = ["past_key_values"]
@@ -1705,12 +1704,6 @@ class E1PreTrainedModel(PreTrainedModel):
     _skip_keys_device_placement = "past_key_values"
     all_tied_weights_keys = {}
 
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        # Force remote-code-safe initialization checks for local class loads on
-        # newer Transformers versions, so loaded tensors are not reinitialized.
-        return True
-
     def _init_weights(self, module: nn.Module) -> None:
         std = self.config.initializer_range
         if isinstance(module, nn.Linear):
@@ -1723,10 +1716,6 @@ class E1PreTrainedModel(PreTrainedModel):
                 module.weight.data[module.padding_idx].zero_()
         elif isinstance(module, RMSNorm):
             module.weight.data.fill_(1.0)
-
-    def post_init(self) -> None:
-        # this reinitializes the weights, so we need to skip it
-        pass
 
     def _backward_compatibility_gradient_checkpointing(self) -> None:
         if self.supports_gradient_checkpointing and getattr(self.config, "gradient_checkpointing", False):
@@ -1743,7 +1732,7 @@ class E1PreTrainedModel(PreTrainedModel):
         return super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
 
 
-class E1Model(E1PreTrainedModel, EmbeddingMixin):
+class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
     config: E1Config
     config_class = E1Config
     def __init__(self, config: E1Config, **kwargs):
@@ -1756,7 +1745,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = config.gradient_checkpointing
         self.prep_tokens = E1BatchPreparer()
-        self.post_init()
+        self.init_weights()
 
     def get_input_embeddings(self) -> nn.Embedding:
         return self.embed_tokens
@@ -1916,12 +1905,56 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
         )
 
 
+class E1Model(E1PreTrainedModel, EmbeddingMixin):
+    config: E1Config
+    config_class = E1Config
+
+    def __init__(self, config: E1Config, **kwargs):
+        E1PreTrainedModel.__init__(self, config, **kwargs)
+        self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
+        self.init_weights()
+
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.model.get_input_embeddings()
+
+    def set_input_embeddings(self, value: nn.Embedding) -> None:
+        self.model.set_input_embeddings(value)
+
+    @torch.inference_mode()
+    def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
+        return self.model._embed(sequences, return_attention_mask=return_attention_mask, **kwargs)
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        within_seq_position_ids: torch.LongTensor,
+        global_position_ids: torch.LongTensor,
+        sequence_ids: torch.LongTensor,
+        past_key_values: DynamicCache | None = None,
+        use_cache: bool = False,
+        output_attentions: bool = False,
+        output_hidden_states: bool = False,
+        **kwargs,
+    ) -> E1ModelOutputWithPast:
+        return self.model(
+            input_ids=input_ids,
+            within_seq_position_ids=within_seq_position_ids,
+            global_position_ids=global_position_ids,
+            sequence_ids=sequence_ids,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            **kwargs,
+        )
+
+
 class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
     config: E1Config
     config_class = E1Config
     def __init__(self, config: E1Config, **kwargs):
         E1PreTrainedModel.__init__(self, config, **kwargs)
-        self.model: E1Model = E1Model(config)
+        self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
         self.vocab_size = config.vocab_size
         self.mlm_head = torch.nn.Sequential(
             nn.Linear(config.hidden_size, config.hidden_size, bias=True),
@@ -1931,7 +1964,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
         )
         self.gradient_checkpointing = config.gradient_checkpointing
         self.prep_tokens = E1BatchPreparer()
-        self.post_init()
+        self.init_weights()
 
     @property
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
@@ -2027,7 +2060,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
     config_class = E1Config
     def __init__(self, config: E1Config, **kwargs):
         E1PreTrainedModel.__init__(self, config, **kwargs)
-        self.model: E1Model = E1Model(config)
+        self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
         self.vocab_size = config.vocab_size
         self.num_labels = config.num_labels
         self.classifier = nn.Sequential(
@@ -2047,7 +2080,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
         else:
             pooling_types = ['mean', 'var']
         self.pooler = Pooler(pooling_types)
-        self.post_init()
+        self.init_weights()
 
     @property
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
@@ -2127,7 +2160,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
     config_class = E1Config
     def __init__(self, config: E1Config, **kwargs):
         E1PreTrainedModel.__init__(self, config, **kwargs)
-        self.model: E1Model = E1Model(config)
+        self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
         self.vocab_size = config.vocab_size
         self.num_labels = config.num_labels
         self.classifier = nn.Sequential(
@@ -2139,7 +2172,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         self.loss_fct = nn.CrossEntropyLoss()
         self.gradient_checkpointing = config.gradient_checkpointing
         self.prep_tokens = E1BatchPreparer()
-        self.post_init()
+        self.init_weights()
 
     @property
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:

@@ -990,11 +990,6 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
     supports_gradient_checkpointing = True
     all_tied_weights_keys = {}
 
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        # Prevent post-load reinitialization of tensors already loaded from checkpoints.
-        return True
-
     def _init_weights(self, module):
         """Initialize the weights"""
         # HF from_pretrained marks loaded parameters with `_is_hf_initialized`.
