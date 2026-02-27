@@ -364,7 +364,6 @@ from typing import Optional, Tuple, Union, Dict, Any
 from einops import rearrange
 from dataclasses import dataclass
 from transformers import PreTrainedModel, PretrainedConfig, EsmTokenizer
-from transformers import initialization as init
 from transformers.modeling_outputs import (
     ModelOutput,
     BaseModelOutputWithPastAndCrossAttentions,
@@ -769,12 +768,12 @@ class FastEsmPreTrainedModel(PreTrainedModel):
         """Initialize the weights"""
         super()._init_weights(module)
         if isinstance(module, EsmLMHead):
-            init.zeros_(module.bias)
+            nn.init.zeros_(module.bias)
         elif isinstance(module, EsmEmbeddings):
-            init.copy_(module.position_ids, torch.arange(module.position_ids.shape[-1]).expand((1, -1)))
+            nn.init.copy_(module.position_ids, torch.arange(module.position_ids.shape[-1]).expand((1, -1)))
         elif isinstance(module, RotaryEmbedding):
             inv_freq = 1.0 / (10000 ** (torch.arange(0, module.dim, 2, dtype=torch.int64).float() / module.dim))
-            init.copy_(module.inv_freq, inv_freq)
+            nn.init.copy_(module.inv_freq, inv_freq)
 
     def get_output_embeddings(self):
         # NOTE: get_output_embeddings() must return None to prevent accidental weight tying.
