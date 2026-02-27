@@ -1136,7 +1136,7 @@ class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
         if vocab_size is not None:
             config.vocab_size = vocab_size
         DPLM2PreTrainedModel.__init__(self, config)
-        self.esm = DPLM2Model(config, add_pooling_layer=False)
+        self.esm = FAST_DPLM2_ENCODER(config)
         self.lm_head = EsmLMHead(config)
         self.loss_fct = nn.CrossEntropyLoss()
         self.post_init()
@@ -1237,7 +1237,7 @@ class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
     def __init__(self, config):
         DPLM2PreTrainedModel.__init__(self, config)
         self.num_labels = config.num_labels
-        self.esm = DPLM2Model(config, add_pooling_layer=False)
+        self.esm = FAST_DPLM2_ENCODER(config)
         self.classifier = EsmClassificationHead(config)
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
@@ -1314,7 +1314,7 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
     def __init__(self, config):
         DPLM2PreTrainedModel.__init__(self, config)
         self.num_labels = config.num_labels
-        self.esm = DPLM2Model(config, add_pooling_layer=False)
+        self.esm = FAST_DPLM2_ENCODER(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.loss_fct = nn.CrossEntropyLoss()

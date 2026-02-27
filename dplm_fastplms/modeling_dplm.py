@@ -1048,7 +1048,7 @@ class DPLMForMaskedLM(DPLMPreTrainedModel, EmbeddingMixin):
     def __init__(self, config, dropout: float = 0.1):
         config.hidden_dropout_prob = dropout
         DPLMPreTrainedModel.__init__(self, config)
-        self.esm = DPLMModel(config, add_pooling_layer=False)
+        self.esm = FAST_DPLM_ENCODER(config)
         self.lm_head = EsmLMHead(config)
         self.loss_fct = nn.CrossEntropyLoss()
         self.post_init()
@@ -1143,7 +1143,7 @@ class DPLMForSequenceClassification(DPLMPreTrainedModel, EmbeddingMixin):
     def __init__(self, config):
         DPLMPreTrainedModel.__init__(self, config)
         self.num_labels = config.num_labels
-        self.esm = DPLMModel(config, add_pooling_layer=False)
+        self.esm = FAST_DPLM_ENCODER(config)
         self.classifier = EsmClassificationHead(config)
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
@@ -1213,7 +1213,7 @@ class DPLMForTokenClassification(DPLMPreTrainedModel, EmbeddingMixin):
     def __init__(self, config):
         DPLMPreTrainedModel.__init__(self, config)
         self.num_labels = config.num_labels
-        self.esm = DPLMModel(config, add_pooling_layer=False)
+        self.esm = FAST_DPLM_ENCODER(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
         self.loss_fct = nn.CrossEntropyLoss()
