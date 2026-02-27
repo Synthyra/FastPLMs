@@ -399,9 +399,9 @@ def get_attention_mask(
     attention_mask: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
     if attention_mask is None:
-        token_attention_mask = torch.ones((batch_size, seq_len), device=device).bool() 
+        attention_mask_2d = torch.ones((batch_size, seq_len), device=device).bool() 
     else:
-        token_attention_mask = attention_mask.bool()
+        attention_mask_2d = attention_mask.bool()
     
     if attn_backend == "flex":
         assert create_block_mask is not None, "Flex attention backend requested but torch.create_block_mask is unavailable."
@@ -409,8 +409,10 @@ def get_attention_mask(
         if attention_mask is None:
             flex_block_mask = None
         else:
+            valid_lens = attention_mask_2d.sum(dim=-1)
+
             def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-                return (token_attention_mask[batch_idx, q_idx] == token_attention_mask[batch_idx, kv_idx]) & (token_attention_mask[batch_idx, q_idx] != 0)
+                return (q_idx < valid_lens[batch_idx]) & (kv_idx < valid_lens[batch_idx])
     
             flex_block_mask = create_block_mask(
                 mask_mod,
@@ -420,12 +422,12 @@ def get_attention_mask(
                 seq_len,
                 device=device,
             )
-        extended_attention_mask = None
+        attention_mask_4d = None
     else:
         flex_block_mask = None
-        extended_attention_mask = token_attention_mask[:, None, :, None] & token_attention_mask[:, None, None, :]
+        attention_mask_4d = attention_mask_2d[:, None, :, None] & attention_mask_2d[:, None, None, :]
 
-    return extended_attention_mask, flex_block_mask
+    return attention_mask_4d, flex_block_mask
 
 
 class ESMplusplusConfig(PretrainedConfig):
@@ -938,7 +940,7 @@ class TransformerStack(nn.Module):
         attentions = () if output_attentions else None
         
         # move to 4D attention mask or flex block mask
-        attention_mask, flex_block_mask = get_attention_mask(
+        attention_mask_4d, flex_block_mask = get_attention_mask(
             attn_backend=self._attn_backend,
             batch_size=x.shape[0],
             seq_len=x.shape[1],
@@ -951,14 +953,14 @@ class TransformerStack(nn.Module):
                 x, attn_weights = self._gradient_checkpointing_func(
                     block.__call__,
                     x=x,
-                    attention_mask=attention_mask,
+                    attention_mask=attention_mask_4d,
                     flex_block_mask=flex_block_mask,
                     output_attentions=output_attentions,
                 )
             else:
                 x, attn_weights = block(
                     x=x,
-                    attention_mask=attention_mask,
+                    attention_mask=attention_mask_4d,
                     flex_block_mask=flex_block_mask,
                     output_attentions=output_attentions,
                 )

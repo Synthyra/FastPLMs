@@ -420,9 +420,9 @@ def get_attention_mask(
     attention_mask: Optional[torch.Tensor] = None,
 ) -> Tuple[Optional[torch.Tensor], Optional[object]]:
     if attention_mask is None:
-        token_attention_mask = torch.ones((batch_size, seq_len), device=device).bool()
+        attention_mask_2d = torch.ones((batch_size, seq_len), device=device).bool()
     else:
-        token_attention_mask = attention_mask.bool()
+        attention_mask_2d = attention_mask.bool()
 
     if attn_backend == "flex":
         assert create_block_mask is not None, "Flex attention backend requested but torch.create_block_mask is unavailable."
@@ -430,8 +430,10 @@ def get_attention_mask(
         if attention_mask is None:
             flex_block_mask = None
         else:
+            valid_lens = attention_mask_2d.sum(dim=-1)
+
             def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-                return (token_attention_mask[batch_idx, q_idx] == token_attention_mask[batch_idx, kv_idx]) & (token_attention_mask[batch_idx, q_idx] != 0)
+                return (q_idx < valid_lens[batch_idx]) & (kv_idx < valid_lens[batch_idx])
     
             flex_block_mask = create_block_mask(
                 mask_mod,
@@ -441,12 +443,12 @@ def get_attention_mask(
                 seq_len,
                 device=device,
             )
-        extended_attention_mask = None
+        attention_mask_4d = None
     else:
         flex_block_mask = None
-        extended_attention_mask = token_attention_mask[:, None, :, None] & token_attention_mask[:, None, None, :]
+        attention_mask_4d = attention_mask_2d[:, None, :, None] & attention_mask_2d[:, None, None, :]
 
-    return extended_attention_mask, flex_block_mask
+    return attention_mask_4d, flex_block_mask
 
 
 @dataclass
@@ -904,12 +906,12 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
         past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
 
         if attention_mask is None:
-            token_attention_mask = torch.ones((batch_size, seq_length + past_key_values_length), device=device).bool()
+            attention_mask_2d = torch.ones((batch_size, seq_length + past_key_values_length), device=device).bool()
         elif attention_mask.dim() == 2:
-            token_attention_mask = attention_mask.bool()
+            attention_mask_2d = attention_mask.bool()
         elif attention_mask.dim() == 4:
             assert input_ids is not None, "4D attention_mask requires input_ids to infer token-level mask."
-            token_attention_mask = input_ids.ne(self.config.pad_token_id)
+            attention_mask_2d = input_ids.ne(self.config.pad_token_id)
         else:
             raise ValueError(f"Unsupported attention_mask shape: {attention_mask.shape}")
 
@@ -924,19 +926,19 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
 
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
-        embedding_attention_mask = token_attention_mask
+        embedding_attention_mask = attention_mask_2d
         if embedding_attention_mask is None and input_ids is not None:
             embedding_attention_mask = input_ids.ne(self.config.pad_token_id)
 
         if self.config.attn_backend == "flex" and output_attentions:
             raise AssertionError("output_attentions=True is not supported with attn_backend='flex'.")
 
-        extended_attention_mask, flex_block_mask = get_attention_mask(
+        attention_mask_4d, flex_block_mask = get_attention_mask(
             attn_backend=self.config.attn_backend,
             batch_size=batch_size,
             seq_len=seq_length,
             device=device,
-            attention_mask=token_attention_mask,
+            attention_mask=attention_mask_2d,
         )
 
         embedding_output = self.embeddings(
@@ -947,7 +949,7 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
         )
         encoder_outputs = self.encoder(
             embedding_output,
-            attention_mask=extended_attention_mask,
+            attention_mask=attention_mask_4d,
             head_mask=head_mask,
             encoder_hidden_states=encoder_hidden_states,
             encoder_attention_mask=encoder_extended_attention_mask,
