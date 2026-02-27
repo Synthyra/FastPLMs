@@ -1,7 +1,7 @@
 import copy
 import torch
 from huggingface_hub import HfApi, login
-from transformers import AutoModelForMaskedLM, AutoTokenizer
+from transformers import AutoModelForMaskedLM, EsmTokenizer
 
 from dplm_fastplms.modeling_dplm import DPLMConfig as FastDPLMConfig, DPLMForMaskedLM
 from weight_parity_utils import assert_model_parameters_fp32
@@ -53,7 +53,7 @@ if __name__ == "__main__":
         }
         config.tie_word_embeddings = False
         model = DPLMForMaskedLM.from_pretrained(source_repo, config=config).eval().cpu().to(torch.float32)
-        model.tokenizer = AutoTokenizer.from_pretrained(source_repo)
+        model.tokenizer = EsmTokenizer.from_pretrained(source_repo)
 
         # Break any potential embedding/LM-head parameter aliasing before export.
         model.lm_head.dense.weight = copy.deepcopy(model.lm_head.dense.weight)

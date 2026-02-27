@@ -1062,7 +1062,6 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
 
 class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
     config_class = DPLM2Config
-
     def __init__(self, config, add_pooling_layer=True):
         DPLM2PreTrainedModel.__init__(self, config)
         self.config = config
@@ -1129,7 +1128,6 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
 
 class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
     config_class = DPLM2Config
-
     def __init__(self, config, dropout: float = 0.1, vocab_size: Optional[int] = None):
         config.hidden_dropout_prob = dropout
         config.tie_word_embeddings = False
