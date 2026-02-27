@@ -365,9 +365,9 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
-from transformers import AutoTokenizer, EsmTokenizer
+from transformers import EsmTokenizer
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
@@ -1141,7 +1141,7 @@ class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
         self.pad_id = config.pad_token_id
         self.tokenizer = self.__class__.tokenizer
         if isinstance(config._name_or_path, str) and len(config._name_or_path) > 0:
-            self.tokenizer = AutoTokenizer.from_pretrained(config._name_or_path)
+            self.tokenizer = EsmTokenizer.from_pretrained(config._name_or_path)
 
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
