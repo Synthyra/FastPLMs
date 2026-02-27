@@ -764,16 +764,19 @@ class FastEsmPreTrainedModel(PreTrainedModel):
         return True
 
     @torch.no_grad()
-    def _init_weights(self, module):
-        """Initialize the weights"""
-        super()._init_weights(module)
-        if isinstance(module, EsmLMHead):
-            nn.init.zeros_(module.bias)
-        elif isinstance(module, EsmEmbeddings):
-            nn.init.copy_(module.position_ids, torch.arange(module.position_ids.shape[-1]).expand((1, -1)))
-        elif isinstance(module, RotaryEmbedding):
-            inv_freq = 1.0 / (10000 ** (torch.arange(0, module.dim, 2, dtype=torch.int64).float() / module.dim))
-            nn.init.copy_(module.inv_freq, inv_freq)
+    def _init_weights(self, module: nn.Module) -> None:
+        std = self.config.initializer_range
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+
+    def post_init(self) -> None:
+        super().post_init()
 
     def get_output_embeddings(self):
         # NOTE: get_output_embeddings() must return None to prevent accidental weight tying.
