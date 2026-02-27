@@ -20,6 +20,45 @@ MODEL_DICT = {
     # Synthyra/ESM2-3B
     "ESM2-3B": "facebook/esm2_t36_3B_UR50D",
 }
+SHARDED_REPO_IDS = {"Synthyra/ESM2-3B"}
+SHARD_SIZE = "5GB"
+
+
+def _delete_legacy_unsharded_weights_if_present(api: HfApi, repo_id: str) -> None:
+    if repo_id not in SHARDED_REPO_IDS:
+        return
+    repo_files = api.list_repo_files(repo_id=repo_id, repo_type="model")
+    if "model.safetensors" in repo_files:
+        print(f"Deleting legacy unified model.safetensors from {repo_id}")
+        api.delete_file(
+            path_in_repo="model.safetensors",
+            repo_id=repo_id,
+            repo_type="model",
+        )
+
+
+def _assert_repo_has_sharded_weights(api: HfApi, repo_id: str) -> None:
+    if repo_id not in SHARDED_REPO_IDS:
+        return
+    repo_files = api.list_repo_files(repo_id=repo_id, repo_type="model")
+    has_index_file = "model.safetensors.index.json" in repo_files
+    has_shard_file = any(
+        repo_file.startswith("model-") and repo_file.endswith(".safetensors")
+        for repo_file in repo_files
+    )
+    assert has_index_file, f"{repo_id} is missing model.safetensors.index.json."
+    assert has_shard_file, f"{repo_id} has no model shard files."
+    assert "model.safetensors" not in repo_files, f"{repo_id} still has unified model.safetensors."
+
+
+def _push_model_with_expected_format(model: FastEsmForMaskedLM, api: HfApi, repo_id: str) -> None:
+    if repo_id in SHARDED_REPO_IDS:
+        print(f"Pushing sharded weights for {repo_id} with max_shard_size={SHARD_SIZE}")
+        model.push_to_hub(repo_id, max_shard_size=SHARD_SIZE)
+        _delete_legacy_unsharded_weights_if_present(api, repo_id)
+        _assert_repo_has_sharded_weights(api, repo_id)
+        return
+    model.push_to_hub(repo_id)
 
 
 def _resolve_repo_items(repo_ids: list[str] | None) -> list[tuple[str, str]]:
@@ -116,7 +155,7 @@ if __name__ == "__main__":
         tokenizer = model.tokenizer
         tokenizer.push_to_hub(repo_id)
 
-        model.push_to_hub(repo_id)
+        _push_model_with_expected_format(model, api, repo_id)
 
         api.upload_file(
             path_or_fileobj=os.path.join(script_root, "modeling_fastesm.py"),
