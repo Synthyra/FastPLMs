@@ -1909,6 +1909,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
     def __init__(self, config: E1Config, **kwargs):
         E1PreTrainedModel.__init__(self, config, **kwargs)
         self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
+        self.prep_tokens = self.model.prep_tokens
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Embedding:
@@ -1960,7 +1961,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
             nn.Linear(config.hidden_size, config.vocab_size, bias=True),
         )
         self.gradient_checkpointing = config.gradient_checkpointing
-        self.prep_tokens = E1BatchPreparer()
+        self.prep_tokens = self.model.prep_tokens
         self.post_init()
 
     @property
@@ -2070,7 +2071,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
         self.gradient_checkpointing = config.gradient_checkpointing
-        self.prep_tokens = E1BatchPreparer()
+        self.prep_tokens = self.model.prep_tokens
 
         if 'pooling_types' in kwargs and isinstance(kwargs['pooling_types'], List[str]) and len(kwargs['pooling_types']) > 0:
             pooling_types = kwargs['pooling_types']
@@ -2168,7 +2169,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         )
         self.loss_fct = nn.CrossEntropyLoss()
         self.gradient_checkpointing = config.gradient_checkpointing
-        self.prep_tokens = E1BatchPreparer()
+        self.prep_tokens = self.model.prep_tokens
         self.post_init()
 
     @property
