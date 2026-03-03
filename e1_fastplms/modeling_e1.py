@@ -565,6 +565,7 @@ def get_overlapping_blocks(SLEN_Q: torch.Tensor, SLEN_K: torch.Tensor) -> tuple[
     return full_blocks, partial_blocks
 
 
+@torch.compiler.disable
 def direct_block_mask(SLEN_Q: torch.Tensor, SLEN_K: torch.Tensor) -> BlockMask:
     full_blocks, partial_blocks = get_overlapping_blocks(SLEN_Q, SLEN_K)
     partial_blocks = partial_blocks[None, None]
@@ -588,6 +589,7 @@ def direct_block_mask(SLEN_Q: torch.Tensor, SLEN_K: torch.Tensor) -> BlockMask:
     )
 
 
+@torch.compiler.disable
 def doc_id_mask(SLEN_Q: torch.Tensor, SLEN_K: torch.Tensor) -> BlockMask:
     q_doc_id = torch.repeat_interleave(SLEN_Q)
     k_doc_id = torch.repeat_interleave(SLEN_K)
