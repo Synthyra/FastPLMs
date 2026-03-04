@@ -1785,3 +1785,57 @@ class EsmSequenceTokenizer(PreTrainedTokenizerFast):
     @property
     def special_token_ids(self):
         return self.all_special_ids
+
+
+if __name__ == "__main__":
+    import random
+
+    import torch
+
+    from torch import Tensor
+
+    def print_tensor_shapes(prefix: str, obj):
+        if isinstance(obj, Tensor):
+            print(f"{prefix}{obj.shape}")
+        elif isinstance(obj, dict):
+            for name, value in obj.items():
+                print_tensor_shapes(f"{prefix}{name}.", value)
+        elif isinstance(obj, list):
+            for idx, value in enumerate(obj):
+                print_tensor_shapes(f"{prefix}[{idx}].", value)
+        elif isinstance(obj, tuple):
+            for idx, value in enumerate(obj):
+                print_tensor_shapes(f"{prefix}[{idx}].", value)
+        elif hasattr(obj, "__dict__"):
+            for name, value in vars(obj).items():
+                if name.startswith("_"):
+                    continue
+                print_tensor_shapes(f"{prefix}{name}.", value)
+        else:
+            print(f"{prefix}{type(obj)}")
+
+    random.seed(0)
+    torch.manual_seed(0)
+
+    tokenizer = EsmSequenceTokenizer()
+    num_attention_heads = random.choice([2, 4])
+    config = ESMplusplusConfig(
+        vocab_size=tokenizer.vocab_size,
+        hidden_size=16 * num_attention_heads,
+        num_attention_heads=num_attention_heads,
+        num_hidden_layers=random.choice([1, 2]),
+        num_labels=2,
+        dropout=0.0,
+    )
+
+    batch = tokenizer(["ACDEFG", "MKTW"], return_tensors="pt", padding=True)
+    batch["labels"] = batch["input_ids"].clone()
+    model = ESMplusplusForMaskedLM(config=config).eval()
+
+    with torch.no_grad():
+        output = model(**batch, return_dict=True)
+
+    print("Batch shape:")
+    print_tensor_shapes("", batch)
+    print("Output shape:")
+    print_tensor_shapes("", output)

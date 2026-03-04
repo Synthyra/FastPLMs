@@ -1543,3 +1543,57 @@ class DPLMForTokenClassification(DPLMPreTrainedModel, EmbeddingMixin):
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+
+
+if __name__ == "__main__":
+    import random
+
+    import torch
+
+    from torch import Tensor
+    from transformers import EsmTokenizer
+
+    def print_tensor_shapes(prefix: str, obj):
+        if isinstance(obj, Tensor):
+            print(f"{prefix}{obj.shape}")
+        elif isinstance(obj, dict):
+            for name, value in obj.items():
+                print_tensor_shapes(f"{prefix}{name}.", value)
+        elif isinstance(obj, list):
+            for idx, value in enumerate(obj):
+                print_tensor_shapes(f"{prefix}[{idx}].", value)
+        elif isinstance(obj, tuple):
+            for idx, value in enumerate(obj):
+                print_tensor_shapes(f"{prefix}[{idx}].", value)
+        elif hasattr(obj, "__dict__"):
+            for name, value in vars(obj).items():
+                if name.startswith("_"):
+                    continue
+                print_tensor_shapes(f"{prefix}{name}.", value)
+        else:
+            print(f"{prefix}{type(obj)}")
+
+    random.seed(0)
+    torch.manual_seed(0)
+
+    num_attention_heads = random.choice([2, 4])
+    config = DPLMConfig(
+        hidden_size=16 * num_attention_heads,
+        num_attention_heads=num_attention_heads,
+        num_hidden_layers=random.choice([1, 2]),
+        attention_probs_dropout_prob=0.0,
+        hidden_dropout_prob=0.0,
+        attn_backend="sdpa",
+    )
+    tokenizer = EsmTokenizer.from_pretrained("facebook/esm2_t6_8M_UR50D")
+    batch = tokenizer(["ACDEFG", "MKTW"], return_tensors="pt", padding="longest")
+    batch["labels"] = batch["input_ids"].clone()
+    model = DPLMForMaskedLM(config=config).eval()
+
+    with torch.no_grad():
+        output = model(**batch, return_dict=True)
+
+    print("Batch shape:")
+    print_tensor_shapes("", batch)
+    print("Output shape:")
+    print_tensor_shapes("", output)

@@ -2505,3 +2505,69 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         )
 
 
+if __name__ == "__main__":
+    import random
+
+    import torch
+
+    from torch import Tensor
+
+    def print_tensor_shapes(prefix: str, obj):
+        if isinstance(obj, Tensor):
+            print(f"{prefix}{obj.shape}")
+        elif isinstance(obj, dict):
+            for name, value in obj.items():
+                print_tensor_shapes(f"{prefix}{name}.", value)
+        elif isinstance(obj, list):
+            for idx, value in enumerate(obj):
+                print_tensor_shapes(f"{prefix}[{idx}].", value)
+        elif isinstance(obj, tuple):
+            for idx, value in enumerate(obj):
+                print_tensor_shapes(f"{prefix}[{idx}].", value)
+        elif hasattr(obj, "__dict__"):
+            for name, value in vars(obj).items():
+                if name.startswith("_"):
+                    continue
+                print_tensor_shapes(f"{prefix}{name}.", value)
+        else:
+            print(f"{prefix}{type(obj)}")
+
+    def get_e1_batch(tokenizer, sequences: list[str], device: torch.device):
+        preparer = E1BatchPreparer(data_prep_config=DataPrepConfig(max_num_positions_within_seq=64), tokenizer=tokenizer)
+        return preparer.get_batch_kwargs(sequences=sequences, device=device)
+
+    random.seed(0)
+    torch.manual_seed(0)
+
+    num_attention_heads = random.choice([2, 4])
+    config = E1Config(
+        hidden_size=16 * num_attention_heads,
+        intermediate_size=64 * num_attention_heads,
+        num_hidden_layers=random.choice([1, 2]),
+        num_attention_heads=num_attention_heads,
+        num_key_value_heads=num_attention_heads,
+        max_num_positions_within_seq=128,
+        max_num_positions_global=256,
+        max_num_sequences=8,
+        dtype="float32",
+    )
+    model = E1ForMaskedLM(config=config).eval()
+    tokenizer = get_tokenizer()
+    batch = get_e1_batch(tokenizer=tokenizer, sequences=["ACDEFG", "MKTW"], device=torch.device("cpu"))
+    batch["labels"] = batch["labels"].clone()
+
+    with torch.no_grad():
+        output = model(
+            input_ids=batch["input_ids"],
+            within_seq_position_ids=batch["within_seq_position_ids"],
+            global_position_ids=batch["global_position_ids"],
+            sequence_ids=batch["sequence_ids"],
+            labels=batch["labels"],
+        )
+
+    print("Batch shape:")
+    print_tensor_shapes("", batch)
+    print("Output shape:")
+    print_tensor_shapes("", output)
+
+
