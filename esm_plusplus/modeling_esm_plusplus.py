@@ -383,51 +383,269 @@ from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
+
 try:
-    from torch.nn.attention.flex_attention import create_block_mask
-    from torch.nn.attention.flex_attention import flex_attention
+    from torch.nn.attention.flex_attention import create_block_mask, flex_attention, BlockMask
 except ImportError:
     create_block_mask = None
     flex_attention = None
+    BlockMask = None
+
+from enum import Enum
+
+
+### Kernels Flash Attention Detection
+def _infer_kernels_flash_variant(kernel) -> str | None:
+    if hasattr(kernel, "fwd") and hasattr(kernel, "varlen_fwd"):
+        return "flash_attn2"
+    if hasattr(kernel, "flash_attn_func") and hasattr(kernel, "flash_attn_varlen_func"):
+        return "flash_attn3"
+    return None
+
+
+def _try_get_kernels_flash():
+    try:
+        from kernels import get_kernel
+    except ImportError:
+        return None, None
+
+    flash_kernel = None
+    flash_kernel_variant = None
+    try:
+        flash_kernel = get_kernel("kernels-community/flash-attn3")
+        flash_kernel_variant = _infer_kernels_flash_variant(flash_kernel)
+        assert flash_kernel_variant is not None, "Loaded flash-attn3 kernel does not expose a supported API."
+    except Exception:
+        try:
+            flash_kernel = get_kernel("kernels-community/flash-attn2")
+            flash_kernel_variant = _infer_kernels_flash_variant(flash_kernel)
+            assert flash_kernel_variant is not None, "Loaded flash-attn2 kernel does not expose a supported API."
+        except Exception:
+            flash_kernel = None
+            flash_kernel_variant = None
+    return flash_kernel, flash_kernel_variant
+
+
+FLASH_KERNEL, FLASH_KERNEL_VARIANT = _try_get_kernels_flash()
+
+
+def _kernels_flash_forward(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    causal: bool = False,
+) -> torch.Tensor:
+    assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
+    if FLASH_KERNEL_VARIANT == "flash_attn2":
+        return FLASH_KERNEL.fwd(q=query_states, k=key_states, v=value_states, is_causal=causal)[0]
+    if FLASH_KERNEL_VARIANT == "flash_attn3":
+        try:
+            output = FLASH_KERNEL.flash_attn_func(q=query_states, k=key_states, v=value_states, causal=causal)
+        except TypeError:
+            output = FLASH_KERNEL.flash_attn_func(query_states, key_states, value_states, 0.0, None, causal)
+        if isinstance(output, tuple):
+            return output[0]
+        return output
+    raise AssertionError(f"Unsupported kernels flash attention variant: {FLASH_KERNEL_VARIANT}")
+
+
+def _kernels_flash_varlen_forward(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    max_seqlen_in_batch_q: int,
+    max_seqlen_in_batch_k: int,
+    causal: bool = False,
+) -> torch.Tensor:
+    assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
+    if FLASH_KERNEL_VARIANT == "flash_attn2":
+        return FLASH_KERNEL.varlen_fwd(
+            q=query_states, k=key_states, v=value_states,
+            cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_in_batch_q, max_seqlen_k=max_seqlen_in_batch_k,
+            is_causal=causal,
+        )[0]
+    if FLASH_KERNEL_VARIANT == "flash_attn3":
+        try:
+            output = FLASH_KERNEL.flash_attn_varlen_func(
+                q=query_states, k=key_states, v=value_states,
+                cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_in_batch_q, max_seqlen_k=max_seqlen_in_batch_k,
+                causal=causal,
+            )
+        except TypeError:
+            output = FLASH_KERNEL.flash_attn_varlen_func(
+                query_states, key_states, value_states,
+                cu_seqlens_q, cu_seqlens_k,
+                max_seqlen_in_batch_q, max_seqlen_in_batch_k,
+                0.0, None, causal,
+            )
+        if isinstance(output, tuple):
+            return output[0]
+        return output
+    raise AssertionError(f"Unsupported kernels flash attention variant: {FLASH_KERNEL_VARIANT}")
+
+
+### Unpad / Pad helpers for varlen flash attention
+class IndexFirstAxis(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, input, indices) -> torch.Tensor:
+        ctx.save_for_backward(indices)
+        assert input.ndim >= 2
+        ctx.first_axis_dim, other_shape = input.shape[0], input.shape[1:]
+        second_dim = other_shape.numel()
+        return torch.gather(
+            rearrange(input, "b ... -> b (...)"), 0, repeat(indices, "z -> z d", d=second_dim)
+        ).reshape(-1, *other_shape)
+
+    @staticmethod
+    def backward(ctx, grad_output) -> tuple[torch.Tensor, None]:
+        (indices,) = ctx.saved_tensors
+        assert grad_output.ndim >= 2
+        other_shape = grad_output.shape[1:]
+        grad_output = rearrange(grad_output, "b ... -> b (...)")
+        grad_input = torch.zeros(
+            [ctx.first_axis_dim, grad_output.shape[1]], device=grad_output.device, dtype=grad_output.dtype
+        )
+        grad_input.scatter_(0, repeat(indices, "z -> z d", d=grad_output.shape[1]), grad_output)
+        return grad_input.reshape(ctx.first_axis_dim, *other_shape), None
+
+
+class IndexPutFirstAxis(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, values, indices, first_axis_dim) -> torch.Tensor:
+        ctx.save_for_backward(indices)
+        assert indices.ndim == 1
+        assert values.ndim >= 2
+        output = torch.zeros(first_axis_dim, *values.shape[1:], device=values.device, dtype=values.dtype)
+        output[indices] = values
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output) -> tuple[torch.Tensor, None, None]:
+        (indices,) = ctx.saved_tensors
+        return grad_output[indices], None, None
+
+
+index_first_axis = IndexFirstAxis.apply
+index_put_first_axis = IndexPutFirstAxis.apply
+
+
+def pad_input(hidden_states: torch.Tensor, indices: torch.Tensor, batch: int, seqlen: int) -> torch.Tensor:
+    output = index_put_first_axis(hidden_states, indices, batch * seqlen)
+    return rearrange(output, "(b s) ... -> b s ...", b=batch)
+
+
+def _unpad_input(
+    query_layer: torch.Tensor,
+    key_layer: torch.Tensor,
+    value_layer: torch.Tensor,
+    attention_mask_2d: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, int]]:
+    batch_size, seq_len, num_heads, head_dim = query_layer.shape
+    seqlens = attention_mask_2d.sum(dim=1).int()
+    cu_seqlens = F.pad(seqlens.cumsum(0, dtype=torch.int32), (1, 0))
+    max_seqlen = int(seqlens.max().item())
+    indices = attention_mask_2d.flatten().nonzero(as_tuple=False).flatten()
+    query_layer = index_first_axis(query_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices)
+    key_layer = index_first_axis(key_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices)
+    value_layer = index_first_axis(value_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices)
+    return query_layer, key_layer, value_layer, indices, (cu_seqlens, cu_seqlens), (max_seqlen, max_seqlen)
+
+
+def kernels_flash_attention_func(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    attention_mask_2d: torch.Tensor | None = None,
+    causal: bool = False,
+) -> torch.Tensor:
+    """Top-level flash attention entry point. Routes to varlen when a 2D padding mask is provided."""
+    assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
+    if not causal and attention_mask_2d is not None:
+        batch_size, q_len = query_states.shape[:2]
+        (
+            query_states, key_states, value_states,
+            indices_q, (cu_seqlens_q, cu_seqlens_k), (max_seqlen_q, max_seqlen_k),
+        ) = _unpad_input(query_states, key_states, value_states, attention_mask_2d)
+        attn_output_unpad = _kernels_flash_varlen_forward(
+            query_states=query_states, key_states=key_states, value_states=value_states,
+            cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_in_batch_q=max_seqlen_q, max_seqlen_in_batch_k=max_seqlen_k,
+        )
+        return pad_input(attn_output_unpad, indices_q, batch_size, q_len)
+    else:
+        return _kernels_flash_forward(
+            query_states=query_states, key_states=key_states, value_states=value_states, causal=causal,
+        )
+
+
+### Attention Backend Enum & Resolution
+class AttentionBackend(Enum):
+    AUTO = "auto"
+    KERNELS_FLASH = "kernels_flash"
+    FLEX = "flex"
+    SDPA = "sdpa"
+
+
+VALID_ATTENTION_BACKENDS = tuple(b.value for b in AttentionBackend)
+
+
+def resolve_attention_backend(requested_backend: str) -> AttentionBackend:
+    assert requested_backend in VALID_ATTENTION_BACKENDS, (
+        f"Unsupported attention backend: {requested_backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
+    )
+    if requested_backend == AttentionBackend.AUTO.value:
+        if FLASH_KERNEL is not None:
+            return AttentionBackend.KERNELS_FLASH
+        if flex_attention is not None:
+            return AttentionBackend.FLEX
+        return AttentionBackend.SDPA
+    if requested_backend == AttentionBackend.KERNELS_FLASH.value:
+        assert FLASH_KERNEL is not None, "Kernels Flash Attention is not available in this environment."
+        return AttentionBackend.KERNELS_FLASH
+    if requested_backend == AttentionBackend.FLEX.value:
+        assert flex_attention is not None, "Flex Attention is not available in this environment."
+        return AttentionBackend.FLEX
+    if requested_backend == AttentionBackend.SDPA.value:
+        return AttentionBackend.SDPA
+    raise AssertionError(f"Unsupported attention backend: {requested_backend}")
 
 
 def get_attention_mask(
-    attn_backend: str, 
-    batch_size: int, 
-    seq_len: int, 
+    effective_backend: AttentionBackend,
+    batch_size: int,
+    seq_len: int,
     device: torch.device,
-    attention_mask: Optional[torch.Tensor] = None
-) -> torch.Tensor:
+    attention_mask: Optional[torch.Tensor] = None,
+) -> tuple[torch.Tensor | None, torch.Tensor | None, "BlockMask | None"]:
+    """Build padding masks once for all transformer layers.
+
+    Returns (attention_mask_2d, attention_mask_4d, flex_block_mask).
+    """
     if attention_mask is None:
-        attention_mask_2d = torch.ones((batch_size, seq_len), device=device).bool() 
-    else:
-        attention_mask_2d = attention_mask.bool()
-    
-    if attn_backend == "flex":
+        return None, None, None
+
+    attention_mask_2d = attention_mask.bool()
+
+    if effective_backend == AttentionBackend.KERNELS_FLASH:
+        return attention_mask_2d, None, None
+
+    if effective_backend == AttentionBackend.FLEX:
         assert create_block_mask is not None, "Flex attention backend requested but torch.create_block_mask is unavailable."
+        valid_lens = attention_mask_2d.sum(dim=-1)
 
-        if attention_mask is None:
-            flex_block_mask = None
-        else:
-            valid_lens = attention_mask_2d.sum(dim=-1)
+        def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+            return (q_idx < valid_lens[batch_idx]) & (kv_idx < valid_lens[batch_idx])
 
-            def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-                return (q_idx < valid_lens[batch_idx]) & (kv_idx < valid_lens[batch_idx])
-    
-            flex_block_mask = create_block_mask(
-                mask_mod,
-                batch_size,
-                1,
-                seq_len,
-                seq_len,
-                device=device,
-            )
-        attention_mask_4d = None
-    else:
-        flex_block_mask = None
-        attention_mask_4d = attention_mask_2d[:, None, :, None] & attention_mask_2d[:, None, None, :]
+        flex_block_mask = create_block_mask(mask_mod, batch_size, 1, seq_len, seq_len, device=device)
+        return attention_mask_2d, None, flex_block_mask
 
-    return attention_mask_4d, flex_block_mask
+    # SDPA / manual
+    attention_mask_4d = attention_mask_2d[:, None, :, None] & attention_mask_2d[:, None, None, :]
+    return attention_mask_2d, attention_mask_4d, None
 
 
 class ESMplusplusConfig(PretrainedConfig):
@@ -452,7 +670,7 @@ class ESMplusplusConfig(PretrainedConfig):
         problem_type: str | None = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "auto",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -684,23 +902,25 @@ def swiglu_ln_ffn(d_model: int, expansion_ratio: float) -> nn.Sequential:
 
 ### Attention
 class MultiHeadAttention(nn.Module):
-    """Multi-head attention with rotary embeddings.
-    
+    """Multi-head attention with rotary embeddings and configurable backend.
+
     Args:
         d_model: Model dimension
         n_heads: Number of attention heads
+        attn_backend: One of "auto", "kernels_flash", "flex", "sdpa"
     """
     def __init__(
         self,
         d_model: int,
         n_heads: int,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "auto",
     ):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = self.d_model // self.n_heads
-        self.attn_backend = attn_backend
+        self.scale = 1.0 / math.sqrt(self.d_head)
+        self.attn_backend = resolve_attention_backend(attn_backend)
         self.layernorm_qkv = nn.Sequential(
             nn.LayerNorm(d_model), nn.Linear(d_model, d_model * 3, bias=False)
         )
@@ -711,7 +931,6 @@ class MultiHeadAttention(nn.Module):
         self.rotary = RotaryEmbedding(d_model // n_heads)
 
     def _apply_rotary(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Apply rotary embeddings to query and key."""
         q = q.unflatten(-1, (self.n_heads, self.d_head))
         k = k.unflatten(-1, (self.n_heads, self.d_head))
         q, k = self.rotary(q, k)
@@ -722,21 +941,12 @@ class MultiHeadAttention(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        attention_mask: torch.Tensor,
-        flex_block_mask: object,
+        attention_mask_2d: torch.Tensor | None = None,
+        attention_mask_4d: torch.Tensor | None = None,
+        flex_block_mask: "BlockMask | None" = None,
         output_attentions: bool = False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Args:
-            x: Input tensor
-            attention_mask: 4D attention mask
-            flex_block_mask: Flex attention block mask
-            output_attentions: Whether to return attention weights
-            
-        Returns:
-            Output tensor after self attention, and optionally attention weights
-        """
-        attn_weights = None
+        output_s_max: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         qkv_BLD3 = self.layernorm_qkv(x)
         query_BLD, key_BLD, value_BLD = torch.chunk(qkv_BLD3, 3, dim=-1)
         query_BLD, key_BLD = (
@@ -745,37 +955,110 @@ class MultiHeadAttention(nn.Module):
         )
         query_BLD, key_BLD = self._apply_rotary(query_BLD, key_BLD)
         query_BHLD, key_BHLD, value_BHLD = map(self.reshaper, (query_BLD, key_BLD, value_BLD))
-        scale = 1 / math.sqrt(self.d_head)
 
-        if output_attentions: # Manual attention computation
-            attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-2, -1)) * scale
-            attn_weights = attn_weights.masked_fill(attention_mask.logical_not(), float('-inf'))
-            attn_weights = F.softmax(attn_weights, dim=-1)
-            context_BHLD = torch.matmul(attn_weights, value_BHLD)
+        attn_output, attn_weights, s_max = self._attn(
+            query_BHLD, key_BHLD, value_BHLD,
+            attention_mask_2d=attention_mask_2d,
+            attention_mask_4d=attention_mask_4d,
+            flex_block_mask=flex_block_mask,
+            output_attentions=output_attentions,
+            output_s_max=output_s_max,
+        )
+
+        output = self.out_proj(attn_output)
+        return output, attn_weights, s_max
+
+    def _attn(
+        self,
+        query_BHLD: torch.Tensor,
+        key_BHLD: torch.Tensor,
+        value_BHLD: torch.Tensor,
+        attention_mask_2d: torch.Tensor | None = None,
+        attention_mask_4d: torch.Tensor | None = None,
+        flex_block_mask: "BlockMask | None" = None,
+        output_attentions: bool = False,
+        output_s_max: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+        if output_attentions:
+            return self._manual_attn(query_BHLD, key_BHLD, value_BHLD, attention_mask_4d, output_s_max)
+
+        if self.attn_backend == AttentionBackend.KERNELS_FLASH:
+            attn_output, attn_weights = self._kernels_flash_attn(query_BHLD, key_BHLD, value_BHLD, attention_mask_2d)
+        elif self.attn_backend == AttentionBackend.FLEX:
+            attn_output, attn_weights = self._flex_attn(query_BHLD, key_BHLD, value_BHLD, flex_block_mask)
+        elif self.attn_backend == AttentionBackend.SDPA:
+            attn_output, attn_weights = self._sdpa_attn(query_BHLD, key_BHLD, value_BHLD, attention_mask_4d)
         else:
-            if self.attn_backend == "flex":
-                assert flex_attention is not None, "Flex attention backend requested but torch.flex_attention is unavailable."
-                assert query_BHLD.dtype in (torch.float16, torch.bfloat16), f"Flex attention backend requires float16 or bfloat16, got {query_BHLD.dtype}."
-                assert flex_block_mask is not None, "Flex attention backend requires a block mask when attention_mask is provided."
-                context_BHLD = flex_attention(
-                    query_BHLD,
-                    key_BHLD,
-                    value_BHLD,
-                    block_mask=flex_block_mask,
-                    scale=scale,
-                )
-            else:
-                context_BHLD = F.scaled_dot_product_attention(
-                    query_BHLD,
-                    key_BHLD,
-                    value_BHLD,
-                    attn_mask=attention_mask,
-                    scale=scale,
-                )
-            
-        context_BLD = rearrange(context_BHLD, "b h s d -> b s (h d)")
-        output = self.out_proj(context_BLD)
-        return output, attn_weights
+            raise AssertionError(f"Unsupported resolved backend: {self.attn_backend}")
+
+        s_max = self._compute_s_max(query_BHLD, key_BHLD) if output_s_max else None
+        return attn_output, attn_weights, s_max
+
+    @torch.no_grad()
+    def _compute_s_max(self, query_BHLD: torch.Tensor, key_BHLD: torch.Tensor) -> list[torch.Tensor]:
+        q_norm = torch.linalg.vector_norm(query_BHLD, dim=-1)
+        k_norm = torch.linalg.vector_norm(key_BHLD, dim=-1)
+        s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(dim=0).values * self.scale
+        return [s_max_bound[h] for h in range(self.n_heads)]
+
+    def _manual_attn(
+        self,
+        query_BHLD: torch.Tensor,
+        key_BHLD: torch.Tensor,
+        value_BHLD: torch.Tensor,
+        attention_mask_4d: torch.Tensor | None = None,
+        output_s_max: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
+        attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-2, -1)) * self.scale
+        if attention_mask_4d is not None:
+            attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        context_BHLD = torch.matmul(attn_weights, value_BHLD)
+        attn_output = rearrange(context_BHLD, "b h s d -> b s (h d)")
+        s_max = self._compute_s_max(query_BHLD, key_BHLD) if output_s_max else None
+        return attn_output, attn_weights, s_max
+
+    def _kernels_flash_attn(
+        self,
+        query_BHLD: torch.Tensor,
+        key_BHLD: torch.Tensor,
+        value_BHLD: torch.Tensor,
+        attention_mask_2d: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, None]:
+        query_BLHD = query_BHLD.transpose(1, 2).contiguous()
+        key_BLHD = key_BHLD.transpose(1, 2).contiguous()
+        value_BLHD = value_BHLD.transpose(1, 2).contiguous()
+        attn_output = kernels_flash_attention_func(
+            query_states=query_BLHD, key_states=key_BLHD, value_states=value_BLHD,
+            attention_mask_2d=attention_mask_2d, causal=False,
+        )
+        return rearrange(attn_output, "b s h d -> b s (h d)"), None
+
+    def _flex_attn(
+        self,
+        query_BHLD: torch.Tensor,
+        key_BHLD: torch.Tensor,
+        value_BHLD: torch.Tensor,
+        flex_block_mask: "BlockMask | None" = None,
+    ) -> tuple[torch.Tensor, None]:
+        assert flex_attention is not None, "Flex attention is not available in this environment."
+        assert query_BHLD.dtype in (torch.float16, torch.bfloat16), (
+            f"Flex attention requires float16 or bfloat16, got {query_BHLD.dtype}."
+        )
+        context_BHLD = flex_attention(query_BHLD, key_BHLD, value_BHLD, block_mask=flex_block_mask, scale=self.scale)
+        return rearrange(context_BHLD, "b h s d -> b s (h d)"), None
+
+    def _sdpa_attn(
+        self,
+        query_BHLD: torch.Tensor,
+        key_BHLD: torch.Tensor,
+        value_BHLD: torch.Tensor,
+        attention_mask_4d: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, None]:
+        context_BHLD = F.scaled_dot_product_attention(
+            query_BHLD, key_BHLD, value_BHLD, attn_mask=attention_mask_4d, scale=self.scale,
+        )
+        return rearrange(context_BHLD, "b h s d -> b s (h d)"), None
 
 
 ### Regression Head
@@ -798,14 +1081,7 @@ def RegressionHead(d_model: int, output_dim: int, hidden_dim: Optional[int] = No
 
 ### Transformer Block
 class UnifiedTransformerBlock(nn.Module):
-    """Transformer block with attention and feedforward layers.
-    
-    Args:
-        d_model: Model dimension
-        n_heads: Number of attention heads
-        residue_scaling_factor: Factor for scaling residual connections
-        expansion_ratio: Expansion ratio for feedforward network
-    """
+    """Transformer block with attention and feedforward layers."""
     def __init__(
         self,
         d_model: int,
@@ -813,14 +1089,10 @@ class UnifiedTransformerBlock(nn.Module):
         residue_scaling_factor: float = 1,
         expansion_ratio: float = 8 / 3,
         dropout: float = 0.0,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "auto",
     ):
         super().__init__()
-        self.attn = MultiHeadAttention(
-            d_model=d_model,
-            n_heads=n_heads,
-            attn_backend=attn_backend,
-        )
+        self.attn = MultiHeadAttention(d_model=d_model, n_heads=n_heads, attn_backend=attn_backend)
         self.ffn = swiglu_ln_ffn(d_model, expansion_ratio)
         self.scaling_factor = residue_scaling_factor
         self.dropout = nn.Dropout(dropout)
@@ -828,29 +1100,23 @@ class UnifiedTransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        attention_mask: torch.Tensor,
-        flex_block_mask: object,
+        attention_mask_2d: torch.Tensor | None = None,
+        attention_mask_4d: torch.Tensor | None = None,
+        flex_block_mask: "BlockMask | None" = None,
         output_attentions: bool = False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        """
-        Args:
-            x: Input tensor
-            attention_mask: 4D attention mask
-            flex_block_mask: Flex attention block mask
-            output_attentions: Whether to return attention weights
-            
-        Returns:
-            Output tensor after transformer block, and optionally attention weights
-        """
-        attn_output, attn_weights = self.attn(
+        output_s_max: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+        attn_output, attn_weights, s_max = self.attn(
             x,
-            attention_mask,
-            flex_block_mask,
-            output_attentions,
+            attention_mask_2d=attention_mask_2d,
+            attention_mask_4d=attention_mask_4d,
+            flex_block_mask=flex_block_mask,
+            output_attentions=output_attentions,
+            output_s_max=output_s_max,
         )
         x = x + self.dropout(attn_output) / self.scaling_factor
         x = x + self.dropout(self.ffn(x)) / self.scaling_factor
-        return x, attn_weights
+        return x, attn_weights, s_max
 
 
 ### Model Outputs
@@ -860,6 +1126,7 @@ class TransformerOutput(ModelOutput):
     last_hidden_state: Optional[torch.Tensor] = None
     hidden_states: Optional[Tuple[torch.Tensor]] = None
     attentions: Optional[Tuple[torch.Tensor]] = None
+    s_max: Optional[Tuple[list[torch.Tensor], ...]] = None
 
 
 @dataclass
@@ -870,28 +1137,22 @@ class ESMplusplusOutput(ModelOutput):
     last_hidden_state: Optional[torch.Tensor] = None
     hidden_states: Optional[Tuple[torch.Tensor]] = None
     attentions: Optional[Tuple[torch.Tensor]] = None
+    s_max: Optional[Tuple[list[torch.Tensor], ...]] = None
 
 
 ### Transformer Stack
 class TransformerStack(nn.Module):
-    """Stack of transformer blocks.
-    
-    Args:
-        d_model: Model dimension
-        n_heads: Number of attention heads
-        n_layers: Number of transformer layers
-        dropout: Dropout rate
-    """
+    """Stack of transformer blocks."""
     def __init__(
         self,
         d_model: int,
         n_heads: int,
         n_layers: int,
         dropout: float = 0.0,
-        attn_backend: str = "sdpa",
+        attn_backend: str = "auto",
     ):
         super().__init__()
-        self._attn_backend = attn_backend
+        self.attention_backend = resolve_attention_backend(attn_backend)
         self.blocks = nn.ModuleList(
             [
                 UnifiedTransformerBlock(
@@ -906,18 +1167,17 @@ class TransformerStack(nn.Module):
         )
         self.norm = nn.LayerNorm(d_model, bias=False)
         self.gradient_checkpointing = False
-        self.attn_backend = attn_backend
 
     @property
-    def attn_backend(self) -> str:
-        return self._attn_backend
+    def attn_backend(self) -> AttentionBackend:
+        return self.attention_backend
 
     @attn_backend.setter
     def attn_backend(self, backend: str) -> None:
-        assert backend in ("sdpa", "flex"), f"Unsupported attn_backend: {backend}"
-        self._attn_backend = backend
+        resolved = resolve_attention_backend(backend)
+        self.attention_backend = resolved
         for block in self.blocks:
-            block.attn.attn_backend = backend
+            block.attn.attn_backend = resolved
 
     def forward(
         self,
@@ -925,61 +1185,58 @@ class TransformerStack(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         output_hidden_states: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
+        output_s_max: Optional[bool] = False,
     ) -> TransformerOutput:
-        """
-        Args:
-            x: Input tensor
-            attention_mask: Optional 2D attention mask
-            output_hidden_states: Whether to return all hidden states
-            output_attentions: Whether to return attention weights
-            
-        Returns:
-            TransformerOutput containing last hidden state and optionally all hidden states and attention weights
-        """
         hidden_states = () if output_hidden_states else None
         attentions = () if output_attentions else None
-        
-        # move to 4D attention mask or flex block mask
-        attention_mask_4d, flex_block_mask = get_attention_mask(
-            attn_backend=self._attn_backend,
+        full_s_max = () if output_s_max else None
+
+        attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
+            effective_backend=self.attention_backend,
             batch_size=x.shape[0],
             seq_len=x.shape[1],
             device=x.device,
             attention_mask=attention_mask,
         )
-            
+
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
-                x, attn_weights = self._gradient_checkpointing_func(
+                x, attn_weights, s_max = self._gradient_checkpointing_func(
                     block.__call__,
                     x=x,
-                    attention_mask=attention_mask_4d,
+                    attention_mask_2d=attention_mask_2d,
+                    attention_mask_4d=attention_mask_4d,
                     flex_block_mask=flex_block_mask,
                     output_attentions=output_attentions,
+                    output_s_max=output_s_max,
                 )
             else:
-                x, attn_weights = block(
+                x, attn_weights, s_max = block(
                     x=x,
-                    attention_mask=attention_mask_4d,
+                    attention_mask_2d=attention_mask_2d,
+                    attention_mask_4d=attention_mask_4d,
                     flex_block_mask=flex_block_mask,
                     output_attentions=output_attentions,
+                    output_s_max=output_s_max,
                 )
 
             if attentions is not None:
                 attentions += (attn_weights,)
-                
             if output_hidden_states:
                 assert hidden_states is not None
                 hidden_states += (x,)
-        
+            if full_s_max is not None:
+                full_s_max += (s_max,)
+
         last_hidden_state = self.norm(x)
         if output_hidden_states:
             hidden_states += (last_hidden_state,)
-                
+
         return TransformerOutput(
-            last_hidden_state=last_hidden_state, 
+            last_hidden_state=last_hidden_state,
             hidden_states=hidden_states,
-            attentions=attentions
+            attentions=attentions,
+            s_max=full_s_max,
         )
 
 
@@ -1025,7 +1282,7 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
 
     @attn_backend.setter
     def attn_backend(self, backend: str) -> None:
-        assert backend in ("sdpa", "flex"), f"Unsupported attn_backend: {backend}"
+        assert backend in VALID_ATTENTION_BACKENDS, f"Unsupported attn_backend: {backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
         self.config.attn_backend = backend
         for module in self.modules():
             if isinstance(module, TransformerStack):
@@ -1102,39 +1359,30 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         inputs_embeds: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        output_s_max: Optional[bool] = False,
+        return_dict: Optional[bool] = None,
         **kwargs,
-    ) -> TransformerOutput:
-        """Forward pass for masked language modeling.
-        
-        Args:
-            input_ids: Input token IDs
-            attention_mask: Attention mask
-            inputs_embeds: Optional precomputed embeddings
-            output_hidden_states: Whether to return all hidden states
-            output_attentions: Whether to return attention weights
-            
-        Returns:
-            TransformerOutput containing last hidden state and optionally all hidden states and attention weights
-        """
+    ) -> ESMplusplusOutput:
         assert input_ids is not None or inputs_embeds is not None, "You have to specify either input_ids or inputs_embeds"
         assert not (input_ids is not None and inputs_embeds is not None), "You cannot specify both input_ids and inputs_embeds at the same time"
-        
+
         if inputs_embeds is None:
             x = self.embed(input_ids)
         else:
             x = inputs_embeds
-        
+
         transformer_output = self.transformer(
             x=x,
             attention_mask=attention_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
+            output_s_max=output_s_max,
         )
         return ESMplusplusOutput(
             last_hidden_state=transformer_output.last_hidden_state,
             hidden_states=transformer_output.hidden_states,
             attentions=transformer_output.attentions,
+            s_max=transformer_output.s_max,
         )
 
 class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
@@ -1189,32 +1437,21 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        output_s_max: Optional[bool] = False,
+        return_dict: Optional[bool] = None,
         **kwargs,
     ) -> ESMplusplusOutput:
-        """Forward pass for masked language modeling.
-        
-        Args:
-            input_ids: Input token IDs
-            attention_mask: Attention mask
-            inputs_embeds: Optional precomputed embeddings
-            labels: Optional labels for masked tokens
-            output_hidden_states: Whether to return all hidden states
-            output_attentions: Whether to return attention weights
-            
-        Returns:
-            ESMplusplusOutput containing loss, logits, hidden states and attention weights
-        """
         if inputs_embeds is None:
             x = self.embed(input_ids)
         else:
             x = inputs_embeds
-    
+
         output = self.transformer(
             x=x,
             attention_mask=attention_mask,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
+            output_s_max=output_s_max,
         )
 
         last_hidden_state = output.last_hidden_state
@@ -1222,13 +1459,14 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
         loss = None
         if labels is not None:
             loss = self.ce_loss(logits.view(-1, self.vocab_size), labels.view(-1))
-        
+
         return ESMplusplusOutput(
             loss=loss,
             logits=logits,
             last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
+            s_max=output.s_max,
         )
 
 
@@ -1271,33 +1509,22 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        output_s_max: Optional[bool] = False,
+        return_dict: Optional[bool] = None,
         **kwargs,
     ) -> ESMplusplusOutput:
-        """Forward pass for sequence classification.
-        
-        Args:
-            input_ids: Input token IDs
-            attention_mask: Attention mask
-            inputs_embeds: Optional precomputed embeddings
-            labels: Optional labels for classification
-            output_hidden_states: Whether to return all hidden states
-            output_attentions: Whether to return attention weights
-            
-        Returns:
-            ESMplusplusOutput containing loss, logits, and hidden states
-        """
         output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             labels=None,
             output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states
+            output_hidden_states=output_hidden_states,
+            output_s_max=output_s_max,
         )
 
         last_hidden_state = output.last_hidden_state
-        features = self.pooler(last_hidden_state, attention_mask) # pooler expects 2d attention mask
+        features = self.pooler(last_hidden_state, attention_mask)
         logits = self.classifier(features)
 
         loss = None
@@ -1327,6 +1554,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
             last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
+            s_max=output.s_max,
         )
 
 
@@ -1356,29 +1584,18 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
-        return_dict: Optional[bool] = None, # to play nice with HF adjacent packages
+        output_s_max: Optional[bool] = False,
+        return_dict: Optional[bool] = None,
         **kwargs,
     ) -> ESMplusplusOutput:
-        """Forward pass for token classification.
-        
-        Args:
-            input_ids: Input token IDs
-            attention_mask: Attention mask
-            inputs_embeds: Optional precomputed embeddings
-            labels: Optional labels for token classification
-            output_hidden_states: Whether to return all hidden states
-            output_attentions: Whether to return attention weights
-            
-        Returns:
-            ESMplusplusOutput containing loss, logits, and hidden states
-        """
         output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             labels=None,
             output_attentions=output_attentions,
-            output_hidden_states=output_hidden_states
+            output_hidden_states=output_hidden_states,
+            output_s_max=output_s_max,
         )
 
         last_hidden_state = output.last_hidden_state
@@ -1386,13 +1603,14 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         loss = None
         if labels is not None:
             loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-        
+
         return ESMplusplusOutput(
             loss=loss,
             logits=logits,
             last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
+            s_max=output.s_max,
         )
 
 

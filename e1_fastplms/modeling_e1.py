@@ -375,13 +375,99 @@ from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
 
-### Establish attention compatibility
-try:
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
-except ImportError:
-    logger.warning("Failed to import flash attention; Will be using PyTorch attention instead")
-    flash_attn_func = None
-    flash_attn_varlen_func = None
+### Kernels Flash Attention Detection
+def _infer_kernels_flash_variant(kernel) -> str | None:
+    if hasattr(kernel, "fwd") and hasattr(kernel, "varlen_fwd"):
+        return "flash_attn2"
+    if hasattr(kernel, "flash_attn_func") and hasattr(kernel, "flash_attn_varlen_func"):
+        return "flash_attn3"
+    return None
+
+
+def _try_get_kernels_flash():
+    try:
+        from kernels import get_kernel
+    except ImportError:
+        return None, None
+
+    flash_kernel = None
+    flash_kernel_variant = None
+    try:
+        flash_kernel = get_kernel("kernels-community/flash-attn3")
+        flash_kernel_variant = _infer_kernels_flash_variant(flash_kernel)
+        assert flash_kernel_variant is not None, "Loaded flash-attn3 kernel does not expose a supported API."
+    except Exception:
+        try:
+            flash_kernel = get_kernel("kernels-community/flash-attn2")
+            flash_kernel_variant = _infer_kernels_flash_variant(flash_kernel)
+            assert flash_kernel_variant is not None, "Loaded flash-attn2 kernel does not expose a supported API."
+        except Exception:
+            flash_kernel = None
+            flash_kernel_variant = None
+    return flash_kernel, flash_kernel_variant
+
+
+FLASH_KERNEL, FLASH_KERNEL_VARIANT = _try_get_kernels_flash()
+
+
+def _kernels_flash_forward(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    causal: bool = False,
+) -> torch.Tensor:
+    assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
+    if FLASH_KERNEL_VARIANT == "flash_attn2":
+        return FLASH_KERNEL.fwd(q=query_states, k=key_states, v=value_states, is_causal=causal)[0]
+    if FLASH_KERNEL_VARIANT == "flash_attn3":
+        try:
+            output = FLASH_KERNEL.flash_attn_func(q=query_states, k=key_states, v=value_states, causal=causal)
+        except TypeError:
+            output = FLASH_KERNEL.flash_attn_func(query_states, key_states, value_states, 0.0, None, causal)
+        if isinstance(output, tuple):
+            return output[0]
+        return output
+    raise AssertionError(f"Unsupported kernels flash attention variant: {FLASH_KERNEL_VARIANT}")
+
+
+def _kernels_flash_varlen_forward(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    cu_seqlens_q: torch.Tensor,
+    cu_seqlens_k: torch.Tensor,
+    max_seqlen_in_batch_q: int,
+    max_seqlen_in_batch_k: int,
+    causal: bool = False,
+) -> torch.Tensor:
+    assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
+    if FLASH_KERNEL_VARIANT == "flash_attn2":
+        return FLASH_KERNEL.varlen_fwd(
+            q=query_states, k=key_states, v=value_states,
+            cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_in_batch_q, max_seqlen_k=max_seqlen_in_batch_k,
+            is_causal=causal,
+        )[0]
+    if FLASH_KERNEL_VARIANT == "flash_attn3":
+        try:
+            output = FLASH_KERNEL.flash_attn_varlen_func(
+                q=query_states, k=key_states, v=value_states,
+                cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_in_batch_q, max_seqlen_k=max_seqlen_in_batch_k,
+                causal=causal,
+            )
+        except TypeError:
+            output = FLASH_KERNEL.flash_attn_varlen_func(
+                query_states, key_states, value_states,
+                cu_seqlens_q, cu_seqlens_k,
+                max_seqlen_in_batch_q, max_seqlen_in_batch_k,
+                0.0, None, causal,
+            )
+        if isinstance(output, tuple):
+            return output[0]
+        return output
+    raise AssertionError(f"Unsupported kernels flash attention variant: {FLASH_KERNEL_VARIANT}")
+
 
 from torch.nn.attention.flex_attention import (
     BlockMask,
@@ -398,15 +484,36 @@ except Exception as e:
     layer_norm = None
 
 
-def is_flash_attention_available() -> bool:
-    return (
-        flash_attn_func is not None and flash_attn_varlen_func is not None and (os.getenv("USE_FLASH_ATTN", "1") == "1")
+### Attention Backend Enum & Resolution
+class AttentionBackend(Enum):
+    AUTO = "auto"
+    KERNELS_FLASH = "kernels_flash"
+    FLEX = "flex"
+    SDPA = "sdpa"
+
+
+VALID_ATTENTION_BACKENDS = tuple(b.value for b in AttentionBackend)
+
+
+def resolve_attention_backend(requested_backend: str) -> AttentionBackend:
+    assert requested_backend in VALID_ATTENTION_BACKENDS, (
+        f"Unsupported attention backend: {requested_backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
     )
-
-
-class FlexAttentionArgs(TypedDict, total=False):
-    block_mask: BlockMask | None
-    score_mod: Callable | None
+    if requested_backend == AttentionBackend.AUTO.value:
+        if FLASH_KERNEL is not None:
+            return AttentionBackend.KERNELS_FLASH
+        if flex_attention is not None:
+            return AttentionBackend.FLEX
+        return AttentionBackend.SDPA
+    if requested_backend == AttentionBackend.KERNELS_FLASH.value:
+        assert FLASH_KERNEL is not None, "Kernels Flash Attention is not available in this environment."
+        return AttentionBackend.KERNELS_FLASH
+    if requested_backend == AttentionBackend.FLEX.value:
+        assert flex_attention is not None, "Flex Attention is not available in this environment."
+        return AttentionBackend.FLEX
+    if requested_backend == AttentionBackend.SDPA.value:
+        return AttentionBackend.SDPA
+    raise AssertionError(f"Unsupported attention backend: {requested_backend}")
 
 
 def create_block_causal_mask_optimized(sequence_ids: torch.Tensor) -> BlockMask:
@@ -421,6 +528,32 @@ def create_block_causal_mask_optimized(sequence_ids: torch.Tensor) -> BlockMask:
 
     batch_size, seqlen = sequence_ids.shape
     return create_block_mask(document_mask, batch_size, 1, seqlen, seqlen, device=sequence_ids.device)
+
+
+def create_within_seq_block_mask(sequence_ids: torch.Tensor) -> BlockMask:
+    def document_mask(b, h, q_idx, kv_idx):  # type: ignore[no-untyped-def]
+        return (
+            (sequence_ids[b, q_idx] == sequence_ids[b, kv_idx])
+            & (sequence_ids[b, q_idx] != -1)
+            & (sequence_ids[b, kv_idx] != -1)
+        )
+
+    batch_size, seqlen = sequence_ids.shape
+    return create_block_mask(document_mask, batch_size, 1, seqlen, seqlen, device=sequence_ids.device)
+
+
+def build_within_seq_mask_4d(sequence_ids: torch.Tensor) -> torch.Tensor:
+    not_pad = (sequence_ids != -1)
+    same_seq = sequence_ids.unsqueeze(-1) == sequence_ids.unsqueeze(-2)
+    valid = not_pad.unsqueeze(-1) & not_pad.unsqueeze(-2)
+    return (same_seq & valid).unsqueeze(1)
+
+
+def build_block_causal_mask_4d(sequence_ids: torch.Tensor) -> torch.Tensor:
+    not_pad = (sequence_ids != -1)
+    causal = sequence_ids.unsqueeze(-1) >= sequence_ids.unsqueeze(-2)
+    valid = not_pad.unsqueeze(-1) & not_pad.unsqueeze(-2)
+    return (causal & valid).unsqueeze(1)
 
 
 def flex_attention_func(
@@ -449,7 +582,7 @@ def flex_attention_func(
     return outputs
 
 
-def flash_attention_func(
+def kernels_flash_attention_func(
     query_states: torch.Tensor,  # (bs, seqlen, nh, hs)
     key_states: torch.Tensor,  # (bs, seqlen, nkv, hs)
     value_states: torch.Tensor,  # (bs, seqlen, nkv, hs)
@@ -457,9 +590,7 @@ def flash_attention_func(
     k_sequence_ids: torch.Tensor,
     causal: bool = False,
 ) -> torch.Tensor:  # (bs, seqlen, nh, hs)
-    # Contains at least one padding token in the sequence. Note: ignore attention mask if causal.
-    if not is_flash_attention_available():
-        raise ImportError("Flash Attention is not available. Please install flash-attn.")
+    assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
 
     if not causal:
         batch_size, q_len = query_states.shape[0], query_states.shape[1]
@@ -472,20 +603,20 @@ def flash_attention_func(
             (max_seqlen_in_batch_q, max_seqlen_in_batch_k),
         ) = _unpad_input(query_states, key_states, value_states, q_sequence_ids, k_sequence_ids)
 
-        attn_output_unpad = flash_attn_varlen_func(
+        attn_output_unpad = _kernels_flash_varlen_forward(
             query_states,
             key_states,
             value_states,
             cu_seqlens_q=cu_seqlens_q,
             cu_seqlens_k=cu_seqlens_k,
-            max_seqlen_q=max_seqlen_in_batch_q,
-            max_seqlen_k=max_seqlen_in_batch_k,
+            max_seqlen_in_batch_q=max_seqlen_in_batch_q,
+            max_seqlen_in_batch_k=max_seqlen_in_batch_k,
             causal=False,
         )
         attn_output = pad_input(attn_output_unpad, indices_q, batch_size, q_len)
 
     else:
-        attn_output = flash_attn_func(query_states, key_states, value_states, causal=True)
+        attn_output = _kernels_flash_forward(query_states, key_states, value_states, causal=True)
 
     return attn_output
 
@@ -941,6 +1072,7 @@ class E1Config(PretrainedConfig):
         rope_theta_within_seq=10000.0,
         rope_theta_global=100000.0,
         clip_qkv=None,
+        attn_backend="auto",
         **kwargs,
     ) -> None:
         tokenizer = get_tokenizer()
@@ -981,6 +1113,7 @@ class E1Config(PretrainedConfig):
         self.vocab_size = tokenizer.get_vocab_size()
         self.gradient_checkpointing = gradient_checkpointing
         self.no_ffn_gradient_checkpointing = no_ffn_gradient_checkpointing
+        self.attn_backend = attn_backend
 
         if vocab_size is not None:
             if vocab_size < self.vocab_size:
@@ -1183,18 +1316,16 @@ class KVCache:
         self.cache_dict[unique_context].batch_select_indices([0])
 
 
-class AttentionMethod(Enum):
-    FLASH = "flash"
-    FLEX = "flex"
-
-
 class AttentionLayerType(Enum):
     WITHIN_SEQ = "within_seq"
     GLOBAL = "global"
 
 
 class AttentionArgs(TypedDict, total=False):
-    flex_attention_args: FlexAttentionArgs
+    within_seq_block_mask: BlockMask | None
+    block_causal_block_mask: BlockMask | None
+    within_seq_mask_4d: torch.Tensor | None
+    block_causal_mask_4d: torch.Tensor | None
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -1315,6 +1446,8 @@ class Attention(nn.Module):
             self.head_dim, max_position_embeddings=self.max_position_embeddings, base=self.rope_theta
         )
 
+        self.attn_backend = resolve_attention_backend(config.attn_backend)
+
     def prepare_qkv(
         self,
         hidden_states: torch.Tensor,
@@ -1341,9 +1474,6 @@ class Attention(nn.Module):
         if use_cache and past_key_value is not None:
             key_states, val_states = past_key_value.update(key_states, val_states, self.layer_idx)
 
-        # In PEFT, usually we cast the layer norms in float32 for training stability reasons
-        # therefore the input hidden states gets silently casted in float32. Hence, we need
-        # cast them back in float16 just to be sure everything works as expected.
         input_dtype = query_states.dtype
         if torch.is_autocast_enabled():
             target_dtype = torch.get_autocast_gpu_dtype()
@@ -1370,8 +1500,9 @@ class Attention(nn.Module):
         attention_args: AttentionArgs | None = None,
         past_key_value: DynamicCache | None = None,
         output_attentions: bool = False,
+        output_s_max: bool = False,
         use_cache: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
         is_cache_prefilled = (
             use_cache and past_key_value is not None and past_key_value.get_seq_length(self.layer_idx) > 0
         )
@@ -1385,100 +1516,123 @@ class Attention(nn.Module):
             use_cache=use_cache,
         )
 
-        # Note: We fallback to using flash attention in inference mode when cache is filled with kv values
-        # for global attention layers instead of flex attention. This is because once the cache is filled,
-        # the last sequence attends to everything in the cache, so we can make things faster by using a
-        # bidirectional flash attention instead of block-causal flex attention.
-        if self.layer_type == AttentionLayerType.WITHIN_SEQ or is_cache_prefilled:
-            attention_type = AttentionMethod.FLASH
-        else:
-            attention_type = AttentionMethod.FLEX
-
-        attn_output, attn_weights = self._attn(
-            attention_type=attention_type,
+        attn_output, attn_weights, s_max = self._attn(
             query_states=query_states,
             key_states=key_states,
             val_states=val_states,
             sequence_ids=sequence_ids,
             attention_args=attention_args,
             output_attentions=output_attentions,
+            output_s_max=output_s_max,
+            is_cache_prefilled=is_cache_prefilled,
         )
 
         attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights, past_key_value
+        return attn_output, attn_weights, past_key_value, s_max
 
     def _attn(
         self,
-        attention_type: AttentionMethod,
         query_states: torch.Tensor,
         key_states: torch.Tensor,
         val_states: torch.Tensor,
         sequence_ids: torch.Tensor,
         attention_args: AttentionArgs | None = None,
         output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        match attention_type:
-            case AttentionMethod.FLASH:
-                f = self._flash_attn
-            case AttentionMethod.FLEX:
-                f = self._flex_attn
-            case _:
-                raise ValueError(f"No attention implementation found for {attention_type}")
-        return f(
-            query_states=query_states,
-            key_states=key_states,
-            val_states=val_states,
-            sequence_ids=sequence_ids,
-            attention_args=attention_args,
-            output_attentions=output_attentions,
-        )
+        output_s_max: bool = False,
+        is_cache_prefilled: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+        effective_layer_type = self.layer_type
+        if is_cache_prefilled and self.layer_type == AttentionLayerType.GLOBAL:
+            effective_layer_type = AttentionLayerType.WITHIN_SEQ
 
-    def _flash_attn(
+        if output_attentions:
+            return self._manual_attn(
+                query_states, key_states, val_states,
+                sequence_ids=sequence_ids,
+                attention_args=attention_args,
+                effective_layer_type=effective_layer_type,
+                output_s_max=output_s_max,
+                is_cache_prefilled=is_cache_prefilled,
+            )
+
+        if self.attn_backend == AttentionBackend.KERNELS_FLASH:
+            if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
+                attn_output, attn_weights = self._kernels_flash_attn(
+                    query_states, key_states, val_states,
+                    sequence_ids=sequence_ids,
+                    is_cache_prefilled=is_cache_prefilled,
+                )
+            else:
+                attn_output, attn_weights = self._flex_attn(
+                    query_states, key_states, val_states,
+                    attention_args=attention_args,
+                    effective_layer_type=effective_layer_type,
+                )
+        elif self.attn_backend == AttentionBackend.FLEX:
+            attn_output, attn_weights = self._flex_attn(
+                query_states, key_states, val_states,
+                attention_args=attention_args,
+                effective_layer_type=effective_layer_type,
+            )
+        elif self.attn_backend == AttentionBackend.SDPA:
+            attn_output, attn_weights = self._sdpa_attn(
+                query_states, key_states, val_states,
+                sequence_ids=sequence_ids,
+                attention_args=attention_args,
+                effective_layer_type=effective_layer_type,
+                is_cache_prefilled=is_cache_prefilled,
+            )
+        else:
+            raise AssertionError(f"Unsupported resolved backend: {self.attn_backend}")
+
+        s_max = self._compute_s_max(query_states, key_states) if output_s_max else None
+        return attn_output, attn_weights, s_max
+
+    @torch.no_grad()
+    def _compute_s_max(
+        self,
+        query_states: torch.Tensor,  # (B, L, H, D)
+        key_states: torch.Tensor,    # (B, L, Hkv, D)
+    ) -> list[torch.Tensor]:
+        query_BHLD = query_states.transpose(1, 2).contiguous()
+        key_BHLD = key_states.transpose(1, 2).contiguous()
+        key_BHLD = repeat_kv(key_BHLD, self.num_key_value_groups)
+        scale = 1.0 / (self.head_dim ** 0.5)
+        q_norm = torch.linalg.vector_norm(query_BHLD, dim=-1)
+        k_norm = torch.linalg.vector_norm(key_BHLD, dim=-1)
+        s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(dim=0).values * scale
+        return [s_max_bound[h] for h in range(self.num_heads)]
+
+    def _kernels_flash_attn(
         self,
         query_states: torch.Tensor,
         key_states: torch.Tensor,
         val_states: torch.Tensor,
         sequence_ids: torch.Tensor,
-        attention_args: AttentionArgs | None = None,
-        output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        """Flash attention implementation.
-
-        Calls the public API of flash attention and deals with padding tokens if any are present.
-        """
-        assert not output_attentions, "Flash attention doesn't support returning attention masks"
+        is_cache_prefilled: bool = False,
+    ) -> tuple[torch.Tensor, None]:
         bsz, q_len = query_states.shape[0], query_states.shape[1]
         _, kv_len = key_states.shape[0], key_states.shape[1]
 
-        if self.layer_type == AttentionLayerType.GLOBAL:  # Only happens in inference
+        if self.layer_type == AttentionLayerType.GLOBAL and not is_cache_prefilled:
             q_sequence_ids = sequence_ids
             if q_len < kv_len:
-                # Assumes query contain only one sequence
-                # and all tokens in query (except padding) will attend to all tokens in KV
                 first_token_id = sequence_ids[:, 0].unsqueeze(1)
                 k_sequence_ids = torch.cat([first_token_id.expand(bsz, kv_len - q_len), sequence_ids], dim=-1)
             else:
                 k_sequence_ids = sequence_ids
         else:
-            if q_len < kv_len:  # Only happens in inference
+            if q_len < kv_len:
                 key_states = key_states[:, -q_len:]
                 val_states = val_states[:, -q_len:]
             q_sequence_ids = k_sequence_ids = sequence_ids
 
-        if is_flash_attention_available():
-            attn_output = flash_attention_func(
-                query_states,
-                key_states,
-                val_states,
-                q_sequence_ids=q_sequence_ids,
-                k_sequence_ids=k_sequence_ids,
-                causal=False,
-            )
-        else:
-            attn_output = varlen_flex_attention_func(
-                query_states, key_states, val_states, q_sequence_ids=q_sequence_ids, k_sequence_ids=k_sequence_ids
-            )
-
+        attn_output = kernels_flash_attention_func(
+            query_states, key_states, val_states,
+            q_sequence_ids=q_sequence_ids,
+            k_sequence_ids=k_sequence_ids,
+            causal=False,
+        )
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         return attn_output, None
 
@@ -1487,18 +1641,94 @@ class Attention(nn.Module):
         query_states: torch.Tensor,
         key_states: torch.Tensor,
         val_states: torch.Tensor,
-        sequence_ids: torch.Tensor,
         attention_args: AttentionArgs | None = None,
-        output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
+    ) -> tuple[torch.Tensor, None]:
         bsz, q_len = query_states.shape[0], query_states.shape[1]
-        flex_attention_args = attention_args.get("flex_attention_args", None) if attention_args is not None else None
-        block_mask = flex_attention_args.get("block_mask", None) if flex_attention_args is not None else None
-        score_mod = flex_attention_args.get("score_mod", None) if flex_attention_args is not None else None
-        outputs = flex_attention_func(query_states, key_states, val_states, score_mod=score_mod, block_mask=block_mask)
-
+        if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
+            block_mask = attention_args["within_seq_block_mask"] if attention_args is not None else None
+        else:
+            block_mask = attention_args["block_causal_block_mask"] if attention_args is not None else None
+        outputs = flex_attention_func(query_states, key_states, val_states, block_mask=block_mask)
         outputs = outputs.reshape(bsz, q_len, self.hidden_size).contiguous()
         return outputs, None
+
+    def _sdpa_attn(
+        self,
+        query_states: torch.Tensor,   # (B, L, H, D)
+        key_states: torch.Tensor,      # (B, L, Hkv, D)
+        val_states: torch.Tensor,      # (B, L, Hkv, D)
+        sequence_ids: torch.Tensor,
+        attention_args: AttentionArgs | None = None,
+        effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
+        is_cache_prefilled: bool = False,
+    ) -> tuple[torch.Tensor, None]:
+        bsz, q_len = query_states.shape[:2]
+        kv_len = key_states.shape[1]
+
+        if is_cache_prefilled and q_len < kv_len:
+            if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
+                key_states = key_states[:, -q_len:]
+                val_states = val_states[:, -q_len:]
+            attention_mask_4d = build_within_seq_mask_4d(sequence_ids) if effective_layer_type == AttentionLayerType.WITHIN_SEQ else None
+        elif attention_args is not None:
+            if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
+                attention_mask_4d = attention_args["within_seq_mask_4d"]
+            else:
+                attention_mask_4d = attention_args["block_causal_mask_4d"]
+        else:
+            attention_mask_4d = None
+
+        query_BHLD = query_states.transpose(1, 2).contiguous()
+        key_BHLD = key_states.transpose(1, 2).contiguous()
+        val_BHLD = val_states.transpose(1, 2).contiguous()
+        key_BHLD = repeat_kv(key_BHLD, self.num_key_value_groups)
+        val_BHLD = repeat_kv(val_BHLD, self.num_key_value_groups)
+        context_BHLD = F.scaled_dot_product_attention(query_BHLD, key_BHLD, val_BHLD, attn_mask=attention_mask_4d)
+        attn_output = context_BHLD.transpose(1, 2).reshape(bsz, q_len, self.hidden_size).contiguous()
+        return attn_output, None
+
+    def _manual_attn(
+        self,
+        query_states: torch.Tensor,   # (B, L, H, D)
+        key_states: torch.Tensor,      # (B, L, Hkv, D)
+        val_states: torch.Tensor,      # (B, L, Hkv, D)
+        sequence_ids: torch.Tensor,
+        attention_args: AttentionArgs | None = None,
+        effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
+        output_s_max: bool = False,
+        is_cache_prefilled: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
+        bsz, q_len = query_states.shape[:2]
+        kv_len = key_states.shape[1]
+
+        if is_cache_prefilled and q_len < kv_len:
+            if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
+                key_states = key_states[:, -q_len:]
+                val_states = val_states[:, -q_len:]
+            attention_mask_4d = build_within_seq_mask_4d(sequence_ids) if effective_layer_type == AttentionLayerType.WITHIN_SEQ else None
+        elif attention_args is not None:
+            if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
+                attention_mask_4d = attention_args["within_seq_mask_4d"]
+            else:
+                attention_mask_4d = attention_args["block_causal_mask_4d"]
+        else:
+            attention_mask_4d = None
+
+        query_BHLD = query_states.transpose(1, 2).contiguous()
+        key_BHLD = key_states.transpose(1, 2).contiguous()
+        val_BHLD = val_states.transpose(1, 2).contiguous()
+        key_BHLD = repeat_kv(key_BHLD, self.num_key_value_groups)
+        val_BHLD = repeat_kv(val_BHLD, self.num_key_value_groups)
+        scale = 1.0 / (self.head_dim ** 0.5)
+        attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-2, -1)) * scale
+        if attention_mask_4d is not None:
+            attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
+        attn_weights = F.softmax(attn_weights, dim=-1)
+        context_BHLD = torch.matmul(attn_weights, val_BHLD)
+        attn_output = context_BHLD.transpose(1, 2).reshape(bsz, q_len, self.hidden_size).contiguous()
+        s_max = self._compute_s_max(query_states, key_states) if output_s_max else None
+        return attn_output, attn_weights, s_max
 
 
 class MLP(nn.Module):
@@ -1573,6 +1803,7 @@ class E1ModelOutputWithPast(ModelOutput):
     past_key_values: DynamicCache | None = None
     hidden_states: tuple[torch.FloatTensor, ...] | None = None
     attentions: tuple[torch.FloatTensor, ...] | None = None
+    s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
 @dataclass
@@ -1584,6 +1815,7 @@ class E1MaskedLMOutputWithPast(ModelOutput):
     past_key_values: DynamicCache | None = None
     hidden_states: tuple[torch.FloatTensor, ...] | None = None
     attentions: tuple[torch.FloatTensor, ...] | None = None
+    s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
 @dataclass
@@ -1594,6 +1826,7 @@ class E1ClassificationOutputWithPast(ModelOutput):
     past_key_values: DynamicCache | None = None
     hidden_states: tuple[torch.FloatTensor, ...] | None = None
     attentions: tuple[torch.FloatTensor, ...] | None = None
+    s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
 class RMSNorm(nn.Module):
@@ -1638,11 +1871,12 @@ class NormAttentionNorm(nn.Module):
         attention_args: AttentionArgs | None = None,
         past_key_value: DynamicCache | None = None,
         output_attentions: bool = False,
+        output_s_max: bool = False,
         use_cache: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, DynamicCache | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
+        hidden_states, self_attn_weights, present_key_value, s_max = self.self_attn(
             hidden_states=hidden_states,
             within_seq_position_ids=within_seq_position_ids,
             global_position_ids=global_position_ids,
@@ -1650,13 +1884,14 @@ class NormAttentionNorm(nn.Module):
             attention_args=attention_args,
             past_key_value=past_key_value,
             output_attentions=output_attentions,
+            output_s_max=output_s_max,
             use_cache=use_cache,
         )
         hidden_states = residual + hidden_states
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
-        return hidden_states, residual, self_attn_weights, present_key_value
+        return hidden_states, residual, self_attn_weights, present_key_value, s_max
 
 
 class DecoderLayer(nn.Module):
@@ -1676,9 +1911,10 @@ class DecoderLayer(nn.Module):
         attention_args: AttentionArgs | None = None,
         past_key_value: DynamicCache | None = None,
         output_attentions: bool = False,
+        output_s_max: bool = False,
         use_cache: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None]:
-        hidden_states, residual, self_attn_weights, present_key_value = self.norm_attn_norm(
+    ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
+        hidden_states, residual, self_attn_weights, present_key_value, s_max = self.norm_attn_norm(
             hidden_states=hidden_states,
             within_seq_position_ids=within_seq_position_ids,
             global_position_ids=global_position_ids,
@@ -1686,6 +1922,7 @@ class DecoderLayer(nn.Module):
             attention_args=attention_args,
             past_key_value=past_key_value,
             output_attentions=output_attentions,
+            output_s_max=output_s_max,
             use_cache=use_cache,
         )
 
@@ -1693,7 +1930,7 @@ class DecoderLayer(nn.Module):
         hidden_states = self.ffn(hidden_states)
         hidden_states = residual + hidden_states
 
-        return hidden_states, self_attn_weights, present_key_value
+        return hidden_states, self_attn_weights, present_key_value, s_max
 
 
 class E1PreTrainedModel(PreTrainedModel):
@@ -1730,6 +1967,23 @@ class E1PreTrainedModel(PreTrainedModel):
     def _device(self) -> torch.device:
         return next(self.parameters()).device
 
+    @property
+    def attn_backend(self) -> str:
+        return self.config.attn_backend
+
+    @attn_backend.setter
+    def attn_backend(self, backend: str) -> None:
+        assert backend in VALID_ATTENTION_BACKENDS, (
+            f"Unsupported attn_backend: {backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
+        )
+        self.config.attn_backend = backend
+        resolved = resolve_attention_backend(backend)
+        for module in self.modules():
+            if isinstance(module, FAST_E1_ENCODER):
+                module._attn_backend = resolved
+            elif isinstance(module, Attention):
+                module.attn_backend = resolved
+
 
 class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
     config: E1Config
@@ -1744,6 +1998,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = config.gradient_checkpointing
         self.prep_tokens = E1BatchPreparer()
+        self._attn_backend = resolve_attention_backend(config.attn_backend)
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Embedding:
@@ -1773,6 +2028,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
+        output_s_max: bool = False,
         **kwargs
     ) -> E1ModelOutputWithPast:
         """
@@ -1794,6 +2050,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             use_cache: bool
             output_attentions: bool
             output_hidden_states: bool
+            output_s_max: bool
 
         Returns:
             E1ModelOutputWithPast: Model Outputs
@@ -1810,7 +2067,6 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         if use_cache and past_key_values is None:
             past_key_values = DynamicCache()
         elif not use_cache:
-            # To avoid weirdness with gradient checkpointing: https://github.com/huggingface/transformers/issues/28499
             past_key_values = None
 
         global_position_ids = global_position_ids.view(-1, seq_length).long()
@@ -1824,29 +2080,37 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         )
 
         inputs_embeds = self.embed_tokens(input_ids)
-        # -1 is used to indicate padding tokens, so we need to clamp the sequence ids to 0
         inputs_embeds = inputs_embeds + self.embed_seq_id(sequence_ids.clamp(min=0))
 
-        # In case we need to do any manual typecasting
         if torch.is_autocast_enabled():
             target_dtype = torch.get_autocast_gpu_dtype()
         else:
             target_dtype = self.layers[0].norm_attn_norm.self_attn.q_proj.weight.dtype
         hidden_states = inputs_embeds.to(target_dtype)
 
-        # (batch_size, query_length, keyval_length)
         past_key_values_length = past_key_values.get_seq_length() if past_key_values is not None else 0
 
-        # Create block mask for flex attention
+        attn_backend = self._attn_backend
+        has_global_layers = self.config.global_attention_every_n_layers > 0
+        needs_4d_masks = (attn_backend == AttentionBackend.SDPA) or output_attentions
+        needs_block_causal_flex = (
+            (attn_backend == AttentionBackend.FLEX and has_global_layers)
+            or (attn_backend == AttentionBackend.KERNELS_FLASH and has_global_layers)
+        )
+        needs_within_seq_flex = (attn_backend == AttentionBackend.FLEX)
+
         attention_args: AttentionArgs | None = None
         if past_key_values_length == 0:
-            block_mask = create_block_causal_mask_optimized(sequence_ids)
-            flex_attention_args = FlexAttentionArgs(block_mask=block_mask)
-            attention_args = AttentionArgs(flex_attention_args=flex_attention_args)
+            attention_args = AttentionArgs(
+                block_causal_block_mask=create_block_causal_mask_optimized(sequence_ids) if needs_block_causal_flex else None,
+                within_seq_block_mask=create_within_seq_block_mask(sequence_ids) if needs_within_seq_flex else None,
+                within_seq_mask_4d=build_within_seq_mask_4d(sequence_ids) if needs_4d_masks else None,
+                block_causal_mask_4d=build_block_causal_mask_4d(sequence_ids) if needs_4d_masks else None,
+            )
 
-        # decoder layers
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
+        full_s_max = () if output_s_max else None
         next_decoder_cache = None
 
         for decoder_layer in self.layers:
@@ -1863,6 +2127,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                     attention_args,
                     past_key_values,
                     output_attentions,
+                    output_s_max,
                     use_cache,
                 )
             else:
@@ -1874,23 +2139,23 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                     attention_args=attention_args,
                     past_key_value=past_key_values,
                     output_attentions=output_attentions,
+                    output_s_max=output_s_max,
                     use_cache=use_cache,
                 )
 
-            hidden_states, self_attn_weights, present_key_value = layer_outputs
+            hidden_states, self_attn_weights, present_key_value, s_max = layer_outputs
 
             if use_cache:
-                # NOTE: it's necessary to re-assign past_key_values because FSDP2
-                # passes certain arguments by value, not by reference.
-                # See https://github.com/huggingface/transformers/issues/38190#issuecomment-2914016168
                 next_decoder_cache = past_key_values = present_key_value
 
             if output_attentions:
                 all_self_attns += (self_attn_weights,)  # type: ignore[operator]
 
+            if full_s_max is not None:
+                full_s_max += (s_max,)  # type: ignore[operator]
+
         hidden_states = self.norm(hidden_states)
 
-        # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)  # type: ignore[operator]
 
@@ -1901,6 +2166,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             past_key_values=next_cache,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
+            s_max=full_s_max,
         )
 
 
@@ -1934,6 +2200,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
+        output_s_max: bool = False,
         **kwargs,
     ) -> E1ModelOutputWithPast:
         return self.model(
@@ -1945,6 +2212,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_s_max=output_s_max,
             **kwargs,
         )
 
@@ -1991,6 +2259,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
+        output_s_max: bool = False,
         **kwargs,
     ) -> E1MaskedLMOutputWithPast:
         """
@@ -2013,6 +2282,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
             use_cache: bool
             output_attentions: bool
             output_hidden_states: bool
+            output_s_max: bool
 
         Returns:
             E1MaskedLMOutputWithPast: Model Outputs
@@ -2026,12 +2296,12 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_s_max=output_s_max,
         )
 
         last_hidden_state = outputs.last_hidden_state
         loss = None
 
-        # Compute masked language modeling loss
         mlm_logits = self.mlm_head(last_hidden_state).float()
         mlm_loss = 0.0
         if labels is not None:
@@ -2052,6 +2322,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            s_max=outputs.s_max,
         )
 
 
@@ -2107,6 +2378,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
+        output_s_max: bool = False,
         **kwargs,
     ) -> E1ClassificationOutputWithPast:
         outputs: E1ModelOutputWithPast = self.model(
@@ -2118,6 +2390,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_s_max=output_s_max,
         )
 
         attention_mask = (sequence_ids != -1).long()
@@ -2152,6 +2425,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            s_max=outputs.s_max,
         )
 
 
@@ -2199,6 +2473,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
+        output_s_max: bool = False,
         **kwargs,
     ) -> E1ClassificationOutputWithPast:
         outputs: E1ModelOutputWithPast = self.model(
@@ -2210,6 +2485,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
             use_cache=use_cache,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
+            output_s_max=output_s_max,
         )
 
         x = outputs.last_hidden_state
@@ -2225,6 +2501,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            s_max=outputs.s_max,
         )
 
 
