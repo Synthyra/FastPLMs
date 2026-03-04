@@ -10,20 +10,26 @@ The GitHub with the implementation and requirements.txt can be found [here](http
 [ESM++](https://github.com/Synthyra/ESMplusplus) is a faithful implementation of [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) ([license](https://www.evolutionaryscale.ai/policies/cambrian-open-license-agreement)) that allows for batching and standard Huggingface compatibility without requiring the ESM Python package.
 The small version corresponds to the 300 million parameter version of ESMC.
 
-## Attention backend defaults
-`sdpa` is the default attention backend for ESM++.
+## Attention backends
 
-To enable Flex Attention, set `attn_backend="flex"` in the config before loading the model:
+`sdpa` (PyTorch Scaled Dot Product Attention) is the default. The backend is set via `config.attn_backend` before loading.
+
+| Backend | Key | Notes |
+| :--- | :--- | :--- |
+| PyTorch SDPA | `"sdpa"` | Default. Exact numerics, stable on all hardware. |
+| Flash Attention | `"kernels_flash"` | Fastest on Ampere/Hopper GPUs. Requires `pip install kernels` (pre-built — no hours-long compilation). Outputs are not bitwise identical to SDPA due to online softmax reordering; differences are often small but not guaranteed to be inconsequential — use `"sdpa"` if exact numerics matter. |
+| Flex Attention | `"flex"` | Skips padding tokens via block mask — faster on variable-length batches. Near-exact numerics. First use compiles a Triton kernel (30–120 s). Best combined with `torch.compile`. |
+| Auto | `"auto"` | Picks the best available: `kernels_flash` → `flex` → `sdpa`. |
 
 ```python
 from transformers import AutoConfig, AutoModelForMaskedLM
 
 config = AutoConfig.from_pretrained('Synthyra/ESMplusplus_small', trust_remote_code=True)
-config.attn_backend = "flex"
+config.attn_backend = "flex"  # or "kernels_flash", "sdpa", "auto"
 model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_small', config=config, trust_remote_code=True)
 ```
 
-For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when using Flex Attention.
+`torch.compile(model)` is heavily recommended for sustained throughput, especially with Flex Attention.
 
 
 ## Use with 🤗 transformers

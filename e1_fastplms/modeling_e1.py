@@ -495,25 +495,35 @@ class AttentionBackend(Enum):
 VALID_ATTENTION_BACKENDS = tuple(b.value for b in AttentionBackend)
 
 
+_BACKEND_CONFIRMED = False
+
+
 def resolve_attention_backend(requested_backend: str) -> AttentionBackend:
+    global _BACKEND_CONFIRMED
     assert requested_backend in VALID_ATTENTION_BACKENDS, (
         f"Unsupported attention backend: {requested_backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
     )
     if requested_backend == AttentionBackend.AUTO.value:
         if FLASH_KERNEL is not None:
-            return AttentionBackend.KERNELS_FLASH
-        if flex_attention is not None:
-            return AttentionBackend.FLEX
-        return AttentionBackend.SDPA
-    if requested_backend == AttentionBackend.KERNELS_FLASH.value:
+            resolved = AttentionBackend.KERNELS_FLASH
+        elif flex_attention is not None:
+            resolved = AttentionBackend.FLEX
+        else:
+            resolved = AttentionBackend.SDPA
+    elif requested_backend == AttentionBackend.KERNELS_FLASH.value:
         assert FLASH_KERNEL is not None, "Kernels Flash Attention is not available in this environment."
-        return AttentionBackend.KERNELS_FLASH
-    if requested_backend == AttentionBackend.FLEX.value:
+        resolved = AttentionBackend.KERNELS_FLASH
+    elif requested_backend == AttentionBackend.FLEX.value:
         assert flex_attention is not None, "Flex Attention is not available in this environment."
-        return AttentionBackend.FLEX
-    if requested_backend == AttentionBackend.SDPA.value:
-        return AttentionBackend.SDPA
-    raise AssertionError(f"Unsupported attention backend: {requested_backend}")
+        resolved = AttentionBackend.FLEX
+    elif requested_backend == AttentionBackend.SDPA.value:
+        resolved = AttentionBackend.SDPA
+    else:
+        raise AssertionError(f"Unsupported attention backend: {requested_backend}")
+    if not _BACKEND_CONFIRMED:
+        print(f"Attention backend: config='{requested_backend}' -> resolved='{resolved.value}'")
+        _BACKEND_CONFIRMED = True
+    return resolved
 
 
 def create_block_causal_mask_optimized(sequence_ids: torch.Tensor) -> BlockMask:
@@ -1072,7 +1082,7 @@ class E1Config(PretrainedConfig):
         rope_theta_within_seq=10000.0,
         rope_theta_global=100000.0,
         clip_qkv=None,
-        attn_backend="auto",
+        attn_backend="sdpa",
         **kwargs,
     ) -> None:
         tokenizer = get_tokenizer()

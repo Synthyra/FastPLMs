@@ -11,14 +11,28 @@ FastESM is a Huggingface compatible plug in version of ESM2 rewritten with a new
 
 Load any ESM2 models into a FastEsm model to dramatically speed up training and inference without **ANY** cost in performance.
 
-## Attention backend defaults
-`sdpa` is the default attention backend for FastESM.
+## Attention backends
 
-To enable Flex Attention, set `attn_backend="flex"` on the config before model initialization/loading.
+`sdpa` (PyTorch Scaled Dot Product Attention) is the default. It is fast, memory-efficient, and numerically equivalent to naive attention. The backend is set via `config.attn_backend` before loading.
 
-For throughput and memory efficiency, `torch.compile(...)` is heavily recommended, especially when using Flex Attention.
+| Backend | Key | Notes |
+| :--- | :--- | :--- |
+| PyTorch SDPA | `"sdpa"` | Default. Exact numerics, stable on all hardware. |
+| Flash Attention | `"kernels_flash"` | Fastest. Requires `pip install kernels` (pre-built — no hours-long compilation). Outputs are not bitwise identical to SDPA due to online softmax reordering; differences are often small but not guaranteed to be inconsequential — use `"sdpa"` if exact numerics matter. |
+| Flex Attention | `"flex"` | Skips padding tokens via block mask — faster on variable-length batches. Near-exact numerics. First use compiles a Triton kernel (30–120 s). |
+| Auto | `"auto"` | Picks the best available: `kernels_flash` → `flex` → `sdpa`. |
 
-Outputting attention maps (or the contact prediction head) is not natively possible with the optimized attention backends (including Flex Attention). You can still pass ```output_attentions``` to have attention calculated manually and returned.
+```python
+from transformers import AutoConfig, AutoModel
+
+config = AutoConfig.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
+config.attn_backend = "flex"  # or "kernels_flash", "sdpa", "auto"
+model = AutoModel.from_pretrained("Synthyra/ESM2-150M", config=config, trust_remote_code=True)
+```
+
+`torch.compile(model)` is heavily recommended for sustained throughput, especially with Flex Attention.
+
+Attention maps (`output_attentions=True`) are supported with all backends. For SDPA, Flash, and Flex, the attention weights are computed via a separate naive pass, so there is no memory benefit to enabling it during normal inference.
 Various other optimizations also make the base implementation slightly different than the one in transformers.
 
 ## Use with 🤗 transformers

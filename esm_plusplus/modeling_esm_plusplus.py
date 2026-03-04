@@ -593,25 +593,35 @@ class AttentionBackend(Enum):
 VALID_ATTENTION_BACKENDS = tuple(b.value for b in AttentionBackend)
 
 
+_BACKEND_CONFIRMED = False
+
+
 def resolve_attention_backend(requested_backend: str) -> AttentionBackend:
+    global _BACKEND_CONFIRMED
     assert requested_backend in VALID_ATTENTION_BACKENDS, (
         f"Unsupported attention backend: {requested_backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
     )
     if requested_backend == AttentionBackend.AUTO.value:
         if FLASH_KERNEL is not None:
-            return AttentionBackend.KERNELS_FLASH
-        if flex_attention is not None:
-            return AttentionBackend.FLEX
-        return AttentionBackend.SDPA
-    if requested_backend == AttentionBackend.KERNELS_FLASH.value:
+            resolved = AttentionBackend.KERNELS_FLASH
+        elif flex_attention is not None:
+            resolved = AttentionBackend.FLEX
+        else:
+            resolved = AttentionBackend.SDPA
+    elif requested_backend == AttentionBackend.KERNELS_FLASH.value:
         assert FLASH_KERNEL is not None, "Kernels Flash Attention is not available in this environment."
-        return AttentionBackend.KERNELS_FLASH
-    if requested_backend == AttentionBackend.FLEX.value:
+        resolved = AttentionBackend.KERNELS_FLASH
+    elif requested_backend == AttentionBackend.FLEX.value:
         assert flex_attention is not None, "Flex Attention is not available in this environment."
-        return AttentionBackend.FLEX
-    if requested_backend == AttentionBackend.SDPA.value:
-        return AttentionBackend.SDPA
-    raise AssertionError(f"Unsupported attention backend: {requested_backend}")
+        resolved = AttentionBackend.FLEX
+    elif requested_backend == AttentionBackend.SDPA.value:
+        resolved = AttentionBackend.SDPA
+    else:
+        raise AssertionError(f"Unsupported attention backend: {requested_backend}")
+    if not _BACKEND_CONFIRMED:
+        print(f"Attention backend: config='{requested_backend}' -> resolved='{resolved.value}'")
+        _BACKEND_CONFIRMED = True
+    return resolved
 
 
 def get_attention_mask(
@@ -670,7 +680,7 @@ class ESMplusplusConfig(PretrainedConfig):
         problem_type: str | None = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
-        attn_backend: str = "auto",
+        attn_backend: str = "sdpa",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -913,7 +923,7 @@ class MultiHeadAttention(nn.Module):
         self,
         d_model: int,
         n_heads: int,
-        attn_backend: str = "auto",
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.d_model = d_model
@@ -1089,7 +1099,7 @@ class UnifiedTransformerBlock(nn.Module):
         residue_scaling_factor: float = 1,
         expansion_ratio: float = 8 / 3,
         dropout: float = 0.0,
-        attn_backend: str = "auto",
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.attn = MultiHeadAttention(d_model=d_model, n_heads=n_heads, attn_backend=attn_backend)
@@ -1149,7 +1159,7 @@ class TransformerStack(nn.Module):
         n_heads: int,
         n_layers: int,
         dropout: float = 0.0,
-        attn_backend: str = "auto",
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.attention_backend = resolve_attention_backend(attn_backend)

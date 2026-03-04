@@ -39,8 +39,31 @@ with torch.no_grad():
 ## DPLM2 modality types
 DPLM2 infers `type_ids` automatically from `input_ids` and `attention_mask` when they are not provided.
 
-## Attention backend
-`sdpa` is the default backend. Flex Attention is available by setting `config.attn_backend = "flex"` before loading.
+## Attention backends
+
+`sdpa` (PyTorch Scaled Dot Product Attention) is the default.
+
+| Backend | Key | Notes |
+| :--- | :--- | :--- |
+| PyTorch SDPA | `"sdpa"` | Default. Exact numerics, stable on all hardware. |
+| Flash Attention | `"kernels_flash"` | Fastest on Ampere/Hopper GPUs. Requires `pip install kernels` (pre-built — no hours-long compilation). Outputs are not bitwise identical to SDPA due to online softmax reordering; differences are often small but not guaranteed to be inconsequential — use `"sdpa"` if exact numerics matter. |
+| Flex Attention | `"flex"` | Skips padding tokens via block mask — faster on variable-length batches. Near-exact numerics. First use compiles a Triton kernel (30–120 s). Best combined with `torch.compile`. |
+| Auto | `"auto"` | Picks the best available: `kernels_flash` → `flex` → `sdpa`. |
+
+Set via config before loading, or change on the model after loading (DPLM2 propagates the change to all attention layers immediately):
+
+```python
+from transformers import AutoConfig, AutoModel
+
+# Option 1: set before loading
+config = AutoConfig.from_pretrained("Synthyra/DPLM2-150M", trust_remote_code=True)
+config.attn_backend = "flex"
+model = AutoModel.from_pretrained("Synthyra/DPLM2-150M", config=config, trust_remote_code=True)
+
+# Option 2: set after loading
+model = AutoModel.from_pretrained("Synthyra/DPLM2-150M", trust_remote_code=True)
+model.attn_backend = "flex"  # propagates to all attention layers in-place
+```
 
 ## Embed datasets
 All DPLM2 models inherit `EmbeddingMixin`, so you can call `model.embed_dataset(...)` directly.
