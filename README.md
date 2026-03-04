@@ -9,7 +9,7 @@ FastPLMs is an open-source initiative dedicated to accelerating pretrained prote
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Supported Models](#supported-models)
-3. [Efficiency: Flex & Flash Attention](#efficiency-flex--flash-attention)
+3. [Attention Backends](#attention-backends)
 4. [Embedding & Pooling](#embedding--pooling)
 5. [Concrete Examples](#concrete-examples)
 6. [Testing & Benchmarking](#testing--benchmarking)
@@ -72,25 +72,69 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 
 ---
 
-## Efficiency: Flex & Flash Attention
+## Attention Backends
 
-### Flash Attention (SDPA)
-We use PyTorch's `Scaled Dot Product Attention` (SDPA) as the default backend for most models. It provides significant speedups over native implementations while maintaining stability across different GPU architectures.
+All FastPLMs models share a common set of attention backends, controlled via `config.attn_backend`. The default is `"sdpa"`, which is safe on all hardware and numerically equivalent to standard attention.
 
-### Flex Attention
-**Flex Attention** is a cutting-edge mechanism in PyTorch that allows for:
-- **Dynamic Masking**: Efficiently ignoring padding without redundant compute.
-- **Custom Patterns**: Supporting specialized masks (like E1's block-causal) with native performance.
-- **Extreme Speed**: When combined with `torch.compile`, Flex Attention often provides the best possible throughput.
+### Backend Comparison
 
-**To enable Flex Attention:**
+| Backend | Key | Speed | Numerical Equivalence | Availability |
+| :--- | :--- | :--- | :--- | :--- |
+| PyTorch SDPA | `"sdpa"` | Fast | Exact | Any PyTorch ≥ 2.0 |
+| Flash Attention | `"kernels_flash"` | Fastest | Approximate | Requires `pip install kernels` (pre-built) |
+| Flex Attention | `"flex"` | Very fast | ~Exact | Requires PyTorch ≥ 2.5 |
+| Auto | `"auto"` | — | — | Always (selects best available) |
+
+### SDPA (default)
+
+PyTorch's [`scaled_dot_product_attention`](https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html) dispatches to a fused CUDA kernel (cuDNN or efficient attention) that is faster and more memory-efficient than naive attention, while being mathematically identical to it. This is the recommended default for reproducibility and general use. It is also the only backend where `output_attentions=True` is handled natively; with other backends, attentions are computed via a separate naive matrix multiplication when requested.
+
+### Flash Attention (`kernels_flash`)
+
+Flash Attention 2 and 3 are typically the fastest options on Ampere (A100) and Hopper (H100) GPUs, often 2–4× faster than SDPA at long sequence lengths. Flash Attention achieves this by tiling the computation and applying an online softmax, which means the results are **not bitwise identical** to SDPA or naive attention. Differences are on the order of floating-point rounding and are often inconsequential for standard inference — but they are not guaranteed to be so. They can compound across layers, interact with low-precision dtypes (fp16/bf16), or affect sensitive downstream tasks. Flash Attention is standard practice in large model training and the trade-off is well understood, but it should not be treated as a drop-in numerical equivalent of SDPA. If exact reproducibility or numerical sensitivity is a concern, use `"sdpa"` instead.
+
+**No compilation required.** FastPLMs uses the HuggingFace [`kernels`](https://github.com/huggingface/kernels) package to load pre-built Flash Attention 2/3 binaries at runtime — no C++ compiler, no CUDA toolkit version pinning, no waiting:
+
+```
+pip install kernels
+```
+
+Building `flash-attn` from source is notoriously painful. The Ninja build system parallelizes aggressively across all available CPU cores, and each NVCC/CICC compiler process it spawns can consume **5–8 GB of RAM on its own**. On a 64-core machine this can push peak RAM usage to **~300 GB**, and even on a throttled single-threaded build (`MAX_JOBS=1 NVCC_THREADS=1`) the compile still takes **many hours** while grinding through paging. Pre-built community wheels cover 384+ version/GPU/CUDA/platform combinations and still routinely fall short of matching a user's exact environment. This is the point where most people give up and go without Flash Attention entirely. The `kernels` package sidesteps all of this by fetching a pre-compiled binary matched to your GPU architecture (SM80 for Ampere, SM90 for Hopper). If no compatible binary exists for your hardware, it gracefully falls back to `flex` or `sdpa` rather than erroring.
+
+### Flex Attention (`flex`)
+
+PyTorch's [`flex_attention`](https://pytorch.org/docs/stable/nn.attention.flex_attention.html) (PyTorch ≥ 2.5) generates a fused Triton kernel customized to the mask pattern at hand. It is numerically very close to SDPA — typically within floating-point rounding of naive computation. The primary advantage is that it can apply a **block mask** that skips padding tokens entirely, providing a meaningful speedup on batches with variable-length sequences (no compute wasted on padding). E1 uses a block-causal variant of this mask.
+
+The **first forward pass** triggers JIT compilation via Triton, which can take 30–120 seconds. All subsequent calls are fast. Combining with `torch.compile` yields the best sustained throughput.
+
+### Auto (`auto`)
+
+Automatically selects the best available backend in order of preference: `kernels_flash` → `flex` → `sdpa`. Useful when you want maximum speed without configuring the environment manually, and you accept that the resolved backend may differ across machines.
+
+### Setting the Backend
+
+**At load time (all models):**
 ```python
 from transformers import AutoConfig, AutoModel
 
-config = AutoConfig.from_pretrained("Synthyra/ESMplusplus_small", trust_remote_code=True)
-config.attn_backend = "flex"
-model = AutoModel.from_pretrained("Synthyra/ESMplusplus_small", config=config, trust_remote_code=True)
+config = AutoConfig.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
+config.attn_backend = "flex"  # "sdpa", "kernels_flash", "flex", or "auto"
+model = AutoModel.from_pretrained("Synthyra/ESM2-150M", config=config, trust_remote_code=True)
 ```
+
+**After load time (DPLM and DPLM2 only):**
+
+DPLM and DPLM2 expose an `attn_backend` property on the model that propagates the change to all attention layers immediately:
+```python
+model = AutoModel.from_pretrained("Synthyra/DPLM-150M", trust_remote_code=True)
+model.attn_backend = "flex"  # updates every attention layer in-place
+```
+
+For ESM2, E1, and ESM++, the backend must be set on the config before calling `from_pretrained`.
+
+### Returning Attention Maps
+
+All backends support `output_attentions=True`. For the optimized backends (SDPA, Flash Attention, Flex), attention weights are computed via a separate naive matrix multiplication and appended to the output — so enabling this negates the memory savings of those backends. Use it only for inspection or contact prediction, not during high-throughput inference.
 
 ---
 

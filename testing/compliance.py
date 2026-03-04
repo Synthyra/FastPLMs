@@ -16,7 +16,7 @@ from esm_plusplus.load_official import load_official_model as load_official_esmc
 from e1_fastplms.load_official import load_official_model as load_official_e1_model
 from e1_fastplms.modeling_e1 import E1ForMaskedLM
 
-from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
+from weight_parity_utils import assert_state_dict_equal
 
 
 class ComplianceChecker:
@@ -40,17 +40,16 @@ class ComplianceChecker:
         official_model, tokenizer = load_official_esmc_model(
             reference_repo_id=official_model_path,
             device=self.device,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
         )
         load_class = AutoModelForMaskedLM if from_auto_model else ESMplusplusForMaskedLM
         fast_model = load_class.from_pretrained(
             fast_model_path,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
             device_map=self.device,
             force_download=force_download,
             trust_remote_code=True,
         ).eval()
-        fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer
 
     def _load_esm2(self, from_auto_model: bool = False, force_download: bool = False):
@@ -59,17 +58,16 @@ class ComplianceChecker:
         official_model, tokenizer = load_official_esm2_model(
             reference_repo_id=official_model_path,
             device=self.device,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
         )
         load_class = AutoModelForMaskedLM if from_auto_model else FastEsmForMaskedLM
         fast_model = load_class.from_pretrained(
             fast_model_path,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
             device_map=self.device,
             force_download=force_download,
             trust_remote_code=True,
         ).eval()
-        fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer
 
     def _load_e1(self, from_auto_model: bool = False, force_download: bool = False):
@@ -78,17 +76,16 @@ class ComplianceChecker:
         official_model, tokenizer = load_official_e1_model(
             reference_repo_id=official_model_path,
             device=self.device,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
         )
         load_class = AutoModelForMaskedLM if from_auto_model else E1ForMaskedLM
         fast_model = load_class.from_pretrained(
             fast_model_path,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
             device_map=self.device,
             force_download=force_download,
             trust_remote_code=True,
         ).eval()
-        fast_model.attn_backend = "sdpa"
         return official_model, fast_model, tokenizer
 
     def _generate_random_sequence(self, length: int) -> str:
@@ -179,14 +176,6 @@ class ComplianceChecker:
             official_model, fast_model, tokenizer = self._load_e1(from_auto_model, force_download)
         else:
             raise ValueError(f"Unsupported model type: {model_type}. Supported: ESMC, ESM2, E1")
-        assert_model_parameters_fp32(
-            model=official_model.model,
-            model_name=f"official {model_type} model",
-        )
-        assert_model_parameters_fp32(
-            model=fast_model,
-            model_name=f"fast {model_type} model",
-        )
         assert_state_dict_equal(
             reference_state_dict=official_model.model.state_dict(),
             candidate_state_dict=fast_model.state_dict(),

@@ -11,7 +11,7 @@ FastESM is a Huggingface compatible plug in version of ESM2 rewritten with a new
 
 Load any ESM2 models into a FastEsm model to dramatically speed up training and inference without **ANY** cost in performance.
 
-Outputting attention maps (or the contact prediction head) is not natively possible with SDPA. You can still pass ```output_attentions``` to have attention calculated manually and returned.
+The default attention backend is `sdpa`. See the [FastPLMs README](https://github.com/Synthyra/FastPLMs) for a full breakdown of available backends (`sdpa`, `kernels_flash`, `flex`, `auto`) and how to switch between them. Attention maps (`output_attentions=True`) are supported on all backends via a separate naive computation.
 Various other optimizations also make the base implementation slightly different than the one in transformers.
 
 # FastESM2-650

@@ -1,15 +1,18 @@
 import entrypoint_setup
 
-import time
-import torch
-import random
+import argparse
 import copy
-import numpy as np
+import random
+import time
+from pathlib import Path
+
 import matplotlib.pyplot as plt
-import seaborn as sns
+import numpy as np
 import pandas as pd
-from transformers import AutoModelForMaskedLM
+import seaborn as sns
+import torch
 from tqdm.auto import tqdm
+from transformers import AutoModelForMaskedLM
 
 
 def set_seed(seed: int):
@@ -18,6 +21,9 @@ def set_seed(seed: int):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
+
+
+SUPPORTED_BACKENDS = ("sdpa", "flex", "kernels_flash")
 
 
 class ThroughputChecker:
@@ -41,11 +47,14 @@ class ThroughputChecker:
         return model
 
     def _generate_random_sequence(self, length: int) -> str:
-        return 'M' + "".join(random.choices(self.canonical_amino_acids, k=length-1))
-    
+        return "M" + "".join(random.choices(self.canonical_amino_acids, k=length - 1))
+
     def _generate_random_batch(self, batch_size: int, min_length: int, max_length: int) -> list[str]:
         max_length_example = self._generate_random_sequence(max_length)
-        return [max_length_example] + [self._generate_random_sequence(random.randint(min_length, max_length)) for _ in range(batch_size-1)]
+        return [max_length_example] + [
+            self._generate_random_sequence(random.randint(min_length, max_length))
+            for _ in range(batch_size - 1)
+        ]
 
     @torch.inference_mode()
     def _time(self, model, tokenizer, batch_size: int, min_length: int, max_length: int):
@@ -70,13 +79,10 @@ class ThroughputChecker:
                 truncation=True,
                 add_special_tokens=True,
             )
-            # Count the number of non-pad tokens in the batch.
             input_ids = tokenized["input_ids"]
             if "attention_mask" in tokenized:
-                attention_mask = tokenized["attention_mask"]
-                nonpad_tokens_this = attention_mask.sum().item()
+                nonpad_tokens_this = tokenized["attention_mask"].sum().item()
             else:
-                # Fallback: count non-<pad> tokens (assuming pad_token_id exists).
                 pad_token_id = tokenizer.pad_token_id
                 if pad_token_id is not None:
                     nonpad_tokens_this = (input_ids != pad_token_id).sum().item()
@@ -126,78 +132,111 @@ class ThroughputChecker:
             torch.cuda.empty_cache()
         return time_taken, timed_tokens_sum
 
-    def evaluate(self, model_path: str, batch_sizes: list[int], min_length: int, sequence_lengths: list[int]):
-        results = {"sdpa": {}, "flex": {}}
-        
+    def evaluate(self, model_path: str, batch_sizes: list[int], min_length: int, sequence_lengths: list[int], backends: list[str]):
+        results = {backend: {} for backend in backends}
+
         original_model = self._load_model(model_path)
         tokenizer = original_model.tokenizer
-        
-        print(f"Benchmarking {model_path} with SDPA...")
-        for bs in batch_sizes:
-            for max_length in sequence_lengths:
-                original_model.attn_backend = "sdpa"
-                t, tokens = self._time(copy.deepcopy(original_model), tokenizer, bs, min_length, max_length)
-                results["sdpa"][(bs, max_length)] = {"time": t, "tokens": tokens}
 
-        print(f"Benchmarking {model_path} with Flex...")
-        for bs in batch_sizes:
-            for max_length in sequence_lengths:
-                original_model.attn_backend = "flex"
-                t, tokens = self._time(copy.deepcopy(original_model), tokenizer, bs, min_length, max_length)
-                results["flex"][(bs, max_length)] = {"time": t, "tokens": tokens}
-        
+        for backend in backends:
+            print(f"Benchmarking {model_path} with backend={backend}")
+            try:
+                backend_model = copy.deepcopy(original_model)
+                backend_model.attn_backend = backend
+            except AssertionError as error:
+                print(f"Skipping backend '{backend}' for {model_path}: {error}")
+                continue
+
+            for bs in batch_sizes:
+                for max_length in sequence_lengths:
+                    model_copy = copy.deepcopy(backend_model)
+                    time_taken, tokens = self._time(
+                        model_copy,
+                        tokenizer,
+                        bs,
+                        min_length,
+                        max_length,
+                    )
+                    results[backend][(bs, max_length)] = {"time": time_taken, "tokens": tokens}
+
         original_model.cpu()
         del original_model
-        torch.cuda.empty_cache()
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
         return results
 
 
 def plot_results(all_results: dict, output_path: str):
     sns.set_theme(style="whitegrid")
     plot_data = []
-    
+
     for model_path, results in all_results.items():
-        model_name = model_path.split("/")[-1]
-        for backend in ["sdpa", "flex"]:
+        model_name = Path(model_path).name
+        for backend in sorted(results.keys()):
             for (bs, max_length), entry in results[backend].items():
-                t = entry["time"]
+                time_taken = entry["time"]
                 nonpad_tokens = entry["tokens"]
-                tokens_per_sec = nonpad_tokens / t if t > 0 else 0.0
-                plot_data.append({
-                    "Model": f"{model_name} ({backend})",
-                    "Combination": f"BS={bs}, L={max_length}",
-                    "Tokens/s": tokens_per_sec,
-                    "BS": bs,
-                    "L": max_length
-                })
-    
+                tokens_per_sec = nonpad_tokens / time_taken if time_taken > 0 else 0.0
+                plot_data.append(
+                    {
+                        "Model": model_name,
+                        "Backend": backend,
+                        "Batch": bs,
+                        "SeqLen": max_length,
+                        "TokensPerSec": tokens_per_sec,
+                        "NonPadTokens": nonpad_tokens,
+                        "Seconds": time_taken,
+                    }
+                )
+
     if not plot_data:
         return
 
-    # Convert list of dicts to pandas DataFrame
     plot_df = pd.DataFrame(plot_data)
+    sequence_lengths = sorted(plot_df["SeqLen"].dropna().unique().tolist())
 
-    plt.figure(figsize=(12, 6))
-    # Sort by BS then L for the x-axis labels
-    combinations = sorted(list(set(d["Combination"] for d in plot_data)), 
-                         key=lambda x: (int(x.split("=")[1].split(",")[0]), int(x.split("=")[2].split(",")[0])))
-
-    sns.barplot(data=plot_df, x="Combination", y="Tokens/s", hue="Model", order=combinations)
-    plt.title("Model Throughput Comparison (Non-pad Tokens/s): SDPA vs Flex")
-    plt.ylabel("Tokens/s")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+    plot = sns.relplot(
+        data=plot_df,
+        x="SeqLen",
+        y="TokensPerSec",
+        hue="Backend",
+        style="Batch",
+        kind="line",
+        marker="o",
+        dashes=False,
+        col="Model",
+        col_wrap=1,
+        height=4.5,
+        aspect=1.5,
+        facet_kws={"sharey": False},
+    )
+    plot.set_titles("{col_name}")
+    plot.set(xticks=sequence_lengths)
+    plot.set_axis_labels("Sequence length", "Non-pad tokens/s")
+    plot.figure.suptitle("Throughput comparison by model")
+    plot.tight_layout()
+    plot.figure.subplots_adjust(top=0.93, right=0.95, bottom=0.06)
+    plot.add_legend(title="Backend / Batch")
     plt.savefig(output_path, dpi=300)
     print(f"Results saved to {output_path}")
 
 
 if __name__ == "__main__":
-    import argparse
+    # On Windows, use "%cd%" instead of "${PWD}" to get the current working directory:
+    # docker run --gpus all -v "%cd%":/workspace fastplms python -m testing.throughput
+    # On Linux/macOS, keep using ${PWD}:
+    # docker run --gpus all -v ${PWD}:/workspace fastplms python -m testing.throughput
     parser = argparse.ArgumentParser()
     parser.add_argument("--hf_token", type=str, default=None)
-    parser.add_argument("--model_paths", nargs="+", default=["Synthyra/ESM2-8M", "Synthyra/ESMplusplus_small"])
+    parser.add_argument(
+        "--model_paths",
+        nargs="+",
+        default=["Synthyra/ESM2-8M", "Synthyra/ESMplusplus_small"],
+    )
     parser.add_argument("--batch_sizes", nargs="+", type=int, default=[2, 4, 8])
     parser.add_argument("--sequence_lengths", nargs="+", type=int, default=[64, 128, 256, 512, 1024, 2048])
+    parser.add_argument("--backends", nargs="+", choices=SUPPORTED_BACKENDS, default=list(SUPPORTED_BACKENDS))
+    parser.add_argument("--min_length", type=int, default=32)
     parser.add_argument("--warmup_batches", type=int, default=10)
     parser.add_argument("--timed_batches", type=int, default=100)
     parser.add_argument("--output_path", type=str, default="throughput_comparison.png")
@@ -205,12 +244,19 @@ if __name__ == "__main__":
 
     if args.hf_token:
         from huggingface_hub import login
+
         login(token=args.hf_token)
 
     checker = ThroughputChecker(warmup_batches=args.warmup_batches, timed_batches=args.timed_batches)
-    
+
     all_results = {}
-    for path in args.model_paths:
-        all_results[path] = checker.evaluate(path, args.batch_sizes, min_length=32, sequence_lengths=args.sequence_lengths)
-    
+    for model_path in args.model_paths:
+        all_results[model_path] = checker.evaluate(
+            model_path,
+            args.batch_sizes,
+            min_length=args.min_length,
+            sequence_lengths=args.sequence_lengths,
+            backends=args.backends,
+        )
+
     plot_results(all_results, args.output_path)
