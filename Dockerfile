@@ -33,8 +33,10 @@ WORKDIR /app
 COPY requirements.txt .
 
 RUN pip install --upgrade pip setuptools
-RUN pip install -U -r requirements.txt
-RUN pip install -U torch torchvision --index-url https://download.pytorch.org/whl/cu128
+RUN git clone https://github.com/Profluent-AI/E1.git && cd E1 && pip install -e . && cd ..
+RUN pip install esm -U
+RUN pip install -r requirements.txt
+RUN pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128 -U
 RUN pip install numpy==1.26.4
 
 COPY . .

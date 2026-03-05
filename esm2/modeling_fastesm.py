@@ -156,6 +156,26 @@ def build_collator(tokenizer: PreTrainedTokenizerBase) -> Callable[[list[str]], 
     return _collate_fn
 
 
+def parse_fasta(fasta_path: str) -> List[str]:
+    assert os.path.exists(fasta_path), f"FASTA file does not exist: {fasta_path}"
+    sequences = []
+    current_seq = []
+    with open(fasta_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_seq:
+                    sequences.append(''.join(current_seq))
+                    current_seq = []
+            else:
+                current_seq.append(line)
+    if current_seq:
+        sequences.append(''.join(current_seq))
+    return sequences
+
+
 class EmbeddingMixin:
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         raise NotImplementedError
@@ -243,7 +263,7 @@ class EmbeddingMixin:
 
     def embed_dataset(
         self,
-        sequences: List[str],
+        sequences: Optional[List[str]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         batch_size: int = 2,
         max_len: int = 512,
@@ -256,6 +276,7 @@ class EmbeddingMixin:
         save: bool = True,
         sql_db_path: str = 'embeddings.db',
         save_path: str = 'embeddings.pth',
+        fasta_path: Optional[str] = None,
         **kwargs,
     ) -> Optional[dict[str, torch.Tensor]]:
         """
@@ -264,7 +285,15 @@ class EmbeddingMixin:
         Supports two modes:
         - Tokenizer mode (ESM2/ESM++): provide `tokenizer`, `_embed(input_ids, attention_mask)` is used.
         - Sequence mode (E1): pass `tokenizer=None`, `_embed(sequences, return_attention_mask=True, **kwargs)` is used.
+
+        Sequences can be supplied as a list via `sequences`, parsed from a FASTA file via
+        `fasta_path`, or both (the two sources are combined). At least one must be provided.
         """
+        if fasta_path is not None:
+            fasta_sequences = parse_fasta(fasta_path)
+            sequences = list(sequences or []) + fasta_sequences
+        assert sequences is not None and len(sequences) > 0, \
+            "Must provide at least one sequence via `sequences` or `fasta_path`."
         sequences = list(set([seq[:max_len] if truncate else seq for seq in sequences]))
         sequences = sorted(sequences, key=len, reverse=True)
         hidden_size = self.config.hidden_size
@@ -645,8 +674,9 @@ def get_attention_mask(
         flex_block_mask = create_block_mask(mask_mod, batch_size, 1, seq_len, seq_len, device=device)
         return attention_mask_2d, None, flex_block_mask
 
-    # SDPA / manual
-    attention_mask_4d = attention_mask_2d[:, None, :, None] & attention_mask_2d[:, None, None, :]
+    # SDPA / manual — only mask the key dimension so padding query positions attend to
+    # real keys and produce valid (non-NaN) outputs instead of NaN from softmax(-inf,...,-inf).
+    attention_mask_4d = attention_mask_2d[:, None, None, :]
     return attention_mask_2d, attention_mask_4d, None
 
 

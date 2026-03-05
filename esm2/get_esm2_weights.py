@@ -2,7 +2,7 @@ import torch
 import copy
 import os
 from huggingface_hub import HfApi, login
-from transformers import EsmConfig, EsmForMaskedLM, AutoModelForMaskedLM
+from transformers import EsmConfig, EsmForMaskedLM, AutoModelForMaskedLM, AutoTokenizer
 
 from esm2.modeling_fastesm import FastEsmConfig, FastEsmForMaskedLM
 from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
@@ -86,6 +86,7 @@ if __name__ == "__main__":
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--repo_ids", nargs="*", type=str, default=None)
     parser.add_argument("--dry_run", action="store_true")
+    parser.add_argument("--skip-weights", action="store_true")
     args = parser.parse_args()
     api = HfApi()
 
@@ -117,6 +118,15 @@ if __name__ == "__main__":
             "AutoModelForTokenClassification": "modeling_fastesm.FastEsmForTokenClassification",
         }
         config.tie_word_embeddings = False
+        if args.skip_weights:
+            if args.dry_run:
+                print(f"[skip-weights][dry-run] validated config for {repo_id} <- {source_repo}")
+                continue
+            tokenizer = AutoTokenizer.from_pretrained(source_repo)
+            config.push_to_hub(repo_id)
+            tokenizer.push_to_hub(repo_id)
+            print(f"[skip-weights] uploaded config+tokenizer for {repo_id}")
+            continue
         model = FastEsmForMaskedLM.from_pretrained(
             source_repo,
             config=config,

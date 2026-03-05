@@ -156,6 +156,26 @@ def build_collator(tokenizer: PreTrainedTokenizerBase) -> Callable[[list[str]], 
     return _collate_fn
 
 
+def parse_fasta(fasta_path: str) -> List[str]:
+    assert os.path.exists(fasta_path), f"FASTA file does not exist: {fasta_path}"
+    sequences = []
+    current_seq = []
+    with open(fasta_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith('>'):
+                if current_seq:
+                    sequences.append(''.join(current_seq))
+                    current_seq = []
+            else:
+                current_seq.append(line)
+    if current_seq:
+        sequences.append(''.join(current_seq))
+    return sequences
+
+
 class EmbeddingMixin:
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         raise NotImplementedError
@@ -243,7 +263,7 @@ class EmbeddingMixin:
 
     def embed_dataset(
         self,
-        sequences: List[str],
+        sequences: Optional[List[str]] = None,
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         batch_size: int = 2,
         max_len: int = 512,
@@ -256,6 +276,7 @@ class EmbeddingMixin:
         save: bool = True,
         sql_db_path: str = 'embeddings.db',
         save_path: str = 'embeddings.pth',
+        fasta_path: Optional[str] = None,
         **kwargs,
     ) -> Optional[dict[str, torch.Tensor]]:
         """
@@ -264,7 +285,15 @@ class EmbeddingMixin:
         Supports two modes:
         - Tokenizer mode (ESM2/ESM++): provide `tokenizer`, `_embed(input_ids, attention_mask)` is used.
         - Sequence mode (E1): pass `tokenizer=None`, `_embed(sequences, return_attention_mask=True, **kwargs)` is used.
+
+        Sequences can be supplied as a list via `sequences`, parsed from a FASTA file via
+        `fasta_path`, or both (the two sources are combined). At least one must be provided.
         """
+        if fasta_path is not None:
+            fasta_sequences = parse_fasta(fasta_path)
+            sequences = list(sequences or []) + fasta_sequences
+        assert sequences is not None and len(sequences) > 0, \
+            "Must provide at least one sequence via `sequences` or `fasta_path`."
         sequences = list(set([seq[:max_len] if truncate else seq for seq in sequences]))
         sequences = sorted(sequences, key=len, reverse=True)
         hidden_size = self.config.hidden_size
@@ -668,8 +697,9 @@ def get_attention_mask(
         flex_block_mask = create_block_mask(mask_mod, batch_size, 1, seq_len, seq_len, device=device)
         return attention_mask_2d, None, flex_block_mask
 
-    # SDPA / manual
-    attention_mask_4d = attention_mask_2d[:, None, :, None] & attention_mask_2d[:, None, None, :]
+    # SDPA / manual — only mask the key dimension so padding query positions attend to
+    # real keys and produce valid (non-NaN) outputs instead of NaN from softmax(-inf,...,-inf).
+    attention_mask_4d = attention_mask_2d[:, None, None, :]
     return attention_mask_2d, attention_mask_4d, None
 
 
@@ -678,6 +708,55 @@ def _infer_modality_type(input_ids: torch.Tensor, attention_mask: torch.Tensor) 
     modality_type = ((input_ids < 33) & input_mask).int()
     modality_type[~input_mask] = 2
     return modality_type
+
+
+def _normalize_dplm2_input_ids(input_ids: torch.Tensor, vocab_size: int) -> torch.Tensor:
+    if input_ids.numel() == 0:
+        return input_ids
+
+    normalized_input_ids = input_ids.clone()
+    generic_to_aa_special_ids = {
+        vocab_size: 2,
+        vocab_size + 1: 3,
+        vocab_size + 2: 0,
+        vocab_size + 3: 32,
+    }
+    for generic_id, aa_id in generic_to_aa_special_ids.items():
+        normalized_input_ids[input_ids == generic_id] = aa_id
+
+    valid_token_mask = normalized_input_ids.ge(0)
+    if valid_token_mask.any():
+        max_token_id = int(normalized_input_ids[valid_token_mask].max().item())
+        assert max_token_id < vocab_size, (
+            f"Found token id {max_token_id} outside the DPLM2 embedding table (vocab_size={vocab_size}). "
+            "Tokenizer special tokens must be normalized before embedding."
+        )
+    return normalized_input_ids
+
+
+def _has_packed_multimodal_layout(
+    type_ids: Optional[torch.Tensor],
+    aa_type: int,
+    struct_type: int,
+    pad_type: int,
+) -> bool:
+    if type_ids is None:
+        return False
+    assert type_ids.ndim == 2, f"Expected type_ids to have shape (batch, seq_len), got {tuple(type_ids.shape)}"
+    seq_len = type_ids.shape[-1]
+    if seq_len % 2 != 0:
+        return False
+
+    half_len = seq_len // 2
+    first_half = type_ids[:, :half_len]
+    second_half = type_ids[:, half_len:]
+
+    first_half_valid = ((first_half == aa_type) | (first_half == pad_type)).all(dim=-1)
+    second_half_valid = ((second_half == struct_type) | (second_half == pad_type)).all(dim=-1)
+    aa_count = (first_half == aa_type).sum(dim=-1)
+    struct_count = (second_half == struct_type).sum(dim=-1)
+    packed_rows = first_half_valid & second_half_valid & aa_count.gt(0) & aa_count.eq(struct_count)
+    return bool(packed_rows.all())
 
 
 @dataclass
@@ -747,17 +826,22 @@ class DPLM2PreTrainedModel(EsmPreTrainedModel):
 
 
 class ModifiedRotaryEmbedding(RotaryEmbedding):
-    def __init__(self, dim: int, aa_type: int, struct_type: int):
+    def __init__(self, dim: int, aa_type: int, struct_type: int, pad_type: int):
         super().__init__(dim)
         self.aa_type = aa_type
         self.struct_type = struct_type
+        self.pad_type = pad_type
 
     def _has_multimodal_tokens(self, type_ids: Optional[torch.Tensor]) -> bool:
-        if type_ids is None:
-            return False
-        aa_present = (type_ids == self.aa_type).any()
-        struct_present = (type_ids == self.struct_type).any()
-        return bool(aa_present and struct_present)
+        # The split rotary path only works when the sequence tensor is already packed
+        # as [AA half | structure half]. Plain protein batches can still contain
+        # high-ID special tokens, so mere modality presence is not enough.
+        return _has_packed_multimodal_layout(
+            type_ids=type_ids,
+            aa_type=self.aa_type,
+            struct_type=self.struct_type,
+            pad_type=self.pad_type,
+        )
 
     def _update_cos_sin_tables(
         self,
@@ -774,12 +858,13 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
             or self._sin_cached is None
             or seq_len != self._seq_len_cached
             or self._cos_cached.device != x.device
+            or self._cos_cached.dtype != x.dtype
         )
         if cache_is_stale:
             self._seq_len_cached = seq_len
             t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
             freqs = torch.outer(t, self.inv_freq)
-            emb = torch.cat((freqs, freqs), dim=-1).to(x.device)
+            emb = torch.cat((freqs, freqs), dim=-1).to(device=x.device, dtype=x.dtype)
             self._cos_cached = emb.cos()[None, None, :, :]
             self._sin_cached = emb.sin()[None, None, :, :]
 
@@ -823,6 +908,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
             dim=self.attention_head_size,
             aa_type=config.aa_type,
             struct_type=config.struct_type,
+            pad_type=config.pad_type,
         )
 
     def forward(
@@ -1112,6 +1198,7 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
         self.embeddings.word_embeddings = value
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
         if attention_mask is None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
         type_ids = _infer_modality_type(input_ids, attention_mask)
@@ -1143,7 +1230,7 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
         elif input_ids is not None:
-            pass
+            input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
         elif inputs_embeds is None:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
@@ -1248,6 +1335,7 @@ class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
         self.lm_head.decoder = new_embeddings
 
     def _get_modality_type(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
         return _infer_modality_type(input_ids, attention_mask)
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -1299,6 +1387,7 @@ class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
         logits = self.lm_head(sequence_output)
         loss = None
         if labels is not None:
+            labels = _normalize_dplm2_input_ids(labels, self.config.vocab_size)
             labels = labels.to(logits.device)
             loss = self.loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
@@ -1353,6 +1442,7 @@ class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
         if type_ids is None and input_ids is not None:
             if attention_mask is None:
                 attention_mask = input_ids.ne(self.config.pad_token_id)
+            input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
             type_ids = _infer_modality_type(input_ids, attention_mask)
 
         outputs = self.esm(
@@ -1432,6 +1522,7 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
         if type_ids is None and input_ids is not None:
             if attention_mask is None:
                 attention_mask = input_ids.ne(self.config.pad_token_id)
+            input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
             type_ids = _infer_modality_type(input_ids, attention_mask)
 
         outputs = self.esm(

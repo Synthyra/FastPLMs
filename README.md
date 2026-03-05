@@ -178,7 +178,30 @@ model.embed_dataset(
 )
 ```
 
-### 2. High-Throughput In-Memory Embedding
+### 2. Embedding from a FASTA File
+Pass a FASTA file path directly — no manual parsing required. Multi-line sequences are handled automatically. You can combine `fasta_path` with an explicit `sequences` list and the two sources are merged before embedding.
+
+```python
+# Embed all sequences in a FASTA file and save to SQLite
+model.embed_dataset(
+    fasta_path='my_proteins.fasta',
+    batch_size=64,
+    pooling_types=['mean'],
+    sql=True,
+    sql_db_path='my_proteins.db',
+)
+
+# Mix a FASTA file with an explicit list
+model.embed_dataset(
+    sequences=["MKTIIALSYIFCLVFA"],
+    fasta_path='additional_proteins.fasta',
+    batch_size=32,
+    save=True,
+    save_path='combined_embeddings.pth',
+)
+```
+
+### 3. High-Throughput In-Memory Embedding
 Perfect for medium-sized datasets that fit in memory.
 
 ```python
@@ -195,7 +218,7 @@ embeddings = model.embed_dataset(
 seq_vector = embeddings["MALWMRLLPLLALLALWGPDPAAA"] # torch.Tensor
 ```
 
-### 3. Custom Pooling & Multi-Strategy
+### 4. Custom Pooling & Multi-Strategy
 Concatenate multiple mathematical representations for richer downstream features.
 
 ```python

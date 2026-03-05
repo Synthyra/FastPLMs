@@ -74,6 +74,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--repo_ids", nargs="*", type=str, default=None)
+    parser.add_argument("--skip-weights", action="store_true")
     args = parser.parse_args()
     api = HfApi()
 
@@ -91,6 +92,12 @@ if __name__ == "__main__":
             "AutoModelForTokenClassification": "modeling_dplm.DPLMForTokenClassification",
         }
         config.tie_word_embeddings = False
+        if args.skip_weights:
+            tokenizer = EsmTokenizer.from_pretrained(source_repo)
+            config.push_to_hub(repo_id)
+            tokenizer.push_to_hub(repo_id)
+            print(f"[skip-weights] uploaded config+tokenizer for {repo_id}")
+            continue
         model = DPLMForMaskedLM.from_pretrained(source_repo, config=config).eval().cpu().to(torch.float32)
         model.tokenizer = EsmTokenizer.from_pretrained(source_repo)
 

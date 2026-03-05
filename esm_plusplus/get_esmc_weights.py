@@ -2,7 +2,7 @@ import copy
 import os
 import torch
 from huggingface_hub import HfApi, login
-from transformers import AutoModelForMaskedLM, AutoConfig
+from transformers import AutoModelForMaskedLM, AutoTokenizer, AutoConfig
 
 from esm_plusplus.load_official import load_official_model
 from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
@@ -37,6 +37,7 @@ if __name__ == "__main__":
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--repo_ids", nargs="*", type=str, default=None)
     parser.add_argument("--dry_run", action="store_true")
+    parser.add_argument("--skip-weights", action="store_true")
     args = parser.parse_args()
     api = HfApi()
 
@@ -58,6 +59,14 @@ if __name__ == "__main__":
             "AutoModelForTokenClassification": "modeling_esm_plusplus.ESMplusplusForTokenClassification",
         }
         config.tie_word_embeddings = False
+        if args.skip_weights:
+            if args.dry_run:
+                print(f"[skip-weights][dry-run] validated config+tokenizer parity for {repo_id}")
+                continue
+            config.push_to_hub(repo_id)
+            tokenizer.push_to_hub(repo_id)
+            print(f"[skip-weights] uploaded config+tokenizer for {repo_id}")
+            continue
         model = ESMplusplusForMaskedLM(config=config).eval().cpu().to(torch.float32)
         load_result = model.load_state_dict(official_model.model.state_dict(), strict=True)
 

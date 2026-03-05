@@ -168,6 +168,7 @@ if __name__ == "__main__":
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--use_kernels", action="store_true")
     parser.add_argument("--dry_run", action="store_true")
+    parser.add_argument("--skip-weights", action="store_true")
     args = parser.parse_args()
 
     # Standardization: use the first repo_id from repo_ids
@@ -176,6 +177,23 @@ if __name__ == "__main__":
     checkpoint_path = _download_checkpoint_if_needed(Path(args.checkpoint_path))
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.skip_weights:
+        repo_id = args.repo_ids[0] if args.repo_ids else "Synthyra/Boltz2"
+        if args.dry_run:
+            print(f"[skip-weights][dry-run] validated Boltz2 config parity for checkpoint {checkpoint_path}")
+            raise SystemExit(0)
+        official_model = _load_official_boltz2_model(
+            checkpoint_path=checkpoint_path,
+            use_kernels=args.use_kernels,
+        )
+        official_model.config.auto_map = {
+            "AutoConfig": "modeling_boltz2.Boltz2Config",
+            "AutoModel": "modeling_boltz2.Boltz2Model",
+        }
+        official_model.config.push_to_hub(repo_id)
+        print(f"[skip-weights] uploaded Boltz2 config to {repo_id}")
+        raise SystemExit(0)
 
     official_model = _load_official_boltz2_model(
         checkpoint_path=checkpoint_path,

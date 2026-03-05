@@ -178,7 +178,9 @@ SHARED_FILES = {
 }
 
 
-def _run_weight_scripts(families: list[str] | None, hf_token: str | None) -> None:
+def _run_weight_scripts(
+    families: list[str] | None, hf_token: str | None, skip_weights: bool
+) -> None:
     python_cmd = "python" if platform.system().lower() == "linux" else "py"
     for entry in MODEL_REGISTRY:
         if families is not None and entry["family"] not in families:
@@ -189,6 +191,8 @@ def _run_weight_scripts(families: list[str] | None, hf_token: str | None) -> Non
         command = [python_cmd, "-m", module]
         if hf_token is not None:
             command.extend(["--hf_token", hf_token])
+        if skip_weights:
+            command.append("--skip-weights")
         print(f"Running: {' '.join(command)}")
         subprocess.run(command, check=True)
 
@@ -239,15 +243,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Upload FastPLMs models to HuggingFace")
     parser.add_argument("--hf_token", type=str, default=None)
     parser.add_argument("--families", nargs="+", default=None)
-    parser.add_argument("--skip-weights", action="store_true", help="Skip weight conversion scripts")
+    parser.add_argument(
+        "--skip-weights",
+        action="store_true",
+        help="Run weight scripts without downloading/pushing model weights",
+    )
     parser.add_argument("--files-only", action="store_true", help="Only upload files, skip weight conversion")
     args = parser.parse_args()
 
     if args.hf_token:
         login(token=args.hf_token)
 
-    if not args.skip_weights and not args.files_only:
-        _run_weight_scripts(args.families, args.hf_token)
+    if not args.files_only:
+        _run_weight_scripts(args.families, args.hf_token, args.skip_weights)
 
     api = HfApi()
     _upload_files(api, args.families)
