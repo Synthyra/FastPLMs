@@ -97,6 +97,7 @@ if __name__ == "__main__":
     script_root = os.path.dirname(os.path.abspath(__file__))
 
     for model_name, source_repo in _resolve_repo_items(args.repo_ids):
+        repo_id = "Synthyra/" + model_name
         official_config = EsmConfig.from_pretrained(source_repo)
         # Makes sure the esm2 word and lm head are correctly loaded
         official_config.tie_word_embeddings = True
@@ -157,7 +158,6 @@ if __name__ == "__main__":
             context=f"ESM2 weight parity ({source_repo})",
         )
 
-        repo_id = "Synthyra/" + model_name
         if args.dry_run:
             print(f"[dry_run] validated ESM2 parity for {repo_id} <- {source_repo}")
             continue
