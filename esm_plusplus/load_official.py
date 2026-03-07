@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 
+
 class _ESMCComplianceOutput:
     """Mimics HuggingFace model output so the test suite can access .logits and .hidden_states."""
     def __init__(self, logits: torch.Tensor, last_hidden_state: torch.Tensor, hidden_states: tuple):
