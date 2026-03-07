@@ -53,9 +53,9 @@ def load_official_model(
     from esm.pretrained import ESMC_300M_202412, ESMC_600M_202412
 
     if "300" in reference_repo_id:
-        official_model = ESMC_300M_202412()
+        official_model = ESMC_300M_202412(use_flash_attn=False)
     elif "600" in reference_repo_id:
-        official_model = ESMC_600M_202412()
+        official_model = ESMC_600M_202412(use_flash_attn=False)
     else:
         raise ValueError(f"Unsupported ESMC reference repo id: {reference_repo_id}")
 
