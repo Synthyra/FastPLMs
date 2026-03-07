@@ -17,8 +17,25 @@ class _OfficialESMCForwardWrapper(nn.Module):
         self.model = model
         self.tokenizer = tokenizer
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor = None, **kwargs):
-        esmc_output = self.model(input_ids)
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        sequence_id: torch.Tensor | None = None,
+        **kwargs,
+    ):
+        del kwargs  # kwargs is included for signature compatibility with HF model calls.
+        if sequence_id is None:
+            if attention_mask is not None:
+                sequence_id = attention_mask
+            else:
+                sequence_id = input_ids != self.tokenizer.pad_token_id
+        sequence_id = sequence_id.to(dtype=torch.bool, device=input_ids.device)
+        assert sequence_id.shape == input_ids.shape, (
+            f"sequence_id shape {sequence_id.shape} must match input_ids shape {input_ids.shape}."
+        )
+
+        esmc_output = self.model(input_ids, sequence_id=sequence_id)
         # ESMC returns: sequence_logits, embeddings, hidden_states (stacked [n_layers, B, L, D])
         logits = esmc_output.sequence_logits
         embeddings = esmc_output.embeddings

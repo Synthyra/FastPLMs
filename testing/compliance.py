@@ -22,10 +22,10 @@ from weight_parity_utils import assert_state_dict_equal
 class ComplianceChecker:
     def __init__(
         self,
-        test_number_batches: int = 10,
-        batch_size: int = 4,
+        test_number_batches: int = 25,
+        batch_size: int = 8,
         min_sequence_length: int = 16,
-        max_sequence_length: int = 64,
+        max_sequence_length: int = 128,
     ):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.test_number_batches = test_number_batches
@@ -126,15 +126,18 @@ class ComplianceChecker:
                 tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
             
             attention_mask = tokenized['attention_mask'].cpu().bool()
+            model_inputs = tokenized.copy()
+            if model_type == "ESMC":
+                model_inputs["sequence_id"] = model_inputs["attention_mask"].to(dtype=torch.bool)
 
-            official_output = official_model(**tokenized, output_hidden_states=True)
+            official_output = official_model(**model_inputs, output_hidden_states=True)
             official_hidden_states = official_output.hidden_states
             official_logits = official_output.logits.cpu()
             if only_non_pad_tokens:
                 official_logits = official_logits[attention_mask]
             official_preds = official_logits.argmax(dim=-1)
             
-            fast_output = fast_model(**tokenized, output_hidden_states=True)
+            fast_output = fast_model(**model_inputs, output_hidden_states=True)
             fast_hidden_states = fast_output.hidden_states
             fast_logits = fast_output.logits.cpu()
             if only_non_pad_tokens:
