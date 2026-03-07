@@ -50,6 +50,7 @@ class ComplianceChecker:
             force_download=force_download,
             trust_remote_code=True,
         ).eval()
+        fast_model.config.attn_backend = "flex"
         return official_model, fast_model, tokenizer
 
     def _load_esm2(self, from_auto_model: bool = False, force_download: bool = False):

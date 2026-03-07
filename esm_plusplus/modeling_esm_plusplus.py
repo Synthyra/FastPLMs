@@ -682,10 +682,9 @@ def get_attention_mask(
         flex_block_mask = create_block_mask(mask_mod, batch_size, 1, seq_len, seq_len, device=device)
         return attention_mask_2d, None, flex_block_mask
 
-    # SDPA / manual — match official ESMC pairwise validity masking.
-    # This keeps pad-to-pad attention enabled while blocking all real<->pad and pad<->real
-    # interactions except when both positions are pad.
-    attention_mask_4d = attention_mask_2d[:, None, :, :] == attention_mask_2d[:, None, None, :]
+    # SDPA / manual — only mask the key dimension so padding query positions attend to
+    # real keys and produce valid (non-NaN) outputs instead of NaN from softmax(-inf,...,-inf).
+    attention_mask_4d = attention_mask_2d[:, None, None, :]
     return attention_mask_2d, attention_mask_4d, None
 
 
