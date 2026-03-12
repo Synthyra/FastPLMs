@@ -431,6 +431,22 @@ except (ImportError, AttributeError):
     flex_attention = None
     BlockMask = None
 
+_compiled_flex_attention = None
+
+
+def _get_flex_attention_fn():
+    """Return flex_attention callable: compiled (fused kernel) by default, or eager when debug flag is set."""
+    global _compiled_flex_attention
+    if flex_attention is None:
+        return None
+    flex_mod = torch.nn.attention.flex_attention
+    if getattr(flex_mod, "_FLEX_ATTENTION_DISABLE_COMPILE_DEBUG", False):
+        return flex_attention
+    if _compiled_flex_attention is None:
+        _compiled_flex_attention = torch.compile(flex_attention)
+    return _compiled_flex_attention
+
+
 from enum import Enum
 
 
@@ -932,7 +948,8 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         assert query_BHLD.dtype in (torch.float16, torch.bfloat16), (
             f"Flex attention requires float16 or bfloat16, got {query_BHLD.dtype}."
         )
-        context_BHLD = flex_attention(query_BHLD, key_BHLD, value_BHLD, block_mask=flex_block_mask, scale=1.0)
+        fn = _get_flex_attention_fn()
+        context_BHLD = fn(query_BHLD, key_BHLD, value_BHLD, block_mask=flex_block_mask, scale=1.0)
         return rearrange(context_BHLD, "b h s d -> b s (h d)"), None
 
     def _sdpa_attn(

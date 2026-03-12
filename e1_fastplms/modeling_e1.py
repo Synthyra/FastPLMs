@@ -505,6 +505,20 @@ from torch.nn.attention.flex_attention import (
     _create_sparse_block_from_block_mask
 )
 
+_compiled_flex_attention = None
+
+
+def _get_flex_attention_fn():
+    """Return flex_attention callable: compiled (fused kernel) by default, or eager when debug flag is set."""
+    global _compiled_flex_attention
+    flex_mod = torch.nn.attention.flex_attention
+    if getattr(flex_mod, "_FLEX_ATTENTION_DISABLE_COMPILE_DEBUG", False):
+        return flex_attention
+    if _compiled_flex_attention is None:
+        _compiled_flex_attention = torch.compile(flex_attention)
+    return _compiled_flex_attention
+
+
 try:
     from kernels import get_kernel
     layer_norm = get_kernel("kernels-community/triton-layer-norm")
@@ -608,7 +622,8 @@ def flex_attention_func(
     key_states = key_states.transpose(1, 2).contiguous()  # (bs, nkv, seqlen, hs)
     value_states = value_states.transpose(1, 2).contiguous()  # (bs, nkv, seqlen, hs)
 
-    outputs = flex_attention(
+    fn = _get_flex_attention_fn()
+    outputs = fn(
         query_states,
         key_states,
         value_states,
@@ -798,7 +813,8 @@ def varlen_flex_attention_func(
     seqlens_k = cu_seqlens_k[1:] - cu_seqlens_k[:-1]
     block_mask = block_mask_creator(seqlens_q, seqlens_k)
 
-    attn_output_unpad = flex_attention(
+    fn = _get_flex_attention_fn()
+    attn_output_unpad = fn(
         query_states,
         key_states,
         value_states,
