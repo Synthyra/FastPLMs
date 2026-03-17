@@ -633,7 +633,7 @@ class E1RAGPredictor:
 
         pbar.close()
 
-        # Remap: return embeddings keyed bynfull-length seqs
+        # return embeddings keyed by full-length seqs
         result = {}
         for seq in sequences:
             trunc = truncated_map[seq]
