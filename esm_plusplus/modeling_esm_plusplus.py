@@ -471,7 +471,17 @@ def _try_get_kernels_flash():
     return flash_kernel, flash_kernel_variant
 
 
-FLASH_KERNEL, FLASH_KERNEL_VARIANT = _try_get_kernels_flash()
+_FLASH_KERNELS_LOADED = False
+FLASH_KERNEL = None
+FLASH_KERNEL_VARIANT = None
+
+
+def _ensure_flash_kernels_loaded():
+    global _FLASH_KERNELS_LOADED, FLASH_KERNEL, FLASH_KERNEL_VARIANT
+    if _FLASH_KERNELS_LOADED:
+        return
+    _FLASH_KERNELS_LOADED = True
+    FLASH_KERNEL, FLASH_KERNEL_VARIANT = _try_get_kernels_flash()
 
 
 def _kernels_flash_forward(
@@ -646,6 +656,8 @@ def resolve_attention_backend(requested_backend: str) -> AttentionBackend:
     assert requested_backend in VALID_ATTENTION_BACKENDS, (
         f"Unsupported attention backend: {requested_backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
     )
+    if requested_backend in (AttentionBackend.AUTO.value, AttentionBackend.KERNELS_FLASH.value):
+        _ensure_flash_kernels_loaded()
     if requested_backend == AttentionBackend.AUTO.value:
         if FLASH_KERNEL is not None:
             resolved = AttentionBackend.KERNELS_FLASH
