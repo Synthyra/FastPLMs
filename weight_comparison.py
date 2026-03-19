@@ -1,6 +1,8 @@
 import argparse
 import os
 import torch
+from typing import Dict
+
 from safetensors.torch import load_file
 from rich.console import Console
 from rich.table import Table
@@ -10,7 +12,7 @@ from transformers import AutoModelForMaskedLM, AutoConfig, AutoModel
 from e1_fastplms.modeling_e1 import E1ForMaskedLM, E1Config, E1Model
 
 
-def load_weights(path, cast_fp32=True):
+def load_weights(path: str, cast_fp32: bool = True) -> Dict[str, torch.Tensor]:
     assert os.path.exists(path), f"File {path} not found."
     if path.endswith(".safetensors"):
         sd = load_file(path)
@@ -31,7 +33,7 @@ def load_weights(path, cast_fp32=True):
     return sd
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--file1", type=str, default=None)
     parser.add_argument("--files", type=str, nargs="+", default=None)

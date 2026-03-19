@@ -5,6 +5,7 @@ import copy
 import random
 import time
 from pathlib import Path
+from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -15,7 +16,7 @@ from tqdm.auto import tqdm
 from transformers import AutoModelForMaskedLM
 
 
-def set_seed(seed: int):
+def set_seed(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
@@ -31,13 +32,13 @@ class ThroughputChecker:
         self,
         warmup_batches: int = 10,
         timed_batches: int = 100,
-    ):
+    ) -> None:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.warmup_batches = warmup_batches
         self.timed_batches = timed_batches
         self.canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
 
-    def _load_model(self, model_path: str):
+    def _load_model(self, model_path: str) -> torch.nn.Module:
         model = AutoModelForMaskedLM.from_pretrained(
             model_path,
             dtype=torch.bfloat16,
@@ -49,7 +50,7 @@ class ThroughputChecker:
     def _generate_random_sequence(self, length: int) -> str:
         return "M" + "".join(random.choices(self.canonical_amino_acids, k=length - 1))
 
-    def _generate_random_batch(self, batch_size: int, min_length: int, max_length: int) -> list[str]:
+    def _generate_random_batch(self, batch_size: int, min_length: int, max_length: int) -> List[str]:
         max_length_example = self._generate_random_sequence(max_length)
         return [max_length_example] + [
             self._generate_random_sequence(random.randint(min_length, max_length))
@@ -57,7 +58,7 @@ class ThroughputChecker:
         ]
 
     @torch.inference_mode()
-    def _time(self, model, tokenizer, batch_size: int, min_length: int, max_length: int):
+    def _time(self, model: torch.nn.Module, tokenizer: object, batch_size: int, min_length: int, max_length: int) -> Tuple[float, int]:
         model = model.to(self.device).eval()
         set_seed(42)
         min_dynamic_warmup_batches = self.warmup_batches
@@ -132,7 +133,7 @@ class ThroughputChecker:
             torch.cuda.empty_cache()
         return time_taken, timed_tokens_sum
 
-    def evaluate(self, model_path: str, batch_sizes: list[int], min_length: int, sequence_lengths: list[int], backends: list[str]):
+    def evaluate(self, model_path: str, batch_sizes: List[int], min_length: int, sequence_lengths: List[int], backends: List[str]) -> Dict[str, Dict[Tuple[int, int], Dict[str, float]]]:
         results = {backend: {} for backend in backends}
 
         original_model = self._load_model(model_path)
@@ -166,7 +167,7 @@ class ThroughputChecker:
         return results
 
 
-def plot_results(all_results: dict, output_path: str):
+def plot_results(all_results: Dict[str, Dict], output_path: str) -> None:
     sns.set_theme(style="whitegrid")
     plot_data = []
 

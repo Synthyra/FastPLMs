@@ -1,11 +1,12 @@
 """Load official ESMC model from the esm package for comparison."""
 import torch
 import torch.nn as nn
+from typing import Optional, Tuple
 
 
 class _ESMCComplianceOutput:
     """Mimics HuggingFace model output so the test suite can access .logits and .hidden_states."""
-    def __init__(self, logits: torch.Tensor, last_hidden_state: torch.Tensor, hidden_states: tuple):
+    def __init__(self, logits: torch.Tensor, last_hidden_state: torch.Tensor, hidden_states: Tuple[torch.Tensor, ...]) -> None:
         self.logits = logits
         self.last_hidden_state = last_hidden_state
         self.hidden_states = hidden_states
@@ -13,7 +14,7 @@ class _ESMCComplianceOutput:
 
 class _OfficialESMCForwardWrapper(nn.Module):
     """Wraps official ESMC model to produce outputs compatible with our test suite."""
-    def __init__(self, model: nn.Module, tokenizer):
+    def __init__(self, model: nn.Module, tokenizer: object) -> None:
         super().__init__()
         self.model = model
         self.tokenizer = tokenizer
@@ -21,8 +22,8 @@ class _OfficialESMCForwardWrapper(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        sequence_id: torch.Tensor | None = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        sequence_id: Optional[torch.Tensor] = None,
         **kwargs,
     ):
         esmc_output = self.model(sequence_tokens=input_ids)
@@ -47,7 +48,7 @@ def load_official_model(
     reference_repo_id: str,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
-) -> tuple[nn.Module, object]:
+) -> Tuple[nn.Module, object]:
     """Load the official ESMC model from the esm submodule.
 
     Args:

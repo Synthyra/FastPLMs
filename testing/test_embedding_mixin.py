@@ -4,6 +4,7 @@ import random
 import tempfile
 import os
 import torch
+from typing import Dict, List
 
 from esm2.modeling_fastesm import FastEsmForMaskedLM
 from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
@@ -65,11 +66,11 @@ class FixedLengthTokenizer:
     keeping max_seqlen_in_batch identical and eliminating floating-point
     variability from different softmax vector lengths / flash-attention tile sizes.
     """
-    def __init__(self, tokenizer, max_length: int = MAX_EMBED_LEN):
+    def __init__(self, tokenizer: object, max_length: int = MAX_EMBED_LEN) -> None:
         self._tok = tokenizer
         self.max_length = max_length
 
-    def __call__(self, sequences, **kwargs):
+    def __call__(self, sequences: List[str], **kwargs) -> Dict[str, torch.Tensor]:
         return self._tok(
             sequences,
             return_tensors="pt",
@@ -79,7 +80,7 @@ class FixedLengthTokenizer:
         )
 
 
-def random_sequences(n: int, min_len: int = 8, max_len: int = 64) -> list[str]:
+def random_sequences(n: int, min_len: int = 8, max_len: int = 64) -> List[str]:
     """Variable-length sequences; used for the NaN test."""
     return [
         "M" + "".join(random.choices(CANONICAL_AAS, k=random.randint(min_len, max_len)))
@@ -87,7 +88,7 @@ def random_sequences(n: int, min_len: int = 8, max_len: int = 64) -> list[str]:
     ]
 
 
-def random_sequences_fixed_len(n: int, length: int = 64) -> list[str]:
+def random_sequences_fixed_len(n: int, length: int = 64) -> List[str]:
     """Fixed-length sequences; used for the match test with E1 (sequence mode)."""
     return [
         "M" + "".join(random.choices(CANONICAL_AAS, k=length - 1))
@@ -95,7 +96,7 @@ def random_sequences_fixed_len(n: int, length: int = 64) -> list[str]:
     ]
 
 
-def assert_no_nan(embeddings: dict[str, torch.Tensor], label: str) -> None:
+def assert_no_nan(embeddings: Dict[str, torch.Tensor], label: str) -> None:
     for seq, emb in embeddings.items():
         assert not torch.isnan(emb).any(), (
             f"[{label}] NaN found in embedding for sequence '{seq[:20]}...'"
@@ -103,8 +104,8 @@ def assert_no_nan(embeddings: dict[str, torch.Tensor], label: str) -> None:
 
 
 def assert_embeddings_match(
-    a: dict[str, torch.Tensor],
-    b: dict[str, torch.Tensor],
+    a: Dict[str, torch.Tensor],
+    b: Dict[str, torch.Tensor],
     label: str,
     atol: float = 5e-3,
 ) -> None:

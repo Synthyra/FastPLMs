@@ -2,11 +2,13 @@
 
 import torch
 import torch.nn as nn
+from typing import Tuple
+
 from transformers import EsmForMaskedLM, EsmTokenizer
 
 
 class _OfficialESM2ForwardWrapper(nn.Module):
-    def __init__(self, model: EsmForMaskedLM):
+    def __init__(self, model: EsmForMaskedLM) -> None:
         super().__init__()
         self.model = model
         self.tokenizer = EsmTokenizer.from_pretrained(model.config._name_or_path)
@@ -24,7 +26,7 @@ def load_official_model(
     reference_repo_id: str,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
-) -> tuple[nn.Module, EsmTokenizer]:
+) -> Tuple[nn.Module, EsmTokenizer]:
     """Load the official HuggingFace ESM2 model.
 
     Returns (wrapped_model, tokenizer).

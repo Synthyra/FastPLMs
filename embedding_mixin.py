@@ -4,16 +4,16 @@ import networkx as nx
 import numpy as np
 import torch
 from tqdm.auto import tqdm
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Set
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from transformers import PreTrainedTokenizerBase
 
 
 class Pooler:
-    def __init__(self, pooling_types: List[str]):
+    def __init__(self, pooling_types: List[str]) -> None:
         self.pooling_types = pooling_types
-        self.pooling_options = {
+        self.pooling_options: Dict[str, Callable] = {
             'mean': self.mean_pooling,
             'max': self.max_pooling,
             'norm': self.norm_pooling,
@@ -25,10 +25,11 @@ class Pooler:
         }
 
     def _create_pooled_matrices_across_layers(self, attentions: torch.Tensor) -> torch.Tensor:
+        assert isinstance(attentions, torch.Tensor)
         maxed_attentions = torch.max(attentions, dim=1)[0]
         return maxed_attentions
 
-    def _page_rank(self, attention_matrix, personalization=None, nstart=None, prune_type="top_k_outdegree"):
+    def _page_rank(self, attention_matrix: np.ndarray, personalization: Optional[dict] = None, nstart: Optional[dict] = None, prune_type: str = "top_k_outdegree") -> Dict[int, float]:
         # Run PageRank on the attention matrix converted to a graph.
         # Raises exceptions if the graph doesn't match the token sequence or has no edges.
         # Returns the PageRank scores for each token node.
@@ -41,13 +42,13 @@ class Pooler:
 
         return nx.pagerank(G, alpha=0.85, tol=1e-06, weight='weight', personalization=personalization, nstart=nstart, max_iter=100)
 
-    def _convert_to_graph(self, matrix):
+    def _convert_to_graph(self, matrix: np.ndarray) -> nx.DiGraph:
         # Convert a matrix (e.g., attention scores) to a directed graph using networkx.
         # Each element in the matrix represents a directed edge with a weight.
         G = nx.from_numpy_array(matrix, create_using=nx.DiGraph)
         return G
 
-    def _calculate_importance_weights(self, dict_importance, attention_mask: Optional[torch.Tensor] = None):
+    def _calculate_importance_weights(self, dict_importance: Dict[int, float], attention_mask: Optional[torch.Tensor] = None) -> np.ndarray:
         # Remove keys where attention_mask is 0
         if attention_mask is not None:
             for k in list(dict_importance.keys()):
@@ -59,7 +60,7 @@ class Pooler:
         total = sum(dict_importance.values())
         return np.array([v / total for _, v in dict_importance.items()])
 
-    def _pool_parti(self, emb: torch.Tensor, attentions: torch.Tensor, attention_mask: Optional[torch.Tensor] = None): # (b, L, d) -> (b, d)
+    def _pool_parti(self, emb: torch.Tensor, attentions: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor: # (b, L, d) -> (b, d)
         maxed_attentions = self._create_pooled_matrices_across_layers(attentions).numpy()
         # emb is (b, L, d), maxed_attentions is (b, L, L)
         emb_pooled = []
@@ -71,35 +72,35 @@ class Pooler:
         pooled = torch.tensor(np.array(emb_pooled))
         return pooled
 
-    def mean_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
+    def mean_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         if attention_mask is None:
             return emb.mean(dim=1)
         else:
             attention_mask = attention_mask.unsqueeze(-1)
             return (emb * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
 
-    def max_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
+    def max_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         if attention_mask is None:
             return emb.max(dim=1).values
         else:
             attention_mask = attention_mask.unsqueeze(-1)
             return (emb * attention_mask).max(dim=1).values
 
-    def norm_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
+    def norm_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         if attention_mask is None:
             return emb.norm(dim=1, p=2)
         else:
             attention_mask = attention_mask.unsqueeze(-1)
             return (emb * attention_mask).norm(dim=1, p=2)
 
-    def median_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
+    def median_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         if attention_mask is None:
             return emb.median(dim=1).values
         else:
             attention_mask = attention_mask.unsqueeze(-1)
             return (emb * attention_mask).median(dim=1).values
     
-    def std_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
+    def std_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         if attention_mask is None:
             return emb.std(dim=1)
         else:
@@ -107,7 +108,7 @@ class Pooler:
             var = self.var_pooling(emb, attention_mask, **kwargs)
             return torch.sqrt(var)
     
-    def var_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
+    def var_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         if attention_mask is None:
             return emb.var(dim=1)
         else:
@@ -122,7 +123,7 @@ class Pooler:
             var = (squared_diff * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)  # (b, d)
             return var
 
-    def cls_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs): # (b, L, d) -> (b, d)
+    def cls_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         return emb[:, 0, :]
 
     def __call__(
@@ -130,8 +131,8 @@ class Pooler:
             emb: torch.Tensor,
             attention_mask: Optional[torch.Tensor] = None,
             attentions: Optional[torch.Tensor] = None
-        ): # [mean, max]
-        final_emb = []
+        ) -> torch.Tensor: # [mean, max]
+        final_emb: List[torch.Tensor] = []
         for pooling_type in self.pooling_types:
             final_emb.append(self.pooling_options[pooling_type](emb=emb, attention_mask=attention_mask, attentions=attentions)) # (b, d)
         return torch.cat(final_emb, dim=-1) # (b, n_pooling_types * d)
@@ -139,7 +140,7 @@ class Pooler:
 
 class ProteinDataset(TorchDataset):
     """Simple dataset for protein sequences."""
-    def __init__(self, sequences: list[str]):
+    def __init__(self, sequences: List[str]) -> None:
         self.sequences = sequences
 
     def __len__(self) -> int:
@@ -149,8 +150,8 @@ class ProteinDataset(TorchDataset):
         return self.sequences[idx]
 
 
-def build_collator(tokenizer: PreTrainedTokenizerBase) -> Callable[[list[str]], dict[str, torch.Tensor]]:
-    def _collate_fn(sequences: list[str]) -> dict[str, torch.Tensor]:
+def build_collator(tokenizer: PreTrainedTokenizerBase) -> Callable[[List[str]], Dict[str, torch.Tensor]]:
+    def _collate_fn(sequences: List[str]) -> Dict[str, torch.Tensor]:
         return tokenizer(sequences, return_tensors="pt", padding='longest')
     return _collate_fn
 
@@ -184,7 +185,7 @@ class EmbeddingMixin:
         """Get the device of the model."""
         return next(self.parameters()).device
 
-    def _read_sequences_from_db(self, db_path: str) -> set[str]:
+    def _read_sequences_from_db(self, db_path: str) -> Set[str]:
         """Read sequences from SQLite database."""
         sequences = []
         with sqlite3.connect(db_path) as conn:
@@ -216,7 +217,7 @@ class EmbeddingMixin:
             cursor.execute("ALTER TABLE embeddings ADD COLUMN dtype TEXT")
         conn.commit()
 
-    def load_embeddings_from_pth(self, save_path: str) -> dict[str, torch.Tensor]:
+    def load_embeddings_from_pth(self, save_path: str) -> Dict[str, torch.Tensor]:
         assert os.path.exists(save_path), f"Embedding file does not exist: {save_path}"
         payload = torch.load(save_path, map_location="cpu", weights_only=True)
         assert isinstance(payload, dict), "Expected .pth embeddings file to contain a dictionary."
@@ -225,9 +226,9 @@ class EmbeddingMixin:
             assert isinstance(tensor, torch.Tensor), "Expected embedding dictionary values to be tensors."
         return payload
 
-    def load_embeddings_from_db(self, db_path: str, sequences: Optional[List[str]] = None) -> dict[str, torch.Tensor]:
+    def load_embeddings_from_db(self, db_path: str, sequences: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         assert os.path.exists(db_path), f"Embedding database does not exist: {db_path}"
-        loaded: dict[str, torch.Tensor] = {}
+        loaded: Dict[str, torch.Tensor] = {}
         with sqlite3.connect(db_path) as conn:
             self._ensure_embeddings_table(conn)
             cursor = conn.cursor()
@@ -277,7 +278,7 @@ class EmbeddingMixin:
         save_path: str = 'embeddings.pth',
         fasta_path: Optional[str] = None,
         **kwargs,
-    ) -> Optional[dict[str, torch.Tensor]]:
+    ) -> Optional[Dict[str, torch.Tensor]]:
         """
         Embed a dataset of protein sequences.
 
@@ -306,6 +307,7 @@ class EmbeddingMixin:
             device = None
 
         def get_embeddings(residue_embeddings: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+            assert isinstance(residue_embeddings, torch.Tensor)
             if full_embeddings or residue_embeddings.ndim == 2:
                 return residue_embeddings
             return pooler(residue_embeddings, attention_mask)

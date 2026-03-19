@@ -16,6 +16,7 @@ Usage:
 import argparse
 import platform
 import subprocess
+from typing import Optional
 
 from huggingface_hub import HfApi, login
 
@@ -179,7 +180,7 @@ SHARED_FILES = {
 
 
 def _run_weight_scripts(
-    families: list[str] | None, hf_token: str | None, skip_weights: bool
+    families: Optional[list], hf_token: Optional[str], skip_weights: bool
 ) -> None:
     python_cmd = "python" if platform.system().lower() == "linux" else "py"
     for entry in MODEL_REGISTRY:
@@ -197,7 +198,7 @@ def _run_weight_scripts(
         subprocess.run(command, check=True)
 
 
-def _upload_files(api: HfApi, families: list[str] | None) -> None:
+def _upload_files(api: HfApi, families: Optional[list]) -> None:
     for entry in MODEL_REGISTRY:
         if families is not None and entry["family"] not in families:
             continue

@@ -1,10 +1,10 @@
 import torch
 from torch.nn.functional import mse_loss
-from typing import Mapping
+from typing import Dict, List, Mapping
 
 
 def assert_model_parameters_fp32(model: torch.nn.Module, model_name: str) -> None:
-    non_fp32: list[dict[str, str]] = []
+    non_fp32: List[Dict[str, str]] = []
     parameter_count = 0
     for name, parameter in model.named_parameters():
         parameter_count += 1
@@ -22,7 +22,7 @@ def assert_state_dict_floating_tensors_fp32(
     state_dict: Mapping[str, torch.Tensor],
     state_dict_name: str,
 ) -> None:
-    non_fp32: list[dict[str, str]] = []
+    non_fp32: List[Dict[str, str]] = []
     for tensor_name in sorted(state_dict.keys()):
         tensor = state_dict[tensor_name]
         assert torch.is_tensor(tensor), (

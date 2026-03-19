@@ -918,7 +918,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     return run_boltz2_compliance_suite(args)

@@ -1,6 +1,8 @@
 import copy
 import os
 import torch
+from typing import List, Optional, Tuple
+
 from huggingface_hub import HfApi, login
 from transformers import AutoModelForMaskedLM, AutoTokenizer, AutoConfig
 
@@ -15,11 +17,11 @@ MODEL_DICT = {
 }
 
 
-def _resolve_repo_items(repo_ids: list[str] | None) -> list[tuple[str, str]]:
+def _resolve_repo_items(repo_ids: Optional[List[str]]) -> List[Tuple[str, str]]:
     if repo_ids is None or len(repo_ids) == 0:
         return list(MODEL_DICT.items())
 
-    selected_items: list[tuple[str, str]] = []
+    selected_items: List[Tuple[str, str]] = []
     for repo_id in repo_ids:
         assert repo_id in MODEL_DICT, (
             f"Unknown repo_id {repo_id}. "

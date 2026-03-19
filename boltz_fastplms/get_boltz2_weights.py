@@ -4,6 +4,7 @@ import shutil
 import sys
 import urllib.request
 from pathlib import Path
+from typing import Dict, List, Set
 
 import torch
 from huggingface_hub import HfApi, login
@@ -52,8 +53,8 @@ def _ensure_local_boltz_module_on_path() -> Path:
     for parent in [cwd, *cwd.parents]:
         candidates.append(parent / "boltz" / "src")
 
-    deduplicated_candidates: list[Path] = []
-    seen = set()
+    deduplicated_candidates: List[Path] = []
+    seen: Set[str] = set()
     for candidate in candidates:
         candidate_resolved = candidate.resolve()
         candidate_key = str(candidate_resolved)
@@ -122,7 +123,7 @@ def _load_official_boltz2_model(
         target=AtomDiffusion,
         kwargs=raw_diffusion_process_args,
     )
-    sanitized_diffusion_process_args: dict[str, object] = {}
+    sanitized_diffusion_process_args: Dict[str, object] = {}
     for key in filtered_diffusion_process_args:
         if key == "score_model_args":
             continue
@@ -132,7 +133,7 @@ def _load_official_boltz2_model(
 
     cleaned_state_dict = _state_dict_without_wrappers(state_dict)
     target_keys = set(official_model.state_dict().keys())
-    filtered_state_dict: dict[str, torch.Tensor] = {}
+    filtered_state_dict: Dict[str, torch.Tensor] = {}
     for key in cleaned_state_dict:
         if key in target_keys:
             filtered_state_dict[key] = cleaned_state_dict[key]
@@ -222,7 +223,7 @@ if __name__ == "__main__":
         "template_module.",
         "bfactor_module.",
     )
-    unexpected_excluded_official_keys: list[str] = []
+    unexpected_excluded_official_keys: List[str] = []
     for key in excluded_official_keys:
         is_allowed = False
         for prefix in allowed_excluded_prefixes:
@@ -235,7 +236,7 @@ if __name__ == "__main__":
         "Unexpected official Boltz2 keys not present in FastPLMs inference core. "
         f"Unexpected keys (first 20): {unexpected_excluded_official_keys[:20]}"
     )
-    filtered_official_state_dict: dict[str, torch.Tensor] = {}
+    filtered_official_state_dict: Dict[str, torch.Tensor] = {}
     for key in candidate_state_dict:
         filtered_official_state_dict[key] = official_state_dict[key]
     assert_state_dict_equal(

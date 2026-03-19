@@ -1,10 +1,11 @@
 """Load official E1 model from the e1 package for comparison."""
 import torch
 import torch.nn as nn
+from typing import Tuple
 
 
 class _OfficialE1ForwardWrapper(nn.Module):
-    def __init__(self, model):
+    def __init__(self, model: nn.Module) -> None:
         super().__init__()
         self.model = model
 
@@ -31,7 +32,7 @@ def load_official_model(
     reference_repo_id: str,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
-) -> tuple[nn.Module, object]:
+) -> Tuple[nn.Module, object]:
     """Load the official E1 model from the e1 submodule.
 
     Args:

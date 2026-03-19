@@ -1,21 +1,23 @@
 ﻿import argparse
-import numpy as np
-import matplotlib.pyplot as plt
-import torch
 import os
 import random
 import requests
 import tempfile
 import sys
+from typing import Tuple
+
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 from Bio.PDB import PDBParser, PPBuilder
 
 from esm2.modeling_fastesm import FastEsmModel
 
 
-def download_random_pdb():
+def download_random_pdb() -> str:
     """
     Download a random protein chain PDB file.
-    
+
     Returns:
         str: Path to the downloaded PDB file.
     """
@@ -43,7 +45,7 @@ def download_random_pdb():
         raise Exception(f"Failed to download PDB file: {response.status_code}")
 
 
-def parse_pdb(pdb_file):
+def parse_pdb(pdb_file: str) -> Tuple[str, np.ndarray]:
     """
     Parse a PDB file and extract the protein sequence and CA atom coordinates.
     
@@ -72,7 +74,7 @@ def parse_pdb(pdb_file):
     raise ValueError("No polypeptide chains were found in the PDB file.")
 
 
-def compute_distance_matrix(coords):
+def compute_distance_matrix(coords: np.ndarray) -> np.ndarray:
     """
     Compute the pairwise Euclidean distance matrix from a set of coordinates.
     
@@ -88,7 +90,7 @@ def compute_distance_matrix(coords):
     return dist_matrix
 
 
-def get_esm_contact_map(sequence):
+def get_esm_contact_map(sequence: str) -> np.ndarray:
     """
     Use the ESM model to predict a contact map for the given protein sequence.
     
@@ -113,7 +115,7 @@ def get_esm_contact_map(sequence):
     return contact_map
 
 
-def plot_maps(true_contact_map, predicted_contact_map, pdb_file):
+def plot_maps(true_contact_map: np.ndarray, predicted_contact_map: np.ndarray, pdb_file: str) -> None:
     """
     Generate two subplots:
       1. ESM predicted contact map.
@@ -149,7 +151,7 @@ def plot_maps(true_contact_map, predicted_contact_map, pdb_file):
     plt.close()
 
 
-def main():
+def main() -> None:
     # py tests/test_contact_maps.py
     parser = argparse.ArgumentParser(
         description="Extract protein sequence and compute contact maps from a PDB file using ESM predictions."

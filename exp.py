@@ -1,9 +1,10 @@
 import torch
+from typing import Dict, List
 
 from e1_fastplms.modeling_e1 import E1BatchPreparer
 
 
-def analyze_batch_kwargs(batch_kwargs: dict, preparer: E1BatchPreparer, sequences: list[str]) -> None:
+def analyze_batch_kwargs(batch_kwargs: Dict[str, torch.Tensor], preparer: E1BatchPreparer, sequences: List[str]) -> None:
     print("==== Batch kwargs analysis ====")
 
     input_ids = batch_kwargs["input_ids"]
