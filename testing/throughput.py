@@ -103,6 +103,12 @@ class ThroughputChecker:
             end_time = time.time()
             return end_time - start_time, processed_tokens
 
+        # Run one eager batch before compiling to warm internal caches (e.g. rotary
+        # embedding's _seq_len_cached). Without this, deepcopy preserves None state and
+        # dynamo recompiles when the cache flips from None to int on the first batch.
+        _ = run_one_batch()
+        synchronize()
+
         # Each _time() call receives a fresh deepcopy at a single (batch_size, seq_len),
         # so static compilation is fine. Flex attention + dynamic=True triggers an inductor
         # fusion bug in PyTorch 2.11, so we use static shapes.
