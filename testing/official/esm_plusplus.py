@@ -1,7 +1,16 @@
-"""Load official ESMC model from the esm package for comparison."""
+"""Load official ESMC model from the esm submodule for comparison."""
+import os
+import sys
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple
+
+# EvolutionaryScale's esm package conflicts with fair-esm (both register as `import esm`).
+# Instead of pip installing, we add the submodule to sys.path on demand.
+_ESM_SUBMODULE = os.path.join(os.path.dirname(__file__), "..", "..", "official", "esm")
+if _ESM_SUBMODULE not in sys.path:
+    sys.path.insert(0, _ESM_SUBMODULE)
 
 
 class _ESMCComplianceOutput:

@@ -32,17 +32,21 @@ WORKDIR /app
 
 COPY requirements.txt .
 
+RUN git submodule update --remote --init --recursive
 RUN pip install --upgrade pip setuptools
+
+# Install official repos from submodules for compliance testing.
+# EvolutionaryScale's esm is NOT pip installed because it conflicts with
+# fair-esm (both use `import esm`). testing/official/esm_plusplus.py
+# adds the submodule to sys.path on demand instead.
+RUN pip install -e /app/official/e1 && \
+    pip install -e /app/official/dplm
+
 RUN pip install -r requirements.txt
 RUN pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
 RUN pip install numpy==1.26.4
-RUN pip install esm -U
 
 COPY . .
-
-# Install official repos from submodules for compliance testing
-RUN pip install -e /app/official/e1 && \
-    pip install -e /app/official/dplm
 
 WORKDIR /workspace
 

@@ -10,3 +10,6 @@
 [submodule "official/transformers"]
 	path = official/transformers
 	url = https://github.com/huggingface/transformers.git
+[submodule "official/esm"]
+	path = official/esm
+	url = https://github.com/evolutionaryScale/esm.git
