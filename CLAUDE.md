@@ -23,7 +23,7 @@ docker run --gpus all fastplms python -m pytest /app/testing/ -k esm2 -v
 docker run --gpus all fastplms python -m pytest /app/testing/test_automodel.py -v
 
 # Throughput benchmark (saves JSON/CSV/PNG)
-docker run --gpus all -v %cd%:/workspace fastplms python -m pytest /app/testing/test_throughput.py -v -s
+docker run --gpus all -v $(pwd):/workspace fastplms python -m pytest /app/testing/test_throughput.py -v -s
 
 # Everything (requires 40+ GB VRAM for 3B models)
 docker run --gpus all fastplms python -m pytest /app/testing/ -v

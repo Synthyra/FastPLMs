@@ -103,8 +103,9 @@ class ThroughputChecker:
             end_time = time.time()
             return end_time - start_time, processed_tokens
 
-        # Compile first, then keep warming up until the compiled path stabilizes.
-        model = torch.compile(model)
+        # Compile with dynamic shapes so a single kernel handles all (batch_size, seq_len) combos
+        # without hitting the recompile limit across evaluate() iterations.
+        model = torch.compile(model, dynamic=True)
         warmup_latencies = []
         for warmup_idx in tqdm(range(max_dynamic_warmup_batches), desc="Warmup (dynamic)", leave=False):
             synchronize()

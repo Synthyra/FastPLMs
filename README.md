@@ -294,7 +294,7 @@ docker run --gpus all fastplms python -m pytest /app/testing/ -v
 docker run --gpus all fastplms python -m pytest /app/testing/ -k esm2 -v
 ```
 
-On Windows, replace `${PWD}` with `%cd%`.
+On Windows, replace `${PWD}` with `$(pwd)`.
 
 ### Compliance Test Dependencies
 
@@ -313,11 +313,11 @@ Throughput can be measured via the pytest test (saves structured JSON/CSV/PNG re
 
 ```bash
 # Pytest (benchmarks ESM2-8M, ESMplusplus_small, DPLM-150M, DPLM2-150M across all backends)
-docker run --gpus all -v %cd%:/workspace fastplms python -m pytest /app/testing/test_throughput.py -v -s
+docker run --gpus all -v $(pwd):/workspace fastplms python -m pytest /app/testing/test_throughput.py -v -s
 # Output: throughput_results.json, throughput_results.csv, throughput_comparison.png
 
 # Standalone (fully configurable)
-docker run --gpus all -v %cd%:/workspace fastplms \
+docker run --gpus all -v $(pwd):/workspace fastplms \
     python -m testing.throughput \
     --model_paths Synthyra/ESM2-8M Synthyra/ESMplusplus_small \
     --backends sdpa flex kernels_flash \
@@ -348,10 +348,10 @@ docker build -t fastplms .
 docker run --gpus all fastplms python -m pytest /app/testing/ -v
 
 # Interactive shell
-docker run --gpus all -v %cd%:/workspace -it fastplms bash
+docker run --gpus all -v $(pwd):/workspace -it fastplms bash
 ```
 
-On Linux/macOS, replace `%cd%` with `${PWD}`.
+On Linux/macOS, replace `$(pwd)` with `${PWD}`.
 
 ---
 

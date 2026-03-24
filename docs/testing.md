@@ -48,7 +48,7 @@ docker run --gpus all -v ${PWD}:/workspace fastplms python -m testing.throughput
 docker run --gpus all -v ${PWD}:/workspace -it fastplms bash
 ```
 
-On Windows, replace `${PWD}` with `%cd%`.
+On Windows, replace `${PWD}` with `$(pwd)`.
 
 ## Pytest Markers
 
