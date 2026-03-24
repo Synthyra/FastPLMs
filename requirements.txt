@@ -1,5 +1,8 @@
 torch>=2.5.1 # this is force reinstalled in the Dockerfile with cuda
 matplotlib
+tqdm
+# testing
+pytest
 # standard
 numpy
 einops
