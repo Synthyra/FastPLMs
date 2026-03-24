@@ -36,11 +36,12 @@ COPY official/ official/
 RUN pip install --upgrade pip setuptools
 
 # Install official repos from submodules for compliance testing.
-# EvolutionaryScale's esm is NOT pip installed because it conflicts with
-# fair-esm (both use `import esm`). testing/official/esm_plusplus.py
-# adds the submodule to sys.path on demand instead.
-RUN pip install -e /app/official/e1 && \
-    pip install -e /app/official/dplm
+# - E1: pip install -e (needed by testing/official/e1.py)
+# - DPLM: NOT installed (pins torchtext==0.17.0 which is incompatible).
+#   Compliance uses transformers.EsmForMaskedLM directly. Submodule is for reference only.
+# - ESM (EvolutionaryScale): NOT pip installed (conflicts with fair-esm on `import esm`).
+#   testing/official/esm_plusplus.py adds the submodule to sys.path on demand.
+RUN pip install -e /app/official/e1
 
 RUN pip install -r requirements.txt
 RUN pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
