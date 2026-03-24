@@ -699,6 +699,7 @@ class BaseSequenceTokenizer:
         raise NotImplementedError
 
 
+@torch.compiler.disable
 def get_attention_mask(
     effective_backend: AttentionBackend,
     batch_size: int,

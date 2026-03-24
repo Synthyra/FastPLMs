@@ -681,6 +681,7 @@ def resolve_attention_backend(requested_backend: str) -> AttentionBackend:
     return resolved
 
 
+@torch.compiler.disable
 def get_attention_mask(
     effective_backend: AttentionBackend,
     batch_size: int,

@@ -581,6 +581,7 @@ def resolve_attention_backend(requested_backend: str) -> AttentionBackend:
     return resolved
 
 
+@torch.compiler.disable
 def create_block_causal_mask_optimized(sequence_ids: torch.Tensor) -> BlockMask:
     # Assumes sequence_ids is sorted in increasing order for each batch item, except for
     # the -1 values, which are used to indicate the padding tokens.
@@ -595,6 +596,7 @@ def create_block_causal_mask_optimized(sequence_ids: torch.Tensor) -> BlockMask:
     return create_block_mask(document_mask, batch_size, 1, seqlen, seqlen, device=sequence_ids.device)
 
 
+@torch.compiler.disable
 def create_within_seq_block_mask(sequence_ids: torch.Tensor) -> BlockMask:
     def document_mask(b, h, q_idx, kv_idx):  # type: ignore[no-untyped-def]
         return (

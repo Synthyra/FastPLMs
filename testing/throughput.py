@@ -107,20 +107,28 @@ class ThroughputChecker:
             end_time = time.time()
             return end_time - start_time, processed_tokens
 
-        # The modeling files internally compile flex_attention via _get_flex_attention_fn(),
-        # caching the result in a module-level _compiled_flex_attention global. When we
-        # also wrap the full model in torch.compile(), the inductor hits double-compilation
-        # (compiled Triton kernels inside a compiled graph) and crashes.
+        # Two torch.compile compatibility fixes for flex attention:
         #
-        # Fix: (1) set the debug flag so _get_flex_attention_fn returns raw flex_attention,
-        # (2) clear any already-cached compiled version across all loaded modeling modules.
+        # 1. create_block_mask must NOT run inside torch.compile (per PyTorch docs).
+        #    Wrap get_attention_mask and E1's block mask helpers with torch.compiler.disable
+        #    so they execute eagerly even when the outer model is compiled.
+        #
+        # 2. The modeling files internally compile flex_attention via _get_flex_attention_fn(),
+        #    caching the result in a module-level _compiled_flex_attention global. When we
+        #    also wrap the full model in torch.compile(), the inductor hits double-compilation.
+        #    Set the debug flag so _get_flex_attention_fn returns raw flex_attention, and
+        #    clear any already-cached compiled version.
+        import sys
+        for mod in list(sys.modules.values()):
+            for fn_name in ("get_attention_mask", "create_block_causal_mask_optimized", "create_within_seq_block_mask"):
+                fn = getattr(mod, fn_name, None)
+                if fn is not None and callable(fn):
+                    setattr(mod, fn_name, torch.compiler.disable(fn))
+            if hasattr(mod, "_compiled_flex_attention"):
+                mod._compiled_flex_attention = None
         flex_mod = getattr(torch.nn.attention, "flex_attention", None)
         if flex_mod is not None:
             flex_mod._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
-        import sys
-        for mod in list(sys.modules.values()):
-            if hasattr(mod, "_compiled_flex_attention"):
-                mod._compiled_flex_attention = None
 
         # Eager pass to warm internal caches (rotary _seq_len_cached, flex block masks)
         # before compile. Without this, dynamo recompiles when cache state changes.
