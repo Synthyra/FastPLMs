@@ -5,6 +5,14 @@ from typing import Dict, List, Tuple
 import pytest
 import torch
 
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "gpu: requires CUDA GPU")
+    config.addinivalue_line("markers", "slow: loads two models simultaneously (compliance tests)")
+    config.addinivalue_line("markers", "large: requires 24+ GB VRAM (3B parameter models)")
+    config.addinivalue_line("markers", "structure: structure prediction models (Boltz2, ESMFold)")
+
+
 # Standalone scripts that are not pytest tests
 collect_ignore = [
     os.path.join(os.path.dirname(__file__), "test_contact_maps.py"),

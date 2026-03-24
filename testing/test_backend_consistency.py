@@ -40,9 +40,13 @@ def _tokenize_batch(
     model_key: str,
     sequences: List[str],
     device: torch.device,
+    registry: Dict[str, Dict] = None,
 ) -> Dict[str, torch.Tensor]:
     """Tokenize sequences, handling E1's sequence mode."""
-    if model_key == "e1":
+    if registry is None:
+        registry = MODEL_REGISTRY
+    config = registry[model_key] if model_key in registry else MODEL_REGISTRY[model_key]
+    if config["model_type"] == "E1":
         batch = model.model.prep_tokens.get_batch_kwargs(sequences, device=device)
         return {
             "input_ids": batch["input_ids"],
@@ -76,7 +80,7 @@ def _run_backend_consistency(model_key: str, registry: Dict[str, Dict]) -> None:
     ).eval()
 
     sequences = _generate_sequences(model_key)
-    inputs = _tokenize_batch(model, model_key, sequences, device)
+    inputs = _tokenize_batch(model, model_key, sequences, device, registry=registry)
 
     model_inputs = inputs.copy()
     model_inputs = add_model_specific_inputs(model_inputs, config["model_type"])
