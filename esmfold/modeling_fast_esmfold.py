@@ -1165,8 +1165,12 @@ class FastEsmForProteinFolding(EsmForProteinFolding):
         with torch.no_grad():
             output = self.infer(sequence)
         plddt = output["plddt"]
-        if plddt.dim() >= 2:
-            mean_plddt = float(plddt.mean(dim=-1).mean().item())
+        # plddt shape is (batch, L, 37) - per-atom across atom37 types.
+        # Use CA atom (index 1) only, matching PDB B-factor output.
+        if plddt.dim() == 3:
+            mean_plddt = float(plddt[:, :, 1].mean().item())
+        elif plddt.dim() == 2:
+            mean_plddt = float(plddt[:, 1].mean().item())
         else:
             mean_plddt = float(plddt.mean().item())
         result = {
