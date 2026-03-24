@@ -8,12 +8,27 @@ FastPLMs is an open-source initiative dedicated to accelerating pretrained prote
 
 ## Table of Contents
 1. [Introduction](#introduction)
-2. [Supported Models](#supported-models)
-3. [Attention Backends](#attention-backends)
-4. [Embedding & Pooling](#embedding--pooling)
-5. [Concrete Examples](#concrete-examples)
-6. [Testing & Benchmarking](#testing--benchmarking)
-7. [Installation & Docker](#installation--docker)
+2. [Documentation](#documentation)
+3. [Supported Models](#supported-models)
+4. [Attention Backends](#attention-backends)
+5. [Embedding & Pooling](#embedding--pooling)
+6. [Concrete Examples](#concrete-examples)
+7. [Testing & Benchmarking](#testing--benchmarking)
+8. [Installation & Docker](#installation--docker)
+
+---
+
+## Documentation
+
+Detailed documentation is available in the [`docs/`](docs/) folder:
+
+- [Architecture Overview](docs/architecture.md) - How FastPLMs wraps official models, the attention backend system, Docker layout
+- [Per-Model Guides](docs/models.md) - Loading, configuration, and special handling for each model family
+- [Attention Backends](docs/attention_backends.md) - SDPA, Flash, Flex, Auto: how they work, when to use each, numerical properties
+- [Embedding & Pooling API](docs/embedding_api.md) - Pooler strategies, `embed_dataset()` parameters, SQLite/pth storage
+- [Fine-Tuning Guide](docs/finetuning.md) - LoRA, Trainer patterns, dataset classes, metrics
+- [Testing & Benchmarking](docs/testing.md) - Docker commands, pytest markers, compliance architecture, throughput benchmarks
+- [Contributing](docs/contributing.md) - Code style, adding new models, required tests
 
 ---
 
@@ -238,19 +253,21 @@ print(embeddings[sequences[0]].shape)
 
 ## Testing & Benchmarking
 
-FastPLMs includes a pytest-based test suite under `testing/` covering correctness, compliance, and performance. All GPU tests run inside Docker.
+FastPLMs includes a pytest-based test suite under `testing/` covering correctness, compliance, and performance. All GPU tests run inside Docker. See [docs/testing.md](docs/testing.md) for the full guide.
 
 ### Test Categories
 
 | Test | What it checks | Marker |
 | :--- | :--- | :--- |
 | **AutoModel loading** | Every model loads via `AutoModelForMaskedLM.from_pretrained(..., trust_remote_code=True)` and produces valid outputs | `gpu` |
-| **Backend consistency** | SDPA, Flex, and Flash backends produce equivalent predictions | `gpu` |
+| **Backend consistency** | SDPA, Flex, and Flash backends produce equivalent predictions (>= 95% agreement) | `gpu` |
 | **Weight compliance** | FastPLM weights are bit-exact with the original implementations (ESM2, ESMC, E1, DPLM) | `slow`, `gpu` |
 | **Forward compliance** | Forward pass logits/predictions match the originals within tolerance | `slow`, `gpu` |
 | **NaN stability** | Batched inference with padding produces no NaN in real-token embeddings | `gpu` |
 | **Batch-single match** | Batch and single-item embedding produce identical results | `gpu` |
-| **Throughput** | Tokens/sec across backends and batch sizes (standalone script, not pytest) | - |
+| **Full model suite** | All of the above across every checkpoint (8M through 3B) | `gpu`, `large` |
+| **Throughput benchmark** | Tokens/sec across models, backends, batch sizes, and sequence lengths | `slow`, `gpu` |
+| **Structure models** | Boltz2 and ESMFold loading + forward pass | `structure`, `slow`, `gpu` |
 
 ### Running Tests with Docker
 
@@ -258,15 +275,26 @@ FastPLMs includes a pytest-based test suite under `testing/` covering correctnes
 # Build the image
 docker build -t fastplms .
 
-# Run all tests
-docker run --gpus all fastplms python -m pytest /app/testing/ -v
+# Fast tests (small models, no compliance, no structure)
+docker run --gpus all fastplms python -m pytest /app/testing/ -m "gpu and not slow and not large and not structure" -v
 
-# Fast tests only (skip compliance, which loads two models per family)
-docker run --gpus all fastplms python -m pytest /app/testing/ -m "not slow" -v
+# All sequence model tests except 3B
+docker run --gpus all fastplms python -m pytest /app/testing/ -m "not large and not structure" -v
+
+# Full suite including 3B models (requires 40+ GB VRAM)
+docker run --gpus all fastplms python -m pytest /app/testing/ -m "not structure" -v
+
+# Structure models only (Boltz2, ESMFold)
+docker run --gpus all fastplms python -m pytest /app/testing/ -m "structure" -v
+
+# Everything
+docker run --gpus all fastplms python -m pytest /app/testing/ -v
 
 # Single model family
 docker run --gpus all fastplms python -m pytest /app/testing/ -k esm2 -v
 ```
+
+On Windows, replace `${PWD}` with `%cd%`.
 
 ### Compliance Test Dependencies
 
@@ -277,22 +305,25 @@ Weight and forward compliance tests compare FastPLM outputs against the original
 | `esm` | EvolutionaryScale's ESMC reference models | `pip install esm` |
 | `E1` | Profluent-Bio's E1 reference models (Python >= 3.12) | `pip install E1 @ git+https://github.com/Profluent-AI/E1.git` |
 
-ESM2 and DPLM compliance use HuggingFace `transformers` directly (no extra packages). If a compliance dependency is not installed, those tests are skipped.
+ESM2 and DPLM compliance use HuggingFace `transformers` directly (no extra packages). If a compliance dependency is not installed, those tests are skipped. All compliance dependencies are pre-installed in the Docker image.
 
 ### Throughput Benchmarks
 
-The throughput benchmark is a standalone script (not part of the pytest suite) that measures tokens/sec across backends, batch sizes, and sequence lengths with `torch.compile`.
+Throughput can be measured via the pytest test (saves structured JSON/CSV/PNG results) or the standalone script (more configurable).
 
 ```bash
-# Inside Docker
-docker run --gpus all -v ${PWD}:/workspace fastplms \
+# Pytest (benchmarks ESM2-8M, ESMplusplus_small, DPLM-150M, DPLM2-150M across all backends)
+docker run --gpus all -v %cd%:/workspace fastplms python -m pytest /app/testing/test_throughput.py -v -s
+# Output: throughput_results.json, throughput_results.csv, throughput_comparison.png
+
+# Standalone (fully configurable)
+docker run --gpus all -v %cd%:/workspace fastplms \
     python -m testing.throughput \
     --model_paths Synthyra/ESM2-8M Synthyra/ESMplusplus_small \
     --backends sdpa flex kernels_flash \
     --batch_sizes 2 4 8 \
-    --sequence_lengths 64 128 256 512 1024 2048
-
-# Output: throughput_comparison.png
+    --sequence_lengths 64 128 256 512 1024 2048 \
+    --output_path /workspace/throughput_comparison.png
 ```
 
 ---
@@ -307,7 +338,7 @@ pip install -r requirements.txt
 ```
 
 ### Docker (Recommended for GPU Testing)
-The Dockerfile includes CUDA 12.8, all Python dependencies, and the E1 reference package for compliance testing.
+The Dockerfile includes CUDA 12.8, all Python dependencies, and the E1/esm reference packages for compliance testing.
 
 ```bash
 # Build the image
@@ -317,10 +348,10 @@ docker build -t fastplms .
 docker run --gpus all fastplms python -m pytest /app/testing/ -v
 
 # Interactive shell
-docker run --gpus all -v ${PWD}:/workspace -it fastplms bash
+docker run --gpus all -v %cd%:/workspace -it fastplms bash
 ```
 
-On Windows, replace `${PWD}` with `%cd%`.
+On Linux/macOS, replace `%cd%` with `${PWD}`.
 
 ---
 

@@ -8,7 +8,10 @@ from typing import Dict, List
 import pytest
 import torch
 
-from testing.conftest import CANONICAL_AAS, MODEL_REGISTRY, SEED
+from testing.conftest import (
+    CANONICAL_AAS, FULL_MODEL_REGISTRY, MODEL_REGISTRY, SEED,
+    mark_by_size,
+)
 
 
 BATCH_SIZE = 4
@@ -18,6 +21,8 @@ MAX_EMBED_LEN = 128
 # Models that use tokenizer mode (not E1)
 TOKENIZER_MODEL_KEYS = [k for k, v in MODEL_REGISTRY.items() if v["uses_tokenizer"]]
 ALL_MODEL_KEYS = list(MODEL_REGISTRY.keys())
+ALL_FULL_MODEL_KEYS = list(FULL_MODEL_REGISTRY.keys())
+FULL_TOKENIZER_KEYS = [k for k, v in FULL_MODEL_REGISTRY.items() if v["uses_tokenizer"]]
 
 
 class FixedLengthTokenizer:
@@ -185,6 +190,93 @@ def test_batch_single_match(model_key: str) -> None:
 
     random.seed(SEED)
     config = MODEL_REGISTRY[model_key]
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = AutoModelForMaskedLM.from_pretrained(
+        config["fast_path"],
+        trust_remote_code=True,
+        dtype=torch.float32,
+        device_map=device,
+    ).eval()
+
+    tokenizer = FixedLengthTokenizer(model.tokenizer)
+    sequences = _random_sequences(n=8)
+
+    batch_embs = model.embed_dataset(
+        sequences=sequences,
+        batch_size=BATCH_SIZE,
+        tokenizer=tokenizer,
+        full_embeddings=True,
+        embed_dtype=torch.float32,
+        save=False,
+    )
+    single_embs = model.embed_dataset(
+        sequences=sequences,
+        batch_size=1,
+        tokenizer=tokenizer,
+        full_embeddings=True,
+        embed_dtype=torch.float32,
+        save=False,
+    )
+    _assert_no_nan(batch_embs, f"{model_key} match test batch_size={BATCH_SIZE}")
+    _assert_no_nan(single_embs, f"{model_key} match test batch_size=1")
+    _assert_embeddings_match(batch_embs, single_embs, model_key)
+
+    del model
+    torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# Full model registry tests: NaN stability across all checkpoints
+# ---------------------------------------------------------------------------
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("model_key", mark_by_size(ALL_FULL_MODEL_KEYS, FULL_MODEL_REGISTRY))
+def test_full_nan_stability(model_key: str) -> None:
+    """Every checkpoint's embed_dataset produces no NaN in real-token rows."""
+    from transformers import AutoModelForMaskedLM
+
+    random.seed(SEED)
+    config = FULL_MODEL_REGISTRY[model_key]
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = AutoModelForMaskedLM.from_pretrained(
+        config["fast_path"],
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        device_map=device,
+    ).eval()
+
+    uses_tokenizer = config["uses_tokenizer"]
+    if uses_tokenizer:
+        tokenizer = FixedLengthTokenizer(model.tokenizer)
+        sequences = _random_sequences(n=8)
+    else:
+        tokenizer = None
+        sequences = _random_sequences_fixed_len(n=8)
+
+    embs = model.embed_dataset(
+        sequences=sequences,
+        batch_size=BATCH_SIZE,
+        tokenizer=tokenizer,
+        full_embeddings=True,
+        embed_dtype=torch.bfloat16,
+        save=False,
+    )
+    _assert_no_nan(embs, f"{model_key} NaN check batch_size={BATCH_SIZE}")
+
+    del model
+    torch.cuda.empty_cache()
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("model_key", mark_by_size(FULL_TOKENIZER_KEYS, FULL_MODEL_REGISTRY))
+def test_full_batch_single_match(model_key: str) -> None:
+    """Every tokenizer-mode checkpoint matches batch vs single-item embedding."""
+    from transformers import AutoModelForMaskedLM
+
+    random.seed(SEED)
+    config = FULL_MODEL_REGISTRY[model_key]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = AutoModelForMaskedLM.from_pretrained(

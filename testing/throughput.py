@@ -167,6 +167,50 @@ class ThroughputChecker:
         return results
 
 
+def save_structured_results(all_results: Dict[str, Dict], output_dir: str) -> None:
+    """Save throughput results as JSON and CSV files.
+
+    Each row contains: model, backend, batch_size, seq_len, tokens_per_sec,
+    total_tokens, elapsed_sec.
+    """
+    import csv
+    import json
+
+    rows = []
+    for model_path, results in all_results.items():
+        model_name = Path(model_path).name
+        for backend in sorted(results.keys()):
+            for (bs, max_length), entry in results[backend].items():
+                time_taken = entry["time"]
+                nonpad_tokens = entry["tokens"]
+                tokens_per_sec = nonpad_tokens / time_taken if time_taken > 0 else 0.0
+                rows.append({
+                    "model": model_name,
+                    "model_path": model_path,
+                    "backend": backend,
+                    "batch_size": bs,
+                    "seq_len": max_length,
+                    "tokens_per_sec": round(tokens_per_sec, 2),
+                    "total_tokens": nonpad_tokens,
+                    "elapsed_sec": round(time_taken, 4),
+                })
+
+    output_path = Path(output_dir)
+
+    json_path = output_path / "throughput_results.json"
+    with open(json_path, "w") as f:
+        json.dump(rows, f, indent=2)
+    print(f"JSON results saved to {json_path}")
+
+    if rows:
+        csv_path = output_path / "throughput_results.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"CSV results saved to {csv_path}")
+
+
 def plot_results(all_results: Dict[str, Dict], output_path: str) -> None:
     sns.set_theme(style="whitegrid")
     plot_data = []
@@ -260,4 +304,6 @@ if __name__ == "__main__":
             backends=args.backends,
         )
 
+    output_dir = str(Path(args.output_path).parent)
+    save_structured_results(all_results, output_dir)
     plot_results(all_results, args.output_path)
