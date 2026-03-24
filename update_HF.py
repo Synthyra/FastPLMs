@@ -130,6 +130,20 @@ MODEL_REGISTRY = [
         "weight_module": None,
     },
     {
+        "family": "esmfold",
+        "repo_ids": [
+            "Synthyra/FastESMFold",
+        ],
+        "files": {
+            "esmfold/modeling_fast_esmfold.py": "modeling_fast_esmfold.py",
+        },
+        "readme_map": {
+            "Synthyra/FastESMFold": "readmes/esmfold_readme.md",
+        },
+        "license": "LICENSE",
+        "weight_module": "esmfold.get_esmfold_weights",
+    },
+    {
         "family": "boltz",
         "repo_ids": [
             "Synthyra/Boltz2",

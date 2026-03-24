@@ -468,9 +468,6 @@ class EsmSelfAttention(nn.Module):
         flex_block_mask: "BlockMask | None" = None,
     ) -> tuple[torch.Tensor, None]:
         assert flex_attention is not None, "Flex attention is not available in this environment."
-        assert query_BHLD.dtype in (torch.float16, torch.bfloat16), (
-            f"Flex attention requires float16 or bfloat16, got {query_BHLD.dtype}."
-        )
         fn = _get_flex_attention_fn()
         context_BHLD = fn(query_BHLD, key_BHLD, value_BHLD, block_mask=flex_block_mask, scale=1.0)
         return rearrange(context_BHLD, "b h s d -> b s (h d)"), None
@@ -722,7 +719,7 @@ def inject_trainable_lora(
 class TTTConfig:
     lr: float = 4e-4
     ags: int = 4
-    steps: int = 30
+    steps: int = 10
     batch_size: int = 4
     mask_ratio: float = 0.15
     crop_size: int = 1024
@@ -787,7 +784,7 @@ class FastEsmFoldConfig(EsmConfig):
         self.attn_backend = attn_backend
         self.ttt_config = ttt_config or {
             "lr": 4e-4,
-            "steps": 30,
+            "steps": 10,
             "lora_rank": 8,
             "lora_alpha": 32.0,
         }

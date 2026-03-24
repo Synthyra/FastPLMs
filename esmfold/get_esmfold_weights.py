@@ -39,7 +39,7 @@ def convert_and_push(
     config_dict["attn_backend"] = attn_backend
     config_dict["ttt_config"] = {
         "lr": 4e-4,
-        "steps": 30,
+        "steps": 10,
         "ags": 4,
         "batch_size": 4,
         "mask_ratio": 0.15,

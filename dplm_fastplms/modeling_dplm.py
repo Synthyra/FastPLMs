@@ -957,9 +957,6 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         flex_block_mask: "BlockMask | None" = None,
     ) -> tuple[torch.Tensor, None]:
         assert flex_attention is not None, "Flex attention is not available in this environment."
-        assert query_BHLD.dtype in (torch.float16, torch.bfloat16), (
-            f"Flex attention requires float16 or bfloat16, got {query_BHLD.dtype}."
-        )
         fn = _get_flex_attention_fn()
         context_BHLD = fn(query_BHLD, key_BHLD, value_BHLD, block_mask=flex_block_mask, scale=1.0)
         return rearrange(context_BHLD, "b h s d -> b s (h d)"), None

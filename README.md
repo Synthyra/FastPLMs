@@ -238,23 +238,62 @@ print(embeddings[sequences[0]].shape)
 
 ## Testing & Benchmarking
 
-FastPLMs includes a robust CLI-based testing suite under `testing/`.
+FastPLMs includes a pytest-based test suite under `testing/` covering correctness, compliance, and performance. All GPU tests run inside Docker.
 
-### Running the Suite
-- **Compliance Checks**: Verify that optimized models match reference outputs.
-  ```bash
-  py -m testing.run_compliance --families esm2
-  ```
-- **Throughput Benchmarks**: Measure tokens/sec and peak memory.
-  ```bash
-  py -m testing.run_throughput --device cuda --lengths 512,1024
-  ```
-- **Run Everything**: Execute the full suite across all families.
-  ```bash
-  py -m testing.run_all --full-models
-  ```
+### Test Categories
 
-Results are saved to `testing/results/<timestamp>/` as `metrics.json`, `metrics.csv`, and high-resolution plots.
+| Test | What it checks | Marker |
+| :--- | :--- | :--- |
+| **AutoModel loading** | Every model loads via `AutoModelForMaskedLM.from_pretrained(..., trust_remote_code=True)` and produces valid outputs | `gpu` |
+| **Backend consistency** | SDPA, Flex, and Flash backends produce equivalent predictions | `gpu` |
+| **Weight compliance** | FastPLM weights are bit-exact with the original implementations (ESM2, ESMC, E1, DPLM) | `slow`, `gpu` |
+| **Forward compliance** | Forward pass logits/predictions match the originals within tolerance | `slow`, `gpu` |
+| **NaN stability** | Batched inference with padding produces no NaN in real-token embeddings | `gpu` |
+| **Batch-single match** | Batch and single-item embedding produce identical results | `gpu` |
+| **Throughput** | Tokens/sec across backends and batch sizes (standalone script, not pytest) | - |
+
+### Running Tests with Docker
+
+```bash
+# Build the image
+docker build -t fastplms .
+
+# Run all tests
+docker run --gpus all fastplms python -m pytest /app/testing/ -v
+
+# Fast tests only (skip compliance, which loads two models per family)
+docker run --gpus all fastplms python -m pytest /app/testing/ -m "not slow" -v
+
+# Single model family
+docker run --gpus all fastplms python -m pytest /app/testing/ -k esm2 -v
+```
+
+### Compliance Test Dependencies
+
+Weight and forward compliance tests compare FastPLM outputs against the original model implementations. These require additional packages:
+
+| Dependency | Purpose | Install |
+| :--- | :--- | :--- |
+| `esm` | EvolutionaryScale's ESMC reference models | `pip install esm` |
+| `E1` | Profluent-Bio's E1 reference models (Python >= 3.12) | `pip install E1 @ git+https://github.com/Profluent-AI/E1.git` |
+
+ESM2 and DPLM compliance use HuggingFace `transformers` directly (no extra packages). If a compliance dependency is not installed, those tests are skipped.
+
+### Throughput Benchmarks
+
+The throughput benchmark is a standalone script (not part of the pytest suite) that measures tokens/sec across backends, batch sizes, and sequence lengths with `torch.compile`.
+
+```bash
+# Inside Docker
+docker run --gpus all -v ${PWD}:/workspace fastplms \
+    python -m testing.throughput \
+    --model_paths Synthyra/ESM2-8M Synthyra/ESMplusplus_small \
+    --backends sdpa flex kernels_flash \
+    --batch_sizes 2 4 8 \
+    --sequence_lengths 64 128 256 512 1024 2048
+
+# Output: throughput_comparison.png
+```
 
 ---
 
@@ -267,15 +306,21 @@ cd FastPLMs
 pip install -r requirements.txt
 ```
 
-### Docker (Recommended for Testing)
+### Docker (Recommended for GPU Testing)
+The Dockerfile includes CUDA 12.8, all Python dependencies, and the E1 reference package for compliance testing.
+
 ```bash
 # Build the image
-docker build -t fastplms-test -f Dockerfile .
+docker build -t fastplms .
 
-# Run benchmarks inside container
-docker run --rm --gpus all -it -v ${PWD}:/workspace fastplms-test \
-    python -m testing.run_throughput --device cuda
+# Run all tests
+docker run --gpus all fastplms python -m pytest /app/testing/ -v
+
+# Interactive shell
+docker run --gpus all -v ${PWD}:/workspace -it fastplms bash
 ```
+
+On Windows, replace `${PWD}` with `%cd%`.
 
 ---
 
