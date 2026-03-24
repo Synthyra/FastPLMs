@@ -103,9 +103,10 @@ class ThroughputChecker:
             end_time = time.time()
             return end_time - start_time, processed_tokens
 
-        # Compile with dynamic shapes so a single kernel handles all (batch_size, seq_len) combos
-        # without hitting the recompile limit across evaluate() iterations.
-        model = torch.compile(model, dynamic=True)
+        # Each _time() call receives a fresh deepcopy at a single (batch_size, seq_len),
+        # so static compilation is fine. Flex attention + dynamic=True triggers an inductor
+        # fusion bug in PyTorch 2.11, so we use static shapes.
+        model = torch.compile(model)
         warmup_latencies = []
         for warmup_idx in tqdm(range(max_dynamic_warmup_batches), desc="Warmup (dynamic)", leave=False):
             synchronize()
