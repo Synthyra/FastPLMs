@@ -31,6 +31,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /app
 
 COPY requirements.txt .
+COPY official/ official/
 
 RUN pip install --upgrade pip setuptools
 

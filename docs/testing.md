@@ -7,6 +7,9 @@ FastPLMs uses pytest with Docker for all GPU testing. Tests cover model loading,
 ### Build
 
 ```bash
+# Initialize submodules first (required -- official repos are pip installed during build)
+git submodule update --init --recursive
+
 docker build -t fastplms .
 ```
 

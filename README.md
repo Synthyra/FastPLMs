@@ -332,15 +332,23 @@ docker run --gpus all -v $(pwd):/workspace fastplms \
 
 ### Local Installation
 ```bash
-git clone https://github.com/Synthyra/FastPLMs.git
+git clone --recurse-submodules https://github.com/Synthyra/FastPLMs.git
 cd FastPLMs
 pip install -r requirements.txt
 ```
 
+If you already cloned without `--recurse-submodules`, initialize submodules separately:
+```bash
+git submodule update --init --recursive
+```
+
 ### Docker (Recommended for GPU Testing)
-The Dockerfile includes CUDA 12.8, all Python dependencies, and the E1/esm reference packages for compliance testing.
+The Dockerfile includes CUDA 12.8, all Python dependencies, and official reference repos (E1, DPLM) installed from `official/` submodules for compliance testing.
 
 ```bash
+# Initialize submodules (required before building Docker)
+git submodule update --init --recursive
+
 # Build the image
 docker build -t fastplms .
 

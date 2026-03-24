@@ -7,6 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 All tests run in Docker. Never run tests natively on Windows (missing Triton, flash-attention, CUDA kernels).
 
 ```bash
+# Initialize submodules (required before Docker build)
+git submodule update --init --recursive
+
 # Build the Docker image
 docker build -t fastplms .
 
