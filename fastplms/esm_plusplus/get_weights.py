@@ -6,9 +6,9 @@ from typing import List, Optional, Tuple
 from huggingface_hub import HfApi, login
 from transformers import AutoModelForMaskedLM, AutoTokenizer, AutoConfig
 
-from esm_plusplus.load_official import load_official_model
-from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
-from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
+from testing.official.esm_plusplus import load_official_model
+from fastplms.esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
+from fastplms.weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
 MODEL_DICT = {
@@ -32,7 +32,7 @@ def _resolve_repo_items(repo_ids: Optional[List[str]]) -> List[Tuple[str, str]]:
 
 
 if __name__ == "__main__":
-    # py -m esm_plusplus.get_esmc_weights
+    # py -m fastplms.esm_plusplus.get_weights
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -101,7 +101,7 @@ if __name__ == "__main__":
         tokenizer.push_to_hub(repo_id)
         model.push_to_hub(repo_id)
         api.upload_file(
-            path_or_fileobj="esm_plusplus/modeling_esm_plusplus.py",
+            path_or_fileobj=os.path.join(script_root, "modeling_esm_plusplus.py"),
             path_in_repo="modeling_esm_plusplus.py",
             repo_id=repo_id,
             repo_type="model",

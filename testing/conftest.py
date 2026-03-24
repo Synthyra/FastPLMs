@@ -31,35 +31,35 @@ MODEL_REGISTRY: Dict[str, Dict] = {
     "esm2": {
         "fast_path": "Synthyra/ESM2-8M",
         "official_path": "facebook/esm2_t6_8M_UR50D",
-        "load_official": "esm2.load_official",
+        "load_official": "testing.official.esm2",
         "model_type": "ESM2",
         "uses_tokenizer": True,
     },
     "esmc": {
         "fast_path": "Synthyra/ESMplusplus_small",
         "official_path": "esmc-300",
-        "load_official": "esm_plusplus.load_official",
+        "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
         "uses_tokenizer": True,
     },
     "e1": {
         "fast_path": "Synthyra/Profluent-E1-150M",
         "official_path": "Profluent-Bio/E1-150m",
-        "load_official": "e1_fastplms.load_official",
+        "load_official": "testing.official.e1",
         "model_type": "E1",
         "uses_tokenizer": False,
     },
     "dplm": {
         "fast_path": "Synthyra/DPLM-150M",
         "official_path": "airkingbd/dplm_150m",
-        "load_official": "dplm_fastplms.load_official",
+        "load_official": "testing.official.dplm",
         "model_type": "DPLM",
         "uses_tokenizer": True,
     },
     "dplm2": {
         "fast_path": "Synthyra/DPLM2-150M",
         "official_path": "airkingbd/dplm2_150m",
-        "load_official": "dplm2_fastplms.load_official",
+        "load_official": "testing.official.dplm2",
         "model_type": "DPLM2",
         "uses_tokenizer": True,
     },
@@ -71,7 +71,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "esm2_8m": {
         "fast_path": "Synthyra/ESM2-8M",
         "official_path": "facebook/esm2_t6_8M_UR50D",
-        "load_official": "esm2.load_official",
+        "load_official": "testing.official.esm2",
         "model_type": "ESM2",
         "uses_tokenizer": True,
         "size_category": "small",
@@ -79,7 +79,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "esm2_35m": {
         "fast_path": "Synthyra/ESM2-35M",
         "official_path": "facebook/esm2_t12_35M_UR50D",
-        "load_official": "esm2.load_official",
+        "load_official": "testing.official.esm2",
         "model_type": "ESM2",
         "uses_tokenizer": True,
         "size_category": "small",
@@ -87,7 +87,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "esm2_150m": {
         "fast_path": "Synthyra/ESM2-150M",
         "official_path": "facebook/esm2_t30_150M_UR50D",
-        "load_official": "esm2.load_official",
+        "load_official": "testing.official.esm2",
         "model_type": "ESM2",
         "uses_tokenizer": True,
         "size_category": "medium",
@@ -95,7 +95,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "esm2_650m": {
         "fast_path": "Synthyra/ESM2-650M",
         "official_path": "facebook/esm2_t33_650M_UR50D",
-        "load_official": "esm2.load_official",
+        "load_official": "testing.official.esm2",
         "model_type": "ESM2",
         "uses_tokenizer": True,
         "size_category": "large",
@@ -103,7 +103,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "esm2_3b": {
         "fast_path": "Synthyra/ESM2-3B",
         "official_path": "facebook/esm2_t36_3B_UR50D",
-        "load_official": "esm2.load_official",
+        "load_official": "testing.official.esm2",
         "model_type": "ESM2",
         "uses_tokenizer": True,
         "size_category": "xlarge",
@@ -112,7 +112,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "esmc_small": {
         "fast_path": "Synthyra/ESMplusplus_small",
         "official_path": "esmc-300",
-        "load_official": "esm_plusplus.load_official",
+        "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
         "uses_tokenizer": True,
         "size_category": "medium",
@@ -120,7 +120,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "esmc_large": {
         "fast_path": "Synthyra/ESMplusplus_large",
         "official_path": "esmc-600",
-        "load_official": "esm_plusplus.load_official",
+        "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
         "uses_tokenizer": True,
         "size_category": "large",
@@ -129,7 +129,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "e1_150m": {
         "fast_path": "Synthyra/Profluent-E1-150M",
         "official_path": "Profluent-Bio/E1-150m",
-        "load_official": "e1_fastplms.load_official",
+        "load_official": "testing.official.e1",
         "model_type": "E1",
         "uses_tokenizer": False,
         "size_category": "small",
@@ -137,7 +137,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "e1_300m": {
         "fast_path": "Synthyra/Profluent-E1-300M",
         "official_path": "Profluent-Bio/E1-300m",
-        "load_official": "e1_fastplms.load_official",
+        "load_official": "testing.official.e1",
         "model_type": "E1",
         "uses_tokenizer": False,
         "size_category": "medium",
@@ -145,7 +145,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "e1_600m": {
         "fast_path": "Synthyra/Profluent-E1-600M",
         "official_path": "Profluent-Bio/E1-600m",
-        "load_official": "e1_fastplms.load_official",
+        "load_official": "testing.official.e1",
         "model_type": "E1",
         "uses_tokenizer": False,
         "size_category": "large",
@@ -154,7 +154,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "dplm_150m": {
         "fast_path": "Synthyra/DPLM-150M",
         "official_path": "airkingbd/dplm_150m",
-        "load_official": "dplm_fastplms.load_official",
+        "load_official": "testing.official.dplm",
         "model_type": "DPLM",
         "uses_tokenizer": True,
         "size_category": "small",
@@ -162,7 +162,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "dplm_650m": {
         "fast_path": "Synthyra/DPLM-650M",
         "official_path": "airkingbd/dplm_650m",
-        "load_official": "dplm_fastplms.load_official",
+        "load_official": "testing.official.dplm",
         "model_type": "DPLM",
         "uses_tokenizer": True,
         "size_category": "large",
@@ -170,7 +170,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "dplm_3b": {
         "fast_path": "Synthyra/DPLM-3B",
         "official_path": "airkingbd/dplm_3b",
-        "load_official": "dplm_fastplms.load_official",
+        "load_official": "testing.official.dplm",
         "model_type": "DPLM",
         "uses_tokenizer": True,
         "size_category": "xlarge",
@@ -179,7 +179,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "dplm2_150m": {
         "fast_path": "Synthyra/DPLM2-150M",
         "official_path": "airkingbd/dplm2_150m",
-        "load_official": "dplm2_fastplms.load_official",
+        "load_official": "testing.official.dplm2",
         "model_type": "DPLM2",
         "uses_tokenizer": True,
         "size_category": "small",
@@ -187,7 +187,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "dplm2_650m": {
         "fast_path": "Synthyra/DPLM2-650M",
         "official_path": "airkingbd/dplm2_650m",
-        "load_official": "dplm2_fastplms.load_official",
+        "load_official": "testing.official.dplm2",
         "model_type": "DPLM2",
         "uses_tokenizer": True,
         "size_category": "large",
@@ -195,7 +195,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     "dplm2_3b": {
         "fast_path": "Synthyra/DPLM2-3B",
         "official_path": "airkingbd/dplm2_3b",
-        "load_official": "dplm2_fastplms.load_official",
+        "load_official": "testing.official.dplm2",
         "model_type": "DPLM2",
         "uses_tokenizer": True,
         "size_category": "xlarge",

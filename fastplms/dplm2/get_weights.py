@@ -1,20 +1,21 @@
 import copy
+import os
 import torch
 from typing import List, Optional, Tuple
 
 from huggingface_hub import HfApi, login
 from transformers import AutoModelForMaskedLM, EsmTokenizer
 
-from dplm_fastplms.modeling_dplm import DPLMConfig as FastDPLMConfig, DPLMForMaskedLM
-from weight_parity_utils import assert_model_parameters_fp32
+from fastplms.dplm2.modeling_dplm2 import DPLM2Config as FastDPLM2Config, DPLM2ForMaskedLM
+from fastplms.weight_parity_utils import assert_model_parameters_fp32
 
 
 MODEL_DICT = {
-    "Synthyra/DPLM-150M": "airkingbd/dplm_150m",
-    "Synthyra/DPLM-650M": "airkingbd/dplm_650m",
-    "Synthyra/DPLM-3B": "airkingbd/dplm_3b",
+    "Synthyra/DPLM2-150M": "airkingbd/dplm2_150m",
+    "Synthyra/DPLM2-650M": "airkingbd/dplm2_650m",
+    "Synthyra/DPLM2-3B": "airkingbd/dplm2_3b",
 }
-SHARDED_REPO_IDS = {"Synthyra/DPLM-3B"}
+SHARDED_REPO_IDS = {"Synthyra/DPLM2-3B"}
 SHARD_SIZE = "5GB"
 
 
@@ -45,7 +46,7 @@ def _assert_repo_has_sharded_weights(api: HfApi, repo_id: str) -> None:
     assert "model.safetensors" not in repo_files, f"{repo_id} still has unified model.safetensors."
 
 
-def _push_model_with_expected_format(model: DPLMForMaskedLM, api: HfApi, repo_id: str) -> None:
+def _push_model_with_expected_format(model: DPLM2ForMaskedLM, api: HfApi, repo_id: str) -> None:
     if repo_id in SHARDED_REPO_IDS:
         print(f"Pushing sharded weights for {repo_id} with max_shard_size={SHARD_SIZE}")
         model.push_to_hub(repo_id, max_shard_size=SHARD_SIZE)
@@ -70,7 +71,7 @@ def _resolve_repo_items(repo_ids: Optional[List[str]]) -> List[Tuple[str, str]]:
 
 
 if __name__ == "__main__":
-    # py -m dplm_fastplms.get_dplm_weights
+    # py -m fastplms.dplm2.get_weights
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -85,13 +86,13 @@ if __name__ == "__main__":
         login(token=args.hf_token)
 
     for repo_id, source_repo in _resolve_repo_items(args.repo_ids):
-        config = FastDPLMConfig.from_pretrained(source_repo)
+        config = FastDPLM2Config.from_pretrained(source_repo)
         config.auto_map = {
-            "AutoConfig": "modeling_dplm.DPLMConfig",
-            "AutoModel": "modeling_dplm.DPLMModel",
-            "AutoModelForMaskedLM": "modeling_dplm.DPLMForMaskedLM",
-            "AutoModelForSequenceClassification": "modeling_dplm.DPLMForSequenceClassification",
-            "AutoModelForTokenClassification": "modeling_dplm.DPLMForTokenClassification",
+            "AutoConfig": "modeling_dplm2.DPLM2Config",
+            "AutoModel": "modeling_dplm2.DPLM2Model",
+            "AutoModelForMaskedLM": "modeling_dplm2.DPLM2ForMaskedLM",
+            "AutoModelForSequenceClassification": "modeling_dplm2.DPLM2ForSequenceClassification",
+            "AutoModelForTokenClassification": "modeling_dplm2.DPLM2ForTokenClassification",
         }
         config.tie_word_embeddings = False
         if args.skip_weights:
@@ -100,7 +101,7 @@ if __name__ == "__main__":
             tokenizer.push_to_hub(repo_id)
             print(f"[skip-weights] uploaded config+tokenizer for {repo_id}")
             continue
-        model = DPLMForMaskedLM.from_pretrained(source_repo, config=config).eval().cpu().to(torch.float32)
+        model = DPLM2ForMaskedLM.from_pretrained(source_repo, config=config).eval().cpu().to(torch.float32)
         model.tokenizer = EsmTokenizer.from_pretrained(source_repo)
 
         # Break any potential embedding/LM-head parameter aliasing before export.
@@ -113,15 +114,15 @@ if __name__ == "__main__":
 
         assert_model_parameters_fp32(
             model=model,
-            model_name=f"DPLM model ({source_repo})",
+            model_name=f"DPLM2 model ({source_repo})",
         )
 
         tokenizer = model.tokenizer
         tokenizer.push_to_hub(repo_id)
         _push_model_with_expected_format(model, api, repo_id)
         api.upload_file(
-            path_or_fileobj="dplm_fastplms/modeling_dplm.py",
-            path_in_repo="modeling_dplm.py",
+            path_or_fileobj=os.path.join(os.path.dirname(os.path.abspath(__file__)), "modeling_dplm2.py"),
+            path_in_repo="modeling_dplm2.py",
             repo_id=repo_id,
             repo_type="model",
         )
@@ -134,5 +135,5 @@ if __name__ == "__main__":
         )
         assert_model_parameters_fp32(
             model=downloaded_model,
-            model_name=f"downloaded DPLM model ({repo_id})",
+            model_name=f"downloaded DPLM2 model ({repo_id})",
         )

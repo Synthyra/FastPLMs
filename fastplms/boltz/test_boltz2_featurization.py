@@ -4,7 +4,7 @@ Compares feature tensors produced by both pipelines for the same input sequence.
 Requires the `boltz` package to be installed for the official pipeline.
 
 Usage:
-    python -m boltz_fastplms.test_boltz2_featurization
+    python -m fastplms.boltz.test_boltz2_featurization
 """
 
 import sys

@@ -88,7 +88,7 @@ def _assert_embeddings_match(
 # --- CPU-only utility tests ---
 
 def test_parse_fasta() -> None:
-    from embedding_mixin import parse_fasta
+    from fastplms.embedding_mixin import parse_fasta
 
     fasta_content = (
         ">seq1 a simple protein\n"
@@ -114,7 +114,7 @@ def test_parse_fasta() -> None:
 
 @pytest.mark.gpu
 def test_dplm2_multimodal_layout_guard() -> None:
-    from dplm2_fastplms.modeling_dplm2 import _has_packed_multimodal_layout
+    from fastplms.dplm2.modeling_dplm2 import _has_packed_multimodal_layout
 
     plain = torch.tensor([[1, 1, 1, 1, 1, 1, 0, 2], [1, 1, 1, 1, 1, 0, 2, 2]])
     packed = torch.tensor([[1, 1, 1, 2, 0, 0, 0, 2], [1, 1, 2, 2, 0, 0, 2, 2]])
@@ -127,7 +127,7 @@ def test_dplm2_multimodal_layout_guard() -> None:
 
 @pytest.mark.gpu
 def test_dplm2_special_token_normalization() -> None:
-    from dplm2_fastplms.modeling_dplm2 import _normalize_dplm2_input_ids
+    from fastplms.dplm2.modeling_dplm2 import _normalize_dplm2_input_ids
 
     input_ids = torch.tensor([[8231, 5, 23, 13, 8229, 1, 8232, -100]])
     normalized = _normalize_dplm2_input_ids(input_ids, vocab_size=8229)

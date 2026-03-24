@@ -20,7 +20,7 @@ from testing.conftest import (
     CANONICAL_AAS, FULL_MODEL_REGISTRY, MODEL_REGISTRY, SEED,
     add_model_specific_inputs, mark_by_size,
 )
-from weight_parity_utils import assert_state_dict_equal
+from fastplms.weight_parity_utils import assert_state_dict_equal
 
 
 MODEL_KEYS = list(MODEL_REGISTRY.keys())

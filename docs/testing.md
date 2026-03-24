@@ -13,7 +13,7 @@ docker build -t fastplms .
 The Dockerfile includes:
 - CUDA 12.8, cuDNN, Python 3.12
 - PyTorch 2.11.0 with CUDA 12.8 wheels
-- E1 reference package (from git) and `esm` package for compliance testing
+- Official reference repos installed via `pip install -e` from `official/` submodules
 - All `requirements.txt` dependencies
 
 ### Run Tests
@@ -122,7 +122,7 @@ Compliance tests verify that FastPLM implementations are faithful to the origina
 
 ### Architecture
 
-Each model family has a `load_official.py` module that provides:
+Each model family has a corresponding module in `testing/official/` (e.g., `testing/official/esm2.py`) that provides:
 
 ```python
 def load_official_model(reference_repo_id, device, dtype):
@@ -134,7 +134,7 @@ The returned model is wrapped so its forward pass matches FastPLM's interface (r
 
 ### Weight Compliance
 
-`test_weight_compliance` loads both models in float32 and compares state dicts via `weight_parity_utils.assert_state_dict_equal()`. This checks that every parameter is bit-exact (MSE == 0.0).
+`test_weight_compliance` loads both models in float32 and compares state dicts via `fastplms.weight_parity_utils.assert_state_dict_equal()`. This checks that every parameter is bit-exact (MSE == 0.0).
 
 **DPLM2 is excluded** because the official model has an extra `contact_head` not present in the FastPLM version.
 
@@ -151,10 +151,11 @@ Per-layer hidden state MSE is tracked for debugging when thresholds are exceeded
 
 | Dependency | Models | Install |
 |------------|--------|---------|
-| `esm` | ESMC | `pip install esm` |
-| `E1` | E1 | `pip install E1 @ git+https://github.com/Profluent-AI/E1.git` |
+| `esm` | ESMC | `pip install -e official/boltz` (includes esm) |
+| `E1` | E1 | `pip install -e official/e1` |
+| `transformers` (official) | ESM2, DPLM | `pip install -e official/transformers` |
 
-ESM2 and DPLM use HuggingFace `transformers` directly (no extra packages). If a dependency is missing, those tests are skipped.
+Official repos live in the `official/` directory as git submodules and are installed via `pip install -e` in the Dockerfile. If a dependency is missing, those tests are skipped.
 
 ## Throughput Benchmarking
 

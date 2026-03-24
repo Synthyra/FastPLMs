@@ -35,10 +35,11 @@ Pytest markers: `gpu`, `slow` (loads two models), `large` (3B models, 24+ GB VRA
 
 ### Model Families
 
-Each family lives in its own package: `esm2/`, `esm_plusplus/`, `e1_fastplms/`, `dplm_fastplms/`, `dplm2_fastplms/`, `boltz_fastplms/`, `esmfold/`. Each contains:
+Each family lives under `fastplms/`: `fastplms/esm2/`, `fastplms/esm_plusplus/`, `fastplms/e1/`, `fastplms/dplm/`, `fastplms/dplm2/`, `fastplms/boltz/`, `fastplms/esmfold/`. Each contains:
 - `modeling_*.py` -- HuggingFace `PreTrainedModel` + `PretrainedConfig` subclasses (also pushed to HF Hub for `trust_remote_code`)
-- `load_official.py` -- loads the original reference model for compliance testing
-- `get_*_weights.py` -- converts official checkpoints to FastPLM format
+- `get_weights.py` -- converts official checkpoints to FastPLM format
+
+Official model loaders for compliance testing live in `testing/official/{family}.py`.
 
 All sequence models load via `AutoModelForMaskedLM.from_pretrained("Synthyra/...", trust_remote_code=True)`.
 
@@ -56,7 +57,7 @@ All models share `config.attn_backend` with four options: `"sdpa"` (default, exa
 
 ### EmbeddingMixin
 
-`embedding_mixin.py` is inherited by every sequence model. Provides `embed_dataset()` for batch embedding with 8 pooling strategies, SQLite/pth storage, FASTA parsing, and deduplication. `Pooler` class handles mean/max/cls/norm/median/std/var/parti pooling.
+`fastplms/embedding_mixin.py` is inherited by every sequence model. Provides `embed_dataset()` for batch embedding with 8 pooling strategies, SQLite/pth storage, FASTA parsing, and deduplication. `Pooler` class handles mean/max/cls/norm/median/std/var/parti pooling.
 
 ### Test Registries
 
@@ -68,7 +69,7 @@ All models share `config.attn_backend` with four options: `"sdpa"` (default, exa
 
 ### Compliance Testing
 
-Each family's `load_official.py` returns `(wrapped_model, tokenizer)` with a standardized interface. Tests compare weight parity (bit-exact MSE) and forward pass (logits MSE < 0.05, pred accuracy > 0.90 in bfloat16). DPLM2 is excluded from compliance (official has extra `contact_head`).
+Each family's `testing/official/{family}.py` returns `(wrapped_model, tokenizer)` with a standardized interface. Tests compare weight parity (bit-exact MSE) and forward pass (logits MSE < 0.05, pred accuracy > 0.90 in bfloat16). DPLM2 is excluded from compliance (official has extra `contact_head`).
 
 ### Docker Layout
 

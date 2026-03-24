@@ -9,13 +9,13 @@ from typing import Dict, List, Set
 import torch
 from huggingface_hub import HfApi, login
 
-from boltz_fastplms.modeling_boltz2 import (
+from fastplms.boltz.modeling_boltz2 import (
     Boltz2Model,
     _filtered_kwargs,
     _state_dict_without_wrappers,
     _to_plain_python,
 )
-from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
+from fastplms.weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
 BOLTZ2_CKPT_URL = "https://huggingface.co/boltz-community/boltz-2/resolve/main/boltz2_conf.ckpt"
@@ -161,9 +161,9 @@ def _load_official_boltz2_model(
 
 
 if __name__ == "__main__":
-    # py -m boltz_fastplms.get_boltz2_weights
+    # py -m fastplms.boltz.get_weights
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint_path", type=str, default="boltz_fastplms/weights/boltz2_conf.ckpt")
+    parser.add_argument("--checkpoint_path", type=str, default="fastplms/boltz/weights/boltz2_conf.ckpt")
     parser.add_argument("--output_dir", type=str, default="boltz2_automodel_export")
     parser.add_argument("--repo_ids", nargs="*", type=str, default=["Synthyra/Boltz2"])
     parser.add_argument("--hf_token", type=str, default=None)

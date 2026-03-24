@@ -6,18 +6,27 @@ FastPLMs provides optimized, HuggingFace-compatible implementations of protein l
 
 ```
 FastPLMs/
-  esm2/                    # ESM2 (Meta AI)
-  esm_plusplus/             # ESM++ / ESMC (EvolutionaryScale)
-  e1_fastplms/             # E1 (Profluent Bio)
-  dplm_fastplms/           # DPLM (ByteDance)
-  dplm2_fastplms/          # DPLM2 (ByteDance)
-  boltz_fastplms/          # Boltz2 (structure prediction)
-  esmfold/                 # ESMFold (structure prediction)
-  embedding_mixin.py       # Shared pooling & embedding utilities
-  entrypoint_setup.py      # PyTorch runtime config
-  testing/                 # Test suite + benchmarks
-  docs/                    # Documentation
-  readmes/                 # Per-model HuggingFace card READMEs
+  fastplms/                  # Main package
+    esm2/                    # ESM2 (Meta AI)
+    esm_plusplus/             # ESM++ / ESMC (EvolutionaryScale)
+    e1/                      # E1 (Profluent Bio)
+    dplm/                    # DPLM (ByteDance)
+    dplm2/                   # DPLM2 (ByteDance)
+    boltz/                   # Boltz2 (structure prediction)
+    esmfold/                 # ESMFold (structure prediction)
+    attention.py             # Shared attention backend code
+    embedding_mixin.py       # Shared pooling & embedding utilities
+    weight_parity_utils.py   # Weight comparison utilities
+    fine_tuning_example.py   # LoRA fine-tuning example
+  official/                  # Official reference repos (git submodules)
+    boltz/                   # Official Boltz
+    e1/                      # Official E1
+    dplm/                    # Official DPLM
+    transformers/            # Official HF transformers
+  entrypoint_setup.py        # PyTorch runtime config
+  testing/                   # Test suite + benchmarks
+    official/                # Official model loaders for compliance
+  docs/                      # Documentation
 ```
 
 Each model family lives in its own package directory containing:
@@ -26,7 +35,8 @@ Each model family lives in its own package directory containing:
 |------|---------|
 | `modeling_*.py` | HuggingFace-compatible `PreTrainedModel` + `PretrainedConfig` subclasses |
 | `get_*_weights.py` | Script to convert official checkpoints to FastPLM format |
-| `load_official.py` | Loads the original reference model for compliance testing |
+| `README.md` | Per-model HuggingFace card README |
+| `LICENSE` | Per-model license file |
 | `__init__.py` | Package init (often minimal; models load via `trust_remote_code`) |
 
 ## How Model Loading Works
@@ -57,7 +67,7 @@ The model's `config.json` on the Hub contains an `auto_map` entry that tells `Au
 
 ## EmbeddingMixin
 
-Every sequence model (ESM2, ESM++, E1, DPLM, DPLM2) inherits from `EmbeddingMixin` (`embedding_mixin.py`), which provides:
+Every sequence model (ESM2, ESM++, E1, DPLM, DPLM2) inherits from `EmbeddingMixin` (`fastplms/embedding_mixin.py`), which provides:
 
 - `embed_dataset()`: Batch embedding pipeline with pooling, SQLite/pth storage, FASTA parsing, and deduplication
 - `_embed()`: Abstract method implemented by each model to return last hidden states
@@ -109,7 +119,7 @@ The Dockerfile uses:
 - **Source code**: Copied to `/app` (PYTHONPATH=/app)
 - **Runtime workdir**: `/workspace` for outputs, caches, and volume mounts
 - **Caches**: `HF_HOME=/workspace/.cache/huggingface`, `TORCH_HOME=/workspace/.cache/torch`
-- **Compliance deps**: E1 (from git) and `esm` package pre-installed
+- **Compliance deps**: Official repos installed via `pip install -e` from `official/` submodules
 
 ## Weight Conversion
 
@@ -122,7 +132,7 @@ Each model family has a `get_*_weights.py` script that:
 
 ## Compliance Testing
 
-Each family also has a `load_official.py` that wraps the original model in a standardized interface returning `(model, tokenizer)`. This allows the compliance test suite to load both implementations side-by-side and compare:
+Each family has a corresponding module in `testing/official/` (e.g., `testing/official/esm2.py`) that wraps the original model in a standardized interface returning `(model, tokenizer)`. This allows the compliance test suite to load both implementations side-by-side and compare:
 
 - **Weight parity**: Bit-exact MSE comparison of state dicts
 - **Forward compliance**: Logits MSE and prediction accuracy across random batches

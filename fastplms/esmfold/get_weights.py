@@ -1,9 +1,9 @@
 """Convert Synthyra/ESMFold-v1 weights to FastESMFold format and push to HuggingFace.
 
 Usage:
-    py -m esmfold.get_esmfold_weights
-    py -m esmfold.get_esmfold_weights --dry_run
-    py -m esmfold.get_esmfold_weights --hf_token <token>
+    py -m fastplms.esmfold.get_weights
+    py -m fastplms.esmfold.get_weights --dry_run
+    py -m fastplms.esmfold.get_weights --hf_token <token>
 """
 import os
 import sys
@@ -13,7 +13,7 @@ import torch
 from huggingface_hub import HfApi, login
 from transformers import AutoTokenizer, EsmConfig
 
-from esmfold.modeling_fast_esmfold import FastEsmFoldConfig, FastEsmForProteinFolding
+from fastplms.esmfold.modeling_fast_esmfold import FastEsmFoldConfig, FastEsmForProteinFolding
 
 SOURCE_REPO = "Synthyra/ESMFold-v1"
 TARGET_REPO = "Synthyra/FastESMFold"

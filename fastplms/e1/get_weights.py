@@ -2,7 +2,7 @@ import argparse
 import torch    
 from huggingface_hub import login
 
-from e1_fastplms.modeling_e1 import E1ForMaskedLM, E1Config
+from fastplms.e1.modeling_e1 import E1ForMaskedLM, E1Config
 
 
 model_dict = {
@@ -13,7 +13,7 @@ model_dict = {
 
 
 if __name__ == "__main__":
-    # py -m e1_fastplms.get_e1_weights
+    # py -m fastplms.e1.get_weights
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--hf_token', type=str, default=None)

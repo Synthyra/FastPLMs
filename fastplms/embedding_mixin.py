@@ -83,8 +83,8 @@ class Pooler:
         if attention_mask is None:
             return emb.max(dim=1).values
         else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (emb * attention_mask).max(dim=1).values
+            mask = attention_mask.unsqueeze(-1).bool()
+            return emb.masked_fill(~mask, float('-inf')).max(dim=1).values
 
     def norm_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         if attention_mask is None:
@@ -97,8 +97,8 @@ class Pooler:
         if attention_mask is None:
             return emb.median(dim=1).values
         else:
-            attention_mask = attention_mask.unsqueeze(-1)
-            return (emb * attention_mask).median(dim=1).values
+            mask = attention_mask.unsqueeze(-1).bool()
+            return emb.masked_fill(~mask, float('nan')).nanmedian(dim=1).values
     
     def std_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
         if attention_mask is None:

@@ -33,13 +33,16 @@ WORKDIR /app
 COPY requirements.txt .
 
 RUN pip install --upgrade pip setuptools
-RUN git clone https://github.com/Profluent-AI/E1.git && cd E1 && pip install -e . && cd ..
-RUN pip install esm -U
 RUN pip install -r requirements.txt
 RUN pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
 RUN pip install numpy==1.26.4
+RUN pip install esm -U
 
 COPY . .
+
+# Install official repos from submodules for compliance testing
+RUN pip install -e /app/official/e1 && \
+    pip install -e /app/official/dplm
 
 WORKDIR /workspace
 

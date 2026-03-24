@@ -1,6 +1,6 @@
 # Fine-Tuning Guide
 
-FastPLMs models can be fine-tuned for downstream tasks using LoRA (recommended) or full fine-tuning via the HuggingFace `Trainer` API. This guide is based on `fine_tuning_example.py` in the repository root.
+FastPLMs models can be fine-tuned for downstream tasks using LoRA (recommended) or full fine-tuning via the HuggingFace `Trainer` API. This guide is based on `fastplms/fine_tuning_example.py`.
 
 ## Quick Start
 
@@ -138,7 +138,7 @@ trainer.train()
 
 ## LoRA Configuration
 
-The recommended defaults from `fine_tuning_example.py`:
+The recommended defaults from `fastplms/fine_tuning_example.py`:
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|

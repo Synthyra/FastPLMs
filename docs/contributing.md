@@ -47,11 +47,14 @@ from transformers import (
 ### 1. Create the Package
 
 ```
-new_model_fastplms/
+fastplms/new_model/
     __init__.py
     modeling_new_model.py    # PreTrainedModel + PretrainedConfig
     get_new_model_weights.py # Weight conversion from official checkpoint
-    load_official.py         # Load official model for compliance testing
+    README.md                # HuggingFace model card README
+    LICENSE                  # Model license
+
+testing/official/new_model.py  # Load official model for compliance testing
 ```
 
 ### 2. Implement the Model
@@ -83,7 +86,7 @@ Your `modeling_*.py` should:
 
 ### 4. Add Compliance Testing
 
-`load_official.py` should expose:
+`testing/official/new_model.py` should expose:
 
 ```python
 def load_official_model(reference_repo_id: str, device: torch.device, dtype: torch.dtype):
@@ -101,7 +104,7 @@ Add your model to `testing/conftest.py`:
 "new_model": {
     "fast_path": "Synthyra/NewModel-150M",
     "official_path": "org/official-model",
-    "load_official": "new_model_fastplms.load_official",
+    "load_official": "testing.official.new_model",
     "model_type": "NewModel",
     "uses_tokenizer": True,
 },
@@ -110,7 +113,7 @@ Add your model to `testing/conftest.py`:
 "new_model_150m": {
     "fast_path": "Synthyra/NewModel-150M",
     "official_path": "org/official-model-150m",
-    "load_official": "new_model_fastplms.load_official",
+    "load_official": "testing.official.new_model",
     "model_type": "NewModel",
     "uses_tokenizer": True,
     "size_category": "small",
@@ -119,7 +122,7 @@ Add your model to `testing/conftest.py`:
 
 ### 6. Add HuggingFace README
 
-Create `readmes/new_model_readme.md` with the HuggingFace model card content.
+Create `fastplms/new_model/README.md` with the HuggingFace model card content and `fastplms/new_model/LICENSE` with the model license.
 
 ### 7. Update `update_HF.py`
 

@@ -1,6 +1,6 @@
 # Embedding & Pooling API
 
-The `EmbeddingMixin` class (`embedding_mixin.py`) provides a standardized interface for extracting protein representations from any FastPLMs sequence model.
+The `EmbeddingMixin` class (`fastplms/embedding_mixin.py`) provides a standardized interface for extracting protein representations from any FastPLMs sequence model.
 
 ## Pooler
 
@@ -9,7 +9,7 @@ The `Pooler` class aggregates per-residue representations `(batch, seq_len, hidd
 ### Construction
 
 ```python
-from embedding_mixin import Pooler
+from fastplms.embedding_mixin import Pooler
 
 pooler = Pooler(pooling_types=["mean", "max"])
 ```
@@ -179,7 +179,7 @@ SQLite mode commits every 100 batches during embedding to avoid data loss on int
 The `parse_fasta()` utility reads a FASTA file and returns a list of sequences:
 
 ```python
-from embedding_mixin import parse_fasta
+from fastplms.embedding_mixin import parse_fasta
 
 sequences = parse_fasta("proteins.fasta")
 ```

@@ -1,4 +1,4 @@
-from boltz_fastplms.modeling_boltz2 import (
+from fastplms.boltz.modeling_boltz2 import (
     Boltz2Config,
     Boltz2Model,
     Boltz2StructureOutput,

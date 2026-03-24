@@ -6,8 +6,8 @@ from typing import List, Optional, Tuple
 from huggingface_hub import HfApi, login
 from transformers import EsmConfig, EsmForMaskedLM, AutoModelForMaskedLM, AutoTokenizer
 
-from esm2.modeling_fastesm import FastEsmConfig, FastEsmForMaskedLM
-from weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
+from fastplms.esm2.modeling_fastesm import FastEsmConfig, FastEsmForMaskedLM
+from fastplms.weight_parity_utils import assert_state_dict_equal, assert_model_parameters_fp32
 
 
 MODEL_DICT = {
@@ -81,7 +81,7 @@ def _resolve_repo_items(repo_ids: Optional[List[str]]) -> List[Tuple[str, str]]:
 
 
 if __name__ == "__main__":
-    # py -m esm2.get_esm2_weights
+    # py -m fastplms.esm2.get_weights
     import argparse
 
     parser = argparse.ArgumentParser()
