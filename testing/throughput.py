@@ -57,6 +57,28 @@ class ThroughputChecker:
             for _ in range(batch_size - 1)
         ]
 
+    def _make_batch(self, tokenizer: object, batch_size: int, min_length: int, max_length: int) -> Tuple[Dict[str, torch.Tensor], int]:
+        """Generate and tokenize one batch, returning (tokenized_on_device, nonpad_token_count)."""
+        batch = self._generate_random_batch(batch_size, min_length, max_length)
+        tokenized = tokenizer(
+            batch,
+            return_tensors="pt",
+            padding="max_length",
+            max_length=max_length,
+            truncation=True,
+            add_special_tokens=True,
+        )
+        if "attention_mask" in tokenized:
+            nonpad_tokens = tokenized["attention_mask"].sum().item()
+        else:
+            pad_token_id = tokenizer.pad_token_id
+            if pad_token_id is not None:
+                nonpad_tokens = (tokenized["input_ids"] != pad_token_id).sum().item()
+            else:
+                nonpad_tokens = tokenized["input_ids"].numel()
+        tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
+        return tokenized, nonpad_tokens
+
     @torch.inference_mode()
     def _time(self, model: torch.nn.Module, tokenizer: object, batch_size: int, min_length: int, max_length: int) -> Tuple[float, int]:
         model = model.to(self.device).eval()
@@ -71,27 +93,9 @@ class ThroughputChecker:
                 torch.cuda.synchronize()
 
         def run_one_batch() -> int:
-            batch = self._generate_random_batch(batch_size, min_length, max_length)
-            tokenized = tokenizer(
-                batch,
-                return_tensors="pt",
-                padding="max_length",
-                max_length=max_length,
-                truncation=True,
-                add_special_tokens=True,
-            )
-            input_ids = tokenized["input_ids"]
-            if "attention_mask" in tokenized:
-                nonpad_tokens_this = tokenized["attention_mask"].sum().item()
-            else:
-                pad_token_id = tokenizer.pad_token_id
-                if pad_token_id is not None:
-                    nonpad_tokens_this = (input_ids != pad_token_id).sum().item()
-                else:
-                    nonpad_tokens_this = input_ids.numel()
-            tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
-            _ = model(**tokenized, output_hidden_states=True)
-            return nonpad_tokens_this
+            tokenized, nonpad_tokens = self._make_batch(tokenizer, batch_size, min_length, max_length)
+            _ = model(**tokenized)
+            return nonpad_tokens
 
         def time_batches(num_batches: int, message: str):
             processed_tokens = 0
@@ -103,18 +107,31 @@ class ThroughputChecker:
             end_time = time.time()
             return end_time - start_time, processed_tokens
 
-        # Run one eager batch before compiling to warm internal caches (e.g. rotary
-        # embedding's _seq_len_cached). Without this, deepcopy preserves None state and
-        # dynamo recompiles when the cache flips from None to int on the first batch.
+        # The modeling files internally compile flex_attention via _get_flex_attention_fn(),
+        # caching the result in a module-level _compiled_flex_attention global. When we
+        # also wrap the full model in torch.compile(), the inductor hits double-compilation
+        # (compiled Triton kernels inside a compiled graph) and crashes.
+        #
+        # Fix: (1) set the debug flag so _get_flex_attention_fn returns raw flex_attention,
+        # (2) clear any already-cached compiled version across all loaded modeling modules.
+        flex_mod = getattr(torch.nn.attention, "flex_attention", None)
+        if flex_mod is not None:
+            flex_mod._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
+        import sys
+        for mod in list(sys.modules.values()):
+            if hasattr(mod, "_compiled_flex_attention"):
+                mod._compiled_flex_attention = None
+
+        # Eager pass to warm internal caches (rotary _seq_len_cached, flex block masks)
+        # before compile. Without this, dynamo recompiles when cache state changes.
         _ = run_one_batch()
         synchronize()
 
-        # Each _time() call receives a fresh deepcopy at a single (batch_size, seq_len),
-        # so static compilation is fine. Flex attention + dynamic=True triggers an inductor
-        # fusion bug in PyTorch 2.11, so we use static shapes.
+        torch._dynamo.reset()
         model = torch.compile(model)
+
         warmup_latencies = []
-        for warmup_idx in tqdm(range(max_dynamic_warmup_batches), desc="Warmup (dynamic)", leave=False):
+        for warmup_idx in tqdm(range(max_dynamic_warmup_batches), desc="Warmup", leave=False):
             synchronize()
             warmup_start = time.time()
             _ = run_one_batch()
