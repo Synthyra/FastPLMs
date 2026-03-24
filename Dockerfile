@@ -32,7 +32,6 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN git submodule update --remote --init --recursive
 RUN pip install --upgrade pip setuptools
 
 # Install official repos from submodules for compliance testing.
