@@ -24,6 +24,7 @@ from typing import Optional
 
 from huggingface_hub import HfApi, login
 
+_REPO_ROOT = Path(__file__).resolve().parent
 
 # Regex to strip the try/except import guards that reference fastplms.*
 # These are only needed for local development; composites have the code inline.
@@ -52,10 +53,10 @@ def build_composite(modeling_path: str, include_embedding_mixin: bool = True) ->
     for shared_path in COMPOSITE_SHARED_MODULES:
         if not include_embedding_mixin and "embedding_mixin" in shared_path:
             continue
-        content = Path(shared_path).read_text(encoding="utf-8")
+        content = (_REPO_ROOT / shared_path).read_text(encoding="utf-8")
         parts.append(content)
 
-    model_code = Path(modeling_path).read_text(encoding="utf-8")
+    model_code = (_REPO_ROOT / modeling_path).read_text(encoding="utf-8")
     model_code = _IMPORT_GUARD_PATTERN.sub("", model_code)
     parts.append(model_code)
 
@@ -332,8 +333,9 @@ def _upload_files(api: HfApi, families: Optional[list]) -> None:
 
             # Upload extra files (Boltz vb_* modules, E1 tokenizer, etc.)
             for local_path, repo_path in entry["extra_files"].items():
+                abs_local = str(_REPO_ROOT / local_path)
                 api.upload_file(
-                    path_or_fileobj=local_path,
+                    path_or_fileobj=abs_local,
                     path_in_repo=repo_path,
                     repo_id=repo_id,
                     repo_type="model",
@@ -341,23 +343,27 @@ def _upload_files(api: HfApi, families: Optional[list]) -> None:
 
             # Upload license
             license_path = entry["license_map"].get(repo_id)
-            if license_path and os.path.exists(license_path):
-                api.upload_file(
-                    path_or_fileobj=license_path,
-                    path_in_repo="LICENSE",
-                    repo_id=repo_id,
-                    repo_type="model",
-                )
+            if license_path:
+                abs_license = str(_REPO_ROOT / license_path)
+                if os.path.exists(abs_license):
+                    api.upload_file(
+                        path_or_fileobj=abs_license,
+                        path_in_repo="LICENSE",
+                        repo_id=repo_id,
+                        repo_type="model",
+                    )
 
             # Upload readme
             readme_path = entry["readme_map"].get(repo_id)
-            if readme_path and os.path.exists(readme_path):
-                api.upload_file(
-                    path_or_fileobj=readme_path,
-                    path_in_repo="README.md",
-                    repo_id=repo_id,
-                    repo_type="model",
-                )
+            if readme_path:
+                abs_readme = str(_REPO_ROOT / readme_path)
+                if os.path.exists(abs_readme):
+                    api.upload_file(
+                        path_or_fileobj=abs_readme,
+                        path_in_repo="README.md",
+                        repo_id=repo_id,
+                        repo_type="model",
+                    )
 
 
 if __name__ == "__main__":

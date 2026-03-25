@@ -8,11 +8,11 @@ Fast, optimized implementations of ANKH protein language models (T5-based) with 
 
 | Model | Params | Layers | Hidden | Heads | Activation | Source |
 |-------|--------|--------|--------|-------|------------|--------|
-| ANKH_base | ~240M | 48 | 768 | 12 | gelu_new | ElnaggarLab/ankh-base |
-| ANKH_large | ~1.1B | 48 | 1536 | 16 | gelu_new | ElnaggarLab/ankh-large |
-| ANKH2_large | ~550M | 24 | 1536 | 16 | silu | ElnaggarLab/ankh2-ext2 |
-| ANKH3_large | ~1.1B | 48 | 1536 | 16 | silu | ElnaggarLab/ankh3-large |
-| ANKH3_xl | ~3B | 48 | 2560 | 32 | silu | ElnaggarLab/ankh3-xl |
+| ANKH_base | 453.3M | 48 | 768 | 12 | gelu_new | ElnaggarLab/ankh-base |
+| ANKH_large | 1.15B | 48 | 1536 | 16 | gelu_new | ElnaggarLab/ankh-large |
+| ANKH2_large | 1.15B | 24 | 1536 | 16 | silu | ElnaggarLab/ankh2-ext2 |
+| ANKH3_large | 1.15B | 48 | 1536 | 16 | silu | ElnaggarLab/ankh3-large |
+| ANKH3_xl | 3.49B | 48 | 2560 | 32 | silu | ElnaggarLab/ankh3-xl |
 
 ## Usage
 
