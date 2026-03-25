@@ -43,24 +43,30 @@ COMPOSITE_SHARED_MODULES = [
 ]
 
 
+_FUTURE_IMPORT_RE = re.compile(r"^from __future__ import annotations\s*\n?", re.MULTILINE)
+
+
 def build_composite(modeling_path: str, include_embedding_mixin: bool = True) -> str:
     """Build a single self-contained modeling file for HF Hub upload.
 
     Concatenates shared modules + model code, stripping the try/except
     import guards from the model code since shared definitions are inlined above.
+    Hoists `from __future__ import annotations` to the top (must be first statement).
     """
     parts = []
     for shared_path in COMPOSITE_SHARED_MODULES:
         if not include_embedding_mixin and "embedding_mixin" in shared_path:
             continue
         content = (_REPO_ROOT / shared_path).read_text(encoding="utf-8")
+        content = _FUTURE_IMPORT_RE.sub("", content)
         parts.append(content)
 
     model_code = (_REPO_ROOT / modeling_path).read_text(encoding="utf-8")
     model_code = _IMPORT_GUARD_PATTERN.sub("", model_code)
+    model_code = _FUTURE_IMPORT_RE.sub("", model_code)
     parts.append(model_code)
 
-    return "\n".join(parts)
+    return "from __future__ import annotations\n\n" + "\n".join(parts)
 
 
 MODEL_REGISTRY = [
