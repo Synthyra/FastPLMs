@@ -8,6 +8,7 @@ from typing import Dict, List, Set
 
 import torch
 from huggingface_hub import HfApi, login
+from transformers import AutoConfig
 
 from fastplms.boltz.modeling_boltz2 import (
     Boltz2Model,
@@ -175,26 +176,22 @@ if __name__ == "__main__":
     # Standardization: use the first repo_id from repo_ids
     repo_id = args.repo_ids[0] if args.repo_ids else "Synthyra/Boltz2"
 
-    checkpoint_path = _download_checkpoint_if_needed(Path(args.checkpoint_path))
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     if args.skip_weights:
-        repo_id = args.repo_ids[0] if args.repo_ids else "Synthyra/Boltz2"
-        if args.dry_run:
-            print(f"[skip-weights][dry-run] validated Boltz2 config parity for checkpoint {checkpoint_path}")
-            raise SystemExit(0)
-        official_model = _load_official_boltz2_model(
-            checkpoint_path=checkpoint_path,
-            use_kernels=args.use_kernels,
-        )
-        official_model.config.auto_map = {
+        config = AutoConfig.from_pretrained(repo_id, trust_remote_code=True)
+        config.auto_map = {
             "AutoConfig": "modeling_boltz2.Boltz2Config",
             "AutoModel": "modeling_boltz2.Boltz2Model",
         }
-        official_model.config.push_to_hub(repo_id)
+        if args.dry_run:
+            print(f"[skip-weights][dry-run] validated Boltz2 config for {repo_id}")
+            raise SystemExit(0)
+        config.push_to_hub(repo_id)
         print(f"[skip-weights] uploaded Boltz2 config to {repo_id}")
         raise SystemExit(0)
+
+    checkpoint_path = _download_checkpoint_if_needed(Path(args.checkpoint_path))
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     official_model = _load_official_boltz2_model(
         checkpoint_path=checkpoint_path,
