@@ -215,9 +215,9 @@ if __name__ == "__main__":
             repo_id, dtype=torch.float32, device_map="cpu",
             force_download=True, trust_remote_code=True,
         )
-        for key in model.encoder.state_dict():
+        for key in downloaded_model.encoder.state_dict():
             orig = model.encoder.state_dict()[key]
-            dl = downloaded_model.state_dict()[key]
+            dl = downloaded_model.encoder.state_dict()[key]
             mse = (orig.float() - dl.float()).pow(2).mean().item()
             assert mse == 0.0, f"Post-download mismatch at {key}: MSE={mse}"
         print(f"Download verification passed for {repo_id}")
