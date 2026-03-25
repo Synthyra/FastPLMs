@@ -1,4 +1,4 @@
-torch>=2.5.1 # this is force reinstalled in the Dockerfile with cuda
+torch>=2.11 # this is force reinstalled in the Dockerfile with cuda
 matplotlib
 tqdm
 # testing
@@ -17,6 +17,7 @@ datasets==4.5.0
 hf_transfer==0.1.9
 hf-xet
 peft
+sentencepiece
 # embedding mixin
 networkx
 # for boltz

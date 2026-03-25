@@ -10,7 +10,7 @@ Fast, optimized implementations of ANKH protein language models (T5-based) with 
 |-------|--------|--------|--------|-------|------------|--------|
 | ANKH_base | ~240M | 48 | 768 | 12 | gelu_new | ElnaggarLab/ankh-base |
 | ANKH_large | ~1.1B | 48 | 1536 | 16 | gelu_new | ElnaggarLab/ankh-large |
-| ANKH2_large | ~550M | 24 | 1536 | 16 | silu | ElnaggarLab/ankh2-large |
+| ANKH2_large | ~550M | 24 | 1536 | 16 | silu | ElnaggarLab/ankh2-ext2 |
 | ANKH3_large | ~1.1B | 48 | 1536 | 16 | silu | ElnaggarLab/ankh3-large |
 | ANKH3_xl | ~3B | 48 | 2560 | 32 | silu | ElnaggarLab/ankh3-xl |
 
@@ -70,7 +70,7 @@ The relative position bias is computed once (materialized as a full tensor) and 
 - The `FastAnkhForMaskedLM` variant includes an LM head initialized from the shared embedding weights. The original ANKH models were trained with T5's span corruption objective using an encoder-decoder architecture. This encoder-only MaskedLM head is **not pre-trained for standard MLM** and requires additional fine-tuning.
 - ANKH3 models use a vocabulary of 256 tokens (vs 144 for v1/v2) and were trained with dual objectives ([NLU] for embeddings, [S2S] for generation).
 
-## Citation
+## Citations
 
 ```bibtex
 @article{elnaggar2023ankh,
@@ -78,5 +78,25 @@ The relative position bias is computed once (materialized as a full tensor) and 
   author={Elnaggar, Ahmed and Essam, Hazem and Salah-Eldin, Wafaa and Moustafa, Walid and Elkerdawy, Mohamed and Rochereau, Charlotte and Rost, Burkhard},
   journal={arXiv preprint arXiv:2301.06568},
   year={2023}
+}
+```
+
+```bibtex
+@article{alsamkary2025ankh3,
+  title={Ankh3: Multi-Task Pretraining with Sequence Denoising and Completion Enhances Protein Representations},
+  author={Alsamkary, Hazem and Elshaffei, Mohamed and Elkerdawy, Mohamed and Elnaggar, Ahmed},
+  journal={arXiv preprint arXiv:2505.20052},
+  year={2025}
+}
+```
+
+```bibtex
+@misc{FastPLMs,
+  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  year={2024},
+  url={https://huggingface.co/Synthyra/ESMplusplus_small},
+  DOI={10.57967/hf/3726},
+  publisher={Hugging Face}
 }
 ```

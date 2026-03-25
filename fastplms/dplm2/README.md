@@ -67,3 +67,25 @@ model.attn_backend = "flex"  # propagates to all attention layers in-place
 
 ## Embed datasets
 All DPLM2 models inherit `EmbeddingMixin`, so you can call `model.embed_dataset(...)` directly.
+
+## Citations
+
+```bibtex
+@article{wang2024dplm2,
+  title={DPLM-2: A Multimodal Diffusion Protein Language Model},
+  author={Wang, Xinyou and Ye, Zaixiang and Huang, Fei and Cao, Dongyan and Liang, Shujian and Huang, Liang},
+  journal={arXiv preprint arXiv:2410.13782},
+  year={2024}
+}
+```
+
+```bibtex
+@misc{FastPLMs,
+  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  year={2024},
+  url={https://huggingface.co/Synthyra/ESMplusplus_small},
+  DOI={10.57967/hf/3726},
+  publisher={Hugging Face}
+}
+```
