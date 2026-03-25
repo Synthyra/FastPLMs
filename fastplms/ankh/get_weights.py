@@ -14,7 +14,7 @@ from fastplms.weight_parity_utils import assert_model_parameters_fp32
 MODEL_DICT = {
     "Synthyra/ANKH_base": "ElnaggarLab/ankh-base",
     "Synthyra/ANKH_large": "ElnaggarLab/ankh-large",
-    "Synthyra/ANKH2_large": "ElnaggarLab/ankh2-large",
+    "Synthyra/ANKH2_large": "ElnaggarLab/ankh2-ext2",
     "Synthyra/ANKH3_large": "ElnaggarLab/ankh3-large",
     "Synthyra/ANKH3_xl": "ElnaggarLab/ankh3-xl",
 }
