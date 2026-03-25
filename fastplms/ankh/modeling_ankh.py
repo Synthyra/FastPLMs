@@ -300,16 +300,16 @@ class AnkhSelfAttention(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Encoder block & stack
+# Encoder block & stack (T5-compatible key naming)
 # ---------------------------------------------------------------------------
 
-class AnkhBlock(nn.Module):
+class AnkhSelfAttentionLayer(nn.Module):
+    """Wraps AnkhSelfAttention + layer_norm to match T5Block.layer[0] key naming."""
+
     def __init__(self, config: FastAnkhConfig, has_relative_attention_bias: bool = False):
         super().__init__()
-        self.attention = AnkhSelfAttention(config, has_relative_attention_bias)
-        self.attention_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
-        self.ffn = AnkhGatedFFN(config)
-        self.ffn_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
+        self.SelfAttention = AnkhSelfAttention(config, has_relative_attention_bias)
+        self.layer_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
 
     def forward(
         self,
@@ -321,9 +321,8 @@ class AnkhBlock(nn.Module):
         flex_score_mod=None,
         output_attentions: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
-        # Pre-norm self-attention
-        normed = self.attention_norm(hidden_states)
-        attn_output, attn_weights, position_bias = self.attention(
+        normed = self.layer_norm(hidden_states)
+        attn_output, attn_weights, position_bias = self.SelfAttention(
             normed,
             attention_mask_2d=attention_mask_2d,
             attention_mask_4d=attention_mask_4d,
@@ -333,44 +332,151 @@ class AnkhBlock(nn.Module):
             output_attentions=output_attentions,
         )
         hidden_states = hidden_states + attn_output
-
-        # Pre-norm FFN
-        normed = self.ffn_norm(hidden_states)
-        hidden_states = hidden_states + self.ffn(normed)
-
         return hidden_states, attn_weights, position_bias
 
 
-class AnkhEncoder(nn.Module):
+class AnkhFFLayer(nn.Module):
+    """Wraps AnkhGatedFFN + layer_norm to match T5Block.layer[1] key naming."""
+
     def __init__(self, config: FastAnkhConfig):
         super().__init__()
+        self.DenseReluDense = AnkhGatedFFN(config)
+        self.layer_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
+
+    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        normed = self.layer_norm(hidden_states)
+        hidden_states = hidden_states + self.DenseReluDense(normed)
+        return hidden_states
+
+
+class AnkhBlock(nn.Module):
+    """Single transformer block with T5-compatible .layer ModuleList naming."""
+
+    def __init__(self, config: FastAnkhConfig, has_relative_attention_bias: bool = False):
+        super().__init__()
+        self.layer = nn.ModuleList([
+            AnkhSelfAttentionLayer(config, has_relative_attention_bias),
+            AnkhFFLayer(config),
+        ])
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
+        position_bias: Optional[torch.Tensor] = None,
+        flex_score_mod=None,
+        output_attentions: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        hidden_states, attn_weights, position_bias = self.layer[0](
+            hidden_states,
+            attention_mask_2d=attention_mask_2d,
+            attention_mask_4d=attention_mask_4d,
+            flex_block_mask=flex_block_mask,
+            position_bias=position_bias,
+            flex_score_mod=flex_score_mod,
+            output_attentions=output_attentions,
+        )
+        hidden_states = self.layer[1](hidden_states)
+        return hidden_states, attn_weights, position_bias
+
+
+# ---------------------------------------------------------------------------
+# PreTrainedModel base
+# ---------------------------------------------------------------------------
+
+class AnkhPreTrainedModel(PreTrainedModel):
+    config_class = FastAnkhConfig
+    base_model_prefix = "encoder"
+    supports_gradient_checkpointing = True
+    _no_split_modules = ["AnkhBlock"]
+
+    @classmethod
+    def is_remote_code(cls) -> bool:
+        return True
+
+    @torch.no_grad()
+    def _init_weights(self, module: nn.Module) -> None:
+        factor = self.config.initializer_factor
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=factor * (self.config.d_model ** -0.5))
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=factor * 1.0)
+        elif isinstance(module, AnkhRMSNorm):
+            module.weight.data.fill_(1.0)
+
+    def post_init(self) -> None:
+        super().post_init()
+
+    def get_output_embeddings(self):
+        return None
+
+    @property
+    def attn_backend(self) -> str:
+        return self.config.attn_backend
+
+    @attn_backend.setter
+    def attn_backend(self, backend: str) -> None:
+        assert backend in VALID_ATTENTION_BACKENDS, (
+            f"Unsupported attn_backend: {backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
+        )
+        self.config.attn_backend = backend
+        resolved = resolve_attention_backend(backend)
+        if resolved == AttentionBackend.KERNELS_FLASH:
+            print("ANKH: kernels_flash -> flex/sdpa fallback")
+            resolved = AttentionBackend.FLEX if flex_attention is not None else AttentionBackend.SDPA
+        for module in self.modules():
+            if isinstance(module, FAST_ANKH_ENCODER):
+                module.attention_backend = resolved
+            elif isinstance(module, AnkhSelfAttention):
+                module.attn_backend = resolved
+
+
+# ---------------------------------------------------------------------------
+# FAST_ANKH_ENCODER (mirrors T5Stack key naming)
+# ---------------------------------------------------------------------------
+
+class FAST_ANKH_ENCODER(AnkhPreTrainedModel, EmbeddingMixin):
+    """Inner encoder that mirrors T5Stack attribute naming for weight compliance.
+
+    State dict keys: embed_tokens.*, block.{i}.layer.0.SelfAttention.*,
+    block.{i}.layer.1.DenseReluDense.*, final_layer_norm.*.
+    """
+
+    def __init__(self, config: FastAnkhConfig, **kwargs):
+        AnkhPreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
+
         resolved = resolve_attention_backend(config.attn_backend)
-        # ANKH uses relative position bias; flash attention kernels don't support arbitrary biases.
         if resolved == AttentionBackend.KERNELS_FLASH:
             print("ANKH: kernels_flash not supported (relative position bias); falling back to flex/sdpa")
             resolved = AttentionBackend.FLEX if flex_attention is not None else AttentionBackend.SDPA
         self.attention_backend = resolved
 
-        self.layer = nn.ModuleList([
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.d_model)
+        self.block = nn.ModuleList([
             AnkhBlock(config, has_relative_attention_bias=(i == 0))
             for i in range(config.num_layers)
         ])
-        # Propagate resolved backend to all attention modules
-        for block in self.layer:
-            block.attention.attn_backend = self.attention_backend
+        for blk in self.block:
+            blk.layer[0].SelfAttention.attn_backend = self.attention_backend
 
         self.final_layer_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.gradient_checkpointing = False
+        self.tokenizer = AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.embed_tokens = value
 
     @torch.compiler.disable
     def _compute_materialized_bias(self, seq_len: int, device: torch.device) -> torch.Tensor:
-        """Precompute full (Q, K, H) bias tensor for flex score_mod lookup.
-
-        Materializing the bias and indexing in score_mod is ~2.4x faster than
-        computing buckets on-the-fly (PyTorch issue #138493).
-        """
-        bias_embedding = self.layer[0].attention.relative_attention_bias
+        """Precompute full (Q, K, H) bias tensor for flex score_mod lookup."""
+        bias_embedding = self.block[0].layer[0].SelfAttention.relative_attention_bias
         context_position = torch.arange(seq_len, dtype=torch.long, device=device)[:, None]
         memory_position = torch.arange(seq_len, dtype=torch.long, device=device)[None, :]
         relative_position = memory_position - context_position
@@ -390,7 +496,12 @@ class AnkhEncoder(nn.Module):
 
         return score_mod
 
-    def forward(
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        hidden_states = self.embed_tokens(input_ids)
+        encoder_output = self._run_encoder(hidden_states, attention_mask=attention_mask)
+        return encoder_output.last_hidden_state
+
+    def _run_encoder(
         self,
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
@@ -409,13 +520,12 @@ class AnkhEncoder(nn.Module):
             attention_mask=attention_mask,
         )
 
-        # Build flex score_mod or let SDPA compute position_bias in layer 0
         flex_score_mod = None
         position_bias = None
         if self.attention_backend == AttentionBackend.FLEX:
             flex_score_mod = self._build_flex_score_mod(seq_len, hidden_states.device)
 
-        for layer_module in self.layer:
+        for layer_module in self.block:
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
 
@@ -455,86 +565,6 @@ class AnkhEncoder(nn.Module):
             attentions=all_attentions,
         )
 
-
-# ---------------------------------------------------------------------------
-# PreTrainedModel base
-# ---------------------------------------------------------------------------
-
-class AnkhPreTrainedModel(PreTrainedModel):
-    config_class = FastAnkhConfig
-    base_model_prefix = "ankh"
-    supports_gradient_checkpointing = True
-    _no_split_modules = ["AnkhBlock"]
-
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        return True
-
-    @torch.no_grad()
-    def _init_weights(self, module: nn.Module) -> None:
-        factor = self.config.initializer_factor
-        if isinstance(module, nn.Linear):
-            module.weight.data.normal_(mean=0.0, std=factor * (self.config.d_model ** -0.5))
-        elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=factor * 1.0)
-        elif isinstance(module, AnkhRMSNorm):
-            module.weight.data.fill_(1.0)
-
-    def post_init(self) -> None:
-        super().post_init()
-
-    def get_output_embeddings(self):
-        return None
-
-    @property
-    def attn_backend(self) -> str:
-        return self.config.attn_backend
-
-    @attn_backend.setter
-    def attn_backend(self, backend: str) -> None:
-        assert backend in VALID_ATTENTION_BACKENDS, (
-            f"Unsupported attn_backend: {backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
-        )
-        self.config.attn_backend = backend
-        resolved = resolve_attention_backend(backend)
-        if resolved == AttentionBackend.KERNELS_FLASH:
-            print("ANKH: kernels_flash -> flex/sdpa fallback")
-            resolved = AttentionBackend.FLEX if flex_attention is not None else AttentionBackend.SDPA
-        for module in self.modules():
-            if isinstance(module, AnkhEncoder):
-                module.attention_backend = resolved
-                for block in module.layer:
-                    block.attention.attn_backend = resolved
-            elif isinstance(module, AnkhSelfAttention):
-                module.attn_backend = resolved
-
-
-# ---------------------------------------------------------------------------
-# Model classes
-# ---------------------------------------------------------------------------
-
-class FastAnkhModel(AnkhPreTrainedModel, EmbeddingMixin):
-    """ANKH encoder model for embedding extraction."""
-
-    def __init__(self, config: FastAnkhConfig, **kwargs):
-        AnkhPreTrainedModel.__init__(self, config, **kwargs)
-        self.config = config
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.d_model)
-        self.encoder = AnkhEncoder(config)
-        self.tokenizer = AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")
-        self.post_init()
-
-    def get_input_embeddings(self):
-        return self.embed_tokens
-
-    def set_input_embeddings(self, value):
-        self.embed_tokens = value
-
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        hidden_states = self.embed_tokens(input_ids)
-        encoder_output = self.encoder(hidden_states, attention_mask=attention_mask)
-        return encoder_output.last_hidden_state
-
     def forward(
         self,
         input_ids: Optional[torch.Tensor] = None,
@@ -556,11 +586,56 @@ class FastAnkhModel(AnkhPreTrainedModel, EmbeddingMixin):
         else:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
 
-        return self.encoder(
+        return self._run_encoder(
             hidden_states,
             attention_mask=attention_mask,
             output_hidden_states=output_hidden_states or False,
             output_attentions=output_attentions or False,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Model classes
+# ---------------------------------------------------------------------------
+
+class FastAnkhModel(AnkhPreTrainedModel, EmbeddingMixin):
+    """ANKH encoder model for embedding extraction."""
+
+    def __init__(self, config: FastAnkhConfig, **kwargs):
+        AnkhPreTrainedModel.__init__(self, config, **kwargs)
+        self.config = config
+        self.shared = nn.Embedding(config.vocab_size, config.d_model)
+        self.encoder = FAST_ANKH_ENCODER(config)
+        self.post_init()
+
+    @property
+    def tokenizer(self):
+        return self.encoder.tokenizer
+
+    def get_input_embeddings(self):
+        return self.encoder.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.encoder.embed_tokens = value
+
+    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.encoder._embed(input_ids, attention_mask)
+
+    def forward(
+        self,
+        input_ids: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        inputs_embeds: Optional[torch.Tensor] = None,
+        output_hidden_states: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        **kwargs,
+    ) -> AnkhEncoderOutput:
+        return self.encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
         )
 
 
@@ -576,20 +651,21 @@ class FastAnkhForMaskedLM(AnkhPreTrainedModel, EmbeddingMixin):
     def __init__(self, config: FastAnkhConfig, **kwargs):
         AnkhPreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
-        self.ankh = FastAnkhModel(config)
+        self.shared = nn.Embedding(config.vocab_size, config.d_model)
+        self.encoder = FAST_ANKH_ENCODER(config)
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.loss_fct = nn.CrossEntropyLoss()
         self.post_init()
 
     @property
     def tokenizer(self):
-        return self.ankh.tokenizer
+        return self.encoder.tokenizer
 
     def get_input_embeddings(self):
-        return self.ankh.embed_tokens
+        return self.encoder.embed_tokens
 
     def set_input_embeddings(self, value):
-        self.ankh.embed_tokens = value
+        self.encoder.embed_tokens = value
 
     def get_output_embeddings(self):
         return self.lm_head
@@ -598,7 +674,7 @@ class FastAnkhForMaskedLM(AnkhPreTrainedModel, EmbeddingMixin):
         self.lm_head = new_embeddings
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.ankh._embed(input_ids, attention_mask)
+        return self.encoder._embed(input_ids, attention_mask)
 
     def forward(
         self,
@@ -610,8 +686,8 @@ class FastAnkhForMaskedLM(AnkhPreTrainedModel, EmbeddingMixin):
         output_attentions: Optional[bool] = None,
         **kwargs,
     ) -> AnkhMaskedLMOutput:
-        outputs = self.ankh(
-            input_ids,
+        outputs = self.encoder(
+            input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             output_hidden_states=output_hidden_states,
@@ -639,7 +715,8 @@ class FastAnkhForSequenceClassification(AnkhPreTrainedModel, EmbeddingMixin):
         AnkhPreTrainedModel.__init__(self, config, **kwargs)
         self.num_labels = config.num_labels
         self.config = config
-        self.ankh = FastAnkhModel(config)
+        self.shared = nn.Embedding(config.vocab_size, config.d_model)
+        self.encoder = FAST_ANKH_ENCODER(config)
         self.classifier = nn.Linear(config.d_model, config.num_labels)
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
@@ -648,13 +725,13 @@ class FastAnkhForSequenceClassification(AnkhPreTrainedModel, EmbeddingMixin):
 
     @property
     def tokenizer(self):
-        return self.ankh.tokenizer
+        return self.encoder.tokenizer
 
     def get_input_embeddings(self):
-        return self.ankh.embed_tokens
+        return self.encoder.embed_tokens
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.ankh._embed(input_ids, attention_mask)
+        return self.encoder._embed(input_ids, attention_mask)
 
     def forward(
         self,
@@ -666,8 +743,8 @@ class FastAnkhForSequenceClassification(AnkhPreTrainedModel, EmbeddingMixin):
         output_attentions: Optional[bool] = None,
         **kwargs,
     ) -> AnkhMaskedLMOutput:
-        outputs = self.ankh(
-            input_ids,
+        outputs = self.encoder(
+            input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             output_hidden_states=output_hidden_states,
@@ -713,20 +790,21 @@ class FastAnkhForTokenClassification(AnkhPreTrainedModel, EmbeddingMixin):
     def __init__(self, config: FastAnkhConfig, **kwargs):
         AnkhPreTrainedModel.__init__(self, config, **kwargs)
         self.num_labels = config.num_labels
-        self.ankh = FastAnkhModel(config)
+        self.shared = nn.Embedding(config.vocab_size, config.d_model)
+        self.encoder = FAST_ANKH_ENCODER(config)
         self.classifier = nn.Linear(config.d_model, config.num_labels)
         self.loss_fct = nn.CrossEntropyLoss()
         self.post_init()
 
     @property
     def tokenizer(self):
-        return self.ankh.tokenizer
+        return self.encoder.tokenizer
 
     def get_input_embeddings(self):
-        return self.ankh.embed_tokens
+        return self.encoder.embed_tokens
 
     def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.ankh._embed(input_ids, attention_mask)
+        return self.encoder._embed(input_ids, attention_mask)
 
     def forward(
         self,
@@ -738,8 +816,8 @@ class FastAnkhForTokenClassification(AnkhPreTrainedModel, EmbeddingMixin):
         output_attentions: Optional[bool] = None,
         **kwargs,
     ) -> AnkhMaskedLMOutput:
-        outputs = self.ankh(
-            input_ids,
+        outputs = self.encoder(
+            input_ids=input_ids,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             output_hidden_states=output_hidden_states,

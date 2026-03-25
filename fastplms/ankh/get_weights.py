@@ -23,30 +23,18 @@ SHARD_SIZE = "5GB"
 
 
 def _map_encoder_state_dict(official_sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-    """Map T5ForConditionalGeneration state dict to FastAnkh format (encoder only)."""
+    """Map T5ForConditionalGeneration state dict to FastAnkh format (encoder only).
+
+    FastAnkh mirrors T5 key naming, so encoder.* keys pass through directly.
+    We add shared.weight (= encoder.embed_tokens.weight) and lm_head.weight.
+    """
     new_sd = {}
     for key, value in official_sd.items():
-        if not key.startswith("encoder."):
-            continue
+        if key.startswith("encoder.") or key == "shared.weight":
+            new_sd[key] = value.clone()
 
-        new_key = key
-        # encoder.embed_tokens.weight -> ankh.embed_tokens.weight
-        new_key = new_key.replace("encoder.embed_tokens.", "ankh.embed_tokens.")
-        # encoder.block.{i}.layer.0.SelfAttention.* -> ankh.encoder.layer.{i}.attention.*
-        new_key = new_key.replace("encoder.block.", "ankh.encoder.layer.")
-        new_key = new_key.replace(".layer.0.SelfAttention.", ".attention.")
-        new_key = new_key.replace(".layer.0.layer_norm.", ".attention_norm.")
-        # encoder.block.{i}.layer.1.DenseReluDense.* -> ankh.encoder.layer.{i}.ffn.*
-        new_key = new_key.replace(".layer.1.DenseReluDense.", ".ffn.")
-        new_key = new_key.replace(".layer.1.layer_norm.", ".ffn_norm.")
-        # encoder.final_layer_norm.* -> ankh.encoder.final_layer_norm.*
-        new_key = new_key.replace("encoder.final_layer_norm.", "ankh.encoder.final_layer_norm.")
-
-        new_sd[new_key] = value.clone()
-
-    # LM head: copy from shared embedding (not tied)
-    assert "ankh.embed_tokens.weight" in new_sd, "Missing embed_tokens in mapped state dict"
-    new_sd["lm_head.weight"] = new_sd["ankh.embed_tokens.weight"].clone()
+    assert "encoder.embed_tokens.weight" in new_sd, "Missing embed_tokens in mapped state dict"
+    new_sd["lm_head.weight"] = new_sd["encoder.embed_tokens.weight"].clone()
 
     return new_sd
 
@@ -227,8 +215,8 @@ if __name__ == "__main__":
             repo_id, dtype=torch.float32, device_map="cpu",
             force_download=True, trust_remote_code=True,
         )
-        for key in model.ankh.state_dict():
-            orig = model.ankh.state_dict()[key]
+        for key in model.encoder.state_dict():
+            orig = model.encoder.state_dict()[key]
             dl = downloaded_model.state_dict()[key]
             mse = (orig.float() - dl.float()).pow(2).mean().item()
             assert mse == 0.0, f"Post-download mismatch at {key}: MSE={mse}"
