@@ -1,3 +1,10 @@
+---
+library_name: transformers
+tags:
+- protein language model
+- biology
+---
+
 # FastANKH
 
 Fast, optimized implementations of ANKH protein language models (T5-based) with multi-backend attention support.
