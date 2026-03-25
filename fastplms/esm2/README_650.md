@@ -129,15 +129,46 @@ Average MSE for BF16: 0.00004125
 We look at various ESM models and their throughput on an H100. FastESM is over twice as fast as ESM2-650 with longer sequences. Requires PyTorch 2.5+ for the most savings, see [SDPA](https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html).
 ![image/png](https://cdn-uploads.huggingface.co/production/uploads/62f2bd3bdb7cbd214b658c48/PvaBGfuJXEW2v_WLkt63y.png)
 
-### Citation
-If you use any of this implementation or work please cite it (as well as the [ESM2](https://www.science.org/doi/10.1126/science.ade2574) paper).
+### Citations
+
+```bibtex
+@misc{FastPLMs,
+  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  year={2024},
+  url={https://huggingface.co/Synthyra/ESMplusplus_small},
+  DOI={10.57967/hf/3726},
+  publisher={Hugging Face}
+}
 ```
-@misc {FastPLMs,
-    author       = { Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
-    title        = { FastPLMs: Fast, efficient, protien language model inference from Huggingface AutoModel.},
-    year         = {2024},
-    url          = { https://huggingface.co/Synthyra/ESMplusplus_small },
-    DOI          = { 10.57967/hf/3726 },
-    publisher    = { Hugging Face }
+
+```bibtex
+@article{lin2023esm2,
+  title={Evolutionary-scale prediction of atomic-level protein structure with a language model},
+  author={Lin, Zeming and Akin, Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smestad, Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa, Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives, Alexander},
+  journal={Science},
+  volume={379},
+  number={6637},
+  pages={1123--1130},
+  year={2023},
+  DOI={10.1126/science.ade2574}
+}
+```
+
+```bibtex
+@article{dong2024flexattention,
+  title={Flex Attention: A Programming Model for Generating Optimized Attention Kernels},
+  author={Dong, Juechu and Feng, Boyuan and Guessous, Driss and Liang, Yanbo and He, Horace},
+  journal={arXiv preprint arXiv:2412.05496},
+  year={2024}
+}
+```
+
+```bibtex
+@inproceedings{paszke2019pytorch,
+  title={PyTorch: An Imperative Style, High-Performance Deep Learning Library},
+  author={Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
+  booktitle={Advances in Neural Information Processing Systems 32},
+  year={2019}
 }
 ```

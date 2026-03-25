@@ -174,16 +174,42 @@ We look at various ESM models and their throughput on an H100. Adding efficient 
 The most gains will be seen with PyTorch > 2.5 on linux machines.
 ![image/png](https://cdn-uploads.huggingface.co/production/uploads/62f2bd3bdb7cbd214b658c48/RfLRSchFivdsqJrWMh4bo.png)
 
-### Citation
-If you use any of this implementation or work please cite it (as well as the ESMC preprint).
+### Citations
 
+```bibtex
+@misc{FastPLMs,
+  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  year={2024},
+  url={https://huggingface.co/Synthyra/ESMplusplus_small},
+  DOI={10.57967/hf/3726},
+  publisher={Hugging Face}
+}
 ```
-@misc {FastPLMs,
-    author       = { Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
-    title        = { FastPLMs: Fast, efficient, protien language model inference from Huggingface AutoModel.},
-    year         = {2024},
-    url          = { https://huggingface.co/Synthyra/ESMplusplus_small },
-    DOI          = { 10.57967/hf/3726 },
-    publisher    = { Hugging Face }
+
+```bibtex
+@article{hayes2024simulating,
+  title={Simulating 500 million years of evolution with a language model},
+  author={Hayes, Thomas and Rao, Roshan and Akin, Halil and Sofber, Nicholas J and Achour, Divya and Moez, Irfan and Garg, Rhitu and Angelova, Rami and Babu, Manan and Alcaide, Eric and others},
+  journal={bioRxiv},
+  year={2024}
+}
+```
+
+```bibtex
+@article{dong2024flexattention,
+  title={Flex Attention: A Programming Model for Generating Optimized Attention Kernels},
+  author={Dong, Juechu and Feng, Boyuan and Guessous, Driss and Liang, Yanbo and He, Horace},
+  journal={arXiv preprint arXiv:2412.05496},
+  year={2024}
+}
+```
+
+```bibtex
+@inproceedings{paszke2019pytorch,
+  title={PyTorch: An Imperative Style, High-Performance Deep Learning Library},
+  author={Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
+  booktitle={Advances in Neural Information Processing Systems 32},
+  year={2019}
 }
 ```

@@ -122,3 +122,42 @@ Coordinate metrics now include both raw and rigid-aligned variants:
 
 Pass/fail uses `--pass-coord-metric aligned` by default. Set `--pass-coord-metric raw` to use the raw coordinate thresholds.
 
+## Citations
+
+```bibtex
+@misc{FastPLMs,
+  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  year={2024},
+  url={https://huggingface.co/Synthyra/ESMplusplus_small},
+  DOI={10.57967/hf/3726},
+  publisher={Hugging Face}
+}
+```
+
+```bibtex
+@article{passaro2025boltz2,
+  title={Boltz-2: Exploring the Frontiers of Biomolecular Prediction},
+  author={Passaro, Saro and Corso, Gabriele and Wohlwend, Jeremy and Reveiz, Mateo and Bordes, Florian and Wicky, Basile and Dayan, Peter and Jing, Bowen},
+  journal={bioRxiv},
+  year={2025}
+}
+```
+
+```bibtex
+@article{wohlwend2024boltz1,
+  title={Boltz-1: Democratizing Biomolecular Interaction Modeling},
+  author={Wohlwend, Jeremy and Corso, Gabriele and Passaro, Saro and Reveiz, Mateo and Leidal, Ken and Swanson, Wojtek and Kher, Gilmer and Lember, Tommi and Jaakkola, Tommi},
+  journal={bioRxiv},
+  year={2024}
+}
+```
+
+```bibtex
+@inproceedings{paszke2019pytorch,
+  title={PyTorch: An Imperative Style, High-Performance Deep Learning Library},
+  author={Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
+  booktitle={Advances in Neural Information Processing Systems 32},
+  year={2019}
+}
+```

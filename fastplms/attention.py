@@ -3,9 +3,10 @@
 Contains: AttentionBackend enum, backend resolution, mask creation,
 flex attention helpers, flash kernel detection/dispatch, and pad/unpad utilities.
 """
+from __future__ import annotations
+
 from enum import Enum
 from functools import partial
-from typing import Optional
 
 import torch
 import torch.nn as nn
@@ -290,8 +291,8 @@ def get_attention_mask(
     batch_size: int,
     seq_len: int,
     device: torch.device,
-    attention_mask: Optional[torch.Tensor] = None,
-) -> tuple[torch.Tensor | None, torch.Tensor | None, "BlockMask | None"]:
+    attention_mask: torch.Tensor | None = None,
+) -> tuple[torch.Tensor | None, torch.Tensor | None, BlockMask | None]:
     """Build padding masks once for all encoder layers.
 
     Returns (attention_mask_2d, attention_mask_4d, flex_block_mask).

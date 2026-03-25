@@ -226,7 +226,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     },
     "ankh2_large": {
         "fast_path": "Synthyra/ANKH2_large",
-        "official_path": "ElnaggarLab/ankh2-large",
+        "official_path": "ElnaggarLab/ankh2-ext2",
         "load_official": "testing.official.ankh",
         "model_type": "ANKH",
         "uses_tokenizer": True,

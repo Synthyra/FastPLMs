@@ -175,25 +175,43 @@ TTT parameters are set via `config.ttt_config` (a dict) or by modifying `model._
 
 ## Citations
 
-If you use this implementation, please cite FastPLMs and the original ProteinTTT paper:
-
 ```bibtex
 @misc{FastPLMs,
-    author       = {Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
-    title        = {FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
-    year         = {2024},
-    url          = {https://huggingface.co/Synthyra/ESMplusplus_small},
-    DOI          = {10.57967/hf/3726},
-    publisher    = {Hugging Face}
+  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  year={2024},
+  url={https://huggingface.co/Synthyra/ESMplusplus_small},
+  DOI={10.57967/hf/3726},
+  publisher={Hugging Face}
 }
+```
 
+```bibtex
 @misc{bushuiev2026proteinneed,
-    title        = {One protein is all you need},
-    author       = {Anton Bushuiev and Roman Bushuiev and Olga Pimenova and Nikola Zadorozhny and Raman Samusevich and Elisabet Manaskova and Rachel Seongeun Kim and Hannes St\"ark and Jiri Sedlar and Martin Steinegger and Tom\'a\v{s} Pluskal and Josef Sivic},
-    year         = {2026},
-    eprint       = {2411.02109},
-    archivePrefix= {arXiv},
-    primaryClass = {cs.LG},
-    url          = {https://arxiv.org/abs/2411.02109},
+  title={One protein is all you need},
+  author={Anton Bushuiev and Roman Bushuiev and Olga Pimenova and Nikola Zadorozhny and Raman Samusevich and Elisabet Manaskova and Rachel Seongeun Kim and Hannes St\"ark and Jiri Sedlar and Martin Steinegger and Tom\'a\v{s} Pluskal and Josef Sivic},
+  year={2026},
+  eprint={2411.02109},
+  archivePrefix={arXiv},
+  primaryClass={cs.LG},
+  url={https://arxiv.org/abs/2411.02109}
+}
+```
+
+```bibtex
+@article{dong2024flexattention,
+  title={Flex Attention: A Programming Model for Generating Optimized Attention Kernels},
+  author={Dong, Juechu and Feng, Boyuan and Guessous, Driss and Liang, Yanbo and He, Horace},
+  journal={arXiv preprint arXiv:2412.05496},
+  year={2024}
+}
+```
+
+```bibtex
+@inproceedings{paszke2019pytorch,
+  title={PyTorch: An Imperative Style, High-Performance Deep Learning Library},
+  author={Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
+  booktitle={Advances in Neural Information Processing Systems 32},
+  year={2019}
 }
 ```

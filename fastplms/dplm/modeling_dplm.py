@@ -1,3 +1,4 @@
+from __future__ import annotations
 # Copyright (c) 2024 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -209,7 +210,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         value_BHLD: torch.Tensor,
         attention_mask_2d: torch.Tensor | None = None,
         attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: "BlockMask | None" = None,
+        flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
@@ -273,7 +274,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        flex_block_mask: "BlockMask | None" = None,
+        flex_block_mask: BlockMask | None = None,
     ) -> tuple[torch.Tensor, None]:
         assert flex_attention is not None, "Flex attention is not available in this environment."
         fn = _get_flex_attention_fn()

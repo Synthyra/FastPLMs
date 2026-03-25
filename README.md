@@ -2,7 +2,7 @@
 
 <img width="2816" height="1536" alt="FastPLMs Hero Image" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
 
-FastPLMs is an open-source initiative dedicated to accelerating pretrained protein language models (pLMs). By replacing native, often suboptimal attention implementations with **Flash Attention** or **Flex Attention**, we provide high-performance alternatives that are fully compatible with the HuggingFace `transformers` ecosystem.
+FastPLMs is an open-source initiative dedicated to making protein language models (pLMs) efficient and easy to use. By replacing native, often suboptimal attention implementations with **Flash Attention** or **Flex Attention**, we provide high-performance alternatives that are fully compatible with the HuggingFace `transformers` ecosystem and can easily be loaded with no extra code with `AutoModel`.
 
 ---
 
@@ -59,9 +59,10 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | **E1** | Profluent Bio | [Profluent-Bio/E1](https://github.com/Profluent-Bio/E1) | Flex Attention, Block-Causal | 150M, 300M, 600M |
 | **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
 | **ESM++** | EvolutionaryScale | [EvolutionaryScale/esm](https://github.com/evolutionaryscale/esm) | Optimized SDPA / Flex | Small (300M), Large (600M) |
-| **DPLM** | ByteDance | N/A | Diffusion Optimized Attention | 150M, 650M, 3B |
-| **DPLM2** | ByteDance | N/A | Multimodal Diffusion | 150M, 650M, 3B |
+| **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
+| **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
 | **ANKH** | Elnaggar Lab | [ElnaggarLab/ankh](https://huggingface.co/ElnaggarLab/ankh-base) | T5 RPE via Flex score_mod | Base, Large, ANKH2-L, ANKH3-L, ANKH3-XL |
+| **ESMFold** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | ProteinTTT + Fast ESM2 backbone | Standard |
 | **Boltz2** | MIT / Various | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) | Optimized Structure Prediction | Standard |
 
 ### Full Model List
@@ -86,10 +87,11 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | `dplm2_3b` | DPLM2 | 3B | ByteDance | [Synthyra/DPLM2-3B](https://huggingface.co/Synthyra/DPLM2-3B) | [airkingbd/dplm2_3b](https://huggingface.co/airkingbd/dplm2_3b) |
 | `ankh_base` | ANKH | ~240M | Elnaggar Lab | [Synthyra/ANKH_base](https://huggingface.co/Synthyra/ANKH_base) | [ElnaggarLab/ankh-base](https://huggingface.co/ElnaggarLab/ankh-base) |
 | `ankh_large` | ANKH | ~1.1B | Elnaggar Lab | [Synthyra/ANKH_large](https://huggingface.co/Synthyra/ANKH_large) | [ElnaggarLab/ankh-large](https://huggingface.co/ElnaggarLab/ankh-large) |
-| `ankh2_large` | ANKH | ~550M | Elnaggar Lab | [Synthyra/ANKH2_large](https://huggingface.co/Synthyra/ANKH2_large) | [ElnaggarLab/ankh2-large](https://huggingface.co/ElnaggarLab/ankh2-large) |
+| `ankh2_large` | ANKH | ~550M | Elnaggar Lab | [Synthyra/ANKH2_large](https://huggingface.co/Synthyra/ANKH2_large) | [ElnaggarLab/ankh2-ext2](https://huggingface.co/ElnaggarLab/ankh2-ext2) |
 | `ankh3_large` | ANKH | ~1.1B | Elnaggar Lab | [Synthyra/ANKH3_large](https://huggingface.co/Synthyra/ANKH3_large) | [ElnaggarLab/ankh3-large](https://huggingface.co/ElnaggarLab/ankh3-large) |
 | `ankh3_xl` | ANKH | ~3B | Elnaggar Lab | [Synthyra/ANKH3_xl](https://huggingface.co/Synthyra/ANKH3_xl) | [ElnaggarLab/ankh3-xl](https://huggingface.co/ElnaggarLab/ankh3-xl) |
-| `boltz2` | Boltz2 | - | MIT / Various | [Synthyra/Boltz2](https://huggingface.co/Synthyra/Boltz2) | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) |
+| `esmfold` | ESMFold | ~700M | Meta AI | [Synthyra/FastESMFold](https://huggingface.co/Synthyra/FastESMFold) | [facebookresearch/esm](https://github.com/facebookresearch/esm) |
+| `boltz2` | Boltz2 | TBD | MIT / Various | [Synthyra/Boltz2](https://huggingface.co/Synthyra/Boltz2) | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) |
 
 ---
 
@@ -371,3 +373,159 @@ On Linux/macOS, replace `$(pwd)` with `${PWD}`.
 
 ## Suggestions & Contributions
 Found a bug or have a feature request? Please open a [GitHub Issue](https://github.com/Synthyra/FastPLMs/issues). We are actively looking for contributions to optimize more pLM architectures!
+
+---
+
+## Citations
+
+If you use FastPLMs, please cite the following along with the relevant model paper(s).
+
+### FastPLMs
+
+```bibtex
+@misc{FastPLMs,
+  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  year={2024},
+  url={https://huggingface.co/Synthyra/ESMplusplus_small},
+  DOI={10.57967/hf/3726},
+  publisher={Hugging Face}
+}
+```
+
+### Flex Attention
+
+```bibtex
+@article{dong2024flexattention,
+  title={Flex Attention: A Programming Model for Generating Optimized Attention Kernels},
+  author={Dong, Juechu and Feng, Boyuan and Guessous, Driss and Liang, Yanbo and He, Horace},
+  journal={arXiv preprint arXiv:2412.05496},
+  year={2024}
+}
+```
+
+### PyTorch
+
+```bibtex
+@inproceedings{paszke2019pytorch,
+  title={PyTorch: An Imperative Style, High-Performance Deep Learning Library},
+  author={Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
+  booktitle={Advances in Neural Information Processing Systems 32},
+  year={2019}
+}
+```
+
+### ESM2
+
+```bibtex
+@article{lin2023esm2,
+  title={Evolutionary-scale prediction of atomic-level protein structure with a language model},
+  author={Lin, Zeming and Akin, Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smestad, Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa, Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives, Alexander},
+  journal={Science},
+  volume={379},
+  number={6637},
+  pages={1123--1130},
+  year={2023},
+  DOI={10.1126/science.ade2574}
+}
+```
+
+### ESM++ (ESMC)
+
+```bibtex
+@article{hayes2024simulating,
+  title={Simulating 500 million years of evolution with a language model},
+  author={Hayes, Thomas and Rao, Roshan and Akin, Halil and Sofber, Nicholas J and Achour, Divya and Moez, Irfan and Garg, Rhitu and Angelova, Rami and Babu, Manan and Alcaide, Eric and others},
+  journal={bioRxiv},
+  year={2024}
+}
+```
+
+### E1
+
+```bibtex
+@article{jain2025e1,
+  title={E1: Retrieval-Augmented Protein Encoder Models},
+  author={Jain, Sarthak and Beazer, Joel and Ruffolo, Jeffrey A and Bhatnagar, Aadyot and Madani, Ali},
+  journal={bioRxiv},
+  DOI={10.1101/2025.11.12.688125},
+  year={2025}
+}
+```
+
+### DPLM
+
+```bibtex
+@article{wang2024dplm,
+  title={Diffusion Language Models Are Versatile Protein Learners},
+  author={Wang, Xinyou and Ye, Zaixiang and Huang, Fei and Cao, Dongyan and Liang, Shujian and Huang, Liang},
+  journal={Proceedings of the 41st International Conference on Machine Learning},
+  year={2024}
+}
+```
+
+### DPLM2
+
+```bibtex
+@article{wang2024dplm2,
+  title={DPLM-2: A Multimodal Diffusion Protein Language Model},
+  author={Wang, Xinyou and Ye, Zaixiang and Huang, Fei and Cao, Dongyan and Liang, Shujian and Huang, Liang},
+  journal={arXiv preprint arXiv:2410.13782},
+  year={2024}
+}
+```
+
+### ANKH
+
+```bibtex
+@article{elnaggar2023ankh,
+  title={Ankh: Optimized Protein Language Model Unlocks General-Purpose Modelling},
+  author={Elnaggar, Ahmed and Essam, Hazem and Salah-Eldin, Wafaa and Moustafa, Walid and Elkerdawy, Mohamed and Rochereau, Charlotte and Rost, Burkhard},
+  journal={arXiv preprint arXiv:2301.06568},
+  year={2023}
+}
+```
+
+```bibtex
+@article{alsamkary2025ankh3,
+  title={Ankh3: Multi-Task Pretraining with Sequence Denoising and Completion Enhances Protein Representations},
+  author={Alsamkary, Hazem and Elshaffei, Mohamed and Elkerdawy, Mohamed and Elnaggar, Ahmed},
+  journal={arXiv preprint arXiv:2505.20052},
+  year={2025}
+}
+```
+
+### Boltz
+
+```bibtex
+@article{passaro2025boltz2,
+  title={Boltz-2: Exploring the Frontiers of Biomolecular Prediction},
+  author={Passaro, Saro and Corso, Gabriele and Wohlwend, Jeremy and Reveiz, Mateo and Bordes, Florian and Wicky, Basile and Dayan, Peter and Jing, Bowen},
+  journal={bioRxiv},
+  year={2025}
+}
+```
+
+```bibtex
+@article{wohlwend2024boltz1,
+  title={Boltz-1: Democratizing Biomolecular Interaction Modeling},
+  author={Wohlwend, Jeremy and Corso, Gabriele and Passaro, Saro and Reveiz, Mateo and Leidal, Ken and Swanson, Wojtek and Kher, Gilmer and Lember, Tommi and Jaakkola, Tommi},
+  journal={bioRxiv},
+  year={2024}
+}
+```
+
+### ESMFold / ProteinTTT
+
+```bibtex
+@misc{bushuiev2026proteinneed,
+  title={One protein is all you need},
+  author={Anton Bushuiev and Roman Bushuiev and Olga Pimenova and Nikola Zadorozhny and Raman Samusevich and Elisabet Manaskova and Rachel Seongeun Kim and Hannes St\"ark and Jiri Sedlar and Martin Steinegger and Tom\'a\v{s} Pluskal and Josef Sivic},
+  year={2026},
+  eprint={2411.02109},
+  archivePrefix={arXiv},
+  primaryClass={cs.LG},
+  url={https://arxiv.org/abs/2411.02109}
+}
+```
+---

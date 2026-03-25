@@ -148,28 +148,43 @@ for param in model.classifier.parameters():
 For a more thourough example of fine-tuning, check out our example script [here](https://github.com/Synthyra/FastPLMs/blob/main/fine_tuning_example.py).
 
 
-### Citation
-If you use any of this implementation or work please cite the following DOI and Profluent's paper.
+### Citations
 
-```
-@misc {FastPLMs,
-    author       = { Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
-    title        = { FastPLMs: Fast, efficient, protien language model inference from Huggingface AutoModel.},
-    year         = {2024},
-    url          = { https://huggingface.co/Synthyra/ESMplusplus_small },
-    DOI          = { 10.57967/hf/3726 },
-    publisher    = { Hugging Face }
+```bibtex
+@misc{FastPLMs,
+  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  year={2024},
+  url={https://huggingface.co/Synthyra/ESMplusplus_small},
+  DOI={10.57967/hf/3726},
+  publisher={Hugging Face}
 }
 ```
 
+```bibtex
+@article{jain2025e1,
+  title={E1: Retrieval-Augmented Protein Encoder Models},
+  author={Jain, Sarthak and Beazer, Joel and Ruffolo, Jeffrey A and Bhatnagar, Aadyot and Madani, Ali},
+  journal={bioRxiv},
+  DOI={10.1101/2025.11.12.688125},
+  year={2025}
+}
 ```
- @article{Jain_Beazer_Ruffolo_Bhatnagar_Madani_2025,
-    title={E1: Retrieval-Augmented Protein Encoder Models},
-    url={https://www.biorxiv.org/content/early/2025/11/13/2025.11.12.688125},
-    DOI={10.1101/2025.11.12.688125},
-    journal={bioRxiv},
-    publisher={Cold Spring Harbor Laboratory},
-    author={Jain, Sarthak and Beazer, Joel and Ruffolo, Jeffrey A and Bhatnagar, Aadyot and Madani, Ali},
-    year={2025}
+
+```bibtex
+@article{dong2024flexattention,
+  title={Flex Attention: A Programming Model for Generating Optimized Attention Kernels},
+  author={Dong, Juechu and Feng, Boyuan and Guessous, Driss and Liang, Yanbo and He, Horace},
+  journal={arXiv preprint arXiv:2412.05496},
+  year={2024}
+}
+```
+
+```bibtex
+@inproceedings{paszke2019pytorch,
+  title={PyTorch: An Imperative Style, High-Performance Deep Learning Library},
+  author={Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
+  booktitle={Advances in Neural Information Processing Systems 32},
+  year={2019}
 }
 ```

@@ -1,4 +1,5 @@
-torch>=2.11 # this is force reinstalled in the Dockerfile with cuda
+# torch>=2.11 # this is force reinstalled in the Dockerfile with cuda
+# torchvision>=0.26.0 # this is force reinstalled in the Dockerfile with cuda
 matplotlib
 tqdm
 # testing
