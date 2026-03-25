@@ -3,6 +3,7 @@
 Usage:
     py -m fastplms.esmfold.get_weights
     py -m fastplms.esmfold.get_weights --dry_run
+    py -m fastplms.esmfold.get_weights --skip-weights
     py -m fastplms.esmfold.get_weights --hf_token <token>
 """
 import os
@@ -23,6 +24,7 @@ SHARD_SIZE = "5GB"
 def convert_and_push(
     hf_token: str = None,
     dry_run: bool = False,
+    skip_weights: bool = False,
     attn_backend: str = "sdpa",
 ) -> None:
     if hf_token is not None:
@@ -51,6 +53,14 @@ def convert_and_push(
         "AutoModel": "modeling_fast_esmfold.FastEsmForProteinFolding",
     }
     config = FastEsmFoldConfig(**config_dict)
+
+    if skip_weights:
+        if dry_run:
+            print(f"[skip-weights][dry-run] validated config for {TARGET_REPO}")
+            return
+        config.push_to_hub(TARGET_REPO)
+        print(f"[skip-weights] uploaded config for {TARGET_REPO}")
+        return
 
     print("Creating FastEsmForProteinFolding model...")
     model = FastEsmForProteinFolding(config)
@@ -119,6 +129,10 @@ if __name__ == "__main__":
         action="store_true",
     )
     parser.add_argument(
+        "--skip-weights",
+        action="store_true",
+    )
+    parser.add_argument(
         "--attn_backend",
         type=str,
         default="sdpa",
@@ -128,5 +142,6 @@ if __name__ == "__main__":
     convert_and_push(
         hf_token=args.hf_token,
         dry_run=args.dry_run,
+        skip_weights=args.skip_weights,
         attn_backend=args.attn_backend,
     )
