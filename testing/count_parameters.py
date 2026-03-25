@@ -79,7 +79,7 @@ def count_params(repo_id: str, device: str) -> dict:
     model = AutoModelForMaskedLM.from_pretrained(
         repo_id,
         trust_remote_code=True,
-        torch_dtype=torch.float32,
+        dtype=torch.float32,
     ).to(device)
 
     total = sum(p.numel() for p in model.parameters())
@@ -111,7 +111,7 @@ def count_structure_params(repo_id: str, device: str) -> dict:
     model = AutoModel.from_pretrained(
         repo_id,
         trust_remote_code=True,
-        torch_dtype=torch.float32,
+        dtype=torch.float32,
     ).to(device)
 
     total = sum(p.numel() for p in model.parameters())

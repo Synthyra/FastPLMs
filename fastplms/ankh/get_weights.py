@@ -169,7 +169,7 @@ if __name__ == "__main__":
         # Load official T5 encoder-decoder
         print(f"Loading official T5ForConditionalGeneration from {source_repo}...")
         official_model = T5ForConditionalGeneration.from_pretrained(
-            source_repo, torch_dtype=torch.float32, device_map="cpu",
+            source_repo, dtype=torch.float32, device_map="cpu",
         )
 
         # Map encoder weights to FastAnkh format
@@ -224,7 +224,7 @@ if __name__ == "__main__":
         # Verify download
         print(f"Verifying download from {repo_id}...")
         downloaded_model = AutoModel.from_pretrained(
-            repo_id, torch_dtype=torch.float32, device_map="cpu",
+            repo_id, dtype=torch.float32, device_map="cpu",
             force_download=True, trust_remote_code=True,
         )
         for key in model.ankh.state_dict():

@@ -68,7 +68,7 @@ def convert_and_push(
     # Load the source model state dict
     source_model = HFEsmFold.from_pretrained(
         SOURCE_REPO,
-        torch_dtype=torch.float32,
+        dtype=torch.float32,
         device_map="cpu",
     )
     source_sd = source_model.state_dict()

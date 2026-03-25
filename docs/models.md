@@ -284,7 +284,7 @@ Boltz2 compliance is tested via a standalone script (`testing/run_boltz2_complia
 ```python
 from transformers import AutoModel
 
-model = AutoModel.from_pretrained("Synthyra/FastESMFold", trust_remote_code=True, torch_dtype=torch.float32)
+model = AutoModel.from_pretrained("Synthyra/FastESMFold", trust_remote_code=True, dtype=torch.float32)
 ```
 
 ### Key Details

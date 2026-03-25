@@ -50,7 +50,7 @@ def load_official_model(
     model = T5EncoderModel.from_pretrained(
         reference_repo_id,
         device_map=device,
-        torch_dtype=dtype,
+        dtype=dtype,
     ).eval()
     tokenizer = AutoTokenizer.from_pretrained(reference_repo_id)
     wrapped = _OfficialAnkhForwardWrapper(model, tokenizer).to(device=device, dtype=dtype).eval()

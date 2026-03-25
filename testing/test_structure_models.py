@@ -66,7 +66,7 @@ def test_esmfold_loads() -> None:
     model = AutoModel.from_pretrained(
         "Synthyra/FastESMFold",
         trust_remote_code=True,
-        torch_dtype=torch.float32,
+        dtype=torch.float32,
     ).eval().cuda()
 
     assert model is not None
@@ -91,7 +91,7 @@ def test_esmfold_forward() -> None:
         "Synthyra/FastESMFold",
         config=config,
         trust_remote_code=True,
-        torch_dtype=torch.float32,
+        dtype=torch.float32,
     ).eval().cuda()
 
     sequence = "MKTLLILAVVAAALA"

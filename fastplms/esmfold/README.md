@@ -53,7 +53,7 @@ from transformers import AutoModel
 model = AutoModel.from_pretrained(
     "Synthyra/FastESMFold",
     trust_remote_code=True,
-    torch_dtype=torch.float32,
+    dtype=torch.float32,
 ).cuda().eval()
 
 # Standard fold (no TTT)
