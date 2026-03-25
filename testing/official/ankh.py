@@ -10,8 +10,8 @@ from transformers import T5EncoderModel, AutoTokenizer
 class _AnkhComplianceOutput:
     """Mimics HuggingFace model output so the test suite can access .logits and .hidden_states."""
 
-    def __init__(self, last_hidden_state: torch.Tensor, hidden_states: Tuple[torch.Tensor, ...]) -> None:
-        self.logits = None  # T5EncoderModel has no LM head
+    def __init__(self, logits: torch.Tensor, last_hidden_state: torch.Tensor, hidden_states: Tuple[torch.Tensor, ...]) -> None:
+        self.logits = logits
         self.last_hidden_state = last_hidden_state
         self.hidden_states = hidden_states
 
@@ -21,6 +21,8 @@ class _OfficialAnkhForwardWrapper(nn.Module):
         super().__init__()
         self.model = model
         self.tokenizer = tokenizer
+        self.lm_head = nn.Linear(model.config.d_model, model.config.vocab_size, bias=False)
+        self.lm_head.weight = model.shared.weight
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, **kwargs):
         outputs = self.model(
@@ -28,7 +30,9 @@ class _OfficialAnkhForwardWrapper(nn.Module):
             attention_mask=attention_mask,
             output_hidden_states=True,
         )
+        logits = self.lm_head(outputs.last_hidden_state)
         return _AnkhComplianceOutput(
+            logits=logits,
             last_hidden_state=outputs.last_hidden_state,
             hidden_states=outputs.hidden_states,
         )
