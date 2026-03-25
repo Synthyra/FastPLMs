@@ -63,6 +63,13 @@ MODEL_REGISTRY: Dict[str, Dict] = {
         "model_type": "DPLM2",
         "uses_tokenizer": True,
     },
+    "ankh": {
+        "fast_path": "Synthyra/ANKH_base",
+        "official_path": "ElnaggarLab/ankh-base",
+        "load_official": "testing.official.ankh",
+        "model_type": "ANKH",
+        "uses_tokenizer": True,
+    },
 }
 
 # Full registry: every checkpoint across all model families
@@ -197,6 +204,47 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
         "official_path": "airkingbd/dplm2_3b",
         "load_official": "testing.official.dplm2",
         "model_type": "DPLM2",
+        "uses_tokenizer": True,
+        "size_category": "xlarge",
+    },
+    # ANKH family
+    "ankh_base": {
+        "fast_path": "Synthyra/ANKH_base",
+        "official_path": "ElnaggarLab/ankh-base",
+        "load_official": "testing.official.ankh",
+        "model_type": "ANKH",
+        "uses_tokenizer": True,
+        "size_category": "medium",
+    },
+    "ankh_large": {
+        "fast_path": "Synthyra/ANKH_large",
+        "official_path": "ElnaggarLab/ankh-large",
+        "load_official": "testing.official.ankh",
+        "model_type": "ANKH",
+        "uses_tokenizer": True,
+        "size_category": "large",
+    },
+    "ankh2_large": {
+        "fast_path": "Synthyra/ANKH2_large",
+        "official_path": "ElnaggarLab/ankh2-large",
+        "load_official": "testing.official.ankh",
+        "model_type": "ANKH",
+        "uses_tokenizer": True,
+        "size_category": "large",
+    },
+    "ankh3_large": {
+        "fast_path": "Synthyra/ANKH3_large",
+        "official_path": "ElnaggarLab/ankh3-large",
+        "load_official": "testing.official.ankh",
+        "model_type": "ANKH",
+        "uses_tokenizer": True,
+        "size_category": "large",
+    },
+    "ankh3_xl": {
+        "fast_path": "Synthyra/ANKH3_xl",
+        "official_path": "ElnaggarLab/ankh3-xl",
+        "load_official": "testing.official.ankh",
+        "model_type": "ANKH",
         "uses_tokenizer": True,
         "size_category": "xlarge",
     },

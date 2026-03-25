@@ -61,6 +61,7 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | **ESM++** | EvolutionaryScale | [EvolutionaryScale/esm](https://github.com/evolutionaryscale/esm) | Optimized SDPA / Flex | Small (300M), Large (600M) |
 | **DPLM** | ByteDance | N/A | Diffusion Optimized Attention | 150M, 650M, 3B |
 | **DPLM2** | ByteDance | N/A | Multimodal Diffusion | 150M, 650M, 3B |
+| **ANKH** | Elnaggar Lab | [ElnaggarLab/ankh](https://huggingface.co/ElnaggarLab/ankh-base) | T5 RPE via Flex score_mod | Base, Large, ANKH2-L, ANKH3-L, ANKH3-XL |
 | **Boltz2** | MIT / Various | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) | Optimized Structure Prediction | Standard |
 
 ### Full Model List
@@ -83,6 +84,11 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | `dplm2_150m` | DPLM2 | 150M | ByteDance | [Synthyra/DPLM2-150M](https://huggingface.co/Synthyra/DPLM2-150M) | [airkingbd/dplm2_150m](https://huggingface.co/airkingbd/dplm2_150m) |
 | `dplm2_650m` | DPLM2 | 650M | ByteDance | [Synthyra/DPLM2-650M](https://huggingface.co/Synthyra/DPLM2-650M) | [airkingbd/dplm2_650m](https://huggingface.co/airkingbd/dplm2_650m) |
 | `dplm2_3b` | DPLM2 | 3B | ByteDance | [Synthyra/DPLM2-3B](https://huggingface.co/Synthyra/DPLM2-3B) | [airkingbd/dplm2_3b](https://huggingface.co/airkingbd/dplm2_3b) |
+| `ankh_base` | ANKH | ~240M | Elnaggar Lab | [Synthyra/ANKH_base](https://huggingface.co/Synthyra/ANKH_base) | [ElnaggarLab/ankh-base](https://huggingface.co/ElnaggarLab/ankh-base) |
+| `ankh_large` | ANKH | ~1.1B | Elnaggar Lab | [Synthyra/ANKH_large](https://huggingface.co/Synthyra/ANKH_large) | [ElnaggarLab/ankh-large](https://huggingface.co/ElnaggarLab/ankh-large) |
+| `ankh2_large` | ANKH | ~550M | Elnaggar Lab | [Synthyra/ANKH2_large](https://huggingface.co/Synthyra/ANKH2_large) | [ElnaggarLab/ankh2-large](https://huggingface.co/ElnaggarLab/ankh2-large) |
+| `ankh3_large` | ANKH | ~1.1B | Elnaggar Lab | [Synthyra/ANKH3_large](https://huggingface.co/Synthyra/ANKH3_large) | [ElnaggarLab/ankh3-large](https://huggingface.co/ElnaggarLab/ankh3-large) |
+| `ankh3_xl` | ANKH | ~3B | Elnaggar Lab | [Synthyra/ANKH3_xl](https://huggingface.co/Synthyra/ANKH3_xl) | [ElnaggarLab/ankh3-xl](https://huggingface.co/ElnaggarLab/ankh3-xl) |
 | `boltz2` | Boltz2 | - | MIT / Various | [Synthyra/Boltz2](https://huggingface.co/Synthyra/Boltz2) | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) |
 
 ---
@@ -97,7 +103,7 @@ All FastPLMs models share a common set of attention backends, controlled via `co
 | :--- | :--- | :--- | :--- | :--- |
 | PyTorch SDPA | `"sdpa"` | Fast | Exact | Any PyTorch ≥ 2.0 |
 | Flash Attention | `"kernels_flash"` | Fastest | Approximate | Requires `pip install kernels` (pre-built) |
-| Flex Attention | `"flex"` | Very fast | ~Exact | Requires PyTorch ≥ 2.5 |
+| Flex Attention | `"flex"` | Very fast | ~Exact | Requires PyTorch ≥ 2.11 (FA4 backend on Hopper/Blackwell) |
 | Auto | `"auto"` | — | — | Always (selects best available) |
 
 ### SDPA (default)

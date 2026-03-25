@@ -2,6 +2,8 @@
 
 FastPLMs uses pytest with Docker for all GPU testing. Tests cover model loading, attention backend consistency, weight/forward compliance against official implementations, embedding stability, and throughput benchmarking.
 
+**Requires PyTorch 2.11+**. Flex attention uses Flash Attention 4 (FA4) as its backend on Hopper/Blackwell GPUs. The Dockerfile pins PyTorch 2.11.0 with CUDA 12.8.
+
 ## Docker Setup
 
 ### Build
@@ -100,6 +102,7 @@ Used by the base parametrized tests. One small model per family:
 | `e1` | Profluent-E1-150M | E1 |
 | `dplm` | DPLM-150M | DPLM |
 | `dplm2` | DPLM2-150M | DPLM2 |
+| `ankh` | ANKH_base | ANKH |
 
 ### Full Registry (`FULL_MODEL_REGISTRY`)
 
@@ -108,9 +111,9 @@ Used by the `test_full_*` parametrized tests. All checkpoints with `size_categor
 | Category | Models | Marker |
 |----------|--------|--------|
 | `small` | ESM2-8M, ESM2-35M, E1-150M, DPLM-150M, DPLM2-150M | (none) |
-| `medium` | ESM2-150M, ESMC-small, E1-300M | `slow` |
-| `large` | ESM2-650M, ESMC-large, E1-600M, DPLM-650M, DPLM2-650M | `slow` |
-| `xlarge` | ESM2-3B, DPLM-3B, DPLM2-3B | `large` |
+| `medium` | ESM2-150M, ESMC-small, E1-300M, ANKH-base | `slow` |
+| `large` | ESM2-650M, ESMC-large, E1-600M, DPLM-650M, DPLM2-650M, ANKH-large, ANKH2-large, ANKH3-large | `slow` |
+| `xlarge` | ESM2-3B, DPLM-3B, DPLM2-3B, ANKH3-xl | `large` |
 
 ### Structure Registry (`STRUCTURE_MODEL_REGISTRY`)
 

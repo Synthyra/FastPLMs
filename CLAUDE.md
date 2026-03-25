@@ -38,7 +38,7 @@ Pytest markers: `gpu`, `slow` (loads two models), `large` (3B models, 24+ GB VRA
 
 ### Model Families
 
-Each family lives under `fastplms/`: `fastplms/esm2/`, `fastplms/esm_plusplus/`, `fastplms/e1/`, `fastplms/dplm/`, `fastplms/dplm2/`, `fastplms/boltz/`, `fastplms/esmfold/`. Each contains:
+Each family lives under `fastplms/`: `fastplms/esm2/`, `fastplms/esm_plusplus/`, `fastplms/e1/`, `fastplms/dplm/`, `fastplms/dplm2/`, `fastplms/ankh/`, `fastplms/boltz/`, `fastplms/esmfold/`. Each contains:
 - `modeling_*.py` -- HuggingFace `PreTrainedModel` + `PretrainedConfig` subclasses (also pushed to HF Hub for `trust_remote_code`)
 - `get_weights.py` -- converts official checkpoints to FastPLM format
 
@@ -48,7 +48,7 @@ All sequence models load via `AutoModelForMaskedLM.from_pretrained("Synthyra/...
 
 ### Two Input Modes
 
-**Tokenizer mode** (ESM2, ESM++, DPLM, DPLM2): Standard HF tokenizer. Access via `model.tokenizer`. Forward: `_embed(input_ids, attention_mask)`.
+**Tokenizer mode** (ESM2, ESM++, DPLM, DPLM2, ANKH): Standard HF tokenizer. Access via `model.tokenizer`. Forward: `_embed(input_ids, attention_mask)`.
 
 **Sequence mode** (E1): No tokenizer. Uses `model.model.prep_tokens.get_batch_kwargs(sequences, device=device)` returning `input_ids`, `within_seq_position_ids`, `global_position_ids`, `sequence_ids`. Forward: `_embed(sequences, return_attention_mask=True)` returns `(embeddings, mask)`.
 
@@ -56,7 +56,9 @@ ESMC (ESM++) additionally requires `sequence_id = attention_mask.to(dtype=torch.
 
 ### Attention Backends
 
-All models share `config.attn_backend` with four options: `"sdpa"` (default, exact), `"kernels_flash"` (fastest, approximate), `"flex"` (near-exact, block masks), `"auto"` (best available). ESM2/ESM++/E1 set backend on config before `from_pretrained`; DPLM/DPLM2 expose a mutable `model.attn_backend` property.
+All models share `config.attn_backend` with four options: `"sdpa"` (default, exact), `"kernels_flash"` (fastest, approximate), `"flex"` (near-exact, block masks), `"auto"` (best available). ESM2/ESM++/E1 set backend on config before `from_pretrained`; DPLM/DPLM2 expose a mutable `model.attn_backend` property. ANKH only supports `"sdpa"` and `"flex"` (T5 relative position bias is incompatible with flash attention kernels).
+
+**Requires PyTorch 2.11+**. Flex attention uses Flash Attention 4 (FA4) as its backend on Hopper/Blackwell GPUs, with automatic Triton fallback on older hardware. The FA4 backend preference is set globally via `kernel_options={"BACKEND": "FLASH"}` in `fastplms/attention.py`.
 
 ### EmbeddingMixin
 
@@ -65,8 +67,8 @@ All models share `config.attn_backend` with four options: `"sdpa"` (default, exa
 ### Test Registries
 
 `testing/conftest.py` defines:
-- `MODEL_REGISTRY`: 5 small models (one per family) for fast CI
-- `FULL_MODEL_REGISTRY`: 16 checkpoints with `size_category` (small/medium/large/xlarge)
+- `MODEL_REGISTRY`: 6 small models (one per family) for fast CI
+- `FULL_MODEL_REGISTRY`: 21+ checkpoints with `size_category` (small/medium/large/xlarge)
 - `STRUCTURE_MODEL_REGISTRY`: Boltz2, ESMFold (different API, not MaskedLM)
 - Shared helpers: `tokenize_batch()`, `add_model_specific_inputs()`, `mark_by_size()`
 
