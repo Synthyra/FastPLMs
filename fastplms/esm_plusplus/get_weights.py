@@ -50,8 +50,6 @@ if __name__ == "__main__":
     script_root = os.path.dirname(os.path.abspath(__file__))
 
     for repo_id, esmc_model_key in _resolve_repo_items(args.repo_ids):
-        official_model, tokenizer = load_official_model(esmc_model_key, device=torch.device("cpu"), dtype=torch.float32)
-        # load_official_model returns a wrapper, access the underlying model via .model
         config = AutoConfig.from_pretrained(repo_id, trust_remote_code=True)
         config.auto_map = {
             "AutoConfig": "modeling_esm_plusplus.ESMplusplusConfig",
@@ -65,10 +63,13 @@ if __name__ == "__main__":
             if args.dry_run:
                 print(f"[skip-weights][dry-run] validated config+tokenizer parity for {repo_id}")
                 continue
+            tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
             config.push_to_hub(repo_id)
             tokenizer.push_to_hub(repo_id)
             print(f"[skip-weights] uploaded config+tokenizer for {repo_id}")
             continue
+        official_model, tokenizer = load_official_model(esmc_model_key, device=torch.device("cpu"), dtype=torch.float32)
+        # load_official_model returns a wrapper, access the underlying model via .model
         model = ESMplusplusForMaskedLM(config=config).eval().cpu().to(torch.float32)
         load_result = model.load_state_dict(official_model.model.state_dict(), strict=True)
 
