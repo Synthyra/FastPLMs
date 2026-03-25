@@ -63,10 +63,8 @@ if __name__ == "__main__":
             if args.dry_run:
                 print(f"[skip-weights][dry-run] validated config+tokenizer parity for {repo_id}")
                 continue
-            tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
             config.push_to_hub(repo_id)
-            tokenizer.push_to_hub(repo_id)
-            print(f"[skip-weights] uploaded config+tokenizer for {repo_id}")
+            print(f"[skip-weights] uploaded config for {repo_id}")
             continue
         official_model, tokenizer = load_official_model(esmc_model_key, device=torch.device("cpu"), dtype=torch.float32)
         # load_official_model returns a wrapper, access the underlying model via .model
