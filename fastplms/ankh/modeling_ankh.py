@@ -48,6 +48,7 @@ class AnkhMaskedLMOutput(ModelOutput):
 
 class FastAnkhConfig(PretrainedConfig):
     model_type = "fast_ankh"
+    attribute_map = {"hidden_size": "d_model"}
 
     def __init__(
         self,
