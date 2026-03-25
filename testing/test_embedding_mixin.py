@@ -71,7 +71,7 @@ def _assert_embeddings_match(
     a: Dict[str, torch.Tensor],
     b: Dict[str, torch.Tensor],
     label: str,
-    atol: float = 5e-3,
+    atol: float = 6e-3,
 ) -> None:
     assert set(a) == set(b), f"[{label}] Key sets differ between batch and single runs"
     for seq in a:

@@ -233,7 +233,7 @@ class AnkhSelfAttention(nn.Module):
 
         if output_attentions:
             attn_output, attn_weights = self._manual_attn(query_BHLD, key_BHLD, value_BHLD, position_bias)
-            return attn_output, attn_weights, position_bias
+            return self.o(attn_output), attn_weights, position_bias
 
         if self.attn_backend == AttentionBackend.FLEX:
             attn_output = self._flex_attn(query_BHLD, key_BHLD, value_BHLD, flex_block_mask, flex_score_mod)
@@ -242,7 +242,7 @@ class AnkhSelfAttention(nn.Module):
         else:
             raise AssertionError(f"Unsupported backend for ANKH: {self.attn_backend}")
 
-        return attn_output, None, position_bias
+        return self.o(attn_output), None, position_bias
 
     def _sdpa_attn(
         self,
