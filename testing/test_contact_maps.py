@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from Bio.PDB import PDBParser, PPBuilder
 
-from esm2.modeling_fastesm import FastEsmModel
+from fastplms.esm2.modeling_fastesm import FastEsmModel
 
 
 def download_random_pdb() -> str:

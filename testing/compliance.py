@@ -8,16 +8,14 @@ from tqdm import tqdm
 from collections import defaultdict
 from transformers import AutoModelForMaskedLM
 
-from esm2.modeling_fastesm import FastEsmForMaskedLM
-from esm2.load_official import load_official_model as load_official_esm2_model
+from fastplms.esm2.modeling_fastesm import FastEsmForMaskedLM
+from fastplms.esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
+from fastplms.e1.modeling_e1 import E1ForMaskedLM
+from testing.official.esm2 import load_official_model as load_official_esm2_model
+from testing.official.esm_plusplus import load_official_model as load_official_esmc_model
+from testing.official.e1 import load_official_model as load_official_e1_model
 
-from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
-from esm_plusplus.load_official import load_official_model as load_official_esmc_model
-
-from e1_fastplms.load_official import load_official_model as load_official_e1_model
-from e1_fastplms.modeling_e1 import E1ForMaskedLM
-
-from weight_parity_utils import assert_state_dict_equal
+from fastplms.weight_parity_utils import assert_state_dict_equal
 
 
 class ComplianceChecker:

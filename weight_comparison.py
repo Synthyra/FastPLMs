@@ -9,7 +9,7 @@ from rich.table import Table
 
 from transformers import AutoModelForMaskedLM, AutoConfig, AutoModel
 
-from e1_fastplms.modeling_e1 import E1ForMaskedLM, E1Config, E1Model
+from fastplms.e1.modeling_e1 import E1ForMaskedLM, E1Config, E1Model
 
 
 def load_weights(path: str, cast_fp32: bool = True) -> Dict[str, torch.Tensor]:

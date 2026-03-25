@@ -31,10 +31,18 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 WORKDIR /app
 
 COPY requirements.txt .
+COPY official/ official/
 
 RUN pip install --upgrade pip setuptools
-RUN git clone https://github.com/Profluent-AI/E1.git && cd E1 && pip install -e . && cd ..
-RUN pip install esm -U
+
+# Install official repos from submodules for compliance testing.
+# - E1: pip install -e (needed by testing/official/e1.py)
+# - DPLM: NOT installed (pins torchtext==0.17.0 which is incompatible).
+#   Compliance uses transformers.EsmForMaskedLM directly. Submodule is for reference only.
+# - ESM (EvolutionaryScale): NOT pip installed (conflicts with fair-esm on `import esm`).
+#   testing/official/esm_plusplus.py adds the submodule to sys.path on demand.
+RUN pip install -e /app/official/e1
+
 RUN pip install -r requirements.txt
 RUN pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
 RUN pip install numpy==1.26.4

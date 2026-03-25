@@ -57,6 +57,28 @@ class ThroughputChecker:
             for _ in range(batch_size - 1)
         ]
 
+    def _make_batch(self, tokenizer: object, batch_size: int, min_length: int, max_length: int) -> Tuple[Dict[str, torch.Tensor], int]:
+        """Generate and tokenize one batch, returning (tokenized_on_device, nonpad_token_count)."""
+        batch = self._generate_random_batch(batch_size, min_length, max_length)
+        tokenized = tokenizer(
+            batch,
+            return_tensors="pt",
+            padding="max_length",
+            max_length=max_length,
+            truncation=True,
+            add_special_tokens=True,
+        )
+        if "attention_mask" in tokenized:
+            nonpad_tokens = tokenized["attention_mask"].sum().item()
+        else:
+            pad_token_id = tokenizer.pad_token_id
+            if pad_token_id is not None:
+                nonpad_tokens = (tokenized["input_ids"] != pad_token_id).sum().item()
+            else:
+                nonpad_tokens = tokenized["input_ids"].numel()
+        tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
+        return tokenized, nonpad_tokens
+
     @torch.inference_mode()
     def _time(self, model: torch.nn.Module, tokenizer: object, batch_size: int, min_length: int, max_length: int) -> Tuple[float, int]:
         model = model.to(self.device).eval()
@@ -71,27 +93,9 @@ class ThroughputChecker:
                 torch.cuda.synchronize()
 
         def run_one_batch() -> int:
-            batch = self._generate_random_batch(batch_size, min_length, max_length)
-            tokenized = tokenizer(
-                batch,
-                return_tensors="pt",
-                padding="max_length",
-                max_length=max_length,
-                truncation=True,
-                add_special_tokens=True,
-            )
-            input_ids = tokenized["input_ids"]
-            if "attention_mask" in tokenized:
-                nonpad_tokens_this = tokenized["attention_mask"].sum().item()
-            else:
-                pad_token_id = tokenizer.pad_token_id
-                if pad_token_id is not None:
-                    nonpad_tokens_this = (input_ids != pad_token_id).sum().item()
-                else:
-                    nonpad_tokens_this = input_ids.numel()
-            tokenized = {k: v.to(self.device) for k, v in tokenized.items()}
-            _ = model(**tokenized, output_hidden_states=True)
-            return nonpad_tokens_this
+            tokenized, nonpad_tokens = self._make_batch(tokenizer, batch_size, min_length, max_length)
+            _ = model(**tokenized)
+            return nonpad_tokens
 
         def time_batches(num_batches: int, message: str):
             processed_tokens = 0
@@ -103,10 +107,39 @@ class ThroughputChecker:
             end_time = time.time()
             return end_time - start_time, processed_tokens
 
-        # Compile first, then keep warming up until the compiled path stabilizes.
+        # Two torch.compile compatibility fixes for flex attention:
+        #
+        # 1. create_block_mask must NOT run inside torch.compile (per PyTorch docs).
+        #    Wrap get_attention_mask and E1's block mask helpers with torch.compiler.disable
+        #    so they execute eagerly even when the outer model is compiled.
+        #
+        # 2. The modeling files internally compile flex_attention via _get_flex_attention_fn(),
+        #    caching the result in a module-level _compiled_flex_attention global. When we
+        #    also wrap the full model in torch.compile(), the inductor hits double-compilation.
+        #    Set the debug flag so _get_flex_attention_fn returns raw flex_attention, and
+        #    clear any already-cached compiled version.
+        import sys
+        for mod in list(sys.modules.values()):
+            for fn_name in ("get_attention_mask", "create_block_causal_mask_optimized", "create_within_seq_block_mask"):
+                fn = getattr(mod, fn_name, None)
+                if fn is not None and callable(fn):
+                    setattr(mod, fn_name, torch.compiler.disable(fn))
+            if hasattr(mod, "_compiled_flex_attention"):
+                mod._compiled_flex_attention = None
+        flex_mod = getattr(torch.nn.attention, "flex_attention", None)
+        if flex_mod is not None:
+            flex_mod._FLEX_ATTENTION_DISABLE_COMPILE_DEBUG = True
+
+        # Eager pass to warm internal caches (rotary _seq_len_cached, flex block masks)
+        # before compile. Without this, dynamo recompiles when cache state changes.
+        _ = run_one_batch()
+        synchronize()
+
+        torch._dynamo.reset()
         model = torch.compile(model)
+
         warmup_latencies = []
-        for warmup_idx in tqdm(range(max_dynamic_warmup_batches), desc="Warmup (dynamic)", leave=False):
+        for warmup_idx in tqdm(range(max_dynamic_warmup_batches), desc="Warmup", leave=False):
             synchronize()
             warmup_start = time.time()
             _ = run_one_batch()
@@ -165,6 +198,50 @@ class ThroughputChecker:
         if self.device.type == "cuda":
             torch.cuda.empty_cache()
         return results
+
+
+def save_structured_results(all_results: Dict[str, Dict], output_dir: str) -> None:
+    """Save throughput results as JSON and CSV files.
+
+    Each row contains: model, backend, batch_size, seq_len, tokens_per_sec,
+    total_tokens, elapsed_sec.
+    """
+    import csv
+    import json
+
+    rows = []
+    for model_path, results in all_results.items():
+        model_name = Path(model_path).name
+        for backend in sorted(results.keys()):
+            for (bs, max_length), entry in results[backend].items():
+                time_taken = entry["time"]
+                nonpad_tokens = entry["tokens"]
+                tokens_per_sec = nonpad_tokens / time_taken if time_taken > 0 else 0.0
+                rows.append({
+                    "model": model_name,
+                    "model_path": model_path,
+                    "backend": backend,
+                    "batch_size": bs,
+                    "seq_len": max_length,
+                    "tokens_per_sec": round(tokens_per_sec, 2),
+                    "total_tokens": nonpad_tokens,
+                    "elapsed_sec": round(time_taken, 4),
+                })
+
+    output_path = Path(output_dir)
+
+    json_path = output_path / "throughput_results.json"
+    with open(json_path, "w") as f:
+        json.dump(rows, f, indent=2)
+    print(f"JSON results saved to {json_path}")
+
+    if rows:
+        csv_path = output_path / "throughput_results.csv"
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"CSV results saved to {csv_path}")
 
 
 def plot_results(all_results: Dict[str, Dict], output_path: str) -> None:
@@ -260,4 +337,6 @@ if __name__ == "__main__":
             backends=args.backends,
         )
 
+    output_dir = str(Path(args.output_path).parent)
+    save_structured_results(all_results, output_dir)
     plot_results(all_results, args.output_path)

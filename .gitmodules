@@ -1,3 +1,15 @@
-[submodule "boltz"]
-	path = boltz
+[submodule "official/boltz"]
+	path = official/boltz
 	url = https://github.com/jwohlwend/boltz.git
+[submodule "official/e1"]
+	path = official/e1
+	url = https://github.com/Profluent-AI/E1.git
+[submodule "official/dplm"]
+	path = official/dplm
+	url = https://github.com/bytedance/dplm.git
+[submodule "official/transformers"]
+	path = official/transformers
+	url = https://github.com/huggingface/transformers.git
+[submodule "official/esm"]
+	path = official/esm
+	url = https://github.com/evolutionaryScale/esm.git

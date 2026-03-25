@@ -11,10 +11,14 @@ import pytest
 import torch
 from transformers import AutoModelForMaskedLM
 
-from testing.conftest import BACKENDS, CANONICAL_AAS, MODEL_REGISTRY, SEED
+from testing.conftest import (
+    BACKENDS, CANONICAL_AAS, FULL_MODEL_REGISTRY, MODEL_REGISTRY, SEED,
+    add_model_specific_inputs, mark_by_size, tokenize_batch,
+)
 
 
 MODEL_KEYS = list(MODEL_REGISTRY.keys())
+FULL_KEYS = list(FULL_MODEL_REGISTRY.keys())
 # bfloat16 has ~3 decimal digits precision; backends differ in tiling/accumulation order.
 # SDPA vs Flex can show max abs diffs up to ~0.5 in logit space at bfloat16.
 # We check that predictions (argmax) agree rather than raw logit values.
@@ -36,9 +40,13 @@ def _tokenize_batch(
     model_key: str,
     sequences: List[str],
     device: torch.device,
+    registry: Dict[str, Dict] = None,
 ) -> Dict[str, torch.Tensor]:
     """Tokenize sequences, handling E1's sequence mode."""
-    if model_key == "e1":
+    if registry is None:
+        registry = MODEL_REGISTRY
+    config = registry[model_key] if model_key in registry else MODEL_REGISTRY[model_key]
+    if config["model_type"] == "E1":
         batch = model.model.prep_tokens.get_batch_kwargs(sequences, device=device)
         return {
             "input_ids": batch["input_ids"],
@@ -58,15 +66,12 @@ def _tokenize_batch(
     return {k: v.to(device) for k, v in tokenized.items()}
 
 
-@pytest.mark.gpu
-@pytest.mark.parametrize("model_key", MODEL_KEYS)
-def test_backend_consistency(model_key: str) -> None:
-    """All available backends produce equivalent logits."""
+def _run_backend_consistency(model_key: str, registry: Dict[str, Dict]) -> None:
+    """Core backend consistency logic shared by default and full-registry tests."""
     random.seed(SEED)
-    config = MODEL_REGISTRY[model_key]
+    config = registry[model_key]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Use bfloat16: flex attention on some HF-cached modeling files asserts fp16/bf16
     model = AutoModelForMaskedLM.from_pretrained(
         config["fast_path"],
         trust_remote_code=True,
@@ -75,11 +80,10 @@ def test_backend_consistency(model_key: str) -> None:
     ).eval()
 
     sequences = _generate_sequences(model_key)
-    inputs = _tokenize_batch(model, model_key, sequences, device)
+    inputs = _tokenize_batch(model, model_key, sequences, device, registry=registry)
 
     model_inputs = inputs.copy()
-    if config["model_type"] == "ESMC":
-        model_inputs["sequence_id"] = model_inputs["attention_mask"].to(dtype=torch.bool)
+    model_inputs = add_model_specific_inputs(model_inputs, config["model_type"])
 
     backend_logits: Dict[str, torch.Tensor] = {}
 
@@ -122,3 +126,17 @@ def test_backend_consistency(model_key: str) -> None:
 
     del model
     torch.cuda.empty_cache()
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("model_key", MODEL_KEYS)
+def test_backend_consistency(model_key: str) -> None:
+    """All available backends produce equivalent logits (default registry)."""
+    _run_backend_consistency(model_key, MODEL_REGISTRY)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("model_key", mark_by_size(FULL_KEYS, FULL_MODEL_REGISTRY))
+def test_full_backend_consistency(model_key: str) -> None:
+    """All available backends produce equivalent logits (all checkpoints)."""
+    _run_backend_consistency(model_key, FULL_MODEL_REGISTRY)
