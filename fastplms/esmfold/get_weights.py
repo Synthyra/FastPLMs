@@ -33,6 +33,19 @@ def convert_and_push(
     api = HfApi()
     script_root = os.path.dirname(os.path.abspath(__file__))
 
+    if skip_weights:
+        config = FastEsmFoldConfig.from_pretrained(TARGET_REPO, trust_remote_code=True)
+        config.auto_map = {
+            "AutoConfig": "modeling_fast_esmfold.FastEsmFoldConfig",
+            "AutoModel": "modeling_fast_esmfold.FastEsmForProteinFolding",
+        }
+        if dry_run:
+            print(f"[skip-weights][dry-run] validated config for {TARGET_REPO}")
+            return
+        config.push_to_hub(TARGET_REPO)
+        print(f"[skip-weights] uploaded config for {TARGET_REPO}")
+        return
+
     print(f"Loading source model from {SOURCE_REPO}...")
     source_config = EsmConfig.from_pretrained(SOURCE_REPO)
 
@@ -53,14 +66,6 @@ def convert_and_push(
         "AutoModel": "modeling_fast_esmfold.FastEsmForProteinFolding",
     }
     config = FastEsmFoldConfig(**config_dict)
-
-    if skip_weights:
-        if dry_run:
-            print(f"[skip-weights][dry-run] validated config for {TARGET_REPO}")
-            return
-        config.push_to_hub(TARGET_REPO)
-        print(f"[skip-weights] uploaded config for {TARGET_REPO}")
-        return
 
     print("Creating FastEsmForProteinFolding model...")
     model = FastEsmForProteinFolding(config)
