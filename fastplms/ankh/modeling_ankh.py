@@ -206,13 +206,13 @@ class AnkhSelfAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
-        position_bias: torch.Tensor | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
+        position_bias: Optional[torch.Tensor] = None,
         flex_score_mod=None,
         output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         """Returns (attn_output, attn_weights_or_none, position_bias)."""
         batch_size, seq_length = hidden_states.shape[:2]
         hidden_shape = (batch_size, seq_length, self.num_heads, self.d_kv)
@@ -248,7 +248,7 @@ class AnkhSelfAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        position_bias: torch.Tensor | None,
+        position_bias: Optional[torch.Tensor],
     ) -> torch.Tensor:
         # SDPA: position_bias is (1, H, Q, K) additive bias (includes padding mask)
         context_BHLD = F.scaled_dot_product_attention(
@@ -265,7 +265,7 @@ class AnkhSelfAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        flex_block_mask: BlockMask | None,
+        flex_block_mask: Optional[BlockMask],
         flex_score_mod,
     ) -> torch.Tensor:
         assert flex_attention is not None, "Flex attention is not available."
@@ -285,8 +285,8 @@ class AnkhSelfAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        position_bias: torch.Tensor | None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        position_bias: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-1, -2)) * self.scale
         if position_bias is not None:
             attn_weights = attn_weights + position_bias
@@ -313,13 +313,13 @@ class AnkhBlock(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
-        position_bias: torch.Tensor | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
+        position_bias: Optional[torch.Tensor] = None,
         flex_score_mod=None,
         output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         # Pre-norm self-attention
         normed = self.attention_norm(hidden_states)
         attn_output, attn_weights, position_bias = self.attention(

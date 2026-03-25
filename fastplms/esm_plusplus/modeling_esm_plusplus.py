@@ -61,7 +61,7 @@ class ESMplusplusConfig(PretrainedConfig):
         num_attention_heads: int = 15,
         num_hidden_layers: int = 30,
         num_labels: int = 2,
-        problem_type: str | None = None,
+        problem_type: Optional[str] = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
         attn_backend: str = "sdpa",
@@ -335,12 +335,12 @@ class MultiHeadAttention(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
         qkv_BLD3 = self.layernorm_qkv(x)
         query_BLD, key_BLD, value_BLD = torch.chunk(qkv_BLD3, 3, dim=-1)
         query_BLD, key_BLD = (
@@ -367,12 +367,12 @@ class MultiHeadAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
         if output_attentions:
             return self._manual_attn(query_BHLD, key_BHLD, value_BHLD, attention_mask_4d, output_s_max)
 
@@ -389,7 +389,7 @@ class MultiHeadAttention(nn.Module):
         return attn_output, attn_weights, s_max
 
     @torch.no_grad()
-    def _compute_s_max(self, query_BHLD: torch.Tensor, key_BHLD: torch.Tensor) -> list[torch.Tensor]:
+    def _compute_s_max(self, query_BHLD: torch.Tensor, key_BHLD: torch.Tensor) -> List[torch.Tensor]:
         q_norm = torch.linalg.vector_norm(query_BHLD, dim=-1)
         k_norm = torch.linalg.vector_norm(key_BHLD, dim=-1)
         s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(dim=0).values * self.scale
@@ -400,9 +400,9 @@ class MultiHeadAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        attention_mask_4d: torch.Tensor | None = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
         output_s_max: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[List[torch.Tensor]]]:
         attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-2, -1)) * self.scale
         if attention_mask_4d is not None:
             attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
@@ -417,8 +417,8 @@ class MultiHeadAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, None]:
+        attention_mask_2d: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, None]:
         query_BLHD = query_BHLD.transpose(1, 2).contiguous()
         key_BLHD = key_BHLD.transpose(1, 2).contiguous()
         value_BLHD = value_BHLD.transpose(1, 2).contiguous()
@@ -433,8 +433,8 @@ class MultiHeadAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        flex_block_mask: BlockMask | None = None,
-    ) -> tuple[torch.Tensor, None]:
+        flex_block_mask: Optional[BlockMask] = None,
+    ) -> Tuple[torch.Tensor, None]:
         assert flex_attention is not None, "Flex attention is not available in this environment."
         fn = _get_flex_attention_fn()
         context_BHLD = fn(query_BHLD, key_BHLD, value_BHLD, block_mask=flex_block_mask, scale=self.scale)
@@ -445,8 +445,8 @@ class MultiHeadAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        attention_mask_4d: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, None]:
+        attention_mask_4d: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, None]:
         context_BHLD = F.scaled_dot_product_attention(
             query_BHLD, key_BHLD, value_BHLD, attn_mask=attention_mask_4d, scale=self.scale,
         )
@@ -492,12 +492,12 @@ class UnifiedTransformerBlock(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
         attn_output, attn_weights, s_max = self.attn(
             x,
             attention_mask_2d=attention_mask_2d,
@@ -518,7 +518,7 @@ class TransformerOutput(ModelOutput):
     last_hidden_state: Optional[torch.Tensor] = None
     hidden_states: Optional[Tuple[torch.Tensor]] = None
     attentions: Optional[Tuple[torch.Tensor]] = None
-    s_max: Optional[Tuple[list[torch.Tensor], ...]] = None
+    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
 
 
 @dataclass
@@ -529,7 +529,7 @@ class ESMplusplusOutput(ModelOutput):
     last_hidden_state: Optional[torch.Tensor] = None
     hidden_states: Optional[Tuple[torch.Tensor]] = None
     attentions: Optional[Tuple[torch.Tensor]] = None
-    s_max: Optional[Tuple[list[torch.Tensor], ...]] = None
+    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
 
 
 ### Transformer Stack
@@ -1050,7 +1050,7 @@ def get_esmc_checkpoint_path(model: str) -> Path:
 def _load_esmc_checkpoint_model(
     config: ESMplusplusConfig,
     model: str,
-    device: torch.device | str = "cpu",
+    device: Union[torch.device, str] = "cpu",
 ) -> ESMplusplusForMaskedLM:
     key = _resolve_esmc_checkpoint_key(model)
     spec = _ESMC_CHECKPOINT_SPECS[key]
@@ -1073,7 +1073,7 @@ def _load_esmc_checkpoint_model(
     return model_obj
 
 
-def ESMplusplus_300M(device: torch.device | str = "cpu"):
+def ESMplusplus_300M(device: Union[torch.device, str] = "cpu"):
     config = ESMplusplusConfig(
         hidden_size=960,
         num_attention_heads=15,
@@ -1082,7 +1082,7 @@ def ESMplusplus_300M(device: torch.device | str = "cpu"):
     return _load_esmc_checkpoint_model(config=config, model="esmc-300", device=device)
 
 
-def ESMplusplus_600M(device: torch.device | str = "cpu"):
+def ESMplusplus_600M(device: Union[torch.device, str] = "cpu"):
     config = ESMplusplusConfig(
         hidden_size=1152,
         num_attention_heads=18,

@@ -1,3 +1,5 @@
+from typing import Dict, Tuple
+
 import torch
 from torch import Tensor, nn
 from torch.nn.functional import one_hot
@@ -155,7 +157,7 @@ class InputEmbedder(nn.Module):
             )
             self.mol_type_conditioning_init.weight.data.fill_(0)
 
-    def forward(self, feats: dict[str, Tensor], affinity: bool = False) -> Tensor:
+    def forward(self, feats: Dict[str, Tensor], affinity: bool = False) -> Tensor:
         """Perform the forward pass.
 
         Parameters
@@ -261,7 +263,7 @@ class TemplateModule(nn.Module):
     def forward(
         self,
         z: Tensor,
-        feats: dict[str, Tensor],
+        feats: Dict[str, Tensor],
         pair_mask: Tensor,
         use_kernels: bool = False,
     ) -> Tensor:
@@ -411,7 +413,7 @@ class TemplateV2Module(nn.Module):
     def forward(
         self,
         z: Tensor,
-        feats: dict[str, Tensor],
+        feats: Dict[str, Tensor],
         pair_mask: Tensor,
         use_kernels: bool = False,
     ) -> Tensor:
@@ -568,7 +570,7 @@ class MSAModule(nn.Module):
         self,
         z: Tensor,
         emb: Tensor,
-        feats: dict[str, Tensor],
+        feats: Dict[str, Tensor],
         use_kernels: bool = False,
     ) -> Tensor:
         """Perform the forward pass.
@@ -723,7 +725,7 @@ class MSALayer(nn.Module):
         chunk_size_outer_product: int = None,
         chunk_size_tri_attn: int = None,
         use_kernels: bool = False,
-    ) -> tuple[Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor]:
         """Perform the forward pass.
 
         Parameters

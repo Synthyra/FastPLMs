@@ -9,6 +9,7 @@ Usage:
 
 import sys
 from pathlib import Path
+from typing import Dict, List
 
 import torch
 
@@ -16,7 +17,7 @@ from .minimal_featurizer import build_boltz2_features
 from . import vb_const as const
 
 
-def _load_official_features(sequence: str) -> dict[str, torch.Tensor]:
+def _load_official_features(sequence: str) -> Dict[str, torch.Tensor]:
     """Generate features using the official Boltz2 data pipeline."""
     try:
         from boltz.main import check_inputs, process_inputs, BoltzProcessedInput, Manifest
@@ -80,9 +81,9 @@ def _load_official_features(sequence: str) -> dict[str, torch.Tensor]:
 
 
 def _compare_features(
-    fast_feats: dict[str, torch.Tensor],
-    official_feats: dict[str, torch.Tensor],
-) -> list[dict]:
+    fast_feats: Dict[str, torch.Tensor],
+    official_feats: Dict[str, torch.Tensor],
+) -> List[Dict]:
     """Compare two feature dicts key-by-key. Returns list of mismatch reports."""
     all_keys = sorted(set(fast_feats.keys()) | set(official_feats.keys()))
     mismatches = []

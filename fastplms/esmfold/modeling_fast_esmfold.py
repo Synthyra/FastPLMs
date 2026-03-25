@@ -97,11 +97,11 @@ class EsmSelfAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
         output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         batch_size, seq_length = hidden_states.shape[:-1]
         hidden_shape = (batch_size, seq_length, -1, self.attention_head_size)
         query_BHLD = self.query(hidden_states).view(hidden_shape).transpose(1, 2)
@@ -127,11 +127,11 @@ class EsmSelfAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
         output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         if output_attentions:
             return self._manual_attn(query_BHLD, key_BHLD, value_BHLD, attention_mask_4d)
 
@@ -149,8 +149,8 @@ class EsmSelfAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        attention_mask_4d: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        attention_mask_4d: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         attn_weights = torch.matmul(query_BHLD, key_BHLD.transpose(-1, -2))
         if attention_mask_4d is not None:
             attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
@@ -166,8 +166,8 @@ class EsmSelfAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, None]:
+        attention_mask_2d: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, None]:
         query_BLHD = query_BHLD.transpose(1, 2).contiguous()
         key_BLHD = key_BHLD.transpose(1, 2).contiguous()
         value_BLHD = value_BHLD.transpose(1, 2).contiguous()
@@ -182,8 +182,8 @@ class EsmSelfAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        flex_block_mask: BlockMask | None = None,
-    ) -> tuple[torch.Tensor, None]:
+        flex_block_mask: Optional[BlockMask] = None,
+    ) -> Tuple[torch.Tensor, None]:
         assert flex_attention is not None, "Flex attention is not available in this environment."
         fn = _get_flex_attention_fn()
         context_BHLD = fn(query_BHLD, key_BHLD, value_BHLD, block_mask=flex_block_mask, scale=1.0)
@@ -194,8 +194,8 @@ class EsmSelfAttention(nn.Module):
         query_BHLD: torch.Tensor,
         key_BHLD: torch.Tensor,
         value_BHLD: torch.Tensor,
-        attention_mask_4d: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, None]:
+        attention_mask_4d: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, None]:
         context_BHLD = F.scaled_dot_product_attention(
             query_BHLD, key_BHLD, value_BHLD,
             attn_mask=attention_mask_4d,
@@ -215,11 +215,11 @@ class EsmAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
         output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         hidden_states_ln = self.LayerNorm(hidden_states)
         attn_output, attn_weights = self.self(
             hidden_states_ln,
@@ -243,11 +243,11 @@ class EsmLayer(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_2d: torch.Tensor | None = None,
-        attention_mask_4d: torch.Tensor | None = None,
-        flex_block_mask: BlockMask | None = None,
+        attention_mask_2d: Optional[torch.Tensor] = None,
+        attention_mask_4d: Optional[torch.Tensor] = None,
+        flex_block_mask: Optional[BlockMask] = None,
         output_attentions: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         attention_output, attn_weights = self.attention(
             hidden_states,
             attention_mask_2d=attention_mask_2d,

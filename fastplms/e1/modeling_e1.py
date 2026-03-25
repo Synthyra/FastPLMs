@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from enum import Enum
 from dataclasses import dataclass
-from typing import Any, TypedDict, Callable, List
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, Union
 
 import torch
 import torch.nn as nn
@@ -88,8 +88,8 @@ def flex_attention_func(
     query_states: torch.Tensor,  # (bs, seqlen, nh, hs)
     key_states: torch.Tensor,  # (bs, seqlen, nkv, hs)
     value_states: torch.Tensor,  # (bs, seqlen, nkv, hs)
-    score_mod: Callable | None = None,
-    block_mask: BlockMask | None = None,
+    score_mod: Optional[Callable] = None,
+    block_mask: Optional[BlockMask] = None,
 ) -> torch.Tensor:
     assert flex_attention is not None, "Flex Attention is not available in this environment"
     assert score_mod is None, "Score mod is not supported yet"
@@ -150,7 +150,7 @@ def kernels_flash_attention_func(
     return attn_output
 
 
-def block_min_max_seq_ids(SLEN: torch.Tensor, block_size: int = 128) -> tuple[torch.Tensor, torch.Tensor]:
+def block_min_max_seq_ids(SLEN: torch.Tensor, block_size: int = 128) -> Tuple[torch.Tensor, torch.Tensor]:
     device = SLEN.device
     total_tokens = torch.sum(SLEN)
     B = (total_tokens + block_size - 1) // block_size
@@ -179,7 +179,7 @@ def block_min_max_seq_ids(SLEN: torch.Tensor, block_size: int = 128) -> tuple[to
     return MIN_SEQ_ID, MAX_SEQ_ID
 
 
-def get_overlapping_blocks(SLEN_Q: torch.Tensor, SLEN_K: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def get_overlapping_blocks(SLEN_Q: torch.Tensor, SLEN_K: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     MIN_Q, MAX_Q = block_min_max_seq_ids(SLEN_Q)
     MIN_K, MAX_K = block_min_max_seq_ids(SLEN_K)
 
@@ -274,7 +274,7 @@ def varlen_flex_attention_func(
     return attn_output
 
 
-def _get_unpad_data(sequence_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, int]:
+def _get_unpad_data(sequence_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, int]:
     non_pad_indices = sequence_ids != -1
     non_pad_indices = torch.nonzero(non_pad_indices.flatten(), as_tuple=False).flatten()
     sequence_ids = sequence_ids + torch.arange(len(sequence_ids), device=sequence_ids.device)[:, None] * 1e5
@@ -291,7 +291,7 @@ def _unpad_input(
     value_layer: torch.Tensor,
     q_sequence_ids: torch.Tensor,
     k_sequence_ids: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, int]]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Tuple[int, int]]:
     batch_size, kv_seq_len, num_heads, head_dim = key_layer.shape
     query_length, num_q_heads = query_layer.shape[1], query_layer.shape[2]
     assert query_layer.shape[:2] == q_sequence_ids.shape, (
@@ -359,7 +359,7 @@ class DataPrepConfig:
     remove_X_tokens: bool = False
 
 
-def get_context(sequence: str) -> str | None:
+def get_context(sequence: str) -> Optional[str]:
     if "," in sequence:
         return sequence.rsplit(",", 1)[0]
     return None
@@ -368,8 +368,8 @@ def get_context(sequence: str) -> str | None:
 class E1BatchPreparer:
     def __init__(
         self,
-        data_prep_config: DataPrepConfig | None = None,
-        tokenizer: Tokenizer | None = None,
+        data_prep_config: Optional[DataPrepConfig] = None,
+        tokenizer: Optional[Tokenizer] = None,
         preserve_context_labels: bool = False,
     ):
         self.tokenizer = tokenizer or get_tokenizer()
@@ -386,17 +386,17 @@ class E1BatchPreparer:
         self.vocab = self.tokenizer.get_vocab()
 
     def get_batch_kwargs(  # type: ignore[override]
-        self, sequences: list[str], device: torch.device = torch.device("cpu"), non_blocking: bool = False
-    ) -> dict[str, torch.Tensor | list[str] | list[int]]:
+        self, sequences: List[str], device: torch.device = torch.device("cpu"), non_blocking: bool = False
+    ) -> Dict[str, Union[torch.Tensor, List[str], List[int]]]:
         sequence_encodings = [self.prepare_multiseq(sequence) for sequence in sequences]
         return self.pad_encodings(sequence_encodings, device, non_blocking)
 
     def pad_encodings(
         self,
-        sequence_encodings: list[dict[str, torch.Tensor]],
+        sequence_encodings: List[Dict[str, torch.Tensor]],
         device: torch.device = torch.device("cpu"),
         non_blocking: bool = False,
-    ) -> dict[str, torch.Tensor | list[str] | list[int]]:
+    ) -> Dict[str, Union[torch.Tensor, List[str], List[int]]]:
         non_blocking = non_blocking and device.type == "cuda"
         padded_encodings = {}
         # Note: We use -1 as the padding value for sequence and position ids because the 0 value
@@ -418,7 +418,7 @@ class E1BatchPreparer:
 
         return padded_encodings
 
-    def prepare_multiseq(self, sequence: str) -> dict[str, torch.Tensor | str | int]:
+    def prepare_multiseq(self, sequence: str) -> Dict[str, Union[torch.Tensor, str, int]]:
         single_sequences = sequence.split(",")
         if len(single_sequences) > self.data_prep_config.max_num_sequences:
             raise ValueError(
@@ -467,7 +467,7 @@ class E1BatchPreparer:
             "context_len": context_len,
         }
 
-    def prepare_singleseq(self, sequence: str) -> dict[str, torch.Tensor]:
+    def prepare_singleseq(self, sequence: str) -> Dict[str, torch.Tensor]:
         if not self.validate_sequence(sequence):
             raise ValueError(f"Invalid sequence: {sequence}; Input sequence should contain [A-Z] or ? characters only")
 
@@ -604,12 +604,12 @@ class DynamicCache:
     """
 
     def __init__(self) -> None:
-        self.key_cache: list[torch.Tensor] = []
-        self.value_cache: list[torch.Tensor] = []
+        self.key_cache: List[torch.Tensor] = []
+        self.value_cache: List[torch.Tensor] = []
 
     def update(
         self, key_states: torch.Tensor, value_states: torch.Tensor, layer_idx: int
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Update the key and value caches in-place, and return the necessary keys and value states.
 
@@ -689,8 +689,8 @@ class KVCache:
             "labels",
         ]
         self.tensor_output_field_names = ["logits", "embeddings"]
-        self.cache_dict: dict[str, DynamicCache] = {}
-        self.cache_queue: list[str] = []
+        self.cache_dict: Dict[str, DynamicCache] = {}
+        self.cache_queue: List[str] = []
 
     def reset(self) -> None:
         for k in list(self.cache_dict.keys()):
@@ -701,16 +701,16 @@ class KVCache:
 
         torch.cuda.empty_cache()
 
-    def before_forward(self, batch: dict[str, torch.Tensor]) -> None:
-        contexts: list[str] | None = batch.get("context", None)
+    def before_forward(self, batch: Dict[str, torch.Tensor]) -> None:
+        contexts: Optional[List[str]] = batch.get("context", None)
         if contexts is None or "context_len" not in batch:
             logger.warning_once(
                 "KVCache requires the batch dict to have both `context` and `context_len` keys to trigger. Skipping."
             )
             return
 
-        context_lens: list[int] = list(set(batch["context_len"]))
-        contexts: list[str] = list(set(contexts))  # type: ignore[no-redef]
+        context_lens: List[int] = list(set(batch["context_len"]))
+        contexts: List[str] = list(set(contexts))  # type: ignore[no-redef]
         if len(contexts) != 1 or len(context_lens) != 1:
             logger.warning(
                 "SingleContextKVCache requires a single context and context length. "
@@ -736,7 +736,7 @@ class KVCache:
             if batch.get(field_name, None) is not None:
                 batch[field_name] = batch[field_name][:, unique_context_len:]
 
-    def after_forward(self, batch: dict[str, Any], outputs: ModelOutput) -> None:
+    def after_forward(self, batch: Dict[str, Any], outputs: ModelOutput) -> None:
         contexts = batch.get("context", None)
         context_lens = batch.get("context_len", [])
         if contexts is None or len(set(contexts)) != 1 or len(set(context_lens)) != 1 or context_lens[0] == 0:
@@ -783,10 +783,10 @@ class AttentionLayerType(Enum):
 
 
 class AttentionArgs(TypedDict, total=False):
-    within_seq_block_mask: BlockMask | None
-    block_causal_block_mask: BlockMask | None
-    within_seq_mask_4d: torch.Tensor | None
-    block_causal_mask_4d: torch.Tensor | None
+    within_seq_block_mask: Optional[BlockMask]
+    block_causal_block_mask: Optional[BlockMask]
+    within_seq_mask_4d: Optional[torch.Tensor]
+    block_causal_mask_4d: Optional[torch.Tensor]
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -804,7 +804,7 @@ def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 class RotaryPositionalEmbedding(nn.Module):
     def __init__(
-        self, dim: int, max_position_embeddings: int = 2048, base: int = 10000, device: torch.device | None = None
+        self, dim: int, max_position_embeddings: int = 2048, base: int = 10000, device: Optional[torch.device] = None
     ):
         super().__init__()
 
@@ -834,8 +834,8 @@ class RotaryPositionalEmbedding(nn.Module):
         self.register_buffer("sin_cached", angles.sin(), persistent=False)
 
     def forward(
-        self, q: torch.Tensor, k: torch.Tensor, position_ids: torch.LongTensor, seq_len: int | None = None
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        self, q: torch.Tensor, k: torch.Tensor, position_ids: torch.LongTensor, seq_len: Optional[int] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         # x: [bsz, seq_len, num_attention_heads, head_size]
         device, dtype = q.device, q.dtype
         seq_len = position_ids.max().item() + 1 if seq_len is None else seq_len
@@ -913,9 +913,9 @@ class Attention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         position_ids: torch.LongTensor,
-        past_key_value: DynamicCache | None = None,
+        past_key_value: Optional[DynamicCache] = None,
         use_cache: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         bsz, q_len, _ = hidden_states.size()
         query_states: torch.Tensor = self.q_proj(hidden_states)
         key_states: torch.Tensor = self.k_proj(hidden_states)
@@ -958,12 +958,12 @@ class Attention(nn.Module):
         within_seq_position_ids: torch.LongTensor,
         global_position_ids: torch.LongTensor,
         sequence_ids: torch.LongTensor,
-        attention_args: AttentionArgs | None = None,
-        past_key_value: DynamicCache | None = None,
+        attention_args: Optional[AttentionArgs] = None,
+        past_key_value: Optional[DynamicCache] = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
         use_cache: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[DynamicCache], Optional[List[torch.Tensor]]]:
         is_cache_prefilled = (
             use_cache and past_key_value is not None and past_key_value.get_seq_length(self.layer_idx) > 0
         )
@@ -997,11 +997,11 @@ class Attention(nn.Module):
         key_states: torch.Tensor,
         val_states: torch.Tensor,
         sequence_ids: torch.Tensor,
-        attention_args: AttentionArgs | None = None,
+        attention_args: Optional[AttentionArgs] = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
         is_cache_prefilled: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
         effective_layer_type = self.layer_type
         if is_cache_prefilled and self.layer_type == AttentionLayerType.GLOBAL:
             effective_layer_type = AttentionLayerType.WITHIN_SEQ
@@ -1054,7 +1054,7 @@ class Attention(nn.Module):
         self,
         query_states: torch.Tensor,  # (B, L, H, D)
         key_states: torch.Tensor,    # (B, L, Hkv, D)
-    ) -> list[torch.Tensor]:
+    ) -> List[torch.Tensor]:
         query_BHLD = query_states.transpose(1, 2).contiguous()
         key_BHLD = key_states.transpose(1, 2).contiguous()
         key_BHLD = repeat_kv(key_BHLD, self.num_key_value_groups)
@@ -1071,7 +1071,7 @@ class Attention(nn.Module):
         val_states: torch.Tensor,
         sequence_ids: torch.Tensor,
         is_cache_prefilled: bool = False,
-    ) -> tuple[torch.Tensor, None]:
+    ) -> Tuple[torch.Tensor, None]:
         bsz, q_len = query_states.shape[0], query_states.shape[1]
         _, kv_len = key_states.shape[0], key_states.shape[1]
 
@@ -1102,9 +1102,9 @@ class Attention(nn.Module):
         query_states: torch.Tensor,
         key_states: torch.Tensor,
         val_states: torch.Tensor,
-        attention_args: AttentionArgs | None = None,
+        attention_args: Optional[AttentionArgs] = None,
         effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
-    ) -> tuple[torch.Tensor, None]:
+    ) -> Tuple[torch.Tensor, None]:
         bsz, q_len = query_states.shape[0], query_states.shape[1]
         if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
             block_mask = attention_args["within_seq_block_mask"] if attention_args is not None else None
@@ -1120,10 +1120,10 @@ class Attention(nn.Module):
         key_states: torch.Tensor,      # (B, L, Hkv, D)
         val_states: torch.Tensor,      # (B, L, Hkv, D)
         sequence_ids: torch.Tensor,
-        attention_args: AttentionArgs | None = None,
+        attention_args: Optional[AttentionArgs] = None,
         effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
         is_cache_prefilled: bool = False,
-    ) -> tuple[torch.Tensor, None]:
+    ) -> Tuple[torch.Tensor, None]:
         bsz, q_len = query_states.shape[:2]
         kv_len = key_states.shape[1]
 
@@ -1155,11 +1155,11 @@ class Attention(nn.Module):
         key_states: torch.Tensor,      # (B, L, Hkv, D)
         val_states: torch.Tensor,      # (B, L, Hkv, D)
         sequence_ids: torch.Tensor,
-        attention_args: AttentionArgs | None = None,
+        attention_args: Optional[AttentionArgs] = None,
         effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
         output_s_max: bool = False,
         is_cache_prefilled: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[List[torch.Tensor]]]:
         bsz, q_len = query_states.shape[:2]
         kv_len = key_states.shape[1]
 
@@ -1260,34 +1260,34 @@ class E1ModelOutputWithPast(ModelOutput):
             heads.
     """
 
-    last_hidden_state: torch.FloatTensor | None = None
-    past_key_values: DynamicCache | None = None
-    hidden_states: tuple[torch.FloatTensor, ...] | None = None
-    attentions: tuple[torch.FloatTensor, ...] | None = None
-    s_max: tuple[list[torch.Tensor], ...] | None = None
+    last_hidden_state: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[DynamicCache] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
 
 
 @dataclass
 class E1MaskedLMOutputWithPast(ModelOutput):
-    loss: torch.FloatTensor | None = None
-    mlm_loss: torch.FloatTensor | None = None
-    logits: torch.FloatTensor | None = None
-    last_hidden_state: torch.FloatTensor | None = None
-    past_key_values: DynamicCache | None = None
-    hidden_states: tuple[torch.FloatTensor, ...] | None = None
-    attentions: tuple[torch.FloatTensor, ...] | None = None
-    s_max: tuple[list[torch.Tensor], ...] | None = None
+    loss: Optional[torch.FloatTensor] = None
+    mlm_loss: Optional[torch.FloatTensor] = None
+    logits: Optional[torch.FloatTensor] = None
+    last_hidden_state: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[DynamicCache] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
 
 
 @dataclass
 class E1ClassificationOutputWithPast(ModelOutput):
-    loss: torch.FloatTensor | None = None
-    logits: torch.FloatTensor | None = None
-    last_hidden_state: torch.FloatTensor | None = None
-    past_key_values: DynamicCache | None = None
-    hidden_states: tuple[torch.FloatTensor, ...] | None = None
-    attentions: tuple[torch.FloatTensor, ...] | None = None
-    s_max: tuple[list[torch.Tensor], ...] | None = None
+    loss: Optional[torch.FloatTensor] = None
+    logits: Optional[torch.FloatTensor] = None
+    last_hidden_state: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[DynamicCache] = None
+    hidden_states: Optional[Tuple[torch.FloatTensor, ...]] = None
+    attentions: Optional[Tuple[torch.FloatTensor, ...]] = None
+    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
 
 
 class RMSNorm(nn.Module):
@@ -1329,12 +1329,12 @@ class NormAttentionNorm(nn.Module):
         within_seq_position_ids: torch.LongTensor,
         global_position_ids: torch.LongTensor,
         sequence_ids: torch.LongTensor,
-        attention_args: AttentionArgs | None = None,
-        past_key_value: DynamicCache | None = None,
+        attention_args: Optional[AttentionArgs] = None,
+        past_key_value: Optional[DynamicCache] = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
         use_cache: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor], Optional[DynamicCache], Optional[List[torch.Tensor]]]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states, self_attn_weights, present_key_value, s_max = self.self_attn(
@@ -1369,12 +1369,12 @@ class DecoderLayer(nn.Module):
         within_seq_position_ids: torch.LongTensor,
         global_position_ids: torch.LongTensor,
         sequence_ids: torch.LongTensor,
-        attention_args: AttentionArgs | None = None,
-        past_key_value: DynamicCache | None = None,
+        attention_args: Optional[AttentionArgs] = None,
+        past_key_value: Optional[DynamicCache] = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
         use_cache: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[DynamicCache], Optional[List[torch.Tensor]]]:
         hidden_states, residual, self_attn_weights, present_key_value, s_max = self.norm_attn_norm(
             hidden_states=hidden_states,
             within_seq_position_ids=within_seq_position_ids,
@@ -1485,7 +1485,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         within_seq_position_ids: torch.LongTensor,
         global_position_ids: torch.LongTensor,
         sequence_ids: torch.LongTensor,
-        past_key_values: DynamicCache | None = None,
+        past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
@@ -1560,7 +1560,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         )
         needs_within_seq_flex = (attn_backend == AttentionBackend.FLEX)
 
-        attention_args: AttentionArgs | None = None
+        attention_args: Optional[AttentionArgs] = None
         if past_key_values_length == 0:
             attention_args = AttentionArgs(
                 block_causal_block_mask=create_block_causal_mask_optimized(sequence_ids) if needs_block_causal_flex else None,
@@ -1657,7 +1657,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
         within_seq_position_ids: torch.LongTensor,
         global_position_ids: torch.LongTensor,
         sequence_ids: torch.LongTensor,
-        past_key_values: DynamicCache | None = None,
+        past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
@@ -1715,8 +1715,8 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
         within_seq_position_ids: torch.LongTensor,
         global_position_ids: torch.LongTensor,
         sequence_ids: torch.LongTensor,
-        labels: torch.LongTensor | None = None,
-        past_key_values: DynamicCache | None = None,
+        labels: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
@@ -1834,8 +1834,8 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
         within_seq_position_ids: torch.LongTensor,
         global_position_ids: torch.LongTensor,
         sequence_ids: torch.LongTensor,
-        labels: torch.LongTensor | None = None,
-        past_key_values: DynamicCache | None = None,
+        labels: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
@@ -1929,8 +1929,8 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         within_seq_position_ids: torch.LongTensor,
         global_position_ids: torch.LongTensor,
         sequence_ids: torch.LongTensor,
-        labels: torch.LongTensor | None = None,
-        past_key_values: DynamicCache | None = None,
+        labels: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
@@ -1993,7 +1993,7 @@ if __name__ == "__main__":
         else:
             print(f"{prefix}{type(obj)}")
 
-    def get_e1_batch(tokenizer, sequences: list[str], device: torch.device):
+    def get_e1_batch(tokenizer, sequences: List[str], device: torch.device):
         preparer = E1BatchPreparer(data_prep_config=DataPrepConfig(max_num_positions_within_seq=64), tokenizer=tokenizer)
         return preparer.get_batch_kwargs(sequences=sequences, device=device)
 

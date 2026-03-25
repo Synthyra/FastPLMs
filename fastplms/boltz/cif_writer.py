@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 import torch
@@ -9,7 +9,7 @@ from .minimal_structures import ProteinStructureTemplate
 
 def _confidence_per_atom(
     plddt: Optional[torch.Tensor],
-    atom_to_residue: list[int],
+    atom_to_residue: List[int],
     num_atoms: int,
     sample_index: int,
 ) -> np.ndarray:

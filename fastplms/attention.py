@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from enum import Enum
 from functools import partial
+from typing import Dict, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -45,7 +46,7 @@ def _get_flex_attention_fn():
 
 
 ### Kernels Flash Attention Detection
-def _infer_kernels_flash_variant(kernel) -> str | None:
+def _infer_kernels_flash_variant(kernel) -> Optional[str]:
     if hasattr(kernel, "fwd") and hasattr(kernel, "varlen_fwd"):
         return "flash_attn2"
     if hasattr(kernel, "flash_attn_func") and hasattr(kernel, "flash_attn_varlen_func"):
@@ -161,7 +162,7 @@ class IndexFirstAxis(torch.autograd.Function):
         ).reshape(-1, *other_shape)
 
     @staticmethod
-    def backward(ctx, grad_output) -> tuple[torch.Tensor, None]:
+    def backward(ctx, grad_output) -> Tuple[torch.Tensor, None]:
         (indices,) = ctx.saved_tensors
         assert grad_output.ndim >= 2
         other_shape = grad_output.shape[1:]
@@ -184,7 +185,7 @@ class IndexPutFirstAxis(torch.autograd.Function):
         return output
 
     @staticmethod
-    def backward(ctx, grad_output) -> tuple[torch.Tensor, None, None]:
+    def backward(ctx, grad_output) -> Tuple[torch.Tensor, None, None]:
         (indices,) = ctx.saved_tensors
         return grad_output[indices], None, None
 
@@ -203,7 +204,7 @@ def _unpad_input(
     key_layer: torch.Tensor,
     value_layer: torch.Tensor,
     attention_mask_2d: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, tuple[torch.Tensor, torch.Tensor], tuple[int, int]]:
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, Tuple[torch.Tensor, torch.Tensor], Tuple[int, int]]:
     batch_size, seq_len, num_heads, head_dim = query_layer.shape
     seqlens = attention_mask_2d.sum(dim=1).int()
     cu_seqlens = F.pad(seqlens.cumsum(0, dtype=torch.int32), (1, 0))
@@ -219,7 +220,7 @@ def kernels_flash_attention_func(
     query_states: torch.Tensor,
     key_states: torch.Tensor,
     value_states: torch.Tensor,
-    attention_mask_2d: torch.Tensor | None = None,
+    attention_mask_2d: Optional[torch.Tensor] = None,
     causal: bool = False,
 ) -> torch.Tensor:
     assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
@@ -291,8 +292,8 @@ def get_attention_mask(
     batch_size: int,
     seq_len: int,
     device: torch.device,
-    attention_mask: torch.Tensor | None = None,
-) -> tuple[torch.Tensor | None, torch.Tensor | None, BlockMask | None]:
+    attention_mask: Optional[torch.Tensor] = None,
+) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[BlockMask]]:
     """Build padding masks once for all encoder layers.
 
     Returns (attention_mask_2d, attention_mask_4d, flex_block_mask).

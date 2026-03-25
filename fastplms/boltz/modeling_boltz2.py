@@ -3,7 +3,7 @@ import copy
 import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple, Union
 
 import torch
 import torch._dynamo
@@ -48,7 +48,7 @@ from .vb_modules_trunkv2 import (
 )
 
 
-def _default_steering_args() -> dict[str, Any]:
+def _default_steering_args() -> Dict[str, Any]:
     return {
         "fk_steering": False,
         "num_particles": 3,
@@ -60,7 +60,7 @@ def _default_steering_args() -> dict[str, Any]:
     }
 
 
-def _boltz2_reference_diffusion_overrides() -> dict[str, Any]:
+def _boltz2_reference_diffusion_overrides() -> Dict[str, Any]:
     # Match Boltz2 CLI inference defaults from boltz.main/Boltz2DiffusionParams.
     return {
         "gamma_0": 0.8,
@@ -79,7 +79,7 @@ def _boltz2_reference_diffusion_overrides() -> dict[str, Any]:
     }
 
 
-def _enforce_pairformer_v2(pairformer_args: Mapping[str, Any], context: str) -> dict[str, Any]:
+def _enforce_pairformer_v2(pairformer_args: Mapping[str, Any], context: str) -> Dict[str, Any]:
     assert isinstance(pairformer_args, Mapping), (
         f"Expected {context} pairformer_args to be a dictionary."
     )
@@ -90,13 +90,13 @@ def _enforce_pairformer_v2(pairformer_args: Mapping[str, Any], context: str) -> 
     return out
 
 
-def _require_key(mapping: dict[str, Any], key: str) -> Any:
+def _require_key(mapping: Dict[str, Any], key: str) -> Any:
     assert key in mapping, f"Missing required key '{key}' in checkpoint hyperparameters."
     return mapping[key]
 
 
-def _state_dict_without_wrappers(state_dict: dict[str, Tensor]) -> dict[str, Tensor]:
-    cleaned: dict[str, Tensor] = {}
+def _state_dict_without_wrappers(state_dict: Dict[str, Tensor]) -> Dict[str, Tensor]:
+    cleaned: Dict[str, Tensor] = {}
     for key, value in state_dict.items():
         if key.startswith("ema."):
             continue
@@ -113,7 +113,7 @@ def _to_cpu_detached(value: Any) -> Any:
     if torch.is_tensor(value):
         return value.detach().cpu()
     if isinstance(value, dict):
-        out: dict[Any, Any] = {}
+        out: Dict[Any, Any] = {}
         for key, nested_value in value.items():
             out[key] = _to_cpu_detached(nested_value)
         return out
@@ -126,7 +126,7 @@ def _to_cpu_detached(value: Any) -> Any:
 
 def _to_plain_python(value: Any) -> Any:
     if isinstance(value, Mapping):
-        out: dict[Any, Any] = {}
+        out: Dict[Any, Any] = {}
         for key, nested_value in value.items():
             out[key] = _to_plain_python(nested_value)
         return out
@@ -139,11 +139,11 @@ def _to_plain_python(value: Any) -> Any:
     return value
 
 
-def _filtered_kwargs(target: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+def _filtered_kwargs(target: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     signature = inspect.signature(target.__init__)
     allowed = set(signature.parameters.keys())
     allowed.discard("self")
-    filtered: dict[str, Any] = {}
+    filtered: Dict[str, Any] = {}
     for key, value in kwargs.items():
         if key in allowed:
             filtered[key] = value
@@ -161,7 +161,7 @@ class Boltz2StructureOutput(ModelOutput):
     ptm: Optional[torch.Tensor] = None
     sequence: Optional[str] = None
     structure_template: Optional[ProteinStructureTemplate] = None
-    raw_output: Optional[dict[str, torch.Tensor]] = None
+    raw_output: Optional[Dict[str, torch.Tensor]] = None
 
 
 class Boltz2Config(PretrainedConfig):
@@ -169,7 +169,7 @@ class Boltz2Config(PretrainedConfig):
 
     def __init__(
         self,
-        core_kwargs: Optional[dict[str, Any]] = None,
+        core_kwargs: Optional[Dict[str, Any]] = None,
         num_bins: int = 64,
         default_recycling_steps: int = 3,
         default_sampling_steps: int = 200,
@@ -188,7 +188,7 @@ class Boltz2Config(PretrainedConfig):
     @classmethod
     def from_hyperparameters(
         cls,
-        hparams: dict[str, Any],
+        hparams: Dict[str, Any],
         use_kernels: bool = False,
         default_recycling_steps: Optional[int] = None,
         default_sampling_steps: Optional[int] = None,
@@ -221,7 +221,7 @@ class Boltz2Config(PretrainedConfig):
         for key in diffusion_overrides:
             diffusion_process_args[key] = diffusion_overrides[key]
 
-        core_kwargs: dict[str, Any] = {
+        core_kwargs: Dict[str, Any] = {
             "atom_s": hparams["atom_s"],
             "atom_z": hparams["atom_z"],
             "token_s": hparams["token_s"],
@@ -371,12 +371,12 @@ class Boltz2InferenceCore(nn.Module):
         token_s: int,
         token_z: int,
         num_bins: int,
-        embedder_args: dict[str, Any],
-        msa_args: dict[str, Any],
-        pairformer_args: dict[str, Any],
-        score_model_args: dict[str, Any],
-        diffusion_process_args: dict[str, Any],
-        confidence_model_args: Optional[dict[str, Any]] = None,
+        embedder_args: Dict[str, Any],
+        msa_args: Dict[str, Any],
+        pairformer_args: Dict[str, Any],
+        score_model_args: Dict[str, Any],
+        diffusion_process_args: Dict[str, Any],
+        confidence_model_args: Optional[Dict[str, Any]] = None,
         atom_feature_dim: int = 128,
         confidence_prediction: bool = True,
         token_level_confidence: bool = True,
@@ -394,7 +394,7 @@ class Boltz2InferenceCore(nn.Module):
         conditioning_cutoff_min: float = 4.0,
         conditioning_cutoff_max: float = 20.0,
         use_kernels: bool = False,
-        steering_args: Optional[dict[str, Any]] = None,
+        steering_args: Optional[Dict[str, Any]] = None,
     ) -> None:
         super().__init__()
         self.use_kernels = use_kernels
@@ -533,13 +533,13 @@ class Boltz2InferenceCore(nn.Module):
 
     def forward(
         self,
-        feats: dict[str, Tensor],
+        feats: Dict[str, Tensor],
         recycling_steps: int = 3,
         num_sampling_steps: Optional[int] = None,
         diffusion_samples: int = 1,
         max_parallel_samples: Optional[int] = None,
         run_confidence_sequentially: bool = True,
-    ) -> dict[str, Tensor]:
+    ) -> Dict[str, Tensor]:
         s_inputs = self.input_embedder(feats)
         s_init = self.s_init(s_inputs)
 
@@ -575,7 +575,7 @@ class Boltz2InferenceCore(nn.Module):
                 )
 
         pdistogram = self.distogram_module(z)
-        output: dict[str, Tensor] = {
+        output: Dict[str, Tensor] = {
             "pdistogram": pdistogram,
             "s": s,
             "z": z,
@@ -651,10 +651,10 @@ class Boltz2Model(PreTrainedModel):
     def _init_weights(self, module: nn.Module) -> None:  # noqa: ARG002
         return
 
-    def _detied_state_dict(self) -> dict[str, Tensor]:
+    def _detied_state_dict(self) -> Dict[str, Tensor]:
         raw_state = self.state_dict()
-        seen_ptrs: dict[int, str] = {}
-        out: dict[str, Tensor] = {}
+        seen_ptrs: Dict[int, str] = {}
+        out: Dict[str, Tensor] = {}
         for key, tensor in raw_state.items():
             if torch.is_tensor(tensor):
                 ptr = tensor.untyped_storage().data_ptr()
@@ -682,7 +682,7 @@ class Boltz2Model(PreTrainedModel):
     def from_boltz_checkpoint(
         cls,
         checkpoint_path: str,
-        map_location: str | torch.device = "cpu",
+        map_location: Union[str, torch.device] = "cpu",
         use_kernels: bool = False,
         default_recycling_steps: Optional[int] = None,
         default_sampling_steps: Optional[int] = None,
@@ -718,7 +718,7 @@ class Boltz2Model(PreTrainedModel):
                 "Boltz2 inference core unexpectedly uses v1 attention parameters. "
                 "Expected pairformer v2 architecture."
             )
-        filtered: dict[str, Tensor] = {}
+        filtered: Dict[str, Tensor] = {}
         for key, value in cleaned.items():
             if key in target_keys:
                 filtered[key] = value
@@ -741,13 +741,13 @@ class Boltz2Model(PreTrainedModel):
 
     def forward(
         self,
-        feats: dict[str, Tensor],
+        feats: Dict[str, Tensor],
         recycling_steps: Optional[int] = None,
         num_sampling_steps: Optional[int] = None,
         diffusion_samples: Optional[int] = None,
         max_parallel_samples: Optional[int] = None,
         run_confidence_sequentially: bool = True,
-    ) -> dict[str, Tensor]:
+    ) -> Dict[str, Tensor]:
         if recycling_steps is None:
             recycling_steps = self.config.default_recycling_steps
         if num_sampling_steps is None:
@@ -765,10 +765,10 @@ class Boltz2Model(PreTrainedModel):
 
     def _to_model_device(
         self,
-        feats: dict[str, Tensor],
+        feats: Dict[str, Tensor],
         float_dtype: torch.dtype,
-    ) -> dict[str, Tensor]:
-        moved: dict[str, Tensor] = {}
+    ) -> Dict[str, Tensor]:
+        moved: Dict[str, Tensor] = {}
         for key, value in feats.items():
             if torch.is_tensor(value):
                 if value.is_floating_point():
