@@ -11,6 +11,7 @@ Usage:
     py -m update_HF --families esm2 dplm
     py -m update_HF --skip-weights
     py -m update_HF --files-only
+    py -m update_HF --config-only
 """
 
 import argparse
@@ -382,14 +383,19 @@ if __name__ == "__main__":
         help="Run weight scripts without downloading/pushing model weights",
     )
     parser.add_argument("--files-only", action="store_true", help="Only upload files, skip weight conversion")
+    parser.add_argument("--config-only", action="store_true", help="Only upload config+tokenizer via --skip-weights, skip file uploads")
     args = parser.parse_args()
 
     if args.hf_token:
         login(token=args.hf_token)
 
-    if not args.files_only:
+    if args.config_only:
+        _run_weight_scripts(args.families, args.hf_token, skip_weights=True)
+    elif not args.files_only:
         _run_weight_scripts(args.families, args.hf_token, args.skip_weights)
 
-    api = HfApi()
-    _upload_files(api, args.families)
+    if not args.config_only:
+        api = HfApi()
+        _upload_files(api, args.families)
+
     print("\nDone.")
