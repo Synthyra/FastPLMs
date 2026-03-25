@@ -1,19 +1,18 @@
-"""Load official DPLM2 model from the official/transformers submodule for comparison.
+"""Load official DPLM2 model from HuggingFace transformers for comparison.
 
 DPLM2 uses the ESM2 architecture internally, so the official weights load
-directly via EsmForMaskedLM. The official/dplm submodule cannot be pip-installed
-(pins incompatible torchtext==0.17.0), so we load via the transformers submodule.
+directly via EsmForMaskedLM from HuggingFace transformers.
 """
 
 import torch
 import torch.nn as nn
 from typing import Tuple
 
-from testing.official import use_transformers_submodule
+from transformers import EsmForMaskedLM, EsmTokenizer
 
 
 class _OfficialDPLM2ForwardWrapper(nn.Module):
-    def __init__(self, model) -> None:
+    def __init__(self, model: EsmForMaskedLM) -> None:
         super().__init__()
         self.model = model
 
@@ -29,14 +28,11 @@ def load_official_model(
     reference_repo_id: str,
     device: torch.device,
     dtype: torch.dtype = torch.float32,
-) -> Tuple[nn.Module, object]:
-    """Load the official DPLM2 model (ESM2 architecture) from the transformers submodule.
+) -> Tuple[nn.Module, EsmTokenizer]:
+    """Load the official DPLM2 model (ESM2 architecture) from HuggingFace.
 
     Returns (wrapped_model, tokenizer).
     """
-    use_transformers_submodule()
-    from transformers import EsmForMaskedLM, EsmTokenizer
-
     model = EsmForMaskedLM.from_pretrained(
         reference_repo_id,
         device_map=device,

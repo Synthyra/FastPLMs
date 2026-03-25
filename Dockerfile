@@ -36,14 +36,11 @@ COPY official/ official/
 RUN pip install --upgrade pip setuptools
 
 # Install official repos from submodules for compliance testing.
-# All official test loaders in testing/official/ import from submodules, not pip.
 # - E1: pip install -e (needed by testing/official/e1.py)
 # - DPLM: NOT installed (pins torchtext==0.17.0 which is incompatible).
-#   DPLM/DPLM2 use ESM2 architecture; loaded via official/transformers submodule.
+#   Compliance uses transformers.EsmForMaskedLM directly. Submodule is for reference only.
 # - ESM (EvolutionaryScale): NOT pip installed (conflicts with fair-esm on `import esm`).
 #   testing/official/esm_plusplus.py adds the submodule to sys.path on demand.
-# - transformers: ESM2, ANKH, DPLM, DPLM2 load from official/transformers submodule
-#   via use_transformers_submodule() which flushes the pip version from sys.modules.
 RUN pip install -e /app/official/e1
 
 RUN pip install -r requirements.txt

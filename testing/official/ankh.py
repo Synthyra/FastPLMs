@@ -1,10 +1,10 @@
-"""Load official ANKH model (T5EncoderModel) from the official/transformers submodule for comparison."""
+"""Load official ANKH model (T5EncoderModel) from HuggingFace for comparison."""
 
 import torch
 import torch.nn as nn
 from typing import Tuple
 
-from testing.official import use_transformers_submodule
+from transformers import T5EncoderModel, AutoTokenizer
 
 
 class _AnkhComplianceOutput:
@@ -17,7 +17,7 @@ class _AnkhComplianceOutput:
 
 
 class _OfficialAnkhForwardWrapper(nn.Module):
-    def __init__(self, model, tokenizer) -> None:
+    def __init__(self, model: T5EncoderModel, tokenizer) -> None:
         super().__init__()
         self.model = model
         self.tokenizer = tokenizer
@@ -39,16 +39,13 @@ def load_official_model(
     device: torch.device,
     dtype: torch.dtype = torch.float32,
 ) -> Tuple[nn.Module, object]:
-    """Load the official ANKH model as a T5EncoderModel from the transformers submodule.
+    """Load the official ANKH model as a T5EncoderModel.
 
     The official ElnaggarLab repos are T5ForConditionalGeneration but
     T5EncoderModel.from_pretrained extracts just the encoder.
 
     Returns (wrapped_model, tokenizer).
     """
-    use_transformers_submodule()
-    from transformers import T5EncoderModel, AutoTokenizer
-
     model = T5EncoderModel.from_pretrained(
         reference_repo_id,
         device_map=device,
