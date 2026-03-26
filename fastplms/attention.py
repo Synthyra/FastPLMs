@@ -6,7 +6,6 @@ flex attention helpers, flash kernel detection/dispatch, and pad/unpad utilities
 from __future__ import annotations
 
 from enum import Enum
-from functools import partial
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -25,12 +24,7 @@ _compiled_flex_attention = None
 
 
 def _get_flex_attention_fn():
-    """Return flex_attention callable: compiled (fused kernel) by default, or eager when debug flag is set.
-
-    Uses kernel_options={"BACKEND": "FLASH"} to prefer Flash Attention 4 (FA4)
-    on Hopper/Blackwell GPUs (PyTorch 2.11+). Automatically falls back to Triton
-    on older hardware.
-    """
+    """Return flex_attention callable: compiled (fused kernel) by default, or eager when debug flag is set."""
     global _compiled_flex_attention
     if flex_attention is None:
         return None
@@ -39,7 +33,7 @@ def _get_flex_attention_fn():
         return flex_attention
     if _compiled_flex_attention is None:
         _compiled_flex_attention = torch.compile(
-            partial(flex_attention, kernel_options={"BACKEND": "FLASH"}),
+            flex_attention,
             dynamic=False,
         )
     return _compiled_flex_attention

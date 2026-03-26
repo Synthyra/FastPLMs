@@ -58,7 +58,7 @@ ESMC (ESM++) additionally requires `sequence_id = attention_mask.to(dtype=torch.
 
 All models share `config.attn_backend` with four options: `"sdpa"` (default, exact), `"kernels_flash"` (fastest, approximate), `"flex"` (near-exact, block masks), `"auto"` (best available). ESM2/ESM++/E1 set backend on config before `from_pretrained`; DPLM/DPLM2 expose a mutable `model.attn_backend` property. ANKH only supports `"sdpa"` and `"flex"` (T5 relative position bias is incompatible with flash attention kernels).
 
-**Requires PyTorch 2.11+**. Flex attention uses Flash Attention 4 (FA4) as its backend on Hopper/Blackwell GPUs, with automatic Triton fallback on older hardware. The FA4 backend preference is set globally via `kernel_options={"BACKEND": "FLASH"}` in `fastplms/attention.py`.
+**Requires PyTorch 2.11+**. Flex attention is compiled via `torch.compile` in `fastplms/attention.py`, with automatic backend selection by PyTorch.
 
 ### EmbeddingMixin
 
