@@ -1,13 +1,213 @@
+import io
 import os
+import queue
 import sqlite3
+import struct
+import threading
+import time
+
 import networkx as nx
 import numpy as np
 import torch
 from tqdm.auto import tqdm
-from typing import Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set, Tuple
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as TorchDataset
 from transformers import PreTrainedTokenizerBase
+
+
+# Compact blob serialization constants
+# Keep in sync with protify/utils.py and core/atlas/precomputed.py
+_COMPACT_VERSION = 0x01
+_DTYPE_TO_CODE = {torch.float16: 0, torch.bfloat16: 1, torch.float32: 2}
+_CODE_TO_DTYPE = {0: torch.float16, 1: torch.bfloat16, 2: torch.float32}
+_CODE_TO_NP_DTYPE = {0: np.float16, 1: np.float16, 2: np.float32}
+
+
+def tensor_to_embedding_blob(tensor: torch.Tensor) -> bytes:
+    """Serialize a tensor to compact binary format for SQLite blob storage.
+
+    Format: [version:1][dtype_code:1][ndim:4][shape:4*ndim][raw_bytes]
+    bfloat16 tensors are stored as float16 bytes (numpy lacks bfloat16)
+    but tagged with dtype_code=1 so they can be cast back on read.
+    Falls back to torch.save for unsupported dtypes.
+    """
+    t = tensor.cpu()
+    if t.dtype not in _DTYPE_TO_CODE:
+        buffer = io.BytesIO()
+        torch.save(t, buffer)
+        return buffer.getvalue()
+    dtype_code = _DTYPE_TO_CODE[t.dtype]
+
+    if t.dtype == torch.bfloat16:
+        raw = t.half().numpy().tobytes()
+    else:
+        raw = t.numpy().tobytes()
+
+    shape = t.shape
+    header = struct.pack(f'<BBi{len(shape)}i', _COMPACT_VERSION, dtype_code, len(shape), *shape)
+    return header + raw
+
+
+def _compact_header(dtype: torch.dtype, shape: tuple) -> bytes:
+    """Build just the compact header for a given dtype and shape."""
+    dtype_code = _DTYPE_TO_CODE[dtype]
+    return struct.pack(f'<BBi{len(shape)}i', _COMPACT_VERSION, dtype_code, len(shape), *shape)
+
+
+def batch_tensor_to_blobs(batch: torch.Tensor) -> List[bytes]:
+    """Serialize a batch of same-shape tensors to compact blobs (fast path for vectors).
+
+    Builds the header once and slices raw bytes per row. Much faster than
+    per-row tensor_to_embedding_blob calls for uniform-shape batches.
+    """
+    assert batch.ndim >= 2, f"Expected batch with >= 2 dims, got {batch.ndim}"
+    t = batch.cpu()
+    store_dtype = t.dtype
+    if t.dtype not in _DTYPE_TO_CODE:
+        return [tensor_to_embedding_blob(t[i]) for i in range(t.shape[0])]
+
+    if t.dtype == torch.bfloat16:
+        arr = t.half().numpy()
+        store_dtype = torch.bfloat16
+    else:
+        arr = t.numpy()
+
+    row_shape = tuple(t.shape[1:])
+    header = _compact_header(store_dtype, row_shape)
+    raw = arr.tobytes()
+    stride = len(raw) // t.shape[0]
+    return [header + raw[i * stride:(i + 1) * stride] for i in range(t.shape[0])]
+
+
+def embedding_blob_to_tensor(blob: bytes, fallback_shape: Optional[Tuple[int, ...]] = None) -> torch.Tensor:
+    """Deserialize a blob back to a tensor. Auto-detects compact vs legacy formats."""
+    if len(blob) >= 6 and blob[0] == _COMPACT_VERSION:
+        dtype_code = blob[1]
+        ndim = struct.unpack_from('<i', blob, 2)[0]
+        shape = struct.unpack_from(f'<{ndim}i', blob, 6)
+        data_offset = 6 + 4 * ndim
+        np_dtype = _CODE_TO_NP_DTYPE[dtype_code]
+        arr = np.frombuffer(blob, dtype=np_dtype, offset=data_offset).copy().reshape(shape)
+        t = torch.from_numpy(arr)
+        target_dtype = _CODE_TO_DTYPE[dtype_code]
+        if target_dtype != t.dtype:
+            t = t.to(target_dtype)
+        return t
+
+    # Fallback: try torch.load (pickle format)
+    try:
+        buffer = io.BytesIO(blob)
+        return torch.load(buffer, map_location='cpu', weights_only=True)
+    except Exception:
+        pass
+
+    # Legacy fallback: raw float32 bytes with caller-supplied shape
+    assert fallback_shape is not None, "Cannot deserialize blob: unknown format and no fallback_shape provided."
+    arr = np.frombuffer(blob, dtype=np.float32).copy().reshape(fallback_shape)
+    return torch.from_numpy(arr)
+
+
+def maybe_compile(model: torch.nn.Module, dynamic: bool = False) -> torch.nn.Module:
+    """Compile model with torch.compile if possible.
+
+    Skips compilation when dynamic=True (padding='longest') because
+    flex attention's create_block_mask is incompatible with dynamic shapes
+    under torch.compile, causing CUDA illegal memory access.
+    """
+    if dynamic:
+        print("Skipping torch.compile (dynamic shapes + flex attention incompatible)")
+        return model
+    try:
+        model = torch.compile(model)
+        print("Model compiled")
+    except Exception as e:
+        print(f"Skipping torch.compile: {e}")
+    return model
+
+
+def build_collator(
+    tokenizer: PreTrainedTokenizerBase,
+    padding: str = 'max_length',
+    max_length: int = 512,
+) -> Callable[[List[str]], Dict[str, torch.Tensor]]:
+    def _collate_fn(sequences: List[str]) -> Dict[str, torch.Tensor]:
+        kwargs: Dict[str, Any] = dict(
+            return_tensors="pt", padding=padding, truncation=True, max_length=max_length,
+        )
+        if padding != 'max_length':
+            kwargs['pad_to_multiple_of'] = 8
+        return tokenizer(sequences, **kwargs)
+    return _collate_fn
+
+
+def _make_embedding_progress(
+    dataloader: DataLoader,
+    padding: str,
+    n_warmup: int = 3,
+    n_calibration: int = 5,
+) -> Iterator[Tuple[int, Any]]:
+    """Progress-bar wrapper for embedding loops. Drop-in replacement for enumerate(dataloader).
+
+    When padding='max_length', all batches have uniform cost so plain tqdm works.
+    When padding='longest' (sorted longest-first), batch times vary dramatically.
+    In that case: yield warmup batches first (compiler warmup + OOM check on longest
+    sequences), then time mid-length calibration batches to estimate total ETA.
+
+    Keep in sync with protify/embedder.py and core/atlas/precomputed.py.
+    """
+    total = len(dataloader)
+    if padding == 'max_length' or total <= n_warmup + n_calibration:
+        for i, batch in tqdm(enumerate(dataloader), total=total, desc='Embedding batches'):
+            yield i, batch
+        return
+
+    dl_iter = iter(dataloader)
+
+    # Phase 1: warmup on longest batches (first n_warmup, since sorted longest-first)
+    warmup_bar = tqdm(range(n_warmup), desc='Warmup (longest batches)', leave=False)
+    for i in warmup_bar:
+        batch = next(dl_iter)
+        yield i, batch
+    warmup_bar.close()
+
+    # Phase 2: skip to middle of dataset for calibration timing
+    # We need to yield all intermediate batches too (they contain real data)
+    mid_start = total // 2
+    intermediate_bar = tqdm(
+        range(n_warmup, mid_start), desc='Embedding batches', leave=False,
+    )
+    for i in intermediate_bar:
+        batch = next(dl_iter)
+        yield i, batch
+    intermediate_bar.close()
+
+    # Phase 3: time calibration batches from the middle
+    calibration_times: List[float] = []
+    cal_bar = tqdm(range(n_calibration), desc='Calibrating ETA', leave=False)
+    for j in cal_bar:
+        t0 = time.perf_counter()
+        batch = next(dl_iter)
+        yield mid_start + j, batch
+        calibration_times.append(time.perf_counter() - t0)
+    cal_bar.close()
+
+    avg_time = sum(calibration_times) / len(calibration_times)
+    remaining_start = mid_start + n_calibration
+    remaining_count = total - remaining_start
+    estimated_total_seconds = avg_time * remaining_count
+
+    # Phase 4: remaining batches with calibrated ETA
+    main_bar = tqdm(
+        range(remaining_count),
+        desc='Embedding batches',
+        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+    )
+    main_bar.set_postfix_str(f'ETA ~{estimated_total_seconds:.0f}s (calibrated)')
+    for k in main_bar:
+        batch = next(dl_iter)
+        yield remaining_start + k, batch
+    main_bar.close()
 
 
 class Pooler:
@@ -30,9 +230,6 @@ class Pooler:
         return maxed_attentions
 
     def _page_rank(self, attention_matrix: np.ndarray, personalization: Optional[dict] = None, nstart: Optional[dict] = None, prune_type: str = "top_k_outdegree") -> Dict[int, float]:
-        # Run PageRank on the attention matrix converted to a graph.
-        # Raises exceptions if the graph doesn't match the token sequence or has no edges.
-        # Returns the PageRank scores for each token node.
         G = self._convert_to_graph(attention_matrix)
         if G.number_of_nodes() != attention_matrix.shape[0]:
             raise Exception(
@@ -43,26 +240,20 @@ class Pooler:
         return nx.pagerank(G, alpha=0.85, tol=1e-06, weight='weight', personalization=personalization, nstart=nstart, max_iter=100)
 
     def _convert_to_graph(self, matrix: np.ndarray) -> nx.DiGraph:
-        # Convert a matrix (e.g., attention scores) to a directed graph using networkx.
-        # Each element in the matrix represents a directed edge with a weight.
         G = nx.from_numpy_array(matrix, create_using=nx.DiGraph)
         return G
 
     def _calculate_importance_weights(self, dict_importance: Dict[int, float], attention_mask: Optional[torch.Tensor] = None) -> np.ndarray:
-        # Remove keys where attention_mask is 0
         if attention_mask is not None:
             for k in list(dict_importance.keys()):
                 if attention_mask[k] == 0:
                     del dict_importance[k]
 
-        #dict_importance[0] # remove cls
-        #dict_importance[-1] # remove eos
         total = sum(dict_importance.values())
         return np.array([v / total for _, v in dict_importance.items()])
 
-    def _pool_parti(self, emb: torch.Tensor, attentions: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor: # (b, L, d) -> (b, d)
+    def _pool_parti(self, emb: torch.Tensor, attentions: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         maxed_attentions = self._create_pooled_matrices_across_layers(attentions).numpy()
-        # emb is (b, L, d), maxed_attentions is (b, L, L)
         emb_pooled = []
         for e, a, mask in zip(emb, maxed_attentions, attention_mask):
             dict_importance = self._page_rank(a)
@@ -72,58 +263,53 @@ class Pooler:
         pooled = torch.tensor(np.array(emb_pooled))
         return pooled
 
-    def mean_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
+    def mean_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         if attention_mask is None:
             return emb.mean(dim=1)
         else:
             attention_mask = attention_mask.unsqueeze(-1)
             return (emb * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
 
-    def max_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
+    def max_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         if attention_mask is None:
             return emb.max(dim=1).values
         else:
             mask = attention_mask.unsqueeze(-1).bool()
             return emb.masked_fill(~mask, float('-inf')).max(dim=1).values
 
-    def norm_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
+    def norm_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         if attention_mask is None:
             return emb.norm(dim=1, p=2)
         else:
             attention_mask = attention_mask.unsqueeze(-1)
             return (emb * attention_mask).norm(dim=1, p=2)
 
-    def median_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
+    def median_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         if attention_mask is None:
             return emb.median(dim=1).values
         else:
             mask = attention_mask.unsqueeze(-1).bool()
             return emb.masked_fill(~mask, float('nan')).nanmedian(dim=1).values
-    
-    def std_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
+
+    def std_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         if attention_mask is None:
             return emb.std(dim=1)
         else:
-            # Compute variance correctly over non-masked positions, then take sqrt
             var = self.var_pooling(emb, attention_mask, **kwargs)
             return torch.sqrt(var)
-    
-    def var_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
+
+    def var_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         if attention_mask is None:
             return emb.var(dim=1)
         else:
-            # Correctly compute variance over only non-masked positions
-            attention_mask = attention_mask.unsqueeze(-1)  # (b, L, 1)
-            # Compute mean over non-masked positions
-            mean = (emb * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)  # (b, d)
-            mean = mean.unsqueeze(1)  # (b, 1, d)
-            # Compute squared differences from mean, only over non-masked positions
-            squared_diff = (emb - mean) ** 2  # (b, L, d)
-            # Sum squared differences over non-masked positions and divide by count
-            var = (squared_diff * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)  # (b, d)
+            attention_mask = attention_mask.unsqueeze(-1)
+            mean = (emb * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
+            mean = mean.unsqueeze(1)
+            squared_diff = (emb - mean) ** 2
+            var = (squared_diff * attention_mask).sum(dim=1) / attention_mask.sum(dim=1)
             return var
 
-    def cls_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor: # (b, L, d) -> (b, d)
+    def cls_pooling(self, emb: torch.Tensor, attention_mask: Optional[torch.Tensor] = None, **kwargs) -> torch.Tensor:
         return emb[:, 0, :]
 
     def __call__(
@@ -131,11 +317,11 @@ class Pooler:
             emb: torch.Tensor,
             attention_mask: Optional[torch.Tensor] = None,
             attentions: Optional[torch.Tensor] = None
-        ) -> torch.Tensor: # [mean, max]
+        ) -> torch.Tensor:
         final_emb: List[torch.Tensor] = []
         for pooling_type in self.pooling_types:
-            final_emb.append(self.pooling_options[pooling_type](emb=emb, attention_mask=attention_mask, attentions=attentions)) # (b, d)
-        return torch.cat(final_emb, dim=-1) # (b, n_pooling_types * d)
+            final_emb.append(self.pooling_options[pooling_type](emb=emb, attention_mask=attention_mask, attentions=attentions))
+        return torch.cat(final_emb, dim=-1)
 
 
 class ProteinDataset(TorchDataset):
@@ -148,12 +334,6 @@ class ProteinDataset(TorchDataset):
 
     def __getitem__(self, idx: int) -> str:
         return self.sequences[idx]
-
-
-def build_collator(tokenizer: PreTrainedTokenizerBase) -> Callable[[List[str]], Dict[str, torch.Tensor]]:
-    def _collate_fn(sequences: List[str]) -> Dict[str, torch.Tensor]:
-        return tokenizer(sequences, return_tensors="pt", padding='longest')
-    return _collate_fn
 
 
 def parse_fasta(fasta_path: str) -> List[str]:
@@ -187,34 +367,19 @@ class EmbeddingMixin:
 
     def _read_sequences_from_db(self, db_path: str) -> Set[str]:
         """Read sequences from SQLite database."""
-        sequences = []
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_path, timeout=30) as conn:
             c = conn.cursor()
             c.execute("SELECT sequence FROM embeddings")
-            while True:
-                row = c.fetchone()
-                if row is None:
-                    break
-                sequences.append(row[0])
-        return set(sequences)
+            return {row[0] for row in c.fetchall()}
 
     def _ensure_embeddings_table(self, conn: sqlite3.Connection) -> None:
         cursor = conn.cursor()
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS embeddings ("
             "sequence TEXT PRIMARY KEY, "
-            "embedding BLOB NOT NULL, "
-            "shape TEXT, "
-            "dtype TEXT"
+            "embedding BLOB NOT NULL"
             ")"
         )
-        cursor.execute("PRAGMA table_info(embeddings)")
-        rows = cursor.fetchall()
-        column_names = [row[1] for row in rows]
-        if "shape" not in column_names:
-            cursor.execute("ALTER TABLE embeddings ADD COLUMN shape TEXT")
-        if "dtype" not in column_names:
-            cursor.execute("ALTER TABLE embeddings ADD COLUMN dtype TEXT")
         conn.commit()
 
     def load_embeddings_from_pth(self, save_path: str) -> Dict[str, torch.Tensor]:
@@ -229,17 +394,17 @@ class EmbeddingMixin:
     def load_embeddings_from_db(self, db_path: str, sequences: Optional[List[str]] = None) -> Dict[str, torch.Tensor]:
         assert os.path.exists(db_path), f"Embedding database does not exist: {db_path}"
         loaded: Dict[str, torch.Tensor] = {}
-        with sqlite3.connect(db_path) as conn:
+        with sqlite3.connect(db_path, timeout=30) as conn:
             self._ensure_embeddings_table(conn)
             cursor = conn.cursor()
             if sequences is None:
-                cursor.execute("SELECT sequence, embedding, shape, dtype FROM embeddings")
+                cursor.execute("SELECT sequence, embedding FROM embeddings")
             else:
                 if len(sequences) == 0:
                     return loaded
                 placeholders = ",".join(["?"] * len(sequences))
                 cursor.execute(
-                    f"SELECT sequence, embedding, shape, dtype FROM embeddings WHERE sequence IN ({placeholders})",
+                    f"SELECT sequence, embedding FROM embeddings WHERE sequence IN ({placeholders})",
                     tuple(sequences),
                 )
 
@@ -247,18 +412,7 @@ class EmbeddingMixin:
             for row in rows:
                 sequence = row[0]
                 embedding_bytes = row[1]
-                shape_text = row[2]
-                dtype_text = row[3]
-                assert shape_text is not None, "Missing shape metadata in embeddings table."
-                assert dtype_text is not None, "Missing dtype metadata in embeddings table."
-                shape_values = [int(value) for value in shape_text.split(",") if len(value) > 0]
-                assert len(shape_values) > 0, f"Invalid shape metadata for sequence: {sequence}"
-                expected_size = int(np.prod(shape_values))
-                np_dtype = np.dtype(dtype_text)
-                array = np.frombuffer(embedding_bytes, dtype=np_dtype)
-                assert array.size == expected_size, f"Shape mismatch while reading sequence: {sequence}"
-                reshaped = array.copy().reshape(tuple(shape_values))
-                loaded[sequence] = torch.from_numpy(reshaped)
+                loaded[sequence] = embedding_blob_to_tensor(embedding_bytes)
         return loaded
 
     def embed_dataset(
@@ -277,6 +431,7 @@ class EmbeddingMixin:
         sql_db_path: str = 'embeddings.db',
         save_path: str = 'embeddings.pth',
         fasta_path: Optional[str] = None,
+        padding: str = 'max_length',
         **kwargs,
     ) -> Optional[Dict[str, torch.Tensor]]:
         """
@@ -299,8 +454,13 @@ class EmbeddingMixin:
         hidden_size = self.config.hidden_size
         pooler = Pooler(pooling_types) if not full_embeddings else None
         tokenizer_mode = tokenizer is not None
+
+        # Resolve padding and compilation
+        dynamic = padding == 'longest'
+        compiled_model = maybe_compile(self, dynamic=dynamic)
+
         if tokenizer_mode:
-            collate_fn = build_collator(tokenizer)
+            collate_fn = build_collator(tokenizer, padding=padding, max_length=max_len)
             device = self.device
         else:
             collate_fn = None
@@ -317,17 +477,25 @@ class EmbeddingMixin:
                 assert collate_fn is not None
                 assert device is not None
                 dataset = ProteinDataset(to_embed)
-                dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, collate_fn=collate_fn, shuffle=False)
-                for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), desc='Embedding batches'):
+                dataloader = DataLoader(
+                    dataset,
+                    batch_size=batch_size,
+                    num_workers=num_workers,
+                    prefetch_factor=2 if num_workers > 0 else None,
+                    collate_fn=collate_fn,
+                    shuffle=False,
+                    pin_memory=True,
+                )
+                for i, batch in _make_embedding_progress(dataloader, padding):
                     seqs = to_embed[i * batch_size:(i + 1) * batch_size]
                     input_ids = batch['input_ids'].to(device)
                     attention_mask = batch['attention_mask'].to(device)
-                    residue_embeddings = self._embed(input_ids, attention_mask)
+                    residue_embeddings = compiled_model._embed(input_ids, attention_mask)
                     yield seqs, residue_embeddings, attention_mask
             else:
                 for batch_start in tqdm(range(0, len(to_embed), batch_size), desc='Embedding batches'):
                     seqs = to_embed[batch_start:batch_start + batch_size]
-                    batch_output = self._embed(seqs, return_attention_mask=True, **kwargs)
+                    batch_output = compiled_model._embed(seqs, return_attention_mask=True, **kwargs)
                     assert isinstance(batch_output, tuple), "Sequence mode _embed must return (last_hidden_state, attention_mask)."
                     assert len(batch_output) == 2, "Sequence mode _embed must return exactly two values."
                     residue_embeddings, attention_mask = batch_output
@@ -335,30 +503,47 @@ class EmbeddingMixin:
                     yield seqs, residue_embeddings, attention_mask
 
         if sql:
-            conn = sqlite3.connect(sql_db_path)
+            conn = sqlite3.connect(sql_db_path, timeout=30, check_same_thread=False)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA busy_timeout=30000')
+            conn.execute('PRAGMA synchronous=OFF')
+            conn.execute('PRAGMA cache_size=-64000')
             self._ensure_embeddings_table(conn)
-            c = conn.cursor()
             already_embedded = self._read_sequences_from_db(sql_db_path)
             to_embed = [seq for seq in sequences if seq not in already_embedded]
             print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
             print(f"Embedding {len(to_embed)} new sequences")
             if len(to_embed) > 0:
-                with torch.no_grad():
-                    for i, (seqs, residue_embeddings, attention_mask) in enumerate(iter_batches(to_embed)):
-                        embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
-                        for seq, emb, mask in zip(seqs, embeddings, attention_mask):
-                            if full_embeddings:
-                                emb = emb[mask.bool()].reshape(-1, hidden_size)
-                            emb_np = emb.cpu().numpy()
-                            emb_shape = ",".join([str(dim) for dim in emb_np.shape])
-                            emb_dtype = str(emb_np.dtype)
-                            c.execute(
-                                "INSERT OR REPLACE INTO embeddings (sequence, embedding, shape, dtype) VALUES (?, ?, ?, ?)",
-                                (seq, emb_np.tobytes(), emb_shape, emb_dtype),
-                            )
-                        if tokenizer_mode and (i + 1) % 100 == 0:
+                sql_queue: queue.Queue = queue.Queue(maxsize=4)
+
+                def _sql_writer():
+                    wc = conn.cursor()
+                    while True:
+                        item = sql_queue.get()
+                        if item is None:
+                            break
+                        wc.executemany("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", item)
+                        if sql_queue.qsize() == 0:
                             conn.commit()
-                conn.commit()
+                    conn.commit()
+
+                sql_writer_thread = threading.Thread(target=_sql_writer, daemon=True)
+                sql_writer_thread.start()
+
+                with torch.inference_mode():
+                    for seqs, residue_embeddings, attention_mask in iter_batches(to_embed):
+                        embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
+                        if full_embeddings:
+                            batch_rows = []
+                            for seq, emb, mask in zip(seqs, embeddings, attention_mask):
+                                batch_rows.append((seq, tensor_to_embedding_blob(emb[mask.bool()].reshape(-1, hidden_size))))
+                        else:
+                            blobs = batch_tensor_to_blobs(embeddings)
+                            batch_rows = list(zip(seqs, blobs))
+                        sql_queue.put(batch_rows)
+
+                sql_queue.put(None)
+                sql_writer_thread.join()
             conn.close()
             return None
 
@@ -373,7 +558,7 @@ class EmbeddingMixin:
             print(f"Embedding {len(to_embed)} new sequences")
 
         if len(to_embed) > 0:
-            with torch.no_grad():
+            with torch.inference_mode():
                 for seqs, residue_embeddings, attention_mask in iter_batches(to_embed):
                     embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
                     for seq, emb, mask in zip(seqs, embeddings, attention_mask):
