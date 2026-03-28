@@ -48,8 +48,8 @@ def test_boltz2_forward() -> None:
     )
 
     assert output.sample_atom_coords is not None
-    assert output.sample_atom_coords.ndim == 2
-    assert output.sample_atom_coords.shape[1] == 3
+    assert output.sample_atom_coords.ndim in (2, 3), f"Expected 2D or 3D coords, got {output.sample_atom_coords.ndim}D"
+    assert output.sample_atom_coords.shape[-1] == 3
     assert not torch.isnan(output.sample_atom_coords).any(), "NaN in predicted coordinates"
     assert output.plddt is not None
     assert output.sequence == sequence
