@@ -1481,10 +1481,11 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
     # Ignore copy
     def forward(
         self,
-        input_ids: torch.LongTensor,
-        within_seq_position_ids: torch.LongTensor,
-        global_position_ids: torch.LongTensor,
-        sequence_ids: torch.LongTensor,
+        input_ids: Optional[torch.LongTensor] = None,
+        within_seq_position_ids: Optional[torch.LongTensor] = None,
+        global_position_ids: Optional[torch.LongTensor] = None,
+        sequence_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
         past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
         output_attentions: bool = False,
@@ -1507,6 +1508,9 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                 This tensor contains the sequence id of each residue.
                 For example, if the input is ["<bos>1ABC2<eos><bos>1DEF2<eos>", "<bos>1GH2<eos><bos>1JKL2<eos>"],
                 the tensor would be [[0,0,0,0,0,0,0,1,1,1,1,1,1,1], [0,0,0,0,0,0,1,1,1,1,1,1,1,-1]]
+            inputs_embeds: (batch_size, seq_length, hidden_size) - pre-computed embeddings,
+                bypasses embed_tokens and embed_seq_id when provided. Used by PDE for
+                differentiable soft sequence optimization.
             past_key_values: DynamicCache
             use_cache: bool
             output_attentions: bool
@@ -1516,7 +1520,17 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         Returns:
             E1ModelOutputWithPast: Model Outputs
         """
-        batch_size, seq_length = input_ids.shape
+        assert not (input_ids is not None and inputs_embeds is not None), (
+            "Cannot specify both input_ids and inputs_embeds"
+        )
+        assert input_ids is not None or inputs_embeds is not None, (
+            "Must specify either input_ids or inputs_embeds"
+        )
+
+        if input_ids is not None:
+            batch_size, seq_length = input_ids.shape
+        else:
+            batch_size, seq_length = inputs_embeds.shape[:2]
 
         if self.gradient_checkpointing and self.training and torch.is_grad_enabled():
             if use_cache:
@@ -1530,6 +1544,16 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         elif not use_cache:
             past_key_values = None
 
+        # Synthesize positional IDs for soft embedding path (single-sequence)
+        if inputs_embeds is not None:
+            device = inputs_embeds.device
+            if within_seq_position_ids is None:
+                within_seq_position_ids = torch.arange(seq_length, device=device).unsqueeze(0).expand(batch_size, -1)
+            if global_position_ids is None:
+                global_position_ids = torch.arange(seq_length, device=device).unsqueeze(0).expand(batch_size, -1)
+            if sequence_ids is None:
+                sequence_ids = torch.zeros(batch_size, seq_length, device=device, dtype=torch.long)
+
         global_position_ids = global_position_ids.view(-1, seq_length).long()
         within_seq_position_ids = within_seq_position_ids.view(-1, seq_length).long()
         sequence_ids = sequence_ids.view(-1, seq_length).long()
@@ -1540,8 +1564,9 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             f"Position ids must be in the range [-1, {self.config.max_num_positions_within_seq}); got max {max_position_id} and min {min_position_id}"
         )
 
-        inputs_embeds = self.embed_tokens(input_ids)
-        inputs_embeds = inputs_embeds + self.embed_seq_id(sequence_ids.clamp(min=0))
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+            inputs_embeds = inputs_embeds + self.embed_seq_id(sequence_ids.clamp(min=0))
 
         if torch.is_autocast_enabled():
             target_dtype = torch.get_autocast_gpu_dtype()
@@ -1653,10 +1678,11 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: torch.LongTensor,
-        within_seq_position_ids: torch.LongTensor,
-        global_position_ids: torch.LongTensor,
-        sequence_ids: torch.LongTensor,
+        input_ids: Optional[torch.LongTensor] = None,
+        within_seq_position_ids: Optional[torch.LongTensor] = None,
+        global_position_ids: Optional[torch.LongTensor] = None,
+        sequence_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
         past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
         output_attentions: bool = False,
@@ -1669,6 +1695,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
             within_seq_position_ids=within_seq_position_ids,
             global_position_ids=global_position_ids,
             sequence_ids=sequence_ids,
+            inputs_embeds=inputs_embeds,
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,
@@ -1711,10 +1738,11 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: torch.LongTensor,
-        within_seq_position_ids: torch.LongTensor,
-        global_position_ids: torch.LongTensor,
-        sequence_ids: torch.LongTensor,
+        input_ids: Optional[torch.LongTensor] = None,
+        within_seq_position_ids: Optional[torch.LongTensor] = None,
+        global_position_ids: Optional[torch.LongTensor] = None,
+        sequence_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
@@ -1738,6 +1766,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
                 This tensor contains the sequence id of each residue.
                 For example, if the input is ["<bos>1ABC2<eos><bos>1DEF2<eos>", "<bos>1GH2<eos><bos>1JKL2<eos>"],
                 the tensor would be [[0,0,0,0,0,0,0,1,1,1,1,1,1,1], [0,0,0,0,0,0,1,1,1,1,1,1,1,-1]]
+            inputs_embeds: (batch_size, seq_length, hidden_size) - pre-computed embeddings
             labels: (batch_size, seq_length)
             past_key_values: DynamicCache
             use_cache: bool
@@ -1753,6 +1782,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
             within_seq_position_ids=within_seq_position_ids,
             global_position_ids=global_position_ids,
             sequence_ids=sequence_ids,
+            inputs_embeds=inputs_embeds,
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,
@@ -1830,10 +1860,11 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: torch.LongTensor,
-        within_seq_position_ids: torch.LongTensor,
-        global_position_ids: torch.LongTensor,
-        sequence_ids: torch.LongTensor,
+        input_ids: Optional[torch.LongTensor] = None,
+        within_seq_position_ids: Optional[torch.LongTensor] = None,
+        global_position_ids: Optional[torch.LongTensor] = None,
+        sequence_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
@@ -1847,6 +1878,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
             within_seq_position_ids=within_seq_position_ids,
             global_position_ids=global_position_ids,
             sequence_ids=sequence_ids,
+            inputs_embeds=inputs_embeds,
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,
@@ -1854,7 +1886,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
             output_s_max=output_s_max,
         )
 
-        attention_mask = (sequence_ids != -1).long()
+        attention_mask = (sequence_ids != -1).long() if sequence_ids is not None else torch.ones(outputs.last_hidden_state.shape[:2], device=outputs.last_hidden_state.device, dtype=torch.long)
         x = outputs.last_hidden_state
         features = self.pooler(x, attention_mask)
         logits = self.classifier(features)
@@ -1925,10 +1957,11 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: torch.LongTensor,
-        within_seq_position_ids: torch.LongTensor,
-        global_position_ids: torch.LongTensor,
-        sequence_ids: torch.LongTensor,
+        input_ids: Optional[torch.LongTensor] = None,
+        within_seq_position_ids: Optional[torch.LongTensor] = None,
+        global_position_ids: Optional[torch.LongTensor] = None,
+        sequence_ids: Optional[torch.LongTensor] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
         labels: Optional[torch.LongTensor] = None,
         past_key_values: Optional[DynamicCache] = None,
         use_cache: bool = False,
@@ -1942,6 +1975,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
             within_seq_position_ids=within_seq_position_ids,
             global_position_ids=global_position_ids,
             sequence_ids=sequence_ids,
+            inputs_embeds=inputs_embeds,
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,

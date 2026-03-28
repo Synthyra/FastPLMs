@@ -615,7 +615,9 @@ class MSAModule(nn.Module):
 
         # Load relevant features
         msa = feats["msa"]
-        msa = torch.nn.functional.one_hot(msa, num_classes=const.num_tokens)
+        if msa.dtype in (torch.long, torch.int32, torch.int64):
+            msa = torch.nn.functional.one_hot(msa, num_classes=const.num_tokens).float()
+        # else: already float one-hot (soft/differentiable path)
         has_deletion = feats["has_deletion"].unsqueeze(-1)
         deletion_value = feats["deletion_value"].unsqueeze(-1)
         is_paired = feats["msa_paired"].unsqueeze(-1)
