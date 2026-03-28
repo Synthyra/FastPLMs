@@ -114,7 +114,7 @@ class DiffusionTransformer(Module):
             else:
                 bias_l = None
 
-            if self.activation_checkpointing and self.training:
+            if self.activation_checkpointing:
                 a = torch.utils.checkpoint.checkpoint(
                     layer,
                     a,
@@ -123,6 +123,7 @@ class DiffusionTransformer(Module):
                     mask,
                     to_keys,
                     multiplicity,
+                    use_reentrant=False,
                 )
 
             else:

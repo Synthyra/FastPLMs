@@ -122,12 +122,13 @@ class DiffusionModule(Module):
         diffusion_conditioning,
         multiplicity=1,
     ):
-        if self.activation_checkpointing and self.training:
+        if self.activation_checkpointing:
             s, normed_fourier = torch.utils.checkpoint.checkpoint(
                 self.single_conditioner,
                 times,
                 s_trunk.repeat_interleave(multiplicity, 0),
                 s_inputs.repeat_interleave(multiplicity, 0),
+                use_reentrant=False,
             )
         else:
             s, normed_fourier = self.single_conditioner(

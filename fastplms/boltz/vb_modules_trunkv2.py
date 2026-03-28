@@ -643,7 +643,7 @@ class MSAModule(nn.Module):
 
         # Perform MSA blocks
         for i in range(self.msa_blocks):
-            if self.activation_checkpointing and self.training:
+            if self.activation_checkpointing:
                 z, m = torch.utils.checkpoint.checkpoint(
                     self.layers[i],
                     z,
@@ -656,6 +656,7 @@ class MSAModule(nn.Module):
                     chunk_size_outer_product,
                     chunk_size_tri_attn,
                     use_kernels,
+                    use_reentrant=False,
                 )
             else:
                 z, m = self.layers[i](
