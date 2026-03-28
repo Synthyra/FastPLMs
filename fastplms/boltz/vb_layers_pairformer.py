@@ -186,7 +186,7 @@ class PairformerModule(nn.Module):
             chunk_size_tri_attn = None
 
         for layer in self.layers:
-            if self.activation_checkpointing and self.training:
+            if self.activation_checkpointing:
                 s, z = torch.utils.checkpoint.checkpoint(
                     layer,
                     s,
@@ -195,6 +195,7 @@ class PairformerModule(nn.Module):
                     pair_mask,
                     chunk_size_tri_attn,
                     use_kernels,
+                    use_reentrant=False,
                 )
             else:
                 s, z = layer(s, z, mask, pair_mask, chunk_size_tri_attn, use_kernels)
@@ -317,13 +318,14 @@ class PairformerNoSeqModule(nn.Module):
             chunk_size_tri_attn = None
 
         for layer in self.layers:
-            if self.activation_checkpointing and self.training:
+            if self.activation_checkpointing:
                 z = torch.utils.checkpoint.checkpoint(
                     layer,
                     z,
                     pair_mask,
                     chunk_size_tri_attn,
                     use_kernels,
+                    use_reentrant=False,
                 )
             else:
                 z = layer(
