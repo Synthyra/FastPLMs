@@ -539,6 +539,7 @@ class Boltz2InferenceCore(nn.Module):
         diffusion_samples: int = 1,
         max_parallel_samples: Optional[int] = None,
         run_confidence_sequentially: bool = True,
+        detach_confidence: bool = True,
     ) -> Dict[str, Tensor]:
         s_inputs = self.input_embedder(feats)
         s_init = self.s_init(s_inputs)
@@ -621,14 +622,27 @@ class Boltz2InferenceCore(nn.Module):
                 )
                 x_pred = output["sample_atom_coords"]
 
+            if detach_confidence:
+                s_inputs_c = s_inputs.detach()
+                s_c = s.detach()
+                z_c = z.detach()
+                x_pred_c = x_pred.detach()
+                pdist_c = output["pdistogram"][:, :, :, 0].detach()
+            else:
+                s_inputs_c = s_inputs
+                s_c = s
+                z_c = z
+                x_pred_c = x_pred
+                pdist_c = output["pdistogram"][:, :, :, 0]
+
             output.update(
                 self.confidence_module(
-                    s_inputs=s_inputs.detach(),
-                    s=s.detach(),
-                    z=z.detach(),
-                    x_pred=x_pred.detach(),
+                    s_inputs=s_inputs_c,
+                    s=s_c,
+                    z=z_c,
+                    x_pred=x_pred_c,
                     feats=feats,
-                    pred_distogram_logits=output["pdistogram"][:, :, :, 0].detach(),
+                    pred_distogram_logits=pdist_c,
                     multiplicity=diffusion_samples,
                     run_sequentially=run_confidence_sequentially,
                     use_kernels=self.use_kernels,
@@ -747,6 +761,7 @@ class Boltz2Model(PreTrainedModel):
         diffusion_samples: Optional[int] = None,
         max_parallel_samples: Optional[int] = None,
         run_confidence_sequentially: bool = True,
+        detach_confidence: bool = True,
     ) -> Dict[str, Tensor]:
         if recycling_steps is None:
             recycling_steps = self.config.default_recycling_steps
@@ -761,6 +776,7 @@ class Boltz2Model(PreTrainedModel):
             diffusion_samples=diffusion_samples,
             max_parallel_samples=max_parallel_samples,
             run_confidence_sequentially=run_confidence_sequentially,
+            detach_confidence=detach_confidence,
         )
 
     def _to_model_device(
