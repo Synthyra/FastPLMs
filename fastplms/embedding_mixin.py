@@ -17,7 +17,7 @@ from transformers import PreTrainedTokenizerBase
 
 
 # Compact blob serialization constants
-# Keep in sync with protify/utils.py and core/atlas/precomputed.py
+# Canonical source: core/embed/blob.py. Keep in sync with protify/utils.py.
 _COMPACT_VERSION = 0x01
 _DTYPE_TO_CODE = {torch.float16: 0, torch.bfloat16: 1, torch.float32: 2}
 _CODE_TO_DTYPE = {0: torch.float16, 1: torch.bfloat16, 2: torch.float32}
@@ -208,6 +208,40 @@ def _make_embedding_progress(
         batch = next(dl_iter)
         yield remaining_start + k, batch
     main_bar.close()
+
+
+class _SQLWriter:
+    """Context manager for async SQL embedding writes. Matches core/embed/storage.SQLEmbeddingWriter."""
+
+    def __init__(self, conn: sqlite3.Connection, queue_maxsize: int = 4) -> None:
+        self._conn = conn
+        self._queue: queue.Queue = queue.Queue(maxsize=queue_maxsize)
+        self._thread: Optional[threading.Thread] = None
+
+    def __enter__(self) -> "_SQLWriter":
+        self._thread = threading.Thread(target=self._writer_loop, daemon=True)
+        self._thread.start()
+        return self
+
+    def write_batch(self, rows: List[Tuple[str, bytes]]) -> None:
+        self._queue.put(rows)
+
+    def _writer_loop(self) -> None:
+        cursor = self._conn.cursor()
+        while True:
+            item = self._queue.get()
+            if item is None:
+                break
+            cursor.executemany("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", item)
+            if self._queue.qsize() == 0:
+                self._conn.commit()
+        self._conn.commit()
+
+    def __exit__(self, *exc) -> None:
+        if self._thread is not None:
+            self._queue.put(None)
+            self._thread.join()
+            self._thread = None
 
 
 class Pooler:
@@ -503,6 +537,7 @@ class EmbeddingMixin:
                     yield seqs, residue_embeddings, attention_mask
 
         if sql:
+            # Step 1: DEDUPLICATE - check existing embeddings in SQL
             conn = sqlite3.connect(sql_db_path, timeout=30, check_same_thread=False)
             conn.execute('PRAGMA journal_mode=WAL')
             conn.execute('PRAGMA busy_timeout=30000')
@@ -514,36 +549,19 @@ class EmbeddingMixin:
             print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
             print(f"Embedding {len(to_embed)} new sequences")
             if len(to_embed) > 0:
-                sql_queue: queue.Queue = queue.Queue(maxsize=4)
-
-                def _sql_writer():
-                    wc = conn.cursor()
-                    while True:
-                        item = sql_queue.get()
-                        if item is None:
-                            break
-                        wc.executemany("INSERT OR REPLACE INTO embeddings VALUES (?, ?)", item)
-                        if sql_queue.qsize() == 0:
-                            conn.commit()
-                    conn.commit()
-
-                sql_writer_thread = threading.Thread(target=_sql_writer, daemon=True)
-                sql_writer_thread.start()
-
-                with torch.inference_mode():
-                    for seqs, residue_embeddings, attention_mask in iter_batches(to_embed):
-                        embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
-                        if full_embeddings:
-                            batch_rows = []
-                            for seq, emb, mask in zip(seqs, embeddings, attention_mask):
-                                batch_rows.append((seq, tensor_to_embedding_blob(emb[mask.bool()].reshape(-1, hidden_size))))
-                        else:
-                            blobs = batch_tensor_to_blobs(embeddings)
-                            batch_rows = list(zip(seqs, blobs))
-                        sql_queue.put(batch_rows)
-
-                sql_queue.put(None)
-                sql_writer_thread.join()
+                # Steps 4-7: BATCH+EMBED -> POOL/TRIM -> SERIALIZE -> WRITE (async)
+                with _SQLWriter(conn) as writer:
+                    with torch.inference_mode():
+                        for seqs, residue_embeddings, attention_mask in iter_batches(to_embed):
+                            embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
+                            if full_embeddings:
+                                batch_rows = []
+                                for seq, emb, mask in zip(seqs, embeddings, attention_mask):
+                                    batch_rows.append((seq, tensor_to_embedding_blob(emb[mask.bool()].reshape(-1, hidden_size))))
+                            else:
+                                blobs = batch_tensor_to_blobs(embeddings)
+                                batch_rows = list(zip(seqs, blobs))
+                            writer.write_batch(batch_rows)
             conn.close()
             return None
 
