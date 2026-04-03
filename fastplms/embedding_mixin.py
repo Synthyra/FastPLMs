@@ -352,6 +352,11 @@ class Pooler:
             attention_mask: Optional[torch.Tensor] = None,
             attentions: Optional[torch.Tensor] = None
         ) -> torch.Tensor:
+        if attention_mask is not None:
+            assert attention_mask.sum(dim=-1).min() > 0, (
+                "Pooler received samples with all-zero attention masks. "
+                "This causes NaN from division by zero. Filter empty inputs before pooling."
+            )
         final_emb: List[torch.Tensor] = []
         for pooling_type in self.pooling_types:
             final_emb.append(self.pooling_options[pooling_type](emb=emb, attention_mask=attention_mask, attentions=attentions))
