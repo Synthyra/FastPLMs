@@ -1468,7 +1468,6 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
     def set_input_embeddings(self, value: nn.Embedding) -> None:
         self.embed_tokens = value
 
-    @torch.inference_mode()
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
         batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
         last_hidden_state = self.forward(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
@@ -1672,7 +1671,6 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
     def set_input_embeddings(self, value: nn.Embedding) -> None:
         self.model.set_input_embeddings(value)
 
-    @torch.inference_mode()
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
         return self.model._embed(sequences, return_attention_mask=return_attention_mask, **kwargs)
 
@@ -1726,7 +1724,6 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
         return self.model.device_mesh
 
-    @torch.inference_mode()
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
         batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
         last_hidden_state = self.model(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
@@ -1848,7 +1845,6 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
         return self.model.device_mesh
 
-    @torch.inference_mode()
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
         batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
         last_hidden_state = self.model(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
@@ -1945,7 +1941,6 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
         return self.model.device_mesh
 
-    @torch.inference_mode()
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
         batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
         last_hidden_state = self.model(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
