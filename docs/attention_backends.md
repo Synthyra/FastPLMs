@@ -74,9 +74,11 @@ Selects the best available backend in priority order: `kernels_flash` -> `flex` 
 
 ## Setting the Backend
 
-### At Load Time (ESM2, ESM++, E1, ANKH)
+Every FastPLMs sequence model (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) supports **both** load-time and post-load backend switching. Pick whichever fits your workflow.
 
-The backend must be set on the config before calling `from_pretrained`:
+### At Load Time
+
+Set `config.attn_backend` before calling `from_pretrained`:
 
 ```python
 from transformers import AutoConfig, AutoModelForMaskedLM
@@ -88,14 +90,18 @@ model = AutoModelForMaskedLM.from_pretrained(
 )
 ```
 
-### After Load Time (DPLM, DPLM2, ANKH)
+### After Load Time
 
-DPLM, DPLM2, and ANKH expose a mutable `attn_backend` property that propagates to all attention layers:
+Every family's `PreTrainedModel` subclass exposes a mutable `attn_backend` property whose setter propagates the change to every attention submodule in-place:
 
 ```python
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM-150M", trust_remote_code=True)
-model.attn_backend = "flex"  # Updates every attention layer in-place
+model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
+model.attn_backend = "flex"  # every attention layer now uses flex
+
+model.attn_backend = "kernels_flash"  # flip to flash without reloading
 ```
+
+This is useful for benchmarking multiple backends on the same weights, or for falling back at runtime if a backend turns out to be unavailable on the current GPU. The setter validates that the requested backend is installed and raises `AssertionError` otherwise -- except for ANKH's `kernels_flash` request, which silently falls back to `flex` (or `sdpa`) because the flash kernels cannot accept ANKH's additive relative position bias.
 
 ## Backend Resolution
 
@@ -110,15 +116,17 @@ The resolved enum is stored on each attention layer as `self.attn_backend` and o
 
 ## Mask Transformations
 
-Different backends require different mask formats. The `get_attention_mask()` function (or equivalent) in each model produces:
+`fastplms/attention.py::get_attention_mask()` builds a shared set of padding masks once per forward, and every family consumes the same output:
 
-| Backend | Mask Format | Shape |
-|---------|-------------|-------|
-| SDPA | Boolean 4D mask (True = attend) for most families; ANKH uses a float additive mask (`0.0` valid, `-inf` padded) added to the relative position bias | `(batch, 1, 1, seq_len)` |
-| Flash | Boolean 2D mask + cumulative seq lengths | `(batch, seq_len)` |
+| Backend | Mask produced by `get_attention_mask` | Shape |
+|---------|---------------------------------------|-------|
+| SDPA | Boolean 4D mask (True = valid) | `(batch, 1, 1, seq_len)` |
+| Flash | Boolean 2D mask (True = valid) | `(batch, seq_len)` |
 | Flex | `BlockMask` via `create_block_mask` | Opaque block mask object |
 
-> Note for additive mask construction: when building a float additive mask from a bool tensor, **don't** call `.masked_fill(mask, float("-inf"))` on the bool tensor itself - it returns a bool tensor (because `-inf` casts to `True`), silently dropping the mask. Allocate a float zeros tensor first, then `masked_fill_(...)` on that.
+Families that need an **additive** (float, `0.0`/`-inf`) mask -- ANKH is currently the only one, because T5 relative position bias is added directly to attention scores -- convert the shared bool mask with the `bool_to_additive_mask(bool_mask, dtype)` helper in `fastplms/attention.py`. Use the helper, don't hand-roll it:
+
+> Never call `.masked_fill(bool_mask, float("-inf"))` on a bool tensor. `bool(float("-inf"))` is `True`, so the result is a bool tensor and the mask is silently dropped. `bool_to_additive_mask` allocates the float tensor correctly and is the only sanctioned way to produce an additive mask inside the codebase.
 
 ## Interaction with `torch.compile`
 

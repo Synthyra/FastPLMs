@@ -314,3 +314,22 @@ def get_attention_mask(
     # real keys and produce valid (non-NaN) outputs instead of NaN from softmax(-inf,...,-inf).
     attention_mask_4d = attention_mask_2d[:, None, None, :]
     return attention_mask_2d, attention_mask_4d, None
+
+
+def bool_to_additive_mask(
+    bool_mask: torch.Tensor,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Convert a bool mask (True = valid) to a float additive mask (0.0 valid, -inf invalid).
+
+    Why this exists: calling `bool_mask.masked_fill(bool_mask.logical_not(), float('-inf'))`
+    directly on a bool tensor returns a bool tensor -- because `-inf` casts to `True` -- and
+    silently drops the mask entirely. Always allocate a float tensor first, then fill it.
+    This helper is the sanctioned way to build an SDPA additive mask from a bool validity mask.
+    """
+    assert bool_mask.dtype == torch.bool, (
+        f"bool_to_additive_mask requires a bool tensor, got dtype={bool_mask.dtype}"
+    )
+    additive = torch.zeros_like(bool_mask, dtype=dtype)
+    additive.masked_fill_(bool_mask.logical_not(), float("-inf"))
+    return additive

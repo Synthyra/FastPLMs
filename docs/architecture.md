@@ -101,10 +101,11 @@ All models share a common attention backend abstraction controlled by `config.at
 
 Each model's attention layer stores an `AttentionBackend` enum and dispatches accordingly. See [Attention Backends](attention_backends.md) for implementation details.
 
-**Backend setting differs by model family:**
+**Backend setting is uniform across families:**
 
-- ESM2, ESM++, E1: Set on the config before calling `from_pretrained`
-- DPLM, DPLM2: Expose a mutable `model.attn_backend` property that propagates to all layers
+- At load time, every family accepts `config.attn_backend = "..."` before `from_pretrained`.
+- At runtime, every family exposes a mutable `model.attn_backend` property whose setter propagates to every attention submodule. Use this to benchmark backends on the same weights without reloading.
+- Exception: ANKH silently resolves `kernels_flash` to `flex` (or `sdpa`), because T5 relative position bias is incompatible with the flash kernels.
 
 ## Entrypoint Setup
 
@@ -159,9 +160,10 @@ Each model family has a `get_*_weights.py` script that:
 
 Each family has a corresponding module in `testing/official/` (e.g., `testing/official/esm2.py`) that wraps the original model in a standardized interface returning `(model, tokenizer)`. The parity / compliance suites load both implementations side-by-side and compare:
 
-- **Tokenizer parity** (`test_parity.py`): vocab, token ids, special tokens
-- **Weight parity**: bit-exact equality of every parameter
-- **Forward parity**: per-layer relative-std hidden-state diff in fp32 + bf16, padding-isolation, end-to-end `embed_dataset` pipeline
-- **Backend consistency**: SDPA vs `kernels_flash` vs `flex` agree on FastPLMs side
+- **Tokenizer parity** (`test_parity.py`): vocab, every token id, every special token id
+- **Weight parity**: bit-exact equality of every parameter, with family-specific allowlisted extras (e.g. ANKH's `lm_head.weight`, since native is a T5 encoder without a head)
+- **Forward parity (fp32 + bf16)**: per-layer relative-std AND relative-maxabs hidden-state diff (two complementary metrics so a localized regression can't hide inside a collapsed scalar), `last_hidden_state` absolute + relative maxabs, logits MSE, padding-isolation across SDPA and Flex, end-to-end `embed_dataset` pipeline for every family
+- **Backend consistency**: every family's supported backends (typically SDPA vs Flex vs `kernels_flash`) agree on the fast side to per-backend tolerance; ANKH compares SDPA vs Flex only because kernels_flash silently falls back
+- **Backend setter propagation**: `model.attn_backend = X` actually updates every attention submodule. If this regresses, every backend-parametrized test becomes a no-op.
 
 The parity suite runs per family in its own Docker image (per the per-family layout above). See [Testing & Benchmarking](testing.md) for full details.

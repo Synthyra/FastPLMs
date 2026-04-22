@@ -155,7 +155,6 @@ class RotaryEmbedding(torch.nn.Module):
         self._sin_cached = None
         self._cos_k_cached = None
         self._sin_k_cached = None
-        self._inv_freq_compute_device: Optional[torch.device] = None
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -165,7 +164,6 @@ class RotaryEmbedding(torch.nn.Module):
         else:
             buffer_device = self.device
         inv_freq = self._compute_inv_freq(buffer_device)
-        self._inv_freq_compute_device = inv_freq.device
         self._seq_len_cached = 0
         self._cos_cached = None
         self._sin_cached = None

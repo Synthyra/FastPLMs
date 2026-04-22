@@ -30,7 +30,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESM2-150M", config=config
 
 - Uses the standard ESM tokenizer (`EsmTokenizer` from `transformers`)
 - Tokenizer accessible via `model.tokenizer`
-- Backend must be set on the config **before** `from_pretrained`
+- Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load (same mechanism as every other family).
 - Pre-LayerNorm architecture with a final `emb_layer_norm_after`
 - Supports `output_attentions=True` and `output_hidden_states=True`
 
@@ -66,7 +66,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESMplusplus_small", trust
 - **Requires `sequence_id`** parameter for batched inference: `sequence_id = attention_mask.to(dtype=torch.bool)`
 - Uses `einops` for tensor reshaping operations
 - Rotary embeddings support `interleaved` mode and `scale_base`/`scaling_factor` for dynamic scaling
-- Backend set via config before `from_pretrained`
+- Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load.
 
 ### Batched Forward Pass
 
@@ -113,7 +113,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/Profluent-E1-150M", trust
   - `GLOBAL`: Cross-sequence block-causal attention
 - Separate RoPE configurations for within-sequence and global attention (different `rope_theta`)
 - KV caching via `DynamicCache` for efficient generation
-- Backend set via config before `from_pretrained`
+- Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load.
 
 ### Tokenization (Sequence Mode)
 
@@ -256,9 +256,9 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/ANKH_base", config=config
 
 - Uses the ANKH T5 tokenizer (`AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")`)
 - Tokenizer accessible via `model.tokenizer`
-- Backend must be set on the config **before** `from_pretrained`
+- Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load (same mechanism as every other family).
 - **Attention is unscaled** (no `1/sqrt(d_kv)` factor). T5 trains without scaling; the learned relative position bias absorbs the temperature.
-- Only `sdpa` and `flex` are supported. Requesting `kernels_flash` falls back to `flex` (or `sdpa` if flex is unavailable) because flash kernels can't accept additive position bias.
+- Only `sdpa` and `flex` are supported. Requesting `kernels_flash` silently falls back to `flex` (or `sdpa` if flex is unavailable) because flash kernels can't accept additive position bias.
 - Layer 0 owns the relative-position-bias `nn.Embedding`; subsequent layers receive the precomputed bias through the forward call.
 - The native ANKH checkpoint is a T5 encoder-decoder; FastPLMs uses the encoder only and bolts on a separate `lm_head` for the `ForMaskedLM` variant. For weight-parity comparisons against `transformers.T5EncoderModel`, the FastPLMs `lm_head.weight` is allowlisted as an expected extra parameter.
 
