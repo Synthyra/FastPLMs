@@ -33,6 +33,7 @@ from typing import Dict, List, Optional, Tuple
 import pytest
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers import AutoModelForMaskedLM
 
 from testing.conftest import CANONICAL_AAS, MODEL_REGISTRY, SEED, tokenize_batch
@@ -575,22 +576,33 @@ def _get_resolved_backend(model: nn.Module, model_key: str) -> str:
     return model.config.attn_backend
 
 
-# Per-backend absolute and relative tolerances by dtype. kernels_flash is
-# approximate by design; flex is near-exact to sdpa. bf16 tolerances are looser
-# than fp32 because of dtype rounding in the compared baseline itself.
+# Per-backend tolerances. Two regimes:
+#
+# 1. fp32 strict raw: backends that support fp32 must produce hidden states
+#    within floating-point rounding of sdpa. flex passes easily; kernels_flash
+#    isn't eligible (rejects fp32 at the kernel level).
+#
+# 2. bf16 downstream-equivalent: in bf16, kernels_flash (and, more loosely,
+#    flex) have different tiling/reduction orders than sdpa, so raw hidden
+#    states can differ meaningfully (~0.5+ maxabs in logit space per the
+#    legacy test's comment). Asking for raw agreement is known infeasible.
+#    Instead we check what downstream users actually care about:
+#       a. mean-pool cosine similarity (for embedding-based downstream tasks)
+#       b. top-1 argmax agreement on logits (for masked-LM prediction use)
 BACKEND_TOL_FP32: Dict[str, Dict[str, float]] = {
     "flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3},
 }
-BACKEND_TOL_BF16: Dict[str, Dict[str, float]] = {
-    "flex": {"mse": 5e-4, "maxabs": 5e-2, "rel_maxabs": 5e-2},
-    "kernels_flash": {"mse": 5e-3, "maxabs": 2e-1, "rel_maxabs": 1e-1},
+
+# Cosine similarity and argmax-agreement thresholds for bf16 downstream consistency.
+# `kernels_flash` is loosest because online softmax + tiling compounds across layers.
+BACKEND_TOL_BF16_DOWNSTREAM: Dict[str, Dict[str, float]] = {
+    "flex":          {"min_cosine": 0.999, "min_argmax_agreement": 0.98},
+    "kernels_flash": {"min_cosine": 0.995, "min_argmax_agreement": 0.95},
 }
 
 
-def _run_backend_consistency(
+def _run_backend_consistency_fp32(
     model_key: str,
-    dtype: torch.dtype,
-    dtype_label: str,
     backends: Tuple[str, ...],
     backend_tol: Dict[str, Dict[str, float]],
 ) -> None:
@@ -598,7 +610,7 @@ def _run_backend_consistency(
     random.seed(SEED)
     sequences = generate_fixed_sequences()
 
-    baseline = load_fast(model_key, device, dtype)
+    baseline = load_fast(model_key, device, torch.float32)
     base_resolved = _apply_backend(baseline, "sdpa", model_key)
     assert base_resolved == "sdpa", f"{model_key}: sdpa baseline resolved to {base_resolved} (expected 'sdpa')"
 
@@ -614,12 +626,12 @@ def _run_backend_consistency(
 
     failures: List[str] = []
     for backend in backends:
-        alt = load_fast(model_key, device, dtype)
+        alt = load_fast(model_key, device, torch.float32)
         resolved = _apply_backend(alt, backend, model_key)
         if resolved is None:
             del alt
             torch.cuda.empty_cache()
-            pytest.skip(f"{model_key} ({dtype_label}): backend {backend} not available")
+            pytest.skip(f"{model_key} (fp32): backend {backend} not available")
         if resolved != backend:
             failures.append(
                 f"{backend}: requested backend was silently resolved to '{resolved}'. "
@@ -647,26 +659,124 @@ def _run_backend_consistency(
         del alt, alt_out
         torch.cuda.empty_cache()
 
-    assert not failures, f"{model_key} ({dtype_label}): backend consistency failed:\n" + "\n".join(failures)
+    assert not failures, f"{model_key} (fp32): backend consistency failed:\n" + "\n".join(failures)
+
+
+def _mean_pool(last_hidden_state: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    """Mean-pool over valid positions per sequence. Returns (batch, hidden)."""
+    m = attention_mask.bool().unsqueeze(-1).float()
+    summed = (last_hidden_state.float() * m).sum(dim=1)
+    counts = m.sum(dim=1).clamp_min(1.0)
+    return summed / counts
+
+
+def _run_backend_consistency_bf16_downstream(
+    model_key: str,
+    backends: Tuple[str, ...],
+    backend_tol: Dict[str, Dict[str, float]],
+) -> None:
+    device = torch.device("cuda")
+    random.seed(SEED)
+    sequences = generate_fixed_sequences()
+
+    baseline = load_fast(model_key, device, torch.bfloat16)
+    base_resolved = _apply_backend(baseline, "sdpa", model_key)
+    assert base_resolved == "sdpa", f"{model_key}: sdpa baseline resolved to {base_resolved} (expected 'sdpa')"
+
+    with torch.no_grad():
+        base_out, mask = fast_forward(baseline, model_key, sequences, device, output_hidden_states=False)
+    base_last_attr = getattr(base_out, "last_hidden_state", None)
+    base_last = base_last_attr if base_last_attr is not None else base_out.hidden_states[-1]
+    base_pooled = _mean_pool(base_last, mask)  # (B, D) in fp32
+    mask_b = mask.bool()
+
+    base_logits = getattr(base_out, "logits", None)
+    base_argmax = None
+    if base_logits is not None:
+        base_argmax = base_logits.float()[mask_b].argmax(dim=-1)
+
+    del baseline, base_out
+    torch.cuda.empty_cache()
+
+    failures: List[str] = []
+    for backend in backends:
+        alt = load_fast(model_key, device, torch.bfloat16)
+        resolved = _apply_backend(alt, backend, model_key)
+        if resolved is None:
+            del alt
+            torch.cuda.empty_cache()
+            pytest.skip(f"{model_key} (bf16): backend {backend} not available")
+        if resolved != backend:
+            failures.append(
+                f"{backend}: requested backend was silently resolved to '{resolved}'. "
+                f"Remove {backend!r} from the consistency matrix for {model_key!r} if this is intentional."
+            )
+            del alt
+            torch.cuda.empty_cache()
+            continue
+        with torch.no_grad():
+            alt_out, _ = fast_forward(alt, model_key, sequences, device, output_hidden_states=False)
+        alt_last_attr = getattr(alt_out, "last_hidden_state", None)
+        alt_last = alt_last_attr if alt_last_attr is not None else alt_out.hidden_states[-1]
+        alt_pooled = _mean_pool(alt_last, mask)
+        # Per-sequence cosine similarity, then min across sequences.
+        cos_per_seq = F.cosine_similarity(base_pooled, alt_pooled, dim=-1)  # (B,)
+        min_cos = cos_per_seq.min().item()
+        tol = backend_tol[backend]
+        if min_cos < tol["min_cosine"]:
+            failures.append(
+                f"{backend}: min per-sequence pooled cosine = {min_cos:.4f} "
+                f"(tol >= {tol['min_cosine']:.4f})"
+            )
+        # Argmax agreement (if logits are available).
+        alt_logits = getattr(alt_out, "logits", None)
+        if base_argmax is not None and alt_logits is not None:
+            alt_argmax = alt_logits.float()[mask_b].argmax(dim=-1)
+            agreement = (base_argmax == alt_argmax).float().mean().item()
+            if agreement < tol["min_argmax_agreement"]:
+                failures.append(
+                    f"{backend}: logits argmax agreement vs sdpa = {agreement:.4f} "
+                    f"(tol >= {tol['min_argmax_agreement']:.4f})"
+                )
+        del alt, alt_out
+        torch.cuda.empty_cache()
+
+    assert not failures, f"{model_key} (bf16 downstream): backend consistency failed:\n" + "\n".join(failures)
 
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("model_key", list(BACKEND_CONSISTENCY_FP32_MATRIX.keys()))
 def test_backend_consistency_fp32(model_key: str) -> None:
-    """fp32 backend parity: sdpa vs flex. kernels_flash does not support fp32."""
-    _run_backend_consistency(
-        model_key, torch.float32, "fp32",
-        BACKEND_CONSISTENCY_FP32_MATRIX[model_key], BACKEND_TOL_FP32,
+    """fp32 backend parity: sdpa vs flex. Strict raw-value agreement.
+
+    kernels_flash is excluded: its ops reject fp32 at the kernel level.
+    """
+    _run_backend_consistency_fp32(
+        model_key,
+        BACKEND_CONSISTENCY_FP32_MATRIX[model_key],
+        BACKEND_TOL_FP32,
     )
 
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("model_key", list(BACKEND_CONSISTENCY_BF16_MATRIX.keys()))
-def test_backend_consistency_bf16(model_key: str) -> None:
-    """bf16 backend parity: sdpa vs flex vs kernels_flash (kernels_flash is fp16/bf16 only)."""
-    _run_backend_consistency(
-        model_key, torch.bfloat16, "bf16",
-        BACKEND_CONSISTENCY_BF16_MATRIX[model_key], BACKEND_TOL_BF16,
+def test_backend_consistency_bf16_downstream(model_key: str) -> None:
+    """bf16 backend parity: sdpa vs flex vs kernels_flash at the downstream level.
+
+    In bf16, different attention kernels produce meaningfully different raw
+    hidden states (tiling / reduction order; well-documented in the legacy
+    compliance test). What matters for downstream users is whether:
+
+    - mean-pooled embeddings (classification / regression use) agree in
+      direction (cosine similarity)
+    - top-1 argmax predictions (MLM use) agree
+
+    Both are checked here with per-backend thresholds.
+    """
+    _run_backend_consistency_bf16_downstream(
+        model_key,
+        BACKEND_CONSISTENCY_BF16_MATRIX[model_key],
+        BACKEND_TOL_BF16_DOWNSTREAM,
     )
 
 
