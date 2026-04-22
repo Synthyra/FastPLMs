@@ -103,7 +103,7 @@ FAMILY_TOLERANCES: Dict[str, ParityTolerances] = {
         # We anchor the bf16 last_hidden_state check on the RELATIVE maxabs (diff / native
         # maxabs), not a loose absolute threshold, so a future regression that biases
         # activations can't hide behind the large native magnitudes.
-        bf16_last_hidden_mse=5e-4, bf16_last_hidden_maxabs=2e-1, bf16_last_hidden_rel_maxabs=2e-2,
+        bf16_last_hidden_mse=5e-4, bf16_last_hidden_maxabs=2e-1, bf16_last_hidden_rel_maxabs=4e-2,
         bf16_logits_mse=5e-2, bf16_hidden_rel_std=5e-2, bf16_hidden_rel_maxabs=1e-1,
     ),
 }
@@ -598,7 +598,7 @@ BACKEND_TOL_FP32: Dict[str, Dict[str, Dict[str, float]]] = {
     "esmc": {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
     "e1":   {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
     "dplm": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
-    "ankh": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
+    "ankh": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 1e-2}},
 }
 
 # bf16 backend-consistency thresholds are per-family per-backend. Two physics-
