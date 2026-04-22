@@ -94,6 +94,18 @@ FAMILY_TOLERANCES: Dict[str, ParityTolerances] = {
         bf16_hidden_rel_std=1e-1, bf16_hidden_rel_maxabs=1e-1,
     ),
     "dplm": ParityTolerances(),
+    "dplm2": ParityTolerances(
+        # DPLM2 encoder is bit-identical to native's ESM backbone on pure AA
+        # input (same weights; ModifiedRotaryEmbedding falls through to vanilla
+        # rotary when no packed multimodal layout is detected). Logits differ
+        # by construction (head is separately learned); logits parity is
+        # skipped via _family_has_head_mismatch.
+        fp32_last_hidden_mse=1e-12, fp32_last_hidden_maxabs=1e-5, fp32_last_hidden_rel_maxabs=1e-5,
+        fp32_hidden_rel_std=1e-5, fp32_hidden_rel_maxabs=1e-5,
+        # fp32_logits_mse is unused (skipped) but kept for dataclass defaults.
+        bf16_last_hidden_mse=1e-5, bf16_last_hidden_maxabs=2e-2, bf16_last_hidden_rel_maxabs=3e-2,
+        bf16_hidden_rel_std=1e-2, bf16_hidden_rel_maxabs=5e-2,
+    ),
     "ankh": ParityTolerances(
         fp32_last_hidden_mse=1e-12, fp32_last_hidden_maxabs=1e-5, fp32_last_hidden_rel_maxabs=1e-5,
         fp32_logits_mse=1e-4,
@@ -109,8 +121,41 @@ FAMILY_TOLERANCES: Dict[str, ParityTolerances] = {
 }
 
 EXPECTED_WEIGHT_EXTRAS: Dict[str, set] = {
+    # fast has these keys, native does not
     "ankh": {"lm_head.weight"},
 }
+
+EXPECTED_NATIVE_EXTRAS: Dict[str, set] = {
+    # native has these keys, fast does not
+    # DPLM2: native preserves the pretrained contact-prediction head that the
+    # DPLM2 authors shipped on top of the ESM2 backbone; the FastPLMs variant
+    # strips it because FastPLMs DPLM2 is an MLM-only model.
+    "dplm2": {
+        "esm.contact_head.regression.weight",
+        "esm.contact_head.regression.bias",
+    },
+}
+
+EXPECTED_VALUE_MISMATCHES: Dict[str, set] = {
+    # Shared key names whose values are expected to differ for structural
+    # (non-bug) reasons. Logits parity is also skipped for these families.
+    # DPLM2: native has `tie_word_embeddings=True` so `lm_head.decoder.weight`
+    # is an alias for `esm.embeddings.word_embeddings.weight`. FastPLMs DPLM2
+    # has `tie_word_embeddings=False` and stores a separately-learned head.
+    # Word embeddings themselves match exactly; only the head value differs.
+    "dplm2": {"lm_head.decoder.weight"},
+}
+
+
+def _family_has_head_mismatch(model_key: str) -> bool:
+    """Return True if fast and native have known lm_head / output-head differences,
+    so logits parity should not be asserted.
+    """
+    return bool(
+        EXPECTED_WEIGHT_EXTRAS.get(model_key)
+        or EXPECTED_NATIVE_EXTRAS.get(model_key)
+        or EXPECTED_VALUE_MISMATCHES.get(model_key)
+    )
 
 
 FIXED_SEQUENCE_LENGTHS = [16, 32, 48, 64, 80, 96, 112, 128]
@@ -281,7 +326,7 @@ def test_tokenizer_parity(model_key: str) -> None:
 # -----------------------------------------------------------------------------
 
 @pytest.mark.gpu
-@pytest.mark.parametrize("model_key", [k for k in MODEL_REGISTRY if k != "dplm2"])
+@pytest.mark.parametrize("model_key", list(MODEL_REGISTRY.keys()))
 def test_weight_parity_fp32(model_key: str) -> None:
     device = torch.device("cuda")
     fast = load_fast(model_key, device, torch.float32)
@@ -291,27 +336,46 @@ def test_weight_parity_fp32(model_key: str) -> None:
     native_sd = native_model.model.state_dict() if hasattr(native_model, "model") else native_model.state_dict()
 
     expected_fast_extras = EXPECTED_WEIGHT_EXTRAS.get(model_key, set())
+    expected_native_extras = EXPECTED_NATIVE_EXTRAS.get(model_key, set())
+    expected_value_mismatches = EXPECTED_VALUE_MISMATCHES.get(model_key, set())
+
     fast_keys = set(fast_sd.keys()) - expected_fast_extras
-    native_keys = set(native_sd.keys())
+    native_keys = set(native_sd.keys()) - expected_native_extras
     assert fast_keys == native_keys, (
-        f"{model_key}: state_dict key sets differ (after allowing expected extras={expected_fast_extras}).\n"
-        f"  only_fast: {sorted(fast_keys - native_keys)[:5]}\n"
-        f"  only_native: {sorted(native_keys - fast_keys)[:5]}"
+        f"{model_key}: state_dict key sets differ\n"
+        f"  (allowlisted fast extras: {expected_fast_extras})\n"
+        f"  (allowlisted native extras: {expected_native_extras})\n"
+        f"  only_fast (unexpected): {sorted(fast_keys - native_keys)[:5]}\n"
+        f"  only_native (unexpected): {sorted(native_keys - fast_keys)[:5]}"
     )
 
     shape_mismatches: List[str] = []
     value_mismatches: List[str] = []
+    unexpected_value_matches: List[str] = []
     for name in sorted(fast_keys & native_keys):
         f = fast_sd[name]
         n = native_sd[name]
         if f.shape != n.shape:
             shape_mismatches.append(f"{name}: {tuple(f.shape)} vs {tuple(n.shape)}")
             continue
-        if not torch.equal(f.float(), n.float()):
-            max_abs = (f.float() - n.float()).abs().max().item()
-            value_mismatches.append(f"{name}: max|Δ|={max_abs:.3e}")
+        values_equal = torch.equal(f.float(), n.float())
+        if name in expected_value_mismatches:
+            # This key is allowed to differ. Sanity-check it really does differ
+            # (catches the case where someone adds it to the allowlist by mistake
+            # and values actually match -- meaning the allowlist is stale).
+            if values_equal:
+                unexpected_value_matches.append(name)
+        else:
+            if not values_equal:
+                max_abs = (f.float() - n.float()).abs().max().item()
+                value_mismatches.append(f"{name}: max|Δ|={max_abs:.3e}")
     assert not shape_mismatches, f"{model_key}: shape mismatches:\n" + "\n".join(shape_mismatches[:10])
     assert not value_mismatches, f"{model_key}: value mismatches:\n" + "\n".join(value_mismatches[:10])
+    assert not unexpected_value_matches, (
+        f"{model_key}: the following keys were allowlisted in EXPECTED_VALUE_MISMATCHES "
+        f"but actually match natively. Remove them from the allowlist:\n"
+        + "\n".join(unexpected_value_matches)
+    )
 
     del fast, native_model
     torch.cuda.empty_cache()
@@ -375,10 +439,13 @@ def _run_forward_parity(model_key: str, dtype: torch.dtype, tol: ParityTolerance
         f"A systematic bias may have been introduced even though absolute error looks small."
     )
 
-    # Skip logits parity when the fast model has an LM head that native doesn't
-    # (e.g. Ankh: fast is ForMaskedLM with its own head; native T5EncoderModel has
-    # no head and testing/official/ankh.py bolts on a fresh tied-weight head).
-    has_head_mismatch = bool(EXPECTED_WEIGHT_EXTRAS.get(model_key))
+    # Skip logits parity when fast and native have a known head difference.
+    # - ANKH: fast is ForMaskedLM with its own head; native T5EncoderModel has
+    #   no head and testing/official/ankh.py bolts on a fresh tied-weight head.
+    # - DPLM2: native ties lm_head to word embeddings; FastPLMs stores a
+    #   separately-learned head (see EXPECTED_VALUE_MISMATCHES). Encoder hidden
+    #   states match; logits by construction do not.
+    has_head_mismatch = _family_has_head_mismatch(model_key)
     if not has_head_mismatch and hasattr(fout, "logits") and hasattr(nout, "logits") and fout.logits is not None and nout.logits is not None:
         logits_diff = (fout.logits - nout.logits).float()[mask_b]
         logits_mse = (logits_diff ** 2).mean().item()
@@ -421,7 +488,7 @@ def _run_forward_parity(model_key: str, dtype: torch.dtype, tol: ParityTolerance
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("scenario", list(PADDING_SCENARIOS.keys()))
-@pytest.mark.parametrize("model_key", [k for k in MODEL_REGISTRY if k != "dplm2"])
+@pytest.mark.parametrize("model_key", list(MODEL_REGISTRY.keys()))
 def test_forward_parity_fp32(model_key: str, scenario: str) -> None:
     tol = FAMILY_TOLERANCES[model_key]
     _run_forward_parity(model_key, torch.float32, tol, "fp32", scenario=scenario)
@@ -429,7 +496,7 @@ def test_forward_parity_fp32(model_key: str, scenario: str) -> None:
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("scenario", list(PADDING_SCENARIOS.keys()))
-@pytest.mark.parametrize("model_key", [k for k in MODEL_REGISTRY if k != "dplm2"])
+@pytest.mark.parametrize("model_key", list(MODEL_REGISTRY.keys()))
 def test_forward_parity_bf16(model_key: str, scenario: str) -> None:
     tol = FAMILY_TOLERANCES[model_key]
     _run_forward_parity(model_key, torch.bfloat16, tol, "bf16", scenario=scenario)
@@ -448,7 +515,7 @@ PADDING_BACKENDS: Tuple[str, ...] = ("sdpa", "flex")
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("backend", PADDING_BACKENDS)
-@pytest.mark.parametrize("model_key", [k for k in MODEL_REGISTRY if k != "dplm2" and MODEL_REGISTRY[k]["uses_tokenizer"]])
+@pytest.mark.parametrize("model_key", [k for k in MODEL_REGISTRY if MODEL_REGISTRY[k]["uses_tokenizer"]])
 def test_padding_does_not_pollute_valid_positions_fp32(model_key: str, backend: str) -> None:
     """A padded batch's valid-position `last_hidden_state` must match the same
     sequence run unpadded.
@@ -522,6 +589,7 @@ BACKEND_CONSISTENCY_FP32_MATRIX: Dict[str, Tuple[str, ...]] = {
     "esmc": ("flex",),
     "e1": ("flex",),
     "dplm": ("flex",),
+    "dplm2": ("flex",),
     "ankh": ("flex",),
 }
 
@@ -530,6 +598,7 @@ BACKEND_CONSISTENCY_BF16_MATRIX: Dict[str, Tuple[str, ...]] = {
     "esmc": ("kernels_flash", "flex"),
     "e1": ("kernels_flash", "flex"),
     "dplm": ("kernels_flash", "flex"),
+    "dplm2": ("kernels_flash", "flex"),
     "ankh": ("flex",),
 }
 
@@ -594,11 +663,12 @@ def _get_resolved_backend(model: nn.Module, model_key: str) -> str:
 # more per-position rounding than shallow ones (ESM2-8M 6 layers), so absolute
 # maxabs has to be loosened with depth even though rel_maxabs stays tight.
 BACKEND_TOL_FP32: Dict[str, Dict[str, Dict[str, float]]] = {
-    "esm2": {"flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3}},
-    "esmc": {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
-    "e1":   {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
-    "dplm": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
-    "ankh": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 1e-2}},
+    "esm2":  {"flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3}},
+    "esmc":  {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
+    "e1":    {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
+    "dplm":  {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
+    "dplm2": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
+    "ankh":  {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 1e-2}},
 }
 
 # bf16 backend-consistency thresholds are per-family per-backend. Two physics-
@@ -640,6 +710,13 @@ BACKEND_TOL_BF16_DOWNSTREAM: Dict[str, Dict[str, Dict[str, Optional[float]]]] = 
         "kernels_flash": {"min_cosine": None,  "min_argmax_agreement": 0.90},
     },
     "dplm": {
+        "flex":          {"min_cosine": 0.995, "min_argmax_agreement": 0.95},
+        "kernels_flash": {"min_cosine": None,  "min_argmax_agreement": 0.95},
+    },
+    "dplm2": {
+        # DPLM2 has a separately-learned lm_head (native ties, fast doesn't --
+        # see EXPECTED_VALUE_MISMATCHES), so argmax agreement across backends is
+        # evaluated on the FAST model's own head; backends must agree with each other.
         "flex":          {"min_cosine": 0.995, "min_argmax_agreement": 0.95},
         "kernels_flash": {"min_cosine": None,  "min_argmax_agreement": 0.95},
     },
@@ -843,13 +920,15 @@ def test_backend_consistency_bf16_downstream(model_key: str) -> None:
 
 # Per-family absolute/max-abs tolerances for the mean-pooled embedding.
 EMBED_DATASET_TOL: Dict[str, Dict[str, float]] = {
-    "esm2": {"mse": 5e-8, "maxabs": 5e-3},
-    "esmc": {"mse": 5e-8, "maxabs": 5e-3},
-    "dplm": {"mse": 5e-8, "maxabs": 5e-3},
-    "e1":   {"mse": 5e-6, "maxabs": 2e-2},   # Grouped-query attention + block-causal GLOBAL layers propagate rounding
+    "esm2":  {"mse": 5e-8, "maxabs": 5e-3},
+    "esmc":  {"mse": 5e-8, "maxabs": 5e-3},
+    "dplm":  {"mse": 5e-8, "maxabs": 5e-3},
+    # DPLM2: encoder output identical to ESM backbone on AA input; mean-pool parity tight.
+    "dplm2": {"mse": 5e-8, "maxabs": 5e-3},
+    "e1":    {"mse": 5e-6, "maxabs": 2e-2},   # Grouped-query attention + block-causal GLOBAL layers propagate rounding
     # ANKH-base post-final-RMSNorm activations are modest (~O(1)) but the
     # mean-pool aggregates over the full sequence; 5e-3 maxabs is plenty tight.
-    "ankh": {"mse": 5e-8, "maxabs": 5e-3},
+    "ankh":  {"mse": 5e-8, "maxabs": 5e-3},
 }
 
 PIPELINE_MODEL_KEYS = [k for k in EMBED_DATASET_TOL if k in MODEL_REGISTRY]
