@@ -505,12 +505,26 @@ def test_padding_does_not_pollute_valid_positions_fp32(model_key: str, backend: 
 
 # -----------------------------------------------------------------------------
 # Attention backend consistency (fast-only; all backends must agree)
+#
+# The supported dtypes differ by backend:
+# - sdpa: fp32, fp16, bf16 all fine
+# - flex: fp32, fp16, bf16 all fine
+# - kernels_flash: fp16 / bf16 only (flash kernel ops reject fp32)
+#
+# So we split the consistency check into fp32 (sdpa vs flex) and bf16 (all three
+# supported backends). ANKH is special: its encoder silently downgrades
+# kernels_flash to flex because T5 relative position bias can't be fed to flash.
 # -----------------------------------------------------------------------------
 
-# ANKH's modeling code intentionally falls back from kernels_flash to flex
-# (T5 relative position bias is incompatible with flash kernels). We therefore
-# only ask ANKH to compare sdpa vs flex.
-BACKEND_CONSISTENCY_MATRIX: Dict[str, Tuple[str, ...]] = {
+BACKEND_CONSISTENCY_FP32_MATRIX: Dict[str, Tuple[str, ...]] = {
+    "esm2": ("flex",),
+    "esmc": ("flex",),
+    "e1": ("flex",),
+    "dplm": ("flex",),
+    "ankh": ("flex",),
+}
+
+BACKEND_CONSISTENCY_BF16_MATRIX: Dict[str, Tuple[str, ...]] = {
     "esm2": ("kernels_flash", "flex"),
     "esmc": ("kernels_flash", "flex"),
     "e1": ("kernels_flash", "flex"),
@@ -561,21 +575,30 @@ def _get_resolved_backend(model: nn.Module, model_key: str) -> str:
     return model.config.attn_backend
 
 
-@pytest.mark.gpu
-@pytest.mark.parametrize("model_key", list(BACKEND_CONSISTENCY_MATRIX.keys()))
-def test_backend_consistency_fp32(model_key: str) -> None:
-    """Every supported backend for this family must produce the same last_hidden_state
-    as SDPA on fixed inputs (to documented tolerance).
+# Per-backend absolute and relative tolerances by dtype. kernels_flash is
+# approximate by design; flex is near-exact to sdpa. bf16 tolerances are looser
+# than fp32 because of dtype rounding in the compared baseline itself.
+BACKEND_TOL_FP32: Dict[str, Dict[str, float]] = {
+    "flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3},
+}
+BACKEND_TOL_BF16: Dict[str, Dict[str, float]] = {
+    "flex": {"mse": 5e-4, "maxabs": 5e-2, "rel_maxabs": 5e-2},
+    "kernels_flash": {"mse": 5e-3, "maxabs": 2e-1, "rel_maxabs": 1e-1},
+}
 
-    SDPA is the numerical ground truth (exact / memory-efficient). kernels_flash
-    uses online softmax and tiling so its outputs differ at the 1e-3 level; flex
-    is near-exact (within rounding). The tolerances below are set accordingly.
-    """
+
+def _run_backend_consistency(
+    model_key: str,
+    dtype: torch.dtype,
+    dtype_label: str,
+    backends: Tuple[str, ...],
+    backend_tol: Dict[str, Dict[str, float]],
+) -> None:
     device = torch.device("cuda")
     random.seed(SEED)
     sequences = generate_fixed_sequences()
 
-    baseline = load_fast(model_key, device, torch.float32)
+    baseline = load_fast(model_key, device, dtype)
     base_resolved = _apply_backend(baseline, "sdpa", model_key)
     assert base_resolved == "sdpa", f"{model_key}: sdpa baseline resolved to {base_resolved} (expected 'sdpa')"
 
@@ -589,26 +612,19 @@ def test_backend_consistency_fp32(model_key: str) -> None:
     del baseline, base_out
     torch.cuda.empty_cache()
 
-    # Per-backend absolute and relative tolerances. kernels_flash is approximate
-    # by design, so its tolerance is looser. Flex is near-exact in fp32.
-    BACKEND_TOL: Dict[str, Dict[str, float]] = {
-        "flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3},
-        "kernels_flash": {"mse": 1e-3, "maxabs": 1e-1, "rel_maxabs": 5e-2},
-    }
-
     failures: List[str] = []
-    for backend in BACKEND_CONSISTENCY_MATRIX[model_key]:
-        alt = load_fast(model_key, device, torch.float32)
+    for backend in backends:
+        alt = load_fast(model_key, device, dtype)
         resolved = _apply_backend(alt, backend, model_key)
         if resolved is None:
             del alt
             torch.cuda.empty_cache()
-            pytest.skip(f"{model_key}: backend {backend} not available")
+            pytest.skip(f"{model_key} ({dtype_label}): backend {backend} not available")
         if resolved != backend:
             failures.append(
                 f"{backend}: requested backend was silently resolved to '{resolved}'. "
                 f"If this is an intentional fallback (e.g. ANKH kernels_flash -> flex), "
-                f"remove {backend!r} from BACKEND_CONSISTENCY_MATRIX[{model_key!r}]."
+                f"remove {backend!r} from the consistency matrix for {model_key!r}."
             )
             del alt
             torch.cuda.empty_cache()
@@ -621,7 +637,7 @@ def test_backend_consistency_fp32(model_key: str) -> None:
         mse = (diff ** 2).mean().item()
         maxabs = diff.abs().max().item()
         rel_maxabs = maxabs / base_maxabs if base_maxabs > 1e-12 else 0.0
-        tol = BACKEND_TOL[backend]
+        tol = backend_tol[backend]
         if mse > tol["mse"] or maxabs > tol["maxabs"] or rel_maxabs > tol["rel_maxabs"]:
             failures.append(
                 f"{backend}: mse={mse:.3e} (tol={tol['mse']:.3e}), "
@@ -631,7 +647,27 @@ def test_backend_consistency_fp32(model_key: str) -> None:
         del alt, alt_out
         torch.cuda.empty_cache()
 
-    assert not failures, f"{model_key}: backend consistency failed:\n" + "\n".join(failures)
+    assert not failures, f"{model_key} ({dtype_label}): backend consistency failed:\n" + "\n".join(failures)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("model_key", list(BACKEND_CONSISTENCY_FP32_MATRIX.keys()))
+def test_backend_consistency_fp32(model_key: str) -> None:
+    """fp32 backend parity: sdpa vs flex. kernels_flash does not support fp32."""
+    _run_backend_consistency(
+        model_key, torch.float32, "fp32",
+        BACKEND_CONSISTENCY_FP32_MATRIX[model_key], BACKEND_TOL_FP32,
+    )
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("model_key", list(BACKEND_CONSISTENCY_BF16_MATRIX.keys()))
+def test_backend_consistency_bf16(model_key: str) -> None:
+    """bf16 backend parity: sdpa vs flex vs kernels_flash (kernels_flash is fp16/bf16 only)."""
+    _run_backend_consistency(
+        model_key, torch.bfloat16, "bf16",
+        BACKEND_CONSISTENCY_BF16_MATRIX[model_key], BACKEND_TOL_BF16,
+    )
 
 
 # -----------------------------------------------------------------------------
