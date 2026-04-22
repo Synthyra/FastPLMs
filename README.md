@@ -271,6 +271,7 @@ FastPLMs includes a pytest-based test suite under `testing/` covering correctnes
 | **Backend consistency** | SDPA, Flex, and Flash backends produce equivalent predictions (>= 95% agreement) | `gpu` |
 | **Weight compliance** | FastPLM weights are bit-exact with the original implementations (ESM2, ESMC, E1, DPLM) | `slow`, `gpu` |
 | **Forward compliance** | Forward pass logits/predictions match the originals within tolerance | `slow`, `gpu` |
+| **Rigorous parity** | Per-layer fp32 + bf16 hidden-state and last_hidden_state parity, padding-isolation, tokenizer parity, embed_dataset pipeline parity. Run per family in its own Docker image. | `gpu` |
 | **NaN stability** | Batched inference with padding produces no NaN in real-token embeddings | `gpu` |
 | **Batch-single match** | Batch and single-item embedding produce identical results | `gpu` |
 | **Full model suite** | All of the above across every checkpoint (8M through 3B) | `gpu`, `large` |
@@ -279,41 +280,69 @@ FastPLMs includes a pytest-based test suite under `testing/` covering correctnes
 
 ### Running Tests with Docker
 
+FastPLMs uses a per-family Docker setup. A single shared base image (`fastplms-base`) holds torch + transformers + the FastPLMs source, and one image per model family (`fastplms-esm2`, `fastplms-esm_plusplus`, `fastplms-e1`, `fastplms-dplm`, `fastplms-dplm2`, `fastplms-ankh`) layers on top with that family's native reference package. This isolates conflicting dependencies (e.g. EvolutionaryScale `esm` vs `fair-esm`, DPLM's torchtext pin) and keeps each image small.
+
 ```bash
-# Build the image
+# Initialize submodules (required before building Docker)
+git submodule update --init --recursive
+
+# Build base + every family image
+./build_images.sh
+
+# Build a single family
+./build_images.sh esm2
+./build_images.sh esm_plusplus
+```
+
+Run the parity / compliance tests for one family inside its image:
+
+```bash
+# ESM2
+docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm2 \
+    python -m pytest /workspace/testing/test_parity.py -k esm2 -v
+
+# ESM++ (model_key is "esmc")
+docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm_plusplus \
+    python -m pytest /workspace/testing/test_parity.py -k esmc -v
+
+# E1, DPLM, DPLM2, ANKH
+for fam in e1 dplm dplm2 ankh; do
+    docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-$fam \
+        python -m pytest /workspace/testing/test_parity.py -k $fam -v
+done
+```
+
+The legacy monolithic `Dockerfile` (image tag `fastplms`) is still supported for the broader test suites that don't need native package isolation:
+
+```bash
 docker build -t fastplms .
 
 # Fast tests (small models, no compliance, no structure)
-docker run --gpus all fastplms python -m pytest /app/testing/ -m "gpu and not slow and not large and not structure" -v
+docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "gpu and not slow and not large and not structure" -v
 
 # All sequence model tests except 3B
-docker run --gpus all fastplms python -m pytest /app/testing/ -m "not large and not structure" -v
+docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not large and not structure" -v
 
 # Full suite including 3B models (requires 40+ GB VRAM)
-docker run --gpus all fastplms python -m pytest /app/testing/ -m "not structure" -v
+docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not structure" -v
 
 # Structure models only (Boltz2, ESMFold)
-docker run --gpus all fastplms python -m pytest /app/testing/ -m "structure" -v
-
-# Everything
-docker run --gpus all fastplms python -m pytest /app/testing/ -v
-
-# Single model family
-docker run --gpus all fastplms python -m pytest /app/testing/ -k esm2 -v
+docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "structure" -v
 ```
 
-On Windows, replace `${PWD}` with `$(pwd)`.
+On Windows, replace `$(pwd)` with `${PWD}`. **Always pass `--ipc=host`** with PyTorch.
 
-### Compliance Test Dependencies
+### Compliance / Native Reference Dependencies
 
-Weight and forward compliance tests compare FastPLM outputs against the original model implementations. These require additional packages:
+The parity and compliance tests compare FastPLM outputs against the original model implementations. Each per-family Docker image installs only the deps it needs; outside Docker you can install them piecewise:
 
-| Dependency | Purpose | Install |
+| Dependency | Used by | Install |
 | :--- | :--- | :--- |
-| `esm` | EvolutionaryScale's ESMC reference models | `pip install esm` |
-| `E1` | Profluent-Bio's E1 reference models (Python >= 3.12) | `pip install E1 @ git+https://github.com/Profluent-AI/E1.git` |
+| `cloudpathlib`, `zstd`, `biotite` (+ `official/esm` submodule on `sys.path`) | ESM++ / ESMC | provided by `Dockerfile.esm_plusplus`; the EvolutionaryScale `esm` package itself is **not** pip-installed because it pins `transformers<4.53.0`. |
+| `E1` | E1 | `pip install -e official/e1` (or use `Dockerfile.e1`) |
+| `transformers` (`EsmForMaskedLM`, `T5EncoderModel`) | ESM2, DPLM, ANKH | already in `requirements.txt` |
 
-ESM2 and DPLM compliance use HuggingFace `transformers` directly (no extra packages). If a compliance dependency is not installed, those tests are skipped. All compliance dependencies are pre-installed in the Docker image.
+If a native dep is missing in your environment, the corresponding parity tests are skipped rather than failing.
 
 ### Throughput Benchmarks
 
@@ -351,23 +380,37 @@ git submodule update --init --recursive
 ```
 
 ### Docker (Recommended for GPU Testing)
-The Dockerfile includes CUDA 12.8, all Python dependencies, and official reference repos (E1, DPLM) installed from `official/` submodules for compliance testing.
+
+There are two Docker layouts; pick whichever matches your task.
+
+**Per-family layout (recommended for parity / compliance work).** A shared base image plus one image per model family, each with that family's native reference package isolated from the others. Build all of them once with the helper script:
 
 ```bash
-# Initialize submodules (required before building Docker)
 git submodule update --init --recursive
-
-# Build the image
-docker build -t fastplms .
-
-# Run all tests
-docker run --gpus all fastplms python -m pytest /app/testing/ -v
-
-# Interactive shell
-docker run --gpus all -v $(pwd):/workspace -it fastplms bash
+./build_images.sh                       # base + every family
+./build_images.sh esm2 esm_plusplus     # subset
 ```
 
-On Linux/macOS, replace `$(pwd)` with `${PWD}`.
+This produces `fastplms-base` and `fastplms-{esm2,esm_plusplus,e1,dplm,dplm2,ankh}`. Run a family's tests in its image:
+
+```bash
+docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm2 \
+    python -m pytest /workspace/testing/test_parity.py -k esm2 -v
+
+docker run --rm --gpus all --ipc=host -v $(pwd):/workspace -it fastplms-esm2 bash
+```
+
+**Monolithic layout (legacy, single image).** The original `Dockerfile` bundles every dependency that can coexist in one image. Convenient for the broad test suites and throughput benchmarks; not suitable when two families' native deps conflict (notably ESM++ vs `fair-esm`).
+
+```bash
+git submodule update --init --recursive
+docker build -t fastplms .
+
+docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -v
+docker run --gpus all --ipc=host -v $(pwd):/workspace -it fastplms bash
+```
+
+On Windows, replace `$(pwd)` with `${PWD}`. Always pass `--ipc=host` with PyTorch.
 
 ---
 
