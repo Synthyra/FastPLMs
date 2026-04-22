@@ -14,8 +14,7 @@ def main() -> int:
     native = EsmForMaskedLM.from_pretrained(
         "airkingbd/dplm2_150m", dtype=torch.float32, device_map=device,
     ).eval()
-    from transformers import AutoTokenizer
-    native_tok = AutoTokenizer.from_pretrained("airkingbd/dplm2_150m", trust_remote_code=True)
+    native_tok = EsmTokenizer.from_pretrained("airkingbd/dplm2_150m")
     fast_tok = fast.tokenizer
     native_cfg = AutoConfig.from_pretrained("airkingbd/dplm2_150m")
 
