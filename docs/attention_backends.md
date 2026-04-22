@@ -66,9 +66,15 @@ PyTorch's `flex_attention` (PyTorch >= 2.5) generates a fused Triton kernel cust
 
 Selects the best available backend in priority order: `kernels_flash` -> `flex` -> `sdpa`. Useful when you want maximum speed without manual configuration. The resolved backend may differ across machines depending on installed packages and GPU architecture.
 
+## Per-Family Caveats
+
+- **ANKH** supports only `sdpa` and `flex`. The flash-attention kernels can't accept the additive T5 relative position bias, so requesting `kernels_flash` (or `auto` resolving to it) silently falls back to `flex` (or `sdpa` if flex is unavailable). T5 attention is also unscaled (no `1/sqrt(d_kv)` factor) - the learned position bias absorbs the temperature.
+- **E1** uses a block-causal flex variant: bidirectional within a sequence, causal across sequences in a packed multi-sequence batch.
+- **DPLM2** packs amino-acid and structure tokens in the same sequence; the attention mask logic accounts for the multimodal layout but the backend choice is otherwise unchanged.
+
 ## Setting the Backend
 
-### At Load Time (ESM2, ESM++, E1)
+### At Load Time (ESM2, ESM++, E1, ANKH)
 
 The backend must be set on the config before calling `from_pretrained`:
 
@@ -82,9 +88,9 @@ model = AutoModelForMaskedLM.from_pretrained(
 )
 ```
 
-### After Load Time (DPLM, DPLM2)
+### After Load Time (DPLM, DPLM2, ANKH)
 
-DPLM and DPLM2 expose a mutable property that propagates to all attention layers:
+DPLM, DPLM2, and ANKH expose a mutable `attn_backend` property that propagates to all attention layers:
 
 ```python
 model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM-150M", trust_remote_code=True)
@@ -108,9 +114,11 @@ Different backends require different mask formats. The `get_attention_mask()` fu
 
 | Backend | Mask Format | Shape |
 |---------|-------------|-------|
-| SDPA | Float 4D mask (`-inf` for masked) | `(batch, 1, 1, seq_len)` |
+| SDPA | Boolean 4D mask (True = attend) for most families; ANKH uses a float additive mask (`0.0` valid, `-inf` padded) added to the relative position bias | `(batch, 1, 1, seq_len)` |
 | Flash | Boolean 2D mask + cumulative seq lengths | `(batch, seq_len)` |
 | Flex | `BlockMask` via `create_block_mask` | Opaque block mask object |
+
+> Note for additive mask construction: when building a float additive mask from a bool tensor, **don't** call `.masked_fill(mask, float("-inf"))` on the bool tensor itself - it returns a bool tensor (because `-inf` casts to `True`), silently dropping the mask. Allocate a float zeros tensor first, then `masked_fill_(...)` on that.
 
 ## Interaction with `torch.compile`
 

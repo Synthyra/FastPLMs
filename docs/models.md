@@ -2,7 +2,7 @@
 
 This document covers each model family supported by FastPLMs: loading, configuration, special handling, and available checkpoints.
 
-All sequence models (ESM2, ESM++, E1, DPLM, DPLM2) share the same embedding pipeline via `EmbeddingMixin` and support the same set of attention backends. Structure prediction models (Boltz2, ESMFold) have their own APIs.
+All sequence models (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) share the same embedding pipeline via `EmbeddingMixin`. They support most attention backends, with one exception: ANKH supports only `sdpa` and `flex` (T5 relative position bias is incompatible with the flash-attention kernels). Structure prediction models (Boltz2, ESMFold) have their own APIs.
 
 ---
 
@@ -229,6 +229,48 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM2-150M", trust_remote
 | DPLM2-150M | `Synthyra/DPLM2-150M` | `airkingbd/dplm2_150m` |
 | DPLM2-650M | `Synthyra/DPLM2-650M` | `airkingbd/dplm2_650m` |
 | DPLM2-3B | `Synthyra/DPLM2-3B` | `airkingbd/dplm2_3b` |
+
+---
+
+## ANKH
+
+**Organization:** Elnaggar Lab
+**Architecture:** T5-style encoder with bidirectional gated GELU FFN and learned relative position bias (bucketed)
+**Checkpoints:** Base, Large, ANKH2-Large, ANKH3-Large, ANKH3-XL
+
+### Loading
+
+```python
+from transformers import AutoModelForMaskedLM, AutoConfig
+
+# Default (SDPA)
+model = AutoModelForMaskedLM.from_pretrained("Synthyra/ANKH_base", trust_remote_code=True)
+
+# Flex backend (block-mask aware)
+config = AutoConfig.from_pretrained("Synthyra/ANKH_base", trust_remote_code=True)
+config.attn_backend = "flex"
+model = AutoModelForMaskedLM.from_pretrained("Synthyra/ANKH_base", config=config, trust_remote_code=True)
+```
+
+### Key Details
+
+- Uses the ANKH T5 tokenizer (`AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")`)
+- Tokenizer accessible via `model.tokenizer`
+- Backend must be set on the config **before** `from_pretrained`
+- **Attention is unscaled** (no `1/sqrt(d_kv)` factor). T5 trains without scaling; the learned relative position bias absorbs the temperature.
+- Only `sdpa` and `flex` are supported. Requesting `kernels_flash` falls back to `flex` (or `sdpa` if flex is unavailable) because flash kernels can't accept additive position bias.
+- Layer 0 owns the relative-position-bias `nn.Embedding`; subsequent layers receive the precomputed bias through the forward call.
+- The native ANKH checkpoint is a T5 encoder-decoder; FastPLMs uses the encoder only and bolts on a separate `lm_head` for the `ForMaskedLM` variant. For weight-parity comparisons against `transformers.T5EncoderModel`, the FastPLMs `lm_head.weight` is allowlisted as an expected extra parameter.
+
+### Available Checkpoints
+
+| Checkpoint | HuggingFace ID | Official Reference |
+|------------|----------------|-------------------|
+| ANKH-base | `Synthyra/ANKH_base` | `ElnaggarLab/ankh-base` |
+| ANKH-large | `Synthyra/ANKH_large` | `ElnaggarLab/ankh-large` |
+| ANKH2-large | `Synthyra/ANKH2_large` | `ElnaggarLab/ankh2-ext2` |
+| ANKH3-large | `Synthyra/ANKH3_large` | `ElnaggarLab/ankh3-large` |
+| ANKH3-XL | `Synthyra/ANKH3_xl` | `ElnaggarLab/ankh3-xl` |
 
 ---
 
