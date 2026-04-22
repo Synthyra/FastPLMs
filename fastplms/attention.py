@@ -89,15 +89,34 @@ def _kernels_flash_forward(
     key_states: torch.Tensor,
     value_states: torch.Tensor,
     causal: bool = False,
+    softmax_scale: Optional[float] = None,
 ) -> torch.Tensor:
+    """Flash-attention forward, optionally overriding the softmax scale.
+
+    When `softmax_scale is None`, the flash kernel applies its default
+    `1 / sqrt(head_dim)`. Pass `softmax_scale=1.0` if the caller has already
+    pre-scaled Q (the convention used by ESM2, DPLM, DPLM2, E1, ESMFold).
+    Failing to override when Q is pre-scaled produces DOUBLE scaling and
+    catastrophic downstream drift -- on DPLM-150M (30 layers) this was observed
+    as pooled-embedding cosine ~-0.12 and argmax agreement ~0.27 vs sdpa.
+    """
     assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
     if FLASH_KERNEL_VARIANT == "flash_attn2":
-        return FLASH_KERNEL.fwd(q=query_states, k=key_states, v=value_states, is_causal=causal)[0]
+        return FLASH_KERNEL.fwd(
+            q=query_states, k=key_states, v=value_states,
+            softmax_scale=softmax_scale, is_causal=causal,
+        )[0]
     if FLASH_KERNEL_VARIANT == "flash_attn3":
         try:
-            output = FLASH_KERNEL.flash_attn_func(q=query_states, k=key_states, v=value_states, causal=causal)
+            output = FLASH_KERNEL.flash_attn_func(
+                q=query_states, k=key_states, v=value_states,
+                softmax_scale=softmax_scale, causal=causal,
+            )
         except TypeError:
-            output = FLASH_KERNEL.flash_attn_func(query_states, key_states, value_states, 0.0, None, causal)
+            output = FLASH_KERNEL.flash_attn_func(
+                query_states, key_states, value_states,
+                0.0, softmax_scale, causal,
+            )
         if isinstance(output, tuple):
             return output[0]
         return output
@@ -113,14 +132,20 @@ def _kernels_flash_varlen_forward(
     max_seqlen_in_batch_q: int,
     max_seqlen_in_batch_k: int,
     causal: bool = False,
+    softmax_scale: Optional[float] = None,
 ) -> torch.Tensor:
+    """Varlen flash-attention forward, optionally overriding the softmax scale.
+
+    See `_kernels_flash_forward` docstring for why `softmax_scale=1.0` must be
+    passed when Q has been pre-scaled by the caller.
+    """
     assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
     if FLASH_KERNEL_VARIANT == "flash_attn2":
         return FLASH_KERNEL.varlen_fwd(
             q=query_states, k=key_states, v=value_states,
             cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k,
             max_seqlen_q=max_seqlen_in_batch_q, max_seqlen_k=max_seqlen_in_batch_k,
-            is_causal=causal,
+            softmax_scale=softmax_scale, is_causal=causal,
         )[0]
     if FLASH_KERNEL_VARIANT == "flash_attn3":
         try:
@@ -128,14 +153,14 @@ def _kernels_flash_varlen_forward(
                 q=query_states, k=key_states, v=value_states,
                 cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k,
                 max_seqlen_q=max_seqlen_in_batch_q, max_seqlen_k=max_seqlen_in_batch_k,
-                causal=causal,
+                softmax_scale=softmax_scale, causal=causal,
             )
         except TypeError:
             output = FLASH_KERNEL.flash_attn_varlen_func(
                 query_states, key_states, value_states,
                 cu_seqlens_q, cu_seqlens_k,
                 max_seqlen_in_batch_q, max_seqlen_in_batch_k,
-                0.0, None, causal,
+                0.0, softmax_scale, causal,
             )
         if isinstance(output, tuple):
             return output[0]
@@ -216,7 +241,21 @@ def kernels_flash_attention_func(
     value_states: torch.Tensor,
     attention_mask_2d: Optional[torch.Tensor] = None,
     causal: bool = False,
+    softmax_scale: Optional[float] = None,
 ) -> torch.Tensor:
+    """Public flash-attention entry point with optional padding handling.
+
+    `softmax_scale`:
+        None -> kernel applies its default `1 / sqrt(head_dim)`.
+        float -> kernel uses the given scale (pass 1.0 when Q is pre-scaled
+        by the caller).
+
+    IMPORTANT: if your family multiplies Q by `1/sqrt(head_dim)` before calling
+    this function (as ESM2, DPLM, DPLM2, E1, and ESMFold do) you MUST pass
+    `softmax_scale=1.0`. Otherwise the kernel applies its default scale ON TOP
+    of the caller's, producing effective scale `1/head_dim` and catastrophic
+    downstream drift that compounds across layers.
+    """
     assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
     if not causal and attention_mask_2d is not None:
         batch_size, q_len = query_states.shape[:2]
@@ -228,11 +267,13 @@ def kernels_flash_attention_func(
             query_states=query_states, key_states=key_states, value_states=value_states,
             cu_seqlens_q=cu_seqlens_q, cu_seqlens_k=cu_seqlens_k,
             max_seqlen_in_batch_q=max_seqlen_q, max_seqlen_in_batch_k=max_seqlen_k,
+            softmax_scale=softmax_scale,
         )
         return pad_input(attn_output_unpad, indices_q, batch_size, q_len)
     else:
         return _kernels_flash_forward(
-            query_states=query_states, key_states=key_states, value_states=value_states, causal=causal,
+            query_states=query_states, key_states=key_states, value_states=value_states,
+            causal=causal, softmax_scale=softmax_scale,
         )
 
 
@@ -314,3 +355,22 @@ def get_attention_mask(
     # real keys and produce valid (non-NaN) outputs instead of NaN from softmax(-inf,...,-inf).
     attention_mask_4d = attention_mask_2d[:, None, None, :]
     return attention_mask_2d, attention_mask_4d, None
+
+
+def bool_to_additive_mask(
+    bool_mask: torch.Tensor,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Convert a bool mask (True = valid) to a float additive mask (0.0 valid, -inf invalid).
+
+    Why this exists: calling `bool_mask.masked_fill(bool_mask.logical_not(), float('-inf'))`
+    directly on a bool tensor returns a bool tensor -- because `-inf` casts to `True` -- and
+    silently drops the mask entirely. Always allocate a float tensor first, then fill it.
+    This helper is the sanctioned way to build an SDPA additive mask from a bool validity mask.
+    """
+    assert bool_mask.dtype == torch.bool, (
+        f"bool_to_additive_mask requires a bool tensor, got dtype={bool_mask.dtype}"
+    )
+    additive = torch.zeros_like(bool_mask, dtype=dtype)
+    additive.masked_fill_(bool_mask.logical_not(), float("-inf"))
+    return additive

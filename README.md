@@ -136,7 +136,7 @@ Automatically selects the best available backend in order of preference: `kernel
 
 ### Setting the Backend
 
-**At load time (all models):**
+**At load time (every family):**
 ```python
 from transformers import AutoConfig, AutoModel
 
@@ -145,15 +145,17 @@ config.attn_backend = "flex"  # "sdpa", "kernels_flash", "flex", or "auto"
 model = AutoModel.from_pretrained("Synthyra/ESM2-150M", config=config, trust_remote_code=True)
 ```
 
-**After load time (DPLM and DPLM2 only):**
+**After load time (every family):**
 
-DPLM and DPLM2 expose an `attn_backend` property on the model that propagates the change to all attention layers immediately:
+Every family's `PreTrainedModel` subclass exposes a mutable `attn_backend` property whose setter propagates the change to every attention submodule in-place, so you can swap backends on a loaded model without reloading the weights:
+
 ```python
-model = AutoModel.from_pretrained("Synthyra/DPLM-150M", trust_remote_code=True)
-model.attn_backend = "flex"  # updates every attention layer in-place
+model = AutoModel.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
+model.attn_backend = "flex"           # every attention layer now uses flex
+model.attn_backend = "kernels_flash"  # flip again, no reload
 ```
 
-For ESM2, E1, and ESM++, the backend must be set on the config before calling `from_pretrained`.
+This is handy for benchmarking backends on the same weights or for falling back at runtime if a backend is unavailable. The setter asserts if the requested backend isn't installed on the current GPU (e.g. `kernels_flash` without the `kernels` package).
 
 ### Returning Attention Maps
 

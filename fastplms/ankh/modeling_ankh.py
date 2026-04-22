@@ -13,7 +13,7 @@ from transformers.modeling_outputs import ModelOutput
 try:
     from fastplms.attention import (
         AttentionBackend, VALID_ATTENTION_BACKENDS,
-        resolve_attention_backend, get_attention_mask,
+        resolve_attention_backend, get_attention_mask, bool_to_additive_mask,
         _get_flex_attention_fn,
         create_block_mask, flex_attention, BlockMask,
     )
@@ -228,17 +228,8 @@ class AnkhSelfAttention(nn.Module):
         if position_bias is None and self.has_relative_attention_bias and self.attn_backend != AttentionBackend.FLEX:
             position_bias = self.compute_bias(seq_length, seq_length, hidden_states.device)
             # Fold padding mask into position bias so layers don't need separate mask.
-            # Build an additive float mask: 0.0 at valid keys, -inf at padded keys.
-            # Important: do NOT call masked_fill on the bool mask itself -- that returns
-            # a bool tensor (because -inf casts to True), silently dropping the mask.
             if attention_mask_4d is not None:
-                mask_additive = torch.zeros(
-                    attention_mask_4d.shape,
-                    dtype=position_bias.dtype,
-                    device=position_bias.device,
-                )
-                mask_additive.masked_fill_(attention_mask_4d.logical_not(), float("-inf"))
-                position_bias = position_bias + mask_additive
+                position_bias = position_bias + bool_to_additive_mask(attention_mask_4d, position_bias.dtype)
 
         if output_attentions:
             attn_output, attn_weights = self._manual_attn(query_BHLD, key_BHLD, value_BHLD, position_bias)
