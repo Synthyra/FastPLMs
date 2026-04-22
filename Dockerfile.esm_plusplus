@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs ESM++ / ESMC parity testing.
+# Adds EvolutionaryScale `esm` package dependencies on top of the base image.
+# NOT using `pip install -e /app/official/esm` because that pins transformers<4.53.0
+# which conflicts with the 4.57.6 we use elsewhere. Instead we install the runtime
+# deps `esm.models.esmc` actually imports, relying on sys.path injection via
+# testing/official/__init__.py to bring in the esm package itself.
+#
+# Build:
+#   docker build -f Dockerfile.esm_plusplus -t fastplms-esm_plusplus .
+# Run parity script:
+#   docker run --gpus all --ipc=host --rm -v $(pwd):/workspace \
+#     fastplms-esm_plusplus python /workspace/testing/parity_debug_esmc.py
+
+FROM fastplms-base
+
+RUN pip install \
+        attrs \
+        biopython \
+        biotite \
+        brotli \
+        cloudpathlib \
+        httpx \
+        msgpack-numpy \
+        pygtrie \
+        tenacity \
+        torchtext \
+        zstd

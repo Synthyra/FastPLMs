@@ -181,14 +181,26 @@ class RotaryEmbedding(torch.nn.Module):
         self.register_buffer("scale", scale)
 
     def _compute_inv_freq(self, device: Optional[torch.device] = None) -> torch.Tensor:
-        """Compute inverse frequency bands."""
-        return 1 / (
+        """Compute inverse frequency bands.
+
+        Always computes on CPU then moves to the requested device. This matches
+        native EvolutionaryScale ESMC, which computes inv_freq on CPU at
+        `__init__` and migrates via `.to(device)`. Computing directly on GPU
+        gives a ~3.7e-9 bit-level difference in inv_freq (fp32 transcendental
+        precision differs between CPU and GPU), which compounds through the 30
+        attention layers to ~1e-3 mse divergence from native at
+        `hidden_states[-2]`. See testing/parity_debug_rotary.py.
+        """
+        cpu_inv_freq = 1 / (
             self.base
             ** (
-                torch.arange(0, self.dim, 2, device=device, dtype=torch.float32)
+                torch.arange(0, self.dim, 2, device="cpu", dtype=torch.float32)
                 / self.dim
             )
         )
+        if device is not None and torch.device(device).type != "cpu":
+            return cpu_inv_freq.to(device)
+        return cpu_inv_freq
 
     def _update_cos_sin_cache(self, seqlen: int, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None):
         """Update the cached cosine and sine values."""
@@ -239,9 +251,13 @@ class RotaryEmbedding(torch.nn.Module):
         Returns:
             Tuple of rotated query and key tensors
         """
-        assert self._inv_freq_compute_device is not None, "Rotary inv_freq compute device should be set after initialization."
-        if self._inv_freq_compute_device != q.device:
-            self.reset_parameters()
+        # NOTE: do NOT recompute inv_freq here if device has changed. The native
+        # ESMC implementation computes inv_freq once on CPU at __init__ and
+        # relies on PyTorch's `.to(device)` to migrate the buffer. Recomputing
+        # the values directly on GPU gives a ~3.7e-9 bit-level difference vs the
+        # CPU-computed-then-moved values due to fp32 transcendental precision,
+        # which compounds through 30 attention layers to ~1e-3 mse divergence
+        # from native at `hidden_states[-2]`. See testing/parity_debug_rotary.py.
         self._update_cos_sin_cache(q.shape[1], device=q.device, dtype=q.dtype)
         assert self._cos_cached is not None
         assert self._sin_cached is not None

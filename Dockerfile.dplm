@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs DPLM. Native reference is `transformers.EsmForMaskedLM`
+# (DPLM uses the ESM2 architecture internally) -- already in base image.
+# DPLM's official package is NOT installed because it pins torchtext==0.17.0
+# which is incompatible with our torch pin. Submodule at official/dplm is for
+# reference only.
+#
+# Build:
+#   docker build -f Dockerfile.base -t fastplms-base .
+#   docker build -f Dockerfile.dplm -t fastplms-dplm .
+FROM fastplms-base

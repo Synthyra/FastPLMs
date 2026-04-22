@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1.7
+# Base image for FastPLMs. Shared across every family image (Dockerfile.<family>).
+# Contains torch, transformers, pinned numpy, project source code -- everything
+# that every family needs. Does NOT install any family-specific native/official
+# package; those live in family Dockerfiles to avoid dependency conflicts
+# (e.g. EvolutionaryScale `esm` pins `transformers<4.53.0`, DPLM pins
+# torchtext==0.17.0).
+#
+# Build:
+#   docker build -f Dockerfile.base -t fastplms-base .
+#
+# NOTE: switch to cudnn-devel if you need to compile CUDA extensions
+# (e.g. flash-attn from source).
+FROM nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONPATH=/app \
+    PATH=/opt/venv/bin:/usr/local/bin:$PATH \
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    TF_ENABLE_ONEDNN_OPTS=0 \
+    TOKENIZERS_PARALLELISM=true \
+    PROJECT_ROOT=/workspace \
+    HF_HUB_ENABLE_HF_TRANSFER=1 \
+    DISABLE_PANDERA_IMPORT_WARNING=True \
+    HF_HOME=/workspace/.cache/huggingface \
+    TORCH_HOME=/workspace/.cache/torch \
+    XDG_CACHE_HOME=/workspace/.cache \
+    WANDB_DIR=/workspace/logs \
+    TQDM_CACHE=/workspace/.cache/tqdm
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential curl git ca-certificates \
+        python3.12 python3.12-dev python3.12-venv \
+        ninja-build && \
+    python3.12 -m venv /opt/venv && \
+    ln -sf /opt/venv/bin/python /usr/local/bin/python && \
+    ln -sf /opt/venv/bin/pip /usr/local/bin/pip
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --upgrade pip setuptools
+# Install cu128 torch BEFORE requirements.txt so transformers/accelerate/etc
+# see torch already satisfied, then AGAIN after in case a transitive dep
+# silently overwrites it with the PyPI default (CUDA 13) wheel.
+RUN pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+RUN pip install -r requirements.txt
+RUN pip install --force-reinstall torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+RUN pip install numpy==1.26.4
+
+# Source code is copied LAST so edits don't invalidate dep caches.
+COPY . .
+
+WORKDIR /workspace
+
+CMD ["bash"]

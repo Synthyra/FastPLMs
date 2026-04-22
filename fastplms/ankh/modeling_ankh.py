@@ -153,7 +153,9 @@ class AnkhSelfAttention(nn.Module):
         self.k = nn.Linear(config.d_model, self.inner_dim, bias=False)
         self.v = nn.Linear(config.d_model, self.inner_dim, bias=False)
         self.o = nn.Linear(self.inner_dim, config.d_model, bias=False)
-        self.scale = self.d_kv ** -0.5
+        # T5/ANKH attention is unscaled: scores = Q K^T (no 1/sqrt(d_kv)).
+        # The learned relative position bias absorbs any temperature.
+        self.scale = 1.0
 
         if self.has_relative_attention_bias:
             self.relative_attention_bias = nn.Embedding(
@@ -225,11 +227,18 @@ class AnkhSelfAttention(nn.Module):
         # Compute position bias on first layer (SDPA/manual only; flex uses score_mod)
         if position_bias is None and self.has_relative_attention_bias and self.attn_backend != AttentionBackend.FLEX:
             position_bias = self.compute_bias(seq_length, seq_length, hidden_states.device)
-            # Fold padding mask into position bias so layers don't need separate mask
+            # Fold padding mask into position bias so layers don't need separate mask.
+            # Build an additive float mask: 0.0 at valid keys, -inf at padded keys.
+            # Important: do NOT call masked_fill on the bool mask itself -- that returns
+            # a bool tensor (because -inf casts to True), silently dropping the mask.
             if attention_mask_4d is not None:
-                position_bias = position_bias + attention_mask_4d.masked_fill(
-                    attention_mask_4d.logical_not(), float("-inf")
+                mask_additive = torch.zeros(
+                    attention_mask_4d.shape,
+                    dtype=position_bias.dtype,
+                    device=position_bias.device,
                 )
+                mask_additive.masked_fill_(attention_mask_4d.logical_not(), float("-inf"))
+                position_bias = position_bias + mask_additive
 
         if output_attentions:
             attn_output, attn_weights = self._manual_attn(query_BHLD, key_BHLD, value_BHLD, position_bias)
