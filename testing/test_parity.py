@@ -589,8 +589,16 @@ def _get_resolved_backend(model: nn.Module, model_key: str) -> str:
 #    Instead we check what downstream users actually care about:
 #       a. mean-pool cosine similarity (for embedding-based downstream tasks)
 #       b. top-1 argmax agreement on logits (for masked-LM prediction use)
-BACKEND_TOL_FP32: Dict[str, Dict[str, float]] = {
-    "flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3},
+# fp32 backend-consistency tolerances are per-family per-backend. Depth
+# matters: deeper models (DPLM 30 layers, ESMC 30 layers, ANKH-base 48) accumulate
+# more per-position rounding than shallow ones (ESM2-8M 6 layers), so absolute
+# maxabs has to be loosened with depth even though rel_maxabs stays tight.
+BACKEND_TOL_FP32: Dict[str, Dict[str, Dict[str, float]]] = {
+    "esm2": {"flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3}},
+    "esmc": {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
+    "e1":   {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
+    "dplm": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
+    "ankh": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
 }
 
 # bf16 backend-consistency thresholds are per-family per-backend. Two physics-
@@ -647,6 +655,7 @@ def _run_backend_consistency_fp32(
     backends: Tuple[str, ...],
     backend_tol: Dict[str, Dict[str, float]],
 ) -> None:
+    """backend_tol is the per-backend tol dict FOR THIS family (already indexed by caller)."""
     device = torch.device("cuda")
     random.seed(SEED)
     sequences = generate_fixed_sequences()
@@ -798,7 +807,7 @@ def test_backend_consistency_fp32(model_key: str) -> None:
     _run_backend_consistency_fp32(
         model_key,
         BACKEND_CONSISTENCY_FP32_MATRIX[model_key],
-        BACKEND_TOL_FP32,
+        BACKEND_TOL_FP32[model_key],
     )
 
 
