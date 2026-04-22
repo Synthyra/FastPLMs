@@ -14,13 +14,13 @@ def main() -> int:
     native = EsmForMaskedLM.from_pretrained(
         "airkingbd/dplm2_150m", dtype=torch.float32, device_map=device,
     ).eval()
-    native_tok = EsmTokenizer.from_pretrained("airkingbd/dplm2_150m")
+    from transformers import AutoTokenizer
+    native_tok = AutoTokenizer.from_pretrained("airkingbd/dplm2_150m", trust_remote_code=True)
     fast_tok = fast.tokenizer
     native_cfg = AutoConfig.from_pretrained("airkingbd/dplm2_150m")
 
     print(f"fast config.vocab_size   = {fast.config.vocab_size}")
     print(f"native config.vocab_size = {native_cfg.vocab_size}")
-    print(f"fast embedding shape:   {fast.esm.embed_tokens.weight.shape}" if hasattr(fast, 'esm') else f"fast embedding shape (other): {next(iter(fast.state_dict().values())).shape}")
     print(f"fast word_emb shape: {fast.state_dict()['esm.embeddings.word_embeddings.weight'].shape}")
     print(f"native word_emb shape: {native.state_dict()['esm.embeddings.word_embeddings.weight'].shape}")
 
