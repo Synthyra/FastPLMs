@@ -76,11 +76,11 @@ FAMILY_TOLERANCES: Dict[str, ParityTolerances] = {
     ),
     "dplm": ParityTolerances(),
     "ankh": ParityTolerances(
-        fp32_last_hidden_mse=5e-3, fp32_last_hidden_maxabs=2.0,
-        fp32_logits_mse=5e-3,
-        fp32_hidden_rel_std=1e-2,
-        bf16_last_hidden_mse=5e-2, bf16_last_hidden_maxabs=5.0,
-        bf16_logits_mse=5e-2, bf16_hidden_rel_std=1e-1,
+        fp32_last_hidden_mse=1e-12, fp32_last_hidden_maxabs=1e-5,
+        fp32_logits_mse=1e-4,
+        fp32_hidden_rel_std=1e-5,
+        bf16_last_hidden_mse=5e-4, bf16_last_hidden_maxabs=2e-1,
+        bf16_logits_mse=5e-2, bf16_hidden_rel_std=5e-2,
     ),
 }
 
@@ -352,11 +352,6 @@ def _run_forward_parity(model_key: str, dtype: torch.dtype, tol: ParityTolerance
 @pytest.mark.parametrize("scenario", list(PADDING_SCENARIOS.keys()))
 @pytest.mark.parametrize("model_key", [k for k in MODEL_REGISTRY if k != "dplm2"])
 def test_forward_parity_fp32(model_key: str, scenario: str) -> None:
-    # ANKH per-layer relative diff is ~25-30% vs native T5EncoderModel -- larger
-    # than numerical roundoff should produce. Flagged for separate investigation;
-    # see docs/parity_findings.md. last_hidden_state itself is within tolerance.
-    if model_key == "ankh":
-        pytest.xfail("ANKH per-layer hidden state divergence vs native T5EncoderModel under investigation")
     tol = FAMILY_TOLERANCES[model_key]
     _run_forward_parity(model_key, torch.float32, tol, "fp32", scenario=scenario)
 
@@ -365,8 +360,6 @@ def test_forward_parity_fp32(model_key: str, scenario: str) -> None:
 @pytest.mark.parametrize("scenario", list(PADDING_SCENARIOS.keys()))
 @pytest.mark.parametrize("model_key", [k for k in MODEL_REGISTRY if k != "dplm2"])
 def test_forward_parity_bf16(model_key: str, scenario: str) -> None:
-    if model_key == "ankh":
-        pytest.xfail("ANKH per-layer hidden state divergence vs native T5EncoderModel under investigation")
     tol = FAMILY_TOLERANCES[model_key]
     _run_forward_parity(model_key, torch.bfloat16, tol, "bf16", scenario=scenario)
 
@@ -387,9 +380,6 @@ def test_padding_does_not_pollute_valid_positions_fp32(model_key: str) -> None:
     which would produce a much larger and persistent diff at
     `last_hidden_state` -- exactly what this test catches.
     """
-    if model_key == "ankh":
-        pytest.xfail("ANKH per-layer hidden state divergence vs native T5EncoderModel under investigation")
-
     device = torch.device("cuda")
     random.seed(SEED)
     fast = load_fast(model_key, device, torch.float32)
