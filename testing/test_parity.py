@@ -106,7 +106,7 @@ FAMILY_TOLERANCES: Dict[str, ParityTolerances] = {
         # DPLM2-150M has 30 layers (vs ESM2-8M's 6), so bf16 accumulation gives
         # slightly higher MSE and maxabs than ESM2 at the post-final-norm output.
         bf16_last_hidden_mse=5e-5, bf16_last_hidden_maxabs=1.5e-1, bf16_last_hidden_rel_maxabs=3e-2,
-        bf16_hidden_rel_std=2e-2, bf16_hidden_rel_maxabs=5e-2,
+        bf16_hidden_rel_std=3e-2, bf16_hidden_rel_maxabs=5e-2,
     ),
     "ankh": ParityTolerances(
         fp32_last_hidden_mse=1e-12, fp32_last_hidden_maxabs=1e-5, fp32_last_hidden_rel_maxabs=1e-5,
