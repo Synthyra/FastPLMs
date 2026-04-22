@@ -263,9 +263,12 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_BLHD = query_BHLD.transpose(1, 2).contiguous()
         key_BLHD = key_BHLD.transpose(1, 2).contiguous()
         value_BLHD = value_BHLD.transpose(1, 2).contiguous()
+        # Q has been pre-scaled by self.scale = 1/sqrt(head_dim) in forward().
+        # Pass softmax_scale=1.0 to prevent double-scaling by the kernel.
         attn_output = kernels_flash_attention_func(
             query_states=query_BLHD, key_states=key_BLHD, value_states=value_BLHD,
             attention_mask_2d=attention_mask_2d, causal=False,
+            softmax_scale=1.0,
         )
         return rearrange(attn_output, "b s h d -> b s (h d)"), None
 
