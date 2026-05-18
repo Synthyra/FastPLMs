@@ -92,6 +92,22 @@ class FastAnkhConfig(PretrainedConfig):
         return output
 
 
+def _load_ankh_tokenizer(config: FastAnkhConfig):
+    """Load the tokenizer that matches this checkpoint (Hub id on ``config._name_or_path``).
+
+    ``embed.py`` and other callers use ``model.tokenizer``; ANKH3 checkpoints use a
+    256-token vocab, not ankh-base's 144. Falls back to ankh-base when the config has
+    no hub path (e.g. bare ``FastAnkhConfig()`` in tests).
+    """
+    name_or_path = getattr(config, "_name_or_path", None)
+    if isinstance(name_or_path, str) and len(name_or_path) > 0:
+        try:
+            return AutoTokenizer.from_pretrained(name_or_path)
+        except Exception:
+            pass
+    return AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")
+
+
 # ---------------------------------------------------------------------------
 # Submodules
 # ---------------------------------------------------------------------------
@@ -464,7 +480,7 @@ class FAST_ANKH_ENCODER(AnkhPreTrainedModel, EmbeddingMixin):
 
         self.final_layer_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.gradient_checkpointing = False
-        self.tokenizer = AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")
+        self.tokenizer = _load_ankh_tokenizer(config)
         self.post_init()
 
     def get_input_embeddings(self):
