@@ -119,6 +119,26 @@ MODEL_REGISTRY = [
         "weight_module": "fastplms.esm_plusplus.get_weights",
     },
     {
+        "family": "esm3",
+        "repo_ids": [
+            "Synthyra/ESM3_small",
+        ],
+        "modeling_src": "fastplms/esm3/modeling_esm3.py",
+        "modeling_dest": "modeling_esm3.py",
+        "composite": False,
+        "include_embedding_mixin": False,
+        "extra_files": {
+            "fastplms/esm3/modeling_esm3.py": "modeling_esm3.py",
+        },
+        "readme_map": {
+            "Synthyra/ESM3_small": "fastplms/esm3/README.md",
+        },
+        "license_map": {
+            "Synthyra/ESM3_small": "fastplms/esm3/LICENSE",
+        },
+        "weight_module": "fastplms.esm3.get_weights",
+    },
+    {
         "family": "esm2",
         "repo_ids": [
             "Synthyra/ESM2-8M",

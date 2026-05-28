@@ -42,6 +42,13 @@ MODEL_REGISTRY: Dict[str, Dict] = {
         "model_type": "ESMC",
         "uses_tokenizer": True,
     },
+    "esm3": {
+        "fast_path": "Synthyra/ESM3_small",
+        "official_path": "esm3-sm-open-v1",
+        "load_official": "testing.official.esm3",
+        "model_type": "ESM3",
+        "uses_tokenizer": True,
+    },
     "e1": {
         "fast_path": "Synthyra/Profluent-E1-150M",
         "official_path": "Profluent-Bio/E1-150m",
@@ -139,6 +146,14 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
         "model_type": "ESMC",
         "uses_tokenizer": True,
         "size_category": "xlarge",
+    },
+    "esm3_small": {
+        "fast_path": "Synthyra/ESM3_small",
+        "official_path": "esm3-sm-open-v1",
+        "load_official": "testing.official.esm3",
+        "model_type": "ESM3",
+        "uses_tokenizer": True,
+        "size_category": "large",
     },
     # E1 family
     "e1_150m": {

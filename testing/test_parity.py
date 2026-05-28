@@ -87,6 +87,12 @@ FAMILY_TOLERANCES: Dict[str, ParityTolerances] = {
         bf16_last_hidden_mse=1e-5, bf16_last_hidden_maxabs=5e-2, bf16_last_hidden_rel_maxabs=5e-2,
         bf16_logits_mse=5e-2, bf16_hidden_rel_std=5e-2, bf16_hidden_rel_maxabs=1e-1,
     ),
+    "esm3": ParityTolerances(
+        fp32_last_hidden_mse=1e-8, fp32_last_hidden_maxabs=1e-3, fp32_last_hidden_rel_maxabs=1e-3,
+        fp32_logits_mse=1e-4, fp32_hidden_rel_std=5e-3, fp32_hidden_rel_maxabs=5e-2,
+        bf16_last_hidden_mse=1e-4, bf16_last_hidden_maxabs=1e-1, bf16_last_hidden_rel_maxabs=5e-2,
+        bf16_logits_mse=5e-2, bf16_hidden_rel_std=7e-2, bf16_hidden_rel_maxabs=1.5e-1,
+    ),
     "e1": ParityTolerances(
         fp32_last_hidden_mse=5e-7, fp32_last_hidden_maxabs=2e-2, fp32_last_hidden_rel_maxabs=2e-3,
         fp32_hidden_rel_std=1e-2, fp32_hidden_rel_maxabs=2e-2,
@@ -924,6 +930,7 @@ def test_backend_consistency_bf16_downstream(model_key: str) -> None:
 EMBED_DATASET_TOL: Dict[str, Dict[str, float]] = {
     "esm2":  {"mse": 5e-8, "maxabs": 5e-3},
     "esmc":  {"mse": 5e-8, "maxabs": 5e-3},
+    "esm3":  {"mse": 5e-8, "maxabs": 5e-3},
     "dplm":  {"mse": 5e-8, "maxabs": 5e-3},
     # DPLM2: encoder output identical to ESM backbone on AA input; mean-pool parity tight.
     "dplm2": {"mse": 5e-8, "maxabs": 5e-3},

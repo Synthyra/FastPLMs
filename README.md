@@ -59,6 +59,7 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | **E1** | Profluent Bio | [Profluent-Bio/E1](https://github.com/Profluent-Bio/E1) | Flex Attention, Block-Causal | 150M, 300M, 600M |
 | **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
 | **ESM++** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Optimized SDPA / Flex | Small (300M), Large (600M), 6B |
+| **ESM3** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | HF AutoModel wrapper | Open Small |
 | **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
 | **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
 | **ANKH** | Elnaggar Lab | [ElnaggarLab/ankh](https://huggingface.co/ElnaggarLab/ankh-base) | T5 RPE via Flex score_mod | Base, Large, ANKH2-L, ANKH3-L, ANKH3-XL |
@@ -77,6 +78,7 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | `esmplusplus_small` | ESM++ | 333.0M | Biohub | [Synthyra/ESMplusplus_small](https://huggingface.co/Synthyra/ESMplusplus_small) | [biohub/ESMC-300M](https://huggingface.co/biohub/ESMC-300M) |
 | `esmplusplus_large` | ESM++ | 575.0M | Biohub | [Synthyra/ESMplusplus_large](https://huggingface.co/Synthyra/ESMplusplus_large) | [biohub/ESMC-600M](https://huggingface.co/biohub/ESMC-600M) |
 | `esmplusplus_6b` | ESM++ | 6.35B | Biohub | [Synthyra/ESMplusplus_6B](https://huggingface.co/Synthyra/ESMplusplus_6B) | [biohub/ESMC-6B](https://huggingface.co/biohub/ESMC-6B) |
+| `esm3_small` | ESM3 | 1.4B | Biohub | [Synthyra/ESM3_small](https://huggingface.co/Synthyra/ESM3_small) | [biohub/esm3-sm-open-v1](https://huggingface.co/biohub/esm3-sm-open-v1) |
 | `e1_150m` | E1 | 154.4M | Profluent Bio | [Synthyra/Profluent-E1-150M](https://huggingface.co/Synthyra/Profluent-E1-150M) | [Profluent-Bio/E1-150m](https://huggingface.co/Profluent-Bio/E1-150m) |
 | `e1_300m` | E1 | 274.3M | Profluent Bio | [Synthyra/Profluent-E1-300M](https://huggingface.co/Synthyra/Profluent-E1-300M) | [Profluent-Bio/E1-300m](https://huggingface.co/Profluent-Bio/E1-300m) |
 | `e1_600m` | E1 | 641.4M | Profluent Bio | [Synthyra/Profluent-E1-600M](https://huggingface.co/Synthyra/Profluent-E1-600M) | [Profluent-Bio/E1-600m](https://huggingface.co/Profluent-Bio/E1-600m) |
