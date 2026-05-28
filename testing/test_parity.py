@@ -709,6 +709,10 @@ BACKEND_TOL_FP32: Dict[str, Dict[str, Dict[str, float]]] = {
     "dplm2": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
     "ankh":  {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 1e-2}},
 }
+# ESM3's `last_hidden_state` is the pre-final-norm residual stream. Its absolute
+# scale is intentionally large, so fp32 backend consistency is gated by MSE and
+# relative maxabs; absolute maxabs is still reported if another guard fails.
+BACKEND_FP32_RELATIVE_DOMINANT = {"esm3"}
 
 # bf16 backend-consistency thresholds are per-family per-backend. Two physics-
 # driven metrics with different behaviors across families:
@@ -819,7 +823,10 @@ def _run_backend_consistency_fp32(
         maxabs = diff.abs().max().item()
         rel_maxabs = maxabs / base_maxabs if base_maxabs > 1e-12 else 0.0
         tol = backend_tol[backend]
-        if mse > tol["mse"] or maxabs > tol["maxabs"] or rel_maxabs > tol["rel_maxabs"]:
+        maxabs_failed = maxabs > tol["maxabs"]
+        if model_key in BACKEND_FP32_RELATIVE_DOMINANT:
+            maxabs_failed = False
+        if mse > tol["mse"] or maxabs_failed or rel_maxabs > tol["rel_maxabs"]:
             failures.append(
                 f"{backend}: mse={mse:.3e} (tol={tol['mse']:.3e}), "
                 f"maxabs={maxabs:.3e} (tol={tol['maxabs']:.3e}), "
