@@ -9,7 +9,7 @@ Marked as `slow` because each test loads two models simultaneously.
 import importlib
 import random
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pytest
 import torch
@@ -34,8 +34,8 @@ FORWARD_DTYPE = torch.float32
 
 @dataclass(frozen=True)
 class ForwardComplianceTolerances:
-    hidden_mse: float = 1e-8
-    hidden_maxabs: float = 5e-4
+    hidden_mse: Optional[float] = 1e-8
+    hidden_maxabs: Optional[float] = 5e-4
     hidden_rel_std: float = 5e-3
     hidden_rel_maxabs: float = 5e-2
     last_hidden_mse: float = 1e-8
@@ -58,10 +58,12 @@ FORWARD_COMPLIANCE_TOLERANCES: Dict[str, ForwardComplianceTolerances] = {
         logits_maxabs=1e-5,
     ),
     "ESMC": ForwardComplianceTolerances(
-        hidden_mse=1e-8,
-        hidden_maxabs=1e-3,
-        hidden_rel_std=5e-3,
-        hidden_rel_maxabs=5e-2,
+        # ESMC intermediate states are high-magnitude pre-norm streams; use
+        # tight relative guards there and absolute guards after final norm.
+        hidden_mse=None,
+        hidden_maxabs=None,
+        hidden_rel_std=1e-4,
+        hidden_rel_maxabs=1e-4,
         last_hidden_mse=1e-8,
         last_hidden_maxabs=1e-3,
         last_hidden_rel_maxabs=1e-3,
@@ -227,6 +229,16 @@ def _render_worst(worst: Dict[str, Dict[str, float]]) -> str:
     return "\n".join(lines)
 
 
+def _exceeds(value: float, tolerance: Optional[float]) -> bool:
+    return tolerance is not None and value > tolerance
+
+
+def _format_tolerance(tolerance: Optional[float]) -> str:
+    if tolerance is None:
+        return "relative-only"
+    return f"{tolerance:.3e}"
+
+
 def _select_final_hidden_state(
     output: object,
     hidden_states: Tuple[torch.Tensor, ...],
@@ -321,14 +333,16 @@ def _run_forward_compliance(model_key: str, registry: Dict[str, Dict]) -> None:
                 label = f"hidden_states[{i}]"
                 _record_worst(worst_metrics, label, hidden_metrics)
                 if (
-                    hidden_metrics["mse"] > tol.hidden_mse
-                    or hidden_metrics["maxabs"] > tol.hidden_maxabs
+                    _exceeds(hidden_metrics["mse"], tol.hidden_mse)
+                    or _exceeds(hidden_metrics["maxabs"], tol.hidden_maxabs)
                     or hidden_metrics["rel_std"] > tol.hidden_rel_std
                     or hidden_metrics["rel_maxabs"] > tol.hidden_rel_maxabs
                 ):
                     failures.append(
-                        f"{label}: mse={hidden_metrics['mse']:.3e} (tol={tol.hidden_mse:.3e}), "
-                        f"maxabs={hidden_metrics['maxabs']:.3e} (tol={tol.hidden_maxabs:.3e}), "
+                        f"{label}: mse={hidden_metrics['mse']:.3e} "
+                        f"(tol={_format_tolerance(tol.hidden_mse)}), "
+                        f"maxabs={hidden_metrics['maxabs']:.3e} "
+                        f"(tol={_format_tolerance(tol.hidden_maxabs)}), "
                         f"rel_std={hidden_metrics['rel_std']:.3e} (tol={tol.hidden_rel_std:.3e}), "
                         f"rel_maxabs={hidden_metrics['rel_maxabs']:.3e} "
                         f"(tol={tol.hidden_rel_maxabs:.3e})"
