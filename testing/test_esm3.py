@@ -7,6 +7,7 @@ from transformers import AutoModel
 
 from fastplms.esm3 import modeling_esm3
 from fastplms.esm3.modeling_esm3 import FastESM3Config, FastESM3Model
+from testing.conftest import strict_fp32_matmul
 
 
 HUB_AUTO_MAP = {
@@ -105,7 +106,7 @@ def test_esm3_flex_matches_sdpa() -> None:
     model = _small_model().to(torch.device("cuda"))
     batch = model.tokenize_sequences(["MKTAYIAKQ", "GGGG"], device=model.device)
 
-    with torch.inference_mode():
+    with torch.inference_mode(), strict_fp32_matmul():
         model.attn_backend = "sdpa"
         sdpa_output = model(**batch).last_hidden_state
         try:
