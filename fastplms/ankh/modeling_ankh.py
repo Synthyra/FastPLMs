@@ -93,18 +93,10 @@ class FastAnkhConfig(PretrainedConfig):
 
 
 def _load_ankh_tokenizer(config: FastAnkhConfig):
-    """Load the tokenizer that matches this checkpoint (Hub id on ``config._name_or_path``).
-
-    ``embed.py`` and other callers use ``model.tokenizer``; ANKH3 checkpoints use a
-    256-token vocab, not ankh-base's 144. Falls back to ankh-base when the config has
-    no hub path (e.g. bare ``FastAnkhConfig()`` in tests).
-    """
-    name_or_path = getattr(config, "_name_or_path", None)
+    """Load the checkpoint-matched tokenizer, falling back only for bare configs."""
+    name_or_path = config._name_or_path
     if isinstance(name_or_path, str) and len(name_or_path) > 0:
-        try:
-            return AutoTokenizer.from_pretrained(name_or_path)
-        except Exception:
-            pass
+        return AutoTokenizer.from_pretrained(name_or_path)
     return AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")
 
 

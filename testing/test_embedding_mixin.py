@@ -85,6 +85,14 @@ def _assert_embeddings_match(
         )
 
 
+def _disable_tf32_for_batch_single_match() -> None:
+    # TF32 kernels can be batch-shape-dependent on Hopper/GH200, which defeats
+    # this test's batch-vs-single equality check.
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
+
 # --- CPU-only utility tests ---
 
 def test_parse_fasta() -> None:
@@ -189,6 +197,7 @@ def test_batch_single_match(model_key: str) -> None:
     from transformers import AutoModelForMaskedLM
 
     random.seed(SEED)
+    _disable_tf32_for_batch_single_match()
     config = MODEL_REGISTRY[model_key]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -276,6 +285,7 @@ def test_full_batch_single_match(model_key: str) -> None:
     from transformers import AutoModelForMaskedLM
 
     random.seed(SEED)
+    _disable_tf32_for_batch_single_match()
     config = FULL_MODEL_REGISTRY[model_key]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
