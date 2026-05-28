@@ -48,9 +48,9 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESM2-150M", config=config
 
 ## ESM++ (ESMC)
 
-**Organization:** EvolutionaryScale
+**Organization:** Biohub
 **Architecture:** Transformer encoder with configurable rotary embeddings (scaling, interleaving)
-**Checkpoints:** Small (300M), Large (600M)
+**Checkpoints:** Small (300M), Large (600M), 6B
 
 ### Loading
 
@@ -84,8 +84,9 @@ with torch.inference_mode():
 
 | Checkpoint | HuggingFace ID | Official Reference |
 |------------|----------------|-------------------|
-| ESM++ Small (300M) | `Synthyra/ESMplusplus_small` | `EvolutionaryScale/esmc-300m-2024-12` |
-| ESM++ Large (600M) | `Synthyra/ESMplusplus_large` | `EvolutionaryScale/esmc-600m-2024-12` |
+| ESM++ Small (300M) | `Synthyra/ESMplusplus_small` | `biohub/ESMC-300M` |
+| ESM++ Large (600M) | `Synthyra/ESMplusplus_large` | `biohub/ESMC-600M` |
+| ESM++ 6B | `Synthyra/ESMplusplus_6B` | `biohub/ESMC-6B` |
 
 ---
 

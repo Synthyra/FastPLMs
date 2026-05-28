@@ -7,7 +7,7 @@ tags: []
 The GitHub with the implementation and requirements.txt can be found [here](https://github.com/Synthyra/FastPLMs.git)
 
 # ESM++
-[ESM++](https://github.com/Synthyra/ESMplusplus) is a faithful implementation of [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) ([license](https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-license-agreement)) that allows for batching and standard Huggingface compatibility without requiring the ESM Python package.
+[ESM++](https://github.com/Synthyra/ESMplusplus) is a faithful implementation of [ESMC](https://biohub.ai/esm/protein) ([license](https://github.com/Biohub/esm/blob/main/LICENSE.md)) that allows for batching and standard Huggingface compatibility without requiring the ESM Python package.
 The large version corresponds to the 600 million parameter version of ESMC.
 
 ## Attention backends
@@ -187,11 +187,24 @@ We look at various ESM models and their throughput on an H100. Adding efficient 
 ```
 
 ```bibtex
-@article{hayes2024simulating,
-  title={Simulating 500 million years of evolution with a language model},
-  author={Hayes, Thomas and Rao, Roshan and Akin, Halil and Sofber, Nicholas J and Achour, Divya and Moez, Irfan and Garg, Rhitu and Angelova, Rami and Babu, Manan and Alcaide, Eric and others},
-  journal={bioRxiv},
-  year={2024}
+@misc{candido2026language,
+  title  = {Language Modeling Materializes a World Model of Protein Biology},
+  author = {Candido, Salvatore and Hayes, Thomas and Derry, Alexander and Rao, Roshan
+            and Lin, Zeming and Verkuil, Robert and Wu, Bryan and Lee, Jin Sub
+            and Bruguera, Elise S. and Keval, Jehan A. and Kopylov, Mykhailo
+            and Pak, John E. and Wu, Wesley and Thomas, Neil and Mataraso, Samson
+            and Hsu, Alvin and Trotman-Grant, Ashton C. and Fatras, Kilian
+            and dos Santos Costa, Allan and Badkundri, Rohil and Ak{\i}n, Halil
+            and Oktay, Deniz and Deaton, Jonathan and Montabana, Elizabeth
+            and Sitwala, Hrishita and Yu, Yue and Wiggert, Marius
+            and Carlin, Dylan Alexander and Goering, Anthony W. and Blazejewski, Tomasz
+            and Sandora, McCullen and Hla, Michael and Jia, Tina Z.
+            and Kloker, Leon H. and Sofroniew, Nicholas J. and Uehara, Masatoshi
+            and Pannu, Jassi and Bachas, Sharrol and Liu, Daniel S.
+            and Sercu, Tom and Rives, Alexander},
+  year   = {2026},
+  url    = {https://biohub.ai/papers/esm_protein.pdf},
+  note   = {Preprint}
 }
 ```
 

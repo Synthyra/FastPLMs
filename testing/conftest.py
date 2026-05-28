@@ -37,7 +37,7 @@ MODEL_REGISTRY: Dict[str, Dict] = {
     },
     "esmc": {
         "fast_path": "Synthyra/ESMplusplus_small",
-        "official_path": "esmc-300",
+        "official_path": "biohub/ESMC-300M",
         "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
         "uses_tokenizer": True,
@@ -118,7 +118,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     # ESM++ family
     "esmc_small": {
         "fast_path": "Synthyra/ESMplusplus_small",
-        "official_path": "esmc-300",
+        "official_path": "biohub/ESMC-300M",
         "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
         "uses_tokenizer": True,
@@ -126,11 +126,19 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     },
     "esmc_large": {
         "fast_path": "Synthyra/ESMplusplus_large",
-        "official_path": "esmc-600",
+        "official_path": "biohub/ESMC-600M",
         "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
         "uses_tokenizer": True,
         "size_category": "large",
+    },
+    "esmc_6b": {
+        "fast_path": "Synthyra/ESMplusplus_6B",
+        "official_path": "biohub/ESMC-6B",
+        "load_official": "testing.official.esm_plusplus",
+        "model_type": "ESMC",
+        "uses_tokenizer": True,
+        "size_category": "xlarge",
     },
     # E1 family
     "e1_150m": {

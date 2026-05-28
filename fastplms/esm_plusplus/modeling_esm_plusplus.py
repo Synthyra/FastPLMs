@@ -5,12 +5,13 @@ ESM++ model implementation.
 ESM++ is a faithful implementation of ESMC that allows for batching and standard Huggingface compatibility
 The ESM Python package is not required
 
-Modified from https://github.com/evolutionaryscale/esm
-License: https://www.evolutionaryscale.ai/policies/cambrian-non-commercial-license-agreement
+Modified from https://github.com/Biohub/esm
+License: https://github.com/Biohub/esm/blob/main/LICENSE.md
 """
 
 import math
 import os
+import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Union, List
 from einops import rearrange, repeat
 from huggingface_hub import snapshot_download
+from safetensors.torch import load_file as load_safetensors_file
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
@@ -182,7 +184,7 @@ class RotaryEmbedding(torch.nn.Module):
         """Compute inverse frequency bands.
 
         Always computes on CPU then moves to the requested device. This matches
-        native EvolutionaryScale ESMC, which computes inv_freq on CPU at
+        native Biohub ESMC, which computes inv_freq on CPU at
         `__init__` and migrates via `.to(device)`. Computing directly on GPU
         gives a ~3.7e-9 bit-level difference in inv_freq (fp32 transcendental
         precision differs between CPU and GPU), which compounds through the 30
@@ -712,14 +714,20 @@ class PreTrainedESMplusplusModel(PreTrainedModel):
         return loaded
 
     @classmethod
-    def from_pretrained_esm(cls, model_name: str):
+    def from_pretrained_esm(
+        cls,
+        model_name: str,
+        device: Union[torch.device, str] = "cpu",
+    ):
         """Load a pretrained ESM++ model."""
-        if '300' in model_name:
-            return ESMplusplus_300M()
-        elif '600' in model_name:
-            return ESMplusplus_600M()
-        else:
-            raise ValueError(f"Invalid model name: {model_name}")
+        key = _resolve_esmc_checkpoint_key(model_name)
+        if key == "esmc-300":
+            return ESMplusplus_300M(device=device)
+        if key == "esmc-600":
+            return ESMplusplus_600M(device=device)
+        if key == "esmc-6b":
+            return ESMplusplus_6B(device=device)
+        raise ValueError(f"Invalid model name: {model_name}")
 
 
 ### ESM++ Models
@@ -1020,30 +1028,37 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         )
 
 
-### Loading from EvolutionaryScale
+### Loading from Biohub
 _ESMC_CHECKPOINT_SPECS = {
     "esmc-300": {
-        "repo_id": "EvolutionaryScale/esmc-300m-2024-12",
-        "weights_relpath": "data/weights/esmc_300m_2024_12_v0.pth",
+        "repo_id": "biohub/ESMC-300M",
         "hidden_size": 960,
         "num_attention_heads": 15,
         "num_hidden_layers": 30,
     },
     "esmc-600": {
-        "repo_id": "EvolutionaryScale/esmc-600m-2024-12",
-        "weights_relpath": "data/weights/esmc_600m_2024_12_v0.pth",
+        "repo_id": "biohub/ESMC-600M",
         "hidden_size": 1152,
         "num_attention_heads": 18,
         "num_hidden_layers": 36,
+    },
+    "esmc-6b": {
+        "repo_id": "biohub/ESMC-6B",
+        "hidden_size": 2560,
+        "num_attention_heads": 40,
+        "num_hidden_layers": 80,
     },
 }
 
 
 def _resolve_esmc_checkpoint_key(model: str) -> str:
-    if "esmc-300" in model:
+    normalized = model.lower().replace("_", "-")
+    if "300" in normalized:
         return "esmc-300"
-    if "esmc-600" in model:
+    if "600" in normalized:
         return "esmc-600"
+    if "6b" in normalized:
+        return "esmc-6b"
     raise ValueError(f"{model=} is an invalid ESMC model name.")
 
 
@@ -1058,7 +1073,82 @@ def data_root(model: str):
 
 def get_esmc_checkpoint_path(model: str) -> Path:
     key = _resolve_esmc_checkpoint_key(model)
-    return data_root(key) / _ESMC_CHECKPOINT_SPECS[key]["weights_relpath"]
+    spec = _ESMC_CHECKPOINT_SPECS[key]
+    if "weights_relpath" in spec:
+        return data_root(key) / spec["weights_relpath"]
+    checkpoint_dir = data_root(key)
+    if (checkpoint_dir / "model.safetensors").exists():
+        return checkpoint_dir / "model.safetensors"
+    if (checkpoint_dir / "model.safetensors.index.json").exists():
+        return checkpoint_dir / "model.safetensors.index.json"
+    raise FileNotFoundError(f"No ESMC checkpoint found under {checkpoint_dir}.")
+
+
+def _normalize_esmc_state_key(key: str) -> Optional[str]:
+    if key.endswith("._extra_state"):
+        return None
+    if key.startswith("esmc."):
+        key = key[len("esmc."):]
+    if key.startswith("lm_head."):
+        key = f"sequence_head.{key[len('lm_head.'):]}"
+    replacements = (
+        (".attn.layernorm_qkv.layer_norm_bias", ".attn.layernorm_qkv.0.bias"),
+        (".attn.layernorm_qkv.layer_norm_weight", ".attn.layernorm_qkv.0.weight"),
+        (".attn.layernorm_qkv.weight", ".attn.layernorm_qkv.1.weight"),
+        (".ffn.layer_norm_bias", ".ffn.0.bias"),
+        (".ffn.layer_norm_weight", ".ffn.0.weight"),
+        (".ffn.fc1_weight", ".ffn.1.weight"),
+        (".ffn.fc2_weight", ".ffn.3.weight"),
+    )
+    for old, new in replacements:
+        key = key.replace(old, new)
+    return key
+
+
+def _normalize_esmc_state_dict(state_dict: dict) -> dict:
+    normalized = {}
+    for key, tensor in state_dict.items():
+        normalized_key = _normalize_esmc_state_key(key)
+        if normalized_key is None:
+            continue
+        normalized[normalized_key] = tensor
+    return normalized
+
+
+def _safetensors_checkpoint_files(checkpoint_path: Path) -> List[Path]:
+    if checkpoint_path.name == "model.safetensors":
+        return [checkpoint_path]
+    with checkpoint_path.open("r", encoding="utf-8") as f:
+        index = json.load(f)
+    return [
+        checkpoint_path.parent / filename
+        for filename in sorted(set(index["weight_map"].values()))
+    ]
+
+
+def _load_safetensors_state_dict(
+    model_obj: ESMplusplusForMaskedLM,
+    checkpoint_path: Path,
+    device: Union[torch.device, str],
+) -> None:
+    expected_keys = set(model_obj.state_dict().keys())
+    loaded_keys = set()
+    device_string = str(torch.device(device))
+    for shard_path in _safetensors_checkpoint_files(checkpoint_path):
+        shard_state_dict = load_safetensors_file(shard_path, device=device_string)
+        normalized = _normalize_esmc_state_dict(shard_state_dict)
+        unexpected = set(normalized.keys()) - expected_keys
+        assert len(unexpected) == 0, (
+            f"Unexpected ESMC checkpoint keys in {shard_path.name}: "
+            f"{sorted(unexpected)[:10]}"
+        )
+        model_obj.load_state_dict(normalized, strict=False)
+        loaded_keys.update(normalized.keys())
+
+    missing = expected_keys - loaded_keys
+    assert len(missing) == 0, (
+        f"ESMC checkpoint did not provide all expected keys: {sorted(missing)[:10]}"
+    )
 
 
 def _load_esmc_checkpoint_model(
@@ -1082,8 +1172,16 @@ def _load_esmc_checkpoint_model(
     )
     with torch.device(device):
         model_obj = ESMplusplusForMaskedLM(config)
-    state_dict = torch.load(get_esmc_checkpoint_path(key), map_location=device)
-    model_obj.load_state_dict(state_dict)
+    checkpoint_path = get_esmc_checkpoint_path(key)
+    if checkpoint_path.suffix == ".safetensors" or checkpoint_path.name == "model.safetensors.index.json":
+        _load_safetensors_state_dict(
+            model_obj=model_obj,
+            checkpoint_path=checkpoint_path,
+            device=device,
+        )
+    else:
+        state_dict = torch.load(checkpoint_path, map_location=device)
+        model_obj.load_state_dict(_normalize_esmc_state_dict(state_dict))
     return model_obj
 
 
@@ -1103,6 +1201,15 @@ def ESMplusplus_600M(device: Union[torch.device, str] = "cpu"):
         num_hidden_layers=36,
     )
     return _load_esmc_checkpoint_model(config=config, model="esmc-600", device=device)
+
+
+def ESMplusplus_6B(device: Union[torch.device, str] = "cpu"):
+    config = ESMplusplusConfig(
+        hidden_size=2560,
+        num_attention_heads=40,
+        num_hidden_layers=80,
+    )
+    return _load_esmc_checkpoint_model(config=config, model="esmc-6b", device=device)
 
 
 ### Tokenization

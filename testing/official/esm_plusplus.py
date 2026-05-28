@@ -57,18 +57,20 @@ def load_official_model(
     """Load the official ESMC model from the esm submodule.
 
     Args:
-        reference_repo_id: e.g. "EvolutionaryScale/esmc-300m-2024-12"
+        reference_repo_id: e.g. "biohub/ESMC-300M" or "esmc-300"
         device: target device
         dtype: target dtype (should be float32 for comparison)
 
     Returns (wrapped_model, tokenizer).
     """
-    from esm.pretrained import ESMC_300M_202412, ESMC_600M_202412
+    from esm.pretrained import ESMC_300M_202412, ESMC_600M_202412, ESMC_6B_202412
 
     if "300" in reference_repo_id:
         official_model = ESMC_300M_202412(use_flash_attn=False)
     elif "600" in reference_repo_id:
         official_model = ESMC_600M_202412(use_flash_attn=False)
+    elif "6B" in reference_repo_id or "6b" in reference_repo_id:
+        official_model = ESMC_6B_202412(use_flash_attn=False)
     else:
         raise ValueError(f"Unsupported ESMC reference repo id: {reference_repo_id}")
 
@@ -79,6 +81,6 @@ def load_official_model(
 
 
 if __name__ == "__main__":
-    model, tokenizer = load_official_model(reference_repo_id="EvolutionaryScale/esmc-300m-2024-12", device=torch.device("cuda"), dtype=torch.float32)
+    model, tokenizer = load_official_model(reference_repo_id="biohub/ESMC-300M", device=torch.device("cuda"), dtype=torch.float32)
     print(model)
     print(tokenizer)

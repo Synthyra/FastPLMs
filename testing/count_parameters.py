@@ -27,6 +27,7 @@ SEQUENCE_MODELS = {
     # ESM++
     "esmc_small": "Synthyra/ESMplusplus_small",
     "esmc_large": "Synthyra/ESMplusplus_large",
+    "esmc_6b": "Synthyra/ESMplusplus_6B",
     # E1
     "e1_150m": "Synthyra/Profluent-E1-150M",
     "e1_300m": "Synthyra/Profluent-E1-300M",
