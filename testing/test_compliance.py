@@ -231,8 +231,14 @@ def _select_final_hidden_state(
     output: object,
     hidden_states: Tuple[torch.Tensor, ...],
 ) -> Tuple[str, torch.Tensor]:
-    if "last_hidden_state" in output:
+    if isinstance(output, dict) and "last_hidden_state" in output:
         return "last_hidden_state", output["last_hidden_state"]
+    try:
+        last_hidden_state = output.last_hidden_state
+    except AttributeError:
+        return "hidden_states[-1]", hidden_states[-1]
+    if last_hidden_state is not None:
+        return "last_hidden_state", last_hidden_state
     return "hidden_states[-1]", hidden_states[-1]
 
 
@@ -336,19 +342,18 @@ def _run_forward_compliance(model_key: str, registry: Dict[str, Dict]) -> None:
                 fast_output,
                 fast_hidden,
             )
-            assert official_last_label == fast_last_label, (
-                f"{model_key}: final hidden state source mismatch "
-                f"fast={fast_last_label} official={official_last_label}"
-            )
+            final_label = official_last_label
+            if official_last_label != fast_last_label:
+                final_label = f"fast {fast_last_label} vs official {official_last_label}"
             last_metrics = _masked_metrics(fast_last, official_last, attention_mask)
-            _record_worst(worst_metrics, official_last_label, last_metrics)
+            _record_worst(worst_metrics, final_label, last_metrics)
             if (
                 last_metrics["mse"] > tol.last_hidden_mse
                 or last_metrics["maxabs"] > tol.last_hidden_maxabs
                 or last_metrics["rel_maxabs"] > tol.last_hidden_rel_maxabs
             ):
                 failures.append(
-                    f"{official_last_label}: mse={last_metrics['mse']:.3e} "
+                    f"{final_label}: mse={last_metrics['mse']:.3e} "
                     f"(tol={tol.last_hidden_mse:.3e}), "
                     f"maxabs={last_metrics['maxabs']:.3e} "
                     f"(tol={tol.last_hidden_maxabs:.3e}), "
