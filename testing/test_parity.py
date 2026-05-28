@@ -686,7 +686,10 @@ def _get_resolved_backend(model: nn.Module, model_key: str) -> str:
 BACKEND_TOL_FP32: Dict[str, Dict[str, Dict[str, float]]] = {
     "esm2":  {"flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3}},
     "esmc":  {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
-    "esm3":  {"flex": {"mse": 1e-6, "maxabs": 2e-2, "rel_maxabs": 5e-3}},
+    # ESM3 exposes the pre-final-norm stream as last_hidden_state, with fp32
+    # activations around 1e4 on the fixed parity batch. SDPA vs manual/Flex
+    # attention shows ~1e-6 relative drift there while logits stay bit-tight.
+    "esm3":  {"flex": {"mse": 1e-6, "maxabs": 2e-2, "rel_maxabs": 5e-6}},
     "e1":    {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
     "dplm":  {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
     "dplm2": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
