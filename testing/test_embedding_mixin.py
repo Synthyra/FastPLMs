@@ -85,12 +85,23 @@ def _assert_embeddings_match(
         )
 
 
-def _disable_tf32_for_batch_single_match() -> None:
+@pytest.fixture
+def disable_tf32_for_batch_single_match():
     # TF32 kernels can be batch-shape-dependent on Hopper/GH200, which defeats
     # this test's batch-vs-single equality check.
-    if torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+    if not torch.cuda.is_available():
+        yield
+        return
+
+    matmul_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+    cudnn_allow_tf32 = torch.backends.cudnn.allow_tf32
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = matmul_allow_tf32
+        torch.backends.cudnn.allow_tf32 = cudnn_allow_tf32
 
 
 # --- CPU-only utility tests ---
@@ -188,7 +199,7 @@ def test_nan_stability(model_key: str) -> None:
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("model_key", TOKENIZER_MODEL_KEYS)
-def test_batch_single_match(model_key: str) -> None:
+def test_batch_single_match(model_key: str, disable_tf32_for_batch_single_match) -> None:
     """Batched and single-item embedding produce matching results (tokenizer models only).
 
     E1 is excluded: flash varlen is not bit-deterministic across different batch sizes.
@@ -197,7 +208,6 @@ def test_batch_single_match(model_key: str) -> None:
     from transformers import AutoModelForMaskedLM
 
     random.seed(SEED)
-    _disable_tf32_for_batch_single_match()
     config = MODEL_REGISTRY[model_key]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -280,12 +290,11 @@ def test_full_nan_stability(model_key: str) -> None:
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("model_key", mark_by_size(FULL_TOKENIZER_KEYS, FULL_MODEL_REGISTRY))
-def test_full_batch_single_match(model_key: str) -> None:
+def test_full_batch_single_match(model_key: str, disable_tf32_for_batch_single_match) -> None:
     """Every tokenizer-mode checkpoint matches batch vs single-item embedding."""
     from transformers import AutoModelForMaskedLM
 
     random.seed(SEED)
-    _disable_tf32_for_batch_single_match()
     config = FULL_MODEL_REGISTRY[model_key]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

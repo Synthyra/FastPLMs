@@ -8,7 +8,8 @@ import pytest
 import torch
 from transformers import AutoConfig, AutoTokenizer, EsmTokenizer
 
-from fastplms.ankh.modeling_ankh import FastAnkhConfig, _load_ankh_tokenizer
+from fastplms.ankh.modeling_ankh import FAST_ANKH_ENCODER, FastAnkhConfig
+from fastplms.dplm2.modeling_dplm2 import _normalize_dplm2_input_ids
 from fastplms.e1.modeling_e1 import E1BatchPreparer, get_tokenizer
 from fastplms.esm_plusplus.modeling_esm_plusplus import EsmSequenceTokenizer
 from testing.conftest import CANONICAL_AAS, FULL_MODEL_REGISTRY, mark_by_size
@@ -19,6 +20,11 @@ TOKENIZER_MODEL_KEYS = [
     for key, value in FULL_MODEL_REGISTRY.items()
     if value["uses_tokenizer"]
 ]
+DPLM2_MODEL_KEYS = [
+    key
+    for key, value in FULL_MODEL_REGISTRY.items()
+    if value["model_type"] == "DPLM2"
+]
 CANONICAL_SEQUENCES = [
     "M" + CANONICAL_AAS,
     "MVLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHFDLSH",
@@ -26,13 +32,23 @@ CANONICAL_SEQUENCES = [
 ]
 
 
+def _tiny_ankh_config(name_or_path: str = "") -> FastAnkhConfig:
+    config = FastAnkhConfig(
+        vocab_size=4,
+        d_model=8,
+        d_kv=4,
+        d_ff=16,
+        num_heads=2,
+        num_layers=1,
+    )
+    config._name_or_path = name_or_path
+    return config
+
+
 def _fast_tokenizer(config: Dict):
     if config["model_type"] == "ANKH":
-        fast_config = AutoConfig.from_pretrained(
-            config["fast_path"],
-            trust_remote_code=True,
-        )
-        return _load_ankh_tokenizer(fast_config)
+        encoder = FAST_ANKH_ENCODER(_tiny_ankh_config(config["fast_path"]))
+        return encoder.tokenizer
     if config["model_type"] == "ESMC":
         return EsmSequenceTokenizer()
     if config["model_type"] in ("ESM2", "DPLM", "DPLM2"):
@@ -121,7 +137,8 @@ def test_sequence_tokenizer_matches_reference(model_key: str) -> None:
 
 
 def test_ankh_tokenizer_loader_falls_back_for_bare_config() -> None:
-    fast_tok = _load_ankh_tokenizer(FastAnkhConfig())
+    encoder = FAST_ANKH_ENCODER(_tiny_ankh_config())
+    fast_tok = encoder.tokenizer
     reference_tok = AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")
 
     assert len(fast_tok.get_vocab()) == len(reference_tok.get_vocab())
@@ -130,6 +147,45 @@ def test_ankh_tokenizer_loader_falls_back_for_bare_config() -> None:
         _token_ids(fast_tok, CANONICAL_SEQUENCES[0]),
         _token_ids(reference_tok, CANONICAL_SEQUENCES[0]),
     )
+
+
+@pytest.mark.parametrize(
+    "model_key",
+    mark_by_size(DPLM2_MODEL_KEYS, FULL_MODEL_REGISTRY),
+)
+def test_dplm2_tokenizer_special_ids_normalize_in_range(model_key: str) -> None:
+    config = FULL_MODEL_REGISTRY[model_key]
+    fast_config = AutoConfig.from_pretrained(
+        config["fast_path"],
+        trust_remote_code=True,
+    )
+    tokenizer = EsmTokenizer.from_pretrained(config["fast_path"])
+
+    generic_special_ids = torch.tensor([[
+        fast_config.vocab_size,
+        fast_config.vocab_size + 1,
+        fast_config.vocab_size + 2,
+        fast_config.vocab_size + 3,
+        -100,
+    ]])
+    expected = torch.tensor([[2, 3, 0, 32, -100]])
+    normalized_special_ids = _normalize_dplm2_input_ids(
+        generic_special_ids,
+        vocab_size=fast_config.vocab_size,
+    )
+    assert torch.equal(normalized_special_ids, expected)
+
+    encoded = tokenizer(
+        CANONICAL_SEQUENCES,
+        return_tensors="pt",
+        padding=True,
+    )
+    normalized_input_ids = _normalize_dplm2_input_ids(
+        encoded["input_ids"],
+        vocab_size=fast_config.vocab_size,
+    )
+    valid_ids = normalized_input_ids[normalized_input_ids.ge(0)]
+    assert bool(valid_ids.lt(fast_config.vocab_size).all())
 
 
 def test_e1_sequence_mode_tokenizer_contract() -> None:
