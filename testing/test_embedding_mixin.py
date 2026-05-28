@@ -10,7 +10,7 @@ import torch
 
 from testing.conftest import (
     CANONICAL_AAS, FULL_MODEL_REGISTRY, MODEL_REGISTRY, SEED,
-    mark_by_size,
+    mark_by_size, strict_fp32_matmul,
 )
 
 
@@ -202,22 +202,23 @@ def test_batch_single_match(model_key: str) -> None:
     tokenizer = FixedLengthTokenizer(model.tokenizer)
     sequences = _random_sequences(n=8)
 
-    batch_embs = model.embed_dataset(
-        sequences=sequences,
-        batch_size=BATCH_SIZE,
-        tokenizer=tokenizer,
-        full_embeddings=True,
-        embed_dtype=torch.float32,
-        save=False,
-    )
-    single_embs = model.embed_dataset(
-        sequences=sequences,
-        batch_size=1,
-        tokenizer=tokenizer,
-        full_embeddings=True,
-        embed_dtype=torch.float32,
-        save=False,
-    )
+    with strict_fp32_matmul():
+        batch_embs = model.embed_dataset(
+            sequences=sequences,
+            batch_size=BATCH_SIZE,
+            tokenizer=tokenizer,
+            full_embeddings=True,
+            embed_dtype=torch.float32,
+            save=False,
+        )
+        single_embs = model.embed_dataset(
+            sequences=sequences,
+            batch_size=1,
+            tokenizer=tokenizer,
+            full_embeddings=True,
+            embed_dtype=torch.float32,
+            save=False,
+        )
     _assert_no_nan(batch_embs, f"{model_key} match test batch_size={BATCH_SIZE}")
     _assert_no_nan(single_embs, f"{model_key} match test batch_size=1")
     _assert_embeddings_match(batch_embs, single_embs, model_key)
@@ -289,22 +290,23 @@ def test_full_batch_single_match(model_key: str) -> None:
     tokenizer = FixedLengthTokenizer(model.tokenizer)
     sequences = _random_sequences(n=8)
 
-    batch_embs = model.embed_dataset(
-        sequences=sequences,
-        batch_size=BATCH_SIZE,
-        tokenizer=tokenizer,
-        full_embeddings=True,
-        embed_dtype=torch.float32,
-        save=False,
-    )
-    single_embs = model.embed_dataset(
-        sequences=sequences,
-        batch_size=1,
-        tokenizer=tokenizer,
-        full_embeddings=True,
-        embed_dtype=torch.float32,
-        save=False,
-    )
+    with strict_fp32_matmul():
+        batch_embs = model.embed_dataset(
+            sequences=sequences,
+            batch_size=BATCH_SIZE,
+            tokenizer=tokenizer,
+            full_embeddings=True,
+            embed_dtype=torch.float32,
+            save=False,
+        )
+        single_embs = model.embed_dataset(
+            sequences=sequences,
+            batch_size=1,
+            tokenizer=tokenizer,
+            full_embeddings=True,
+            embed_dtype=torch.float32,
+            save=False,
+        )
     _assert_no_nan(batch_embs, f"{model_key} match test batch_size={BATCH_SIZE}")
     _assert_no_nan(single_embs, f"{model_key} match test batch_size=1")
     _assert_embeddings_match(batch_embs, single_embs, model_key)

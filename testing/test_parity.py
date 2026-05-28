@@ -25,6 +25,7 @@ Run (per family image; see Dockerfile.<family>):
 """
 from __future__ import annotations
 
+import contextlib
 import importlib
 import random
 from dataclasses import dataclass
@@ -36,7 +37,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForMaskedLM
 
-from testing.conftest import CANONICAL_AAS, MODEL_REGISTRY, SEED, tokenize_batch
+from testing.conftest import (
+    CANONICAL_AAS, MODEL_REGISTRY, SEED, strict_fp32_matmul, tokenize_batch,
+)
 
 
 @dataclass
@@ -406,7 +409,8 @@ def _run_forward_parity(model_key: str, dtype: torch.dtype, tol: ParityTolerance
 
     sequences = generate_fixed_sequences(lengths=PADDING_SCENARIOS[scenario])
 
-    with torch.no_grad():
+    parity_context = strict_fp32_matmul() if dtype == torch.float32 else contextlib.nullcontext()
+    with torch.no_grad(), parity_context:
         fout, fmask = fast_forward(fast, model_key, sequences, device, output_hidden_states=True)
         nout, nmask = native_forward(native_model, model_key, sequences, device, native_tok)
 
@@ -562,7 +566,7 @@ def test_padding_does_not_pollute_valid_positions_fp32(model_key: str, backend: 
     short = generate_fixed_sequences(lengths=[16])[0]
     long_ = generate_fixed_sequences(lengths=[128])[0]
 
-    with torch.no_grad():
+    with torch.no_grad(), strict_fp32_matmul():
         out_alone, mask_alone = fast_forward(fast, model_key, [short], device, output_hidden_states=True)
         out_padded, mask_padded = fast_forward(fast, model_key, [short, long_], device, output_hidden_states=True)
 
@@ -769,7 +773,7 @@ def _run_backend_consistency_fp32(
     base_resolved = _apply_backend(baseline, "sdpa", model_key)
     assert base_resolved == "sdpa", f"{model_key}: sdpa baseline resolved to {base_resolved} (expected 'sdpa')"
 
-    with torch.no_grad():
+    with torch.no_grad(), strict_fp32_matmul():
         base_out, mask = fast_forward(baseline, model_key, sequences, device, output_hidden_states=False)
     base_last_attr = getattr(base_out, "last_hidden_state", None)
     base_last = base_last_attr if base_last_attr is not None else base_out.hidden_states[-1]
@@ -796,7 +800,7 @@ def _run_backend_consistency_fp32(
             del alt
             torch.cuda.empty_cache()
             continue
-        with torch.no_grad():
+        with torch.no_grad(), strict_fp32_matmul():
             alt_out, _ = fast_forward(alt, model_key, sequences, device, output_hidden_states=False)
         alt_last_attr = getattr(alt_out, "last_hidden_state", None)
         alt_last = alt_last_attr if alt_last_attr is not None else alt_out.hidden_states[-1]
@@ -976,20 +980,21 @@ def test_embed_dataset_pipeline_parity(model_key: str) -> None:
 
     # Tokenizer mode vs sequence mode: E1 has no tokenizer.
     tokenizer_mode = config["uses_tokenizer"]
-    fast_embeddings = fast.embed_dataset(
-        sequences=sequences,
-        tokenizer=fast.tokenizer if tokenizer_mode else None,
-        batch_size=4, max_len=256, truncate=True,
-        full_embeddings=False,
-        embed_dtype=torch.float32,
-        pooling_types=["mean"],
-        num_workers=0, sql=False, save=False,
-        padding="max_length" if tokenizer_mode else "longest",
-    )
+    with strict_fp32_matmul():
+        fast_embeddings = fast.embed_dataset(
+            sequences=sequences,
+            tokenizer=fast.tokenizer if tokenizer_mode else None,
+            batch_size=4, max_len=256, truncate=True,
+            full_embeddings=False,
+            embed_dtype=torch.float32,
+            pooling_types=["mean"],
+            num_workers=0, sql=False, save=False,
+            padding="max_length" if tokenizer_mode else "longest",
+        )
     assert fast_embeddings is not None
 
     tol = EMBED_DATASET_TOL[model_key]
-    with torch.no_grad():
+    with torch.no_grad(), strict_fp32_matmul():
         failures: List[str] = []
         for seq in sequences:
             # Produce a native mean-pooled embedding for this single sequence.

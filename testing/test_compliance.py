@@ -34,6 +34,8 @@ MAX_SEQ_LEN = 128
 # can show logits MSE ~0.02 and pred accuracy ~0.94 due to accumulated rounding.
 LOGITS_MSE_THRESHOLD = 0.05
 PREDS_ACCURACY_THRESHOLD = 0.90
+FINAL_HIDDEN_MSE_THRESHOLD = 1e-4
+LOGITS_HEAD_MISMATCH_MODEL_TYPES = {"ANKH"}
 
 
 def _generate_random_batch(batch_size: int, min_len: int, max_len: int) -> List[str]:
@@ -134,6 +136,7 @@ def _run_forward_compliance(model_key: str, registry: Dict[str, Dict]) -> None:
 
     cumulative_logits_mse = 0.0
     cumulative_preds_accuracy = 0.0
+    cumulative_final_hidden_mse = 0.0
     hidden_state_diffs: Dict[int, float] = defaultdict(float)
 
     with torch.inference_mode():
@@ -165,21 +168,40 @@ def _run_forward_compliance(model_key: str, registry: Dict[str, Dict]) -> None:
 
             official_hidden = official_output.hidden_states
             fast_hidden = fast_output.hidden_states
-            for i in range(min(len(official_hidden), len(fast_hidden))):
+            hidden_state_count = min(len(official_hidden), len(fast_hidden))
+            assert hidden_state_count > 0, f"{model_key}: no hidden states returned"
+            for i in range(hidden_state_count):
                 off_h = official_hidden[i][attention_mask]
                 fast_h = fast_hidden[i][attention_mask]
                 hidden_state_diffs[i] += mse_loss(off_h, fast_h).item()
+            final_off_h = official_hidden[hidden_state_count - 1][attention_mask]
+            final_fast_h = fast_hidden[hidden_state_count - 1][attention_mask]
+            cumulative_final_hidden_mse += mse_loss(final_off_h, final_fast_h).item()
 
     avg_logits_mse = cumulative_logits_mse / TEST_NUM_BATCHES
     avg_preds_accuracy = cumulative_preds_accuracy / TEST_NUM_BATCHES
+    avg_final_hidden_mse = cumulative_final_hidden_mse / TEST_NUM_BATCHES
 
-    if avg_logits_mse > LOGITS_MSE_THRESHOLD or avg_preds_accuracy < PREDS_ACCURACY_THRESHOLD:
+    if model_type in LOGITS_HEAD_MISMATCH_MODEL_TYPES:
+        if avg_final_hidden_mse > FINAL_HIDDEN_MSE_THRESHOLD:
+            debug_lines = [f"Layer {k}: avg MSE = {v / TEST_NUM_BATCHES:.6f}" for k, v in sorted(hidden_state_diffs.items())]
+            debug_msg = "\n".join(debug_lines)
+            pytest.fail(
+                f"{model_key} forward compliance failed:\n"
+                f"  avg final hidden MSE = {avg_final_hidden_mse:.6f} "
+                f"(threshold: {FINAL_HIDDEN_MSE_THRESHOLD})\n"
+                f"  logits skipped: {model_type} native wrapper uses a synthetic LM head\n"
+                f"Per-layer hidden state MSE:\n{debug_msg}"
+            )
+    elif avg_logits_mse > LOGITS_MSE_THRESHOLD or avg_preds_accuracy < PREDS_ACCURACY_THRESHOLD:
         debug_lines = [f"Layer {k}: avg MSE = {v / TEST_NUM_BATCHES:.6f}" for k, v in sorted(hidden_state_diffs.items())]
         debug_msg = "\n".join(debug_lines)
         pytest.fail(
             f"{model_key} forward compliance failed:\n"
             f"  avg logits MSE = {avg_logits_mse:.6f} (threshold: {LOGITS_MSE_THRESHOLD})\n"
             f"  avg preds accuracy = {avg_preds_accuracy:.4f} (threshold: {PREDS_ACCURACY_THRESHOLD})\n"
+            f"  avg final hidden MSE = {avg_final_hidden_mse:.6f} "
+            f"(threshold: {FINAL_HIDDEN_MSE_THRESHOLD})\n"
             f"Per-layer hidden state MSE:\n{debug_msg}"
         )
 
