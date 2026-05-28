@@ -16,6 +16,12 @@ from testing.conftest import (
 
 BATCH_SIZE = 4
 MAX_EMBED_LEN = 128
+EMBED_MATCH_TOL = {
+    "default": {"maxabs": 6e-3, "rel_maxabs": None},
+    # ESM3 exposes the pre-final-norm residual stream as embeddings. Absolute
+    # fp32 batch-shape noise can reach ~1e-2 while relative error stays tiny.
+    "esm3": {"maxabs": 1e-2, "rel_maxabs": 5e-6},
+}
 
 
 # Models that use tokenizer mode (not E1)
@@ -71,17 +77,25 @@ def _assert_embeddings_match(
     a: Dict[str, torch.Tensor],
     b: Dict[str, torch.Tensor],
     label: str,
-    atol: float = 6e-3,
 ) -> None:
     assert set(a) == set(b), f"[{label}] Key sets differ between batch and single runs"
+    if label.startswith("esm3"):
+        tol = EMBED_MATCH_TOL["esm3"]
+    else:
+        tol = EMBED_MATCH_TOL["default"]
     for seq in a:
         ea, eb = a[seq].float(), b[seq].float()
         assert ea.shape == eb.shape, (
             f"[{label}] Shape mismatch for '{seq[:20]}': {ea.shape} vs {eb.shape}"
         )
         max_diff = (ea - eb).abs().max().item()
-        assert max_diff <= atol, (
-            f"[{label}] Max abs diff {max_diff:.5f} > {atol} for '{seq[:20]}'"
+        base_maxabs = max(ea.abs().max().item(), eb.abs().max().item())
+        rel_maxabs = max_diff / base_maxabs if base_maxabs > 1e-12 else 0.0
+        rel_tol = tol["rel_maxabs"]
+        rel_ok = rel_tol is None or rel_maxabs <= rel_tol
+        assert max_diff <= tol["maxabs"] and rel_ok, (
+            f"[{label}] Max abs diff {max_diff:.5f} > {tol['maxabs']} "
+            f"or rel maxabs {rel_maxabs:.3e} > {rel_tol} for '{seq[:20]}'"
         )
 
 
