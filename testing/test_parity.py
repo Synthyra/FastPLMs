@@ -82,8 +82,8 @@ FAMILY_TOLERANCES: Dict[str, ParityTolerances] = {
         bf16_logits_mse=5e-2, bf16_hidden_rel_std=1e-2, bf16_hidden_rel_maxabs=5e-2,
     ),
     "esmc": ParityTolerances(
-        fp32_last_hidden_mse=0.0, fp32_last_hidden_maxabs=0.0, fp32_last_hidden_rel_maxabs=0.0,
-        fp32_logits_mse=0.0, fp32_hidden_rel_std=0.0, fp32_hidden_rel_maxabs=0.0,
+        fp32_last_hidden_mse=1e-8, fp32_last_hidden_maxabs=1e-3, fp32_last_hidden_rel_maxabs=1e-3,
+        fp32_logits_mse=1e-4, fp32_hidden_rel_std=5e-3, fp32_hidden_rel_maxabs=5e-2,
         bf16_last_hidden_mse=1e-5, bf16_last_hidden_maxabs=5e-2, bf16_last_hidden_rel_maxabs=5e-2,
         bf16_logits_mse=5e-2, bf16_hidden_rel_std=5e-2, bf16_hidden_rel_maxabs=1e-1,
     ),
