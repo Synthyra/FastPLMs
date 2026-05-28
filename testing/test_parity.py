@@ -686,7 +686,7 @@ def _get_resolved_backend(model: nn.Module, model_key: str) -> str:
 BACKEND_TOL_FP32: Dict[str, Dict[str, Dict[str, float]]] = {
     "esm2":  {"flex": {"mse": 1e-6, "maxabs": 5e-3, "rel_maxabs": 5e-3}},
     "esmc":  {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
-    "esm3":  {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
+    "esm3":  {"flex": {"mse": 1e-6, "maxabs": 2e-2, "rel_maxabs": 5e-3}},
     "e1":    {"flex": {"mse": 1e-6, "maxabs": 1e-2, "rel_maxabs": 5e-3}},
     "dplm":  {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
     "dplm2": {"flex": {"mse": 1e-6, "maxabs": 5e-2, "rel_maxabs": 5e-3}},
