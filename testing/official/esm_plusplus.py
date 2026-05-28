@@ -63,16 +63,30 @@ def load_official_model(
 
     Returns (wrapped_model, tokenizer).
     """
-    from esm.pretrained import ESMC_300M_202412, ESMC_600M_202412, ESMC_6B_202412
+    from esm.models.esmc import ESMC
+    from esm.tokenization import get_esmc_model_tokenizers
+    from fastplms.esm_plusplus.modeling_esm_plusplus import (
+        _ESMC_CHECKPOINT_SPECS,
+        _load_safetensors_state_dict,
+        _resolve_esmc_checkpoint_key,
+        get_esmc_checkpoint_path,
+    )
 
-    if "300" in reference_repo_id:
-        official_model = ESMC_300M_202412(use_flash_attn=False)
-    elif "600" in reference_repo_id:
-        official_model = ESMC_600M_202412(use_flash_attn=False)
-    elif "6B" in reference_repo_id or "6b" in reference_repo_id:
-        official_model = ESMC_6B_202412(use_flash_attn=False)
-    else:
-        raise ValueError(f"Unsupported ESMC reference repo id: {reference_repo_id}")
+    key = _resolve_esmc_checkpoint_key(reference_repo_id)
+    spec = _ESMC_CHECKPOINT_SPECS[key]
+    with torch.device(device):
+        official_model = ESMC(
+            d_model=spec["hidden_size"],
+            n_heads=spec["num_attention_heads"],
+            n_layers=spec["num_hidden_layers"],
+            tokenizer=get_esmc_model_tokenizers(),
+            use_flash_attn=False,
+        ).eval()
+    _load_safetensors_state_dict(
+        model_obj=official_model,
+        checkpoint_path=get_esmc_checkpoint_path(reference_repo_id),
+        device=device,
+    )
 
     official_model = official_model.to(device=device, dtype=dtype).eval()
     tokenizer = official_model.tokenizer
