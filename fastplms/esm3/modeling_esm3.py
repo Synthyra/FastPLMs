@@ -14,6 +14,7 @@ import functools
 import importlib
 import os
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -28,6 +29,17 @@ from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
 from transformers import PreTrainedModel, PreTrainedTokenizerFast, PretrainedConfig
 from transformers.modeling_outputs import ModelOutput
+
+try:
+    from torch.nn.attention.flex_attention import (
+        BlockMask,
+        create_block_mask,
+        flex_attention,
+    )
+except ImportError:
+    BlockMask = None
+    create_block_mask = None
+    flex_attention = None
 
 
 ESM3_OPEN_SMALL = "esm3_sm_open_v1"
@@ -96,7 +108,46 @@ SEQUENCE_VOCAB = [
     "<mask>",
 ]
 
-_SUPPORTED_ATTENTION_BACKENDS = ("sdpa",)
+_SUPPORTED_ATTENTION_BACKENDS = ("auto", "flex", "sdpa")
+_compiled_flex_attention = None
+
+
+class AttentionBackend(Enum):
+    AUTO = "auto"
+    FLEX = "flex"
+    SDPA = "sdpa"
+
+
+def _get_flex_attention_fn():
+    global _compiled_flex_attention
+    if flex_attention is None:
+        return None
+    flex_mod = torch.nn.attention.flex_attention
+    if getattr(flex_mod, "_FLEX_ATTENTION_DISABLE_COMPILE_DEBUG", False):
+        return flex_attention
+    if _compiled_flex_attention is None:
+        _compiled_flex_attention = torch.compile(
+            flex_attention,
+            dynamic=False,
+        )
+    return _compiled_flex_attention
+
+
+def resolve_attention_backend(requested_backend: str) -> AttentionBackend:
+    assert requested_backend in _SUPPORTED_ATTENTION_BACKENDS, (
+        f"Unsupported ESM3 attention backend: {requested_backend}. "
+        f"Expected one of {_SUPPORTED_ATTENTION_BACKENDS}."
+    )
+    if requested_backend == AttentionBackend.AUTO.value:
+        if flex_attention is not None:
+            return AttentionBackend.FLEX
+        return AttentionBackend.SDPA
+    if requested_backend == AttentionBackend.FLEX.value:
+        assert flex_attention is not None, "Flex Attention is not available in this environment."
+        return AttentionBackend.FLEX
+    if requested_backend == AttentionBackend.SDPA.value:
+        return AttentionBackend.SDPA
+    raise AssertionError(f"Unsupported ESM3 attention backend: {requested_backend}")
 
 _ESM3_CHECKPOINT_SPECS = {
     ESM3_OPEN_SMALL: {
@@ -585,11 +636,14 @@ class MultiHeadAttention(nn.Module):
         n_heads: int,
         bias: bool = False,
         qk_layernorm: bool = True,
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = self.d_model // self.n_heads
+        self.scale = self.d_head**-0.5
+        self.attn_backend = resolve_attention_backend(attn_backend)
         self.layernorm_qkv = nn.Sequential(
             nn.LayerNorm(d_model),
             nn.Linear(d_model, d_model * 3, bias=bias),
@@ -641,21 +695,61 @@ class MultiHeadAttention(nn.Module):
             mask = None
 
         if output_attentions:
-            scale = self.d_head**-0.5
-            attn_scores = torch.einsum("bhld,bhsd->bhls", query, key) * scale
+            attn_scores = torch.einsum("bhld,bhsd->bhls", query, key) * self.scale
             if mask is not None:
                 attn_scores = attn_scores.masked_fill(~mask, float("-inf"))
             attn_weights = torch.softmax(attn_scores, dim=-1)
             context = torch.einsum("bhls,bhsd->bhld", attn_weights, value)
         else:
             attn_weights = None
-            if mask is None:
-                context = F.scaled_dot_product_attention(query, key, value)
+            if self.attn_backend == AttentionBackend.FLEX:
+                block_mask = self._create_flex_block_mask(seq_id, query)
+                fn = _get_flex_attention_fn()
+                assert fn is not None, "Flex Attention is not available in this environment."
+                context = fn(
+                    query,
+                    key,
+                    value,
+                    block_mask=block_mask,
+                    scale=self.scale,
+                )
+            elif self.attn_backend == AttentionBackend.SDPA:
+                context = F.scaled_dot_product_attention(
+                    query,
+                    key,
+                    value,
+                    attn_mask=mask,
+                    scale=self.scale,
+                )
             else:
-                context = F.scaled_dot_product_attention(query, key, value, mask)
+                raise AssertionError(f"Unsupported resolved ESM3 backend: {self.attn_backend}")
 
         context = einops.rearrange(context, "b h s d -> b s (h d)")
         return self.out_proj(context), attn_weights
+
+    @staticmethod
+    def _create_flex_block_mask(
+        seq_id: Optional[torch.Tensor],
+        query: torch.Tensor,
+    ) -> Optional["BlockMask"]:
+        if seq_id is None:
+            return None
+        assert create_block_mask is not None, (
+            "Flex Attention requested but torch.create_block_mask is unavailable."
+        )
+        batch_size, _, seq_len, _ = query.shape
+
+        def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+            return seq_id[batch_idx, q_idx] == seq_id[batch_idx, kv_idx]
+
+        return create_block_mask(
+            mask_mod,
+            batch_size,
+            1,
+            seq_len,
+            seq_len,
+            device=query.device,
+        )
 
 
 class GeometricReasoningOriginalImpl(nn.Module):
@@ -826,6 +920,7 @@ class UnifiedTransformerBlock(nn.Module):
         mask_and_zero_frameless: bool = False,
         qk_layernorm: bool = True,
         ffn_type: str = "swiglu",
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.use_plain_attn = use_plain_attn
@@ -835,6 +930,7 @@ class UnifiedTransformerBlock(nn.Module):
                 n_heads,
                 bias,
                 qk_layernorm=qk_layernorm,
+                attn_backend=attn_backend,
             )
         self.use_geom_attn = use_geom_attn
         if self.use_geom_attn:
@@ -894,6 +990,7 @@ class TransformerStack(nn.Module):
         qk_layernorm: bool = True,
         ffn_type: str = "swiglu",
         expansion_ratio: float = 8 / 3,
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.blocks = nn.ModuleList(
@@ -911,6 +1008,7 @@ class TransformerStack(nn.Module):
                     bias=bias,
                     qk_layernorm=qk_layernorm,
                     ffn_type=ffn_type,
+                    attn_backend=attn_backend,
                 )
                 for index in range(n_layers)
             ]
@@ -1086,6 +1184,7 @@ class ESM3Core(nn.Module):
         v_heads: int,
         n_layers: int,
         tokenizers: FastESM3TokenizerCollection,
+        attn_backend: str = "sdpa",
     ):
         super().__init__()
         self.encoder = EncodeInputs(d_model)
@@ -1095,6 +1194,7 @@ class ESM3Core(nn.Module):
             v_heads,
             n_layers,
             mask_and_zero_frameless=True,
+            attn_backend=attn_backend,
         )
         self.output_heads = OutputHeads(d_model)
         self.tokenizers = tokenizers
@@ -1276,6 +1376,7 @@ def _build_official_esm3(config: FastESM3Config) -> nn.Module:
         v_heads=config.num_vector_heads,
         n_layers=config.num_hidden_layers,
         tokenizers=FastESM3TokenizerCollection(sequence=EsmSequenceTokenizer()),
+        attn_backend=config.attn_backend,
     )
 
 
@@ -1315,11 +1416,14 @@ class FastESM3PreTrainedModel(PreTrainedModel):
 
     @attn_backend.setter
     def attn_backend(self, backend: str) -> None:
-        if backend not in _SUPPORTED_ATTENTION_BACKENDS:
-            raise ValueError(
-                f"ESM3 currently supports only {_SUPPORTED_ATTENTION_BACKENDS}; got {backend}."
-            )
+        assert backend in _SUPPORTED_ATTENTION_BACKENDS, (
+            f"ESM3 currently supports only {_SUPPORTED_ATTENTION_BACKENDS}; got {backend}."
+        )
         self.config.attn_backend = backend
+        resolved = resolve_attention_backend(backend)
+        for module in self.modules():
+            if isinstance(module, MultiHeadAttention):
+                module.attn_backend = resolved
 
     @classmethod
     def from_pretrained_esm(

@@ -41,6 +41,14 @@ You can also call sequence inference directly:
 output = model.forward_sequence(["MKTAYIAKQRQISFVKSHFSRQDILDLWIYHTQGYFP"])
 ```
 
+Switch between SDPA and Flex Attention after loading:
+
+```python
+model.attn_backend = "flex"
+output = model.forward_sequence(["MKTAYIAKQRQISFVKSHFSRQDILDLWIYHTQGYFP"])
+model.attn_backend = "sdpa"
+```
+
 ## Embed Entire Datasets
 
 To embed a list of protein sequences, call `embed_dataset`. Sequences are deduplicated, sorted by length, optionally truncated, and embedded in batches.

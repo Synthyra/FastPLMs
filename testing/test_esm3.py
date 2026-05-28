@@ -97,3 +97,24 @@ def test_esm3_embed_dataset(tmp_path: Path) -> None:
     assert set(embeddings) == {"MKTAYIAKQ", "GGGG"}
     assert embeddings["MKTAYIAKQ"].shape == (128,)
     assert save_path.exists()
+
+
+def test_esm3_flex_matches_sdpa() -> None:
+    if not torch.cuda.is_available():
+        pytest.skip("Flex attention ESM3 equivalence is validated on CUDA.")
+    model = _small_model().to(torch.device("cuda"))
+    batch = model.tokenize_sequences(["MKTAYIAKQ", "GGGG"], device=model.device)
+
+    with torch.inference_mode():
+        model.attn_backend = "sdpa"
+        sdpa_output = model(**batch).last_hidden_state
+        try:
+            model.attn_backend = "flex"
+        except AssertionError as exc:
+            pytest.skip(f"Flex attention is unavailable: {exc}")
+        flex_output = model(**batch).last_hidden_state
+
+    max_abs = (sdpa_output - flex_output).float().abs().max().item()
+    mse = ((sdpa_output - flex_output).float() ** 2).mean().item()
+    assert max_abs < 1e-4
+    assert mse < 1e-8

@@ -1,13 +1,121 @@
 """Load official ESM3 from the official/esm submodule for comparison."""
+import math
 from typing import Optional, Tuple
 
 import einops
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 
 from testing.official import use_esm_submodule
 
 use_esm_submodule()
+
+
+def _patch_official_geom_attention_dtype_cast() -> None:
+    from esm.layers.geom_attention import GeometricReasoningOriginalImpl
+
+    if getattr(GeometricReasoningOriginalImpl, "_fastplms_dtype_patch", False):
+        return
+
+    def forward(self, s, affine, affine_mask, sequence_id, chain_id):
+        if sequence_id is None:
+            sequence_id = torch.zeros_like(s[..., 0], dtype=torch.int64)
+        attn_bias = sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)
+        attn_bias = attn_bias.unsqueeze(1).float()
+        attn_bias = attn_bias.masked_fill(
+            ~affine_mask[:, None, None, :],
+            torch.finfo(attn_bias.dtype).min,
+        )
+        chain_id_mask = chain_id.unsqueeze(1) != chain_id.unsqueeze(2)
+        attn_bias = attn_bias.masked_fill(
+            chain_id_mask.unsqueeze(1),
+            torch.finfo(s.dtype).min,
+        )
+
+        ns = self.s_norm(s)
+        vec_rot, vec_dist = self.proj(ns).split(
+            [
+                self.v_heads * 2 * 3 + self.v_heads * 3 * self.num_vector_messages,
+                self.v_heads * 2 * 3,
+            ],
+            dim=-1,
+        )
+        query_rot, key_rot, value = (
+            affine.rot[..., None]
+            .apply(einops.rearrange(vec_rot, "... (h c) -> ... h c", c=3))
+            .split(
+                [self.v_heads, self.v_heads, self.v_heads * self.num_vector_messages],
+                dim=-2,
+            )
+        )
+        query_dist, key_dist = (
+            affine[..., None]
+            .apply(einops.rearrange(vec_dist, "... (h c) -> ... h c", c=3))
+            .chunk(2, dim=-2)
+        )
+
+        query_dist = einops.rearrange(query_dist, "b s h d -> b h s 1 d")
+        key_dist = einops.rearrange(key_dist, "b s h d -> b h 1 s d")
+        query_rot = einops.rearrange(query_rot, "b s h d -> b h s d")
+        key_rot = einops.rearrange(key_rot, "b s h d -> b h d s")
+        value = einops.rearrange(
+            value,
+            "b s (h m) d -> b h s (m d)",
+            m=self.num_vector_messages,
+        )
+
+        distance_term = (query_dist - key_dist).norm(dim=-1) / math.sqrt(3)
+        rotation_term = query_rot.matmul(key_rot) / math.sqrt(3)
+        distance_term_weight = einops.rearrange(
+            F.softplus(self.distance_scale_per_head),
+            "h -> h 1 1",
+        )
+        rotation_term_weight = einops.rearrange(
+            F.softplus(self.rotation_scale_per_head),
+            "h -> h 1 1",
+        )
+        attn_weight = (
+            rotation_term * rotation_term_weight
+            - distance_term * distance_term_weight
+        )
+
+        if attn_bias is not None:
+            seq_q = attn_weight.size(2)
+            seq_k = attn_weight.size(3)
+            bias_q = max(0, attn_bias.size(2) - seq_q)
+            bias_k = max(0, attn_bias.size(3) - seq_k)
+            attn_bias = attn_bias[:, :, bias_q:, bias_k:]
+            attn_weight = attn_weight + attn_bias
+
+        attn_weight = torch.softmax(attn_weight, dim=-1)
+        attn_out = attn_weight.matmul(value)
+        attn_out = (
+            affine.rot[..., None]
+            .invert()
+            .apply(
+                einops.rearrange(
+                    attn_out,
+                    "b h s (m d) -> b s (h m) d",
+                    m=self.num_vector_messages,
+                )
+            )
+        )
+        attn_out = einops.rearrange(
+            attn_out,
+            "b s (h m) d -> b s (h m d)",
+            m=self.num_vector_messages,
+        )
+        if self.mask_and_zero_frameless:
+            attn_out = attn_out.masked_fill(~affine_mask[..., None], 0.0)
+        attn_out = attn_out.to(self.out_proj.weight.dtype)
+        return self.out_proj(attn_out)
+
+    GeometricReasoningOriginalImpl.forward = forward
+    GeometricReasoningOriginalImpl._fastplms_dtype_patch = True
+
+
+_patch_official_geom_attention_dtype_cast()
 
 
 class _ESM3ComplianceOutput:
