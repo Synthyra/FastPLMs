@@ -31,18 +31,34 @@ MAX_EMBED_LEN = 128
 @contextlib.contextmanager
 def strict_fp32_matmul():
     """Temporarily disable TF32 for fp32 numerical parity checks."""
-    old_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
-    old_cudnn_tf32 = torch.backends.cudnn.allow_tf32
-    old_matmul_precision = torch.get_float32_matmul_precision()
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
-    torch.set_float32_matmul_precision("highest")
+    try:
+        old_fp32_precision = torch.backends.fp32_precision
+        old_matmul_precision = torch.backends.cuda.matmul.fp32_precision
+        old_cudnn_precision = torch.backends.cudnn.fp32_precision
+    except AttributeError:
+        old_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+        old_cudnn_tf32 = torch.backends.cudnn.allow_tf32
+        old_matmul_precision = torch.get_float32_matmul_precision()
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        torch.set_float32_matmul_precision("highest")
+        try:
+            yield
+        finally:
+            torch.backends.cuda.matmul.allow_tf32 = old_matmul_tf32
+            torch.backends.cudnn.allow_tf32 = old_cudnn_tf32
+            torch.set_float32_matmul_precision(old_matmul_precision)
+        return
+
+    torch.backends.fp32_precision = "ieee"
+    torch.backends.cuda.matmul.fp32_precision = "ieee"
+    torch.backends.cudnn.fp32_precision = "ieee"
     try:
         yield
     finally:
-        torch.backends.cuda.matmul.allow_tf32 = old_matmul_tf32
-        torch.backends.cudnn.allow_tf32 = old_cudnn_tf32
-        torch.set_float32_matmul_precision(old_matmul_precision)
+        torch.backends.fp32_precision = old_fp32_precision
+        torch.backends.cuda.matmul.fp32_precision = old_matmul_precision
+        torch.backends.cudnn.fp32_precision = old_cudnn_precision
 
 # Default registry: one small model per family for fast CI
 MODEL_REGISTRY: Dict[str, Dict] = {

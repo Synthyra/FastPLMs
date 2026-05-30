@@ -75,6 +75,7 @@ The relative position bias is computed once (materialized as a full tensor) and 
 ## Notes
 
 - The `FastAnkhForMaskedLM` variant includes an LM head initialized from the shared embedding weights. The original ANKH models were trained with T5's span corruption objective using an encoder-decoder architecture. This encoder-only MaskedLM head is **not pre-trained for standard MLM** and requires additional fine-tuning.
+- `model.tokenizer` is loaded from the checkpoint hub id so each ANKH model uses its matching tokenizer.
 - ANKH3 models use a vocabulary of 256 tokens (vs 144 for v1/v2) and were trained with dual objectives ([NLU] for embeddings, [S2S] for generation).
 
 ## Citations

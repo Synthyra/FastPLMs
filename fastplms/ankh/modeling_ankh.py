@@ -92,6 +92,14 @@ class FastAnkhConfig(PretrainedConfig):
         return output
 
 
+def _load_ankh_tokenizer(config: FastAnkhConfig):
+    """Load the checkpoint-matched tokenizer, falling back only for bare configs."""
+    name_or_path = config._name_or_path
+    if isinstance(name_or_path, str) and len(name_or_path) > 0:
+        return AutoTokenizer.from_pretrained(name_or_path)
+    return AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")
+
+
 # ---------------------------------------------------------------------------
 # Submodules
 # ---------------------------------------------------------------------------
@@ -464,10 +472,7 @@ class FAST_ANKH_ENCODER(AnkhPreTrainedModel, EmbeddingMixin):
 
         self.final_layer_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.gradient_checkpointing = False
-        tokenizer_source = config._name_or_path
-        if tokenizer_source == "":
-            tokenizer_source = "ElnaggarLab/ankh-base"
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
+        self.tokenizer = _load_ankh_tokenizer(config)
         self.post_init()
 
     def get_input_embeddings(self):

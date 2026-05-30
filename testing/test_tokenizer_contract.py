@@ -1,4 +1,4 @@
-"""Tokenizer contract tests for FastPLMs sequence checkpoints."""
+"""Tokenizer contract tests for all FastPLMs sequence checkpoints."""
 
 from __future__ import annotations
 
