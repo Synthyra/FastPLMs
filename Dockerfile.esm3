@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs ESM3 testing.
+# Biohub `esm` is loaded from the official/esm submodule via sys.path.
+
+FROM fastplms-base
+
+RUN pip install \
+        attrs \
+        biopython \
+        biotite \
+        brotli \
+        cloudpathlib \
+        httpx \
+        msgpack \
+        msgpack-numpy \
+        pandas \
+        pygtrie \
+        tenacity \
+        zstd

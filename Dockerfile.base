@@ -3,7 +3,7 @@
 # Contains torch, transformers, pinned numpy, project source code -- everything
 # that every family needs. Does NOT install any family-specific native/official
 # package; those live in family Dockerfiles to avoid dependency conflicts
-# (e.g. EvolutionaryScale `esm` pins `transformers<4.53.0`, DPLM pins
+# (e.g. Biohub `esm` depends on a Biohub transformers fork, DPLM pins
 # torchtext==0.17.0).
 #
 # Build:

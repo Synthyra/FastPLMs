@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1.7
 # Image for FastPLMs ESM++ / ESMC parity testing.
-# Adds EvolutionaryScale `esm` package dependencies on top of the base image.
-# NOT using `pip install -e /app/official/esm` because that pins transformers<4.53.0
-# which conflicts with the 4.57.6 we use elsewhere. Instead we install the runtime
-# deps `esm.models.esmc` actually imports, relying on sys.path injection via
-# testing/official/__init__.py to bring in the esm package itself.
+# Adds Biohub `esm` package runtime dependencies on top of the base image.
+# NOT using `pip install -e /app/official/esm` because Biohub/esm depends on a
+# Biohub transformers fork. Instead we install the runtime deps `esm.models.esmc`
+# actually imports, relying on sys.path injection via testing/official/__init__.py
+# to bring in the esm package itself.
 #
 # Build:
 #   docker build -f Dockerfile.esm_plusplus -t fastplms-esm_plusplus .
@@ -22,7 +22,7 @@ RUN pip install \
         cloudpathlib \
         httpx \
         msgpack-numpy \
+        pandas \
         pygtrie \
         tenacity \
-        torchtext \
         zstd

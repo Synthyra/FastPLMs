@@ -4,7 +4,7 @@ Standalone ESMC parity investigation — NOT a pytest test.
 Run inside the fastplms Docker image:
     python /app/testing/parity_debug_esmc.py
 
-Goal: surface where FastPLMs ESMC diverges from native EvolutionaryScale ESMC.
+Goal: surface where FastPLMs ESMC diverges from native Biohub ESMC.
 
 What this script checks, in order, printing a clear PASS/FAIL per check:
   1. Tokenizer vocab parity (size, every token mapping, special token IDs).

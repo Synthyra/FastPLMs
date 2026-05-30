@@ -1,3 +1,4 @@
+import contextlib
 import os
 import random
 from typing import Dict, List, Tuple
@@ -26,6 +27,39 @@ SEED = 42
 DEFAULT_BATCH_SIZE = 4
 MAX_EMBED_LEN = 128
 
+
+@contextlib.contextmanager
+def strict_fp32_matmul():
+    """Temporarily disable TF32 for fp32 numerical parity checks."""
+    try:
+        old_fp32_precision = torch.backends.fp32_precision
+        old_matmul_precision = torch.backends.cuda.matmul.fp32_precision
+        old_cudnn_precision = torch.backends.cudnn.fp32_precision
+    except AttributeError:
+        old_matmul_tf32 = torch.backends.cuda.matmul.allow_tf32
+        old_cudnn_tf32 = torch.backends.cudnn.allow_tf32
+        old_matmul_precision = torch.get_float32_matmul_precision()
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+        torch.set_float32_matmul_precision("highest")
+        try:
+            yield
+        finally:
+            torch.backends.cuda.matmul.allow_tf32 = old_matmul_tf32
+            torch.backends.cudnn.allow_tf32 = old_cudnn_tf32
+            torch.set_float32_matmul_precision(old_matmul_precision)
+        return
+
+    torch.backends.fp32_precision = "ieee"
+    torch.backends.cuda.matmul.fp32_precision = "ieee"
+    torch.backends.cudnn.fp32_precision = "ieee"
+    try:
+        yield
+    finally:
+        torch.backends.fp32_precision = old_fp32_precision
+        torch.backends.cuda.matmul.fp32_precision = old_matmul_precision
+        torch.backends.cudnn.fp32_precision = old_cudnn_precision
+
 # Default registry: one small model per family for fast CI
 MODEL_REGISTRY: Dict[str, Dict] = {
     "esm2": {
@@ -37,9 +71,16 @@ MODEL_REGISTRY: Dict[str, Dict] = {
     },
     "esmc": {
         "fast_path": "Synthyra/ESMplusplus_small",
-        "official_path": "esmc-300",
+        "official_path": "biohub/ESMC-300M",
         "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
+        "uses_tokenizer": True,
+    },
+    "esm3": {
+        "fast_path": "Synthyra/ESM3_small",
+        "official_path": "esm3-sm-open-v1",
+        "load_official": "testing.official.esm3",
+        "model_type": "ESM3",
         "uses_tokenizer": True,
     },
     "e1": {
@@ -118,7 +159,7 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     # ESM++ family
     "esmc_small": {
         "fast_path": "Synthyra/ESMplusplus_small",
-        "official_path": "esmc-300",
+        "official_path": "biohub/ESMC-300M",
         "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
         "uses_tokenizer": True,
@@ -126,9 +167,25 @@ FULL_MODEL_REGISTRY: Dict[str, Dict] = {
     },
     "esmc_large": {
         "fast_path": "Synthyra/ESMplusplus_large",
-        "official_path": "esmc-600",
+        "official_path": "biohub/ESMC-600M",
         "load_official": "testing.official.esm_plusplus",
         "model_type": "ESMC",
+        "uses_tokenizer": True,
+        "size_category": "large",
+    },
+    "esmc_6b": {
+        "fast_path": "Synthyra/ESMplusplus_6B",
+        "official_path": "biohub/ESMC-6B",
+        "load_official": "testing.official.esm_plusplus",
+        "model_type": "ESMC",
+        "uses_tokenizer": True,
+        "size_category": "xlarge",
+    },
+    "esm3_small": {
+        "fast_path": "Synthyra/ESM3_small",
+        "official_path": "esm3-sm-open-v1",
+        "load_official": "testing.official.esm3",
+        "model_type": "ESM3",
         "uses_tokenizer": True,
         "size_category": "large",
     },

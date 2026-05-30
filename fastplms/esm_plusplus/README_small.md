@@ -1,5 +1,6 @@
 ---
 library_name: transformers
+license: mit
 tags: []
 ---
 
@@ -7,8 +8,10 @@ tags: []
 The GitHub with the implementation and requirements.txt can be found [here](https://github.com/Synthyra/FastPLMs.git)
 
 # ESM++
-[ESM++](https://github.com/Synthyra/ESMplusplus) is a faithful implementation of [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) ([license](https://www.evolutionaryscale.ai/policies/cambrian-open-license-agreement)) that allows for batching and standard Huggingface compatibility without requiring the ESM Python package.
+[ESM++](https://github.com/Synthyra/FastPLMs) is a faithful implementation of [ESMC](https://biohub.ai/esm/protein) ([license](https://github.com/Biohub/esm/blob/main/LICENSE.md)) that allows for batching and standard Hugging Face compatibility without requiring the ESM Python package.
 The small version corresponds to the 300 million parameter version of ESMC.
+
+This repository includes the Biohub ESM MIT license in `LICENSE`.
 
 ## Attention backends
 
@@ -17,9 +20,9 @@ The small version corresponds to the 300 million parameter version of ESMC.
 | Backend | Key | Notes |
 | :--- | :--- | :--- |
 | PyTorch SDPA | `"sdpa"` | Default. Exact numerics, stable on all hardware. |
-| Flash Attention | `"kernels_flash"` | Fastest on Ampere/Hopper GPUs. Requires `pip install kernels` (pre-built — no hours-long compilation). Outputs are not bitwise identical to SDPA due to online softmax reordering; differences are often small but not guaranteed to be inconsequential — use `"sdpa"` if exact numerics matter. |
-| Flex Attention | `"flex"` | Skips padding tokens via block mask — faster on variable-length batches. Near-exact numerics. First use compiles a Triton kernel (30–120 s). Best combined with `torch.compile`. |
-| Auto | `"auto"` | Picks the best available: `kernels_flash` → `flex` → `sdpa`. |
+| Flash Attention | `"kernels_flash"` | Fastest on Ampere/Hopper GPUs. Requires `pip install kernels` (pre-built, no hours-long compilation). Outputs are not bitwise identical to SDPA due to online softmax reordering; differences are often small but not guaranteed to be inconsequential, so use `"sdpa"` if exact numerics matter. |
+| Flex Attention | `"flex"` | Skips padding tokens via block mask for faster variable-length batches. Near-exact numerics. First use compiles a Triton kernel (30-120 s). Best combined with `torch.compile`. |
+| Auto | `"auto"` | Picks the best available: `kernels_flash`, then `flex`, then `sdpa`. |
 
 ```python
 from transformers import AutoConfig, AutoModelForMaskedLM
@@ -32,7 +35,7 @@ model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_small', confi
 `torch.compile(model)` is heavily recommended for sustained throughput, especially with Flex Attention.
 
 
-## Use with 🤗 transformers
+## Use with Hugging Face Transformers
 ```python
 from transformers import AutoModelForMaskedLM
 model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_small', trust_remote_code=True)
@@ -75,7 +78,6 @@ embedding_dict = model.embed_dataset(
     sequences=[
         'MALWMRLLPLLALLALWGPDPAAA', ... # list of protein sequences
     ],
-    tokenizer=model.tokenizer,
     batch_size=2, # adjust for your GPU memory
     max_len=512, # adjust for your needs
     full_embeddings=False, # if True, no pooling is performed
@@ -114,7 +116,7 @@ Note:
     - Sequences will be truncated to max_len and sorted by length in descending order for faster processing
 ```
 
-## Fine-tuning with 🤗 peft
+## Fine-tuning with Hugging Face PEFT
 ```python
 model = AutoModelForSequenceClassification.from_pretrained('Synthyra/ESMplusplus_small', num_labels=2, trust_remote_code=True)
 # these modules handle ESM++ and ESM2 attention layers
@@ -136,7 +138,7 @@ for param in model.classifier.parameters():
     param.requires_grad = True
 ```
 
-For a more thourough example of fine-tuning, check out our example script [here](https://github.com/Synthyra/FastPLMs/blob/main/fine_tuning_example.py).
+For a more thorough example of fine-tuning, check out our example script [here](https://github.com/Synthyra/FastPLMs/blob/main/fine_tuning_example.py).
 
 
 ## Returning attention maps
@@ -179,7 +181,7 @@ The most gains will be seen with PyTorch > 2.5 on linux machines.
 ```bibtex
 @misc{FastPLMs,
   author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
-  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Hugging Face AutoModel.},
   year={2024},
   url={https://huggingface.co/Synthyra/ESMplusplus_small},
   DOI={10.57967/hf/3726},
@@ -188,11 +190,24 @@ The most gains will be seen with PyTorch > 2.5 on linux machines.
 ```
 
 ```bibtex
-@article{hayes2024simulating,
-  title={Simulating 500 million years of evolution with a language model},
-  author={Hayes, Thomas and Rao, Roshan and Akin, Halil and Sofber, Nicholas J and Achour, Divya and Moez, Irfan and Garg, Rhitu and Angelova, Rami and Babu, Manan and Alcaide, Eric and others},
-  journal={bioRxiv},
-  year={2024}
+@misc{candido2026language,
+  title  = {Language Modeling Materializes a World Model of Protein Biology},
+  author = {Candido, Salvatore and Hayes, Thomas and Derry, Alexander and Rao, Roshan
+            and Lin, Zeming and Verkuil, Robert and Wu, Bryan and Lee, Jin Sub
+            and Bruguera, Elise S. and Keval, Jehan A. and Kopylov, Mykhailo
+            and Pak, John E. and Wu, Wesley and Thomas, Neil and Mataraso, Samson
+            and Hsu, Alvin and Trotman-Grant, Ashton C. and Fatras, Kilian
+            and dos Santos Costa, Allan and Badkundri, Rohil and Ak{\i}n, Halil
+            and Oktay, Deniz and Deaton, Jonathan and Montabana, Elizabeth
+            and Sitwala, Hrishita and Yu, Yue and Wiggert, Marius
+            and Carlin, Dylan Alexander and Goering, Anthony W. and Blazejewski, Tomasz
+            and Sandora, McCullen and Hla, Michael and Jia, Tina Z.
+            and Kloker, Leon H. and Sofroniew, Nicholas J. and Uehara, Masatoshi
+            and Pannu, Jassi and Bachas, Sharrol and Liu, Daniel S.
+            and Sercu, Tom and Rives, Alexander},
+  year   = {2026},
+  url    = {https://biohub.ai/papers/esm_protein.pdf},
+  note   = {Preprint}
 }
 ```
 

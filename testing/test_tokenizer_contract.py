@@ -11,14 +11,23 @@ from transformers import AutoConfig, AutoTokenizer, EsmTokenizer
 from fastplms.ankh.modeling_ankh import FAST_ANKH_ENCODER, FastAnkhConfig
 from fastplms.dplm2.modeling_dplm2 import _normalize_dplm2_input_ids
 from fastplms.e1.modeling_e1 import E1BatchPreparer, get_tokenizer
+from fastplms.esm3.modeling_esm3 import (
+    SEQUENCE_VOCAB as ESM3_SEQUENCE_VOCAB,
+    EsmSequenceTokenizer as ESM3SequenceTokenizer,
+)
 from fastplms.esm_plusplus.modeling_esm_plusplus import EsmSequenceTokenizer
 from testing.conftest import CANONICAL_AAS, FULL_MODEL_REGISTRY, mark_by_size
 
 
-TOKENIZER_MODEL_KEYS = [
+TOKENIZER_REFERENCE_KEYS = [
     key
     for key, value in FULL_MODEL_REGISTRY.items()
-    if value["uses_tokenizer"]
+    if value["uses_tokenizer"] and value["model_type"] != "ESM3"
+]
+ESM3_MODEL_KEYS = [
+    key
+    for key, value in FULL_MODEL_REGISTRY.items()
+    if value["model_type"] == "ESM3"
 ]
 DPLM2_MODEL_KEYS = [
     key
@@ -90,7 +99,7 @@ def _special_token_ids(tokenizer) -> Dict[str, int | None]:
 
 @pytest.mark.parametrize(
     "model_key",
-    mark_by_size(TOKENIZER_MODEL_KEYS, FULL_MODEL_REGISTRY),
+    mark_by_size(TOKENIZER_REFERENCE_KEYS, FULL_MODEL_REGISTRY),
 )
 def test_sequence_tokenizer_matches_reference(model_key: str) -> None:
     config = FULL_MODEL_REGISTRY[model_key]
@@ -133,6 +142,36 @@ def test_sequence_tokenizer_matches_reference(model_key: str) -> None:
             f"{model_key}: encoded ids differ for {sequence[:16]} "
             f"fast={fast_ids[0, :8].tolist()} "
             f"reference={reference_ids[0, :8].tolist()}"
+        )
+
+
+@pytest.mark.parametrize(
+    "model_key",
+    mark_by_size(ESM3_MODEL_KEYS, FULL_MODEL_REGISTRY),
+)
+def test_esm3_sequence_tokenizer_contract(model_key: str) -> None:
+    tokenizer = ESM3SequenceTokenizer()
+    expected_vocab = {
+        token: token_id
+        for token_id, token in enumerate(ESM3_SEQUENCE_VOCAB)
+    }
+
+    assert tokenizer.get_vocab() == expected_vocab, (
+        f"{model_key}: ESM3 sequence vocabulary changed"
+    )
+    assert _special_token_ids(tokenizer) == {
+        "pad_token_id": 1,
+        "cls_token_id": 0,
+        "eos_token_id": 2,
+        "mask_token_id": 32,
+        "unk_token_id": 3,
+    }
+
+    for sequence in CANONICAL_SEQUENCES:
+        encoded = _token_ids(tokenizer, sequence)
+        expected_ids = [0] + [expected_vocab[token] for token in sequence] + [2]
+        assert encoded[0].tolist() == expected_ids, (
+            f"{model_key}: encoded ids differ for {sequence[:16]}"
         )
 
 

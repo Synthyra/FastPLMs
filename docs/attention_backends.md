@@ -69,12 +69,13 @@ Selects the best available backend in priority order: `kernels_flash` -> `flex` 
 ## Per-Family Caveats
 
 - **ANKH** supports only `sdpa` and `flex`. The flash-attention kernels can't accept the additive T5 relative position bias, so requesting `kernels_flash` (or `auto` resolving to it) silently falls back to `flex` (or `sdpa` if flex is unavailable). T5 attention is also unscaled (no `1/sqrt(d_kv)` factor) - the learned position bias absorbs the temperature.
+- **ESM3** supports `sdpa` and `flex` in the FastPLMs wrapper.
 - **E1** uses a block-causal flex variant: bidirectional within a sequence, causal across sequences in a packed multi-sequence batch.
 - **DPLM2** packs amino-acid and structure tokens in the same sequence; the attention mask logic accounts for the multimodal layout but the backend choice is otherwise unchanged.
 
 ## Setting the Backend
 
-Every FastPLMs sequence model (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) supports **both** load-time and post-load backend switching. Pick whichever fits your workflow.
+Every FastPLMs sequence model (ESM2, ESM++, ESM3, E1, DPLM, DPLM2, ANKH) supports **both** load-time and post-load backend switching. Pick whichever fits your workflow.
 
 ### At Load Time
 
@@ -101,7 +102,7 @@ model.attn_backend = "flex"  # every attention layer now uses flex
 model.attn_backend = "kernels_flash"  # flip to flash without reloading
 ```
 
-This is useful for benchmarking multiple backends on the same weights, or for falling back at runtime if a backend turns out to be unavailable on the current GPU. The setter validates that the requested backend is installed and raises `AssertionError` otherwise -- except for ANKH's `kernels_flash` request, which silently falls back to `flex` (or `sdpa`) because the flash kernels cannot accept ANKH's additive relative position bias.
+This is useful for benchmarking multiple backends on the same weights, or for falling back at runtime if a backend turns out to be unavailable on the current GPU. The setter validates that the requested backend is installed and raises `AssertionError` otherwise. ANKH's `kernels_flash` request silently falls back to `flex` or `sdpa` because the flash kernels cannot accept ANKH's additive relative position bias.
 
 ## Backend Resolution
 

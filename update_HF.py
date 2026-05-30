@@ -7,7 +7,8 @@ then uploads to each HF repo.
 
 Usage:
     py -m update_HF
-    py -m update_HF --hf_token YOUR_TOKEN
+    $env:HF_TOKEN = "..."
+    py -m update_HF
     py -m update_HF --families esm2 dplm
     py -m update_HF --skip-weights
     py -m update_HF --files-only
@@ -21,7 +22,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from huggingface_hub import HfApi, login
 
@@ -70,6 +71,25 @@ def build_composite(modeling_path: str, include_embedding_mixin: bool = True) ->
     return "from __future__ import annotations\n\n" + "\n".join(parts)
 
 
+def _token_from_environment() -> Optional[str]:
+    for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        if key in os.environ and len(os.environ[key]) > 0:
+            return os.environ[key]
+    return None
+
+
+def _resolve_hf_token(cli_token: Optional[str]) -> Optional[str]:
+    if cli_token is not None:
+        assert len(cli_token) > 0, "HF token cannot be empty."
+        return cli_token
+    return _token_from_environment()
+
+
+def _login_if_token_available(token: Optional[str]) -> None:
+    if token is not None:
+        login(token=token)
+
+
 MODEL_REGISTRY = [
     {
         "family": "e1",
@@ -102,6 +122,7 @@ MODEL_REGISTRY = [
         "repo_ids": [
             "Synthyra/ESMplusplus_small",
             "Synthyra/ESMplusplus_large",
+            "Synthyra/ESMplusplus_6B",
         ],
         "modeling_src": "fastplms/esm_plusplus/modeling_esm_plusplus.py",
         "modeling_dest": "modeling_esm_plusplus.py",
@@ -111,12 +132,34 @@ MODEL_REGISTRY = [
         "readme_map": {
             "Synthyra/ESMplusplus_small": "fastplms/esm_plusplus/README_small.md",
             "Synthyra/ESMplusplus_large": "fastplms/esm_plusplus/README_large.md",
+            "Synthyra/ESMplusplus_6B": "fastplms/esm_plusplus/README_6B.md",
         },
         "license_map": {
             "Synthyra/ESMplusplus_small": "fastplms/esm_plusplus/LICENSE_small",
             "Synthyra/ESMplusplus_large": "fastplms/esm_plusplus/LICENSE_large",
+            "Synthyra/ESMplusplus_6B": "fastplms/esm_plusplus/LICENSE_6B",
         },
         "weight_module": "fastplms.esm_plusplus.get_weights",
+    },
+    {
+        "family": "esm3",
+        "repo_ids": [
+            "Synthyra/ESM3_small",
+        ],
+        "modeling_src": "fastplms/esm3/modeling_esm3.py",
+        "modeling_dest": "modeling_esm3.py",
+        "composite": False,
+        "include_embedding_mixin": False,
+        "extra_files": {
+            "fastplms/esm3/modeling_esm3.py": "modeling_esm3.py",
+        },
+        "readme_map": {
+            "Synthyra/ESM3_small": "fastplms/esm3/README.md",
+        },
+        "license_map": {
+            "Synthyra/ESM3_small": "fastplms/esm3/LICENSE",
+        },
+        "weight_module": "fastplms.esm3.get_weights",
     },
     {
         "family": "esm2",
@@ -292,6 +335,10 @@ def _run_weight_scripts(
     families: Optional[list], hf_token: Optional[str], skip_weights: bool
 ) -> None:
     python_cmd = "python" if platform.system().lower() == "linux" else "py"
+    child_env: Optional[Dict[str, str]] = None
+    if hf_token is not None:
+        child_env = os.environ.copy()
+        child_env["HF_TOKEN"] = hf_token
     for entry in MODEL_REGISTRY:
         if families is not None and entry["family"] not in families:
             continue
@@ -299,12 +346,10 @@ def _run_weight_scripts(
         if module is None:
             continue
         command = [python_cmd, "-m", module]
-        if hf_token is not None:
-            command.extend(["--hf_token", hf_token])
         if skip_weights:
             command.append("--skip-weights")
         print(f"Running: {' '.join(command)}")
-        subprocess.run(command, check=True)
+        subprocess.run(command, check=True, env=child_env)
 
 
 def _upload_files(api: HfApi, families: Optional[list]) -> None:
@@ -349,33 +394,42 @@ def _upload_files(api: HfApi, families: Optional[list]) -> None:
                 )
 
             # Upload license
-            license_path = entry["license_map"].get(repo_id)
-            if license_path:
+            license_path = None
+            if repo_id in entry["license_map"]:
+                license_path = entry["license_map"][repo_id]
+            if license_path is not None:
                 abs_license = str(_REPO_ROOT / license_path)
-                if os.path.exists(abs_license):
-                    api.upload_file(
-                        path_or_fileobj=abs_license,
-                        path_in_repo="LICENSE",
-                        repo_id=repo_id,
-                        repo_type="model",
-                    )
+                assert os.path.exists(abs_license), f"Missing license: {abs_license}"
+                api.upload_file(
+                    path_or_fileobj=abs_license,
+                    path_in_repo="LICENSE",
+                    repo_id=repo_id,
+                    repo_type="model",
+                )
 
             # Upload readme
-            readme_path = entry["readme_map"].get(repo_id)
-            if readme_path:
+            readme_path = None
+            if repo_id in entry["readme_map"]:
+                readme_path = entry["readme_map"][repo_id]
+            if readme_path is not None:
                 abs_readme = str(_REPO_ROOT / readme_path)
-                if os.path.exists(abs_readme):
-                    api.upload_file(
-                        path_or_fileobj=abs_readme,
-                        path_in_repo="README.md",
-                        repo_id=repo_id,
-                        repo_type="model",
-                    )
+                assert os.path.exists(abs_readme), f"Missing model card: {abs_readme}"
+                api.upload_file(
+                    path_or_fileobj=abs_readme,
+                    path_in_repo="README.md",
+                    repo_id=repo_id,
+                    repo_type="model",
+                )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Upload FastPLMs models to HuggingFace")
-    parser.add_argument("--hf_token", type=str, default=None)
+    parser.add_argument(
+        "--hf_token",
+        type=str,
+        default=None,
+        help="Deprecated. Prefer HF_TOKEN in the environment so tokens are not in shell history.",
+    )
     parser.add_argument("--families", nargs="+", default=None)
     parser.add_argument(
         "--skip-weights",
@@ -386,13 +440,13 @@ if __name__ == "__main__":
     parser.add_argument("--config-only", action="store_true", help="Only upload config+tokenizer via --skip-weights, skip file uploads")
     args = parser.parse_args()
 
-    if args.hf_token:
-        login(token=args.hf_token)
+    hf_token = _resolve_hf_token(args.hf_token)
+    _login_if_token_available(hf_token)
 
     if args.config_only:
-        _run_weight_scripts(args.families, args.hf_token, skip_weights=True)
+        _run_weight_scripts(args.families, hf_token, skip_weights=True)
     elif not args.files_only:
-        _run_weight_scripts(args.families, args.hf_token, args.skip_weights)
+        _run_weight_scripts(args.families, hf_token, args.skip_weights)
 
     if not args.config_only:
         api = HfApi()

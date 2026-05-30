@@ -34,7 +34,7 @@ class ComplianceChecker:
         self.canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
 
     def _load_esmc(self, from_auto_model: bool = False, force_download: bool = False) -> Tuple[torch.nn.Module, torch.nn.Module, object]:
-        official_model_path = "esmc-300"
+        official_model_path = "biohub/ESMC-300M"
         fast_model_path = "Synthyra/ESMplusplus_small"
         official_model, tokenizer = load_official_esmc_model(
             reference_repo_id=official_model_path,

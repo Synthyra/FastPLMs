@@ -10,12 +10,18 @@ import torch
 
 from testing.conftest import (
     CANONICAL_AAS, FULL_MODEL_REGISTRY, MODEL_REGISTRY, SEED,
-    mark_by_size,
+    mark_by_size, strict_fp32_matmul,
 )
 
 
 BATCH_SIZE = 4
 MAX_EMBED_LEN = 128
+EMBED_MATCH_TOL = {
+    "default": {"maxabs": 6e-3, "rel_maxabs": None},
+    # ESM3 exposes the pre-final-norm residual stream as embeddings. Absolute
+    # fp32 batch-shape noise can slightly exceed 1e-2 while relative error stays tiny.
+    "esm3": {"maxabs": 1.5e-2, "rel_maxabs": 5e-6},
+}
 
 
 # Models that use tokenizer mode (not E1)
@@ -71,17 +77,25 @@ def _assert_embeddings_match(
     a: Dict[str, torch.Tensor],
     b: Dict[str, torch.Tensor],
     label: str,
-    atol: float = 6e-3,
 ) -> None:
     assert set(a) == set(b), f"[{label}] Key sets differ between batch and single runs"
+    if label.startswith("esm3"):
+        tol = EMBED_MATCH_TOL["esm3"]
+    else:
+        tol = EMBED_MATCH_TOL["default"]
     for seq in a:
         ea, eb = a[seq].float(), b[seq].float()
         assert ea.shape == eb.shape, (
             f"[{label}] Shape mismatch for '{seq[:20]}': {ea.shape} vs {eb.shape}"
         )
         max_diff = (ea - eb).abs().max().item()
-        assert max_diff <= atol, (
-            f"[{label}] Max abs diff {max_diff:.5f} > {atol} for '{seq[:20]}'"
+        base_maxabs = max(ea.abs().max().item(), eb.abs().max().item())
+        rel_maxabs = max_diff / base_maxabs if base_maxabs > 1e-12 else 0.0
+        rel_tol = tol["rel_maxabs"]
+        rel_ok = rel_tol is None or rel_maxabs <= rel_tol
+        assert max_diff <= tol["maxabs"] and rel_ok, (
+            f"[{label}] Max abs diff {max_diff:.5f} > {tol['maxabs']} "
+            f"or rel maxabs {rel_maxabs:.3e} > {rel_tol} for '{seq[:20]}'"
         )
 
 
@@ -89,19 +103,8 @@ def _assert_embeddings_match(
 def disable_tf32_for_batch_single_match():
     # TF32 kernels can be batch-shape-dependent on Hopper/GH200, which defeats
     # this test's batch-vs-single equality check.
-    if not torch.cuda.is_available():
+    with strict_fp32_matmul():
         yield
-        return
-
-    matmul_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
-    cudnn_allow_tf32 = torch.backends.cudnn.allow_tf32
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.allow_tf32 = False
-    try:
-        yield
-    finally:
-        torch.backends.cuda.matmul.allow_tf32 = matmul_allow_tf32
-        torch.backends.cudnn.allow_tf32 = cudnn_allow_tf32
 
 
 # --- CPU-only utility tests ---
@@ -221,25 +224,54 @@ def test_batch_single_match(model_key: str, disable_tf32_for_batch_single_match)
     tokenizer = FixedLengthTokenizer(model.tokenizer)
     sequences = _random_sequences(n=8)
 
-    batch_embs = model.embed_dataset(
-        sequences=sequences,
-        batch_size=BATCH_SIZE,
-        tokenizer=tokenizer,
-        full_embeddings=True,
-        embed_dtype=torch.float32,
-        save=False,
-    )
-    single_embs = model.embed_dataset(
-        sequences=sequences,
-        batch_size=1,
-        tokenizer=tokenizer,
-        full_embeddings=True,
-        embed_dtype=torch.float32,
-        save=False,
-    )
+    with strict_fp32_matmul():
+        batch_embs = model.embed_dataset(
+            sequences=sequences,
+            batch_size=BATCH_SIZE,
+            tokenizer=tokenizer,
+            full_embeddings=True,
+            embed_dtype=torch.float32,
+            save=False,
+        )
+        single_embs = model.embed_dataset(
+            sequences=sequences,
+            batch_size=1,
+            tokenizer=tokenizer,
+            full_embeddings=True,
+            embed_dtype=torch.float32,
+            save=False,
+        )
     _assert_no_nan(batch_embs, f"{model_key} match test batch_size={BATCH_SIZE}")
     _assert_no_nan(single_embs, f"{model_key} match test batch_size=1")
     _assert_embeddings_match(batch_embs, single_embs, model_key)
+
+    del model
+    torch.cuda.empty_cache()
+
+
+@pytest.mark.gpu
+def test_tokenizer_model_embed_dataset_uses_default_tokenizer() -> None:
+    from transformers import AutoModelForMaskedLM
+
+    config = MODEL_REGISTRY["esmc"]
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = AutoModelForMaskedLM.from_pretrained(
+        config["fast_path"],
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        device_map=device,
+    ).eval()
+
+    embeddings = model.embed_dataset(
+        sequences=["MKTAYIAKQ", "GGGG"],
+        batch_size=2,
+        max_len=16,
+        pooling_types=["mean"],
+        save=False,
+    )
+
+    assert set(embeddings) == {"MKTAYIAKQ", "GGGG"}
+    assert embeddings["MKTAYIAKQ"].shape == (model.config.hidden_size,)
 
     del model
     torch.cuda.empty_cache()
@@ -308,22 +340,23 @@ def test_full_batch_single_match(model_key: str, disable_tf32_for_batch_single_m
     tokenizer = FixedLengthTokenizer(model.tokenizer)
     sequences = _random_sequences(n=8)
 
-    batch_embs = model.embed_dataset(
-        sequences=sequences,
-        batch_size=BATCH_SIZE,
-        tokenizer=tokenizer,
-        full_embeddings=True,
-        embed_dtype=torch.float32,
-        save=False,
-    )
-    single_embs = model.embed_dataset(
-        sequences=sequences,
-        batch_size=1,
-        tokenizer=tokenizer,
-        full_embeddings=True,
-        embed_dtype=torch.float32,
-        save=False,
-    )
+    with strict_fp32_matmul():
+        batch_embs = model.embed_dataset(
+            sequences=sequences,
+            batch_size=BATCH_SIZE,
+            tokenizer=tokenizer,
+            full_embeddings=True,
+            embed_dtype=torch.float32,
+            save=False,
+        )
+        single_embs = model.embed_dataset(
+            sequences=sequences,
+            batch_size=1,
+            tokenizer=tokenizer,
+            full_embeddings=True,
+            embed_dtype=torch.float32,
+            save=False,
+        )
     _assert_no_nan(batch_embs, f"{model_key} match test batch_size={BATCH_SIZE}")
     _assert_no_nan(single_embs, f"{model_key} match test batch_size=1")
     _assert_embeddings_match(batch_embs, single_embs, model_key)
