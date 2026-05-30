@@ -60,13 +60,13 @@ def _upload_repo_files(api: HfApi, repo_id: str, script_root: Path, readme_name:
         repo_type="model",
     )
     license_path = script_root / "LICENSE"
-    if license_path.exists():
-        api.upload_file(
-            path_or_fileobj=str(license_path),
-            path_in_repo="LICENSE",
-            repo_id=repo_id,
-            repo_type="model",
-        )
+    assert license_path.exists(), f"Missing license: {license_path}"
+    api.upload_file(
+        path_or_fileobj=str(license_path),
+        path_in_repo="LICENSE",
+        repo_id=repo_id,
+        repo_type="model",
+    )
 
 
 def _resolve_repo_items(repo_ids: Optional[List[str]]) -> List[Tuple[str, str, str]]:
@@ -105,7 +105,12 @@ def _login_if_requested(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hf_token", type=str, default=None)
+    parser.add_argument(
+        "--hf_token",
+        type=str,
+        default=None,
+        help="Deprecated. Prefer HF_TOKEN in the environment so tokens are not in shell history.",
+    )
     parser.add_argument("--repo_ids", nargs="*", type=str, default=None)
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--skip-weights", action="store_true")

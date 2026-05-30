@@ -17,6 +17,7 @@ A shared base image plus one image per model family. Each family image installs 
 | `fastplms-base` | none (torch 2.11.0, transformers 4.57.6, FastPLMs source, shared deps) |
 | `fastplms-esm2` | uses `transformers.EsmForMaskedLM` |
 | `fastplms-esm_plusplus` | Biohub `esm` runtime deps + `official/esm` submodule on `sys.path`. The `esm` package itself is **not** pip-installed (it depends on a Biohub `transformers` fork). |
+| `fastplms-esm3` | Biohub ESM3 runtime deps + `official/esm` submodule on `sys.path`; requires gated source-model access for official ESM3 parity/compliance. |
 | `fastplms-e1` | `pip install -e /app/official/e1` |
 | `fastplms-dplm` | uses `transformers.EsmForMaskedLM` (DPLM's native package conflicts with our torchtext pin) |
 | `fastplms-dplm2` | none beyond base |
@@ -59,6 +60,10 @@ docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm2 \
 # ESM++ -- model_key is "esmc"
 docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm_plusplus \
     python -m pytest /workspace/testing/test_parity.py -k esmc -v
+
+# ESM3 -- requires accepted access to biohub/esm3-sm-open-v1 for official parity
+docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm3 \
+    python -m pytest /workspace/testing/test_parity.py -k esm3 -v
 
 # Everything else
 for fam in e1 dplm dplm2 ankh; do
@@ -144,6 +149,7 @@ Used by the base parametrized tests. One small model per family:
 |-----|-------|--------|
 | `esm2` | ESM2-8M | ESM2 |
 | `esmc` | ESMplusplus_small | ESM++ |
+| `esm3` | ESM3_small | ESM3 |
 | `e1` | Profluent-E1-150M | E1 |
 | `dplm` | DPLM-150M | DPLM |
 | `dplm2` | DPLM2-150M | DPLM2 |
@@ -157,7 +163,7 @@ Used by the `test_full_*` parametrized tests. All checkpoints with `size_categor
 |----------|--------|--------|
 | `small` | ESM2-8M, ESM2-35M, E1-150M, DPLM-150M, DPLM2-150M | (none) |
 | `medium` | ESM2-150M, ESMC-small, E1-300M, ANKH-base | `slow` |
-| `large` | ESM2-650M, ESMC-large, E1-600M, DPLM-650M, DPLM2-650M, ANKH-large, ANKH2-large, ANKH3-large | `slow` |
+| `large` | ESM2-650M, ESMC-large, ESM3-small, E1-600M, DPLM-650M, DPLM2-650M, ANKH-large, ANKH2-large, ANKH3-large | `slow` |
 | `xlarge` | ESM2-3B, ESMC-6B, DPLM-3B, DPLM2-3B, ANKH3-xl | `large` |
 
 ### Structure Registry (`STRUCTURE_MODEL_REGISTRY`)

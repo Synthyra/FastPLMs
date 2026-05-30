@@ -2,7 +2,7 @@
 
 This document covers each model family supported by FastPLMs: loading, configuration, special handling, and available checkpoints.
 
-All sequence models (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) share the same embedding pipeline via `EmbeddingMixin`. They support most attention backends, with one exception: ANKH supports only `sdpa` and `flex` (T5 relative position bias is incompatible with the flash-attention kernels). Structure prediction models (Boltz2, ESMFold) have their own APIs.
+Most sequence models (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) share the same embedding pipeline via `EmbeddingMixin`. ESM3 exposes its own compatible `embed_dataset()` method for sequence embeddings. They support most attention backends, with these exceptions: ANKH supports only `sdpa` and `flex`, and ESM3 supports `sdpa` and `flex`. Structure prediction models (Boltz2, ESMFold) have their own APIs.
 
 ---
 
@@ -87,6 +87,45 @@ with torch.inference_mode():
 | ESM++ Small (300M) | `Synthyra/ESMplusplus_small` | `biohub/ESMC-300M` |
 | ESM++ Large (600M) | `Synthyra/ESMplusplus_large` | `biohub/ESMC-600M` |
 | ESM++ 6B | `Synthyra/ESMplusplus_6B` | `biohub/ESMC-6B` |
+
+---
+
+## ESM3
+
+**Organization:** Biohub
+**Architecture:** Multimodal protein model over sequence, structure, and function tracks
+**Checkpoints:** Open Small
+
+### Loading
+
+```python
+import torch
+from transformers import AutoModel
+
+model = AutoModel.from_pretrained(
+    "Synthyra/ESM3_small",
+    trust_remote_code=True,
+    dtype=torch.bfloat16,
+    device_map="cuda",
+)
+```
+
+`AutoModelForMaskedLM` also resolves to the same ESM3 wrapper class, which returns sequence logits plus ESM3 track logits.
+
+### Key Details
+
+- Supports sequence-only inference by default via `input_ids` and `attention_mask`.
+- Additional ESM3 tracks can be passed as tensors: `structure_tokens`, `ss8_tokens`, `sasa_tokens`, `function_tokens`, `residue_annotation_tokens`, `average_plddt`, `per_res_plddt`, `structure_coords`, `chain_id`, and `sequence_id`.
+- Exposes `forward_sequence()` and `tokenize_sequences()` helpers for ergonomic sequence inference.
+- Supports `embed_dataset()` with pooled `mean`, `cls`, and `max` embeddings, plus residue-wise embeddings through `full_embeddings=True`.
+- Supports `sdpa` and `flex` attention backends.
+- Includes the Biohub ESM MIT license in the Hub `LICENSE` file and model card metadata.
+
+### Available Checkpoints
+
+| Checkpoint | HuggingFace ID | Official Reference |
+|------------|----------------|-------------------|
+| ESM3 Small | `Synthyra/ESM3_small` | `biohub/esm3-sm-open-v1` |
 
 ---
 

@@ -464,7 +464,10 @@ class FAST_ANKH_ENCODER(AnkhPreTrainedModel, EmbeddingMixin):
 
         self.final_layer_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.gradient_checkpointing = False
-        self.tokenizer = AutoTokenizer.from_pretrained("ElnaggarLab/ankh-base")
+        tokenizer_source = config._name_or_path
+        if tokenizer_source == "":
+            tokenizer_source = "ElnaggarLab/ankh-base"
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_source)
         self.post_init()
 
     def get_input_embeddings(self):

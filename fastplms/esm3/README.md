@@ -1,5 +1,6 @@
 ---
 library_name: transformers
+license: mit
 tags:
   - biology
   - protein-language-model
@@ -10,6 +11,8 @@ tags:
 # FastPLMs ESM3 Small
 
 FastPLMs ESM3 Small is a Hugging Face compatible implementation of Biohub's open ESM3 small model. It loads through `AutoModel`, supports sequence-only inference by default, and exposes ESM3's additional tensor tracks directly through normal keyword arguments.
+
+This repository includes the Biohub ESM MIT license in `LICENSE`.
 
 ## Use With Transformers
 
@@ -151,5 +154,6 @@ Available delegated methods include `encode`, `decode`, `generate`, `batch_gener
 ## Source
 
 - Biohub ESM repository: https://github.com/Biohub/esm
+- Biohub ESM license: https://github.com/Biohub/esm/blob/main/LICENSE.md
 - Paper: https://biohub.ai/papers/esm_protein.pdf
 - Official model source: https://huggingface.co/biohub/esm3-sm-open-v1

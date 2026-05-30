@@ -1,5 +1,6 @@
 ---
 library_name: transformers
+license: mit
 tags:
   - biology
   - esm
@@ -12,6 +13,8 @@ tags:
 
 [ESM++](https://github.com/Synthyra/FastPLMs) is a Hugging Face compatible implementation of [Biohub ESMC](https://biohub.ai/esm/protein) ([license](https://github.com/Biohub/esm/blob/main/LICENSE.md)).
 This checkpoint corresponds to the 6 billion parameter ESMC model released as [`biohub/ESMC-6B`](https://huggingface.co/biohub/ESMC-6B).
+
+This repository includes the Biohub ESM MIT license in `LICENSE`.
 
 The 6B model has 80 transformer layers, hidden size 2560, and 40 attention heads. It is large enough that `dtype=torch.bfloat16` or `torch.float16` plus `device_map="auto"` is usually the practical loading path.
 
@@ -93,7 +96,6 @@ embedding_dict = model.embed_dataset(
         "MSEQWENCE",
         "MPRTEIN",
     ],
-    tokenizer=model.tokenizer,
     batch_size=1,
     max_len=1024,
     full_embeddings=False,
@@ -112,7 +114,6 @@ For residue-level embeddings, set `full_embeddings=True`:
 ```python
 residue_embeddings = model.embed_dataset(
     sequences=["MALWMRLLPLLALLALWGPDPAAA"],
-    tokenizer=model.tokenizer,
     batch_size=1,
     max_len=1024,
     full_embeddings=True,
@@ -126,7 +127,6 @@ For very large datasets, write embeddings directly to SQLite:
 ```python
 model.embed_dataset(
     fasta_path="proteins.fasta",
-    tokenizer=model.tokenizer,
     batch_size=1,
     max_len=1024,
     pooling_types=["mean"],
@@ -222,13 +222,14 @@ model = ESMplusplusForMaskedLM.from_pretrained_esm("esmc-6b")
 ```
 
 The source repository is [`biohub/ESMC-6B`](https://huggingface.co/biohub/ESMC-6B).
+The Biohub ESM license is available at https://github.com/Biohub/esm/blob/main/LICENSE.md.
 
 ## Citation
 
 ```bibtex
 @misc{FastPLMs,
   author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
-  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
+  title={FastPLMs: Fast, efficient, protein language model inference from Hugging Face AutoModel.},
   year={2024},
   url={https://huggingface.co/Synthyra/ESMplusplus_6B},
   DOI={10.57967/hf/3726},

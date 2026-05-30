@@ -1,6 +1,6 @@
 # Embedding & Pooling API
 
-The `EmbeddingMixin` class (`fastplms/embedding_mixin.py`) provides a standardized interface for extracting protein representations from any FastPLMs sequence model.
+The `EmbeddingMixin` class (`fastplms/embedding_mixin.py`) provides a standardized interface for extracting protein representations from tokenizer-based FastPLMs sequence models and E1. ESM3 exposes the same `embed_dataset()` user API through its wrapper.
 
 ## Pooler
 
@@ -73,7 +73,7 @@ embeddings = model.embed_dataset(
 |-----------|------|---------|-------------|
 | `sequences` | `List[str]` | `None` | Protein sequences to embed |
 | `fasta_path` | `str` | `None` | Path to a FASTA file; sequences are parsed and combined with `sequences` |
-| `tokenizer` | `PreTrainedTokenizerBase` | `None` | Tokenizer for tokenizer-mode models. Pass `None` for E1 (sequence mode) |
+| `tokenizer` | `PreTrainedTokenizerBase` | `None` | Tokenizer for tokenizer-mode models. Defaults to `model.tokenizer` when available. Pass `None` for E1 sequence mode |
 | `batch_size` | `int` | `2` | Batch size for inference |
 | `max_len` | `int` | `512` | Maximum sequence length (longer sequences are truncated if `truncate=True`) |
 | `truncate` | `bool` | `True` | Whether to truncate sequences exceeding `max_len` |
@@ -104,15 +104,14 @@ At least one of `sequences` or `fasta_path` must be provided. If both are given,
 
 **Tokenizer mode** (ESM2, ESM++, DPLM, DPLM2):
 ```python
-# Provide the tokenizer
+# The model tokenizer is used by default
 embeddings = model.embed_dataset(
     sequences=sequences,
-    tokenizer=model.tokenizer,  # or a custom wrapper
     batch_size=32,
 )
 ```
 
-The mixin builds a `DataLoader` with `build_collator(tokenizer)` and calls `_embed(input_ids, attention_mask)`.
+The mixin builds a `DataLoader` with `build_collator(tokenizer)` and calls `_embed(input_ids, attention_mask)`. Pass `tokenizer=...` only when you need a custom tokenizer wrapper.
 
 **Sequence mode** (E1):
 ```python
@@ -125,6 +124,17 @@ embeddings = model.embed_dataset(
 ```
 
 The mixin iterates over chunks and calls `_embed(sequences, return_attention_mask=True)`, which returns `(embeddings, attention_mask)`.
+
+**ESM3 wrapper mode**:
+```python
+embeddings = model.embed_dataset(
+    sequences=sequences,
+    batch_size=4,
+    pooling_types=["mean", "cls"],
+)
+```
+
+ESM3 supports pooled `mean`, `cls`, and `max` embeddings, plus residue-wise embeddings with `full_embeddings=True`. SQLite streaming is not enabled for ESM3.
 
 ---
 

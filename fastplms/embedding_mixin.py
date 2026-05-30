@@ -477,7 +477,7 @@ class EmbeddingMixin:
         Embed a dataset of protein sequences.
 
         Supports two modes:
-        - Tokenizer mode (ESM2/ESM++): provide `tokenizer`, `_embed(input_ids, attention_mask)` is used.
+        - Tokenizer mode (ESM2/ESM++): provide `tokenizer` or use `self.tokenizer`.
         - Sequence mode (E1): pass `tokenizer=None`, `_embed(sequences, return_attention_mask=True, **kwargs)` is used.
 
         Sequences can be supplied as a list via `sequences`, parsed from a FASTA file via
@@ -492,6 +492,8 @@ class EmbeddingMixin:
         sequences = sorted(sequences, key=len, reverse=True)
         hidden_size = self.config.hidden_size
         pooler = Pooler(pooling_types) if not full_embeddings else None
+        if tokenizer is None and self.config.model_type != "E1":
+            tokenizer = self.tokenizer
         tokenizer_mode = tokenizer is not None
 
         # Resolve padding and compilation

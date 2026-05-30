@@ -1,7 +1,10 @@
+import argparse
 import os
-import torch
+import tempfile
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import torch
 from huggingface_hub import HfApi, login
 from transformers import AutoModelForMaskedLM
 
@@ -18,6 +21,12 @@ MODEL_DICT: Dict[str, Tuple[str, str]] = {
     "Synthyra/ESMplusplus_small": ("biohub/ESMC-300M", "README_small.md"),
     "Synthyra/ESMplusplus_large": ("biohub/ESMC-600M", "README_large.md"),
     "Synthyra/ESMplusplus_6B": ("biohub/ESMC-6B", "README_6B.md"),
+}
+
+LICENSE_DICT: Dict[str, str] = {
+    "Synthyra/ESMplusplus_small": "LICENSE_small",
+    "Synthyra/ESMplusplus_large": "LICENSE_large",
+    "Synthyra/ESMplusplus_6B": "LICENSE_6B",
 }
 
 HUB_AUTO_MAP = {
@@ -45,15 +54,33 @@ def _build_config(esmc_model_key: str) -> ESMplusplusConfig:
 def _upload_repo_files(api: HfApi, repo_id: str, script_root: str, readme_name: str) -> None:
     readme_path = os.path.join(script_root, readme_name)
     assert os.path.exists(readme_path), f"Missing model card: {readme_path}"
-    api.upload_file(
-        path_or_fileobj=os.path.join(script_root, "modeling_esm_plusplus.py"),
-        path_in_repo="modeling_esm_plusplus.py",
-        repo_id=repo_id,
-        repo_type="model",
+    from update_HF import build_composite
+
+    composite_code = build_composite(
+        "fastplms/esm_plusplus/modeling_esm_plusplus.py",
+        include_embedding_mixin=True,
     )
+    compile(composite_code, "modeling_esm_plusplus.py", "exec")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        composite_path = Path(tmpdir) / "modeling_esm_plusplus.py"
+        composite_path.write_text(composite_code, encoding="utf-8")
+        api.upload_file(
+            path_or_fileobj=str(composite_path),
+            path_in_repo="modeling_esm_plusplus.py",
+            repo_id=repo_id,
+            repo_type="model",
+        )
     api.upload_file(
         path_or_fileobj=readme_path,
         path_in_repo="README.md",
+        repo_id=repo_id,
+        repo_type="model",
+    )
+    license_path = os.path.join(script_root, LICENSE_DICT[repo_id])
+    assert os.path.exists(license_path), f"Missing license: {license_path}"
+    api.upload_file(
+        path_or_fileobj=license_path,
+        path_in_repo="LICENSE",
         repo_id=repo_id,
         repo_type="model",
     )
@@ -77,21 +104,37 @@ def _resolve_repo_items(repo_ids: Optional[List[str]]) -> List[Tuple[str, str, s
     return selected_items
 
 
+def _token_from_environment() -> Optional[str]:
+    for key in ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+        if key in os.environ and len(os.environ[key]) > 0:
+            return os.environ[key]
+    return None
+
+
+def _login_if_requested(args: argparse.Namespace) -> None:
+    token = args.hf_token
+    if token is None:
+        token = _token_from_environment()
+    if token is not None:
+        assert len(token) > 0, "HF token cannot be empty."
+        login(token=token)
+
+
 if __name__ == "__main__":
     # py -m fastplms.esm_plusplus.get_weights
-    import argparse
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--hf_token", type=str, default=None)
+    parser.add_argument(
+        "--hf_token",
+        type=str,
+        default=None,
+        help="Deprecated. Prefer HF_TOKEN in the environment so tokens are not in shell history.",
+    )
     parser.add_argument("--repo_ids", nargs="*", type=str, default=None)
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--skip-weights", action="store_true")
     args = parser.parse_args()
+    _login_if_requested(args)
     api = HfApi()
-
-    if args.hf_token is not None:
-        assert len(args.hf_token) > 0, "--hf_token cannot be empty."
-        login(token=args.hf_token)
 
     script_root = os.path.dirname(os.path.abspath(__file__))
 

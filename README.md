@@ -98,6 +98,12 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 
 ---
 
+### License Notes
+
+Biohub ESM++ and ESM3 model cards include `license: mit` metadata and upload a `LICENSE` file copied from the Biohub ESM MIT license. The upstream license is linked from each model card and from the source repository at https://github.com/Biohub/esm/blob/main/LICENSE.md.
+
+---
+
 ## Attention Backends
 
 All FastPLMs models share a common set of attention backends, controlled via `config.attn_backend`. The default is `"sdpa"`, which is safe on all hardware and numerically equivalent to standard attention.
@@ -272,9 +278,9 @@ FastPLMs includes a pytest-based test suite under `testing/` covering correctnes
 
 | Test | What it checks | Marker |
 | :--- | :--- | :--- |
-| **AutoModel loading** | Every model loads via `AutoModelForMaskedLM.from_pretrained(..., trust_remote_code=True)` and produces valid outputs | `gpu` |
+| **AutoModel loading** | Every model loads via the relevant Transformers auto class with `trust_remote_code=True` and produces valid outputs | `gpu` |
 | **Backend consistency** | SDPA, Flex, and Flash backends produce equivalent predictions (>= 95% agreement) | `gpu` |
-| **Weight compliance** | FastPLM weights are bit-exact with the original implementations (ESM2, ESMC, E1, DPLM) | `slow`, `gpu` |
+| **Weight compliance** | FastPLM weights are bit-exact with the original implementations (ESM2, ESMC, ESM3, E1, DPLM) | `slow`, `gpu` |
 | **Forward compliance** | Forward pass logits/predictions match the originals within tolerance | `slow`, `gpu` |
 | **Rigorous parity** | Per-layer fp32 + bf16 hidden-state and last_hidden_state parity, padding-isolation, tokenizer parity, embed_dataset pipeline parity. Run per family in its own Docker image. | `gpu` |
 | **NaN stability** | Batched inference with padding produces no NaN in real-token embeddings | `gpu` |
@@ -285,7 +291,7 @@ FastPLMs includes a pytest-based test suite under `testing/` covering correctnes
 
 ### Running Tests with Docker
 
-FastPLMs uses a per-family Docker setup. A single shared base image (`fastplms-base`) holds torch + transformers + the FastPLMs source, and one image per model family (`fastplms-esm2`, `fastplms-esm_plusplus`, `fastplms-e1`, `fastplms-dplm`, `fastplms-dplm2`, `fastplms-ankh`) layers on top with that family's native reference package. This isolates conflicting dependencies (e.g. Biohub `esm` vs `fair-esm`, DPLM's torchtext pin) and keeps each image small.
+FastPLMs uses a per-family Docker setup. A single shared base image (`fastplms-base`) holds torch + transformers + the FastPLMs source, and one image per model family (`fastplms-esm2`, `fastplms-esm_plusplus`, `fastplms-esm3`, `fastplms-e1`, `fastplms-dplm`, `fastplms-dplm2`, `fastplms-ankh`) layers on top with that family's native reference package. This isolates conflicting dependencies (e.g. Biohub `esm` vs `fair-esm`, DPLM's torchtext pin) and keeps each image small.
 
 ```bash
 # Initialize submodules (required before building Docker)
@@ -297,6 +303,7 @@ git submodule update --init --recursive
 # Build a single family
 ./build_images.sh esm2
 ./build_images.sh esm_plusplus
+./build_images.sh esm3
 ```
 
 Run the parity / compliance tests for one family inside its image:
@@ -309,6 +316,10 @@ docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm2 \
 # ESM++ (model_key is "esmc")
 docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm_plusplus \
     python -m pytest /workspace/testing/test_parity.py -k esmc -v
+
+# ESM3, requires accepted access to biohub/esm3-sm-open-v1 for official parity
+docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm3 \
+    python -m pytest /workspace/testing/test_parity.py -k esm3 -v
 
 # E1, DPLM, DPLM2, ANKH
 for fam in e1 dplm dplm2 ankh; do
@@ -343,7 +354,7 @@ The parity and compliance tests compare FastPLM outputs against the original mod
 
 | Dependency | Used by | Install |
 | :--- | :--- | :--- |
-| `cloudpathlib`, `zstd`, `biotite` (+ `official/esm` submodule on `sys.path`) | ESM++ / ESMC | provided by `Dockerfile.esm_plusplus`; the Biohub `esm` package itself is **not** pip-installed because it depends on a Biohub `transformers` fork. |
+| `cloudpathlib`, `zstd`, `biotite` (+ `official/esm` submodule on `sys.path`) | ESM++ / ESMC, ESM3 official parity | provided by `Dockerfile.esm_plusplus` and `Dockerfile.esm3`; the Biohub `esm` package itself is **not** pip-installed because it depends on a Biohub `transformers` fork. |
 | `E1` | E1 | `pip install -e official/e1` (or use `Dockerfile.e1`) |
 | `transformers` (`EsmForMaskedLM`, `T5EncoderModel`) | ESM2, DPLM, ANKH | already in `requirements.txt` |
 
@@ -396,7 +407,7 @@ git submodule update --init --recursive
 ./build_images.sh esm2 esm_plusplus     # subset
 ```
 
-This produces `fastplms-base` and `fastplms-{esm2,esm_plusplus,e1,dplm,dplm2,ankh}`. Run a family's tests in its image:
+This produces `fastplms-base` and `fastplms-{esm2,esm_plusplus,esm3,e1,dplm,dplm2,ankh}`. Run a family's tests in its image:
 
 ```bash
 docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm2 \
