@@ -8,8 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from e1_fastplms import e1_utils
-from e1_fastplms.modeling_e1 import (
+from fastplms.e1.modeling_e1 import (
     ColabFoldSearcher,
     ContextCache,
     ContextSpecification,
@@ -120,11 +119,8 @@ def test_context_sampling_matches_official_e1(tmp_path) -> None:
     for seed in (0, 3, 11):
         context, ids = sample_context(seed=seed, **kwargs)
         official_context, official_ids = official_msa_sampling.sample_context(seed=seed, **kwargs)
-        utils_context, utils_ids = e1_utils.sample_context(seed=seed, **kwargs)
         assert context == official_context
         assert ids == official_ids
-        assert utils_context == official_context
-        assert utils_ids == official_ids
 
     specs = [
         ContextSpecification(
@@ -152,16 +148,6 @@ def test_context_sampling_matches_official_e1(tmp_path) -> None:
         )
         for spec in specs
     ]
-    utils_specs = [
-        e1_utils.ContextSpecification(
-            max_num_samples=spec.max_num_samples,
-            max_token_length=spec.max_token_length,
-            max_query_similarity=spec.max_query_similarity,
-            min_query_similarity=spec.min_query_similarity,
-            neighbor_similarity_lower_bound=spec.neighbor_similarity_lower_bound,
-        )
-        for spec in specs
-    ]
 
     contexts, ids = sample_multiple_contexts(
         msa_path=str(a3m_path),
@@ -175,16 +161,8 @@ def test_context_sampling_matches_official_e1(tmp_path) -> None:
         seed=7,
         device=torch.device("cpu"),
     )
-    utils_contexts, utils_ids = e1_utils.sample_multiple_contexts(
-        msa_path=str(a3m_path),
-        context_specifications=utils_specs,
-        seed=7,
-        device=torch.device("cpu"),
-    )
     assert contexts == official_contexts
     assert ids == official_ids
-    assert utils_contexts == official_contexts
-    assert utils_ids == official_ids
 
 
 def test_context_cache_round_trip(tmp_path) -> None:

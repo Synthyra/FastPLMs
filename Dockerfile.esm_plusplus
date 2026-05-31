@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs ESM++ / ESMC parity testing.
+# Adds Biohub `esm` package runtime dependencies on top of the base image.
+# NOT using `pip install -e /app/official/esm` because Biohub/esm depends on a
+# Biohub transformers fork. Instead we install the runtime deps `esm.models.esmc`
+# actually imports, relying on sys.path injection via testing/official/__init__.py
+# to bring in the esm package itself.
+#
+# Build:
+#   docker build -f Dockerfile.esm_plusplus -t fastplms-esm_plusplus .
+# Run parity script:
+#   docker run --gpus all --ipc=host --rm -v $(pwd):/workspace \
+#     fastplms-esm_plusplus python /workspace/testing/parity_debug_esmc.py
+
+FROM fastplms-base
+
+RUN pip install \
+        attrs==26.1.0 \
+        biopython==1.87 \
+        biotite==1.6.0 \
+        brotli==1.2.0 \
+        cloudpathlib==0.24.0 \
+        httpx==0.28.1 \
+        msgpack-numpy==0.4.8 \
+        pandas==3.0.3 \
+        pygtrie==2.5.0 \
+        tenacity==9.1.4 \
+        zstd==1.5.7.3

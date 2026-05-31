@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs ESM2 (also covers ESMFold, which reuses the ESM2 stack).
+# Native reference is `transformers.EsmForMaskedLM` -- already in base image.
+#
+# Build:
+#   docker build -f Dockerfile.base -t fastplms-base .
+#   docker build -f Dockerfile.esm2 -t fastplms-esm2 .
+# Run parity tests:
+#   docker run --gpus all --ipc=host --rm -v $(pwd):/workspace \
+#     fastplms-esm2 python -m pytest /workspace/testing/test_parity.py -k esm2 -v
+FROM fastplms-base

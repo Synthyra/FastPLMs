@@ -1,0 +1,8 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs ANKH. Native reference is `transformers.T5EncoderModel`
+# -- already in base image.
+#
+# Build:
+#   docker build -f Dockerfile.base -t fastplms-base .
+#   docker build -f Dockerfile.ankh -t fastplms-ankh .
+FROM fastplms-base

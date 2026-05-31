@@ -20,3 +20,6 @@ draft.md
 /E1
 /.cache
 /esm
+/testing/__pycache__
+/github_issues
+/internal

@@ -6,3 +6,13 @@
 
 # Keep dependency manifest used during build
 !requirements.txt
+
+# Keep official submodules (needed for pip install -e during build)
+!official/**
+
+# Keep non-Python files needed by models
+!**/*.json
+!**/*.txt
+!**/*.md
+!Dockerfile
+!.dockerignore

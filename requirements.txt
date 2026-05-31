@@ -1,25 +1,32 @@
-torch>=2.5.1 # this is force reinstalled in the Dockerfile with cuda
-matplotlib
+# Local GPU installs should install torch==2.11.0 and torchvision==0.26.0
+# from the cu128 PyTorch index before this file. Dockerfiles enforce this pin.
+matplotlib==3.10.9
+tqdm==4.67.3
+# testing
+pytest==9.0.3
 # standard
-numpy
-einops
-pytest
-scikit-learn
-scipy
-seaborn
+numpy==1.26.4
+einops==0.8.2
+scikit-learn==1.8.0
+scipy==1.17.1
+seaborn==0.13.2
 # huggingface
 tensorflow==2.20.0
 transformers==4.57.6
 accelerate==1.12.0
 datasets==4.5.0
 hf_transfer==0.1.9
-hf-xet
-peft
+hf-xet==1.5.0
+peft==0.19.1
+sentencepiece==0.2.1
 # embedding mixin
-networkx
+networkx==3.6.1
 # for boltz
-omegaconf
-rich
-trifast
+omegaconf==2.3.0
+rich==15.0.0
+trifast==0.1.13
+# ESMFold2
+rdkit==2026.3.2
+zstd==1.5.7.3
 # E1
-kernels
+kernels==0.12.3

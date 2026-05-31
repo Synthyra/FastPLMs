@@ -1,0 +1,14 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs E1. Installs the official E1 package (editable) from the
+# submodule at official/e1. Isolated in its own image because pip install -e
+# modifies the venv with E1-specific deps that aren't needed for other families.
+#
+# Build:
+#   docker build -f Dockerfile.base -t fastplms-base .
+#   docker build -f Dockerfile.e1 -t fastplms-e1 .
+FROM fastplms-base
+
+RUN pip install -e /app/official/e1
+# Re-pin cu128 torch in case the e1 install or one of its transitive deps
+# pulled the PyPI default (CUDA 13) wheel on top of our cu128 base.
+RUN pip install --force-reinstall torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128

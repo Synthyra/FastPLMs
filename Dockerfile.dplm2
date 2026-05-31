@@ -1,0 +1,8 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs DPLM2. Same rationale as Dockerfile.dplm -- DPLM2 uses ESM2
+# architecture internally; native reference is `transformers.EsmForMaskedLM`.
+#
+# Build:
+#   docker build -f Dockerfile.base -t fastplms-base .
+#   docker build -f Dockerfile.dplm2 -t fastplms-dplm2 .
+FROM fastplms-base

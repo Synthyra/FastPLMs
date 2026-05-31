@@ -2,21 +2,20 @@ import entrypoint_setup
 
 import torch
 import random
+from typing import List, Tuple
 from torch.nn.functional import mse_loss
 from tqdm import tqdm
 from collections import defaultdict
 from transformers import AutoModelForMaskedLM
 
-from esm2.modeling_fastesm import FastEsmForMaskedLM
-from esm2.load_official import load_official_model as load_official_esm2_model
+from fastplms.esm2.modeling_fastesm import FastEsmForMaskedLM
+from fastplms.esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
+from fastplms.e1.modeling_e1 import E1ForMaskedLM
+from testing.official.esm2 import load_official_model as load_official_esm2_model
+from testing.official.esm_plusplus import load_official_model as load_official_esmc_model
+from testing.official.e1 import load_official_model as load_official_e1_model
 
-from esm_plusplus.modeling_esm_plusplus import ESMplusplusForMaskedLM
-from esm_plusplus.load_official import load_official_model as load_official_esmc_model
-
-from e1_fastplms.load_official import load_official_model as load_official_e1_model
-from e1_fastplms.modeling_e1 import E1ForMaskedLM
-
-from weight_parity_utils import assert_state_dict_equal
+from fastplms.weight_parity_utils import assert_state_dict_equal
 
 
 class ComplianceChecker:
@@ -26,7 +25,7 @@ class ComplianceChecker:
         batch_size: int = 8,
         min_sequence_length: int = 16,
         max_sequence_length: int = 128,
-    ):
+    ) -> None:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.test_number_batches = test_number_batches
         self.batch_size = batch_size
@@ -34,8 +33,8 @@ class ComplianceChecker:
         self.max_sequence_length = max_sequence_length
         self.canonical_amino_acids = "ACDEFGHIKLMNPQRSTVWY"
 
-    def _load_esmc(self, from_auto_model: bool = False, force_download: bool = False):
-        official_model_path = "esmc-300"
+    def _load_esmc(self, from_auto_model: bool = False, force_download: bool = False) -> Tuple[torch.nn.Module, torch.nn.Module, object]:
+        official_model_path = "biohub/ESMC-300M"
         fast_model_path = "Synthyra/ESMplusplus_small"
         official_model, tokenizer = load_official_esmc_model(
             reference_repo_id=official_model_path,
@@ -52,7 +51,7 @@ class ComplianceChecker:
         ).eval()
         return official_model, fast_model, tokenizer
 
-    def _load_esm2(self, from_auto_model: bool = False, force_download: bool = False):
+    def _load_esm2(self, from_auto_model: bool = False, force_download: bool = False) -> Tuple[torch.nn.Module, torch.nn.Module, object]:
         official_model_path = "facebook/esm2_t6_8M_UR50D"
         fast_model_path = "Synthyra/ESM2-8M"
         official_model, tokenizer = load_official_esm2_model(
@@ -70,7 +69,7 @@ class ComplianceChecker:
         ).eval()
         return official_model, fast_model, tokenizer
 
-    def _load_e1(self, from_auto_model: bool = False, force_download: bool = False):
+    def _load_e1(self, from_auto_model: bool = False, force_download: bool = False) -> Tuple[torch.nn.Module, torch.nn.Module, object]:
         official_model_path = "Profluent-Bio/E1-150m"
         fast_model_path = "Synthyra/Profluent-E1-150M"
         official_model, tokenizer = load_official_e1_model(
@@ -90,11 +89,11 @@ class ComplianceChecker:
 
     def _generate_random_sequence(self, length: int) -> str:
         return 'M' + "".join(random.choices(self.canonical_amino_acids, k=length))
-    
-    def _generate_random_batch(self, batch_size: int, min_length: int, max_length: int) -> list[str]:
+
+    def _generate_random_batch(self, batch_size: int, min_length: int, max_length: int) -> List[str]:
         return [self._generate_random_sequence(random.randint(min_length, max_length)) for _ in range(batch_size)]
 
-    def _weight_compliance(self, official_model, fast_model):
+    def _weight_compliance(self, official_model: torch.nn.Module, fast_model: torch.nn.Module) -> None:
         for (official_name, official_param), (fast_name, fast_param) in zip(official_model.model.state_dict().items(), fast_model.state_dict().items()):
             if official_name == fast_name:
                 diff = mse_loss(official_param, fast_param).item()
@@ -105,7 +104,7 @@ class ComplianceChecker:
                 print(f"Name mismatch: {official_name} != {fast_name}")
 
     @torch.inference_mode()
-    def _foward_compliance(self, model_type: str, official_model, fast_model, tokenizer, only_non_pad_tokens: bool = False):
+    def _foward_compliance(self, model_type: str, official_model: torch.nn.Module, fast_model: torch.nn.Module, tokenizer: object, only_non_pad_tokens: bool = False) -> None:
         cumulative_logits_mse = 0
         cumulative_preds_accuracy = 0
         hidden_state_diff_dict = defaultdict(int)
@@ -170,7 +169,7 @@ class ComplianceChecker:
         force_download: bool = False,
         from_auto_model: bool = False,
         only_non_pad_tokens: bool = False,
-    ):
+    ) -> None:
         if model_type == "ESMC":
             official_model, fast_model, tokenizer = self._load_esmc(from_auto_model, force_download)
         elif model_type == "ESM2":
