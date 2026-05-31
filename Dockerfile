@@ -33,7 +33,7 @@ WORKDIR /app
 COPY requirements.txt .
 COPY official/ official/
 
-RUN pip install --upgrade pip setuptools
+RUN pip install --upgrade pip==26.1.1 setuptools==70.2.0
 
 # Install official repos from submodules for compliance testing.
 # - E1: pip install -e (needed by testing/official/e1.py)

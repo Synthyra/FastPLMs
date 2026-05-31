@@ -393,10 +393,17 @@ docker run --gpus all -v $(pwd):/workspace fastplms \
 ## Installation & Docker
 
 ### Local Installation
+
+FastPLMs is developed and tested with Python 3.12 and CUDA 12.8. For local GPU
+installs, install the cu128 PyTorch wheels first, then the pinned direct
+dependencies:
+
 ```bash
 git clone --recurse-submodules https://github.com/Synthyra/FastPLMs.git
 cd FastPLMs
-pip install -r requirements.txt
+python -m pip install --upgrade pip==26.1.1 setuptools==70.2.0
+python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
+python -m pip install -r requirements.txt
 ```
 
 If you already cloned without `--recurse-submodules`, initialize submodules separately:
