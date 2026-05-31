@@ -334,22 +334,66 @@ def _unpad_input(
 
 block_mask_creator = direct_block_mask if os.getenv("FAST_BLOCK_MASK", "1") == "1" else doc_id_mask
 PAD_TOKEN_ID = 0
+BOS_TOKEN_ID = 1
+EOS_TOKEN_ID = 2
+E1_VOCAB_SIZE = 34
+E1_TOKENIZER_REPO_ID = "Synthyra/Profluent-E1-150M"
 
 
-def get_tokenizer() -> Tokenizer:
-    try:
-        fname = os.path.join(os.path.dirname(__file__), "tokenizer.json")
-        tokenizer: Tokenizer = Tokenizer.from_file(fname)
-    except Exception:
-        print("E1 Tokenizer not found in local directory, downloading from Hugging Face")
-        from huggingface_hub import hf_hub_download
-        fname = hf_hub_download(repo_id="Synthyra/Profluent-E1-150M", filename="tokenizer.json")
-        tokenizer: Tokenizer = Tokenizer.from_file(fname)
+def _load_tokenizer_file(fname: str) -> Tokenizer:
+    tokenizer: Tokenizer = Tokenizer.from_file(fname)
     assert tokenizer.padding["pad_id"] == PAD_TOKEN_ID, (
         f"Padding token id must be {PAD_TOKEN_ID}, but got {tokenizer.padding['pad_id']}"
     )
-
     return tokenizer
+
+
+def get_tokenizer(
+    pretrained_model_name_or_path: Optional[Union[str, os.PathLike]] = None,
+    *,
+    local_files_only: bool = False,
+    cache_dir: Optional[Union[str, os.PathLike]] = None,
+    revision: Optional[str] = None,
+    token: Optional[Union[str, bool]] = None,
+) -> Tokenizer:
+    source_path = None
+    checked_local_source = False
+    if pretrained_model_name_or_path is not None:
+        source_path = os.fspath(pretrained_model_name_or_path)
+        if os.path.isdir(source_path):
+            checked_local_source = True
+            fname = os.path.join(source_path, "tokenizer.json")
+            if os.path.isfile(fname):
+                return _load_tokenizer_file(fname)
+
+    fname = os.path.join(os.path.dirname(__file__), "tokenizer.json")
+    if os.path.isfile(fname):
+        return _load_tokenizer_file(fname)
+
+    if local_files_only and checked_local_source:
+        raise FileNotFoundError(
+            f"E1 tokenizer.json was not found in {source_path} or next to {__file__}."
+        )
+
+    from huggingface_hub import hf_hub_download
+
+    repo_id = E1_TOKENIZER_REPO_ID
+    if source_path is not None and not checked_local_source:
+        repo_id = source_path
+    try:
+        fname = hf_hub_download(
+            repo_id=repo_id,
+            filename="tokenizer.json",
+            cache_dir=os.fspath(cache_dir) if cache_dir is not None else None,
+            revision=revision,
+            token=token,
+            local_files_only=local_files_only,
+        )
+    except Exception as error:
+        raise FileNotFoundError(
+            f"E1 tokenizer.json was not found locally and could not be loaded from {repo_id}."
+        ) from error
+    return _load_tokenizer_file(fname)
 
 
 @dataclass
@@ -370,9 +414,20 @@ class E1BatchPreparer:
         self,
         data_prep_config: Optional[DataPrepConfig] = None,
         tokenizer: Optional[Tokenizer] = None,
+        tokenizer_source: Optional[Union[str, os.PathLike]] = None,
+        local_files_only: bool = False,
+        cache_dir: Optional[Union[str, os.PathLike]] = None,
+        revision: Optional[str] = None,
+        token: Optional[Union[str, bool]] = None,
         preserve_context_labels: bool = False,
     ):
-        self.tokenizer = tokenizer or get_tokenizer()
+        self.tokenizer = tokenizer or get_tokenizer(
+            tokenizer_source,
+            local_files_only=local_files_only,
+            cache_dir=cache_dir,
+            revision=revision,
+            token=token,
+        )
         self.data_prep_config = data_prep_config or DataPrepConfig()
         self.pad_token_id = self.tokenizer.token_to_id("<pad>")
         self.preserve_context_labels = preserve_context_labels
@@ -536,11 +591,10 @@ class E1Config(PretrainedConfig):
         attn_backend="sdpa",
         **kwargs,
     ) -> None:
-        tokenizer = get_tokenizer()
         super().__init__(
-            pad_token_id=tokenizer.token_to_id("<pad>"),
-            bos_token_id=tokenizer.token_to_id("<bos>"),
-            eos_token_id=tokenizer.token_to_id("<eos>"),
+            pad_token_id=PAD_TOKEN_ID,
+            bos_token_id=BOS_TOKEN_ID,
+            eos_token_id=EOS_TOKEN_ID,
             tie_word_embeddings=tie_word_embeddings,
             dtype=dtype,
             **kwargs,
@@ -571,7 +625,7 @@ class E1Config(PretrainedConfig):
         self.clip_qkv = clip_qkv
         self.global_attention_every_n_layers = global_attention_every_n_layers
 
-        self.vocab_size = tokenizer.get_vocab_size()
+        self.vocab_size = E1_VOCAB_SIZE
         self.gradient_checkpointing = gradient_checkpointing
         self.no_ffn_gradient_checkpointing = no_ffn_gradient_checkpointing
         self.attn_backend = attn_backend
@@ -583,14 +637,17 @@ class E1Config(PretrainedConfig):
                 )
                 self.vocab_size = vocab_size
             elif vocab_size > self.vocab_size:
-                logger.warning(f"Using vocab_size {vocab_size} instead of smaller {self.vocab_size} from tokenizer.")
+                logger.warning(
+                    f"Using vocab_size {vocab_size} instead of smaller {self.vocab_size} "
+                    "from E1 tokenizer contract."
+                )
                 self.vocab_size = vocab_size
         if pad_token_id is not None and pad_token_id != self.pad_token_id:
-            logger.warning(f"Ignoring pad_token_id. Using {self.pad_token_id} from tokenizer")
+            logger.warning(f"Ignoring pad_token_id. Using {self.pad_token_id} from E1 tokenizer contract")
         if bos_token_id is not None and bos_token_id != self.bos_token_id:
-            logger.warning(f"Ignoring bos_token_id. Using {self.bos_token_id} from tokenizer")
+            logger.warning(f"Ignoring bos_token_id. Using {self.bos_token_id} from E1 tokenizer contract")
         if eos_token_id is not None and eos_token_id != self.eos_token_id:
-            logger.warning(f"Ignoring eos_token_id. Using {self.eos_token_id} from tokenizer")
+            logger.warning(f"Ignoring eos_token_id. Using {self.eos_token_id} from E1 tokenizer contract")
 
 
 class DynamicCache:
@@ -1403,6 +1460,57 @@ class E1PreTrainedModel(PreTrainedModel):
     _transformer_layer_cls = [DecoderLayer]
     _skip_keys_device_placement = "past_key_values"
     all_tied_weights_keys = {}
+    _tokenizer_source: Optional[Union[str, os.PathLike]] = None
+    _tokenizer_local_files_only = False
+    _tokenizer_cache_dir: Optional[Union[str, os.PathLike]] = None
+    _tokenizer_revision: Optional[str] = None
+    _tokenizer_token: Optional[Union[str, bool]] = None
+
+    @classmethod
+    def from_pretrained(  # type: ignore[override]
+        cls,
+        pretrained_model_name_or_path: Union[str, os.PathLike],
+        *model_args: Any,
+        **kwargs: Any,
+    ) -> "E1PreTrainedModel":
+        previous_source = E1PreTrainedModel._tokenizer_source
+        previous_local_files_only = E1PreTrainedModel._tokenizer_local_files_only
+        previous_cache_dir = E1PreTrainedModel._tokenizer_cache_dir
+        previous_revision = E1PreTrainedModel._tokenizer_revision
+        previous_token = E1PreTrainedModel._tokenizer_token
+        E1PreTrainedModel._tokenizer_source = pretrained_model_name_or_path
+        E1PreTrainedModel._tokenizer_local_files_only = (
+            bool(kwargs["local_files_only"]) if "local_files_only" in kwargs else False
+        )
+        E1PreTrainedModel._tokenizer_cache_dir = kwargs["cache_dir"] if "cache_dir" in kwargs else None
+        E1PreTrainedModel._tokenizer_revision = kwargs["revision"] if "revision" in kwargs else None
+        if "token" in kwargs:
+            E1PreTrainedModel._tokenizer_token = kwargs["token"]
+        elif "use_auth_token" in kwargs:
+            E1PreTrainedModel._tokenizer_token = kwargs["use_auth_token"]
+        else:
+            E1PreTrainedModel._tokenizer_token = None
+        try:
+            return super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        finally:
+            E1PreTrainedModel._tokenizer_source = previous_source
+            E1PreTrainedModel._tokenizer_local_files_only = previous_local_files_only
+            E1PreTrainedModel._tokenizer_cache_dir = previous_cache_dir
+            E1PreTrainedModel._tokenizer_revision = previous_revision
+            E1PreTrainedModel._tokenizer_token = previous_token
+
+    @staticmethod
+    def _tokenizer_kwargs_from_config(config: E1Config) -> Dict[str, Any]:
+        tokenizer_source = E1PreTrainedModel._tokenizer_source
+        if tokenizer_source is None and isinstance(config._name_or_path, str) and len(config._name_or_path) > 0:
+            tokenizer_source = config._name_or_path
+        return {
+            "tokenizer_source": tokenizer_source,
+            "local_files_only": E1PreTrainedModel._tokenizer_local_files_only,
+            "cache_dir": E1PreTrainedModel._tokenizer_cache_dir,
+            "revision": E1PreTrainedModel._tokenizer_revision,
+            "token": E1PreTrainedModel._tokenizer_token,
+        }
 
     def _init_weights(self, module: nn.Module) -> None:
         std = self.config.initializer_range
@@ -1458,7 +1566,9 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         self.layers = nn.ModuleList([DecoderLayer(config, i) for i in range(config.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.gradient_checkpointing = config.gradient_checkpointing
-        self.prep_tokens = E1BatchPreparer()
+        self.prep_tokens = E1BatchPreparer(
+            **E1PreTrainedModel._tokenizer_kwargs_from_config(config)
+        )
         self._attn_backend = resolve_attention_backend(config.attn_backend)
         self.post_init()
 
@@ -2059,5 +2169,3 @@ if __name__ == "__main__":
     print_tensor_shapes("", batch)
     print("Output shape:")
     print_tensor_shapes("", output)
-
-
