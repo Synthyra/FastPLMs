@@ -60,6 +60,7 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
 | **ESM++** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Optimized SDPA / Flex | Small (300M), Large (600M), 6B |
 | **ESM3** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | HF AutoModel wrapper | Open Small |
+| **ESMFold2** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Self-contained HF AutoModel wrapper | Full, Fast |
 | **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
 | **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
 | **ANKH** | Elnaggar Lab | [ElnaggarLab/ankh](https://huggingface.co/ElnaggarLab/ankh-base) | T5 RPE via Flex score_mod | Base, Large, ANKH2-L, ANKH3-L, ANKH3-XL |
@@ -79,6 +80,8 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | `esmplusplus_large` | ESM++ | 575.0M | Biohub | [Synthyra/ESMplusplus_large](https://huggingface.co/Synthyra/ESMplusplus_large) | [biohub/ESMC-600M](https://huggingface.co/biohub/ESMC-600M) |
 | `esmplusplus_6b` | ESM++ | 6.35B | Biohub | [Synthyra/ESMplusplus_6B](https://huggingface.co/Synthyra/ESMplusplus_6B) | [biohub/ESMC-6B](https://huggingface.co/biohub/ESMC-6B) |
 | `esm3_small` | ESM3 | 1.4B | Biohub | [Synthyra/ESM3_small](https://huggingface.co/Synthyra/ESM3_small) | [biohub/esm3-sm-open-v1](https://huggingface.co/biohub/esm3-sm-open-v1) |
+| `esmfold2` | ESMFold2 | 234.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2](https://huggingface.co/Synthyra/ESMFold2) | [biohub/ESMFold2](https://huggingface.co/biohub/ESMFold2) |
+| `esmfold2_fast` | ESMFold2 | 188.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Fast](https://huggingface.co/Synthyra/ESMFold2-Fast) | [biohub/ESMFold2-Fast](https://huggingface.co/biohub/ESMFold2-Fast) |
 | `e1_150m` | E1 | 154.4M | Profluent Bio | [Synthyra/Profluent-E1-150M](https://huggingface.co/Synthyra/Profluent-E1-150M) | [Profluent-Bio/E1-150m](https://huggingface.co/Profluent-Bio/E1-150m) |
 | `e1_300m` | E1 | 274.3M | Profluent Bio | [Synthyra/Profluent-E1-300M](https://huggingface.co/Synthyra/Profluent-E1-300M) | [Profluent-Bio/E1-300m](https://huggingface.co/Profluent-Bio/E1-300m) |
 | `e1_600m` | E1 | 641.4M | Profluent Bio | [Synthyra/Profluent-E1-600M](https://huggingface.co/Synthyra/Profluent-E1-600M) | [Profluent-Bio/E1-600m](https://huggingface.co/Profluent-Bio/E1-600m) |
@@ -287,11 +290,11 @@ FastPLMs includes a pytest-based test suite under `testing/` covering correctnes
 | **Batch-single match** | Batch and single-item embedding produce identical results | `gpu` |
 | **Full model suite** | All of the above across every checkpoint (8M through 3B) | `gpu`, `large` |
 | **Throughput benchmark** | Tokens/sec across models, backends, batch sizes, and sequence lengths | `slow`, `gpu` |
-| **Structure models** | Boltz2 and ESMFold loading + forward pass | `structure`, `slow`, `gpu` |
+| **Structure models** | Boltz2, ESMFold, and ESMFold2 loading + forward/parity checks | `structure`, `slow`, `gpu` |
 
 ### Running Tests with Docker
 
-FastPLMs uses a per-family Docker setup. A single shared base image (`fastplms-base`) holds torch + transformers + the FastPLMs source, and one image per model family (`fastplms-esm2`, `fastplms-esm_plusplus`, `fastplms-esm3`, `fastplms-e1`, `fastplms-dplm`, `fastplms-dplm2`, `fastplms-ankh`) layers on top with that family's native reference package. This isolates conflicting dependencies (e.g. Biohub `esm` vs `fair-esm`, DPLM's torchtext pin) and keeps each image small.
+FastPLMs uses a per-family Docker setup. A single shared base image (`fastplms-base`) holds torch + transformers + the FastPLMs source, and one image per model family (`fastplms-esm2`, `fastplms-esm_plusplus`, `fastplms-esm3`, `fastplms-esmfold2`, `fastplms-e1`, `fastplms-dplm`, `fastplms-dplm2`, `fastplms-ankh`) layers on top with that family's native reference package. This isolates conflicting dependencies (e.g. Biohub `esm` vs `fair-esm`, DPLM's torchtext pin) and keeps each image small.
 
 ```bash
 # Initialize submodules (required before building Docker)
@@ -304,6 +307,7 @@ git submodule update --init --recursive
 ./build_images.sh esm2
 ./build_images.sh esm_plusplus
 ./build_images.sh esm3
+./build_images.sh esmfold2
 ```
 
 Run the parity / compliance tests for one family inside its image:
@@ -320,6 +324,10 @@ docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm_plusplus
 # ESM3, requires accepted access to biohub/esm3-sm-open-v1 for official parity
 docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm3 \
     python -m pytest /workspace/testing/test_parity.py -k esm3 -v
+
+# ESMFold2 / ESMFold2-Fast
+docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esmfold2 \
+    python -m pytest /workspace/testing/test_esmfold2.py -v -s
 
 # E1, DPLM, DPLM2, ANKH
 for fam in e1 dplm dplm2 ankh; do
@@ -342,7 +350,7 @@ docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not
 # Full suite including 3B models (requires 40+ GB VRAM)
 docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not structure" -v
 
-# Structure models only (Boltz2, ESMFold)
+# Structure models only (Boltz2, ESMFold, ESMFold2)
 docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "structure" -v
 ```
 
@@ -355,6 +363,7 @@ The parity and compliance tests compare FastPLM outputs against the original mod
 | Dependency | Used by | Install |
 | :--- | :--- | :--- |
 | `cloudpathlib`, `zstd`, `biotite` (+ `official/esm` submodule on `sys.path`) | ESM++ / ESMC, ESM3 official parity | provided by `Dockerfile.esm_plusplus` and `Dockerfile.esm3`; the Biohub `esm` package itself is **not** pip-installed because it depends on a Biohub `transformers` fork. |
+| Biohub `transformers` fork, `rdkit`, `biotite`, `msgpack-numpy`, `pydssp`, `pygtrie`, `py3dmol` | ESMFold2 parity and structure export | provided by `Dockerfile.esmfold2` |
 | `E1` | E1 | `pip install -e official/e1` (or use `Dockerfile.e1`) |
 | `transformers` (`EsmForMaskedLM`, `T5EncoderModel`) | ESM2, DPLM, ANKH | already in `requirements.txt` |
 
