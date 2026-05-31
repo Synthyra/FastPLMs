@@ -3,6 +3,7 @@ matplotlib
 # standard
 numpy
 einops
+pytest
 scikit-learn
 scipy
 seaborn

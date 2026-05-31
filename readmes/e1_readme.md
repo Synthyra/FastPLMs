@@ -123,6 +123,53 @@ Note:
     - Sequences will be truncated to max_len and sorted by length in descending order for faster processing
 ```
 
+## MSA context, PPLL scoring, and RAG embeddings
+
+FastPLMs exposes E1 retrieval-augmented MSA context utilities directly on the model object:
+
+```python
+a3m_path = model.search_homologues(
+    sequence="MALWMRLLPLLALLALWGPDPAAA",
+    output_dir="msas",
+    provider="colabfold",
+)
+
+contexts = model.sample_msa_contexts(
+    a3m_path=a3m_path,
+    max_context_tokens=[6144, 12288, 24576],
+    similarity_thresholds=[1.0, 0.95, 0.9, 0.7, 0.5],
+)
+
+scores = model.score_ppll(
+    sequences=["MALWMRLLPLLALLALWGPDPAAA"],
+    a3m_path=a3m_path,
+    ensemble=True,
+)
+
+embeddings = model.embed_with_msa(
+    sequences=["MALWMRLLPLLALLALWGPDPAAA"],
+    a3m_path=a3m_path,
+    pooling_types=["mean"],
+)
+```
+
+The MSA parsing and context sampling follow Profluent's official E1 `msa_sampling` behavior, including A3M insertion stripping, neighbor reweighting, query-similarity filtering, seeded sampling, and context token budgets.
+
+`score_ppll()` is intentionally different from Profluent's official `E1Scorer`. The official scorer computes mutant scores against a parent sequence with wildtype or masked marginal log-probability deltas. FastPLMs uses a PPLL-style mean correct-token probability over each scored sequence, then optionally averages over sampled contexts. We prefer this API because it is much cheaper while remaining comparable for our use cases.
+
+For dataset embeddings with precomputed MSAs:
+
+```python
+embedding_dict = model.embed_dataset_with_msa(
+    sequences=["MALWMRLLPLLALLALWGPDPAAA"],
+    msa_dir="msas",
+    batch_size=2,
+    pooling_types=["mean"],
+)
+```
+
+The standard `embed()` and `embed_dataset()` paths are unchanged. Use `embed_with_msa()` or `embed_dataset_with_msa()` when you want retrieval context included.
+
 ## Fine-tuning with 🤗 peft
 ```python
 model = AutoModelForSequenceClassification.from_pretrained('Synthyra/Profluent-E1-150M', num_labels=2, trust_remote_code=True)

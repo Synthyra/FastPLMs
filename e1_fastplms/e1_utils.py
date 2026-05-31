@@ -173,17 +173,17 @@ def sample_context(
 
     sampling_weights = 1.0 / num_neighbors
     query_similarity = get_similarity_to_query(msa_as_byte_tensor)
-    filtered_indices = (query_similarity <= max_query_similarity) & (query_similarity >= min_query_similarity)
+    filtered_mask = (query_similarity <= max_query_similarity) & (query_similarity >= min_query_similarity)
 
-    assert filtered_indices.sum() >= 1, (
+    assert filtered_mask.sum() >= 1, (
         f"No sequences found with similarity to query within the given range: {min_query_similarity=} <= query_similarity <= {max_query_similarity=}. "
         "Consider increasing the max_query_similarity or decreasing the min_query_similarity."
     )
-    filtered_weights = sampling_weights[filtered_indices.cpu().numpy()]
+    filtered_weights = np.where(filtered_mask.cpu().numpy(), sampling_weights, 0.0)
 
     sampled_indices = np.random.default_rng(seed).choice(
         len(filtered_weights),
-        size=min(max_num_samples, len(filtered_weights)),
+        size=min(max_num_samples, int(filtered_mask.sum())),
         p=filtered_weights / filtered_weights.sum(),
         replace=False,
         shuffle=True,
