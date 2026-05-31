@@ -1,15 +1,29 @@
 from __future__ import annotations
 
+import hashlib
+import itertools
 import os
-from enum import Enum
+import pickle
+import random
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import time
+from collections import defaultdict, namedtuple
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 from tokenizers import Tokenizer
+from tqdm.auto import tqdm
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
@@ -832,6 +846,931 @@ class KVCache:
 
         self.cache_dict[unique_context].crop(unique_context_len)
         self.cache_dict[unique_context].batch_select_indices([0])
+
+
+DOCKER_IMAGE = "ghcr.io/soedinglab/mmseqs2"
+COLABFOLD_HOST = "https://api.colabfold.com"
+LOWERCASE_CHARS = b"abcdefghijklmnopqrstuvwxyz"
+DEFAULT_MAX_CONTEXT_TOKENS = [6144, 12288, 24576]
+DEFAULT_SIMILARITY_THRESHOLDS = [1.0, 0.95, 0.9, 0.7, 0.5]
+DEFAULT_EMBED_MAX_TOKENS = 8192
+DEFAULT_EMBED_SIMILARITY = 0.95
+
+IdSequence = namedtuple("IdSequence", ["id", "sequence"])
+IndexedSequence = Tuple[int, str]
+
+
+@dataclass
+class ContextSpecification:
+    max_num_samples: int = 511
+    max_token_length: int = 32768
+    max_query_similarity: float = 1.0
+    min_query_similarity: float = 0.0
+    neighbor_similarity_lower_bound: float = 0.8
+
+
+class E1Prediction(TypedDict, total=False):
+    id: str | int
+    context_id: str | int | None
+    logits: torch.Tensor
+    token_embeddings: torch.Tensor
+    mean_token_embeddings: torch.Tensor
+
+
+def read_fasta_sequences(path: str) -> Dict[str, str]:
+    sequences: Dict[str, str] = {}
+    header: Optional[str] = None
+    parts: List[str] = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if header is not None:
+                    sequences[header] = "".join(parts)
+                header = line[1:].strip()
+                parts = []
+            else:
+                assert header is not None, f"FASTA sequence found before header in {path}"
+                parts.append(line)
+    if header is not None:
+        sequences[header] = "".join(parts)
+    return sequences
+
+
+def write_fasta_sequences(path: str, sequences: Dict[str, str]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        for header, sequence in sequences.items():
+            handle.write(f">{header}\n{sequence}\n")
+
+
+def parse_msa(path: str) -> List[IdSequence]:
+    records = read_fasta_sequences(path)
+    sequences = []
+    for record_id, record_seq in records.items():
+        sequence = str(record_seq).replace("\x00", "").replace(".", "-")
+        sequences.append(IdSequence(record_id, sequence))
+    assert len(sequences) > 0, f"No sequences found in MSA file: {path}"
+    return sequences
+
+
+def convert_to_tensor(sequences: List[IdSequence], device: Optional[torch.device] = None) -> torch.ByteTensor:
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    byte_sequences = [
+        sequence.sequence.encode("ascii").translate(None, LOWERCASE_CHARS)
+        for sequence in sequences
+    ]
+    lengths = {len(byte_sequence) for byte_sequence in byte_sequences}
+    assert len(lengths) == 1, f"MSA rows must have equal aligned lengths after removing insertions: {sorted(lengths)}"
+    array = np.vstack([np.frombuffer(byte_sequence, dtype=np.uint8) for byte_sequence in byte_sequences])
+    return torch.from_numpy(array).to(device)
+
+
+def get_num_neighbors(byte_seqs: torch.ByteTensor, sim_threshold: float = 0.8) -> List[int]:
+    gap_token_id = np.frombuffer(b"-", np.uint8)[0].item()
+    seq_lens = (byte_seqs != gap_token_id).sum(dim=1)
+    num_neighbors: List[int] = []
+    for i in range(byte_seqs.shape[0]):
+        query_non_gaps = byte_seqs[i] != gap_token_id
+        seqs_sim = (byte_seqs[:, query_non_gaps] == byte_seqs[i, query_non_gaps]).sum(dim=1) / seq_lens
+        num_neighbors.append(int((seqs_sim >= sim_threshold).sum().item()))
+    return num_neighbors
+
+
+def get_similarity_to_query(byte_seqs: torch.ByteTensor) -> torch.FloatTensor:
+    return (byte_seqs == byte_seqs[0, :]).sum(dim=1) / byte_seqs.shape[1]
+
+
+def sample_context(
+    msa_path: str,
+    max_num_samples: int,
+    max_token_length: int,
+    max_query_similarity: float = 1.0,
+    min_query_similarity: float = 0.0,
+    neighbor_similarity_lower_bound: float = 0.8,
+    use_full_sequences_in_context: bool = False,
+    full_sequences_path: Optional[str] = None,
+    seed: int = 0,
+    device: Optional[torch.device] = None,
+    cache_num_neighbors_path: Optional[str] = None,
+) -> Tuple[str, List[str]]:
+    msa_sequences = parse_msa(msa_path)
+    msa_as_byte_tensor = convert_to_tensor(msa_sequences, device)
+    if cache_num_neighbors_path is not None and os.path.exists(cache_num_neighbors_path):
+        num_neighbors = np.load(cache_num_neighbors_path)
+    else:
+        num_neighbors = np.array(get_num_neighbors(msa_as_byte_tensor, neighbor_similarity_lower_bound))
+        if cache_num_neighbors_path is not None:
+            np.save(cache_num_neighbors_path, num_neighbors)
+
+    sampling_weights = 1.0 / num_neighbors
+    query_similarity = get_similarity_to_query(msa_as_byte_tensor)
+    filtered_mask = (query_similarity <= max_query_similarity) & (query_similarity >= min_query_similarity)
+    assert filtered_mask.sum() >= 1, (
+        f"No sequences found with similarity to query within range "
+        f"{min_query_similarity} <= query_similarity <= {max_query_similarity}."
+    )
+
+    filtered_weights = np.where(filtered_mask.cpu().numpy(), sampling_weights, 0.0)
+    sampled_indices = np.random.default_rng(seed).choice(
+        len(filtered_weights),
+        size=min(max_num_samples, int(filtered_mask.sum())),
+        p=filtered_weights / filtered_weights.sum(),
+        replace=False,
+        shuffle=True,
+    )
+
+    if use_full_sequences_in_context:
+        assert full_sequences_path is not None, "full_sequences_path is required when use_full_sequences_in_context=True"
+        full_sequences = parse_msa(full_sequences_path)
+        assert len(full_sequences) == len(msa_sequences), "Number of full sequences must match number of MSA sequences"
+        for i, (full_seq, msa_seq) in enumerate(zip(full_sequences, msa_sequences)):
+            assert full_seq.id == msa_seq.id, (
+                "Full sequences and MSA sequences must be in the same order and have the same ids. "
+                f"Found differing id for sample {i}: {full_seq.id} != {msa_seq.id}"
+            )
+        sampled_sequences = [full_sequences[int(i)] for i in sampled_indices]
+    else:
+        sampled_sequences = [msa_sequences[int(i)] for i in sampled_indices]
+
+    context_sequences: List[str] = []
+    context_ids: List[str] = []
+    context_length = 0
+    for seq in sampled_sequences:
+        seq_str = seq.sequence.upper().encode("ascii").translate(None, b"-").decode("ascii")
+        if context_length + len(seq_str) > max_token_length:
+            break
+        context_sequences.append(seq_str)
+        context_ids.append(seq.id)
+        context_length += len(seq_str)
+    return ",".join(context_sequences), context_ids
+
+
+def sample_multiple_contexts(
+    msa_path: str,
+    context_specifications: List[ContextSpecification],
+    use_full_sequences_in_context: bool = False,
+    full_sequences_path: Optional[str] = None,
+    seed: int = 0,
+    device: Optional[torch.device] = None,
+    cache_num_neighbors_path: Optional[str] = None,
+) -> Tuple[List[str], List[List[str]]]:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        if cache_num_neighbors_path is None:
+            cache_num_neighbors_path = os.path.join(temp_dir, "num_neighbors.npy")
+
+        contexts: List[str] = []
+        context_ids: List[List[str]] = []
+        for i, context_specification in enumerate(context_specifications):
+            context, ids = sample_context(
+                msa_path=msa_path,
+                max_num_samples=context_specification.max_num_samples,
+                max_token_length=context_specification.max_token_length,
+                max_query_similarity=context_specification.max_query_similarity,
+                min_query_similarity=context_specification.min_query_similarity,
+                neighbor_similarity_lower_bound=context_specification.neighbor_similarity_lower_bound,
+                use_full_sequences_in_context=use_full_sequences_in_context,
+                full_sequences_path=full_sequences_path,
+                seed=seed + i,
+                device=device,
+                cache_num_neighbors_path=cache_num_neighbors_path,
+            )
+            contexts.append(context)
+            context_ids.append(ids)
+    return contexts, context_ids
+
+
+def get_context_id(max_tokens: int, sim_threshold: float) -> str:
+    return f"identity_{sim_threshold}_tokens_{max_tokens}"
+
+
+def build_context_specifications(
+    max_context_tokens: Optional[List[int]] = None,
+    similarity_thresholds: Optional[List[float]] = None,
+    min_query_similarity: float = 0.3,
+) -> List[Tuple[ContextSpecification, str]]:
+    if max_context_tokens is None:
+        max_context_tokens = DEFAULT_MAX_CONTEXT_TOKENS
+    if similarity_thresholds is None:
+        similarity_thresholds = DEFAULT_SIMILARITY_THRESHOLDS
+
+    specs = []
+    for max_tokens in max_context_tokens:
+        for sim_threshold in similarity_thresholds:
+            spec = ContextSpecification(
+                max_num_samples=511,
+                max_token_length=max_tokens,
+                max_query_similarity=sim_threshold,
+                min_query_similarity=min_query_similarity,
+                neighbor_similarity_lower_bound=0.8,
+            )
+            specs.append((spec, get_context_id(max_tokens, sim_threshold)))
+    return specs
+
+
+def sample_contexts_for_msa(
+    a3m_path: str,
+    context_specs: List[Tuple[ContextSpecification, str]],
+    seed: int = 42,
+) -> Dict[str, str]:
+    specs_only = [spec for spec, _ in context_specs]
+    context_ids = [context_id for _, context_id in context_specs]
+    contexts, _ = sample_multiple_contexts(
+        msa_path=a3m_path,
+        context_specifications=specs_only,
+        seed=seed,
+    )
+    return dict(zip(context_ids, contexts))
+
+
+def _strip_a3m_insertions(sequence: str) -> str:
+    uppercase_or_gap = [char for char in sequence if char.isupper() or char in "-."]
+    return "".join(uppercase_or_gap).replace("-", "").replace(".", "")
+
+
+def get_query_from_a3m(path: str) -> str:
+    header_found = False
+    seq_parts: List[str] = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                if header_found:
+                    break
+                header_found = True
+                continue
+            if header_found:
+                seq_parts.append(line)
+    assert header_found, f"No FASTA header found in A3M file: {path}"
+    return _strip_a3m_insertions("".join(seq_parts))
+
+
+def load_msa_dir(msa_dir: str) -> Dict[str, str]:
+    msa_lookup: Dict[str, str] = {}
+    a3m_files = list(Path(msa_dir).rglob("*.a3m"))
+    if not a3m_files:
+        raise FileNotFoundError(f"No .a3m files found in {msa_dir}")
+    for a3m_path in tqdm(a3m_files, desc="Loading MSAs"):
+        query_seq = get_query_from_a3m(str(a3m_path))
+        msa_lookup[query_seq] = str(a3m_path)
+    logger.info("Loaded %d MSAs from %s", len(msa_lookup), msa_dir)
+    return msa_lookup
+
+
+def _safe_extract_tar(tar: tarfile.TarFile, output_dir: str) -> None:
+    output_root = Path(output_dir).resolve()
+    for member in tar.getmembers():
+        target = (output_root / member.name).resolve()
+        if output_root != target and output_root not in target.parents:
+            raise ValueError(f"Unsafe tar member path: {member.name}")
+    tar.extractall(output_root)
+
+
+def load_msa_from_hf(
+    hf_path: str,
+    cache_dir: Optional[str] = None,
+    token: Optional[str] = None,
+) -> Dict[str, str]:
+    from huggingface_hub import snapshot_download
+
+    if cache_dir is None:
+        cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "fastplms_msa")
+    os.makedirs(cache_dir, exist_ok=True)
+    local_dir = os.path.join(cache_dir, hf_path.replace("/", "_"))
+    if not os.path.exists(local_dir) or not any(Path(local_dir).rglob("*.a3m")):
+        local_dir = snapshot_download(
+            repo_id=hf_path,
+            repo_type="dataset",
+            local_dir=local_dir,
+            token=token,
+        )
+        for tar_path in Path(local_dir).rglob("*.tar.gz"):
+            with tarfile.open(tar_path) as tar:
+                _safe_extract_tar(tar, str(tar_path.parent))
+    return load_msa_dir(local_dir)
+
+
+def get_msa_for_sequence(sequence: str, msa_lookup: Dict[str, str], min_identity: float = 0.95) -> Optional[str]:
+    if sequence in msa_lookup:
+        return msa_lookup[sequence]
+
+    best_match_path: Optional[str] = None
+    best_identity = 0.0
+    for query_seq, a3m_path in msa_lookup.items():
+        if abs(len(query_seq) - len(sequence)) > 10:
+            continue
+        min_len = min(len(query_seq), len(sequence))
+        if min_len == 0:
+            continue
+        matches = sum(a == b for a, b in zip(query_seq[:min_len], sequence[:min_len]))
+        identity = matches / min_len
+        if identity > best_identity:
+            best_identity = identity
+            best_match_path = a3m_path
+
+    if best_identity >= min_identity:
+        return best_match_path
+    return None
+
+
+class ContextCache:
+    def __init__(self, cache_dir: str, specs_hash: str, seed: int) -> None:
+        self.cache_dir = cache_dir
+        self.specs_hash = specs_hash
+        self.seed = seed
+        os.makedirs(cache_dir, exist_ok=True)
+
+    def _cache_path(self, key: str) -> str:
+        safe_key = hashlib.md5(key.encode()).hexdigest()[:16]
+        return os.path.join(self.cache_dir, f"{safe_key}_seed{self.seed}_{self.specs_hash}.pkl")
+
+    def load(self, key: str) -> Optional[Dict[str, str]]:
+        path = self._cache_path(key)
+        if os.path.exists(path):
+            with open(path, "rb") as handle:
+                return pickle.load(handle)
+        return None
+
+    def store(self, key: str, contexts: Dict[str, str]) -> None:
+        path = self._cache_path(key)
+        with open(path, "wb") as handle:
+            pickle.dump(contexts, handle)
+
+
+def compute_ppll(logits: torch.Tensor, token_ids: torch.Tensor) -> float:
+    assert token_ids.numel() > 0, "Cannot score an empty token sequence"
+    if token_ids.device != logits.device:
+        token_ids = token_ids.to(logits.device)
+    if logits.shape[0] != token_ids.shape[0]:
+        raise ValueError(f"Logits length {logits.shape[0]} != token_ids length {token_ids.shape[0]}")
+    probs = logits.softmax(dim=-1)
+    token_probs = probs.gather(dim=1, index=token_ids.unsqueeze(1)).squeeze(1)
+    return float(token_probs.mean().item())
+
+
+class _E1ContextPredictor:
+    def __init__(
+        self,
+        model: PreTrainedModel,
+        data_prep_config: Optional[DataPrepConfig] = None,
+        max_batch_tokens: int = 65536,
+        use_cache: bool = True,
+        cache_size: int = 4,
+        save_masked_positions_only: bool = False,
+        fields_to_save: Optional[List[str]] = None,
+        keep_predictions_in_gpu: bool = False,
+        progress: bool = True,
+    ) -> None:
+        self.model = model
+        self.max_batch_tokens = max_batch_tokens
+        self.batch_preparer = E1BatchPreparer(data_prep_config=data_prep_config)
+        self.model.eval()
+        self.kv_cache = KVCache(cache_size=cache_size) if use_cache else None
+        self.fields_to_save = fields_to_save or ["logits", "token_embeddings", "mean_token_embeddings"]
+        self.save_masked_positions_only = save_masked_positions_only
+        self.keep_predictions_in_gpu = keep_predictions_in_gpu
+        self.progress = progress
+
+    @property
+    def device(self) -> torch.device:
+        return next(self.model.parameters()).device
+
+    def group_by_length(self, indexed_sequences: List[IndexedSequence]) -> List[List[IndexedSequence]]:
+        batches: List[List[IndexedSequence]] = [[]]
+        for idx, seq in sorted(indexed_sequences, key=lambda idx_seq: (len(idx_seq[1]), idx_seq[0])):
+            if len(batches[-1]) > 0 and len(seq) * (len(batches[-1]) + 1) > self.max_batch_tokens:
+                batches.append([])
+            batches[-1].append((idx, seq))
+        return batches
+
+    def group_by_context(self, indexed_sequences: List[IndexedSequence]) -> List[List[IndexedSequence]]:
+        batches: Dict[Optional[str], List[IndexedSequence]] = defaultdict(list)
+        for idx, seq in indexed_sequences:
+            batches[get_context(seq)].append((idx, seq))
+        return list(batches.values())
+
+    def batch_sequences(self, sequences: List[str]) -> List[List[int]]:
+        indexed_sequences: List[IndexedSequence] = list(enumerate(sequences))
+        indexed_batches = self.group_by_context(indexed_sequences)
+        indexed_batches = list(
+            itertools.chain.from_iterable([self.group_by_length(batch) for batch in indexed_batches])
+        )
+        batches = [[item[0] for item in batch] for batch in indexed_batches]
+        assert sorted(sum(batches, [])) == list(range(len(sequences))), (
+            "Batches must contain all indices with no repetition"
+        )
+        return batches
+
+    @torch.no_grad()
+    def predict_batch(self, sequences: List[str], sequence_metadata: List[Dict[str, str | int]]) -> List[E1Prediction]:
+        outputs = self.predict_batch_padded(sequences)
+        outputs["logits"] = outputs["logits"].float()
+        outputs["embeddings"] = outputs["embeddings"].float()
+
+        token_mask = outputs["non_boundary_token_mask"] & outputs["last_sequence_mask"]
+        if self.save_masked_positions_only:
+            token_mask = token_mask & outputs["mask_positions_mask"]
+
+        predictions: List[E1Prediction] = []
+        for i in range(len(sequences)):
+            pred: E1Prediction = {"id": sequence_metadata[i]["id"]}
+            if "context_id" in sequence_metadata[i]:
+                pred["context_id"] = sequence_metadata[i]["context_id"]
+            if "logits" in self.fields_to_save:
+                pred["logits"] = outputs["logits"][i, token_mask[i]]
+                if not self.keep_predictions_in_gpu:
+                    pred["logits"] = pred["logits"].to("cpu")
+            if "token_embeddings" in self.fields_to_save:
+                pred["token_embeddings"] = outputs["embeddings"][i, token_mask[i]]
+                if not self.keep_predictions_in_gpu:
+                    pred["token_embeddings"] = pred["token_embeddings"].to("cpu")
+            if "mean_token_embeddings" in self.fields_to_save:
+                pred["mean_token_embeddings"] = outputs["embeddings"][i, token_mask[i]].mean(dim=0)
+                if not self.keep_predictions_in_gpu:
+                    pred["mean_token_embeddings"] = pred["mean_token_embeddings"].to("cpu")
+            predictions.append(pred)
+        return predictions
+
+    @torch.no_grad()
+    def predict_batch_padded(self, sequences: List[str]) -> Dict[str, torch.Tensor]:
+        device = self.device
+        autocast_enabled = device.type == "cuda"
+        with torch.autocast(device.type, torch.bfloat16, enabled=autocast_enabled):
+            batch = self.batch_preparer.get_batch_kwargs(sequences, device=device)
+            if self.kv_cache is not None:
+                self.kv_cache.before_forward(batch)
+
+            past_key_values = batch["past_key_values"] if "past_key_values" in batch else None
+            use_cache = bool(batch["use_cache"]) if "use_cache" in batch else False
+            output: E1MaskedLMOutputWithPast = self.model(
+                input_ids=batch["input_ids"],
+                within_seq_position_ids=batch["within_seq_position_ids"],
+                global_position_ids=batch["global_position_ids"],
+                sequence_ids=batch["sequence_ids"],
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                output_attentions=False,
+                output_hidden_states=False,
+            )
+            if self.kv_cache is not None:
+                self.kv_cache.after_forward(batch, output)
+
+            padding_mask = batch["input_ids"] == self.batch_preparer.pad_token_id
+            last_sequence_mask = batch["sequence_ids"] == batch["sequence_ids"].max(dim=1).values[:, None]
+            boundary_token_mask = self.batch_preparer.get_boundary_token_mask(batch["input_ids"])
+            mask_positions_mask = self.batch_preparer.get_mask_positions_mask(batch["input_ids"])
+            return {
+                "logits": output.logits,
+                "embeddings": output.last_hidden_state,
+                "last_sequence_mask": last_sequence_mask,
+                "non_boundary_token_mask": ~boundary_token_mask,
+                "mask_positions_mask": mask_positions_mask,
+                "valid_token_mask": ~padding_mask,
+            }
+
+    @torch.no_grad()
+    def predict(
+        self,
+        sequences: Sequence[str],
+        sequence_ids: Optional[Sequence[int | str]] = None,
+        context_seqs: Optional[Dict[str, str]] = None,
+    ) -> Iterator[E1Prediction]:
+        if sequence_ids is None:
+            sequence_ids = list(range(len(sequences)))
+        if context_seqs:
+            sequences_with_context = [
+                (ctx + "," + seq, {"context_id": ctx_id, "id": sequence_id})
+                for ctx_id, ctx in context_seqs.items()
+                for seq, sequence_id in zip(sequences, sequence_ids)
+            ]
+        else:
+            sequences_with_context = [(seq, {"id": sequence_id}) for seq, sequence_id in zip(sequences, sequence_ids)]
+
+        batched_sequences, sequence_metadata = tuple(zip(*sequences_with_context))
+        batches = self.batch_sequences(list(batched_sequences))
+        iterator = tqdm(batches, desc="Predicting batches", disable=not self.progress)
+        for indices in iterator:
+            sequence_batch = [batched_sequences[i] for i in indices]
+            sequence_batch_metadata = [sequence_metadata[i] for i in indices]
+            yield from self.predict_batch(sequence_batch, sequence_batch_metadata)
+
+
+def _pool_hidden_states(
+    hidden_list: List[torch.Tensor],
+    pooling_types: List[str],
+    device: torch.device,
+) -> torch.Tensor:
+    pooler = Pooler(pooling_types)
+    max_len = max(hidden.shape[0] for hidden in hidden_list)
+    hidden_dim = hidden_list[0].shape[1]
+    batch_size = len(hidden_list)
+    padded = torch.zeros(batch_size, max_len, hidden_dim, device=device)
+    attention_mask = torch.zeros(batch_size, max_len, device=device)
+    for i, hidden in enumerate(hidden_list):
+        seq_len = hidden.shape[0]
+        padded[i, :seq_len] = hidden
+        attention_mask[i, :seq_len] = 1.0
+    return pooler(padded, attention_mask)
+
+
+def _forward_for_embedding(
+    model: PreTrainedModel,
+    sequences: List[str],
+    context: Optional[str],
+    max_batch_tokens: int,
+    progress: bool,
+) -> List[torch.Tensor]:
+    predictor = _E1ContextPredictor(
+        model=model,
+        data_prep_config=DataPrepConfig(remove_X_tokens=True),
+        max_batch_tokens=max_batch_tokens,
+        fields_to_save=["token_embeddings"],
+        keep_predictions_in_gpu=True,
+        use_cache=False,
+        cache_size=1,
+        progress=progress,
+    )
+    context_seqs = {"embed_ctx": context} if context else None
+    predictions = list(
+        predictor.predict(
+            sequences=sequences,
+            sequence_ids=list(range(len(sequences))),
+            context_seqs=context_seqs,
+        )
+    )
+    predictions.sort(key=lambda prediction: prediction["id"])
+    return [prediction["token_embeddings"] for prediction in predictions]
+
+
+class HomologueSearcher:
+    def __init__(
+        self,
+        target_db: str,
+        docker_image: str = DOCKER_IMAGE,
+        sensitivity: float = 7.5,
+        max_seqs: int = 1000,
+        min_seq_id: float = 0.0,
+        coverage: float = 0.8,
+        split_memory_limit: Optional[str] = None,
+        use_gpu: bool = True,
+    ) -> None:
+        self.target_db = target_db
+        self.docker_image = docker_image
+        self.sensitivity = sensitivity
+        self.max_seqs = max_seqs
+        self.min_seq_id = min_seq_id
+        self.coverage = coverage
+        self.split_memory_limit = split_memory_limit
+        self.use_gpu = use_gpu
+
+    @staticmethod
+    def _seq_hash(sequence: str) -> str:
+        return hashlib.md5(sequence.encode()).hexdigest()[:12]
+
+    def _run_docker_command(self, cmd: List[str], **kwargs) -> subprocess.CompletedProcess:
+        return subprocess.run(cmd, **kwargs)
+
+    def _validate_paths_under_cwd(self, *paths: str) -> None:
+        cwd = os.path.abspath(os.getcwd())
+        for path in paths:
+            absolute_path = os.path.abspath(path)
+            if not (absolute_path == cwd or absolute_path.startswith(cwd + os.sep)):
+                raise ValueError(
+                    "Path must be under the current working directory for docker volume mount. "
+                    f"cwd={cwd!r}, path={absolute_path!r}"
+                )
+
+    def _path_in_container(self, local_path: str) -> str:
+        self._validate_paths_under_cwd(local_path)
+        rel = os.path.relpath(os.path.abspath(local_path), start=os.path.abspath(os.getcwd()))
+        return rel.replace(os.sep, "/")
+
+    def _docker_base_cmd(self) -> List[str]:
+        cmd = ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/app", "-w", "/app"]
+        if self.use_gpu and torch.cuda.is_available():
+            cmd.extend(["--gpus", "all"])
+        cmd.append(self.docker_image)
+        return cmd
+
+    def _ensure_docker_image(self) -> None:
+        subprocess.run(["docker", "version"], capture_output=True, text=True, check=True)
+        inspect = subprocess.run(["docker", "image", "inspect", self.docker_image], capture_output=True, text=True)
+        if inspect.returncode == 0:
+            return
+        self._run_docker_command(["docker", "pull", self.docker_image], check=True, text=True)
+
+    def create_db(self, fasta_path: str, db_path: str) -> str:
+        os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+        if os.path.exists(f"{db_path}.dbtype"):
+            return db_path
+        self._ensure_docker_image()
+        self._validate_paths_under_cwd(fasta_path, db_path)
+        self._run_docker_command(
+            self._docker_base_cmd() + [
+                "createdb",
+                self._path_in_container(fasta_path),
+                self._path_in_container(db_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return db_path
+
+    def create_index(self, db_path: str, tmp_dir: Optional[str] = None) -> None:
+        if tmp_dir is None:
+            tmp_dir = os.path.join(os.path.dirname(db_path), "tmp_index")
+        os.makedirs(tmp_dir, exist_ok=True)
+        self._ensure_docker_image()
+        self._validate_paths_under_cwd(db_path, tmp_dir)
+        self._run_docker_command(
+            self._docker_base_cmd() + [
+                "createindex",
+                self._path_in_container(db_path),
+                self._path_in_container(tmp_dir),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def search(self, sequence: str, output_dir: str, seq_id: Optional[str] = None) -> str:
+        if seq_id is None:
+            seq_id = self._seq_hash(sequence)
+        seq_output_dir = os.path.join(output_dir, seq_id)
+        a3m_output = os.path.join(seq_output_dir, f"{seq_id}.a3m")
+        if os.path.exists(a3m_output):
+            return a3m_output
+
+        self._ensure_docker_image()
+        os.makedirs(seq_output_dir, exist_ok=True)
+        query_fasta = os.path.join(seq_output_dir, "query.fasta")
+        write_fasta_sequences(query_fasta, {seq_id: sequence})
+        query_db = os.path.join(seq_output_dir, "queryDB")
+        result_db = os.path.join(seq_output_dir, "resultDB")
+        tmp_dir = os.path.join(seq_output_dir, "tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        self._validate_paths_under_cwd(query_fasta, query_db, self.target_db, seq_output_dir, result_db, tmp_dir)
+
+        docker_base = self._docker_base_cmd()
+        self._run_docker_command(
+            docker_base + [
+                "createdb",
+                self._path_in_container(query_fasta),
+                self._path_in_container(query_db),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        search_cmd = docker_base + [
+            "search",
+            self._path_in_container(query_db),
+            self._path_in_container(self.target_db),
+            self._path_in_container(result_db),
+            self._path_in_container(tmp_dir),
+            "-s",
+            str(self.sensitivity),
+            "--max-seqs",
+            str(self.max_seqs),
+            "--min-seq-id",
+            str(self.min_seq_id),
+            "-c",
+            str(self.coverage),
+        ]
+        if self.split_memory_limit is not None:
+            search_cmd.extend(["--split-memory-limit", self.split_memory_limit])
+        if self.use_gpu and torch.cuda.is_available():
+            search_cmd.extend(["--gpu", "1"])
+        self._run_docker_command(search_cmd, check=True, capture_output=True, text=True)
+        self._run_docker_command(
+            docker_base + [
+                "result2msa",
+                self._path_in_container(query_db),
+                self._path_in_container(self.target_db),
+                self._path_in_container(result_db),
+                self._path_in_container(a3m_output),
+                "--msa-format-mode",
+                "6",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        for pattern in ["queryDB*", "resultDB*"]:
+            for path in Path(seq_output_dir).glob(pattern):
+                path.unlink(missing_ok=True)
+        tmp_path = Path(tmp_dir)
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path, ignore_errors=True)
+        return a3m_output
+
+    def batch_search(
+        self,
+        sequences: List[str],
+        output_dir: str,
+        seq_ids: Optional[List[str]] = None,
+        continue_on_error: bool = True,
+    ) -> Dict[str, str]:
+        if seq_ids is None:
+            seq_ids = [self._seq_hash(seq) for seq in sequences]
+        os.makedirs(output_dir, exist_ok=True)
+        results: Dict[str, str] = {}
+        for seq, sid in tqdm(list(zip(sequences, seq_ids)), desc="Searching homologues"):
+            try:
+                results[seq] = self.search(seq, output_dir, sid)
+            except Exception:
+                if not continue_on_error:
+                    raise
+        return results
+
+
+class ColabFoldSearcher:
+    def __init__(
+        self,
+        host_url: str = COLABFOLD_HOST,
+        user_agent: str = "",
+        mode: str = "env",
+        timeout: float = 30.0,
+        max_retries: int = 10,
+        base_delay: float = 1.0,
+        max_delay: float = 60.0,
+        inter_request_delay: Tuple[float, float] = (1.0, 3.0),
+        max_wait_time: int = 600,
+    ) -> None:
+        import requests
+
+        self.requests = requests
+        self.host_url = host_url.rstrip("/")
+        self.mode = mode
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self.base_delay = base_delay
+        self.max_delay = max_delay
+        self.inter_request_delay = inter_request_delay
+        self.max_wait_time = max_wait_time
+        self.session = requests.Session()
+        if user_agent:
+            self.session.headers["User-Agent"] = user_agent
+
+    @staticmethod
+    def _seq_hash(sequence: str) -> str:
+        return hashlib.md5(sequence.encode()).hexdigest()[:12]
+
+    def _backoff_delay(self, attempt: int) -> float:
+        delay = min(self.base_delay * (2 ** attempt), self.max_delay)
+        return delay + random.uniform(0, delay * 0.5)
+
+    def _request_with_retries(self, method: str, url: str, **kwargs):
+        for attempt in range(self.max_retries):
+            try:
+                if method.upper() == "GET":
+                    response = self.session.get(url, timeout=self.timeout, **kwargs)
+                else:
+                    response = self.session.post(url, timeout=self.timeout, **kwargs)
+                if response.status_code == 429:
+                    retry_after = (
+                        float(response.headers["Retry-After"])
+                        if "Retry-After" in response.headers
+                        else self._backoff_delay(attempt)
+                    )
+                    time.sleep(retry_after)
+                    continue
+                if response.status_code >= 500:
+                    time.sleep(self._backoff_delay(attempt))
+                    continue
+                return response
+            except (self.requests.exceptions.Timeout, self.requests.exceptions.ConnectionError):
+                time.sleep(self._backoff_delay(attempt))
+        raise RuntimeError(f"Request to {url} failed after {self.max_retries} attempts")
+
+    def _submit(self, sequence: str, mode: Optional[str] = None) -> Dict[str, Any]:
+        mode = mode or self.mode
+        query = f">101\n{sequence}\n"
+        for attempt in range(self.max_retries):
+            response = self._request_with_retries(
+                "POST",
+                f"{self.host_url}/ticket/msa",
+                data={"q": query, "mode": mode},
+            )
+            data = response.json()
+            status = data["status"] if "status" in data else "UNKNOWN"
+            if status in ("RATELIMIT", "UNKNOWN"):
+                time.sleep(self._backoff_delay(attempt))
+                continue
+            return data
+        raise RuntimeError(f"Failed to submit sequence after {self.max_retries} attempts")
+
+    def _poll(self, ticket_id: str) -> Dict[str, Any]:
+        total_wait = 0.0
+        poll_interval = 1.0
+        while True:
+            response = self._request_with_retries("GET", f"{self.host_url}/ticket/{ticket_id}")
+            data = response.json()
+            status = data["status"] if "status" in data else "ERROR"
+            if status in ("COMPLETE", "ERROR"):
+                return data
+            if status not in ("RUNNING", "PENDING", "UNKNOWN"):
+                return data
+            wait = min(poll_interval + random.uniform(0, 0.5), 5.0)
+            time.sleep(wait)
+            total_wait += wait
+            poll_interval = min(poll_interval + 1.0, 5.0)
+            if total_wait > self.max_wait_time:
+                raise TimeoutError(f"Job {ticket_id} did not complete within {self.max_wait_time}s")
+
+    def _download(self, ticket_id: str, output_path: str) -> None:
+        response = self._request_with_retries("GET", f"{self.host_url}/result/download/{ticket_id}")
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "wb") as handle:
+            handle.write(response.content)
+
+    def _extract_a3m(self, tar_path: str, output_dir: str, seq_id: str) -> str:
+        with tarfile.open(tar_path) as tar:
+            _safe_extract_tar(tar, output_dir)
+
+        uniref_a3m = os.path.join(output_dir, "uniref.a3m")
+        env_a3m = os.path.join(output_dir, "bfd.mgnify30.metaeuk30.smag30.a3m")
+        a3m_files: List[str] = []
+        if os.path.exists(uniref_a3m):
+            a3m_files.append(uniref_a3m)
+        if "env" in self.mode and os.path.exists(env_a3m):
+            a3m_files.append(env_a3m)
+        combined_path = os.path.join(output_dir, f"{seq_id}.a3m")
+        if len(a3m_files) == 1:
+            os.replace(a3m_files[0], combined_path)
+        elif len(a3m_files) > 1:
+            with open(combined_path, "w", encoding="utf-8") as out_handle:
+                for a3m_file in a3m_files:
+                    with open(a3m_file, "r", encoding="utf-8") as in_handle:
+                        out_handle.write(in_handle.read())
+        else:
+            raise RuntimeError("No .a3m files found in downloaded archive")
+        if os.path.exists(tar_path):
+            os.remove(tar_path)
+        for a3m_file in a3m_files:
+            if os.path.exists(a3m_file) and a3m_file != combined_path:
+                os.remove(a3m_file)
+        return combined_path
+
+    def search(self, sequence: str, output_dir: str, seq_id: Optional[str] = None) -> str:
+        if seq_id is None:
+            seq_id = self._seq_hash(sequence)
+        seq_output_dir = os.path.join(output_dir, seq_id)
+        a3m_output = os.path.join(seq_output_dir, f"{seq_id}.a3m")
+        if os.path.exists(a3m_output):
+            return a3m_output
+        os.makedirs(seq_output_dir, exist_ok=True)
+        result = self._submit(sequence)
+        status = result["status"] if "status" in result else "UNKNOWN"
+        if status == "ERROR":
+            raise RuntimeError(f"ColabFold API error for {seq_id}")
+        if status == "MAINTENANCE":
+            raise RuntimeError("ColabFold API is under maintenance")
+        ticket_id = result["id"]
+        result = self._poll(ticket_id)
+        status = result["status"] if "status" in result else "UNKNOWN"
+        if status != "COMPLETE":
+            raise RuntimeError(f"Job failed for {seq_id}: {status}")
+        tar_path = os.path.join(seq_output_dir, f"{seq_id}.tar.gz")
+        self._download(ticket_id, tar_path)
+        return self._extract_a3m(tar_path, seq_output_dir, seq_id)
+
+    def batch_search(
+        self,
+        sequences: List[str],
+        output_dir: str,
+        seq_ids: Optional[List[str]] = None,
+        continue_on_error: bool = True,
+    ) -> Dict[str, str]:
+        if seq_ids is None:
+            seq_ids = [self._seq_hash(seq) for seq in sequences]
+        os.makedirs(output_dir, exist_ok=True)
+        results: Dict[str, str] = {}
+        pairs = list(zip(sequences, seq_ids))
+        for i, (seq, sid) in enumerate(tqdm(pairs, desc="ColabFold search")):
+            try:
+                results[seq] = self.search(seq, output_dir, sid)
+            except Exception:
+                if not continue_on_error:
+                    raise
+            if i < len(pairs) - 1:
+                time.sleep(random.uniform(*self.inter_request_delay))
+        return results
+
+
+def _make_homologue_searcher(provider: str, target_db: Optional[str], **kwargs) -> HomologueSearcher | ColabFoldSearcher:
+    if provider == "mmseqs2":
+        assert target_db is not None, "target_db is required for MMseqs2 homologue search"
+        return HomologueSearcher(target_db=target_db, **kwargs)
+    if provider == "colabfold":
+        return ColabFoldSearcher(**kwargs)
+    raise ValueError(f"Unknown homologue search provider: {provider}")
 
 
 class AttentionLayerType(Enum):
@@ -1842,6 +2781,269 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
             return last_hidden_state, attention_mask
         else:
             return last_hidden_state
+
+    def search_homologues(
+        self,
+        sequence: str,
+        output_dir: str,
+        provider: str = "colabfold",
+        target_db: Optional[str] = None,
+        seq_id: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        searcher = _make_homologue_searcher(provider=provider, target_db=target_db, **kwargs)
+        return searcher.search(sequence=sequence, output_dir=output_dir, seq_id=seq_id)
+
+    def batch_search_homologues(
+        self,
+        sequences: List[str],
+        output_dir: str,
+        provider: str = "colabfold",
+        target_db: Optional[str] = None,
+        seq_ids: Optional[List[str]] = None,
+        continue_on_error: bool = True,
+        **kwargs,
+    ) -> Dict[str, str]:
+        searcher = _make_homologue_searcher(provider=provider, target_db=target_db, **kwargs)
+        return searcher.batch_search(
+            sequences=sequences,
+            output_dir=output_dir,
+            seq_ids=seq_ids,
+            continue_on_error=continue_on_error,
+        )
+
+    def sample_msa_contexts(
+        self,
+        a3m_path: str,
+        seed: int = 42,
+        max_context_tokens: Optional[List[int]] = None,
+        similarity_thresholds: Optional[List[float]] = None,
+        min_query_similarity: float = 0.3,
+        context_cache_dir: Optional[str] = None,
+    ) -> Dict[str, str]:
+        context_specs = build_context_specifications(
+            max_context_tokens=max_context_tokens,
+            similarity_thresholds=similarity_thresholds,
+            min_query_similarity=min_query_similarity,
+        )
+        cache = None
+        if context_cache_dir is not None:
+            key = repr((max_context_tokens, similarity_thresholds, min_query_similarity))
+            specs_hash = hashlib.md5(key.encode()).hexdigest()[:8]
+            cache = ContextCache(context_cache_dir, specs_hash, seed)
+            cached = cache.load(a3m_path)
+            if cached is not None:
+                return cached
+        contexts = sample_contexts_for_msa(a3m_path, context_specs, seed=seed)
+        if cache is not None:
+            cache.store(a3m_path, contexts)
+        return contexts
+
+    @torch.inference_mode()
+    def score_ppll(
+        self,
+        sequences: List[str],
+        a3m_path: str,
+        ensemble: bool = True,
+        seed: int = 42,
+        max_context_tokens: Optional[List[int]] = None,
+        similarity_thresholds: Optional[List[float]] = None,
+        min_query_similarity: float = 0.3,
+        max_batch_tokens: int = 131072,
+        cache_size: int = 1,
+        context_cache_dir: Optional[str] = None,
+        progress: bool = True,
+    ) -> List[float] | List[List[float]]:
+        """Score sequences with FastPLMs PPLL reduction over sampled E1 MSA contexts.
+
+        This intentionally differs from Profluent's official E1Scorer, which scores
+        mutants against a parent sequence with wildtype or masked marginal log-prob
+        deltas. Here each sequence is scored by mean correct-token probability and
+        optionally averaged across sampled contexts.
+        """
+        contexts = self.sample_msa_contexts(
+            a3m_path=a3m_path,
+            seed=seed,
+            max_context_tokens=max_context_tokens,
+            similarity_thresholds=similarity_thresholds,
+            min_query_similarity=min_query_similarity,
+            context_cache_dir=context_cache_dir,
+        )
+        assert len(contexts) > 0, "At least one sampled MSA context is required for PPLL scoring"
+
+        predictor = _E1ContextPredictor(
+            model=self,
+            data_prep_config=DataPrepConfig(remove_X_tokens=True),
+            max_batch_tokens=max_batch_tokens,
+            fields_to_save=["logits"],
+            save_masked_positions_only=False,
+            keep_predictions_in_gpu=False,
+            use_cache=True,
+            cache_size=cache_size,
+            progress=progress,
+        )
+        vocab = predictor.batch_preparer.vocab
+        seq_token_ids = [
+            torch.tensor([vocab[aa] for aa in seq if aa != "X"], device=self.device)
+            for seq in sequences
+        ]
+        context_ids = list(contexts.keys())
+        all_scores = torch.zeros(len(sequences), len(context_ids), device=self.device)
+
+        iterator = tqdm(context_ids, desc="Scoring with contexts", disable=not progress)
+        for ctx_idx, ctx_id in enumerate(iterator):
+            predictions = list(
+                predictor.predict(
+                    sequences=sequences,
+                    sequence_ids=list(range(len(sequences))),
+                    context_seqs={ctx_id: contexts[ctx_id]},
+                )
+            )
+            for prediction in predictions:
+                seq_idx = prediction["id"]
+                assert isinstance(seq_idx, int), "Expected integer sequence ids for score aggregation"
+                all_scores[seq_idx, ctx_idx] = compute_ppll(prediction["logits"], seq_token_ids[seq_idx])
+            if predictor.kv_cache is not None:
+                predictor.kv_cache.reset()
+
+        if ensemble:
+            return all_scores.mean(dim=1).tolist()
+        return all_scores.tolist()
+
+    @torch.inference_mode()
+    def embed_with_msa(
+        self,
+        sequences: List[str],
+        a3m_path: Optional[str] = None,
+        context: Optional[str] = None,
+        pooling_types: Optional[List[str]] = None,
+        pooling: str = "mean",
+        matrix_embed: bool = False,
+        seed: int = 42,
+        max_batch_tokens: int = 131072,
+        embed_max_tokens: int = DEFAULT_EMBED_MAX_TOKENS,
+        embed_similarity: float = DEFAULT_EMBED_SIMILARITY,
+        min_query_similarity: float = 0.3,
+        progress: bool = True,
+    ) -> torch.Tensor | List[torch.Tensor]:
+        if a3m_path is not None and context is None:
+            spec = ContextSpecification(
+                max_num_samples=511,
+                max_token_length=embed_max_tokens,
+                max_query_similarity=embed_similarity,
+                min_query_similarity=min_query_similarity,
+            )
+            contexts, _ = sample_multiple_contexts(
+                msa_path=a3m_path,
+                context_specifications=[spec],
+                seed=seed,
+            )
+            context = contexts[0] if contexts else None
+
+        hidden_list = _forward_for_embedding(
+            model=self,
+            sequences=sequences,
+            context=context,
+            max_batch_tokens=max_batch_tokens,
+            progress=progress,
+        )
+        if matrix_embed:
+            return hidden_list
+        if pooling_types is not None:
+            return _pool_hidden_states(hidden_list, pooling_types, self.device)
+        if pooling not in ("mean", "cls"):
+            raise ValueError("pooling must be 'mean' or 'cls' when pooling_types is not provided")
+        embeddings = [hidden.mean(dim=0) if pooling == "mean" else hidden[0] for hidden in hidden_list]
+        return torch.stack(embeddings)
+
+    @torch.inference_mode()
+    def embed_dataset_with_msa(
+        self,
+        sequences: List[str],
+        msa_lookup: Optional[Dict[str, str]] = None,
+        msa_dir: Optional[str] = None,
+        msa_hf_path: Optional[str] = None,
+        batch_size: int = 2,
+        max_len: int = 2048,
+        pooling_types: Optional[List[str]] = None,
+        pooling: str = "mean",
+        matrix_embed: bool = False,
+        embed_dtype: torch.dtype = torch.bfloat16,
+        embed_max_tokens: int = DEFAULT_EMBED_MAX_TOKENS,
+        embed_similarity: float = DEFAULT_EMBED_SIMILARITY,
+        min_query_similarity: float = 0.3,
+        seed: int = 42,
+        progress: bool = True,
+    ) -> Dict[str, torch.Tensor]:
+        if msa_lookup is None:
+            if msa_dir is not None:
+                msa_lookup = load_msa_dir(msa_dir)
+            elif msa_hf_path is not None:
+                msa_lookup = load_msa_from_hf(msa_hf_path)
+            else:
+                msa_lookup = {}
+
+        truncated_map = {seq: seq[:max_len] for seq in sequences}
+        unique_seqs = sorted(set(truncated_map.values()), key=len, reverse=True)
+        context_map: Dict[str, Optional[str]] = {}
+        spec = ContextSpecification(
+            max_num_samples=511,
+            max_token_length=embed_max_tokens,
+            max_query_similarity=embed_similarity,
+            min_query_similarity=min_query_similarity,
+        )
+        for seq in unique_seqs:
+            a3m_path = get_msa_for_sequence(seq, msa_lookup)
+            if a3m_path is None:
+                context_map[seq] = None
+                continue
+            contexts, _ = sample_multiple_contexts(
+                msa_path=a3m_path,
+                context_specifications=[spec],
+                seed=seed,
+            )
+            context_map[seq] = contexts[0] if contexts else None
+
+        context_groups: Dict[Optional[str], List[str]] = defaultdict(list)
+        for seq in unique_seqs:
+            context_groups[context_map[seq]].append(seq)
+
+        embeddings_dict: Dict[str, torch.Tensor] = {}
+        total_batches = sum((len(seqs) + batch_size - 1) // batch_size for seqs in context_groups.values())
+        pbar = tqdm(total=total_batches, desc="Embedding with MSA", disable=not progress)
+        for ctx, ctx_seqs in context_groups.items():
+            for i in range(0, len(ctx_seqs), batch_size):
+                batch_seqs = ctx_seqs[i:i + batch_size]
+                batch_embeddings = self.embed_with_msa(
+                    sequences=batch_seqs,
+                    context=ctx,
+                    pooling_types=pooling_types,
+                    pooling=pooling,
+                    matrix_embed=matrix_embed,
+                    seed=seed,
+                    embed_max_tokens=embed_max_tokens,
+                    embed_similarity=embed_similarity,
+                    min_query_similarity=min_query_similarity,
+                    progress=False,
+                )
+                if matrix_embed:
+                    assert isinstance(batch_embeddings, list)
+                    for seq, hidden in zip(batch_seqs, batch_embeddings):
+                        embeddings_dict[seq] = hidden.to(embed_dtype).cpu()
+                else:
+                    assert isinstance(batch_embeddings, torch.Tensor)
+                    for j, seq in enumerate(batch_seqs):
+                        embeddings_dict[seq] = batch_embeddings[j].to(embed_dtype).cpu()
+                pbar.update(1)
+        pbar.close()
+
+        result: Dict[str, torch.Tensor] = {}
+        for seq in sequences:
+            trunc = truncated_map[seq]
+            if trunc in embeddings_dict:
+                result[seq] = embeddings_dict[trunc]
+        return result
+
 
     def forward(
         self,

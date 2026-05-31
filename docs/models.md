@@ -180,6 +180,32 @@ embeddings = model.embed_dataset(
 )
 ```
 
+### MSA Context And PPLL
+
+FastPLMs exposes E1 MSA context utilities directly on the model object:
+
+```python
+a3m_path = model.search_homologues(
+    sequence="MALWMRLLPLLALLALWGPDPAAA",
+    output_dir="msas",
+    provider="colabfold",
+)
+
+scores = model.score_ppll(
+    sequences=["MALWMRLLPLLALLALWGPDPAAA"],
+    a3m_path=a3m_path,
+    ensemble=True,
+)
+
+embeddings = model.embed_with_msa(
+    sequences=["MALWMRLLPLLALLALWGPDPAAA"],
+    a3m_path=a3m_path,
+    pooling_types=["mean"],
+)
+```
+
+MSA parsing and context sampling match Profluent's official E1 `msa_sampling` behavior. `score_ppll()` intentionally differs from the official `E1Scorer`: FastPLMs reports mean correct-token probability for each scored sequence and optionally averages across sampled contexts, rather than computing mutant deltas against a parent sequence. This is much cheaper and is the preferred scoring path here.
+
 ### Available Checkpoints
 
 | Checkpoint | HuggingFace ID | Official Reference |
