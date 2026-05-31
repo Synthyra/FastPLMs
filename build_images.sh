@@ -8,7 +8,7 @@
 #   ./build_images.sh --no-base esm2    # skip base rebuild, just esm2
 set -euo pipefail
 
-FAMILIES_DEFAULT=(esm2 esm_plusplus esm3 e1 dplm dplm2 ankh)
+FAMILIES_DEFAULT=(esm2 esm_plusplus esm3 esmfold2 e1 dplm dplm2 ankh)
 
 build_base=1
 families=()

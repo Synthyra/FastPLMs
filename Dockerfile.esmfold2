@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1.7
+# Image for FastPLMs ESMFold2 testing.
+# Includes the Biohub Transformers fork only for official parity tests. The
+# FastPLMs ESMFold2 AutoModel implementation itself vendors its required code.
+
+FROM fastplms-base
+
+RUN pip install \
+        attrs \
+        biopython \
+        biotite \
+        brotli \
+        cloudpathlib \
+        dna_features_viewer \
+        httpx \
+        msgpack \
+        msgpack-numpy \
+        pandas \
+        pydssp \
+        pygtrie \
+        py3dmol \
+        rdkit \
+        tenacity \
+        zstd
+
+RUN pip install --force-reinstall --no-deps \
+        git+https://github.com/Biohub/transformers.git@3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf
