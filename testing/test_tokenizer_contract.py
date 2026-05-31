@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
 from typing import Dict
+from unittest.mock import patch
 
 import pytest
 import torch
-from transformers import AutoConfig, AutoTokenizer, EsmTokenizer
+from transformers import AutoConfig, AutoModelForMaskedLM, AutoTokenizer, EsmTokenizer
 
 from fastplms.ankh.modeling_ankh import FAST_ANKH_ENCODER, FastAnkhConfig
 from fastplms.dplm2.modeling_dplm2 import _normalize_dplm2_input_ids
-from fastplms.e1.modeling_e1 import E1BatchPreparer, get_tokenizer
+from fastplms.e1.modeling_e1 import E1BatchPreparer, E1Config, E1ForMaskedLM, get_tokenizer
 from fastplms.esm3.modeling_esm3 import (
     SEQUENCE_VOCAB as ESM3_SEQUENCE_VOCAB,
     EsmSequenceTokenizer as ESM3SequenceTokenizer,
@@ -39,6 +42,14 @@ CANONICAL_SEQUENCES = [
     "MVLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHFDLSH",
     "MXXBZUOACDEFGHIKLMNPQRSTVWY",
 ]
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _e1_tokenizer_json() -> Path:
+    return _repo_root() / "fastplms" / "e1" / "tokenizer.json"
 
 
 def _tiny_ankh_config(name_or_path: str = "") -> FastAnkhConfig:
@@ -225,6 +236,84 @@ def test_dplm2_tokenizer_special_ids_normalize_in_range(model_key: str) -> None:
     )
     valid_ids = normalized_input_ids[normalized_input_ids.ge(0)]
     assert bool(valid_ids.lt(fast_config.vocab_size).all())
+
+
+def test_e1_config_uses_static_token_constants() -> None:
+    with patch(
+        "fastplms.e1.modeling_e1.get_tokenizer",
+        side_effect=AssertionError("E1Config should not load tokenizer.json"),
+    ):
+        config = E1Config()
+
+    assert config.vocab_size == 34
+    assert config.pad_token_id == 0
+    assert config.bos_token_id == 1
+    assert config.eos_token_id == 2
+
+
+def test_e1_get_tokenizer_prefers_local_model_dir(tmp_path: Path) -> None:
+    shutil.copyfile(_e1_tokenizer_json(), tmp_path / "tokenizer.json")
+
+    with patch(
+        "huggingface_hub.hf_hub_download",
+        side_effect=AssertionError("local tokenizer load should not call Hub download"),
+    ) as hf_hub_download:
+        tokenizer = get_tokenizer(tmp_path, local_files_only=True)
+
+    assert not hf_hub_download.called
+    assert tokenizer.token_to_id("<pad>") == 0
+    assert tokenizer.get_vocab_size() == 34
+
+
+def test_e1_get_tokenizer_local_files_only_missing_local_source_raises(
+    tmp_path: Path,
+) -> None:
+    with patch("fastplms.e1.modeling_e1.os.path.isfile", return_value=False):
+        with patch(
+            "huggingface_hub.hf_hub_download",
+            side_effect=AssertionError("missing local tokenizer should not call Hub download"),
+        ) as hf_hub_download:
+            with pytest.raises(FileNotFoundError):
+                get_tokenizer(tmp_path, local_files_only=True)
+
+    assert not hf_hub_download.called
+
+
+def test_e1_automodel_local_files_only_uses_local_tokenizer(tmp_path: Path) -> None:
+    config = E1Config(
+        hidden_size=8,
+        intermediate_size=16,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        max_num_sequences=4,
+        max_num_positions_within_seq=64,
+        max_num_positions_global=128,
+    )
+    config.auto_map = {
+        "AutoConfig": "modeling_e1.E1Config",
+        "AutoModelForMaskedLM": "modeling_e1.E1ForMaskedLM",
+    }
+    model = E1ForMaskedLM(config)
+    model.save_pretrained(tmp_path)
+    shutil.copyfile(_e1_tokenizer_json(), tmp_path / "tokenizer.json")
+    shutil.copyfile(
+        _repo_root() / "fastplms" / "e1" / "modeling_e1.py",
+        tmp_path / "modeling_e1.py",
+    )
+
+    with patch(
+        "huggingface_hub.hf_hub_download",
+        side_effect=AssertionError("local AutoModel load should not call Hub download"),
+    ) as hf_hub_download:
+        loaded = AutoModelForMaskedLM.from_pretrained(
+            tmp_path,
+            trust_remote_code=True,
+            local_files_only=True,
+        )
+
+    assert not hf_hub_download.called
+    assert loaded.prep_tokens.tokenizer.token_to_id("<pad>") == 0
 
 
 def test_e1_sequence_mode_tokenizer_contract() -> None:
