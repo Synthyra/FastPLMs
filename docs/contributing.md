@@ -3,8 +3,11 @@
 ## Getting Started
 
 1. Fork the repository and clone your fork
-2. Install dependencies: `pip install -r requirements.txt`
-3. Tests run in Docker only (see below)
+2. Use Python 3.12 (`.python-version` pins 3.12.3 for pyenv/uv-style tools)
+3. Pin packaging tools: `python -m pip install --upgrade pip==26.1.1 setuptools==70.2.0`
+4. Install cu128 PyTorch: `python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128`
+5. Install pinned direct dependencies: `python -m pip install -r requirements.txt`
+6. Tests run in Docker only (see below)
 
 ## Code Style
 

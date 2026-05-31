@@ -43,7 +43,7 @@ WORKDIR /app
 
 COPY requirements.txt .
 
-RUN pip install --upgrade pip setuptools
+RUN pip install --upgrade pip==26.1.1 setuptools==70.2.0
 # Install cu128 torch BEFORE requirements.txt so transformers/accelerate/etc
 # see torch already satisfied, then AGAIN after in case a transitive dep
 # silently overwrites it with the PyPI default (CUDA 13) wheel.
