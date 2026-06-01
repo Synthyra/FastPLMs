@@ -85,6 +85,8 @@ embeddings = model.embed_dataset(
 | `sql_db_path` | `str` | `"embeddings.db"` | Path to SQLite database |
 | `save` | `bool` | `True` | Save embeddings to `.pth` file |
 | `save_path` | `str` | `"embeddings.pth"` | Path to `.pth` output file |
+| `hidden_state_index` | `int` | `-1` | Hidden-state tuple index to embed from. `-1` preserves current last-hidden-state behavior |
+| `store_all_hidden_states` | `bool` | `False` | Store every hidden state as layer-first token-wise embeddings. Requires `full_embeddings=True` |
 
 At least one of `sequences` or `fasta_path` must be provided. If both are given, the two sources are merged.
 
@@ -138,6 +140,58 @@ ESM3 supports pooled `mean`, `cls`, and `max` embeddings, plus residue-wise embe
 
 ---
 
+## Hidden-State Selection
+
+By default, `embed_dataset()` embeds from the same final representation as before. Pass `hidden_state_index` when you want pooling from a specific hidden-state tuple entry:
+
+```python
+embeddings = model.embed_dataset(
+    sequences=sequences,
+    batch_size=32,
+    pooling_types=["mean"],
+    hidden_state_index=12,
+)
+```
+
+To save token-wise embeddings for every hidden state, use `store_all_hidden_states=True` with `full_embeddings=True`:
+
+```python
+model.embed_dataset(
+    sequences=sequences,
+    batch_size=4,
+    full_embeddings=True,
+    store_all_hidden_states=True,
+    sql=True,
+    sql_db_path="all_layers.db",
+)
+```
+
+Saved all-layer tensors are layer-first per sequence:
+
+```python
+embeddings["MALWMRLL..."].shape == (num_hidden_states, num_real_tokens, hidden_size)
+```
+
+You can later pool a selected layer without rerunning the model:
+
+```python
+pooled = model.load_pooled_embeddings_from_db(
+    "all_layers.db",
+    pooling_types=["mean", "cls"],
+    hidden_state_index=12,
+)
+
+pooled_pth = model.load_pooled_embeddings_from_pth(
+    "all_layers.pth",
+    pooling_types=["mean"],
+    hidden_state_index=-1,
+)
+```
+
+`pool_embeddings()` provides the same conversion for an in-memory dictionary returned by `load_embeddings_from_pth()` or `load_embeddings_from_db()`.
+
+---
+
 ## Storage Formats
 
 ### `.pth` (PyTorch)
@@ -145,7 +199,7 @@ ESM3 supports pooled `mean`, `cls`, and `max` embeddings, plus residue-wise embe
 A dictionary serialized via `torch.save`:
 ```python
 {
-    "MALWMRLLPLLALL": tensor(...),  # shape: (hidden_size,) or (seq_len, hidden_size)
+    "MALWMRLLPLLALL": tensor(...),  # (hidden_size,), (seq_len, hidden_size), or (num_hidden_states, seq_len, hidden_size)
     "MKTLLILAVVAAALA": tensor(...),
 }
 ```
@@ -161,15 +215,11 @@ Schema:
 ```sql
 CREATE TABLE embeddings (
     sequence TEXT PRIMARY KEY,
-    embedding BLOB NOT NULL,
-    shape TEXT,
-    dtype TEXT
+    embedding BLOB NOT NULL
 );
 ```
 
-- `embedding`: Raw bytes from `numpy.ndarray.tobytes()`
-- `shape`: Comma-separated dimension string (e.g., `"320"` or `"64,320"`)
-- `dtype`: NumPy dtype string (e.g., `"float32"`)
+- `embedding`: Compact tensor blob containing dtype, rank, shape, and raw bytes
 
 Load with:
 ```python
@@ -180,7 +230,7 @@ embeddings = model.load_embeddings_from_db("embeddings.db")
 embeddings = model.load_embeddings_from_db("embeddings.db", sequences=["MALWMRLLPLLALL"])
 ```
 
-SQLite mode commits every 100 batches during embedding to avoid data loss on interruption.
+SQLite mode writes asynchronously and commits when the writer queue drains.
 
 ---
 
@@ -221,7 +271,7 @@ embeddings = model.embed_dataset(
     full_embeddings=True,
     save=False,
 )
-# embeddings["MALWMRLL..."].shape == (seq_len_without_special_tokens, hidden_size)
+# embeddings["MALWMRLL..."].shape == (num_real_tokens, hidden_size)
 ```
 
-Each sequence's embedding has shape `(num_real_tokens, hidden_size)` where `num_real_tokens` excludes padding, BOS, and EOS tokens.
+Each sequence's embedding has shape `(num_real_tokens, hidden_size)` for one hidden state, or `(num_hidden_states, num_real_tokens, hidden_size)` when `store_all_hidden_states=True`. `num_real_tokens` excludes padding according to the model attention mask.

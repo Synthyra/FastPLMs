@@ -39,7 +39,10 @@ try:
         index_first_axis, index_put_first_axis, pad_input, _unpad_input,
         create_block_mask, flex_attention, BlockMask,
     )
-    from fastplms.embedding_mixin import Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator
+    from fastplms.embedding_mixin import (
+        Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
+        select_hidden_state_embeddings,
+    )
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -757,14 +760,27 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
     def set_input_embeddings(self, value):
         self.embed = value
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         x = self.embed(input_ids)
-        return self.transformer(
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
+        output = self.transformer(
             x=x,
             attention_mask=attention_mask,
-            output_hidden_states=False,
+            output_hidden_states=output_hidden_states,
             output_attentions=False,
-        ).last_hidden_state
+        )
+        return select_hidden_state_embeddings(
+            output.last_hidden_state,
+            output.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -834,14 +850,27 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
     def set_output_embeddings(self, new_embeddings):
         self.sequence_head[-1] = new_embeddings
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         x = self.embed(input_ids)
-        return self.transformer(
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
+        output = self.transformer(
             x=x,
             attention_mask=attention_mask,
-            output_hidden_states=False,
+            output_hidden_states=output_hidden_states,
             output_attentions=False,
-        ).last_hidden_state
+        )
+        return select_hidden_state_embeddings(
+            output.last_hidden_state,
+            output.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -906,14 +935,27 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         self.pooler = Pooler(pooling_types)
         self.init_weights()
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         x = self.embed(input_ids)
-        return self.transformer(
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
+        output = self.transformer(
             x=x,
             attention_mask=attention_mask,
-            output_hidden_states=False,
+            output_hidden_states=output_hidden_states,
             output_attentions=False,
-        ).last_hidden_state
+        )
+        return select_hidden_state_embeddings(
+            output.last_hidden_state,
+            output.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -986,9 +1028,27 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         self.loss_fct = nn.CrossEntropyLoss()
         self.init_weights()
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         x = self.embed(input_ids)
-        return self.transformer(x, attention_mask, output_hidden_states=False, output_attentions=False).last_hidden_state
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
+        output = self.transformer(
+            x,
+            attention_mask,
+            output_hidden_states=output_hidden_states,
+            output_attentions=False,
+        )
+        return select_hidden_state_embeddings(
+            output.last_hidden_state,
+            output.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,

@@ -10,6 +10,7 @@ einops==0.8.2
 scikit-learn==1.8.0
 scipy==1.17.1
 seaborn==0.13.2
+biopython==1.86
 # huggingface
 tensorflow==2.20.0
 transformers==4.57.6
@@ -28,5 +29,8 @@ trifast==0.1.13
 # ESMFold2
 rdkit==2026.3.2
 zstd==1.5.7.3
+cloudpathlib==0.23.0
+brotli==1.2.0
+msgpack-numpy==0.4.8
 # E1
 kernels==0.12.3

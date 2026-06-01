@@ -2,12 +2,20 @@
 
 import os
 import random
+import sqlite3
 import tempfile
 from typing import Dict, List
 
 import pytest
 import torch
 
+from fastplms.embedding_mixin import (
+    EmbeddingMixin,
+    load_pooled_embeddings_from_db,
+    load_pooled_embeddings_from_pth,
+    pool_embeddings,
+    tensor_to_embedding_blob,
+)
 from testing.conftest import (
     CANONICAL_AAS, FULL_MODEL_REGISTRY, MODEL_REGISTRY, SEED,
     mark_by_size, strict_fp32_matmul,
@@ -29,6 +37,49 @@ TOKENIZER_MODEL_KEYS = [k for k, v in MODEL_REGISTRY.items() if v["uses_tokenize
 ALL_MODEL_KEYS = list(MODEL_REGISTRY.keys())
 ALL_FULL_MODEL_KEYS = list(FULL_MODEL_REGISTRY.keys())
 FULL_TOKENIZER_KEYS = [k for k, v in FULL_MODEL_REGISTRY.items() if v["uses_tokenizer"]]
+
+
+class DummyEmbeddingConfig:
+    model_type = "E1"
+    hidden_size = 2
+
+
+class DummyHiddenStateModel(torch.nn.Module, EmbeddingMixin):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = DummyEmbeddingConfig()
+        self._parameter = torch.nn.Parameter(torch.zeros(1))
+
+    def _embed(
+        self,
+        sequences: List[str],
+        return_attention_mask: bool = False,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+        **kwargs,
+    ) -> torch.Tensor:
+        del kwargs
+        max_len = max(len(sequence) for sequence in sequences)
+        attention_mask = torch.zeros(len(sequences), max_len, dtype=torch.long)
+        hidden_states = []
+        for layer_idx in range(3):
+            layer = torch.zeros(len(sequences), max_len, 2)
+            for batch_idx, sequence in enumerate(sequences):
+                seq_len = len(sequence)
+                attention_mask[batch_idx, :seq_len] = 1
+                positions = torch.arange(seq_len, dtype=torch.float32)
+                layer[batch_idx, :seq_len, 0] = layer_idx
+                layer[batch_idx, :seq_len, 1] = positions
+            hidden_states.append(layer)
+        if store_all_hidden_states:
+            embeddings = torch.stack(hidden_states, dim=1)
+        elif hidden_state_index == -1:
+            embeddings = hidden_states[-1]
+        else:
+            embeddings = hidden_states[hidden_state_index]
+        if return_attention_mask:
+            return embeddings, attention_mask
+        return embeddings
 
 
 class FixedLengthTokenizer:
@@ -132,6 +183,148 @@ def test_parse_fasta() -> None:
     parsed = parse_fasta(tmp_path)
     os.unlink(tmp_path)
     assert parsed == expected
+
+
+def test_pool_embeddings_selects_layer_from_all_hidden_states() -> None:
+    all_layers = torch.tensor(
+        [
+            [[0.0, 0.0], [0.0, 2.0]],
+            [[1.0, 0.0], [1.0, 2.0]],
+            [[2.0, 0.0], [2.0, 2.0]],
+        ]
+    )
+    pooled = pool_embeddings(
+        {"AA": all_layers},
+        pooling_types=["mean"],
+        hidden_state_index=1,
+    )
+    assert torch.equal(pooled["AA"], torch.tensor([1.0, 1.0]))
+
+
+def test_load_pooled_embeddings_from_pth_and_db() -> None:
+    all_layers = torch.tensor(
+        [
+            [[0.0, 0.0], [0.0, 2.0]],
+            [[1.0, 0.0], [1.0, 2.0]],
+            [[2.0, 0.0], [2.0, 2.0]],
+        ]
+    )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        pth_path = os.path.join(tmp_dir, "embeddings.pth")
+        db_path = os.path.join(tmp_dir, "embeddings.db")
+        torch.save({"AA": all_layers}, pth_path)
+
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "CREATE TABLE embeddings (sequence TEXT PRIMARY KEY, embedding BLOB NOT NULL)"
+            )
+            cursor.execute(
+                "INSERT INTO embeddings VALUES (?, ?)",
+                ("AA", tensor_to_embedding_blob(all_layers)),
+            )
+            conn.commit()
+
+        pth_pooled = load_pooled_embeddings_from_pth(
+            pth_path,
+            pooling_types=["mean"],
+            hidden_state_index=1,
+        )
+        db_pooled = load_pooled_embeddings_from_db(
+            db_path,
+            pooling_types=["mean"],
+            hidden_state_index=1,
+        )
+
+    assert torch.equal(pth_pooled["AA"], torch.tensor([1.0, 1.0]))
+    assert torch.equal(db_pooled["AA"], torch.tensor([1.0, 1.0]))
+
+
+def test_embed_dataset_hidden_state_index_sequence_mode() -> None:
+    model = DummyHiddenStateModel()
+    sequences = ["ACD", "M"]
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        save_path = os.path.join(tmp_dir, "embeddings.pth")
+        default_embeddings = model.embed_dataset(
+            sequences=sequences,
+            tokenizer=None,
+            batch_size=2,
+            pooling_types=["mean"],
+            save=False,
+            save_path=save_path,
+            padding="longest",
+        )
+        selected_embeddings = model.embed_dataset(
+            sequences=sequences,
+            tokenizer=None,
+            batch_size=2,
+            pooling_types=["mean"],
+            hidden_state_index=1,
+            save=False,
+            save_path=save_path,
+            padding="longest",
+        )
+
+    assert torch.equal(default_embeddings["ACD"], torch.tensor([2.0, 1.0]))
+    assert torch.equal(selected_embeddings["ACD"], torch.tensor([1.0, 1.0]))
+    assert torch.equal(selected_embeddings["M"], torch.tensor([1.0, 0.0]))
+
+
+def test_embed_dataset_store_all_hidden_states_sequence_mode() -> None:
+    model = DummyHiddenStateModel()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        save_path = os.path.join(tmp_dir, "embeddings.pth")
+        embeddings = model.embed_dataset(
+            sequences=["ACD", "M"],
+            tokenizer=None,
+            batch_size=2,
+            full_embeddings=True,
+            store_all_hidden_states=True,
+            save=False,
+            save_path=save_path,
+            padding="longest",
+        )
+
+    assert embeddings["ACD"].shape == (3, 3, 2)
+    assert embeddings["M"].shape == (3, 1, 2)
+    assert torch.equal(embeddings["ACD"][1].mean(dim=0), torch.tensor([1.0, 1.0]))
+
+
+def test_embed_dataset_store_all_hidden_states_sql_roundtrip() -> None:
+    model = DummyHiddenStateModel()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "embeddings.db")
+        model.embed_dataset(
+            sequences=["ACD", "M"],
+            tokenizer=None,
+            batch_size=2,
+            full_embeddings=True,
+            store_all_hidden_states=True,
+            sql=True,
+            sql_db_path=db_path,
+            save=False,
+            padding="longest",
+        )
+        pooled = model.load_pooled_embeddings_from_db(
+            db_path,
+            pooling_types=["mean"],
+            hidden_state_index=1,
+        )
+
+    assert torch.equal(pooled["ACD"], torch.tensor([1.0, 1.0]))
+    assert torch.equal(pooled["M"], torch.tensor([1.0, 0.0]))
+
+
+def test_embed_dataset_store_all_hidden_states_requires_full_embeddings() -> None:
+    model = DummyHiddenStateModel()
+    with pytest.raises(AssertionError, match="requires full_embeddings"):
+        model.embed_dataset(
+            sequences=["ACD"],
+            tokenizer=None,
+            store_all_hidden_states=True,
+            save=False,
+            padding="longest",
+        )
 
 
 @pytest.mark.gpu
@@ -272,6 +465,46 @@ def test_tokenizer_model_embed_dataset_uses_default_tokenizer() -> None:
 
     assert set(embeddings) == {"MKTAYIAKQ", "GGGG"}
     assert embeddings["MKTAYIAKQ"].shape == (model.config.hidden_size,)
+
+    del model
+    torch.cuda.empty_cache()
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("model_key", ALL_MODEL_KEYS)
+def test_hidden_state_index_embed_dataset_smoke(model_key: str) -> None:
+    from transformers import AutoModelForMaskedLM
+
+    config = MODEL_REGISTRY[model_key]
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = AutoModelForMaskedLM.from_pretrained(
+        config["fast_path"],
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        device_map=device,
+    ).eval()
+
+    if config["uses_tokenizer"]:
+        tokenizer = FixedLengthTokenizer(model.tokenizer, max_length=32)
+        sequences = ["MKTAYIAKQ", "GGGG"]
+    else:
+        tokenizer = None
+        sequences = ["MKTAYIAKQ", "GGGG"]
+
+    embeddings = model.embed_dataset(
+        sequences=sequences,
+        tokenizer=tokenizer,
+        batch_size=2,
+        max_len=32,
+        pooling_types=["mean"],
+        hidden_state_index=0,
+        save=False,
+    )
+
+    assert set(embeddings) == set(sequences)
+    for embedding in embeddings.values():
+        assert embedding.shape == (model.config.hidden_size,)
+        assert not torch.isnan(embedding).any()
 
     del model
     torch.cuda.empty_cache()

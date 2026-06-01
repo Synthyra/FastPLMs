@@ -1544,13 +1544,22 @@ class FastESM3Model(FastESM3PreTrainedModel):
         self,
         input_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
         **kwargs,
     ) -> torch.Tensor:
-        return self(
+        output = self(
             input_ids=input_ids,
             attention_mask=attention_mask,
             **kwargs,
-        ).last_hidden_state
+        )
+        if store_all_hidden_states:
+            assert output.hidden_states is not None, "store_all_hidden_states requires hidden states."
+            return torch.stack(tuple(output.hidden_states), dim=1)
+        if hidden_state_index == -1:
+            return output.last_hidden_state
+        assert output.hidden_states is not None, "hidden_state_index selection requires hidden states."
+        return output.hidden_states[hidden_state_index]
 
     def _pool_embeddings(
         self,
@@ -1594,10 +1603,16 @@ class FastESM3Model(FastESM3PreTrainedModel):
         save_path: str = "embeddings.pth",
         fasta_path: Optional[str] = None,
         padding: str = "longest",
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
         del num_workers, sql_db_path
         assert not sql, "ESM3 embed_dataset currently supports .pth saves, not SQLite."
+        assert isinstance(hidden_state_index, int), "hidden_state_index must be an integer."
+        assert full_embeddings or not store_all_hidden_states, (
+            "store_all_hidden_states=True requires full_embeddings=True."
+        )
         if tokenizer is None:
             tokenizer = self.tokenizer
         if fasta_path is not None:
@@ -1632,7 +1647,12 @@ class FastESM3Model(FastESM3PreTrainedModel):
                 name: tensor.to(self.device) for name, tensor in tokenized.items()
             }
             with torch.inference_mode():
-                residue_embeddings = self._embed(**tokenized, **kwargs)
+                residue_embeddings = self._embed(
+                    **tokenized,
+                    hidden_state_index=hidden_state_index,
+                    store_all_hidden_states=store_all_hidden_states,
+                    **kwargs,
+                )
             attention_mask = tokenized["attention_mask"]
             if full_embeddings:
                 batch_embeddings = residue_embeddings.to(embed_dtype).cpu()
@@ -1641,7 +1661,10 @@ class FastESM3Model(FastESM3PreTrainedModel):
                     batch_embeddings,
                     attention_mask.cpu(),
                 ):
-                    embeddings_by_sequence[sequence] = embedding[mask.bool()]
+                    if embedding.ndim == 3:
+                        embeddings_by_sequence[sequence] = embedding[:, mask.bool(), :]
+                    else:
+                        embeddings_by_sequence[sequence] = embedding[mask.bool()]
             else:
                 pooled_embeddings = self._pool_embeddings(
                     residue_embeddings,
