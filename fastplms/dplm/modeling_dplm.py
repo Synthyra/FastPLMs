@@ -48,7 +48,10 @@ try:
         index_first_axis, index_put_first_axis, pad_input, _unpad_input,
         create_block_mask, flex_attention, BlockMask,
     )
-    from fastplms.embedding_mixin import Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator
+    from fastplms.embedding_mixin import (
+        Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
+        select_hidden_state_embeddings,
+    )
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -511,17 +514,29 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         if attention_mask is None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
         embedding_output = self.embeddings(input_ids, attention_mask=attention_mask)
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=attention_mask,
-            output_hidden_states=False,
+            output_hidden_states=output_hidden_states,
             output_attentions=False,
         )
-        return encoder_outputs.last_hidden_state
+        return select_hidden_state_embeddings(
+            encoder_outputs.last_hidden_state,
+            encoder_outputs.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         attns = self(input_ids, attention_mask=attention_mask, output_attentions=True).attentions
@@ -657,8 +672,19 @@ class DPLMModel(DPLMPreTrainedModel, EmbeddingMixin):
     def set_input_embeddings(self, value):
         self.esm.embeddings.word_embeddings = value
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.esm._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.esm._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         return self.esm.predict_contacts(input_ids, attention_mask)
@@ -743,8 +769,19 @@ class DPLMForMaskedLM(DPLMPreTrainedModel, EmbeddingMixin):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head.decoder = new_embeddings
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.esm._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.esm._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         return self.esm.predict_contacts(input_ids, attention_mask=attention_mask)
@@ -820,8 +857,19 @@ class DPLMForSequenceClassification(DPLMPreTrainedModel, EmbeddingMixin):
         self.bce = nn.BCEWithLogitsLoss()
         self.post_init()
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.esm._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.esm._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -893,8 +941,19 @@ class DPLMForTokenClassification(DPLMPreTrainedModel, EmbeddingMixin):
         self.loss_fct = nn.CrossEntropyLoss()
         self.post_init()
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.esm._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.esm._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,

@@ -190,6 +190,8 @@ def test_esmfold2_forward_parity(model_key: str) -> None:
             check=False,
             env=env,
         )
+    if result.returncode != 0 and "Skipped:" in result.stderr:
+        pytest.skip(result.stderr.split("Skipped:", 1)[1].strip())
     assert result.returncode == 0, result.stdout + result.stderr
 
 

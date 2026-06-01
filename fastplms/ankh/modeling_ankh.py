@@ -17,7 +17,10 @@ try:
         _get_flex_attention_fn,
         create_block_mask, flex_attention, BlockMask,
     )
-    from fastplms.embedding_mixin import Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator
+    from fastplms.embedding_mixin import (
+        Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
+        select_hidden_state_embeddings,
+    )
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -504,10 +507,26 @@ class FAST_ANKH_ENCODER(AnkhPreTrainedModel, EmbeddingMixin):
 
         return score_mod
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         hidden_states = self.embed_tokens(input_ids)
-        encoder_output = self._run_encoder(hidden_states, attention_mask=attention_mask)
-        return encoder_output.last_hidden_state
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
+        encoder_output = self._run_encoder(
+            hidden_states,
+            attention_mask=attention_mask,
+            output_hidden_states=output_hidden_states,
+        )
+        return select_hidden_state_embeddings(
+            encoder_output.last_hidden_state,
+            encoder_output.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def _run_encoder(
         self,
@@ -626,8 +645,19 @@ class FastAnkhModel(AnkhPreTrainedModel, EmbeddingMixin):
     def set_input_embeddings(self, value):
         self.encoder.embed_tokens = value
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.encoder._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.encoder._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -681,8 +711,19 @@ class FastAnkhForMaskedLM(AnkhPreTrainedModel, EmbeddingMixin):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.encoder._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.encoder._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -738,8 +779,19 @@ class FastAnkhForSequenceClassification(AnkhPreTrainedModel, EmbeddingMixin):
     def get_input_embeddings(self):
         return self.encoder.embed_tokens
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.encoder._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.encoder._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -811,8 +863,19 @@ class FastAnkhForTokenClassification(AnkhPreTrainedModel, EmbeddingMixin):
     def get_input_embeddings(self):
         return self.encoder.embed_tokens
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.encoder._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.encoder._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,

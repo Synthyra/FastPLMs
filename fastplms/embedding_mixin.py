@@ -108,6 +108,88 @@ def embedding_blob_to_tensor(blob: bytes, fallback_shape: Optional[Tuple[int, ..
     return torch.from_numpy(arr)
 
 
+def select_hidden_state_embeddings(
+    last_hidden_state: torch.Tensor,
+    hidden_states: Optional[Tuple[torch.Tensor, ...]],
+    hidden_state_index: int = -1,
+    store_all_hidden_states: bool = False,
+) -> torch.Tensor:
+    assert isinstance(hidden_state_index, int), "hidden_state_index must be an integer."
+    if store_all_hidden_states:
+        assert hidden_states is not None, "store_all_hidden_states requires output_hidden_states=True."
+        assert len(hidden_states) > 0, "Model returned no hidden states."
+        return torch.stack(tuple(hidden_states), dim=1)
+    if hidden_state_index == -1:
+        return last_hidden_state
+    assert hidden_states is not None, "hidden_state_index selection requires output_hidden_states=True."
+    return hidden_states[hidden_state_index]
+
+
+def _trim_full_embedding(embedding: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+    mask = attention_mask.bool()
+    if embedding.ndim == 2:
+        return embedding[mask].reshape(-1, embedding.shape[-1])
+    if embedding.ndim == 3:
+        return embedding[:, mask, :].reshape(embedding.shape[0], -1, embedding.shape[-1])
+    raise AssertionError(f"Expected full embedding tensor with 2 or 3 dims, got {embedding.ndim}.")
+
+
+def pool_embeddings(
+    embeddings: Dict[str, torch.Tensor],
+    pooling_types: List[str] = ['mean'],
+    hidden_state_index: int = -1,
+) -> Dict[str, torch.Tensor]:
+    pooler = Pooler(pooling_types)
+    pooled: Dict[str, torch.Tensor] = {}
+    for sequence, embedding in embeddings.items():
+        assert isinstance(sequence, str), "Expected embedding dictionary keys to be sequences (str)."
+        assert isinstance(embedding, torch.Tensor), "Expected embedding dictionary values to be tensors."
+        if embedding.ndim == 1:
+            pooled[sequence] = embedding.cpu()
+            continue
+        if embedding.ndim == 3:
+            embedding = embedding[hidden_state_index]
+        assert embedding.ndim == 2, f"Expected token-wise embedding with 2 dims, got {embedding.ndim}."
+        pooled[sequence] = pooler(embedding.unsqueeze(0)).squeeze(0).cpu()
+    return pooled
+
+
+def load_pooled_embeddings_from_pth(
+    save_path: str,
+    pooling_types: List[str] = ['mean'],
+    hidden_state_index: int = -1,
+) -> Dict[str, torch.Tensor]:
+    assert os.path.exists(save_path), f"Embedding file does not exist: {save_path}"
+    payload = torch.load(save_path, map_location="cpu", weights_only=True)
+    assert isinstance(payload, dict), "Expected .pth embeddings file to contain a dictionary."
+    return pool_embeddings(payload, pooling_types=pooling_types, hidden_state_index=hidden_state_index)
+
+
+def load_pooled_embeddings_from_db(
+    db_path: str,
+    sequences: Optional[List[str]] = None,
+    pooling_types: List[str] = ['mean'],
+    hidden_state_index: int = -1,
+) -> Dict[str, torch.Tensor]:
+    assert os.path.exists(db_path), f"Embedding database does not exist: {db_path}"
+    loaded: Dict[str, torch.Tensor] = {}
+    with sqlite3.connect(db_path, timeout=30) as conn:
+        cursor = conn.cursor()
+        if sequences is None:
+            cursor.execute("SELECT sequence, embedding FROM embeddings")
+        else:
+            if len(sequences) == 0:
+                return loaded
+            placeholders = ",".join(["?"] * len(sequences))
+            cursor.execute(
+                f"SELECT sequence, embedding FROM embeddings WHERE sequence IN ({placeholders})",
+                tuple(sequences),
+            )
+        for sequence, embedding_bytes in cursor.fetchall():
+            loaded[sequence] = embedding_blob_to_tensor(embedding_bytes)
+    return pool_embeddings(loaded, pooling_types=pooling_types, hidden_state_index=hidden_state_index)
+
+
 def maybe_compile(model: torch.nn.Module, dynamic: bool = False) -> torch.nn.Module:
     """Compile model with torch.compile if possible.
 
@@ -396,7 +478,13 @@ def parse_fasta(fasta_path: str) -> List[str]:
 
 
 class EmbeddingMixin:
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         raise NotImplementedError
 
     @property
@@ -454,6 +542,40 @@ class EmbeddingMixin:
                 loaded[sequence] = embedding_blob_to_tensor(embedding_bytes)
         return loaded
 
+    def pool_embeddings(
+        self,
+        embeddings: Dict[str, torch.Tensor],
+        pooling_types: List[str] = ['mean'],
+        hidden_state_index: int = -1,
+    ) -> Dict[str, torch.Tensor]:
+        return pool_embeddings(embeddings, pooling_types=pooling_types, hidden_state_index=hidden_state_index)
+
+    def load_pooled_embeddings_from_pth(
+        self,
+        save_path: str,
+        pooling_types: List[str] = ['mean'],
+        hidden_state_index: int = -1,
+    ) -> Dict[str, torch.Tensor]:
+        return load_pooled_embeddings_from_pth(
+            save_path,
+            pooling_types=pooling_types,
+            hidden_state_index=hidden_state_index,
+        )
+
+    def load_pooled_embeddings_from_db(
+        self,
+        db_path: str,
+        sequences: Optional[List[str]] = None,
+        pooling_types: List[str] = ['mean'],
+        hidden_state_index: int = -1,
+    ) -> Dict[str, torch.Tensor]:
+        return load_pooled_embeddings_from_db(
+            db_path,
+            sequences=sequences,
+            pooling_types=pooling_types,
+            hidden_state_index=hidden_state_index,
+        )
+
     def embed_dataset(
         self,
         sequences: Optional[List[str]] = None,
@@ -471,6 +593,8 @@ class EmbeddingMixin:
         save_path: str = 'embeddings.pth',
         fasta_path: Optional[str] = None,
         padding: str = 'max_length',
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
         **kwargs,
     ) -> Optional[Dict[str, torch.Tensor]]:
         """
@@ -488,9 +612,11 @@ class EmbeddingMixin:
             sequences = list(sequences or []) + fasta_sequences
         assert sequences is not None and len(sequences) > 0, \
             "Must provide at least one sequence via `sequences` or `fasta_path`."
+        assert isinstance(hidden_state_index, int), "hidden_state_index must be an integer."
+        assert full_embeddings or not store_all_hidden_states, \
+            "store_all_hidden_states=True requires full_embeddings=True."
         sequences = list(set([seq[:max_len] if truncate else seq for seq in sequences]))
         sequences = sorted(sequences, key=len, reverse=True)
-        hidden_size = self.config.hidden_size
         pooler = Pooler(pooling_types) if not full_embeddings else None
         if tokenizer is None and self.config.model_type != "E1":
             tokenizer = self.tokenizer
@@ -531,12 +657,23 @@ class EmbeddingMixin:
                     seqs = to_embed[i * batch_size:(i + 1) * batch_size]
                     input_ids = batch['input_ids'].to(device)
                     attention_mask = batch['attention_mask'].to(device)
-                    residue_embeddings = compiled_model._embed(input_ids, attention_mask)
+                    residue_embeddings = compiled_model._embed(
+                        input_ids,
+                        attention_mask,
+                        hidden_state_index=hidden_state_index,
+                        store_all_hidden_states=store_all_hidden_states,
+                    )
                     yield seqs, residue_embeddings, attention_mask
             else:
                 for batch_start in tqdm(range(0, len(to_embed), batch_size), desc='Embedding batches'):
                     seqs = to_embed[batch_start:batch_start + batch_size]
-                    batch_output = compiled_model._embed(seqs, return_attention_mask=True, **kwargs)
+                    batch_output = compiled_model._embed(
+                        seqs,
+                        return_attention_mask=True,
+                        hidden_state_index=hidden_state_index,
+                        store_all_hidden_states=store_all_hidden_states,
+                        **kwargs,
+                    )
                     assert isinstance(batch_output, tuple), "Sequence mode _embed must return (last_hidden_state, attention_mask)."
                     assert len(batch_output) == 2, "Sequence mode _embed must return exactly two values."
                     residue_embeddings, attention_mask = batch_output
@@ -564,7 +701,7 @@ class EmbeddingMixin:
                             if full_embeddings:
                                 batch_rows = []
                                 for seq, emb, mask in zip(seqs, embeddings, attention_mask):
-                                    batch_rows.append((seq, tensor_to_embedding_blob(emb[mask.bool()].reshape(-1, hidden_size))))
+                                    batch_rows.append((seq, tensor_to_embedding_blob(_trim_full_embedding(emb, mask))))
                             else:
                                 blobs = batch_tensor_to_blobs(embeddings)
                                 batch_rows = list(zip(seqs, blobs))
@@ -588,7 +725,7 @@ class EmbeddingMixin:
                     embeddings = get_embeddings(residue_embeddings, attention_mask).to(embed_dtype)
                     for seq, emb, mask in zip(seqs, embeddings, attention_mask):
                         if full_embeddings:
-                            emb = emb[mask.bool()].reshape(-1, hidden_size)
+                            emb = _trim_full_embedding(emb, mask)
                         embeddings_dict[seq] = emb.cpu()
 
         if save:

@@ -48,7 +48,10 @@ try:
         index_first_axis, index_put_first_axis, pad_input, _unpad_input,
         create_block_mask, flex_attention, BlockMask,
     )
-    from fastplms.embedding_mixin import Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator
+    from fastplms.embedding_mixin import (
+        Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
+        select_hidden_state_embeddings,
+    )
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -548,20 +551,32 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
         if attention_mask is None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
         type_ids = _infer_modality_type(input_ids, attention_mask)
         token_embedding_output = self.embeddings(input_ids, attention_mask=attention_mask)
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
         encoder_outputs = self.encoder(
             token_embedding_output,
             attention_mask=attention_mask,
-            output_hidden_states=False,
+            output_hidden_states=output_hidden_states,
             output_attentions=False,
             type_ids=type_ids,
         )
-        return encoder_outputs.last_hidden_state
+        return select_hidden_state_embeddings(
+            encoder_outputs.last_hidden_state,
+            encoder_outputs.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -623,8 +638,19 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
     def set_input_embeddings(self, value):
         self.esm.embeddings.word_embeddings = value
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.esm._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.esm._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -689,18 +715,30 @@ class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
         input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
         return _infer_modality_type(input_ids, attention_mask)
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
         if attention_mask is None:
             attention_mask = input_ids.ne(self.pad_id)
         type_ids = self._get_modality_type(input_ids, attention_mask)
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
         outputs = self.esm(
             input_ids=input_ids,
             attention_mask=attention_mask,
             type_ids=type_ids,
             output_attentions=False,
-            output_hidden_states=False,
+            output_hidden_states=output_hidden_states,
         )
-        return outputs.last_hidden_state
+        return select_hidden_state_embeddings(
+            outputs.last_hidden_state,
+            outputs.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -774,8 +812,19 @@ class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.esm._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.esm._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,
@@ -854,8 +903,19 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
 
-    def _embed(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.esm._embed(input_ids, attention_mask)
+    def _embed(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+    ) -> torch.Tensor:
+        return self.esm._embed(
+            input_ids,
+            attention_mask,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
 
     def forward(
         self,

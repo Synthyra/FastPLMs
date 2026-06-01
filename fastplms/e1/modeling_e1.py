@@ -39,7 +39,10 @@ try:
         index_first_axis, index_put_first_axis, pad_input,
         create_block_mask, flex_attention, BlockMask,
     )
-    from fastplms.embedding_mixin import Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator
+    from fastplms.embedding_mixin import (
+        Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
+        select_hidden_state_embeddings,
+    )
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -2517,14 +2520,32 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
     def set_input_embeddings(self, value: nn.Embedding) -> None:
         self.embed_tokens = value
 
-    def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
+    def _embed(
+        self,
+        sequences: List[str],
+        return_attention_mask: bool = False,
+        hidden_state_index: int = -1,
+        store_all_hidden_states: bool = False,
+        **kwargs,
+    ) -> torch.Tensor:
         batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
-        last_hidden_state = self.forward(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
+        output = self.forward(
+            **batch,
+            output_hidden_states=output_hidden_states,
+            output_attentions=False,
+        )
+        embeddings = select_hidden_state_embeddings(
+            output.last_hidden_state,
+            output.hidden_states,
+            hidden_state_index=hidden_state_index,
+            store_all_hidden_states=store_all_hidden_states,
+        )
         if return_attention_mask:
             attention_mask = (batch['sequence_ids'] != -1).long()
-            return last_hidden_state, attention_mask
+            return embeddings, attention_mask
         else:
-            return last_hidden_state
+            return embeddings
 
     # Ignore copy
     def forward(
@@ -2774,13 +2795,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
         return self.model.device_mesh
 
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
-        batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
-        last_hidden_state = self.model(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
-        if return_attention_mask:
-            attention_mask = (batch['sequence_ids'] != -1).long()
-            return last_hidden_state, attention_mask
-        else:
-            return last_hidden_state
+        return self.model._embed(sequences, return_attention_mask=return_attention_mask, **kwargs)
 
     def search_homologues(
         self,
@@ -3158,13 +3173,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
         return self.model.device_mesh
 
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
-        batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
-        last_hidden_state = self.model(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
-        if return_attention_mask:
-            attention_mask = (batch['sequence_ids'] != -1).long()
-            return last_hidden_state, attention_mask
-        else:
-            return last_hidden_state
+        return self.model._embed(sequences, return_attention_mask=return_attention_mask, **kwargs)
 
     def forward(
         self,
@@ -3254,13 +3263,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         return self.model.device_mesh
 
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
-        batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
-        last_hidden_state = self.model(**batch, output_hidden_states=False, output_attentions=False).last_hidden_state
-        if return_attention_mask:
-            attention_mask = (batch['sequence_ids'] != -1).long()
-            return last_hidden_state, attention_mask
-        else:
-            return last_hidden_state
+        return self.model._embed(sequences, return_attention_mask=return_attention_mask, **kwargs)
 
     def forward(
         self,
