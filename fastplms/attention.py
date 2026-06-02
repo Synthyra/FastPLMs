@@ -39,7 +39,8 @@ def _get_flex_attention_fn():
     return _compiled_flex_attention
 
 
-### Kernels Flash Attention Detection
+# HuggingFace `kernels` exposes slightly different APIs for Flash Attention 2
+# and 3. Detect the loaded variant once so every caller uses the same dispatch.
 def _infer_kernels_flash_variant(kernel) -> Optional[str]:
     if hasattr(kernel, "fwd") and hasattr(kernel, "varlen_fwd"):
         return "flash_attn2"
@@ -96,9 +97,9 @@ def _kernels_flash_forward(
     When `softmax_scale is None`, the flash kernel applies its default
     `1 / sqrt(head_dim)`. Pass `softmax_scale=1.0` if the caller has already
     pre-scaled Q (the convention used by ESM2, DPLM, DPLM2, E1, ESMFold).
-    Failing to override when Q is pre-scaled produces DOUBLE scaling and
-    catastrophic downstream drift -- on DPLM-150M (30 layers) this was observed
-    as pooled-embedding cosine ~-0.12 and argmax agreement ~0.27 vs sdpa.
+    Failing to override when Q is pre-scaled applies the scale twice. On
+    DPLM-150M, that produced pooled-embedding cosine around -0.12 and argmax
+    agreement around 0.27 vs SDPA.
     """
     assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
     if FLASH_KERNEL_VARIANT == "flash_attn2":
@@ -168,7 +169,8 @@ def _kernels_flash_varlen_forward(
     raise AssertionError(f"Unsupported kernels flash attention variant: {FLASH_KERNEL_VARIANT}")
 
 
-### Unpad / Pad helpers for varlen flash attention
+# Varlen flash attention runs only on real tokens. These helpers remove padding
+# before the kernel call and restore the original padded batch shape afterward.
 class IndexFirstAxis(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, indices) -> torch.Tensor:
@@ -250,11 +252,10 @@ def kernels_flash_attention_func(
         float -> kernel uses the given scale (pass 1.0 when Q is pre-scaled
         by the caller).
 
-    IMPORTANT: if your family multiplies Q by `1/sqrt(head_dim)` before calling
-    this function (as ESM2, DPLM, DPLM2, E1, and ESMFold do) you MUST pass
-    `softmax_scale=1.0`. Otherwise the kernel applies its default scale ON TOP
-    of the caller's, producing effective scale `1/head_dim` and catastrophic
-    downstream drift that compounds across layers.
+    Caller contract: if a model family pre-scales Q by `1/sqrt(head_dim)`
+    before calling this function (ESM2, DPLM, DPLM2, E1, and ESMFold do), pass
+    `softmax_scale=1.0`. Otherwise the flash kernel applies its default scale
+    again, yielding an effective `1/head_dim` scale that drifts across layers.
     """
     assert FLASH_KERNEL is not None, "Kernel Flash Attention is not available in this environment."
     if not causal and attention_mask_2d is not None:
@@ -277,7 +278,7 @@ def kernels_flash_attention_func(
         )
 
 
-### Attention Backend Enum & Resolution
+# User-facing backend strings resolve to this enum before attention dispatch.
 class AttentionBackend(Enum):
     AUTO = "auto"
     KERNELS_FLASH = "kernels_flash"
@@ -351,8 +352,8 @@ def get_attention_mask(
         flex_block_mask = create_block_mask(mask_mod, batch_size, 1, seq_len, seq_len, device=device)
         return attention_mask_2d, None, flex_block_mask
 
-    # SDPA / manual -- only mask the key dimension so padding query positions attend to
-    # real keys and produce valid (non-NaN) outputs instead of NaN from softmax(-inf,...,-inf).
+    # SDPA/manual masks only keys. Padding queries still attend to real keys, so
+    # their outputs stay finite instead of softmaxing over all -inf scores.
     attention_mask_4d = attention_mask_2d[:, None, None, :]
     return attention_mask_2d, attention_mask_4d, None
 
@@ -364,8 +365,8 @@ def bool_to_additive_mask(
     """Convert a bool mask (True = valid) to a float additive mask (0.0 valid, -inf invalid).
 
     Why this exists: calling `bool_mask.masked_fill(bool_mask.logical_not(), float('-inf'))`
-    directly on a bool tensor returns a bool tensor -- because `-inf` casts to `True` -- and
-    silently drops the mask entirely. Always allocate a float tensor first, then fill it.
+    directly on a bool tensor returns a bool tensor because `-inf` casts to `True`.
+    That silently drops the mask. Always allocate a float tensor first, then fill it.
     This helper is the sanctioned way to build an SDPA additive mask from a bool validity mask.
     """
     assert bool_mask.dtype == torch.bool, (

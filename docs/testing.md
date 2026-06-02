@@ -84,7 +84,7 @@ docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not
 # Full suite including 3B models (requires 40+ GB VRAM)
 docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not structure" -v
 
-# Structure models only (Boltz2, ESMFold)
+# Structure models only (Boltz2, ESMFold, ESMFold2, ESMFold2-Fast)
 docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "structure" -v
 
 # Throughput benchmark (saves JSON/CSV/PNG)
@@ -110,7 +110,7 @@ On Windows, replace `${PWD}` with `$(pwd)`.
 | `gpu` | Requires CUDA GPU | Varies |
 | `slow` | Loads two models simultaneously (compliance tests) | 2x model size |
 | `large` | 3B parameter models | 24+ GB |
-| `structure` | Structure prediction models (Boltz2, ESMFold) | 8+ GB |
+| `structure` | Structure prediction models (Boltz2, ESMFold, ESMFold2, ESMFold2-Fast) | 8+ GB |
 
 Use `-m` to filter and `-k` to select by name:
 
@@ -172,6 +172,8 @@ Used by the `test_full_*` parametrized tests. All checkpoints with `size_categor
 |-----|-------|
 | `boltz2` | Synthyra/Boltz2 |
 | `esmfold` | Synthyra/FastESMFold |
+| `esmfold2` | Synthyra/ESMFold2 |
+| `esmfold2_fast` | Synthyra/ESMFold2-Fast |
 
 ## Parity Testing (`test_parity.py`)
 

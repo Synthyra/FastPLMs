@@ -8,7 +8,7 @@ All FastPLMs sequence models share a common attention backend system controlled 
 |---------|-----|----------------------|-------|-------------|
 | PyTorch SDPA | `"sdpa"` | Exact | Fast | Any PyTorch >= 2.0 |
 | Flash Attention | `"kernels_flash"` | Approximate | Fastest | `pip install kernels` |
-| Flex Attention | `"flex"` | Near-exact | Very fast | PyTorch >= 2.5 |
+| Flex Attention | `"flex"` | Near-exact | Very fast | PyTorch >= 2.11 in FastPLMs Docker images |
 | Auto | `"auto"` | Varies | Best available | Always |
 
 ## SDPA (Default)
@@ -47,7 +47,7 @@ No C++ compiler or CUDA toolkit version pinning required. The `kernels` package 
 
 ## Flex Attention (`flex`)
 
-PyTorch's `flex_attention` (PyTorch >= 2.5) generates a fused Triton kernel customized to the mask pattern. The primary advantage is **block masks** that skip padding tokens entirely at the CUDA block level, providing meaningful speedups on variable-length batches.
+PyTorch's `flex_attention` (PyTorch >= 2.11 in FastPLMs Docker images) generates a fused Triton kernel customized to the mask pattern. The primary advantage is **block masks** that skip padding tokens entirely at the CUDA block level, providing meaningful speedups on variable-length batches.
 
 **When to use:** Variable-length batches with significant padding, best sustained throughput with `torch.compile`.
 

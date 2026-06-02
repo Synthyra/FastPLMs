@@ -16,8 +16,8 @@ from torch.utils.data import Dataset as TorchDataset
 from transformers import PreTrainedTokenizerBase
 
 
-# Compact blob serialization constants
-# Canonical source: core/embed/blob.py. Keep in sync with protify/utils.py.
+# SQLite stores tensors as compact blobs. Keep this header format compatible
+# with Protify readers that share the same dtype/version codes.
 _COMPACT_VERSION = 0x01
 _DTYPE_TO_CODE = {torch.float16: 0, torch.bfloat16: 1, torch.float32: 2}
 _CODE_TO_DTYPE = {0: torch.float16, 1: torch.bfloat16, 2: torch.float32}
@@ -95,14 +95,14 @@ def embedding_blob_to_tensor(blob: bytes, fallback_shape: Optional[Tuple[int, ..
             t = t.to(target_dtype)
         return t
 
-    # Fallback: try torch.load (pickle format)
+    # Older `.pth`-style blobs were written with torch.save.
     try:
         buffer = io.BytesIO(blob)
         return torch.load(buffer, map_location='cpu', weights_only=True)
     except Exception:
         pass
 
-    # Legacy fallback: raw float32 bytes with caller-supplied shape
+    # Oldest SQLite rows stored raw float32 bytes and need a caller-supplied shape.
     assert fallback_shape is not None, "Cannot deserialize blob: unknown format and no fallback_shape provided."
     arr = np.frombuffer(blob, dtype=np.float32).copy().reshape(fallback_shape)
     return torch.from_numpy(arr)
@@ -246,15 +246,16 @@ def _make_embedding_progress(
 
     dl_iter = iter(dataloader)
 
-    # Phase 1: warmup on longest batches (first n_warmup, since sorted longest-first)
+    # Warm up on the longest batches first; sorted inputs make these the OOM-risk
+    # and compile-stabilization cases.
     warmup_bar = tqdm(range(n_warmup), desc='Warmup (longest batches)', leave=False)
     for i in warmup_bar:
         batch = next(dl_iter)
         yield i, batch
     warmup_bar.close()
 
-    # Phase 2: skip to middle of dataset for calibration timing
-    # We need to yield all intermediate batches too (they contain real data)
+    # Move toward mid-length batches for ETA calibration, yielding every real
+    # batch on the way so no sequences are skipped.
     mid_start = total // 2
     intermediate_bar = tqdm(
         range(n_warmup, mid_start), desc='Embedding batches', leave=False,
@@ -264,7 +265,8 @@ def _make_embedding_progress(
         yield i, batch
     intermediate_bar.close()
 
-    # Phase 3: time calibration batches from the middle
+    # Mid-length batches give a better remaining-time estimate than the longest
+    # warmup batches.
     calibration_times: List[float] = []
     cal_bar = tqdm(range(n_calibration), desc='Calibrating ETA', leave=False)
     for j in cal_bar:
@@ -279,7 +281,7 @@ def _make_embedding_progress(
     remaining_count = total - remaining_start
     estimated_total_seconds = avg_time * remaining_count
 
-    # Phase 4: remaining batches with calibrated ETA
+    # Finish the tail with the calibrated ETA shown in the progress bar.
     main_bar = tqdm(
         range(remaining_count),
         desc='Embedding batches',
@@ -681,7 +683,7 @@ class EmbeddingMixin:
                     yield seqs, residue_embeddings, attention_mask
 
         if sql:
-            # Step 1: DEDUPLICATE - check existing embeddings in SQL
+            # Resume safely: skip sequences already present in the SQLite table.
             conn = sqlite3.connect(sql_db_path, timeout=30, check_same_thread=False)
             conn.execute('PRAGMA journal_mode=WAL')
             conn.execute('PRAGMA busy_timeout=30000')
@@ -693,7 +695,7 @@ class EmbeddingMixin:
             print(f"Found {len(already_embedded)} already embedded sequences in {sql_db_path}")
             print(f"Embedding {len(to_embed)} new sequences")
             if len(to_embed) > 0:
-                # Steps 4-7: BATCH+EMBED -> POOL/TRIM -> SERIALIZE -> WRITE (async)
+                # Embed batches synchronously; serialize/write them on the SQL writer thread.
                 with _SQLWriter(conn) as writer:
                     with torch.inference_mode():
                         for seqs, residue_embeddings, attention_mask in iter_batches(to_embed):
@@ -735,7 +737,7 @@ class EmbeddingMixin:
 
 
 if __name__ == "__main__":
-    # py -m pooler
+    # Manual smoke test for pooling shape behavior.
     pooler = Pooler(pooling_types=['max', 'parti'])
     batch_size = 8
     seq_len = 64

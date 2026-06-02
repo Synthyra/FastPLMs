@@ -53,7 +53,7 @@ from transformers import (
 fastplms/new_model/
     __init__.py
     modeling_new_model.py    # PreTrainedModel + PretrainedConfig
-    get_new_model_weights.py # Weight conversion from official checkpoint
+    get_weights.py           # Weight conversion from official checkpoint
     README.md                # HuggingFace model card README
     LICENSE                  # Model license
 
@@ -81,7 +81,7 @@ Your `modeling_*.py` should:
 
 ### 3. Add Weight Conversion
 
-`get_*_weights.py` should:
+`get_weights.py` should:
 1. Load the official checkpoint
 2. Remap parameter names to match your architecture
 3. Export `config.json`, `pytorch_model.bin`, and modeling source files

@@ -138,7 +138,7 @@ Building `flash-attn` from source is notoriously painful. The Ninja build system
 
 ### Flex Attention (`flex`)
 
-PyTorch's [`flex_attention`](https://pytorch.org/docs/stable/nn.attention.flex_attention.html) (PyTorch ≥ 2.5) generates a fused Triton kernel customized to the mask pattern at hand. It is numerically very close to SDPA — typically within floating-point rounding of naive computation. The primary advantage is that it can apply a **block mask** that skips padding tokens entirely, providing a meaningful speedup on batches with variable-length sequences (no compute wasted on padding). E1 uses a block-causal variant of this mask.
+PyTorch's [`flex_attention`](https://pytorch.org/docs/stable/nn.attention.flex_attention.html) (PyTorch >= 2.11 in FastPLMs Docker images) generates a fused Triton kernel customized to the mask pattern at hand. It is numerically very close to SDPA, typically within floating-point rounding of naive computation. The primary advantage is that it can apply a **block mask** that skips padding tokens entirely, providing a meaningful speedup on batches with variable-length sequences (no compute wasted on padding). E1 uses a block-causal variant of this mask.
 
 The **first forward pass** triggers JIT compilation via Triton, which can take 30–120 seconds. All subsequent calls are fast. Combining with `torch.compile` yields the best sustained throughput.
 

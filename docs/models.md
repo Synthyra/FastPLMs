@@ -2,7 +2,7 @@
 
 This document covers each model family supported by FastPLMs: loading, configuration, special handling, and available checkpoints.
 
-Most sequence models (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) share the same embedding pipeline via `EmbeddingMixin`. ESM3 exposes its own compatible `embed_dataset()` method for sequence embeddings. They support most attention backends, with these exceptions: ANKH supports only `sdpa` and `flex`, and ESM3 supports `sdpa` and `flex`. Structure prediction models (Boltz2, ESMFold) have their own APIs.
+Most sequence models (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) share the same embedding pipeline via `EmbeddingMixin`. ESM3 exposes its own compatible `embed_dataset()` method for sequence embeddings. They support most attention backends, with these exceptions: ANKH supports only `sdpa` and `flex`, and ESM3 supports `sdpa` and `flex`. Structure prediction models (Boltz2, ESMFold, ESMFold2, and ESMFold2-Fast) have their own APIs.
 
 ---
 
@@ -243,7 +243,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM-150M", trust_remote_
 ### Key Details
 
 - Uses the ESM tokenizer (same as ESM2)
-- **Mutable `attn_backend` property**: Unlike ESM2/ESM++/E1, DPLM exposes `model.attn_backend` as a property that propagates backend changes to all attention layers in-place
+- Backend can be set on the config before `from_pretrained` or via the mutable `model.attn_backend` property after load.
 - Architecture extends `EsmConfig` and `EsmPreTrainedModel` from HuggingFace
 - Supports cross-attention and KV caching for generation
 - `ModifiedEsmSelfAttention` extends the official `EsmSelfAttention` with multi-backend support
