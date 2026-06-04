@@ -9,7 +9,11 @@ tags:
 
 # FastPLMs ESMFold2
 
-FastPLMs ESMFold2 is a self-contained Hugging Face `AutoModel` wrapper for Biohub's ESMFold2 and ESMFold2-Fast structure predictors. It vendors the released Biohub ESMFold2 model code, ESMC backbone code, input builder, MSA helpers, and structure export utilities needed for remote-code loading.
+FastPLMs ESMFold2 is a self-contained Hugging Face `AutoModel` wrapper for
+Biohub's ESMFold2, ESMFold2-Fast, and experimental ESMFold2 structure
+predictors. It vendors the released Biohub ESMFold2 model code, ESMC backbone
+code, input builder, MSA helpers, and structure export utilities needed for
+remote-code loading.
 
 ## Load With AutoModel
 
@@ -24,7 +28,9 @@ model = AutoModel.from_pretrained(
 ).eval().cuda()
 ```
 
-Use `Synthyra/ESMFold2` for the full model and `Synthyra/ESMFold2-Fast` for the faster release variant.
+Use `Synthyra/ESMFold2` for the full model, `Synthyra/ESMFold2-Fast` for the
+faster release variant, and the `Synthyra/ESMFold2-Experimental*` checkpoints
+for differentiable binder design and experimental critic ensembles.
 The folding trunk runs in fp32; the 6B ESMC backbone is loaded in bf16 by default via `esmc_precision="bf16"`.
 
 ## Fold One Protein
@@ -79,6 +85,70 @@ result = model.fold(
 
 model.save_as_cif(result, "complex_prediction.cif")
 ```
+
+## Binder Design With FastPLMs ESMFold2
+
+FastPLMs includes a FastPLMs-only port of the Biohub ESMFold2 binder design
+tutorial at `cookbook/tutorials/binder_design_fastplms.py`. The workflow uses
+ESMFold2 experimental checkpoints for differentiable folding losses, ESM++ for
+sequence regularization, and ESMFold2 hero critics for final confidence scoring.
+
+![FastPLMs EGFR minibinder design](https://raw.githubusercontent.com/Synthyra/FastPLMs/main/docs/assets/egfr_fastplms_binder_design.png)
+
+The optimizer follows the official strategy:
+
+1. Optimize mutable `#` residues as continuous amino acid logits.
+2. Suppress cysteine design by masking cysteine logits and gradients.
+3. Backpropagate through ESMFold2 `res_type_soft` using intra-contact,
+   inter-contact, and globularity losses from the distogram.
+4. Add an ESM++ masked-LM pseudoperplexity regularizer on mutable binder
+   residues.
+5. Keep the late-trajectory sequence with the best iPTM.
+6. Fold the selected sequence with the final critic ensemble and write
+   `results.parquet`, `selection.parquet`, `trajectory.jsonl`,
+   `best_sequences.fasta`, and per-critic PDB/CIF/logit files.
+
+Run the verified EGFR 128 amino acid de novo minibinder example:
+
+```bash
+cd /home/ubuntu/FastPLMs
+
+sudo -n docker run --gpus all --rm \
+  -v /home/ubuntu/FastPLMs:/app \
+  -v /home/ubuntu/FastPLMs:/workspace \
+  -v /home/ubuntu/.cache/huggingface:/workspace/.cache/huggingface \
+  -w /workspace fastplms-esmfold2 \
+  python /app/cookbook/tutorials/binder_design_fastplms.py \
+    --backend local \
+    --target-name egfr \
+    --binder-sequence '################################################################################################################################' \
+    --not-antibody \
+    --steps 150 \
+    --batch-size 1 \
+    --seed 103 \
+    --output-dir /workspace/campaign_egfr_len128_b1_s150_seed103_consensus_cli
+```
+
+Verified result:
+
+| Metric | Value |
+| :--- | :--- |
+| Binder length | `128` |
+| Seed | `103` |
+| Steps | `150` |
+| Hero mean iPTM | `0.913870` |
+| Hero min iPTM | `0.904600` |
+| All four hero critics above 0.9 | `True` |
+
+Binder sequence:
+
+```text
+SAVKHLLEIVKYLEEAIEKALEVDPVFLVPPAAEELLIAAKVIKELAKENPELIEVYELLMKAVKGLKKLVRSNDKEILREVIRLLRKAAKVIREILKNNPDLDPELRKALEELAKVLEEIAEVLEQQ
+```
+
+See the full guide in [`docs/binder_design.md`](https://github.com/Synthyra/FastPLMs/blob/main/docs/binder_design.md)
+for Modal execution, official pI and selection scoring, per-critic metrics, and
+the tested cheaper step-count boundary.
 
 ## Use MSAs
 

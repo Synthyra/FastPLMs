@@ -34,6 +34,36 @@ model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_large', confi
 
 `torch.compile(model)` is heavily recommended for sustained throughput, especially with Flex Attention.
 
+## Binder Design Regularizer
+
+The FastPLMs binder design tutorial uses the ESM++ model family as the
+masked-LM pseudoperplexity regularizer while FastPLMs ESMFold2 experimental
+models provide differentiable folding losses and final critics. The verified
+EGFR example defaults to `Synthyra/ESMplusplus_6B`; this 600M checkpoint exposes
+the same `AutoModelForMaskedLM` API and can be used as a lower-memory
+regularizer by editing `FastPLMsBinderDesign.lm_name` in
+`cookbook/tutorials/binder_design_fastplms.py`.
+
+Default verified run:
+
+```bash
+python cookbook/tutorials/binder_design_fastplms.py \
+  --backend local \
+  --target-name egfr \
+  --binder-sequence '################################################################################################################################' \
+  --not-antibody \
+  --steps 150 \
+  --batch-size 1 \
+  --seed 103 \
+  --output-dir binder_design_egfr_len128_seed103
+```
+
+The verified 6B-regularized result had hero mean iPTM `0.913870`, hero min iPTM
+`0.904600`, and all four ESMFold2 hero critics above `0.9`.
+
+See [`docs/binder_design.md`](https://github.com/Synthyra/FastPLMs/blob/main/docs/binder_design.md)
+for the complete workflow, output files, metrics, and Modal/local compute
+options.
 
 ## Use with Hugging Face Transformers
 ```python

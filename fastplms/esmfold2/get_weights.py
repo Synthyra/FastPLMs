@@ -15,15 +15,28 @@ from huggingface_hub import HfApi, login
 
 from fastplms.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
+from fastplms.esmfold2.modeling_esmfold2_experimental import ESMFold2ExperimentalModel
 
 SOURCE_REPOS = {
     "Synthyra/ESMFold2": "biohub/ESMFold2",
     "Synthyra/ESMFold2-Fast": "biohub/ESMFold2-Fast",
+    "Synthyra/ESMFold2-Experimental-Fast": "biohub/ESMFold2-Experimental-Fast",
+    "Synthyra/ESMFold2-Experimental-Fast-Cutoff2025": "biohub/ESMFold2-Experimental-Fast-Cutoff2025",
+    "Synthyra/ESMFold2-Experimental": "biohub/ESMFold2-Experimental",
+    "Synthyra/ESMFold2-Experimental-Cutoff2025": "biohub/ESMFold2-Experimental-Cutoff2025",
 }
+for _size in ("300M", "600M", "6B"):
+    for _step in ("250", "500", "750", "1000", "1500"):
+        _name = f"ESMFold2-Experimental-Fast-base{_size}-step{_step}k"
+        SOURCE_REPOS[f"Synthyra/{_name}"] = f"biohub/{_name}"
 SHARD_SIZE = "5GB"
-AUTO_MAP = {
+RELEASE_AUTO_MAP = {
     "AutoConfig": "configuration_esmfold2.ESMFold2Config",
     "AutoModel": "modeling_esmfold2.ESMFold2Model",
+}
+EXPERIMENTAL_AUTO_MAP = {
+    "AutoConfig": "configuration_esmfold2.ESMFold2Config",
+    "AutoModel": "modeling_esmfold2_experimental.ESMFold2ExperimentalModel",
 }
 IGNORE_PATTERNS = [
     "__pycache__/*",
@@ -34,8 +47,12 @@ IGNORE_PATTERNS = [
 
 def _prepare_config(source_repo: str) -> ESMFold2Config:
     config = ESMFold2Config.from_pretrained(source_repo)
-    config.auto_map = AUTO_MAP
-    config.architectures = ["ESMFold2Model"]
+    if config.type == "experimental":
+        config.auto_map = EXPERIMENTAL_AUTO_MAP
+        config.architectures = ["ESMFold2ExperimentalModel"]
+    else:
+        config.auto_map = RELEASE_AUTO_MAP
+        config.architectures = ["ESMFold2Model"]
     return config
 
 
@@ -78,8 +95,13 @@ def convert_and_push(
             print(f"[skip-weights] uploaded config/code for {target_repo}")
             continue
 
+        model_cls = (
+            ESMFold2ExperimentalModel
+            if config.type == "experimental"
+            else ESMFold2Model
+        )
         print(f"Loading {source_repo} with FastPLMs ESMFold2 code...")
-        model = ESMFold2Model.from_pretrained(
+        model = model_cls.from_pretrained(
             source_repo,
             config=config,
             load_esmc=False,

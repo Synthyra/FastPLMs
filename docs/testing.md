@@ -22,6 +22,7 @@ A shared base image plus one image per model family. Each family image installs 
 | `fastplms-dplm` | uses `transformers.EsmForMaskedLM` (DPLM's native package conflicts with our torchtext pin) |
 | `fastplms-dplm2` | none beyond base |
 | `fastplms-ankh` | uses `transformers.T5EncoderModel` |
+| `fastplms-esmfold2` | Biohub `transformers` fork, ESMFold2 runtime deps, and structure export deps |
 
 Build:
 
@@ -103,6 +104,29 @@ docker run --gpus all --ipc=host -v ${PWD}:/workspace -it fastplms bash
 
 On Windows, replace `${PWD}` with `$(pwd)`.
 
+### Binder design workflow tests
+
+The FastPLMs binder design tutorial is tested in the ESMFold2 family image
+because it combines FastPLMs ESMFold2 experimental folding with the ESM++
+masked-LM regularizer.
+
+```bash
+# Unit tests for prompt reproducibility, input validation, pI filtering,
+# official-style selection scoring, and differentiable LM regularization.
+docker run --rm -v /home/ubuntu/FastPLMs:/app -w /app fastplms-esmfold2 \
+  python -m pytest /app/testing/test_binder_design_fastplms.py -m "not gpu" -v
+
+# CUDA dry run that writes trajectory, FASTA, results, selection, and structures
+# with fake folding functions so it is fast but still checks artifact plumbing.
+docker run --gpus all --rm -v /home/ubuntu/FastPLMs:/app -w /app fastplms-esmfold2 \
+  python -m pytest /app/testing/test_binder_design_fastplms.py \
+    -k tiny_design_dry_run_writes_outputs -v
+```
+
+The verified EGFR example in [Binder Design Example](binder_design.md) used this
+focused test set: `11 passed, 2 deselected` for the non-GPU tests and `1 passed,
+12 deselected` for the CUDA dry run.
+
 ## Pytest Markers
 
 | Marker | Description | VRAM |
@@ -134,6 +158,7 @@ python -m pytest /workspace/testing/ -k esm2 -v
 | `test_backend_consistency.py` | SDPA, Flex, Flash backends produce equivalent predictions (>= 95% agreement) | `gpu` |
 | `test_compliance.py` | Original (looser, bf16-only) weight/forward compliance against official implementations. Kept as a smoke layer; `test_parity.py` is the source of truth. | `slow`, `gpu` |
 | `test_embedding_mixin.py` | NaN stability, batch-vs-single match, FASTA parsing, DPLM2 utilities | `gpu` |
+| `test_binder_design_fastplms.py` | FastPLMs-only binder prompt reproducibility, input validation, ESM++ pseudoperplexity gradient, official selection metrics, pI filtering, and dry-run artifact writing | `gpu` for the dry run |
 | `test_throughput.py` | Throughput benchmark across models/backends/batch sizes; saves JSON/CSV/PNG | `slow`, `gpu` |
 | `test_structure_models.py` | Boltz2 and ESMFold loading + forward pass | `structure`, `slow`, `gpu` |
 

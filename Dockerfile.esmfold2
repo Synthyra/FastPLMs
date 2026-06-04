@@ -6,6 +6,7 @@
 FROM fastplms-base
 
 RUN pip install \
+        abnumber \
         attrs==26.1.0 \
         biopython==1.87 \
         biotite==1.6.0 \

@@ -88,6 +88,17 @@ with torch.inference_mode():
 | ESM++ Large (600M) | `Synthyra/ESMplusplus_large` | `biohub/ESMC-600M` |
 | ESM++ 6B | `Synthyra/ESMplusplus_6B` | `biohub/ESMC-6B` |
 
+### Binder Design Role
+
+The FastPLMs binder design tutorial uses ESM++ as the masked-LM
+pseudoperplexity regularizer on mutable binder residues. The verified EGFR run
+uses `Synthyra/ESMplusplus_6B` by default, paired with FastPLMs ESMFold2
+experimental checkpoints for differentiable folding and final criticism.
+
+See [Binder Design Example](binder_design.md) for the full local and Modal
+workflow, official selection metrics, and the verified EGFR 128 amino acid
+minibinder result.
+
 ---
 
 ## ESM3
@@ -379,6 +390,82 @@ print(output.plddt.shape)               # (N_residues,)
 ### Compliance Testing
 
 Boltz2 compliance is tested via a standalone script (`testing/run_boltz2_compliance.py`) that compares coordinates, pairwise distances, and TM-scores against the official implementation.
+
+---
+
+## ESMFold2
+
+**Organization:** Biohub
+**Architecture:** ESMC-backed diffusion structure predictor
+**Checkpoints:** Full, Fast, Experimental, Experimental-Fast, Cutoff2025 variants
+
+### Loading
+
+```python
+import torch
+from transformers import AutoModel
+
+model = AutoModel.from_pretrained(
+    "Synthyra/ESMFold2-Fast",
+    trust_remote_code=True,
+    dtype=torch.float32,
+).eval().cuda()
+```
+
+### Key Details
+
+- Uses `AutoModel`, not `AutoModelForMaskedLM`.
+- Can fold single chains and multi-chain complexes.
+- Exposes `fold_protein()`, `fold()`, `prepare_structure_input()`,
+  `result_to_cif()`, and `result_to_pdb()`.
+- Experimental checkpoints support `res_type_soft` for differentiable binder
+  sequence optimization.
+- Final scoring can report pTM, iPTM, pLDDT, structures, and distogram logits.
+- `set_kernel_backend()`, `set_chunk_size()`, and `apply_torch_compile()` are
+  available on the ESMFold2 wrappers.
+
+### Available Checkpoints
+
+| Checkpoint | HuggingFace ID | Use |
+|------------|----------------|-----|
+| ESMFold2 | `Synthyra/ESMFold2` | Full released structure predictor |
+| ESMFold2-Fast | `Synthyra/ESMFold2-Fast` | Faster released structure predictor |
+| ESMFold2-Experimental-Fast | `Synthyra/ESMFold2-Experimental-Fast` | Binder inversion and hero critic |
+| ESMFold2-Experimental-Fast-Cutoff2025 | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` | Binder inversion and hero critic |
+| ESMFold2-Experimental | `Synthyra/ESMFold2-Experimental` | Final hero critic |
+| ESMFold2-Experimental-Cutoff2025 | `Synthyra/ESMFold2-Experimental-Cutoff2025` | Final hero critic |
+
+### Binder Design Example
+
+The FastPLMs binder workflow lives at
+`cookbook/tutorials/binder_design_fastplms.py` and supports local CUDA or Modal
+execution. The optimizer follows the official ESM strategy: continuous amino acid
+logits, cysteine suppression, ESMFold2 distogram structure losses, ESM++
+pseudoperplexity, late-trajectory iPTM selection, and final critic ranking.
+
+```bash
+python cookbook/tutorials/binder_design_fastplms.py \
+  --backend local \
+  --target-name egfr \
+  --binder-sequence '################################################################################################################################' \
+  --not-antibody \
+  --steps 150 \
+  --batch-size 1 \
+  --seed 103 \
+  --output-dir binder_design_egfr_len128_seed103
+```
+
+The verified EGFR result had hero mean iPTM `0.913870`, hero min iPTM
+`0.904600`, and all four hero critics above `0.9`.
+
+Binder sequence:
+
+```text
+SAVKHLLEIVKYLEEAIEKALEVDPVFLVPPAAEELLIAAKVIKELAKENPELIEVYELLMKAVKGLKKLVRSNDKEILREVIRLLRKAAKVIREILKNNPDLDPELRKALEELAKVLEEIAEVLEQQ
+```
+
+See [Binder Design Example](binder_design.md) for output files, per-critic
+metrics, pI filtering, optional scaling critics, and caveats.
 
 ---
 

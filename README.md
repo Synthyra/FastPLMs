@@ -26,6 +26,7 @@ Detailed documentation is available in the [`docs/`](docs/) folder:
 - [Per-Model Guides](docs/models.md) - Loading, configuration, and special handling for each model family
 - [Attention Backends](docs/attention_backends.md) - SDPA, Flash, Flex, Auto: how they work, when to use each, numerical properties
 - [Embedding & Pooling API](docs/embedding_api.md) - Pooler strategies, `embed_dataset()` parameters, SQLite/pth storage
+- [Binder Design Example](docs/binder_design.md) - FastPLMs-only ESMFold2 plus ESM++ binder optimization, CLI, metrics, and EGFR result
 - [Fine-Tuning Guide](docs/finetuning.md) - LoRA, Trainer patterns, dataset classes, metrics
 - [Testing & Benchmarking](docs/testing.md) - Docker commands, pytest markers, compliance architecture, throughput benchmarks
 - [Contributing](docs/contributing.md) - Code style, adding new models, required tests
@@ -60,7 +61,7 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
 | **ESM++** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Optimized SDPA / Flex | Small (300M), Large (600M), 6B |
 | **ESM3** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | HF AutoModel wrapper | Open Small |
-| **ESMFold2** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Self-contained HF AutoModel wrapper | Full, Fast |
+| **ESMFold2** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Self-contained HF AutoModel wrapper | Full, Fast, Experimental, Cutoff2025 |
 | **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
 | **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
 | **ANKH** | Elnaggar Lab | [ElnaggarLab/ankh](https://huggingface.co/ElnaggarLab/ankh-base) | T5 RPE via Flex score_mod | Base, Large, ANKH2-L, ANKH3-L, ANKH3-XL |
@@ -82,6 +83,10 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | `esm3_small` | ESM3 | 1.4B | Biohub | [Synthyra/ESM3_small](https://huggingface.co/Synthyra/ESM3_small) | [biohub/esm3-sm-open-v1](https://huggingface.co/biohub/esm3-sm-open-v1) |
 | `esmfold2` | ESMFold2 | 234.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2](https://huggingface.co/Synthyra/ESMFold2) | [biohub/ESMFold2](https://huggingface.co/biohub/ESMFold2) |
 | `esmfold2_fast` | ESMFold2 | 188.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Fast](https://huggingface.co/Synthyra/ESMFold2-Fast) | [biohub/ESMFold2-Fast](https://huggingface.co/biohub/ESMFold2-Fast) |
+| `esmfold2_experimental_fast` | ESMFold2 | 188.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Experimental-Fast](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast) | [biohub/ESMFold2-Experimental-Fast](https://huggingface.co/biohub/ESMFold2-Experimental-Fast) |
+| `esmfold2_experimental_fast_cutoff2025` | ESMFold2 | 188.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast-Cutoff2025) | [biohub/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Fast-Cutoff2025) |
+| `esmfold2_experimental` | ESMFold2 | 234.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Experimental](https://huggingface.co/Synthyra/ESMFold2-Experimental) | [biohub/ESMFold2-Experimental](https://huggingface.co/biohub/ESMFold2-Experimental) |
+| `esmfold2_experimental_cutoff2025` | ESMFold2 | 234.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Cutoff2025) | [biohub/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Cutoff2025) |
 | `e1_150m` | E1 | 154.4M | Profluent Bio | [Synthyra/Profluent-E1-150M](https://huggingface.co/Synthyra/Profluent-E1-150M) | [Profluent-Bio/E1-150m](https://huggingface.co/Profluent-Bio/E1-150m) |
 | `e1_300m` | E1 | 274.3M | Profluent Bio | [Synthyra/Profluent-E1-300M](https://huggingface.co/Synthyra/Profluent-E1-300M) | [Profluent-Bio/E1-300m](https://huggingface.co/Profluent-Bio/E1-300m) |
 | `e1_600m` | E1 | 641.4M | Profluent Bio | [Synthyra/Profluent-E1-600M](https://huggingface.co/Synthyra/Profluent-E1-600M) | [Profluent-Bio/E1-600m](https://huggingface.co/Profluent-Bio/E1-600m) |
@@ -270,6 +275,50 @@ embeddings = model.embed_dataset(
 # Resulting vector size: 4 * hidden_size
 print(embeddings[sequences[0]].shape)
 ```
+
+### 5. FastPLMs Binder Design With ESMFold2 And ESM++
+FastPLMs includes a binder design workflow that mirrors the Biohub ESMFold2
+tutorial while using only FastPLMs model repos. ESMFold2 experimental checkpoints
+provide differentiable folding losses and final critics, while ESM++ provides the
+masked-LM pseudoperplexity regularizer.
+
+![FastPLMs EGFR minibinder design](docs/assets/egfr_fastplms_binder_design.png)
+
+Run the verified EGFR 128 amino acid de novo minibinder example on a CUDA
+workstation with the ESMFold2 Docker image:
+
+```bash
+cd /home/ubuntu/FastPLMs
+
+sudo -n docker run --gpus all --rm \
+  -v /home/ubuntu/FastPLMs:/app \
+  -v /home/ubuntu/FastPLMs:/workspace \
+  -v /home/ubuntu/.cache/huggingface:/workspace/.cache/huggingface \
+  -w /workspace fastplms-esmfold2 \
+  python /app/cookbook/tutorials/binder_design_fastplms.py \
+    --backend local \
+    --target-name egfr \
+    --binder-sequence '################################################################################################################################' \
+    --not-antibody \
+    --steps 150 \
+    --batch-size 1 \
+    --seed 103 \
+    --output-dir /workspace/campaign_egfr_len128_b1_s150_seed103_consensus_cli
+```
+
+The run writes `trajectory.jsonl`, `best_sequences.fasta`, `results.parquet`,
+`selection.parquet`, and per-critic PDB/CIF/logit files. The verified result had
+hero mean iPTM `0.913870`, hero min iPTM `0.904600`, and all four hero
+ESMFold2 critics above `0.9`.
+
+Binder sequence:
+
+```text
+SAVKHLLEIVKYLEEAIEKALEVDPVFLVPPAAEELLIAAKVIKELAKENPELIEVYELLMKAVKGLKKLVRSNDKEILREVIRLLRKAAKVIREILKNNPDLDPELRKALEELAKVLEEIAEVLEQQ
+```
+
+See [docs/binder_design.md](docs/binder_design.md) for the full strategy,
+official selection rule, Modal backend, per-critic metrics, and caveats.
 
 ---
 

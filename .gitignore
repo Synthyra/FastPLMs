@@ -1,6 +1,7 @@
 
 *.pyc
 *.png
+!docs/assets/*.png
 *.pth
 *.pt
 *.safetensors

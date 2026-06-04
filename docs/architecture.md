@@ -27,6 +27,10 @@ FastPLMs/
     dplm/                    # Official DPLM
     esm/                     # Official Biohub ESM (sys.path-injected, not pip-installed)
   entrypoint_setup.py        # PyTorch runtime config
+  cookbook/                  # FastPLMs examples and tutorials
+    tutorials/
+      binder_design_fastplms.py
+      binder_design_fastplms.ipynb
   testing/                   # Test suite + benchmarks
     official/                # Official model loaders for compliance / parity
     test_parity.py           # Rigorous per-family parity suite
@@ -88,6 +92,22 @@ The mixin supports two modes:
 2. **Sequence mode** (E1): The caller passes `tokenizer=None`; `_embed(sequences, return_attention_mask=True)` is called, which returns `(embeddings, mask)`
 
 See [Embedding & Pooling API](embedding_api.md) for full details.
+
+## Cross-Model Workflows
+
+FastPLMs also includes cookbook workflows that combine multiple model families.
+The binder design tutorial is the main example:
+
+- ESMFold2 experimental models provide differentiable structure losses through
+  `res_type_soft`.
+- ESM++ provides the masked-LM pseudoperplexity regularizer.
+- ESMFold2 hero critics provide final pTM, iPTM, pLDDT, PDB/CIF structures, and
+  selection metrics.
+
+The workflow supports local CUDA Docker runs and Modal execution through
+[`cookbook/tutorials/binder_design_fastplms.py`](../cookbook/tutorials/binder_design_fastplms.py).
+See [Binder Design Example](binder_design.md) for the EGFR 128 amino acid
+minibinder result, CLI, artifacts, and scoring details.
 
 ## Attention Backend System
 

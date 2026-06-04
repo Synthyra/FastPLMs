@@ -75,6 +75,50 @@ print(output.last_hidden_state.shape)
 
 Pass `output_hidden_states=True` if you need all intermediate hidden states.
 
+## Binder Design Regularizer
+
+The FastPLMs binder design tutorial uses `Synthyra/ESMplusplus_6B` as the
+ESMC-style masked-LM regularizer while FastPLMs ESMFold2 experimental models
+provide differentiable folding losses and final critics. The script lives at
+`cookbook/tutorials/binder_design_fastplms.py` and supports local CUDA Docker
+runs plus Modal deployment.
+
+Run the verified EGFR 128 amino acid de novo minibinder example:
+
+```bash
+cd /home/ubuntu/FastPLMs
+
+sudo -n docker run --gpus all --rm \
+  -v /home/ubuntu/FastPLMs:/app \
+  -v /home/ubuntu/FastPLMs:/workspace \
+  -v /home/ubuntu/.cache/huggingface:/workspace/.cache/huggingface \
+  -w /workspace fastplms-esmfold2 \
+  python /app/cookbook/tutorials/binder_design_fastplms.py \
+    --backend local \
+    --target-name egfr \
+    --binder-sequence '################################################################################################################################' \
+    --not-antibody \
+    --steps 150 \
+    --batch-size 1 \
+    --seed 103 \
+    --output-dir /workspace/campaign_egfr_len128_b1_s150_seed103_consensus_cli
+```
+
+The run writes `trajectory.jsonl`, `best_sequences.fasta`, `results.parquet`,
+`selection.parquet`, and per-critic PDB/CIF/logit files. The verified candidate
+had hero mean iPTM `0.913870`, hero min iPTM `0.904600`, and all four ESMFold2
+hero critics above `0.9`.
+
+Binder sequence:
+
+```text
+SAVKHLLEIVKYLEEAIEKALEVDPVFLVPPAAEELLIAAKVIKELAKENPELIEVYELLMKAVKGLKKLVRSNDKEILREVIRLLRKAAKVIREILKNNPDLDPELRKALEELAKVLEEIAEVLEQQ
+```
+
+See [`docs/binder_design.md`](https://github.com/Synthyra/FastPLMs/blob/main/docs/binder_design.md)
+for the full strategy, Modal backend, official pI and selection scoring,
+per-critic metrics, and caveats.
+
 ## Embed Datasets
 
 All FastPLMs sequence models include `embed_dataset`, which handles batching, length sorting, pooling, FASTA parsing, optional resume from existing outputs, and `.pth` or SQLite storage.
