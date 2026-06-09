@@ -52,6 +52,7 @@ try:
         Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
         select_hidden_state_embeddings,
     )
+    from fastplms.test_time_training import FastPLMTestTimeTrainingMixin
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -685,7 +686,7 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
         )
 
 
-class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
+class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, EmbeddingMixin):
     config_class = DPLM2Config
     def __init__(self, config, dropout: float = 0.1, vocab_size: Optional[int] = None):
         config.hidden_dropout_prob = dropout
@@ -701,6 +702,7 @@ class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
         self.tokenizer = self.__class__.tokenizer
         if isinstance(config._name_or_path, str) and len(config._name_or_path) > 0:
             self.tokenizer = EsmTokenizer.from_pretrained(config._name_or_path)
+        self.init_ttt({"lora_target_replace_module": "ModifiedEsmAttention"})
 
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
@@ -739,6 +741,9 @@ class DPLM2ForMaskedLM(DPLM2PreTrainedModel, EmbeddingMixin):
             hidden_state_index=hidden_state_index,
             store_all_hidden_states=store_all_hidden_states,
         )
+
+    def _ttt_get_trainable_modules(self) -> list[nn.Module]:
+        return [self.esm]
 
     def forward(
         self,

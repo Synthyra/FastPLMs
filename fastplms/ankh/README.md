@@ -41,6 +41,31 @@ outputs = model(**inputs)
 embeddings = outputs.last_hidden_state  # (batch, seq_len, hidden_dim)
 ```
 
+## Experimental Test-Time Training
+
+TTT is disabled by default. Normal ANKH inference, embeddings, and
+`state_dict()` keys are unchanged unless you explicitly call `model.ttt(...)`.
+The current implementation is experimental and trains only local LoRA adapters
+with masked language modeling on the test protein. ANKH's FastPLMs MaskedLM
+head is encoder-only and not pretrained for standard MLM, so treat TTT results
+with extra caution.
+
+```python
+from transformers import AutoModelForMaskedLM
+
+mlm = AutoModelForMaskedLM.from_pretrained(
+    "Synthyra/ANKH_base",
+    trust_remote_code=True,
+).cuda().eval()
+
+metrics = mlm.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 3, "ags": 1, "batch_size": 1},
+)
+mlm.ttt_reset()
+print(metrics["losses"])
+```
+
 ## Batch Embedding
 
 ```python

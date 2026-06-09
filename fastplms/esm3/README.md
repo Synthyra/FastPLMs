@@ -44,6 +44,23 @@ You can also call sequence inference directly:
 output = model.forward_sequence(["MKTAYIAKQRQISFVKSHFSRQDILDLWIYHTQGYFP"])
 ```
 
+## Experimental Test-Time Training
+
+TTT is disabled by default. No LoRA adapters are injected during normal
+`forward_sequence`, `forward`, or `embed_dataset` calls. Calling `model.ttt(...)`
+opts in to experimental masked-LM adaptation of the ESM3 sequence track through
+local LoRA weights. It can improve some difficult proteins, but it adds
+test-time compute and can degrade already confident predictions.
+
+```python
+metrics = model.ttt(
+    seq="MKTAYIAKQRQISFVKSHFSRQDILDLWIYHTQGYFP",
+    ttt_config={"steps": 3, "ags": 1, "batch_size": 1},
+)
+model.ttt_reset()
+print(metrics["losses"])
+```
+
 Switch between SDPA and Flex Attention after loading:
 
 ```python

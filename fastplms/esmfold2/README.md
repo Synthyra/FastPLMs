@@ -50,6 +50,44 @@ print(float(result.plddt.mean()))
 print(float(result.ptm))
 ```
 
+## Experimental Test-Time Training
+
+TTT is disabled by default. Standard `fold_protein(...)`, `fold(...)`, raw tensor
+inference, and `state_dict()` keys are unchanged unless you explicitly pass
+`ttt=True` or call `fold_protein_ttt(...)`.
+
+The ESMFold2 TTT path is experimental and protein-only in v1. It trains local
+LoRA adapters only on `_esmc` with a masked language modeling objective. The
+folding trunk, confidence head, diffusion head, and structure input pipeline are
+frozen. TTT can improve difficult low-confidence folds, but it adds substantial
+test-time compute and can degrade already confident predictions.
+
+```python
+result = model.fold_protein(
+    "MSTNPKPQRKTKRNT",
+    num_loops=1,
+    num_sampling_steps=10,
+    num_diffusion_samples=1,
+    seed=0,
+    ttt=True,
+    ttt_config={
+        "steps": 1,
+        "ags": 1,
+        "batch_size": 1,
+        "lora_rank": 8,
+        "lora_alpha": 32.0,
+    },
+)
+
+print(result.ttt_metrics["losses"])
+print(result.ttt_metrics["step_plddts"])
+print(result.ttt_metrics["best_step"])
+```
+
+`load_esmc=True` is required for TTT because the ESMC MLM head is loaded lazily
+from `config.esmc_id`. If that pretrained MLM head cannot be loaded, TTT raises
+an assertion instead of silently using a random head.
+
 ## Save mmCIF or PDB
 
 ```python

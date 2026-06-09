@@ -87,6 +87,7 @@ The export directory contains:
 ## Limitations
 - Current featurization path is protein-only and minimal.
 - This implementation is meant for practical inference and export workflows, not full Boltz training parity.
+- Test-time training is not supported for Boltz2 in FastPLMs. TTT is currently limited to sequence PLMs plus ESMFold and ESMFold2 PLM backbones.
 
 ## Docker-first compliance testing
 

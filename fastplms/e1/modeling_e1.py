@@ -43,6 +43,7 @@ try:
         Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
         select_hidden_state_embeddings,
     )
+    from fastplms.test_time_training import FastPLMTestTimeTrainingMixin
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -2773,7 +2774,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
         )
 
 
-class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
+class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMixin):
     config: E1Config
     config_class = E1Config
     def __init__(self, config: E1Config, **kwargs):
@@ -2789,6 +2790,7 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
         self.gradient_checkpointing = config.gradient_checkpointing
         self.prep_tokens = self.model.prep_tokens
         self.post_init()
+        self.init_ttt({"lora_target_replace_module": "Attention"})
 
     @property
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
@@ -2796,6 +2798,61 @@ class E1ForMaskedLM(E1PreTrainedModel, EmbeddingMixin):
 
     def _embed(self, sequences: List[str], return_attention_mask: bool = False, **kwargs) -> torch.Tensor:
         return self.model._embed(sequences, return_attention_mask=return_attention_mask, **kwargs)
+
+    def _ttt_get_trainable_modules(self) -> list[nn.Module]:
+        return [self.model]
+
+    def _ttt_tokenize(
+        self,
+        seq: str | list[str] | None = None,
+        input_ids: torch.Tensor | None = None,
+        **kwargs,
+    ) -> dict[str, torch.Tensor]:
+        if input_ids is not None:
+            return {
+                "input_ids": input_ids,
+                "within_seq_position_ids": kwargs["within_seq_position_ids"],
+                "global_position_ids": kwargs["global_position_ids"],
+                "sequence_ids": kwargs["sequence_ids"],
+            }
+        assert seq is not None, "Pass either seq or E1 token tensors for TTT."
+        sequences = [seq] if isinstance(seq, str) else seq
+        batch = self.prep_tokens.get_batch_kwargs(sequences, device=torch.device("cpu"))
+        return {
+            "input_ids": batch["input_ids"],
+            "within_seq_position_ids": batch["within_seq_position_ids"],
+            "global_position_ids": batch["global_position_ids"],
+            "sequence_ids": batch["sequence_ids"],
+        }
+
+    def _ttt_mask_token(self) -> int:
+        return int(self.prep_tokens.mask_token_id)
+
+    def _ttt_padding_token(self) -> int:
+        return int(self.prep_tokens.pad_token_id)
+
+    def _ttt_replacement_tokens(self, input_ids: torch.Tensor) -> torch.Tensor:
+        amino_acids = "ACDEFGHIKLMNPQRSTVWY"
+        ids = [self.prep_tokens.vocab[aa] for aa in amino_acids]
+        return torch.tensor(ids, device=input_ids.device, dtype=input_ids.dtype)
+
+    def _ttt_non_special_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return ~self.prep_tokens.get_boundary_token_mask(input_ids)
+
+    def _ttt_predict_logits(
+        self,
+        batch: torch.Tensor | dict[str, torch.Tensor],
+        **kwargs,
+    ) -> torch.Tensor:
+        del kwargs
+        assert isinstance(batch, dict), "E1 TTT expects a tensor dictionary."
+        output = self(
+            input_ids=batch["input_ids"],
+            within_seq_position_ids=batch["within_seq_position_ids"],
+            global_position_ids=batch["global_position_ids"],
+            sequence_ids=batch["sequence_ids"],
+        )
+        return output.logits
 
     def search_homologues(
         self,

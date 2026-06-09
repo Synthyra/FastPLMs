@@ -12,9 +12,10 @@ FastPLMs is an open-source initiative dedicated to making protein language model
 3. [Supported Models](#supported-models)
 4. [Attention Backends](#attention-backends)
 5. [Embedding & Pooling](#embedding--pooling)
-6. [Concrete Examples](#concrete-examples)
-7. [Testing & Benchmarking](#testing--benchmarking)
-8. [Installation & Docker](#installation--docker)
+6. [Experimental Test-Time Training](#experimental-test-time-training)
+7. [Concrete Examples](#concrete-examples)
+8. [Testing & Benchmarking](#testing--benchmarking)
+9. [Installation & Docker](#installation--docker)
 
 ---
 
@@ -61,11 +62,11 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
 | **ESM++** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Optimized SDPA / Flex | Small (300M), Large (600M), 6B |
 | **ESM3** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | HF AutoModel wrapper | Open Small |
-| **ESMFold2** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Self-contained HF AutoModel wrapper | Full, Fast, Experimental, Cutoff2025 |
+| **ESMFold2** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Self-contained HF AutoModel wrapper, opt-in experimental TTT | Full, Fast, Experimental, Cutoff2025 |
 | **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
 | **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
 | **ANKH** | Elnaggar Lab | [ElnaggarLab/ankh](https://huggingface.co/ElnaggarLab/ankh-base) | T5 RPE via Flex score_mod | Base, Large, ANKH2-L, ANKH3-L, ANKH3-XL |
-| **ESMFold** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | ProteinTTT + Fast ESM2 backbone | Standard |
+| **ESMFold** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Fast ESM2 backbone, opt-in experimental ProteinTTT | Standard |
 | **Boltz2** | MIT / Various | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) | Optimized Structure Prediction | Standard |
 
 ### Full Model List
@@ -103,6 +104,75 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | `ankh3_xl` | ANKH | 3.49B | Elnaggar Lab | [Synthyra/ANKH3_xl](https://huggingface.co/Synthyra/ANKH3_xl) | [ElnaggarLab/ankh3-xl](https://huggingface.co/ElnaggarLab/ankh3-xl) |
 | `esmfold` | ESMFold | 3.53B | Meta AI | [Synthyra/FastESMFold](https://huggingface.co/Synthyra/FastESMFold) | [facebookresearch/esm](https://github.com/facebookresearch/esm) |
 | `boltz2` | Boltz2 | 506.3M | MIT / Various | [Synthyra/Boltz2](https://huggingface.co/Synthyra/Boltz2) | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) |
+
+---
+
+## Experimental Test-Time Training
+
+FastPLMs includes experimental ProteinTTT-style test-time training utilities for
+sequence PLMs and the PLM backbones used by ESMFold and ESMFold2. TTT is
+disabled by default. Normal `from_pretrained`, `forward`, `embed_dataset`,
+`fold_protein`, and `state_dict()` behavior is unchanged unless you explicitly
+call `ttt()`, `fold_protein(..., ttt=True)`, or `fold_protein_ttt()`.
+
+TTT briefly adapts a model to one input protein using masked language modeling
+and local LoRA adapters. It can improve predictions for difficult or
+low-confidence proteins, especially structure predictions with weak baseline
+pLDDT, but it is not guaranteed to help. It adds GPU memory use and runtime,
+can degrade already confident predictions, and should be treated as an
+experimental test-time compute option.
+
+Supported opt-in paths:
+
+| Model family | TTT API | Notes |
+| :--- | :--- | :--- |
+| ESM2, ESM++, ESM3, E1, DPLM, DPLM2, ANKH | `model.ttt(seq=...)` | MLM LoRA adaptation of the PLM backbone only |
+| FastESMFold | `model.fold_protein(sequence, ttt=True)` or `model.fold_protein_ttt(sequence)` | Returns the best pLDDT fold across baseline and TTT steps |
+| ESMFold2 | `model.fold_protein(sequence, ttt=True, ttt_config=...)` or `model.fold_protein_ttt(sequence)` | Protein-only v1 path, trains LoRA only on `_esmc` |
+| Boltz2 | Not supported | Boltz2 remains inference-only in FastPLMs |
+
+Sequence PLM example:
+
+```python
+from transformers import AutoModelForMaskedLM
+
+model = AutoModelForMaskedLM.from_pretrained(
+    "Synthyra/ESM2-8M",
+    trust_remote_code=True,
+).cuda().eval()
+
+# No adapters are injected until this call.
+metrics = model.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 3, "ags": 1, "batch_size": 1},
+)
+model.ttt_reset()
+```
+
+ESMFold2 example:
+
+```python
+from transformers import AutoModel
+
+model = AutoModel.from_pretrained(
+    "Synthyra/ESMFold2-Fast",
+    trust_remote_code=True,
+    load_esmc=True,
+).cuda().eval()
+
+result = model.fold_protein(
+    "MSTNPKPQRKTKRNT",
+    num_loops=1,
+    num_sampling_steps=10,
+    ttt=True,
+    ttt_config={"steps": 1, "ags": 1, "batch_size": 1},
+)
+print(result.ttt_metrics)
+```
+
+If you use the TTT functionality, cite ProteinTTT in addition to FastPLMs and
+the underlying model papers. The ProteinTTT citation is listed in
+[Citations](#esmfold--proteinttt).
 
 ---
 

@@ -52,6 +52,7 @@ try:
         Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
         select_hidden_state_embeddings,
     )
+    from fastplms.test_time_training import FastPLMTestTimeTrainingMixin
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -735,7 +736,7 @@ class DPLMModel(DPLMPreTrainedModel, EmbeddingMixin):
         )
 
 
-class DPLMForMaskedLM(DPLMPreTrainedModel, EmbeddingMixin):
+class DPLMForMaskedLM(FastPLMTestTimeTrainingMixin, DPLMPreTrainedModel, EmbeddingMixin):
     config_class = DPLMConfig
 
     def __init__(self, config, dropout: float = 0.1):
@@ -759,6 +760,7 @@ class DPLMForMaskedLM(DPLMPreTrainedModel, EmbeddingMixin):
         self.eos_id = self.tokenizer.eos_token_id
         self.x_id = self.tokenizer.convert_tokens_to_ids("X")
         self.contact_head = None
+        self.init_ttt({"lora_target_replace_module": "ModifiedEsmAttention"})
 
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
@@ -785,6 +787,9 @@ class DPLMForMaskedLM(DPLMPreTrainedModel, EmbeddingMixin):
 
     def predict_contacts(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         return self.esm.predict_contacts(input_ids, attention_mask=attention_mask)
+
+    def _ttt_get_trainable_modules(self) -> list[nn.Module]:
+        return [self.esm]
 
     def forward(
         self,

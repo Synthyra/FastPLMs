@@ -36,6 +36,24 @@ with torch.no_grad():
     logits = mlm(**batch).logits
 ```
 
+## Experimental test-time training
+
+TTT is disabled by default. Normal DPLM2 inference, embeddings, logits, and
+`state_dict()` keys are unchanged unless you explicitly call `model.ttt(...)`.
+The current implementation is experimental and trains only local LoRA adapters
+on the PLM backbone with masked language modeling on the test protein. It can
+help some difficult proteins, but it adds test-time compute and can degrade
+already confident predictions.
+
+```python
+metrics = mlm.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 3, "ags": 1, "batch_size": 1},
+)
+mlm.ttt_reset()
+print(metrics["losses"])
+```
+
 ## DPLM2 modality types
 DPLM2 infers `type_ids` automatically from `input_ids` and `attention_mask` when they are not provided.
 

@@ -50,6 +50,24 @@ with torch.no_grad():
 print(logits.shape) # (2, 11, 33)
 ```
 
+### Experimental test-time training
+
+TTT is disabled by default. Normal inference, embeddings, logits, and
+`state_dict()` keys are unchanged unless you explicitly call `model.ttt(...)`.
+The current implementation is experimental and trains only local LoRA adapters
+on the ESM2 backbone using masked language modeling on the test protein. It can
+help difficult proteins, but it adds test-time compute and can hurt already
+confident predictions.
+
+```python
+metrics = model.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 3, "ags": 1, "batch_size": 1},
+)
+model.ttt_reset()
+print(metrics["losses"])
+```
+
 ### For working with attention maps
 ```python
 import torch

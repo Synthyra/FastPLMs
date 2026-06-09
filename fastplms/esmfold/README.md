@@ -12,7 +12,7 @@ The GitHub with the implementation and requirements.txt can be found [here](http
 
 # FastESMFold
 
-FastESMFold is a self-contained, HuggingFace-compatible reimplementation of ESMFold with optional **Test-Time Training (TTT)** and multi-backend attention (SDPA, Flash, Flex).
+FastESMFold is a self-contained, HuggingFace-compatible reimplementation of ESMFold with optional experimental **Test-Time Training (TTT)** and multi-backend attention (SDPA, Flash, Flex).
 
 No dependency on `fair-esm`, `proteinttt`, or `openfold`. Just `transformers`, `torch`, and `einops`.
 
@@ -22,7 +22,16 @@ Protein language models like ESM2 are trained on millions of sequences, but at i
 
 **Test-Time Training (TTT)** adapts the model to each individual protein before predicting its structure. The idea is simple: before folding, we briefly train the ESM2 backbone on the input sequence using masked language modeling (the same objective it was pretrained with). This forces the model to "study" the specific sequence, strengthening its internal representation of that protein's structural features.
 
-The adaptation uses **LoRA** (Low-Rank Adaptation) for efficiency: only small adapter weights are trained (~4.4M parameters out of 3.5B), and the base model is restored after each prediction. This takes 20-45 seconds per sequence on an A10G GPU but can dramatically improve structure prediction quality, especially on difficult targets where standard ESMFold produces low-confidence predictions.
+TTT is disabled by default. Standard `fold_protein(...)`, `infer(...)`, and
+`state_dict()` behavior are unchanged unless you explicitly pass `ttt=True` or
+call `fold_protein_ttt(...)`.
+
+The adaptation uses **LoRA** (Low-Rank Adaptation) for efficiency: only small
+adapter weights are trained (~4.4M parameters out of 3.5B), and the base model
+is restored after each prediction. This takes 20-45 seconds per sequence on an
+A10G GPU. It can improve structure prediction quality on difficult targets
+where standard ESMFold produces low-confidence predictions, but it is
+experimental and can degrade predictions that already have high confidence.
 
 **When is TTT most useful?**
 - Sequences with low baseline pLDDT (< 0.5): TTT can improve pLDDT by 10-30+ points
@@ -36,7 +45,7 @@ The adaptation uses **LoRA** (Low-Rank Adaptation) for efficiency: only small ad
 ## Key Features
 
 - **Standard ESMFold**: Full ESMFold v1 structure prediction, loadable via `AutoModel`
-- **Optional TTT**: Enable test-time training for improved structure prediction on difficult sequences
+- **Optional experimental TTT**: Enable test-time training for difficult sequences with explicit `ttt=True`
 - **Best structure selection**: When TTT is enabled, folds after each step and returns the structure with the highest pLDDT
 - **FastESM2 attention**: SDPA/Flash/Flex backends for the 3B ESM2 backbone
 - **Self-contained LoRA**: lora_diffusion-compatible implementation (no peft dependency)
@@ -64,9 +73,12 @@ plddt = output["plddt"].mean().item()
 print(f"pLDDT: {plddt:.3f}")
 ```
 
-### Structure prediction with TTT
+### Structure prediction with experimental TTT
 
-TTT adapts the ESM2 backbone to a specific input sequence via masked language modeling before folding. This can dramatically improve pLDDT on difficult sequences (e.g., 0.38 to 0.72).
+TTT adapts the ESM2 backbone to a specific input sequence via masked language
+modeling before folding. It can improve pLDDT on difficult sequences, but it is
+experimental, adds test-time compute, and should not be assumed to improve every
+sequence.
 
 ```python
 # Configure TTT
@@ -74,8 +86,10 @@ model._ttt_cfg.steps = 10      # 10 optimizer steps (default)
 model._ttt_cfg.lora_rank = 8   # LoRA rank (default)
 model._ttt_cfg.lora_alpha = 32 # LoRA scale (default)
 
-# fold_protein() runs TTT, folds after each step, returns best structure
-result = model.fold_protein("MKTLLILAVVAAALA...")
+# ttt=True runs TTT, folds after each step, returns best structure
+result = model.fold_protein("MKTLLILAVVAAALA...", ttt=True)
+# Equivalent:
+# result = model.fold_protein_ttt("MKTLLILAVVAAALA...")
 print(f"pLDDT: {result['plddt']:.3f}")
 print(f"Best step: {result['best_step']} (0=baseline, 1-10=TTT steps)")
 print(f"Step pLDDTs: {[f'{p:.2f}' for p in result['step_plddts']]}")
@@ -87,34 +101,37 @@ with open("structure.pdb", "w") as f:
 
 ### Return values
 
-`fold_protein(sequence)` returns a dict:
+`fold_protein(sequence)` returns a dict. Without `ttt=True`, `step_plddts`
+contains only the baseline pLDDT and `best_step` is `0`.
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `plddt` | float | Best mean pLDDT across all TTT steps |
-| `ptm` | float | Predicted TM-score from best step |
-| `pdb_string` | str | PDB format structure from best step |
-| `step_plddts` | list[float] | pLDDT at each step [baseline, s1, ..., s10] |
-| `best_step` | int | Which step produced the best structure (0=baseline) |
+| `plddt` | float | Mean pLDDT for the selected structure |
+| `ptm` | float | Predicted TM-score for the selected structure |
+| `pdb_string` | str | PDB format structure |
+| `step_plddts` | list[float] | Baseline pLDDT, plus per-step pLDDT when TTT is enabled |
+| `best_step` | int | Which step produced the selected structure (0=baseline) |
 
-### Disabling TTT
+### TTT default behavior
 
-To use FastESMFold as a standard ESMFold (no TTT), set `steps=0` or call `infer()` directly:
+TTT is disabled by default. Use FastESMFold as a standard ESMFold by calling
+`fold_protein(...)` or `infer(...)` without `ttt=True`:
 
 ```python
-# Option 1: Set TTT steps to 0
-config = AutoConfig.from_pretrained("Synthyra/FastESMFold", trust_remote_code=True)
-config.ttt_config = {"steps": 0}
-model = AutoModel.from_pretrained("Synthyra/FastESMFold", config=config, trust_remote_code=True)
-result = model.fold_protein("MKTLLILAVVAAALA...")  # No TTT, just baseline fold
+# Baseline fold, no TTT
+result = model.fold_protein("MKTLLILAVVAAALA...")
+print(result["best_step"])  # 0
 
-# Option 2: Call infer() directly (inherited from EsmForProteinFolding)
+# Raw ESMFold output
 with torch.no_grad():
     output = model.infer("MKTLLILAVVAAALA...")
 pdb_strings = model.output_to_pdb(output)
 ```
 
-## TTT Benchmark
+## Experimental TTT Benchmark
+
+This benchmark is provided as an example of where TTT can help. It is not a
+guarantee of improvement on every sequence.
 
 Tested on 10 difficult sequences on A10G GPU:
 
@@ -155,7 +172,7 @@ TTT parameters are set via `config.ttt_config` (a dict) or by modifying `model._
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `lr` | 4e-4 | Learning rate for SGD optimizer |
-| `steps` | 10 | Number of optimizer steps (0 to disable TTT) |
+| `steps` | 10 | Number of optimizer steps when TTT is explicitly enabled |
 | `ags` | 4 | Gradient accumulation steps per optimizer step |
 | `batch_size` | 4 | Batch size for masked language model training |
 | `mask_ratio` | 0.15 | Fraction of tokens to mask |
