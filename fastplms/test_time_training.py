@@ -87,6 +87,14 @@ class LoraInjectedLinear(nn.Module):
         nn.init.normal_(self.lora_down.weight, std=1.0 / rank)
         nn.init.zeros_(self.lora_up.weight)
 
+    @property
+    def weight(self) -> torch.Tensor:
+        return self.linear._parameters["weight"]
+
+    @property
+    def bias(self) -> torch.Tensor | None:
+        return self.linear._parameters["bias"]
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         base = self.linear(x)
         delta = self.lora_up(self.lora_down(x.to(dtype=torch.float32))) * self.scale
