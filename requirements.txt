@@ -10,7 +10,9 @@ einops==0.8.2
 scikit-learn==1.8.0
 scipy==1.17.1
 seaborn==0.13.2
-biopython==1.86
+attrs==26.1.0
+biopython==1.87
+pandas==3.0.3
 # huggingface
 tensorflow==2.20.0
 transformers==4.57.6
@@ -26,11 +28,20 @@ networkx==3.6.1
 omegaconf==2.3.0
 rich==15.0.0
 trifast==0.1.13
-# ESMFold2
-rdkit==2026.3.2
-zstd==1.5.7.3
-cloudpathlib==0.23.0
+# ESM++ / ESM3 / ESMFold2
+abnumber==0.4.4
+biotite==1.6.0
 brotli==1.2.0
+cloudpathlib==0.24.0
+dna_features_viewer==3.1.5
+httpx==0.28.1
+msgpack==1.1.2
 msgpack-numpy==0.4.8
+pydssp==0.9.1
+pygtrie==2.5.0
+py3dmol==2.5.5
+rdkit==2026.3.2
+tenacity==9.1.4
+zstd==1.5.7.3
 # E1
 kernels==0.12.3
