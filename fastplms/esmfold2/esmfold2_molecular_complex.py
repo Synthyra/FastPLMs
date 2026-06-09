@@ -44,6 +44,7 @@ class MolecularComplexResult:
     residue_index: torch.Tensor | None = None
     entity_id: torch.Tensor | None = None
     sae_features: np.ndarray | None = None  # [L, n_features]
+    ttt_metrics: dict[str, Any] | None = None
 
 
 @dataclass

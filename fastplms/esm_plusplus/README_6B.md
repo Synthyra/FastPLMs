@@ -75,6 +75,25 @@ print(output.last_hidden_state.shape)
 
 Pass `output_hidden_states=True` if you need all intermediate hidden states.
 
+## Experimental Test-Time Training
+
+TTT is disabled by default. Normal ESM++ inference, embeddings, logits, and
+`state_dict()` keys are unchanged unless you explicitly call `model.ttt(...)`.
+The current implementation is experimental and trains only local LoRA adapters
+on the ESMC backbone with masked language modeling on the test protein. It can
+help some difficult proteins, but it adds test-time compute and can degrade
+already confident predictions. The 6B checkpoint is large, so start with small
+`steps`, `ags`, and `batch_size` values.
+
+```python
+metrics = model.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 1, "ags": 1, "batch_size": 1},
+)
+model.ttt_reset()
+print(metrics["losses"])
+```
+
 ## Binder Design Regularizer
 
 The FastPLMs binder design tutorial uses `Synthyra/ESMplusplus_6B` as the

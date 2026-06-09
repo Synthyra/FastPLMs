@@ -4,6 +4,14 @@ This document covers each model family supported by FastPLMs: loading, configura
 
 Most sequence models (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) share the same embedding pipeline via `EmbeddingMixin`. ESM3 exposes its own compatible `embed_dataset()` method for sequence embeddings. They support most attention backends, with these exceptions: ANKH supports only `sdpa` and `flex`, and ESM3 supports `sdpa` and `flex`. Structure prediction models (Boltz2, ESMFold, ESMFold2, and ESMFold2-Fast) have their own APIs.
 
+Experimental test-time training (TTT) is available for ESM2, ESM++, ESM3, E1,
+DPLM, DPLM2, ANKH, FastESMFold, and ESMFold2. It is disabled by default and is
+only activated by explicit calls such as `model.ttt(...)`,
+`fold_protein(..., ttt=True)`, or `fold_protein_ttt(...)`. TTT trains small
+LoRA adapters with a masked language modeling objective on the test protein. It
+can improve difficult or low-confidence cases, but it adds test-time compute and
+can degrade already strong predictions. Treat it as experimental.
+
 ---
 
 ## ESM2
@@ -33,6 +41,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESM2-150M", config=config
 - Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load (same mechanism as every other family).
 - Pre-LayerNorm architecture with a final `emb_layer_norm_after`
 - Supports `output_attentions=True` and `output_hidden_states=True`
+- Experimental TTT is opt-in via `model.ttt(seq=...)`; no LoRA adapters are injected during normal inference.
 
 ### Available Checkpoints
 
@@ -67,6 +76,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESMplusplus_small", trust
 - Uses `einops` for tensor reshaping operations
 - Rotary embeddings support `interleaved` mode and `scale_base`/`scaling_factor` for dynamic scaling
 - Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load.
+- Experimental TTT is opt-in via `model.ttt(seq=...)`; it adapts the PLM backbone only.
 
 ### Batched Forward Pass
 
@@ -131,6 +141,7 @@ model = AutoModel.from_pretrained(
 - Supports `embed_dataset()` with pooled `mean`, `cls`, and `max` embeddings, plus residue-wise embeddings through `full_embeddings=True`.
 - Supports `sdpa` and `flex` attention backends.
 - Includes the Biohub ESM MIT license in the Hub `LICENSE` file and model card metadata.
+- Experimental TTT is opt-in via `model.ttt(seq=...)` and uses `sequence_logits` only.
 
 ### Available Checkpoints
 
@@ -165,6 +176,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/Profluent-E1-150M", trust
 - Separate RoPE configurations for within-sequence and global attention (different `rope_theta`)
 - KV caching via `DynamicCache` for efficient generation
 - Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load.
+- Experimental TTT is opt-in via `model.ttt(seq=...)`; the E1 path carries `input_ids`, `within_seq_position_ids`, `global_position_ids`, and `sequence_ids`.
 
 ### Tokenization (Sequence Mode)
 
@@ -258,6 +270,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM-150M", trust_remote_
 - Architecture extends `EsmConfig` and `EsmPreTrainedModel` from HuggingFace
 - Supports cross-attention and KV caching for generation
 - `ModifiedEsmSelfAttention` extends the official `EsmSelfAttention` with multi-backend support
+- Experimental TTT is opt-in via `model.ttt(seq=...)`; normal DPLM inference and diffusion APIs are unchanged.
 
 ### Post-Load Backend Switching
 
@@ -298,6 +311,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM2-150M", trust_remote
 - Special token normalization: `_normalize_dplm2_input_ids()` maps tokens above vocab_size back into range
 - Packed multimodal layout detection: `_has_packed_multimodal_layout()` checks if input_ids contain interleaved AA and structure tokens
 - The official DPLM2 has an extra `contact_head` not present in the FastPLM version, so weight compliance testing is skipped for this family
+- Experimental TTT is opt-in via `model.ttt(seq=...)`; it adapts only LoRA weights on the PLM backbone.
 
 ### Available Checkpoints
 
@@ -339,6 +353,7 @@ model = AutoModelForMaskedLM.from_pretrained("Synthyra/ANKH_base", config=config
 - Layer 0 owns the relative-position-bias `nn.Embedding`; subsequent layers receive the precomputed bias through the forward call.
 - The native ANKH checkpoint is a T5 encoder-decoder; FastPLMs uses the encoder only and bolts on a separate `lm_head` for the `ForMaskedLM` variant. For weight-parity comparisons against `transformers.T5EncoderModel`, the FastPLMs `lm_head.weight` is allowlisted as an expected extra parameter.
 - ANKH3 checkpoints use 256-token tokenizers, while ANKH v1/v2 checkpoints use 144-token tokenizers. Use the checkpoint tokenizer through `model.tokenizer` or `AutoTokenizer.from_pretrained(<checkpoint>)`.
+- Experimental TTT is opt-in via `model.ttt(seq=...)`; the ANKH MaskedLM head is not pretrained for standard MLM, so results should be treated especially cautiously.
 
 ### Available Checkpoints
 
@@ -373,6 +388,7 @@ model = AutoModel.from_pretrained("Synthyra/Boltz2", trust_remote_code=True, dty
 - Custom featurization pipeline via `minimal_featurizer.build_boltz2_features()`
 - Outputs atomic coordinates, pLDDT, pTM, ipTM confidence scores
 - Can export predictions as CIF files via `model.save_as_cif(output, "pred.cif")`
+- TTT is not supported for Boltz2 in FastPLMs.
 
 ### Predict Structure
 
@@ -423,6 +439,9 @@ model = AutoModel.from_pretrained(
 - Final scoring can report pTM, iPTM, pLDDT, structures, and distogram logits.
 - `set_kernel_backend()`, `set_chunk_size()`, and `apply_torch_compile()` are
   available on the ESMFold2 wrappers.
+- Experimental TTT is opt-in via `fold_protein(..., ttt=True)` or
+  `fold_protein_ttt(...)`; it trains LoRA adapters only on `_esmc`, not the
+  folding trunk, confidence head, or diffusion head.
 
 ### Available Checkpoints
 
@@ -472,7 +491,7 @@ metrics, pI filtering, optional scaling critics, and caveats.
 ## ESMFold
 
 **Organization:** Meta AI (wrapped by Synthyra)
-**Architecture:** ESM2 backbone + structure module with optional Test-Time Training (TTT)
+**Architecture:** ESM2 backbone + structure module with optional experimental Test-Time Training (TTT)
 **Checkpoints:** Standard
 
 ### Loading
@@ -487,8 +506,9 @@ model = AutoModel.from_pretrained("Synthyra/FastESMFold", trust_remote_code=True
 
 - Inherits from `transformers.EsmForProteinFolding` with the ESM2 backbone replaced by `FastEsmBackbone`
 - Supports all attention backends via `config.attn_backend`
-- Optional Test-Time Training (TTT): Adapts the ESM2 backbone via LoRA + masked LM before folding
-- TTT typically improves low-confidence sequences (baseline pLDDT < 0.5) by 10-30+ points
+- TTT is disabled by default and must be requested with `ttt=True` or `fold_protein_ttt(...)`
+- Optional experimental TTT adapts the ESM2 backbone via LoRA + masked LM before folding
+- TTT can improve low-confidence sequences, but it adds compute and may degrade already strong predictions
 
 ### Structure Prediction
 
@@ -498,17 +518,19 @@ with torch.no_grad():
     output = model.infer("MKTLLILAVVAAALA")
 pdb_string = model.output_to_pdb(output)
 
-# With TTT (default: 10 optimizer steps)
-result = model.fold_protein("MKTLLILAVVAAALA")
+# With experimental TTT (default: 10 optimizer steps)
+result = model.fold_protein("MKTLLILAVVAAALA", ttt=True)
 # result = {"plddt": float, "ptm": float, "pdb_string": str, ...}
 ```
 
-### Disabling TTT
+### TTT Defaults
+
+TTT is disabled by default. Standard `fold_protein(...)` is a baseline fold and
+returns `best_step=0`. You can also call `model.infer(...)` directly for raw
+ESMFold outputs. Use `model._ttt_cfg` to tune optimizer steps, LoRA rank, and
+masking parameters before calling `fold_protein(..., ttt=True)`.
 
 ```python
-from transformers import AutoConfig, AutoModel
-
-config = AutoConfig.from_pretrained("Synthyra/FastESMFold", trust_remote_code=True)
-config.ttt_config = {"steps": 0}
-model = AutoModel.from_pretrained("Synthyra/FastESMFold", config=config, trust_remote_code=True)
+model._ttt_cfg.steps = 3
+result = model.fold_protein_ttt("MKTLLILAVVAAALA")
 ```

@@ -99,6 +99,24 @@ import torch
 model = AutoModelForMaskedLM.from_pretrained('Synthyra/ESMplusplus_large', trust_remote_code=True, dtype=torch.float16) # or torch.bfloat16
 ```
 
+## Experimental test-time training
+
+TTT is disabled by default. Normal ESM++ inference, embeddings, logits, and
+`state_dict()` keys are unchanged unless you explicitly call `model.ttt(...)`.
+The current implementation is experimental and trains only local LoRA adapters
+on the ESMC backbone with masked language modeling on the test protein. It can
+help some difficult proteins, but it adds test-time compute and can degrade
+already confident predictions.
+
+```python
+metrics = model.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 3, "ags": 1, "batch_size": 1},
+)
+model.ttt_reset()
+print(metrics["losses"])
+```
+
 ## Embed entire datasets with no new code
 To embed a list of protein sequences **fast**, just call embed_dataset. Sequences are sorted to reduce padding tokens, so the initial progress bar estimation is usually much longer than the actual time it will take.
 

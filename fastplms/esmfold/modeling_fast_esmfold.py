@@ -1,18 +1,18 @@
 from __future__ import annotations
-"""FastESMFold: Self-contained ESMFold with FastESM2 attention backends + built-in Test-Time Training.
+"""FastESMFold: self-contained ESMFold with FastESM2 attention and opt-in TTT.
 
 Usage:
     from transformers import AutoModel
     model = AutoModel.from_pretrained("Synthyra/FastESMFold", trust_remote_code=True).cuda()
 
-    # Basic folding
+    # Basic folding, no TTT
     result = model.fold_protein("MKTLLILAVVA...")
     print(result["plddt"], result["pdb_string"][:100])
 
-    # Folding with TTT (test-time training improves structure prediction)
+    # Experimental folding with TTT
     result = model.fold_protein("MKTLLILAVVA...", ttt=True)
 
-Dependencies: torch, transformers, einops, peft (for LoRA TTT only)
+Dependencies: torch, transformers, einops
 No dependency on: esm (fair-esm), proteinttt, openfold
 """
 import copy
@@ -515,11 +515,11 @@ class FastEsmFoldConfig(EsmConfig):
 # =============================================================================
 
 class FastEsmForProteinFolding(EsmForProteinFolding):
-    """ESMFold with FastESM2 attention backends + built-in Test-Time Training.
+    """ESMFold with FastESM2 attention backends and opt-in experimental TTT.
 
     Inherits all folding logic (trunk, structure module, output_to_pdb, infer)
     from transformers.EsmForProteinFolding. Replaces the ESM2 backbone with
-    FastESM2 for optimized attention and adds TTT for improved structure prediction.
+    FastESM2 for optimized attention and adds opt-in TTT for difficult targets.
 
     Key API:
         result = model.fold_protein("MKTL...", ttt=True)
@@ -906,8 +906,46 @@ class FastEsmForProteinFolding(EsmForProteinFolding):
         self,
         sequence: str,
         return_pdb_string: bool = True,
+        ttt: bool = False,
     ) -> Dict[str, Any]:
-        """Fold a protein sequence with test-time training.
+        """Fold a protein sequence.
+
+        Test-time training is disabled by default. Pass ``ttt=True`` or call
+        ``fold_protein_ttt`` to opt in to experimental TTT.
+
+        Args:
+            sequence: Protein sequence (single-letter amino acid codes)
+            return_pdb_string: If True, include PDB string in output
+            ttt: If True, run experimental LoRA TTT before returning the best fold
+
+        Returns:
+            Dict with keys:
+                - plddt: float, mean pLDDT
+                - ptm: float, predicted TM-score
+                - pdb_string: str (if return_pdb_string=True), PDB from best step
+                - step_plddts: list[float], baseline pLDDT when TTT is disabled
+                - best_step: int, 0 when TTT is disabled
+        """
+        if ttt:
+            return self.fold_protein_ttt(
+                sequence=sequence,
+                return_pdb_string=return_pdb_string,
+            )
+        result = self._fold_single(sequence, return_pdb_string=return_pdb_string)
+        return {
+            "plddt": result["plddt"],
+            "ptm": result["ptm"],
+            "pdb_string": result.get("pdb_string"),
+            "step_plddts": [result["plddt"]],
+            "best_step": 0,
+        }
+
+    def fold_protein_ttt(
+        self,
+        sequence: str,
+        return_pdb_string: bool = True,
+    ) -> Dict[str, Any]:
+        """Fold a protein sequence with experimental test-time training.
 
         Runs TTT (masked language model adaptation via LoRA) for the configured
         number of steps, folding after each optimizer step to track pLDDT. Returns

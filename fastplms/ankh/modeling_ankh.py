@@ -21,6 +21,7 @@ try:
         Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
         select_hidden_state_embeddings,
     )
+    from fastplms.test_time_training import FastPLMTestTimeTrainingMixin
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -677,7 +678,7 @@ class FastAnkhModel(AnkhPreTrainedModel, EmbeddingMixin):
         )
 
 
-class FastAnkhForMaskedLM(AnkhPreTrainedModel, EmbeddingMixin):
+class FastAnkhForMaskedLM(FastPLMTestTimeTrainingMixin, AnkhPreTrainedModel, EmbeddingMixin):
     """ANKH encoder with LM head for masked language modeling.
 
     NOTE: The LM head is initialized from the shared embedding weights but is NOT
@@ -694,6 +695,7 @@ class FastAnkhForMaskedLM(AnkhPreTrainedModel, EmbeddingMixin):
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.loss_fct = nn.CrossEntropyLoss()
         self.post_init()
+        self.init_ttt({"lora_target_replace_module": "AnkhSelfAttention"})
 
     @property
     def tokenizer(self):
@@ -724,6 +726,29 @@ class FastAnkhForMaskedLM(AnkhPreTrainedModel, EmbeddingMixin):
             hidden_state_index=hidden_state_index,
             store_all_hidden_states=store_all_hidden_states,
         )
+
+    def _ttt_get_trainable_modules(self) -> list[nn.Module]:
+        return [self.encoder]
+
+    def _ttt_tokenize(
+        self,
+        seq: str | list[str] | None = None,
+        input_ids: torch.Tensor | None = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        del kwargs
+        if input_ids is not None:
+            return input_ids
+        assert seq is not None, "Pass either seq or input_ids for ANKH TTT."
+        sequences = [seq] if isinstance(seq, str) else seq
+        spaced_sequences = [" ".join(sequence) for sequence in sequences]
+        tokenized = self.tokenizer(spaced_sequences, return_tensors="pt", padding=True)
+        return tokenized["input_ids"]
+
+    def _ttt_replacement_tokens(self, input_ids: torch.Tensor) -> torch.Tensor:
+        amino_acids = "ACDEFGHIKLMNPQRSTVWY"
+        ids = [self.tokenizer.convert_tokens_to_ids(aa) for aa in amino_acids]
+        return torch.tensor(ids, device=input_ids.device, dtype=input_ids.dtype)
 
     def forward(
         self,

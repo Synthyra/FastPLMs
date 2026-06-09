@@ -41,6 +41,11 @@ except ImportError:
     create_block_mask = None
     flex_attention = None
 
+try:
+    from fastplms.test_time_training import FastPLMTestTimeTrainingMixin
+except ImportError:
+    pass  # Running as HF Hub composite; shared definitions are above
+
 
 ESM3_OPEN_SMALL = "esm3_sm_open_v1"
 ESM3_OPEN_SMALL_ALIASES = {
@@ -1462,7 +1467,7 @@ class FastESM3PreTrainedModel(PreTrainedModel):
         return model
 
 
-class FastESM3Model(FastESM3PreTrainedModel):
+class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel):
     config_class = FastESM3Config
 
     def __init__(self, config: FastESM3Config, **kwargs):
@@ -1470,6 +1475,7 @@ class FastESM3Model(FastESM3PreTrainedModel):
         self.tokenizer = EsmSequenceTokenizer()
         self.esm3 = _build_official_esm3(config)
         self.__dict__["_official_sdk_model"] = None
+        self.init_ttt({"lora_target_replace_module": "MultiHeadAttention"})
 
     @property
     def device(self) -> torch.device:
@@ -1692,6 +1698,9 @@ class FastESM3Model(FastESM3PreTrainedModel):
 
     def batch_generate(self, inputs, configs):
         return self._get_official_sdk_model().batch_generate(inputs, configs)
+
+    def _ttt_get_trainable_modules(self) -> list[nn.Module]:
+        return [self.esm3]
 
     def forward_and_sample(self, input, sampling_configuration):
         return self._get_official_sdk_model().forward_and_sample(

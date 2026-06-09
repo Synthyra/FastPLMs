@@ -36,6 +36,7 @@ except ImportError:
     TE_AVAILABLE = False
 
 from transformers.modeling_utils import PreTrainedModel
+from fastplms.test_time_training import FastPLMTestTimeTrainingMixin, TTTConfig
 from .configuration_esmc import ESMCConfig as _FastPLMSESMCConfig
 from .configuration_esmc_sae import ESMCSAEConfig as _FastPLMSESMCSAEConfig
 from .configuration_esmfold2 import ESMFold2Config
@@ -66,7 +67,16 @@ from .esmfold2_aligner import Aligner as _FastPLMSESMFold2Aligner
 from .esmfold2_atom_indexer import AtomIndexer as _FastPLMSESMFold2AtomIndexer
 from .esmfold2_conformers import load_ccd as _fastplms_esmfold2_load_ccd
 from .esmfold2_constants import ELEMENT_NUMBER_TO_SYMBOL as _FASTPLMS_ESMFOLD2_ELEMENT_NUMBER_TO_SYMBOL
-from .esmfold2_constants_esm3 import CHAIN_BREAK_STR as _FASTPLMS_ESMFOLD2_CHAIN_BREAK_STR
+from .esmfold2_constants_esm3 import (
+    CHAIN_BREAK_STR as _FASTPLMS_ESMFOLD2_CHAIN_BREAK_STR,
+    SEQUENCE_BOS_TOKEN,
+    SEQUENCE_EOS_TOKEN,
+    SEQUENCE_MASK_TOKEN,
+    SEQUENCE_PAD_TOKEN,
+    SEQUENCE_STANDARD_AA_MAX_TOKEN,
+    SEQUENCE_STANDARD_AA_MIN_TOKEN,
+    SEQUENCE_VOCAB,
+)
 from .esmfold2_input_builder import StructurePredictionInput as _FastPLMSESMFold2StructurePredictionInput
 from .esmfold2_metrics import compute_rmsd as _fastplms_esmfold2_compute_rmsd
 from .esmfold2_misc import slice_any_object as _fastplms_esmfold2_slice_any_object
@@ -522,7 +532,7 @@ def _lm_precision_context(fp8: bool):
             yield
 
 
-class ESMFold2Model(PreTrainedModel):
+class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
     """ESMFold2 — all-atom structure prediction with an ESMC PLM backbone.
 
     This is the standard released ESMFold2 architecture (uses a linear-
@@ -569,6 +579,7 @@ class ESMFold2Model(PreTrainedModel):
         )
         self._esmc: nn.Module | None = None
         self._esmc_fp8: bool = False  # set by load_esmc(fp8=True)
+        self._ttt_lm_head: nn.Module | None = None
         self._esmfold2_input_builder: Any | None = None
 
         pf = config.folding_trunk
@@ -619,6 +630,7 @@ class ESMFold2Model(PreTrainedModel):
             )
 
         self.post_init()
+        self.init_ttt({"lora_target_replace_module": "MultiHeadAttention"})
 
     def load_esmc(self, esmc_model_path: str, precision: str = "bf16") -> None:
         """Load the ESMC LM.
@@ -660,6 +672,108 @@ class ESMFold2Model(PreTrainedModel):
             self._esmc_fp8 = False
 
         self._esmc = esmc
+        self._ttt_lm_head = None
+
+    def _ensure_ttt_lm_head(self) -> None:
+        assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._ttt_lm_head is not None:
+            return
+        from .modeling_esmc import ESMCForMaskedLM
+
+        mlm, loading_info = ESMCForMaskedLM.from_pretrained(
+            self.config.esmc_id,
+            output_loading_info=True,
+        )
+        missing_head_keys = [
+            key for key in loading_info["missing_keys"] if key.startswith("lm_head")
+        ]
+        assert len(missing_head_keys) == 0, (
+            f"ESMFold2 TTT could not load a pretrained ESMC MLM head from "
+            f"{self.config.esmc_id}: missing {missing_head_keys}"
+        )
+        dtype = next(self._esmc.parameters()).dtype
+        mlm = mlm.to(device=self.device, dtype=dtype).eval()
+        self._ttt_lm_head = mlm.lm_head
+        self._ttt_lm_head.requires_grad_(False)
+        del mlm
+
+    def _ttt_get_trainable_modules(self) -> list[nn.Module]:
+        assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        return [self._esmc]
+
+    def _ttt_tokenize(
+        self,
+        seq: str | list[str] | None = None,
+        input_ids: torch.Tensor | None = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        del kwargs
+        if input_ids is not None:
+            return input_ids
+        assert seq is not None, "Pass either seq or input_ids for ESMFold2 TTT."
+        sequences = [seq] if isinstance(seq, str) else seq
+        token_to_id = {token: idx for idx, token in enumerate(SEQUENCE_VOCAB)}
+        encoded = []
+        for sequence in sequences:
+            token_ids = [SEQUENCE_BOS_TOKEN]
+            for amino_acid in sequence:
+                token_ids.append(
+                    token_to_id[amino_acid if amino_acid in token_to_id else "X"]
+                )
+            token_ids.append(SEQUENCE_EOS_TOKEN)
+            encoded.append(token_ids)
+        max_len = max(len(token_ids) for token_ids in encoded)
+        input_tensor = torch.full(
+            (len(encoded), max_len),
+            SEQUENCE_PAD_TOKEN,
+            dtype=torch.long,
+        )
+        for row, token_ids in enumerate(encoded):
+            input_tensor[row, : len(token_ids)] = torch.tensor(
+                token_ids,
+                dtype=torch.long,
+            )
+        return input_tensor
+
+    def _ttt_mask_token(self) -> int:
+        return SEQUENCE_MASK_TOKEN
+
+    def _ttt_padding_token(self) -> int:
+        return SEQUENCE_PAD_TOKEN
+
+    def _ttt_replacement_tokens(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return torch.arange(
+            SEQUENCE_STANDARD_AA_MIN_TOKEN,
+            SEQUENCE_STANDARD_AA_MAX_TOKEN,
+            device=input_ids.device,
+            dtype=input_ids.dtype,
+        )
+
+    def _ttt_non_special_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
+        return (input_ids >= SEQUENCE_STANDARD_AA_MIN_TOKEN) & (
+            input_ids < SEQUENCE_STANDARD_AA_MAX_TOKEN
+        )
+
+    def _ttt_predict_logits(
+        self,
+        batch: torch.Tensor | dict[str, torch.Tensor],
+        **kwargs,
+    ) -> torch.Tensor:
+        del kwargs
+        assert isinstance(batch, torch.Tensor), (
+            "ESMFold2 TTT expects input_ids tensors."
+        )
+        assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        self._ensure_ttt_lm_head()
+        assert self._ttt_lm_head is not None
+        attention_mask = batch.ne(SEQUENCE_PAD_TOKEN)
+        output = self._esmc(
+            input_ids=batch,
+            attention_mask=attention_mask,
+            return_dict=True,
+            compute_sae=False,
+        )
+        return self._ttt_lm_head(output.last_hidden_state)
 
     @classmethod
     def from_pretrained(
@@ -1123,7 +1237,7 @@ class ESMFold2Model(PreTrainedModel):
             complex_id=complex_id,
         )
 
-    def fold_protein(
+    def _fold_protein_no_ttt(
         self,
         sequence: str,
         *,
@@ -1147,6 +1261,137 @@ class ESMFold2Model(PreTrainedModel):
             seed=seed,
             complex_id=complex_id,
         )
+
+    @staticmethod
+    def _ttt_mean_plddt(result) -> float:
+        assert result.plddt is not None, "ESMFold2 result has no pLDDT tensor."
+        return float(result.plddt.float().mean().item())
+
+    def _ttt_select_result(self, result):
+        if isinstance(result, list):
+            assert len(result) > 0, "ESMFold2 fold returned an empty result list."
+            return max(result, key=self._ttt_mean_plddt)
+        return result
+
+    def _ttt_eval_step(
+        self,
+        step: int,
+        loss: float,
+        seq: str | list[str] | None = None,
+        input_ids: torch.Tensor | None = None,
+        **kwargs,
+    ) -> tuple[dict[str, Any], float | None]:
+        del input_ids
+        assert isinstance(seq, str), (
+            "ESMFold2 fold TTT is protein-only and sequence-string only."
+        )
+        fold_kwargs = kwargs["fold_kwargs"]
+        was_training = self.training
+        self.eval()
+        try:
+            result = self._fold_protein_no_ttt(seq, **fold_kwargs)
+        finally:
+            self.train(was_training)
+        selected = self._ttt_select_result(result)
+        plddt = self._ttt_mean_plddt(selected)
+        return {
+            "step": step,
+            "loss": loss,
+            "plddt": plddt,
+            "result": selected,
+        }, plddt
+
+    def fold_protein(
+        self,
+        sequence: str,
+        *,
+        chain_id: str = "A",
+        num_loops: int = 3,
+        num_sampling_steps: int = 50,
+        num_diffusion_samples: int = 1,
+        seed: int | None = None,
+        complex_id: str = "pred",
+        ttt: bool = False,
+        ttt_config: TTTConfig | dict[str, Any] | None = None,
+    ):
+        if ttt:
+            return self.fold_protein_ttt(
+                sequence=sequence,
+                chain_id=chain_id,
+                num_loops=num_loops,
+                num_sampling_steps=num_sampling_steps,
+                num_diffusion_samples=num_diffusion_samples,
+                seed=seed,
+                complex_id=complex_id,
+                ttt_config=ttt_config,
+            )
+        return self._fold_protein_no_ttt(
+            sequence=sequence,
+            chain_id=chain_id,
+            num_loops=num_loops,
+            num_sampling_steps=num_sampling_steps,
+            num_diffusion_samples=num_diffusion_samples,
+            seed=seed,
+            complex_id=complex_id,
+        )
+
+    def fold_protein_ttt(
+        self,
+        sequence: str,
+        *,
+        chain_id: str = "A",
+        num_loops: int = 3,
+        num_sampling_steps: int = 50,
+        num_diffusion_samples: int = 1,
+        seed: int | None = None,
+        complex_id: str = "pred",
+        ttt_config: TTTConfig | dict[str, Any] | None = None,
+    ):
+        assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        fold_kwargs = {
+            "chain_id": chain_id,
+            "num_loops": num_loops,
+            "num_sampling_steps": num_sampling_steps,
+            "num_diffusion_samples": num_diffusion_samples,
+            "seed": seed,
+            "complex_id": complex_id,
+        }
+        baseline = self._ttt_select_result(
+            self._fold_protein_no_ttt(sequence, **fold_kwargs)
+        )
+        baseline_plddt = self._ttt_mean_plddt(baseline)
+        best_result = baseline
+        best_plddt = baseline_plddt
+        best_step = 0
+        step_plddts = [baseline_plddt]
+
+        cfg = self.ttt_config.merged(ttt_config).merged(
+            {"eval_each_step": True, "automatic_best_state_reset": False}
+        )
+        try:
+            metrics = self.ttt(
+                seq=sequence,
+                ttt_config=cfg,
+                fold_kwargs=fold_kwargs,
+            )
+            for step_metric in metrics["step_metrics"]:
+                step_plddt = step_metric["plddt"]
+                step_plddts.append(step_plddt)
+                if step_plddt > best_plddt:
+                    best_plddt = step_plddt
+                    best_step = step_metric["step"]
+                    best_result = step_metric["result"]
+            best_result.ttt_metrics = {
+                "losses": metrics["losses"],
+                "step_plddts": step_plddts,
+                "baseline_plddt": baseline_plddt,
+                "best_plddt": best_plddt,
+                "best_step": best_step,
+            }
+            return best_result
+        finally:
+            if "_ttt_initialized" in self.__dict__ and self._ttt_initialized:
+                self.ttt_reset()
 
     @staticmethod
     def result_to_cif(result) -> str:

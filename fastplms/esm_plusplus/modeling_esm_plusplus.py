@@ -43,6 +43,7 @@ try:
         Pooler, EmbeddingMixin, ProteinDataset, parse_fasta, build_collator,
         select_hidden_state_embeddings,
     )
+    from fastplms.test_time_training import FastPLMTestTimeTrainingMixin
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
 
@@ -815,7 +816,7 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
             s_max=transformer_output.s_max,
         )
 
-class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
+class ESMplusplusForMaskedLM(FastPLMTestTimeTrainingMixin, PreTrainedESMplusplusModel, EmbeddingMixin):
     """
     ESM++ model for masked language modeling.
     Implements the base ESM++ architecture with a masked language modeling head.
@@ -837,6 +838,7 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
         self.ce_loss = nn.CrossEntropyLoss()
         self.tokenizer = EsmSequenceTokenizer()
         self.init_weights()
+        self.init_ttt({"lora_target_replace_module": "MultiHeadAttention"})
 
     def get_input_embeddings(self):
         return self.embed
@@ -871,6 +873,9 @@ class ESMplusplusForMaskedLM(PreTrainedESMplusplusModel, EmbeddingMixin):
             hidden_state_index=hidden_state_index,
             store_all_hidden_states=store_all_hidden_states,
         )
+
+    def _ttt_get_trainable_modules(self) -> list[nn.Module]:
+        return [self.transformer]
 
     def forward(
         self,
