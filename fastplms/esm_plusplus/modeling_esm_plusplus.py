@@ -595,23 +595,37 @@ class TransformerStack(nn.Module):
         self,
         x: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
+        sequence_id: Optional[torch.Tensor] = None,
         output_hidden_states: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
         output_s_max: Optional[bool] = False,
+        esmfold2_hidden_states: bool = False,
     ) -> TransformerOutput:
         hidden_states = () if output_hidden_states else None
         attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
 
-        attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
-            effective_backend=self.attention_backend,
-            batch_size=x.shape[0],
-            seq_len=x.shape[1],
-            device=x.device,
-            attention_mask=attention_mask,
-        )
+        if sequence_id is None:
+            attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
+                effective_backend=self.attention_backend,
+                batch_size=x.shape[0],
+                seq_len=x.shape[1],
+                device=x.device,
+                attention_mask=attention_mask,
+            )
+        else:
+            attention_mask_2d, attention_mask_4d, flex_block_mask = self._sequence_id_attention_masks(
+                sequence_id=sequence_id,
+                batch_size=x.shape[0],
+                seq_len=x.shape[1],
+                device=x.device,
+            )
 
-        for block in self.blocks:
+        if output_hidden_states and esmfold2_hidden_states:
+            assert hidden_states is not None
+            hidden_states += (x,)
+
+        for block_index, block in enumerate(self.blocks):
             if self.gradient_checkpointing and self.training:
                 x, attn_weights, s_max = self._gradient_checkpointing_func(
                     block.__call__,
@@ -636,7 +650,8 @@ class TransformerStack(nn.Module):
                 attentions += (attn_weights,)
             if output_hidden_states:
                 assert hidden_states is not None
-                hidden_states += (x,)
+                if not esmfold2_hidden_states or block_index < len(self.blocks) - 1:
+                    hidden_states += (x,)
             if full_s_max is not None:
                 full_s_max += (s_max,)
 
@@ -650,6 +665,50 @@ class TransformerStack(nn.Module):
             attentions=attentions,
             s_max=full_s_max,
         )
+
+    def _sequence_id_attention_masks(
+        self,
+        sequence_id: torch.Tensor,
+        batch_size: int,
+        seq_len: int,
+        device: torch.device,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[BlockMask]]:
+        assert sequence_id.shape == (batch_size, seq_len), (
+            f"sequence_id shape must be {(batch_size, seq_len)}, got {tuple(sequence_id.shape)}"
+        )
+        attention_mask_4d = (
+            sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)
+        ).unsqueeze(1)
+        attention_mask_2d = sequence_id != -1
+        if sequence_id.dtype == torch.bool:
+            attention_mask_2d = sequence_id
+
+        if self.attention_backend == AttentionBackend.KERNELS_FLASH:
+            assert sequence_id.dtype == torch.bool, (
+                "ESM++ kernels_flash only supports boolean sequence_id padding masks. "
+                "Use sdpa or flex for chain-aware integer sequence_id masks."
+            )
+            return attention_mask_2d, attention_mask_4d, None
+
+        if self.attention_backend == AttentionBackend.FLEX:
+            assert create_block_mask is not None, (
+                "Flex attention backend requested but torch.create_block_mask is unavailable."
+            )
+
+            def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+                return sequence_id[batch_idx, q_idx] == sequence_id[batch_idx, kv_idx]
+
+            flex_block_mask = create_block_mask(
+                mask_mod,
+                batch_size,
+                1,
+                seq_len,
+                seq_len,
+                device=device,
+            )
+            return attention_mask_2d, attention_mask_4d, flex_block_mask
+
+        return attention_mask_2d, attention_mask_4d, None
 
 
 class PreTrainedESMplusplusModel(PreTrainedModel):
@@ -787,10 +846,12 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        sequence_id: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         output_s_max: Optional[bool] = False,
+        esmfold2_hidden_states: bool = False,
         return_dict: Optional[bool] = None,
         **kwargs,
     ) -> ESMplusplusOutput:
@@ -805,9 +866,11 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         transformer_output = self.transformer(
             x=x,
             attention_mask=attention_mask,
+            sequence_id=sequence_id,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            esmfold2_hidden_states=esmfold2_hidden_states,
         )
         return ESMplusplusOutput(
             last_hidden_state=transformer_output.last_hidden_state,
@@ -881,11 +944,13 @@ class ESMplusplusForMaskedLM(FastPLMTestTimeTrainingMixin, PreTrainedESMplusplus
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        sequence_id: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         output_s_max: Optional[bool] = False,
+        esmfold2_hidden_states: bool = False,
         return_dict: Optional[bool] = None,
         **kwargs,
     ) -> ESMplusplusOutput:
@@ -897,9 +962,11 @@ class ESMplusplusForMaskedLM(FastPLMTestTimeTrainingMixin, PreTrainedESMplusplus
         output = self.transformer(
             x=x,
             attention_mask=attention_mask,
+            sequence_id=sequence_id,
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            esmfold2_hidden_states=esmfold2_hidden_states,
         )
 
         last_hidden_state = output.last_hidden_state
@@ -966,6 +1033,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        sequence_id: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
@@ -977,6 +1045,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            sequence_id=sequence_id,
             inputs_embeds=inputs_embeds,
             labels=None,
             output_attentions=output_attentions,
@@ -1059,6 +1128,7 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         self,
         input_ids: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        sequence_id: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
@@ -1070,6 +1140,7 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            sequence_id=sequence_id,
             inputs_embeds=inputs_embeds,
             labels=None,
             output_attentions=output_attentions,

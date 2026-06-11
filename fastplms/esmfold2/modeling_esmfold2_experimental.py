@@ -20,7 +20,7 @@ from transformers.modeling_utils import PreTrainedModel
 
 from .configuration_esmfold2 import ESMFold2Config
 from .modeling_esmfold2 import (
-    _convert_te_modules_to_fp8_inplace,
+    _load_fastplms_esmplusplus_for_esmfold2,
     _lm_precision_context,
 )
 from .modeling_esmfold2_common import (
@@ -517,30 +517,34 @@ class ESMFold2ExperimentalModel(PreTrainedModel):
         )
 
     def load_esmc(self, esmc_model_path: str, precision: str = "bf16") -> None:
-        from .modeling_esmc import ESMCModel
-
         dtype_map = {
             "bf16": torch.bfloat16,
             "fp32": torch.float32,
-            "fp8": torch.bfloat16,
         }
         if precision not in dtype_map:
-            raise ValueError(
-                f"precision must be one of {list(dtype_map)}, got {precision!r}"
-            )
-        esmc = (
-            ESMCModel.from_pretrained(esmc_model_path)
-            .to(device=self.device, dtype=dtype_map[precision])
-            .eval()
+            if precision == "fp8":
+                raise RuntimeError(
+                    "esmc_precision='fp8' is not supported with the shared "
+                    "FastPLMs ESM++ ESMFold2 backbone yet."
+                )
+            raise ValueError(f"precision must be one of {list(dtype_map)}, got {precision!r}")
+        esmc = _load_fastplms_esmplusplus_for_esmfold2(
+            esmc_model_path=esmc_model_path,
+            attn_backend=self.config.esmc_attn_backend,
+            device=self.device,
+            dtype=dtype_map[precision],
+        )
+        assert esmc.config.hidden_size == self.config.lm_d_model, (
+            f"ESMFold2 expected lm_d_model={self.config.lm_d_model}, "
+            f"but loaded ESM++ hidden_size={esmc.config.hidden_size}."
+        )
+        assert esmc.config.num_hidden_layers == self.config.lm_num_layers, (
+            f"ESMFold2 expected lm_num_layers={self.config.lm_num_layers}, "
+            f"but loaded ESM++ num_hidden_layers={esmc.config.num_hidden_layers}."
         )
         for parameter in esmc.parameters():
             parameter.requires_grad_(False)
-        if precision == "fp8":
-            with torch.no_grad():
-                _convert_te_modules_to_fp8_inplace(esmc)
-            self._esmc_fp8 = True
-        else:
-            self._esmc_fp8 = False
+        self._esmc_fp8 = False
         self._esmc = esmc
 
     @classmethod

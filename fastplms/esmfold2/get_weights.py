@@ -13,7 +13,7 @@ from pathlib import Path
 import torch
 from huggingface_hub import HfApi, login
 
-from fastplms.esmfold2.configuration_esmfold2 import ESMFold2Config
+from fastplms.esmfold2.configuration_esmfold2 import ESMFold2Config, normalize_esmc_id
 from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
 from fastplms.esmfold2.modeling_esmfold2_experimental import ESMFold2ExperimentalModel
 
@@ -47,6 +47,8 @@ IGNORE_PATTERNS = [
 
 def _prepare_config(source_repo: str) -> ESMFold2Config:
     config = ESMFold2Config.from_pretrained(source_repo)
+    config.esmc_id = normalize_esmc_id(config.esmc_id)
+    config.esmc_attn_backend = "flex"
     if config.type == "experimental":
         config.auto_map = EXPERIMENTAL_AUTO_MAP
         config.architectures = ["ESMFold2ExperimentalModel"]

@@ -11,6 +11,14 @@ import pytest
 import torch
 from transformers import AutoModel
 
+from fastplms.esm_plusplus.modeling_esm_plusplus import (
+    ESMplusplusConfig,
+    ESMplusplusModel,
+)
+from fastplms.esmfold2.configuration_esmfold2 import ESMFold2Config
+from fastplms.esmfold2.modeling_esmfold2 import (
+    _load_fastplms_esmplusplus_for_esmfold2,
+)
 from testing.conftest import STRUCTURE_MODEL_REGISTRY
 
 ESMFOLD2_MODEL_KEYS = ("esmfold2", "esmfold2_fast")
@@ -22,6 +30,145 @@ OUTPUT_TOLERANCES = {
     "ptm": 0.0,
     "iptm": 0.0,
 }
+
+
+def test_esmfold2_config_uses_fastplms_esmplusplus_defaults() -> None:
+    config = ESMFold2Config()
+
+    assert config.esmc_id == "Synthyra/ESMplusplus_6B"
+    assert config.esmc_attn_backend == "flex"
+
+
+def test_esmfold2_config_normalizes_legacy_esmc_ids() -> None:
+    config = ESMFold2Config(esmc_id="biohub/ESMC-6B")
+
+    assert config.esmc_id == "Synthyra/ESMplusplus_6B"
+
+
+def test_esmplusplus_sequence_id_masks_cross_chain_attention() -> None:
+    config = ESMplusplusConfig(
+        vocab_size=16,
+        hidden_size=16,
+        num_attention_heads=4,
+        num_hidden_layers=1,
+        attn_backend="sdpa",
+    )
+    model = ESMplusplusModel(config).eval()
+    input_ids = torch.tensor([[0, 3, 4, 2]], dtype=torch.long)
+    sequence_id = torch.tensor([[0, 0, 1, 1]], dtype=torch.long)
+
+    with torch.no_grad():
+        output = model(
+            input_ids=input_ids,
+            sequence_id=sequence_id,
+            output_attentions=True,
+        )
+
+    assert output.attentions is not None
+    attention = output.attentions[0]
+    torch.testing.assert_close(
+        attention[:, :, :2, 2:],
+        torch.zeros_like(attention[:, :, :2, 2:]),
+        rtol=0.0,
+        atol=0.0,
+    )
+    torch.testing.assert_close(
+        attention[:, :, 2:, :2],
+        torch.zeros_like(attention[:, :, 2:, :2]),
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_esmplusplus_flex_sequence_id_masks_run() -> None:
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is required for flex attention sequence_id regression.")
+    device = torch.device("cuda")
+    config = ESMplusplusConfig(
+        vocab_size=16,
+        hidden_size=64,
+        num_attention_heads=4,
+        num_hidden_layers=1,
+        attn_backend="flex",
+    )
+    model = ESMplusplusModel(config).to(device=device).eval()
+    input_ids = torch.tensor([[0, 3, 4, 2]], device=device, dtype=torch.long)
+    sequence_id = torch.tensor([[0, 0, 1, 1]], device=device, dtype=torch.long)
+
+    try:
+        with torch.no_grad():
+            output = model(input_ids=input_ids, sequence_id=sequence_id)
+    except (AssertionError, RuntimeError) as error:
+        pytest.skip(f"Flex attention unavailable in this environment: {error}")
+
+    assert output.last_hidden_state.shape == (1, 4, 64)
+
+
+def test_esmplusplus_esmfold2_hidden_state_layout() -> None:
+    config = ESMplusplusConfig(
+        vocab_size=16,
+        hidden_size=16,
+        num_attention_heads=4,
+        num_hidden_layers=2,
+        attn_backend="sdpa",
+    )
+    model = ESMplusplusModel(config).eval()
+    input_ids = torch.tensor([[0, 3, 4, 2]], dtype=torch.long)
+
+    with torch.no_grad():
+        public_output = model(input_ids=input_ids, output_hidden_states=True)
+        esmfold2_output = model(
+            input_ids=input_ids,
+            output_hidden_states=True,
+            esmfold2_hidden_states=True,
+        )
+
+    assert public_output.hidden_states is not None
+    assert esmfold2_output.hidden_states is not None
+    assert len(public_output.hidden_states) == config.num_hidden_layers + 1
+    assert len(esmfold2_output.hidden_states) == config.num_hidden_layers + 1
+    torch.testing.assert_close(
+        esmfold2_output.hidden_states[0],
+        model.embed(input_ids),
+        rtol=0.0,
+        atol=0.0,
+    )
+    torch.testing.assert_close(
+        esmfold2_output.hidden_states[-1],
+        public_output.hidden_states[-1],
+        rtol=0.0,
+        atol=0.0,
+    )
+
+
+def test_esmfold2_loads_shared_esmplusplus_adapter(tmp_path) -> None:
+    config = ESMplusplusConfig(
+        vocab_size=16,
+        hidden_size=16,
+        num_attention_heads=4,
+        num_hidden_layers=1,
+        attn_backend="sdpa",
+    )
+    ESMplusplusModel(config).save_pretrained(tmp_path)
+
+    adapter = _load_fastplms_esmplusplus_for_esmfold2(
+        esmc_model_path=str(tmp_path),
+        attn_backend="sdpa",
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    input_ids = torch.tensor([[0, 3, 4, 2]], dtype=torch.long)
+    sequence_id = torch.tensor([[0, 0, 1, 1]], dtype=torch.long)
+
+    with torch.no_grad():
+        output = adapter(
+            input_ids=input_ids,
+            sequence_id=sequence_id,
+            output_hidden_states=True,
+        )
+
+    assert adapter.config.attn_backend == "sdpa"
+    assert output.hidden_states.shape == (config.num_hidden_layers + 1, 1, 4, 16)
 
 
 def _enable_deterministic_forward() -> None:
