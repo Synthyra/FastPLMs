@@ -42,6 +42,7 @@ COMPOSITE_SHARED_MODULES = [
     "entrypoint_setup.py",
     "fastplms/embedding_mixin.py",
     "fastplms/attention.py",
+    "fastplms/test_time_training.py",
 ]
 
 
