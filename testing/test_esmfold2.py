@@ -13,6 +13,7 @@ from transformers import AutoModel
 
 from fastplms.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
+    ESMplusplusForMaskedLM,
     ESMplusplusModel,
 )
 from fastplms.esmfold2.configuration_esmfold2 import ESMFold2Config
@@ -139,6 +140,26 @@ def test_esmplusplus_esmfold2_hidden_state_layout() -> None:
         rtol=0.0,
         atol=0.0,
     )
+
+
+def test_esmplusplus_masked_lm_can_skip_logits() -> None:
+    config = ESMplusplusConfig(
+        vocab_size=16,
+        hidden_size=16,
+        num_attention_heads=4,
+        num_hidden_layers=1,
+        attn_backend="sdpa",
+    )
+    model = ESMplusplusForMaskedLM(config).eval()
+    input_ids = torch.tensor([[0, 3, 4, 2]], dtype=torch.long)
+
+    with torch.no_grad():
+        no_logits = model(input_ids=input_ids, compute_logits=False)
+        with_logits = model(input_ids=input_ids, compute_logits=True)
+
+    assert no_logits.logits is None
+    assert with_logits.logits is not None
+    assert with_logits.logits.shape == (1, 4, config.vocab_size)
 
 
 def test_esmfold2_loads_shared_esmplusplus_adapter(tmp_path) -> None:

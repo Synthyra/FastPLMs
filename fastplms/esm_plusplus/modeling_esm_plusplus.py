@@ -676,12 +676,19 @@ class TransformerStack(nn.Module):
         assert sequence_id.shape == (batch_size, seq_len), (
             f"sequence_id shape must be {(batch_size, seq_len)}, got {tuple(sequence_id.shape)}"
         )
-        attention_mask_4d = (
-            sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)
-        ).unsqueeze(1)
-        attention_mask_2d = sequence_id != -1
         if sequence_id.dtype == torch.bool:
             attention_mask_2d = sequence_id
+            attention_mask_4d = (
+                attention_mask_2d[:, None, :, None]
+                & attention_mask_2d[:, None, None, :]
+            )
+        else:
+            attention_mask_2d = sequence_id != -1
+            attention_mask_4d = (
+                attention_mask_2d[:, None, :, None]
+                & attention_mask_2d[:, None, None, :]
+                & (sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)).unsqueeze(1)
+            )
 
         if self.attention_backend == AttentionBackend.KERNELS_FLASH:
             assert sequence_id.dtype == torch.bool, (
@@ -695,8 +702,20 @@ class TransformerStack(nn.Module):
                 "Flex attention backend requested but torch.create_block_mask is unavailable."
             )
 
-            def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-                return sequence_id[batch_idx, q_idx] == sequence_id[batch_idx, kv_idx]
+            if sequence_id.dtype == torch.bool:
+
+                def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+                    return (
+                        sequence_id[batch_idx, q_idx]
+                        & sequence_id[batch_idx, kv_idx]
+                    )
+
+            else:
+
+                def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+                    q_id = sequence_id[batch_idx, q_idx]
+                    kv_id = sequence_id[batch_idx, kv_idx]
+                    return (q_id != -1) & (q_id == kv_id)
 
             flex_block_mask = create_block_mask(
                 mask_mod,
@@ -952,6 +971,7 @@ class ESMplusplusForMaskedLM(FastPLMTestTimeTrainingMixin, PreTrainedESMplusplus
         output_s_max: Optional[bool] = False,
         esmfold2_hidden_states: bool = False,
         return_dict: Optional[bool] = None,
+        compute_logits: bool = True,
         **kwargs,
     ) -> ESMplusplusOutput:
         if inputs_embeds is None:
@@ -970,9 +990,10 @@ class ESMplusplusForMaskedLM(FastPLMTestTimeTrainingMixin, PreTrainedESMplusplus
         )
 
         last_hidden_state = output.last_hidden_state
-        logits = self.sequence_head(last_hidden_state)
+        logits = self.sequence_head(last_hidden_state) if compute_logits else None
         loss = None
         if labels is not None:
+            assert logits is not None, "labels require compute_logits=True."
             loss = self.ce_loss(logits.view(-1, self.vocab_size), labels.view(-1))
 
         return ESMplusplusOutput(

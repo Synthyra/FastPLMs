@@ -36,12 +36,13 @@ except ImportError:
     TE_AVAILABLE = False
 
 from transformers.modeling_utils import PreTrainedModel
-from fastplms.test_time_training import FastPLMTestTimeTrainingMixin, TTTConfig
-from .configuration_esmc import ESMCConfig as _FastPLMSESMCConfig
-from .configuration_esmc_sae import ESMCSAEConfig as _FastPLMSESMCSAEConfig
+
+try:
+    from fastplms.test_time_training import FastPLMTestTimeTrainingMixin, TTTConfig
+except ImportError:
+    from .test_time_training import FastPLMTestTimeTrainingMixin, TTTConfig
+
 from .configuration_esmfold2 import ESMFold2Config, normalize_esmc_id
-from .modeling_esmc import ESMCModel as _FastPLMSESMCModel
-from .modeling_esmc_sae import _ESMCSAELayer as _FastPLMSESMCSAELayer
 from .modeling_esmfold2_common import (
     CHAR_VOCAB_SIZE,
     MAX_ATOMIC_NUMBER,
@@ -157,10 +158,13 @@ def _load_fastplms_esmplusplus_for_esmfold2(
     device: torch.device,
     dtype: torch.dtype,
 ) -> _ESMFold2ESMplusplusAdapter:
-    from fastplms.esm_plusplus.modeling_esm_plusplus import (
-        ESMplusplusConfig,
-        ESMplusplusModel,
-    )
+    try:
+        from fastplms.esm_plusplus.modeling_esm_plusplus import (
+            ESMplusplusConfig,
+            ESMplusplusModel,
+        )
+    except ImportError:
+        from .modeling_esm_plusplus import ESMplusplusConfig, ESMplusplusModel
 
     normalized_path = normalize_esmc_id(esmc_model_path)
     esmc_config = ESMplusplusConfig.from_pretrained(normalized_path)
@@ -736,10 +740,16 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
         if self._ttt_lm_head is not None:
             return
-        from fastplms.esm_plusplus.modeling_esm_plusplus import (
-            ESMplusplusConfig,
-            ESMplusplusForMaskedLM,
-        )
+        try:
+            from fastplms.esm_plusplus.modeling_esm_plusplus import (
+                ESMplusplusConfig,
+                ESMplusplusForMaskedLM,
+            )
+        except ImportError:
+            from .modeling_esm_plusplus import (
+                ESMplusplusConfig,
+                ESMplusplusForMaskedLM,
+            )
 
         esmc_config = ESMplusplusConfig.from_pretrained(self.config.esmc_id)
         esmc_config.attn_backend = self.config.esmc_attn_backend
