@@ -40,6 +40,11 @@ _IMPORT_GUARD_PATTERN = re.compile(
 
 COMPOSITE_SHARED_MODULES = [
     "entrypoint_setup.py",
+    # Defines FastPLMTestTimeTrainingMixin, a base class of every `...ForMaskedLM`.
+    # Must be inlined: the modeling files' `from fastplms.test_time_training import`
+    # is stripped by _IMPORT_GUARD_PATTERN below, so without this the composite
+    # raises NameError at class definition on the Hub. Self-contained (stdlib/torch).
+    "fastplms/test_time_training.py",
     "fastplms/embedding_mixin.py",
     "fastplms/attention.py",
 ]
