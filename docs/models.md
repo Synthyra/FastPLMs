@@ -432,6 +432,8 @@ model = AutoModel.from_pretrained(
 
 - Uses `AutoModel`, not `AutoModelForMaskedLM`.
 - Can fold single chains and multi-chain complexes.
+- Loads the embedded PLM through `Synthyra/ESMplusplus_6B` by default, using
+  FastPLMs ESM++ with `config.esmc_attn_backend = "flex"`.
 - Exposes `fold_protein()`, `fold()`, `prepare_structure_input()`,
   `result_to_cif()`, and `result_to_pdb()`.
 - Experimental checkpoints support `res_type_soft` for differentiable binder

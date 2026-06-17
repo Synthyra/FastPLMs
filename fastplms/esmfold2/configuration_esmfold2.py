@@ -23,7 +23,19 @@ from transformers.configuration_utils import PretrainedConfig
 # Nested dataclass configs
 # ---------------------------------------------------------------------------
 
-_DEFAULT_ESMC_HF_REPO = "biohub/ESMC-6B"
+_DEFAULT_ESMC_HF_REPO = "Synthyra/ESMplusplus_6B"
+_DEFAULT_ESMC_ATTN_BACKEND = "flex"
+_ESMC_ID_ALIASES = {
+    "biohub/ESMC-300M": "Synthyra/ESMplusplus_small",
+    "biohub/ESMC-600M": "Synthyra/ESMplusplus_large",
+    "biohub/ESMC-6B": "Synthyra/ESMplusplus_6B",
+}
+
+
+def normalize_esmc_id(esmc_id: str) -> str:
+    if esmc_id in _ESMC_ID_ALIASES:
+        return _ESMC_ID_ALIASES[esmc_id]
+    return esmc_id
 
 
 @dataclass
@@ -254,8 +266,16 @@ class ESMFold2Config(PretrainedConfig):
 
         self.lm_d_model: int = kwargs.get("lm_d_model", 2560)
         self.lm_num_layers: int = kwargs.get("lm_num_layers", 80)
-        # Required, no default — every shipped HF export must name its ESMC backbone.
-        self.esmc_id: str = kwargs.get("esmc_id", _DEFAULT_ESMC_HF_REPO)
+        # Backward-compatible field name; values now point to FastPLMs ESM++.
+        raw_esmc_id = (
+            kwargs["esmc_id"] if "esmc_id" in kwargs else _DEFAULT_ESMC_HF_REPO
+        )
+        self.esmc_id: str = normalize_esmc_id(raw_esmc_id)
+        self.esmc_attn_backend: str = (
+            kwargs["esmc_attn_backend"]
+            if "esmc_attn_backend" in kwargs
+            else _DEFAULT_ESMC_ATTN_BACKEND
+        )
 
         def _init_nested(cls, val):
             if isinstance(val, cls):
@@ -295,4 +315,10 @@ class ESMFold2Config(PretrainedConfig):
         return output
 
 
-__all__ = ["ESMFold2Config", "MSAEncoderConfig", "ParcaeConfig", "LMEncoderConfig"]
+__all__ = [
+    "ESMFold2Config",
+    "MSAEncoderConfig",
+    "ParcaeConfig",
+    "LMEncoderConfig",
+    "normalize_esmc_id",
+]

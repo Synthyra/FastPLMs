@@ -36,12 +36,13 @@ except ImportError:
     TE_AVAILABLE = False
 
 from transformers.modeling_utils import PreTrainedModel
-from fastplms.test_time_training import FastPLMTestTimeTrainingMixin, TTTConfig
-from .configuration_esmc import ESMCConfig as _FastPLMSESMCConfig
-from .configuration_esmc_sae import ESMCSAEConfig as _FastPLMSESMCSAEConfig
-from .configuration_esmfold2 import ESMFold2Config
-from .modeling_esmc import ESMCModel as _FastPLMSESMCModel
-from .modeling_esmc_sae import _ESMCSAELayer as _FastPLMSESMCSAELayer
+
+try:
+    from fastplms.test_time_training import FastPLMTestTimeTrainingMixin, TTTConfig
+except ImportError:
+    from .test_time_training import FastPLMTestTimeTrainingMixin, TTTConfig
+
+from .configuration_esmfold2 import ESMFold2Config, normalize_esmc_id
 from .modeling_esmfold2_common import (
     CHAR_VOCAB_SIZE,
     MAX_ATOMIC_NUMBER,
@@ -109,6 +110,70 @@ _NONPOLYMER_ID = 4
 # ``model.set_chunk_size(...)``; pass None to disable chunking (faster for
 # short L but OOM-prone past ~600).
 _DEFAULT_CHUNK_SIZE = 64
+
+
+class _ESMFold2ESMplusplusAdapter(nn.Module):
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    @property
+    def config(self):
+        return self.model.config
+
+    def forward(
+        self,
+        input_ids: Tensor,
+        attention_mask: Tensor | None = None,
+        sequence_id: Tensor | None = None,
+        output_hidden_states: bool | None = None,
+        output_attentions: bool | None = None,
+        return_dict: bool | None = None,
+        compute_sae: bool = True,
+        normalize_sae: bool = False,
+    ):
+        del return_dict, compute_sae, normalize_sae
+        output = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            sequence_id=sequence_id,
+            output_hidden_states=output_hidden_states,
+            output_attentions=output_attentions,
+            return_dict=True,
+            esmfold2_hidden_states=True,
+        )
+        if output_hidden_states:
+            hidden_states = output.hidden_states
+            assert hidden_states is not None, "ESM++ did not return hidden states."
+            if isinstance(hidden_states, torch.Tensor):
+                output.hidden_states = hidden_states
+            else:
+                output.hidden_states = torch.stack(tuple(hidden_states), dim=0)
+        return output
+
+
+def _load_fastplms_esmplusplus_for_esmfold2(
+    esmc_model_path: str,
+    attn_backend: str,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> _ESMFold2ESMplusplusAdapter:
+    try:
+        from fastplms.esm_plusplus.modeling_esm_plusplus import (
+            ESMplusplusConfig,
+            ESMplusplusModel,
+        )
+    except ImportError:
+        from .modeling_esm_plusplus import ESMplusplusConfig, ESMplusplusModel
+
+    normalized_path = normalize_esmc_id(esmc_model_path)
+    esmc_config = ESMplusplusConfig.from_pretrained(normalized_path)
+    esmc_config.attn_backend = attn_backend
+    esmc = ESMplusplusModel.from_pretrained(
+        normalized_path,
+        config=esmc_config,
+    )
+    return _ESMFold2ESMplusplusAdapter(esmc).to(device=device, dtype=dtype).eval()
 
 
 class PairTransition(nn.Module):
@@ -578,7 +643,7 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
             d_z=d_pair, d_model=config.lm_d_model, num_layers=config.lm_num_layers
         )
         self._esmc: nn.Module | None = None
-        self._esmc_fp8: bool = False  # set by load_esmc(fp8=True)
+        self._esmc_fp8: bool = False
         self._ttt_lm_head: nn.Module | None = None
         self._esmfold2_input_builder: Any | None = None
 
@@ -633,44 +698,41 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         self.init_ttt({"lora_target_replace_module": "MultiHeadAttention"})
 
     def load_esmc(self, esmc_model_path: str, precision: str = "bf16") -> None:
-        """Load the ESMC LM.
+        """Load the FastPLMs ESM++ LM used as the ESMFold2 PLM backbone.
 
-        ``precision``: ``"bf16"`` (default), ``"fp32"``, or ``"fp8"``.
-        ``"fp8"`` requires H100 + TransformerEngine ≥ 2.x and quantizes
-        every TE module's weights to fp8 storage.
+        ``precision``: ``"bf16"`` (default) or ``"fp32"``.
         """
-        from .modeling_esmc import ESMCModel
-
         dtype_map = {
             "bf16": torch.bfloat16,
             "fp32": torch.float32,
-            "fp8": torch.bfloat16,  # underlying weights stay bf16, TE re-quantizes to fp8
         }
         if precision not in dtype_map:
-            raise ValueError(
-                f"precision must be one of {list(dtype_map)}, got {precision!r}"
-            )
+            if precision == "fp8":
+                raise RuntimeError(
+                    "esmc_precision='fp8' is not supported with the shared "
+                    "FastPLMs ESM++ ESMFold2 backbone yet."
+                )
+            raise ValueError(f"precision must be one of {list(dtype_map)}, got {precision!r}")
         dtype = dtype_map[precision]
 
-        esmc = (
-            ESMCModel.from_pretrained(esmc_model_path)
-            .to(device=self.device, dtype=dtype)
-            .eval()
+        esmc = _load_fastplms_esmplusplus_for_esmfold2(
+            esmc_model_path=esmc_model_path,
+            attn_backend=self.config.esmc_attn_backend,
+            device=self.device,
+            dtype=dtype,
+        )
+        assert esmc.config.hidden_size == self.config.lm_d_model, (
+            f"ESMFold2 expected lm_d_model={self.config.lm_d_model}, "
+            f"but loaded ESM++ hidden_size={esmc.config.hidden_size}."
+        )
+        assert esmc.config.num_hidden_layers == self.config.lm_num_layers, (
+            f"ESMFold2 expected lm_num_layers={self.config.lm_num_layers}, "
+            f"but loaded ESM++ num_hidden_layers={esmc.config.num_hidden_layers}."
         )
         for p in esmc.parameters():
             p.requires_grad_(False)
 
-        if precision == "fp8":
-            if not TE_AVAILABLE:
-                raise RuntimeError(
-                    "transformer_engine is not available; cannot use fp8."
-                )
-            with torch.no_grad():
-                _convert_te_modules_to_fp8_inplace(esmc)
-            self._esmc_fp8 = True
-        else:
-            self._esmc_fp8 = False
-
+        self._esmc_fp8 = False
         self._esmc = esmc
         self._ttt_lm_head = None
 
@@ -678,22 +740,36 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
         if self._ttt_lm_head is not None:
             return
-        from .modeling_esmc import ESMCForMaskedLM
+        try:
+            from fastplms.esm_plusplus.modeling_esm_plusplus import (
+                ESMplusplusConfig,
+                ESMplusplusForMaskedLM,
+            )
+        except ImportError:
+            from .modeling_esm_plusplus import (
+                ESMplusplusConfig,
+                ESMplusplusForMaskedLM,
+            )
 
-        mlm, loading_info = ESMCForMaskedLM.from_pretrained(
+        esmc_config = ESMplusplusConfig.from_pretrained(self.config.esmc_id)
+        esmc_config.attn_backend = self.config.esmc_attn_backend
+        mlm, loading_info = ESMplusplusForMaskedLM.from_pretrained(
             self.config.esmc_id,
+            config=esmc_config,
             output_loading_info=True,
         )
         missing_head_keys = [
-            key for key in loading_info["missing_keys"] if key.startswith("lm_head")
+            key
+            for key in loading_info["missing_keys"]
+            if key.startswith("sequence_head")
         ]
         assert len(missing_head_keys) == 0, (
-            f"ESMFold2 TTT could not load a pretrained ESMC MLM head from "
+            f"ESMFold2 TTT could not load a pretrained ESM++ MLM head from "
             f"{self.config.esmc_id}: missing {missing_head_keys}"
         )
         dtype = next(self._esmc.parameters()).dtype
         mlm = mlm.to(device=self.device, dtype=dtype).eval()
-        self._ttt_lm_head = mlm.lm_head
+        self._ttt_lm_head = mlm.sequence_head
         self._ttt_lm_head.requires_grad_(False)
         del mlm
 

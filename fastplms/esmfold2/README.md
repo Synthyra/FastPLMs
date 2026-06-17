@@ -11,9 +11,9 @@ tags:
 
 FastPLMs ESMFold2 is a self-contained Hugging Face `AutoModel` wrapper for
 Biohub's ESMFold2, ESMFold2-Fast, and experimental ESMFold2 structure
-predictors. It vendors the released Biohub ESMFold2 model code, ESMC backbone
-code, input builder, MSA helpers, and structure export utilities needed for
-remote-code loading.
+predictors. It vendors the released Biohub ESMFold2 model code, input builder,
+MSA helpers, and structure export utilities, while loading the PLM backbone
+through FastPLMs ESM++.
 
 ## Load With AutoModel
 
@@ -31,7 +31,9 @@ model = AutoModel.from_pretrained(
 Use `Synthyra/ESMFold2` for the full model, `Synthyra/ESMFold2-Fast` for the
 faster release variant, and the `Synthyra/ESMFold2-Experimental*` checkpoints
 for differentiable binder design and experimental critic ensembles.
-The folding trunk runs in fp32; the 6B ESMC backbone is loaded in bf16 by default via `esmc_precision="bf16"`.
+The folding trunk runs in fp32; the 6B FastPLMs ESM++ backbone is loaded in
+bf16 by default via `esmc_precision="bf16"` and uses the flex attention backend
+by default inside ESMFold2.
 
 ## Fold One Protein
 
@@ -84,7 +86,7 @@ print(result.ttt_metrics["step_plddts"])
 print(result.ttt_metrics["best_step"])
 ```
 
-`load_esmc=True` is required for TTT because the ESMC MLM head is loaded lazily
+`load_esmc=True` is required for TTT because the ESM++ MLM head is loaded lazily
 from `config.esmc_id`. If that pretrained MLM head cannot be loaded, TTT raises
 an assertion instead of silently using a random head.
 
@@ -219,7 +221,7 @@ with torch.inference_mode():
 decoded = model.input_builder.decode(output, features, chain_infos)
 ```
 
-Set `load_esmc=False` when loading if you want to provide precomputed `lm_hidden_states` manually or run folding-trunk tests without loading the 6B ESMC backbone:
+Set `load_esmc=False` when loading if you want to provide precomputed `lm_hidden_states` manually or run folding-trunk tests without loading the 6B ESM++ backbone:
 
 ```python
 model = AutoModel.from_pretrained(

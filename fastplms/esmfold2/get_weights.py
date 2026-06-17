@@ -8,12 +8,13 @@ Usage:
 
 import argparse
 import os
+import tempfile
 from pathlib import Path
 
 import torch
 from huggingface_hub import HfApi, login
 
-from fastplms.esmfold2.configuration_esmfold2 import ESMFold2Config
+from fastplms.esmfold2.configuration_esmfold2 import ESMFold2Config, normalize_esmc_id
 from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
 from fastplms.esmfold2.modeling_esmfold2_experimental import ESMFold2ExperimentalModel
 
@@ -41,12 +42,18 @@ EXPERIMENTAL_AUTO_MAP = {
 IGNORE_PATTERNS = [
     "__pycache__/*",
     "*.pyc",
+    "configuration_esmc.py",
+    "configuration_esmc_sae.py",
     "get_weights.py",
+    "modeling_esmc.py",
+    "modeling_esmc_sae.py",
 ]
 
 
 def _prepare_config(source_repo: str) -> ESMFold2Config:
     config = ESMFold2Config.from_pretrained(source_repo)
+    config.esmc_id = normalize_esmc_id(config.esmc_id)
+    config.esmc_attn_backend = "flex"
     if config.type == "experimental":
         config.auto_map = EXPERIMENTAL_AUTO_MAP
         config.architectures = ["ESMFold2ExperimentalModel"]
@@ -56,12 +63,39 @@ def _prepare_config(source_repo: str) -> ESMFold2Config:
     return config
 
 
+def _build_esmplusplus_composite() -> str:
+    from update_HF import build_composite
+
+    composite_code = build_composite(
+        "fastplms/esm_plusplus/modeling_esm_plusplus.py",
+        include_embedding_mixin=True,
+    )
+    compile(composite_code, "modeling_esm_plusplus.py", "exec")
+    return composite_code
+
+
 def _upload_code(api: HfApi, repo_id: str, package_dir: Path) -> None:
     api.upload_folder(
         folder_path=str(package_dir),
         repo_id=repo_id,
         repo_type="model",
         ignore_patterns=IGNORE_PATTERNS,
+    )
+    composite_code = _build_esmplusplus_composite()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        composite_path = Path(tmpdir) / "modeling_esm_plusplus.py"
+        composite_path.write_text(composite_code, encoding="utf-8")
+        api.upload_file(
+            path_or_fileobj=str(composite_path),
+            path_in_repo="modeling_esm_plusplus.py",
+            repo_id=repo_id,
+            repo_type="model",
+        )
+    api.upload_file(
+        path_or_fileobj=str(package_dir.parent / "test_time_training.py"),
+        path_in_repo="test_time_training.py",
+        repo_id=repo_id,
+        repo_type="model",
     )
 
 
@@ -86,6 +120,7 @@ def convert_and_push(
         config = _prepare_config(source_repo)
 
         if dry_run:
+            _build_esmplusplus_composite()
             print(f"[dry-run] validated config and code for {target_repo} <- {source_repo}")
             continue
 

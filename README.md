@@ -62,7 +62,7 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
 | **ESM++** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Optimized SDPA / Flex | Small (300M), Large (600M), 6B |
 | **ESM3** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | HF AutoModel wrapper | Open Small |
-| **ESMFold2** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Self-contained HF AutoModel wrapper, opt-in experimental TTT | Full, Fast, Experimental, Cutoff2025 |
+| **ESMFold2** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Self-contained HF AutoModel wrapper with FastPLMs ESM++ LM backbone, opt-in experimental TTT | Full, Fast, Experimental, Cutoff2025 |
 | **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
 | **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
 | **ANKH** | Elnaggar Lab | [ElnaggarLab/ankh](https://huggingface.co/ElnaggarLab/ankh-base) | T5 RPE via Flex score_mod | Base, Large, ANKH2-L, ANKH3-L, ANKH3-XL |
@@ -82,12 +82,12 @@ We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/coll
 | `esmplusplus_large` | ESM++ | 575.0M | Biohub | [Synthyra/ESMplusplus_large](https://huggingface.co/Synthyra/ESMplusplus_large) | [biohub/ESMC-600M](https://huggingface.co/biohub/ESMC-600M) |
 | `esmplusplus_6b` | ESM++ | 6.35B | Biohub | [Synthyra/ESMplusplus_6B](https://huggingface.co/Synthyra/ESMplusplus_6B) | [biohub/ESMC-6B](https://huggingface.co/biohub/ESMC-6B) |
 | `esm3_small` | ESM3 | 1.4B | Biohub | [Synthyra/ESM3_small](https://huggingface.co/Synthyra/ESM3_small) | [biohub/esm3-sm-open-v1](https://huggingface.co/biohub/esm3-sm-open-v1) |
-| `esmfold2` | ESMFold2 | 234.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2](https://huggingface.co/Synthyra/ESMFold2) | [biohub/ESMFold2](https://huggingface.co/biohub/ESMFold2) |
-| `esmfold2_fast` | ESMFold2 | 188.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Fast](https://huggingface.co/Synthyra/ESMFold2-Fast) | [biohub/ESMFold2-Fast](https://huggingface.co/biohub/ESMFold2-Fast) |
-| `esmfold2_experimental_fast` | ESMFold2 | 188.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Experimental-Fast](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast) | [biohub/ESMFold2-Experimental-Fast](https://huggingface.co/biohub/ESMFold2-Experimental-Fast) |
-| `esmfold2_experimental_fast_cutoff2025` | ESMFold2 | 188.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast-Cutoff2025) | [biohub/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Fast-Cutoff2025) |
-| `esmfold2_experimental` | ESMFold2 | 234.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Experimental](https://huggingface.co/Synthyra/ESMFold2-Experimental) | [biohub/ESMFold2-Experimental](https://huggingface.co/biohub/ESMFold2-Experimental) |
-| `esmfold2_experimental_cutoff2025` | ESMFold2 | 234.8M + ESMC 6B | Biohub | [Synthyra/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Cutoff2025) | [biohub/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Cutoff2025) |
+| `esmfold2` | ESMFold2 | 234.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2](https://huggingface.co/Synthyra/ESMFold2) | [biohub/ESMFold2](https://huggingface.co/biohub/ESMFold2) |
+| `esmfold2_fast` | ESMFold2 | 188.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Fast](https://huggingface.co/Synthyra/ESMFold2-Fast) | [biohub/ESMFold2-Fast](https://huggingface.co/biohub/ESMFold2-Fast) |
+| `esmfold2_experimental_fast` | ESMFold2 | 188.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Experimental-Fast](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast) | [biohub/ESMFold2-Experimental-Fast](https://huggingface.co/biohub/ESMFold2-Experimental-Fast) |
+| `esmfold2_experimental_fast_cutoff2025` | ESMFold2 | 188.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast-Cutoff2025) | [biohub/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Fast-Cutoff2025) |
+| `esmfold2_experimental` | ESMFold2 | 234.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Experimental](https://huggingface.co/Synthyra/ESMFold2-Experimental) | [biohub/ESMFold2-Experimental](https://huggingface.co/biohub/ESMFold2-Experimental) |
+| `esmfold2_experimental_cutoff2025` | ESMFold2 | 234.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Cutoff2025) | [biohub/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Cutoff2025) |
 | `e1_150m` | E1 | 154.4M | Profluent Bio | [Synthyra/Profluent-E1-150M](https://huggingface.co/Synthyra/Profluent-E1-150M) | [Profluent-Bio/E1-150m](https://huggingface.co/Profluent-Bio/E1-150m) |
 | `e1_300m` | E1 | 274.3M | Profluent Bio | [Synthyra/Profluent-E1-300M](https://huggingface.co/Synthyra/Profluent-E1-300M) | [Profluent-Bio/E1-300m](https://huggingface.co/Profluent-Bio/E1-300m) |
 | `e1_600m` | E1 | 641.4M | Profluent Bio | [Synthyra/Profluent-E1-600M](https://huggingface.co/Synthyra/Profluent-E1-600M) | [Profluent-Bio/E1-600m](https://huggingface.co/Profluent-Bio/E1-600m) |
@@ -128,7 +128,7 @@ Supported opt-in paths:
 | :--- | :--- | :--- |
 | ESM2, ESM++, ESM3, E1, DPLM, DPLM2, ANKH | `model.ttt(seq=...)` | MLM LoRA adaptation of the PLM backbone only |
 | FastESMFold | `model.fold_protein(sequence, ttt=True)` or `model.fold_protein_ttt(sequence)` | Returns the best pLDDT fold across baseline and TTT steps |
-| ESMFold2 | `model.fold_protein(sequence, ttt=True, ttt_config=...)` or `model.fold_protein_ttt(sequence)` | Protein-only v1 path, trains LoRA only on `_esmc` |
+| ESMFold2 | `model.fold_protein(sequence, ttt=True, ttt_config=...)` or `model.fold_protein_ttt(sequence)` | Protein-only v1 path, trains LoRA only on the ESM++ `_esmc` backbone |
 | Boltz2 | Not supported | Boltz2 remains inference-only in FastPLMs |
 
 Sequence PLM example:
@@ -158,6 +158,7 @@ model = AutoModel.from_pretrained(
     "Synthyra/ESMFold2-Fast",
     trust_remote_code=True,
     load_esmc=True,
+    esmc_attn_backend="flex",
 ).cuda().eval()
 
 result = model.fold_protein(
@@ -169,6 +170,10 @@ result = model.fold_protein(
 )
 print(result.ttt_metrics)
 ```
+
+ESMFold2 loads `Synthyra/ESMplusplus_6B` as its LM backbone by default.
+Legacy `biohub/ESMC-*` IDs in older configs are accepted as migration aliases
+and normalized to the matching Synthyra ESM++ checkpoint.
 
 If you use the TTT functionality, cite ProteinTTT in addition to FastPLMs and
 the underlying model papers. The ProteinTTT citation is listed in
@@ -482,7 +487,7 @@ The parity and compliance tests compare FastPLM outputs against the original mod
 | Dependency | Used by | Install |
 | :--- | :--- | :--- |
 | `cloudpathlib`, `zstd`, `biotite` (+ `official/esm` submodule on `sys.path`) | ESM++ / ESMC, ESM3 official parity | provided by `Dockerfile.esm_plusplus` and `Dockerfile.esm3`; the Biohub `esm` package itself is **not** pip-installed because it depends on a Biohub `transformers` fork. |
-| Biohub `transformers` fork, `rdkit`, `biotite`, `msgpack-numpy`, `pydssp`, `pygtrie`, `py3dmol` | ESMFold2 parity and structure export | provided by `Dockerfile.esmfold2` |
+| Biohub `transformers` fork, `rdkit`, `biotite`, `msgpack-numpy`, `pydssp`, `pygtrie`, `py3dmol` | ESMFold2 parity and structure export; runtime LM loading uses FastPLMs ESM++ | provided by `Dockerfile.esmfold2` |
 | `E1` | E1 | `pip install -e official/e1` (or use `Dockerfile.e1`) |
 | `transformers` (`EsmForMaskedLM`, `T5EncoderModel`) | ESM2, DPLM, ANKH | already in `requirements.txt` |
 
