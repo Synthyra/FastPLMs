@@ -144,6 +144,55 @@ _DEFAULT_CHUNK_SIZE = 64
 
 
 # ===========================================================================
+# MSA inference-time diversity augmentations
+# ===========================================================================
+
+
+def maybe_subsample_msa(
+    msa: Tensor,
+    msa_attention_mask: Tensor | None,
+    has_deletion: Tensor | None,
+    deletion_value: Tensor | None,
+    *,
+    max_depth: int | None,
+    enabled: bool,
+) -> tuple[Tensor, Tensor | None, Tensor | None, Tensor | None]:
+    if not enabled or max_depth is None:
+        return msa, msa_attention_mask, has_deletion, deletion_value
+
+    depth = msa.size(1)
+    if depth <= 1 or depth <= max_depth:
+        return msa, msa_attention_mask, has_deletion, deletion_value
+
+    indices = torch.zeros(max_depth, dtype=torch.long, device=msa.device)
+    indices[1:] = torch.randperm(depth - 1, device=msa.device)[: max_depth - 1] + 1
+    indices = indices.sort().values
+
+    msa = msa[:, indices]
+    if msa_attention_mask is not None:
+        msa_attention_mask = msa_attention_mask[:, indices]
+    if has_deletion is not None:
+        has_deletion = has_deletion[:, indices]
+    if deletion_value is not None:
+        deletion_value = deletion_value[:, indices]
+    return msa, msa_attention_mask, has_deletion, deletion_value
+
+
+def maybe_apply_msa_column_masking(
+    msa_attention_mask: Tensor | None,
+    rate: float,
+) -> Tensor | None:
+    if msa_attention_mask is None or rate <= 0.0 or msa_attention_mask.size(1) <= 1:
+        return msa_attention_mask
+
+    batch_size, _, length = msa_attention_mask.shape
+    col_keep = torch.rand(batch_size, length, device=msa_attention_mask.device) >= rate
+    col_keep = col_keep.unsqueeze(1).expand_as(msa_attention_mask).clone()
+    col_keep[:, 0, :] = True
+    return msa_attention_mask.bool() & col_keep
+
+
+# ===========================================================================
 # Atom-token utilities
 # ===========================================================================
 
@@ -2141,6 +2190,8 @@ def compute_lm_hidden_states(
     mol_type: Tensor,
     token_mask: Tensor,
     pad_to_multiple: int | None = None,
+    lm_mask_pct: float = 0.0,
+    mask_token_id: int = 32,
 ) -> Tensor:
     """Run ESMC with BOS/EOS wrapping, return hidden states [B, L, N, D] with N=81 layers.
 
@@ -2229,6 +2280,13 @@ def compute_lm_hidden_states(
     # sequence_id for chain-aware attention; PAD tokens get -1 (no attention).
     sequence_id = (lm_input_ids == 0).cumsum(dim=1) - 1  # BOS=0
     sequence_id = sequence_id.masked_fill(lm_input_ids == 1, -1)  # PAD=1
+
+    if lm_mask_pct > 0.0:
+        special = (lm_input_ids == 0) | (lm_input_ids == 1) | (lm_input_ids == 2)
+        do_mask = (
+            torch.rand(lm_input_ids.shape, device=device) < lm_mask_pct
+        ) & ~special
+        lm_input_ids = lm_input_ids.masked_fill(do_mask, mask_token_id)
 
     with torch.inference_mode():
         esmc_out = esmc(

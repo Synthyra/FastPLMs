@@ -507,8 +507,13 @@ class _PyTorchLayerNormLinear(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.layer_norm(
-            x, (self.d_in,), self.layer_norm_weight, self.layer_norm_bias, self.eps
+            x,
+            (self.d_in,),
+            self.layer_norm_weight.to(dtype=x.dtype),
+            self.layer_norm_bias.to(dtype=x.dtype),
+            self.eps,
         )
+        x = x.to(dtype=self.weight.dtype)
         return F.linear(x, self.weight)
 
 
@@ -537,13 +542,15 @@ class _PyTorchLayerNormMLP(nn.Module):
         x = F.layer_norm(
             x,
             (self.hidden_size,),
-            self.layer_norm_weight,
-            self.layer_norm_bias,
+            self.layer_norm_weight.to(dtype=x.dtype),
+            self.layer_norm_bias.to(dtype=x.dtype),
             self.eps,
         )
+        x = x.to(dtype=self.fc1_weight.dtype)
         x = F.linear(x, self.fc1_weight)
         x1, x2 = x.chunk(2, dim=-1)
         x = F.silu(x1) * x2
+        x = x.to(dtype=self.fc2_weight.dtype)
         return F.linear(x, self.fc2_weight)
 
 

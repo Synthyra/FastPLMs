@@ -524,8 +524,9 @@ class ESMFold2ExperimentalModel(PreTrainedModel):
         if precision not in dtype_map:
             if precision == "fp8":
                 raise RuntimeError(
-                    "esmc_precision='fp8' is not supported with the shared "
-                    "FastPLMs ESM++ ESMFold2 backbone yet."
+                    "esmc_precision='fp8' is supported only by the standard "
+                    "released ESMFold2 model. The experimental binder-design "
+                    "model keeps the FastPLMs ESM++ backbone in bf16 or fp32."
                 )
             raise ValueError(f"precision must be one of {list(dtype_map)}, got {precision!r}")
         esmc = _load_fastplms_esmplusplus_for_esmfold2(

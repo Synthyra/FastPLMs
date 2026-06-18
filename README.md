@@ -174,6 +174,9 @@ print(result.ttt_metrics)
 ESMFold2 loads `Synthyra/ESMplusplus_6B` as its LM backbone by default.
 Legacy `biohub/ESMC-*` IDs in older configs are accepted as migration aliases
 and normalized to the matching Synthyra ESM++ checkpoint.
+For FP8 LM inference, pass `esmc_precision="fp8"` and install
+`transformer_engine.pytorch` in a CUDA environment with FP8-capable hardware.
+FP8 is inference-only, so TTT remains a bf16/fp32 path.
 
 If you use the TTT functionality, cite ProteinTTT in addition to FastPLMs and
 the underlying model papers. The ProteinTTT citation is listed in

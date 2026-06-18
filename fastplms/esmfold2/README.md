@@ -230,3 +230,18 @@ model = AutoModel.from_pretrained(
     load_esmc=False,
 ).cuda().eval()
 ```
+
+For FP8 LM inference, install `transformer_engine.pytorch` in a CUDA
+environment with FP8-capable hardware and load the shared FastPLMs ESM++
+backbone with:
+
+```python
+model = AutoModel.from_pretrained(
+    "Synthyra/ESMFold2-Fast",
+    trust_remote_code=True,
+    esmc_precision="fp8",
+).cuda().eval()
+```
+
+FP8 is inference-only for the ESMFold2 LM backbone. TTT remains a bf16/fp32
+path.

@@ -62,6 +62,8 @@ from .modeling_esmfold2_common import (
     compute_lm_hidden_states,
     gather_rep_atom_coords,
     gather_token_to_atom,
+    maybe_apply_msa_column_masking,
+    maybe_subsample_msa,
 )
 from .esmfold2_affine3d import Affine3D as _FastPLMSESMFold2Affine3D
 from .esmfold2_aligner import Aligner as _FastPLMSESMFold2Aligner
@@ -700,19 +702,19 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
     def load_esmc(self, esmc_model_path: str, precision: str = "bf16") -> None:
         """Load the FastPLMs ESM++ LM used as the ESMFold2 PLM backbone.
 
-        ``precision``: ``"bf16"`` (default) or ``"fp32"``.
+        ``precision``: ``"bf16"`` (default), ``"fp32"``, or opt-in ``"fp8"``.
         """
         dtype_map = {
             "bf16": torch.bfloat16,
             "fp32": torch.float32,
+            "fp8": torch.bfloat16,
         }
         if precision not in dtype_map:
-            if precision == "fp8":
-                raise RuntimeError(
-                    "esmc_precision='fp8' is not supported with the shared "
-                    "FastPLMs ESM++ ESMFold2 backbone yet."
-                )
             raise ValueError(f"precision must be one of {list(dtype_map)}, got {precision!r}")
+        if precision == "fp8" and not TE_AVAILABLE:
+            raise RuntimeError(
+                "esmc_precision='fp8' requires transformer_engine.pytorch."
+            )
         dtype = dtype_map[precision]
 
         esmc = _load_fastplms_esmplusplus_for_esmfold2(
@@ -732,12 +734,18 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         for p in esmc.parameters():
             p.requires_grad_(False)
 
-        self._esmc_fp8 = False
+        if precision == "fp8":
+            with torch.no_grad():
+                _convert_te_modules_to_fp8_inplace(esmc)
+
+        self._esmc_fp8 = precision == "fp8"
         self._esmc = esmc
         self._ttt_lm_head = None
 
     def _ensure_ttt_lm_head(self) -> None:
         assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._esmc_fp8:
+            raise RuntimeError("ESMFold2 TTT is not supported with fp8 ESM++.")
         if self._ttt_lm_head is not None:
             return
         try:
@@ -775,6 +783,8 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
 
     def _ttt_get_trainable_modules(self) -> list[nn.Module]:
         assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._esmc_fp8:
+            raise RuntimeError("ESMFold2 TTT is not supported with fp8 ESM++.")
         return [self._esmc]
 
     def _ttt_tokenize(
@@ -840,6 +850,8 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
             "ESMFold2 TTT expects input_ids tensors."
         )
         assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._esmc_fp8:
+            raise RuntimeError("ESMFold2 TTT is not supported with fp8 ESM++.")
         self._ensure_ttt_lm_head()
         assert self._ttt_lm_head is not None
         attention_mask = batch.ne(SEQUENCE_PAD_TOKEN)
@@ -942,6 +954,7 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         residue_index: Tensor,
         mol_type: Tensor,
         tok_mask: Tensor,
+        lm_mask_pct: float = 0.0,
     ) -> Tensor:
         assert self._esmc is not None
         # fp8 TE kernels require prod(shape[:-1]) % 8 == 0.
@@ -955,6 +968,8 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
                 mol_type,
                 tok_mask,
                 pad_to_multiple=pad_to,
+                lm_mask_pct=lm_mask_pct,
+                mask_token_id=SEQUENCE_MASK_TOKEN,
             )
 
     def _discretized_dynamics(self) -> tuple[Tensor, Tensor]:
@@ -974,10 +989,11 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         z: Tensor,
         z_init: Tensor,
         lm_z: Tensor | None,
-        _msa_kwargs: dict | None,
+        _msa_inputs: dict | None,
         pair_mask: Tensor,
         a: Tensor,
         b_mat: Tensor,
+        tok_mask: Tensor,
         total_steps: int,
     ) -> Tensor:
         # Helper method (not inline) so per-iter locals free on return —
@@ -1009,10 +1025,44 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
             if lm_z_i is not None and self.lm_encoder is None:
                 z_inject_pair = z_inject_pair + lm_z_i.to(z_inject_pair.dtype)
 
-            if self.msa_encoder is not None and _msa_kwargs is not None:
-                msa_pair = self.msa_encoder(x_pair=z_inject_pair, **_msa_kwargs).to(
-                    z_inject_pair.dtype
+            if self.msa_encoder is not None and _msa_inputs is not None:
+                msa_i, mask_i, hd_i, dv_i = maybe_subsample_msa(
+                    _msa_inputs["msa"],
+                    _msa_inputs["msa_attention_mask"],
+                    _msa_inputs["has_deletion"],
+                    _msa_inputs["deletion_value"],
+                    max_depth=_msa_inputs["max_depth"],
+                    enabled=_msa_inputs["subsample_enabled"],
                 )
+                B_msa, M, L_msa = msa_i.shape
+                msa_oh = F.one_hot(
+                    msa_i.permute(0, 2, 1).long(), num_classes=NUM_RES_TYPES
+                ).float()
+                msa_attn = (
+                    mask_i.permute(0, 2, 1).float()
+                    if mask_i is not None
+                    else tok_mask[:, :, None].expand(-1, -1, M).float()
+                )
+                # Bias-free MSAEncoder.embed requires zeroed padding.
+                msa_oh = msa_oh * msa_attn.unsqueeze(-1)
+                hd = (
+                    hd_i.permute(0, 2, 1).float()
+                    if hd_i is not None
+                    else torch.zeros(B_msa, L_msa, M, device=msa_i.device)
+                )
+                dv = (
+                    dv_i.permute(0, 2, 1).float()
+                    if dv_i is not None
+                    else torch.zeros(B_msa, L_msa, M, device=msa_i.device)
+                )
+                msa_pair = self.msa_encoder(
+                    x_pair=z_inject_pair,
+                    x_inputs=_msa_inputs["x_inputs"],
+                    msa_oh=msa_oh,
+                    has_deletion=hd,
+                    deletion_value=dv,
+                    msa_attention_mask=msa_attn,
+                ).to(z_inject_pair.dtype)
                 z_inject_pair = (
                     msa_pair
                     if self.config.msa_encoder_overwrite
@@ -1058,6 +1108,10 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         num_loops: int | None = None,
         num_diffusion_samples: int | None = None,
         num_sampling_steps: int | None = None,
+        lm_mask_pct: float | None = None,
+        msa_max_depth: int = 1024,
+        msa_column_mask_rate: float = 0.1,
+        msa_subsample_at_inference: bool = True,
         **kwargs,
     ) -> dict[str, Tensor]:
         tok_mask = token_attention_mask
@@ -1144,7 +1198,16 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
                 and self._esmc is not None
             ):
                 lm_hidden_states = self._compute_lm_hidden_states(
-                    input_ids, asym_id, residue_index, mol_type, tok_mask
+                    input_ids,
+                    asym_id,
+                    residue_index,
+                    mol_type,
+                    tok_mask,
+                    lm_mask_pct=(
+                        self.config.lm_mask_pct
+                        if lm_mask_pct is None
+                        else lm_mask_pct
+                    ),
                 )
             lm_z: Tensor | None = None
             if lm_hidden_states is not None:
@@ -1159,35 +1222,20 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
             a = a.view(1, 1, 1, -1).to(device=z.device, dtype=z.dtype)
             b_mat = b.to(device=z.device, dtype=z.dtype)
 
-            _msa_kwargs: dict | None = None
+            _msa_inputs: dict | None = None
             if self.msa_encoder is not None and msa is not None:
-                B_msa, M, L_msa = msa.shape
-                msa_oh = F.one_hot(
-                    msa.permute(0, 2, 1).long(), num_classes=NUM_RES_TYPES
-                ).float()
-                msa_attn = (
-                    msa_attention_mask.permute(0, 2, 1).float()
-                    if msa_attention_mask is not None
-                    else tok_mask[:, :, None].expand(-1, -1, M).float()
+                msa_attention_mask = maybe_apply_msa_column_masking(
+                    msa_attention_mask,
+                    msa_column_mask_rate,
                 )
-                # Bias-free MSAEncoder.embed requires zeroed padding.
-                msa_oh = msa_oh * msa_attn.unsqueeze(-1)
-                hd = (
-                    has_deletion.permute(0, 2, 1).float()
-                    if has_deletion is not None
-                    else torch.zeros(B_msa, L_msa, M, device=msa.device)
-                )
-                dv = (
-                    deletion_value.permute(0, 2, 1).float()
-                    if deletion_value is not None
-                    else torch.zeros(B_msa, L_msa, M, device=msa.device)
-                )
-                _msa_kwargs = dict(
+                _msa_inputs = dict(
                     x_inputs=x_inputs,
-                    msa_oh=msa_oh,
-                    has_deletion=hd,
-                    deletion_value=dv,
-                    msa_attention_mask=msa_attn,
+                    msa=msa,
+                    msa_attention_mask=msa_attention_mask,
+                    has_deletion=has_deletion,
+                    deletion_value=deletion_value,
+                    max_depth=msa_max_depth,
+                    subsample_enabled=msa_subsample_at_inference,
                 )
 
             # Method call (not inline loop) frees per-iter L²×c_z locals.
@@ -1195,13 +1243,14 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
                 z=z,
                 z_init=z_init,
                 lm_z=lm_z,
-                _msa_kwargs=_msa_kwargs,
+                _msa_inputs=_msa_inputs,
                 pair_mask=pair_mask,
                 a=a,
                 b_mat=b_mat,
+                tok_mask=tok_mask,
                 total_steps=total_steps,
             )
-            del z_init, lm_z, _msa_kwargs, a, b_mat
+            del z_init, lm_z, _msa_inputs, a, b_mat
 
             z = self.parcae_readout(z)
             z = self.parcae_coda(z, pair_attention_mask=pair_mask)
@@ -1318,16 +1367,30 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         sequence: str,
         *,
         chain_id: str = "A",
+        msa: Any | None = None,
+        msa_path: str | Path | None = None,
+        msa_max_sequences: int | None = None,
         num_loops: int = 3,
         num_sampling_steps: int = 50,
         num_diffusion_samples: int = 1,
         seed: int | None = None,
         complex_id: str = "pred",
     ):
-        from .esmfold2_types import ProteinInput, StructurePredictionInput
+        from .esmfold2_types import MSA, ProteinInput, StructurePredictionInput
+
+        assert not (
+            msa is not None and msa_path is not None
+        ), "Pass at most one of msa or msa_path."
+        if msa_path is not None:
+            msa = MSA.from_a3m(msa_path, max_sequences=msa_max_sequences)
+        if msa is not None:
+            query = str(msa.query).replace("-", "").upper()
+            assert query == sequence.upper(), (
+                f"MSA query does not match sequence: expected {sequence.upper()!r}, got {query!r}"
+            )
 
         input = StructurePredictionInput(
-            sequences=[ProteinInput(id=chain_id, sequence=sequence)]
+            sequences=[ProteinInput(id=chain_id, sequence=sequence, msa=msa)]
         )
         return self.fold(
             input,
@@ -1382,6 +1445,9 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         sequence: str,
         *,
         chain_id: str = "A",
+        msa: Any | None = None,
+        msa_path: str | Path | None = None,
+        msa_max_sequences: int | None = None,
         num_loops: int = 3,
         num_sampling_steps: int = 50,
         num_diffusion_samples: int = 1,
@@ -1394,6 +1460,9 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
             return self.fold_protein_ttt(
                 sequence=sequence,
                 chain_id=chain_id,
+                msa=msa,
+                msa_path=msa_path,
+                msa_max_sequences=msa_max_sequences,
                 num_loops=num_loops,
                 num_sampling_steps=num_sampling_steps,
                 num_diffusion_samples=num_diffusion_samples,
@@ -1404,6 +1473,9 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         return self._fold_protein_no_ttt(
             sequence=sequence,
             chain_id=chain_id,
+            msa=msa,
+            msa_path=msa_path,
+            msa_max_sequences=msa_max_sequences,
             num_loops=num_loops,
             num_sampling_steps=num_sampling_steps,
             num_diffusion_samples=num_diffusion_samples,
@@ -1416,6 +1488,9 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         sequence: str,
         *,
         chain_id: str = "A",
+        msa: Any | None = None,
+        msa_path: str | Path | None = None,
+        msa_max_sequences: int | None = None,
         num_loops: int = 3,
         num_sampling_steps: int = 50,
         num_diffusion_samples: int = 1,
@@ -1424,8 +1499,13 @@ class ESMFold2Model(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         ttt_config: TTTConfig | dict[str, Any] | None = None,
     ):
         assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._esmc_fp8:
+            raise RuntimeError("ESMFold2 TTT is not supported with fp8 ESM++.")
         fold_kwargs = {
             "chain_id": chain_id,
+            "msa": msa,
+            "msa_path": msa_path,
+            "msa_max_sequences": msa_max_sequences,
             "num_loops": num_loops,
             "num_sampling_steps": num_sampling_steps,
             "num_diffusion_samples": num_diffusion_samples,

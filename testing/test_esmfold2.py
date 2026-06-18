@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -19,6 +20,15 @@ from fastplms.esm_plusplus.modeling_esm_plusplus import (
 from fastplms.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.esmfold2.modeling_esmfold2 import (
     _load_fastplms_esmplusplus_for_esmfold2,
+)
+from fastplms.esmfold2.modeling_esmfold2_common import (
+    compute_lm_hidden_states,
+    maybe_apply_msa_column_masking,
+    maybe_subsample_msa,
+)
+from fastplms.esmfold2.modeling_esmc import (
+    _PyTorchLayerNormLinear,
+    _PyTorchLayerNormMLP,
 )
 from testing.conftest import STRUCTURE_MODEL_REGISTRY
 
@@ -38,12 +48,26 @@ def test_esmfold2_config_uses_fastplms_esmplusplus_defaults() -> None:
 
     assert config.esmc_id == "Synthyra/ESMplusplus_6B"
     assert config.esmc_attn_backend == "flex"
+    assert config.lm_mask_pct == 0.0
 
 
 def test_esmfold2_config_normalizes_legacy_esmc_ids() -> None:
     config = ESMFold2Config(esmc_id="biohub/ESMC-6B")
 
     assert config.esmc_id == "Synthyra/ESMplusplus_6B"
+
+
+def test_esmc_pytorch_fallback_accepts_fp32_inputs_with_bf16_weights() -> None:
+    ln_linear = _PyTorchLayerNormLinear(d_in=8, d_out=12).to(dtype=torch.bfloat16)
+    ln_mlp = _PyTorchLayerNormMLP(hidden_size=8, ffn_hidden_size=16).to(dtype=torch.bfloat16)
+    x = torch.randn(2, 4, 8, dtype=torch.float32)
+
+    with torch.no_grad():
+        linear_out = ln_linear(x)
+        mlp_out = ln_mlp(x)
+
+    assert linear_out.dtype == torch.bfloat16
+    assert mlp_out.dtype == torch.bfloat16
 
 
 def test_esmplusplus_sequence_id_masks_cross_chain_attention() -> None:
@@ -192,6 +216,162 @@ def test_esmfold2_loads_shared_esmplusplus_adapter(tmp_path) -> None:
     assert output.hidden_states.shape == (config.num_hidden_layers + 1, 1, 4, 16)
 
 
+def test_esmfold2_load_esmc_fp8_requires_transformer_engine(monkeypatch) -> None:
+    import fastplms.esmfold2.modeling_esmfold2 as esmfold2_module
+    from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    model = SimpleNamespace()
+    monkeypatch.setattr(esmfold2_module, "TE_AVAILABLE", False)
+
+    with pytest.raises(RuntimeError, match="requires transformer_engine"):
+        ESMFold2Model.load_esmc(model, "unused", precision="fp8")
+
+
+def test_esmfold2_load_esmc_fp8_converts_fastplms_adapter(monkeypatch) -> None:
+    import fastplms.esmfold2.modeling_esmfold2 as esmfold2_module
+    from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    class TinyAdapter(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.linear = torch.nn.Linear(2, 2)
+            self.config = SimpleNamespace(hidden_size=16, num_hidden_layers=1)
+
+    adapter = TinyAdapter()
+    calls = {}
+
+    def fake_loader(*, esmc_model_path, attn_backend, device, dtype):
+        calls["loader"] = (esmc_model_path, attn_backend, device, dtype)
+        return adapter.to(device=device, dtype=dtype)
+
+    def fake_converter(module):
+        calls["converter"] = module
+
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            esmc_attn_backend="sdpa",
+            lm_d_model=16,
+            lm_num_layers=1,
+        ),
+        device=torch.device("cpu"),
+    )
+    monkeypatch.setattr(esmfold2_module, "TE_AVAILABLE", True)
+    monkeypatch.setattr(
+        esmfold2_module,
+        "_load_fastplms_esmplusplus_for_esmfold2",
+        fake_loader,
+    )
+    monkeypatch.setattr(
+        esmfold2_module,
+        "_convert_te_modules_to_fp8_inplace",
+        fake_converter,
+    )
+
+    ESMFold2Model.load_esmc(model, "dummy-esm", precision="fp8")
+
+    assert calls["loader"] == (
+        "dummy-esm",
+        "sdpa",
+        torch.device("cpu"),
+        torch.bfloat16,
+    )
+    assert calls["converter"] is adapter
+    assert model._esmc is adapter
+    assert model._esmc_fp8 is True
+    assert model._ttt_lm_head is None
+    assert all(not parameter.requires_grad for parameter in adapter.parameters())
+
+
+def test_esmfold2_ttt_rejects_fp8_adapter() -> None:
+    from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    model = SimpleNamespace(_esmc=torch.nn.Linear(1, 1), _esmc_fp8=True)
+
+    with pytest.raises(RuntimeError, match="TTT is not supported with fp8"):
+        ESMFold2Model._ttt_get_trainable_modules(model)
+
+
+def test_compute_lm_hidden_states_pads_and_masks_non_special_tokens() -> None:
+    class CapturingEsmc(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.input_ids = None
+            self.sequence_id = None
+
+        def forward(self, input_ids, sequence_id, output_hidden_states):
+            assert output_hidden_states is True
+            self.input_ids = input_ids.detach().clone()
+            self.sequence_id = sequence_id.detach().clone()
+            num_layers = 2
+            hidden_size = 3
+            hidden_states = torch.arange(
+                num_layers * input_ids.numel() * hidden_size,
+                dtype=torch.float32,
+            ).reshape(num_layers, *input_ids.shape, hidden_size)
+            return SimpleNamespace(hidden_states=hidden_states)
+
+    esmc = CapturingEsmc()
+    input_ids = torch.tensor([[5, 6, 7]], dtype=torch.long)
+    asym_id = torch.tensor([[0, 0, 0]], dtype=torch.long)
+    residue_index = torch.tensor([[0, 1, 2]], dtype=torch.long)
+    mol_type = torch.zeros_like(input_ids)
+    token_mask = torch.ones_like(input_ids, dtype=torch.bool)
+
+    result = compute_lm_hidden_states(
+        esmc,
+        input_ids,
+        asym_id,
+        residue_index,
+        mol_type,
+        token_mask,
+        pad_to_multiple=8,
+        lm_mask_pct=1.0,
+        mask_token_id=32,
+    )
+
+    assert esmc.input_ids is not None
+    assert esmc.sequence_id is not None
+    assert esmc.input_ids.tolist() == [[0, 32, 32, 32, 2, 1, 1, 1]]
+    assert esmc.sequence_id.tolist() == [[0, 0, 0, 0, 0, -1, -1, -1]]
+    assert result.shape == (1, 3, 2, 3)
+
+
+def test_msa_subsample_keeps_query_row() -> None:
+    msa = torch.arange(20, dtype=torch.long).reshape(1, 5, 4)
+    msa_attention_mask = torch.ones(1, 5, 4, dtype=torch.bool)
+    has_deletion = torch.zeros(1, 5, 4, dtype=torch.bool)
+    deletion_value = torch.zeros(1, 5, 4)
+
+    torch.manual_seed(0)
+    subsampled, mask, deletion, deletion_vals = maybe_subsample_msa(
+        msa,
+        msa_attention_mask,
+        has_deletion,
+        deletion_value,
+        max_depth=3,
+        enabled=True,
+    )
+
+    assert subsampled.shape == (1, 3, 4)
+    assert torch.equal(subsampled[:, 0], msa[:, 0])
+    assert mask is not None
+    assert deletion is not None
+    assert deletion_vals is not None
+    assert torch.equal(mask[:, 0], msa_attention_mask[:, 0])
+    assert torch.equal(deletion[:, 0], has_deletion[:, 0])
+    assert torch.equal(deletion_vals[:, 0], deletion_value[:, 0])
+
+
+def test_msa_column_masking_keeps_query_row() -> None:
+    msa_attention_mask = torch.ones(2, 3, 4, dtype=torch.bool)
+
+    masked = maybe_apply_msa_column_masking(msa_attention_mask, rate=1.0)
+
+    assert masked is not None
+    assert masked[:, 0, :].all()
+    assert not masked[:, 1:, :].any()
+
+
 def _enable_deterministic_forward() -> None:
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.benchmark = False
@@ -241,6 +421,75 @@ def _run_short_fold(model: torch.nn.Module) -> dict[str, torch.Tensor]:
             num_sampling_steps=2,
             num_diffusion_samples=1,
         )
+
+
+def test_esmfold2_fold_protein_accepts_msa_path(tmp_path, monkeypatch) -> None:
+    from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    captured = {}
+
+    def fake_fold(self, input_value, **kwargs):
+        del self
+        captured["input"] = input_value
+        captured["kwargs"] = kwargs
+        return "ok"
+
+    monkeypatch.setattr(ESMFold2Model, "fold", fake_fold)
+    msa_path = tmp_path / "query.a3m"
+    msa_path.write_text(">query\nMSTN\n>hit\nMSTN\n", encoding="utf-8")
+    model = object.__new__(ESMFold2Model)
+
+    result = ESMFold2Model.fold_protein(
+        model,
+        "MSTN",
+        msa_path=msa_path,
+        msa_max_sequences=1,
+        seed=7,
+    )
+
+    assert result == "ok"
+    protein_input = captured["input"].sequences[0]
+    assert protein_input.sequence == "MSTN"
+    assert protein_input.msa is not None
+    assert protein_input.msa.depth == 1
+    assert captured["kwargs"]["seed"] == 7
+
+
+def test_esmfold2_fold_protein_rejects_msa_query_mismatch(tmp_path, monkeypatch) -> None:
+    from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    def fake_fold(self, input_value, **kwargs):
+        del self, input_value, kwargs
+        return "ok"
+
+    monkeypatch.setattr(ESMFold2Model, "fold", fake_fold)
+    msa_path = tmp_path / "query.a3m"
+    msa_path.write_text(">query\nAAAA\n", encoding="utf-8")
+    model = object.__new__(ESMFold2Model)
+
+    with pytest.raises(AssertionError, match="MSA query does not match sequence"):
+        ESMFold2Model.fold_protein(model, "MSTN", msa_path=msa_path)
+
+
+def test_esmfold2_fold_protein_without_msa_preserves_single_sequence(monkeypatch) -> None:
+    from fastplms.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    captured = {}
+
+    def fake_fold(self, input_value, **kwargs):
+        del self, kwargs
+        captured["input"] = input_value
+        return "ok"
+
+    monkeypatch.setattr(ESMFold2Model, "fold", fake_fold)
+    model = object.__new__(ESMFold2Model)
+
+    result = ESMFold2Model.fold_protein(model, "MSTN")
+
+    assert result == "ok"
+    protein_input = captured["input"].sequences[0]
+    assert protein_input.sequence == "MSTN"
+    assert protein_input.msa is None
 
 
 def _aligned_rmsd(

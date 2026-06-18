@@ -208,6 +208,9 @@ class ESMFold2Config(PretrainedConfig):
         force_lm_dropout_during_inference (`bool`, defaults to False):
             When True, apply ``lm_dropout`` even when ``model.eval()`` and
             ``lm_dropout`` > 0. Binder-design loads set this to True.
+        lm_mask_pct (`float`, defaults to 0.0):
+            Fraction of LM residue tokens randomly replaced with the LM mask
+            token before running the PLM backbone.
         disable_msa_features (`bool`, defaults to False):
             When True, zero out MSA-derived ``profile`` and ``deletion_mean``
             before the inputs embedder (experimental medium/large checkpoints).
@@ -263,6 +266,7 @@ class ESMFold2Config(PretrainedConfig):
         self.force_lm_dropout_during_inference: bool = kwargs.get(
             "force_lm_dropout_during_inference", False
         )
+        self.lm_mask_pct: float = kwargs.get("lm_mask_pct", 0.0)
 
         self.lm_d_model: int = kwargs.get("lm_d_model", 2560)
         self.lm_num_layers: int = kwargs.get("lm_num_layers", 80)
