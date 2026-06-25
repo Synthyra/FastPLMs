@@ -91,6 +91,30 @@ def _login_if_token_available(token: Optional[str]) -> None:
         login(token=token)
 
 
+ESMFOLD2_REPO_IDS = [
+    "Synthyra/ESMFold2",
+    "Synthyra/ESMFold2-Fast",
+    "Synthyra/ESMFold2-Experimental-Fast",
+    "Synthyra/ESMFold2-Experimental-Fast-Cutoff2025",
+    "Synthyra/ESMFold2-Experimental",
+    "Synthyra/ESMFold2-Experimental-Cutoff2025",
+]
+ESMFOLD2_REPO_IDS.extend(
+    f"Synthyra/ESMFold2-Experimental-Fast-base{size}-step{step}k"
+    for size in ("300M", "600M", "6B")
+    for step in ("250", "500", "750", "1000", "1500")
+)
+ESMFOLD2_REMOTE_CODE_IGNORE_PATTERNS = [
+    "__pycache__/*",
+    "*.pyc",
+    "configuration_esmc.py",
+    "configuration_esmc_sae.py",
+    "get_weights.py",
+    "modeling_esmc.py",
+    "modeling_esmc_sae.py",
+]
+
+
 MODEL_REGISTRY = [
     {
         "family": "e1",
@@ -106,6 +130,7 @@ MODEL_REGISTRY = [
         "extra_files": {
             "fastplms/e1/tokenizer.json": "tokenizer.json",
         },
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/Profluent-E1-150M": "fastplms/e1/README.md",
             "Synthyra/Profluent-E1-300M": "fastplms/e1/README.md",
@@ -130,6 +155,7 @@ MODEL_REGISTRY = [
         "composite": True,
         "include_embedding_mixin": True,
         "extra_files": {},
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/ESMplusplus_small": "fastplms/esm_plusplus/README_small.md",
             "Synthyra/ESMplusplus_large": "fastplms/esm_plusplus/README_large.md",
@@ -154,6 +180,7 @@ MODEL_REGISTRY = [
         "extra_files": {
             "fastplms/esm3/modeling_esm3.py": "modeling_esm3.py",
         },
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/ESM3_small": "fastplms/esm3/README.md",
         },
@@ -177,6 +204,7 @@ MODEL_REGISTRY = [
         "composite": True,
         "include_embedding_mixin": True,
         "extra_files": {},
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/ESM2-8M": "fastplms/esm2/README.md",
             "Synthyra/ESM2-35M": "fastplms/esm2/README.md",
@@ -207,6 +235,7 @@ MODEL_REGISTRY = [
         "composite": True,
         "include_embedding_mixin": True,
         "extra_files": {},
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/DPLM-150M": "fastplms/dplm/README.md",
             "Synthyra/DPLM-650M": "fastplms/dplm/README.md",
@@ -227,6 +256,7 @@ MODEL_REGISTRY = [
         "composite": True,
         "include_embedding_mixin": True,
         "extra_files": {},
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/DPLM2-150M": "fastplms/dplm2/README.md",
             "Synthyra/DPLM2-650M": "fastplms/dplm2/README.md",
@@ -249,6 +279,7 @@ MODEL_REGISTRY = [
         "composite": True,
         "include_embedding_mixin": True,
         "extra_files": {},
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/ANKH_base": "fastplms/ankh/README.md",
             "Synthyra/ANKH_large": "fastplms/ankh/README.md",
@@ -275,11 +306,38 @@ MODEL_REGISTRY = [
         "composite": True,
         "include_embedding_mixin": False,
         "extra_files": {},
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/FastESMFold": "fastplms/esmfold/README.md",
         },
         "license_map": {},
         "weight_module": "fastplms.esmfold.get_weights",
+    },
+    {
+        "family": "esmfold2",
+        "repo_ids": ESMFOLD2_REPO_IDS,
+        "modeling_src": "fastplms/esm_plusplus/modeling_esm_plusplus.py",
+        "modeling_dest": "modeling_esm_plusplus.py",
+        "composite": True,
+        "include_embedding_mixin": True,
+        "extra_files": {
+            "fastplms/test_time_training.py": "test_time_training.py",
+        },
+        "folder_uploads": [
+            {
+                "folder_path": "fastplms/esmfold2",
+                "ignore_patterns": ESMFOLD2_REMOTE_CODE_IGNORE_PATTERNS,
+            },
+        ],
+        "readme_map": {
+            repo_id: "fastplms/esmfold2/README.md"
+            for repo_id in ESMFOLD2_REPO_IDS
+        },
+        "license_map": {
+            repo_id: "fastplms/esmfold2/LICENSE"
+            for repo_id in ESMFOLD2_REPO_IDS
+        },
+        "weight_module": "fastplms.esmfold2.get_weights",
     },
     {
         "family": "boltz",
@@ -321,6 +379,7 @@ MODEL_REGISTRY = [
             "fastplms/boltz/vb_tri_attn_primitives.py": "vb_tri_attn_primitives.py",
             "fastplms/boltz/vb_tri_attn_utils.py": "vb_tri_attn_utils.py",
         },
+        "folder_uploads": [],
         "readme_map": {
             "Synthyra/Boltz2": "fastplms/boltz/README.md",
         },
@@ -382,6 +441,16 @@ def _upload_files(api: HfApi, families: Optional[list]) -> None:
                     path_in_repo=entry["modeling_dest"],
                     repo_id=repo_id,
                     repo_type="model",
+                )
+
+            # Upload remote-code folders for multi-file AutoModel packages.
+            for folder_upload in entry["folder_uploads"]:
+                abs_folder = str(_REPO_ROOT / folder_upload["folder_path"])
+                api.upload_folder(
+                    folder_path=abs_folder,
+                    repo_id=repo_id,
+                    repo_type="model",
+                    ignore_patterns=folder_upload["ignore_patterns"],
                 )
 
             # Upload extra files (Boltz vb_* modules, E1 tokenizer, etc.)
