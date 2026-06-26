@@ -180,6 +180,9 @@ def test_esmfold2_experimental_res_type_soft_gradients() -> None:
     loss = output["distogram_logits"].float().mean()
     loss.backward()
 
+    assert "representative_atom_coords" in output
+    assert output["representative_atom_coords"].shape[-1] == 3
+    assert output["representative_atom_coords"].shape[-2] == features["res_type"].shape[1]
     assert res_type_soft.grad is not None
     assert torch.isfinite(res_type_soft.grad).all()
     assert res_type_soft.grad.abs().sum().item() > 0

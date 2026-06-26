@@ -854,10 +854,26 @@ class ESMFold2ExperimentalModel(PreTrainedModel):
             )
         sample_coords = structure_output["sample_atom_coords"]
         assert sample_coords is not None
+        if sample_coords.ndim == 4:
+            batch, sample_count, atom_count, coord_dim = sample_coords.shape
+            sample_coords_for_gather = sample_coords.reshape(
+                batch * sample_count,
+                atom_count,
+                coord_dim,
+            )
+            rep_idx = distogram_atom_idx.repeat_interleave(sample_count, 0).long()
+        else:
+            sample_coords_for_gather = sample_coords
+            rep_idx = distogram_atom_idx.long()
+        representative_atom_coords = gather_rep_atom_coords(
+            sample_coords_for_gather,
+            rep_idx,
+        )
 
         output: dict[str, Tensor] = {
             "distogram_logits": distogram_logits,
             "sample_atom_coords": sample_coords,
+            "representative_atom_coords": representative_atom_coords,
         }
         if calculate_confidence and self.confidence_head is not None:
             confidence_output = self.confidence_head(
