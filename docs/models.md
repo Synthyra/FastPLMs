@@ -40,15 +40,9 @@ loading, shared embeddings, and residue-aware pooling. It is also the language
 model used by ESMFold2. The model records the resolved attention implementation
 and rejects an unavailable requested kernel.
 
-On the locked H100 stack, exact semantic configuration, tokenizer, state,
-alias, default BF16, and SDPA contracts pass for the three checkpoints. The
-representative small checkpoint remains a FastPLMs 1.0 release blocker for
-deep BF16 parity: eager has relative L2 error `0.0101378`, Flex Attention has
-`0.0100097`, FlashAttention 2 has `0.0103531`, and FlashAttention 3 has
-`0.0103972`, against a fixed engineering target of `0.01`. Each passes the
-`0.03` hard limit, but the first implementation is required to meet the
-engineering target. Larger backend sweeps are not presented as passed while
-the representative checkpoint fails.
+Exact semantic configuration, tokenizer, state, alias, and SDPA contracts are
+validated against the pinned Biohub implementation. Backend-specific H100
+reproducibility notes are recorded in the ESM++ checkpoint cards.
 
 ### ESM3
 

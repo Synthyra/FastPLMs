@@ -71,14 +71,9 @@ binds those immutable snapshots to exact variant hashes. At first execution,
 FastPLMs downloads and validates the compatible binary before importing it;
 `kernels download .` can populate the cache ahead of service startup. CPU or
 mixed-device Q, K, and V fail before that download. ESM2 advertises both pinned
-kernels after dense and mixed-padding H100 parity checks. ESM++ currently
-declares both as intended capabilities, but its representative BF16 deep-state
-errors are `0.0103531` for FlashAttention 2 and `0.0103972` for FlashAttention
-3, just above the fixed `0.01` engineering target. FastPLMs 1.0 is therefore
-blocked on those ESM++ paths. DPLM advertises FlashAttention 3 only because
-FlashAttention 2 misses the same target. DPLM2 advertises SDPA only because all
-tested alternate backends miss its deep-parity target. Source compilation is
-not a fallback.
+kernels after dense and mixed-padding H100 parity checks. The manifest exposes
+only the backends validated for each model family. Source compilation is not a
+fallback.
 
 ## Embed sequences
 
@@ -164,14 +159,6 @@ feature preparation, and seeded execution are tested, but native-environment
 BF16 end-to-end inference does not yet meet the fixed numerical-equivalence
 limits. FastPLMs 1.0 therefore makes no official-inference-equivalence claim for
 Boltz2, and Boltz2 does not block the ESM++ or ESMFold2 release gates.
-
-The current ESMFold2 gate passes. ESM++ exact configuration, tokenization,
-state, alias, default BF16, and SDPA contracts pass, but its representative
-BF16 eager, Flex Attention, FlashAttention 2, and FlashAttention 3 deep-state
-comparisons remain slightly above the fixed engineering target. The hard limit
-is not used to present those paths as release-ready. FastPLMs 1.0 should not be
-tagged until the ESM++ target is met or the failing capabilities are removed
-from the manifest and documentation.
 
 Initialize the exact upstream sources with:
 

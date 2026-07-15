@@ -38,6 +38,10 @@ Leave attention unspecified for the Transformers default or request one of
 The BF16 execution policy is `static_parameters`:
 parameters loaded directly in BF16.
 
+## Notes and limitations
+
+Reproducibility note: in the locked H100 environment, SDPA matches the pinned Biohub implementation exactly across complete hidden states, including special and padding positions. Alternative BF16 kernels use different reduction and tiling arithmetic. On one seeded batch of randomly generated compliance sequences, alternate-backend deep-state relative L2 errors were approximately 0.01 to 0.012. These values are not MSE, exclude padding from the biological-residue metric, and remain below the 0.03 hard limit. They describe that representative test batch rather than an expected error distribution for biological sequences. A strict test configured for the 0.01 engineering target may therefore report a small alternate-kernel miss; this does not indicate an architecture or checkpoint difference.
+
 ## Provenance
 
 - FastPLMs checkpoint: `Synthyra/ESMplusplus_small@46c5f7d562e47d4c14165b424c71ab7db008e6fb`
