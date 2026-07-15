@@ -19,6 +19,7 @@ import pytest
 from tools.artifacts.offline_probe import (
     _exercise,
     _load_kwargs,
+    _load_model_exact,
     _run_isolated_reload,
     _runtime_site_packages,
     _save_model_for_probe,
@@ -183,6 +184,41 @@ def test_offline_probe_load_dtype_follows_manifest_execution_policy() -> None:
     autocast = _load_kwargs("dplm", "fp32_parameters_autocast", torch)
     assert static["dtype"] == "bf16"
     assert autocast["dtype"] == "fp32"
+
+
+def test_offline_probe_rejects_incomplete_weight_loading(tmp_path: Path) -> None:
+    class AutoType:
+        @staticmethod
+        def from_pretrained(*args: object, **kwargs: object) -> tuple[object, dict[str, object]]:
+            assert args == (tmp_path,)
+            assert kwargs["output_loading_info"] is True
+            return object(), {
+                "missing_keys": ["encoder.layer.0.weight"],
+                "unexpected_keys": [],
+                "mismatched_keys": [],
+                "error_msgs": [],
+            }
+
+    with pytest.raises(RuntimeError, match="Exact AutoModel weight loading failed"):
+        _load_model_exact(AutoType, tmp_path, trust_remote_code=True)
+
+
+def test_offline_probe_accepts_exact_weight_loading(tmp_path: Path) -> None:
+    model = object()
+
+    class AutoType:
+        @staticmethod
+        def from_pretrained(*args: object, **kwargs: object) -> tuple[object, dict[str, object]]:
+            assert args == (tmp_path,)
+            assert kwargs["output_loading_info"] is True
+            return model, {
+                "missing_keys": [],
+                "unexpected_keys": [],
+                "mismatched_keys": [],
+                "error_msgs": [],
+            }
+
+    assert _load_model_exact(AutoType, tmp_path, trust_remote_code=False) is model
 
 
 def test_offline_probe_semantic_config_excludes_artifact_identity() -> None:

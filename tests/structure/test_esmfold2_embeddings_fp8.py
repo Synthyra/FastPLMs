@@ -133,34 +133,35 @@ def test_esmfold2_embedding_is_residue_only_and_rejects_complexes() -> None:
         model._embedding_batch([""])
 
 
-def test_auto_precision_uses_bf16_when_fp8_is_unavailable(monkeypatch) -> None:
+def test_auto_precision_uses_bf16_without_probing_fp8(monkeypatch) -> None:
     import fastplms.models.esmfold2.modeling_esmfold2 as module
 
     monkeypatch.setattr(
         module,
         "_te_fp8_capability",
-        lambda device: (False, f"FP8 unavailable on {device}"),
+        lambda _device: pytest.fail("auto must not probe FP8 capability"),
     )
     status = _resolve_esmc_precision("auto", torch.device("cuda"))
     assert status.requested == "auto"
     assert status.resolved == "bf16"
-    assert status.reason == "FP8 unavailable on cuda"
+    assert "defaults to BF16" in status.reason
 
 
-def test_auto_precision_selects_fp8_when_transformer_engine_is_available(
+def test_auto_precision_remains_bf16_when_transformer_engine_is_installed(
     monkeypatch,
 ) -> None:
     import fastplms.models.esmfold2.modeling_esmfold2 as module
 
     monkeypatch.setattr(
         module,
-        "_te_fp8_capability",
-        lambda device: (True, f"FP8 available on {device}"),
+        "_transformer_engine_version",
+        lambda: "2.12.0",
     )
     status = _resolve_esmc_precision("auto", torch.device("cuda"))
     assert status.requested == "auto"
-    assert status.resolved == "fp8"
-    assert status.reason == "FP8 available on cuda"
+    assert status.resolved == "bf16"
+    assert "defaults to BF16" in status.reason
+    assert status.transformer_engine_version == "2.12.0"
 
 
 def test_explicit_fp8_is_strict(monkeypatch) -> None:
@@ -374,7 +375,7 @@ assert after == before, (before, after)
     subprocess.run([sys.executable, "-c", script], check=True)
 
 
-def test_install_records_bf16_auto_fallback_and_policy(monkeypatch) -> None:
+def test_install_records_bf16_auto_default_and_policy(monkeypatch) -> None:
     import fastplms.models.esmfold2.modeling_esmfold2 as module
 
     owner = PrecisionOwner()
@@ -392,7 +393,7 @@ def test_install_records_bf16_auto_fallback_and_policy(monkeypatch) -> None:
     _install_esmc_backbone(owner, "canonical-esmc", precision="auto", device=torch.device("cpu"))
     assert owner._esmc_fp8 is False
     assert owner._esmc_precision_status.resolved == "bf16"
-    assert "direct ESMC loading onto a CUDA device" in owner._esmc_precision_status.reason
+    assert "defaults to BF16" in owner._esmc_precision_status.reason
     assert owner.config.esmc_precision == "auto"
     assert load_options[0]["attn_backend"] == "flex_attention"
 

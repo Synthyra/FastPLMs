@@ -390,6 +390,37 @@ def _unpad_input(
     )
 
 
+def _validate_flash_padding_mask(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    attention_mask_2d: torch.Tensor,
+) -> torch.Tensor:
+    """Validate the self-attention padding mask used by the varlen kernels."""
+
+    if attention_mask_2d.ndim != 2:
+        raise ValueError(
+            "FlashAttention padding masks must have shape (batch, sequence_length)."
+        )
+    expected_shape = query_states.shape[:2]
+    if tuple(attention_mask_2d.shape) != tuple(expected_shape):
+        raise ValueError(
+            "FlashAttention padding mask shape must match the query batch and "
+            f"sequence dimensions; expected {tuple(expected_shape)}, received "
+            f"{tuple(attention_mask_2d.shape)}."
+        )
+    if key_states.shape[:2] != expected_shape or value_states.shape[:2] != expected_shape:
+        raise ValueError(
+            "Masked FlashAttention requires Q, K, and V to share batch and "
+            "sequence dimensions."
+        )
+    if attention_mask_2d.device != query_states.device:
+        raise ValueError(
+            "FlashAttention padding mask and Q, K, and V must be on the same device."
+        )
+    return attention_mask_2d.to(dtype=torch.bool)
+
+
 def kernels_flash_attention_func(
     query_states: torch.Tensor,
     key_states: torch.Tensor,
@@ -427,8 +458,15 @@ def kernels_flash_attention_func(
         query_states = query_states.to(dtype=runtime_dtype)
         key_states = key_states.to(dtype=runtime_dtype)
         value_states = value_states.to(dtype=runtime_dtype)
+    if attention_mask_2d is not None:
+        attention_mask_2d = _validate_flash_padding_mask(
+            query_states,
+            key_states,
+            value_states,
+            attention_mask_2d,
+        )
     _ensure_flash_kernels_loaded(implementation)
-    if not causal and attention_mask_2d is not None:
+    if attention_mask_2d is not None:
         batch_size, q_len = query_states.shape[:2]
         (
             query_states,
@@ -446,10 +484,12 @@ def kernels_flash_attention_func(
             cu_seqlens_k=cu_seqlens_k,
             max_seqlen_in_batch_q=max_seqlen_q,
             max_seqlen_in_batch_k=max_seqlen_k,
+            causal=causal,
             softmax_scale=softmax_scale,
             implementation=implementation,
         )
-        return pad_input(attn_output_unpad, indices_q, batch_size, q_len)
+        output = pad_input(attn_output_unpad, indices_q, batch_size, q_len)
+        return output.masked_fill(~attention_mask_2d[:, :, None, None], 0)
     else:
         return _kernels_flash_forward(
             query_states=query_states,

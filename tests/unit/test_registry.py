@@ -496,18 +496,36 @@ def test_manifest_rejects_invalid_hub_license_metadata(
 
 def test_esmfold2_support_is_exactly_the_approved_four() -> None:
     registry = load_model_registry()
+    family = registry.by_family("esmfold2")[0].family
     assert {model.official.repo_id for model in registry.by_family("esmfold2")} == {
         "biohub/ESMFold2",
         "biohub/ESMFold2-Fast",
         "biohub/ESMFold2-Experimental-Cutoff2025",
         "biohub/ESMFold2-Experimental-Fast-Cutoff2025",
     }
-    assert set(registry.by_family("esmfold2")[0].family.precisions) == {
+    assert set(family.precisions) == {
         "auto",
         "fp32",
         "bf16",
         "fp8",
     }
+    assert family.experimental_precisions == ("fp8",)
+    assert family.stable_precisions == ("auto", "fp32", "bf16")
+
+
+def test_experimental_precisions_must_be_declared_precisions(tmp_path: Path) -> None:
+    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
+    invalid = manifest.replace(
+        'experimental_precisions = ["fp8"]',
+        'experimental_precisions = ["fp8", "int4"]',
+        1,
+    )
+    assert invalid != manifest
+    path = tmp_path / "models.toml"
+    path.write_text(invalid, encoding="utf-8")
+
+    with pytest.raises(RegistryError, match="must be a subset of precisions"):
+        load_model_registry(path)
 
 
 def test_boltz2_is_explicitly_provisional() -> None:

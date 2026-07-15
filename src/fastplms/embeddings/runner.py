@@ -31,6 +31,8 @@ from .types import (
 )
 
 _MAX_PARTI_RESIDUES = 2_048
+_RUN_FINGERPRINT_SCHEMA_VERSION = 2
+_MODEL_STATE_HASH_CHUNK_BYTES = 16 * 1024**2
 
 
 def _validate_parti_length(M: Tensor) -> None:
@@ -320,6 +322,57 @@ def _model_identity_metadata(model: Any) -> dict[str, Any]:
     }
 
 
+def _bounded_tensor_chunks(X: Tensor, max_elements: int) -> Iterable[Tensor]:
+    """Yield X in logical row-major order without materializing a full copy."""
+
+    if X.numel() == 0:
+        return
+    if X.ndim == 0:
+        yield X
+        return
+    trailing_elements = 1
+    for size in X.shape[1:]:
+        trailing_elements *= int(size)
+    if trailing_elements <= max_elements:
+        rows_per_chunk = max(1, max_elements // trailing_elements)
+        for start in range(0, X.shape[0], rows_per_chunk):
+            yield X[start : start + rows_per_chunk]
+        return
+    for row in X:
+        yield from _bounded_tensor_chunks(row, max_elements)
+
+
+def _model_state_sha256(model: Any) -> str:
+    """Hash named parameters and persistent buffers using bounded CPU copies."""
+
+    state = model.state_dict(keep_vars=True)
+    digest = hashlib.sha256()
+    for name, value in sorted(state.items()):
+        if not isinstance(value, Tensor):
+            raise TypeError(f"Model state entry {name!r} is not a tensor.")
+        if value.is_meta:
+            raise ValueError(
+                f"Cannot fingerprint meta-device model state entry {name!r}; pass "
+                "model_state_fingerprint with a caller-owned state identity."
+            )
+        header = json.dumps(
+            {
+                "name": name,
+                "dtype": str(value.dtype).removeprefix("torch."),
+                "shape": list(value.shape),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        digest.update(len(header).to_bytes(8, "big"))
+        digest.update(header)
+        max_elements = max(1, _MODEL_STATE_HASH_CHUNK_BYTES // value.element_size())
+        for chunk in _bounded_tensor_chunks(value.detach(), max_elements):
+            cpu_chunk = chunk.to(device="cpu").contiguous()
+            digest.update(cpu_chunk.reshape(-1).view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
+
+
 def _run_fingerprint(
     model: Any,
     records: Sequence[EmbeddingInput],
@@ -331,15 +384,31 @@ def _run_fingerprint(
     dtype: torch.dtype | None,
     model_kwargs: dict[str, Any],
     tokenizer_metadata: dict[str, Any],
-) -> tuple[str, str]:
+    model_state_fingerprint: str | None,
+    persist_output: bool,
+) -> tuple[str, str, str | None, str]:
     input_payload = [[record.id, record.sequence] for record in records]
     input_fingerprint = hashlib.sha256(
         json.dumps(input_payload, separators=(",", ":"), ensure_ascii=False).encode()
     ).hexdigest()
     attention_backend = _attention_backend(model)
     model_identity = _model_identity_metadata(model)
+    if model_state_fingerprint is None and persist_output:
+        resolved_model_state_fingerprint = _model_state_sha256(model)
+        model_state_fingerprint_source = "computed"
+    elif model_state_fingerprint is not None:
+        resolved_model_state_fingerprint = model_state_fingerprint.strip()
+        if not resolved_model_state_fingerprint:
+            raise ValueError("model_state_fingerprint must not be empty.")
+        model_state_fingerprint_source = "caller"
+    else:
+        resolved_model_state_fingerprint = None
+        model_state_fingerprint_source = "not-computed"
     payload = {
+        "fingerprint_schema_version": _RUN_FINGERPRINT_SCHEMA_VERSION,
         "input_fingerprint": input_fingerprint,
+        "model_state_fingerprint": resolved_model_state_fingerprint,
+        "model_state_fingerprint_source": model_state_fingerprint_source,
         "model_class": f"{model.__class__.__module__}.{model.__class__.__qualname__}",
         **model_identity,
         "attention_backend": attention_backend,
@@ -365,7 +434,12 @@ def _run_fingerprint(
     run_fingerprint = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    return input_fingerprint, run_fingerprint
+    return (
+        input_fingerprint,
+        run_fingerprint,
+        resolved_model_state_fingerprint,
+        model_state_fingerprint_source,
+    )
 
 
 def _output_exists(path: str | Path, format: str) -> bool:
@@ -409,6 +483,7 @@ def embed_dataset(
     truncate: bool = True,
     dtype: torch.dtype | None = torch.float32,
     shard_size: int = 2 * 1024**3,
+    model_state_fingerprint: str | None = None,
     **model_kwargs: Any,
 ) -> EmbeddingResult:
     """Embed protein sequences with stable ordering and residue-only pooling."""
@@ -427,6 +502,9 @@ def embed_dataset(
         pooling_names = ()
     elif not pooling_names:
         raise ValueError("pooling is required unless full_embeddings=True.")
+    store_all_hidden_states = bool(model_kwargs.get("store_all_hidden_states", False))
+    if store_all_hidden_states and not full_embeddings:
+        raise ValueError("store_all_hidden_states=True requires full_embeddings=True.")
 
     unsupported = set(getattr(model, "embedding_unsupported_pooling", ()))
     requested_unsupported = unsupported.intersection(pooling_names)
@@ -436,7 +514,12 @@ def embed_dataset(
             f"{sorted(requested_unsupported)}."
         )
 
-    input_fingerprint, run_fingerprint = _run_fingerprint(
+    (
+        input_fingerprint,
+        run_fingerprint,
+        resolved_model_state_fingerprint,
+        model_state_fingerprint_source,
+    ) = _run_fingerprint(
         model,
         records,
         pooling=pooling_names,
@@ -446,11 +529,20 @@ def embed_dataset(
         dtype=dtype,
         model_kwargs=model_kwargs,
         tokenizer_metadata=_tokenizer_metadata(model, tokenizer),
+        model_state_fingerprint=model_state_fingerprint,
+        persist_output=output is not None,
     )
     existing: EmbeddingResult | None = None
     start_position = 0
     if output is not None and resume and _output_exists(output, format):
         existing = load_result(output, format=format)
+        if existing.metadata.get("fingerprint_schema_version") != (
+            _RUN_FINGERPRINT_SCHEMA_VERSION
+        ):
+            raise ValueError(
+                "Existing embeddings use an incompatible run fingerprint schema; "
+                "choose another output or set resume=False."
+            )
         if existing.metadata.get("run_fingerprint") != run_fingerprint:
             raise ValueError(
                 "Existing embeddings were produced by a different run fingerprint; "
@@ -472,8 +564,11 @@ def embed_dataset(
             output,
             {
                 "format_version": 1,
+                "fingerprint_schema_version": _RUN_FINGERPRINT_SCHEMA_VERSION,
                 "run_fingerprint": run_fingerprint,
                 "input_fingerprint": input_fingerprint,
+                "model_state_fingerprint": resolved_model_state_fingerprint,
+                "model_state_fingerprint_source": model_state_fingerprint_source,
                 "complete": False,
             },
             resume=resume,
@@ -525,16 +620,32 @@ def embed_dataset(
                 # Custom embedding adapters own their inference path, so retain
                 # the same fail-closed length contract at their boundary.
                 _validate_parti_length(M)
-            if X.ndim != 3 or M.shape != X.shape[:2]:
+            valid_X_shape = X.ndim == 3 and M.shape == X.shape[:2]
+            valid_all_states_shape = (
+                X.ndim == 4
+                and store_all_hidden_states
+                and full_embeddings
+                and M.shape == (X.shape[0], X.shape[2])
+            )
+            if not (valid_X_shape or valid_all_states_shape):
                 raise ValueError(
-                    "Embedding batches must provide X with shape (b, l, d) and "
+                    "Embedding batches must provide X with shape (b, l, d), or "
+                    "(b, states, l, d) when storing all hidden states, and "
                     "residue_mask with shape (b, l)."
                 )
             if dtype is not None:
                 X = X.to(dtype=dtype)
 
             if full_embeddings:
-                values = [X_i[M_i].detach().cpu() for X_i, M_i in zip(X, M, strict=True)]
+                if X.ndim == 4:
+                    values = [
+                        X_i[:, M_i, :].detach().cpu()
+                        for X_i, M_i in zip(X, M, strict=True)
+                    ]
+                else:
+                    values = [
+                        X_i[M_i].detach().cpu() for X_i, M_i in zip(X, M, strict=True)
+                    ]
             else:
                 assert pooler is not None
                 Y = pooler(
@@ -583,8 +694,11 @@ def embed_dataset(
     model_identity = _model_identity_metadata(model)
     metadata: dict[str, Any] = {
         "format_version": 1,
+        "fingerprint_schema_version": _RUN_FINGERPRINT_SCHEMA_VERSION,
         "run_fingerprint": run_fingerprint,
         "input_fingerprint": input_fingerprint,
+        "model_state_fingerprint": resolved_model_state_fingerprint,
+        "model_state_fingerprint_source": model_state_fingerprint_source,
         "model_class": f"{model.__class__.__module__}.{model.__class__.__qualname__}",
         **model_identity,
         "dtype": str(dtype).removeprefix("torch.") if dtype is not None else "model",

@@ -17,6 +17,7 @@ from huggingface_hub import snapshot_download
 from fastplms.registry import get_model_registry
 from tools.artifacts.build import (
     _TOKENIZER_FILE_NAMES,
+    _tokenizer_checkpoint,
     build_local_artifact,
     validate_artifact,
 )
@@ -50,20 +51,21 @@ def build_all_artifacts(
         )
         tokenizer_snapshot: Path | None = None
         if spec.family.tokenizer_mode == "tokenizer":
+            tokenizer_checkpoint = _tokenizer_checkpoint(registry, spec)
             tokenizer_files = [
                 item.path
-                for item in spec.official.files
+                for item in tokenizer_checkpoint.files
                 if Path(item.path).name in _TOKENIZER_FILE_NAMES
             ]
             if not tokenizer_files:
                 raise RuntimeError(f"{model_id}: official tokenizer files are not declared")
-            if checkpoint is spec.official:
+            if checkpoint == tokenizer_checkpoint:
                 tokenizer_snapshot = snapshot
             else:
                 tokenizer_snapshot = Path(
                     snapshot_download(
-                        repo_id=spec.official.repo_id,
-                        revision=spec.official.revision,
+                        repo_id=tokenizer_checkpoint.repo_id,
+                        revision=tokenizer_checkpoint.revision,
                         allow_patterns=tokenizer_files,
                     )
                 )

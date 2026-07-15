@@ -98,6 +98,7 @@ _FAMILY_FIELDS = frozenset(
         "dtypes",
         "bf16_execution",
         "precisions",
+        "experimental_precisions",
         "vram_tier",
         "checkpoint_license",
         "hub_license",
@@ -131,6 +132,7 @@ _MODEL_FIELDS = frozenset(
         "oracle_assets",
         "official_golden",
         "artifact_source",
+        "tokenizer_source",
         "auto_map",
         "notes",
     }
@@ -287,6 +289,7 @@ class ModelFamily:
     test_tiers: tuple[TestTier, ...]
     runtime_paths: tuple[str, ...]
     auto_map_items: tuple[tuple[str, str], ...]
+    experimental_precisions: tuple[str, ...] = ()
     tokenizer_class: str | None = None
     hub_license_name: str | None = None
     hub_license_link: str | None = None
@@ -308,6 +311,13 @@ class ModelFamily:
             metadata["license_link"] = self.hub_license_link
         return MappingProxyType(metadata)
 
+    @property
+    def stable_precisions(self) -> tuple[str, ...]:
+        """Return precision policies covered by the release contract."""
+
+        experimental = set(self.experimental_precisions)
+        return tuple(precision for precision in self.precisions if precision not in experimental)
+
 
 @dataclass(frozen=True, slots=True)
 class ModelSpec:
@@ -322,6 +332,7 @@ class ModelSpec:
     oracle_assets: tuple[OracleAsset, ...] = ()
     official_golden: OfficialGolden | None = None
     artifact_source: str = "fast"
+    tokenizer_source_id: str | None = None
     auto_map_items: tuple[tuple[str, str], ...] = ()
     notes: str = ""
 
@@ -906,6 +917,19 @@ def _parse_families(
         precisions = _require_str_list(value, "precisions", context)
         if not set(precisions).issubset(_ALLOWED_PRECISIONS):
             raise RegistryError(f"Unsupported precision policy in {context}.")
+        experimental_precisions = _optional_str_list(
+            value,
+            "experimental_precisions",
+            context,
+        )
+        unknown_experimental_precisions = sorted(
+            set(experimental_precisions).difference(precisions)
+        )
+        if unknown_experimental_precisions:
+            raise RegistryError(
+                f"{context}.experimental_precisions must be a subset of precisions; "
+                f"unknown values: {unknown_experimental_precisions}."
+            )
         extra = cast(RuntimeExtra, _require_enum(value, "extra", context, _ALLOWED_EXTRAS))
         vram_tier = cast(
             VramTier,
@@ -981,6 +1005,7 @@ def _parse_families(
             dtypes=cast(tuple[DtypeName, ...], dtypes),
             bf16_execution=bf16_execution,
             precisions=precisions,
+            experimental_precisions=experimental_precisions,
             vram_tier=vram_tier,
             checkpoint_license=checkpoint_license,
             hub_license=hub_license,
@@ -1123,6 +1148,13 @@ def _parse_models(
             "tokenizer" in item.path or "vocab" in item.path for item in fast.files
         ):
             raise RegistryError(f"{context} does not pin a tokenizer asset.")
+        tokenizer_source_id = value.get("tokenizer_source")
+        if tokenizer_source_id is not None and (
+            family.tokenizer_mode != "tokenizer"
+            or not isinstance(tokenizer_source_id, str)
+            or _IDENTIFIER_RE.fullmatch(tokenizer_source_id) is None
+        ):
+            raise RegistryError(f"{context}.tokenizer_source is invalid.")
         notes = value.get("notes", "")
         if not isinstance(notes, str):
             raise RegistryError(f"{context}.notes must be a string.")
@@ -1147,6 +1179,7 @@ def _parse_models(
             oracle_assets=oracle_assets,
             official_golden=official_golden,
             artifact_source=artifact_source,
+            tokenizer_source_id=tokenizer_source_id,
             auto_map_items=tuple(auto_map),
             notes=notes,
         )
@@ -1159,6 +1192,33 @@ def _validate_registry(
     families: Mapping[str, ModelFamily],
     models: Mapping[str, ModelSpec],
 ) -> None:
+    for spec in models.values():
+        if spec.tokenizer_source_id is None:
+            continue
+        source = models.get(spec.tokenizer_source_id)
+        if source is None:
+            raise RegistryError(
+                f"Model {spec.id!r} references unknown tokenizer source "
+                f"{spec.tokenizer_source_id!r}."
+            )
+        if not any(
+            PurePosixPath(item.path).name
+            in {
+                "added_tokens.json",
+                "merges.txt",
+                "sentencepiece.bpe.model",
+                "special_tokens_map.json",
+                "spiece.model",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "vocab.json",
+                "vocab.txt",
+            }
+            for item in source.official.files
+        ):
+            raise RegistryError(
+                f"Tokenizer source {source.id!r} has no official tokenizer assets."
+            )
     expected_esmfold2 = {
         "esmfold2": ("Synthyra/ESMFold2", "biohub/ESMFold2"),
         "esmfold2_fast": ("Synthyra/ESMFold2-Fast", "biohub/ESMFold2-Fast"),

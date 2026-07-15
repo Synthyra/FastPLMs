@@ -78,6 +78,12 @@ meet the fixed engineering target for ESM2. ESM++ backend-specific numerical
 results are recorded in its checkpoint cards. DPLM advertises FlashAttention 3
 only; its FlashAttention 2 result remains outside the engineering target.
 
+All five ESM++/ESMC backends are release-gated. SDPA must be bit-for-bit exact
+against the pinned Biohub output across every hidden state, logits, special
+tokens, and padding. Alternate BF16 backends use a relative-L2 engineering
+target of `0.02` and hard limit of `0.03` on the pinned boundary-length and
+biological panels. Every other BF16 metric retains the global contract.
+
 DPLM advertises eager, SDPA, Flex Attention, and FlashAttention 3. Its pinned
 official BF16 contract keeps parameter storage in FP32 and uses CUDA BF16
 autocast. On the representative H100 case, eager and Flex have worst
@@ -113,6 +119,11 @@ mask is normalized into:
 - a Flex `BlockMask` for padding, causal, block-causal, or declared custom
   semantics.
 
+FlashAttention calls with a packed 2D padding mask always use the varlen kernel,
+including causal self-attention. The causal flag is passed to the varlen kernel,
+and padded query rows are restored as exact zeros after repadding. Masked calls
+reject shapes or devices that do not match Q, K, and V before loading a kernel.
+
 E1's block-causal pattern is a distinct semantic key. It is never represented
 as ordinary padding attention. Mixed-length and skewed-padding parity cases
 exercise every required representation.
@@ -140,9 +151,10 @@ not expose meaningful sequence attention, including ESMFold2, reject `parti`.
 Backend validation uses the same valid biological positions as official parity.
 It measures relative L2 error, relative 99.9th-percentile error, first-percentile
 residue cosine, per-sequence pooled cosine, confident-position top-1 agreement,
-and Jensen-Shannon divergence for probability tensors. A family-specific relaxed
-tolerance is not permitted. A failing advertised backend blocks release until
-the implementation is fixed or the backend is removed from the manifest and
+and Jensen-Shannon divergence for probability tensors. ESMC's documented
+alternate-backend relative-L2 target is the only family-specific numerical
+contract. A target miss by any advertised backend blocks release until the
+implementation is fixed or the backend is removed from the manifest and
 documentation.
 
 Performance is measured separately from correctness. See

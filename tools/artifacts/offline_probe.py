@@ -305,7 +305,8 @@ def _load_saved_artifact(
         raise RuntimeError("Offline artifact validation requires the H100 validation GPU")
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
-    model = auto_type.from_pretrained(
+    model = _load_model_exact(
+        auto_type,
         artifact,
         trust_remote_code=True,
         **_load_kwargs(family, bf16_execution, torch, attn_implementation),
@@ -393,6 +394,32 @@ def _run_isolated_reload(
         return result
 
 
+def _load_model_exact(auto_type: Any, artifact: Path, **kwargs: Any) -> Any:
+    """Load a model while rejecting every incomplete weight-loading outcome."""
+
+    loaded = auto_type.from_pretrained(
+        artifact,
+        output_loading_info=True,
+        **kwargs,
+    )
+    if not isinstance(loaded, tuple) or len(loaded) != 2:
+        raise RuntimeError("Transformers did not return model loading diagnostics")
+    model, loading_info = loaded
+    if not isinstance(loading_info, dict):
+        raise RuntimeError("Transformers returned invalid model loading diagnostics")
+    failures = {
+        name: loading_info.get(name)
+        for name in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")
+        if loading_info.get(name)
+    }
+    if failures:
+        raise RuntimeError(
+            "Exact AutoModel weight loading failed: "
+            + json.dumps(failures, sort_keys=True, default=str)
+        )
+    return model
+
+
 def probe(
     *,
     artifact: Path,
@@ -471,7 +498,8 @@ def probe(
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
 
-    model = auto_type.from_pretrained(
+    model = _load_model_exact(
+        auto_type,
         artifact,
         trust_remote_code=trust_remote_code,
         **_load_kwargs(family, bf16_execution, torch, attn_implementation),
@@ -509,7 +537,8 @@ def probe(
         else:
             torch.manual_seed(42)
             torch.cuda.manual_seed_all(42)
-            reloaded = auto_type.from_pretrained(
+            reloaded = _load_model_exact(
+                auto_type,
                 save_path,
                 trust_remote_code=False,
                 **_load_kwargs(family, bf16_execution, torch, attn_implementation),

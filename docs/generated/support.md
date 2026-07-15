@@ -18,7 +18,7 @@ is a release contract and must pass its declared live compliance tier.
 | `ankh` | ANKH | 5 | `tokenizer` | `n/a` | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `eager`, `sdpa` | `default` | `static_parameters` | `core` | `reference-ankh` | CC-BY-NC-SA-4.0 | `cc-by-nc-sa-4.0` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
 | `boltz2` | Boltz2 | 1 | `structure` | `n/a` | `AutoConfig`, `AutoModel` | `eager` | `default` | `fp32_parameters_autocast` | `structure` | `reference-boltz2` | MIT | `mit` | `structure`, `artifact`, `benchmark` |
 | `esmfold` | ESMFold | 1 | `structure` | `n/a` | `AutoConfig`, `AutoModel` | `eager`, `sdpa`, `flex_attention` | `default` | `fp32_parameters_autocast` | `structure` | `reference-esmfold` | MIT | `mit` | `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark` |
-| `esmfold2` | ESMFold2 | 4 | `structure` | `n/a` | `AutoConfig`, `AutoModel` | `eager`, `sdpa`, `flex_attention` | `auto`, `fp32`, `bf16`, `fp8` | `fp32_parameters_autocast` | `structure` | `reference-esmfold2` | MIT | `mit` | `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark` |
+| `esmfold2` | ESMFold2 | 4 | `structure` | `n/a` | `AutoConfig`, `AutoModel` | `eager`, `sdpa`, `flex_attention` | `auto`, `fp32`, `bf16`, `fp8` (experimental) | `fp32_parameters_autocast` | `structure` | `reference-esmfold2` | MIT | `mit` | `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark` |
 
 ## Checkpoints
 

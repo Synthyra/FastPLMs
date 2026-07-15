@@ -620,10 +620,14 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
         self.embeddings.word_embeddings = value
 
     def predict_contacts(
-        self, input_ids: torch.Tensor, attention_mask: torch.Tensor
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Predict residue contacts with the checkpoint's tied contact head."""
         input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
+        if attention_mask is None:
+            attention_mask = input_ids.ne(self.config.pad_token_id)
         type_ids = self._get_modality_type(input_ids, attention_mask)
         attentions = self(
             input_ids=input_ids,

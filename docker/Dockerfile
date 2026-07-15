@@ -134,6 +134,7 @@ COPY tests/__init__.py /opt/oracle/tests/__init__.py
 COPY tests/parity/__init__.py /opt/oracle/tests/parity/__init__.py
 COPY tests/parity/support/__init__.py /opt/oracle/tests/parity/support/__init__.py
 COPY tests/parity/support/state_transforms.py /opt/oracle/tests/parity/support/state_transforms.py
+COPY tests/parity/support/semantic_config.py /opt/oracle/tests/parity/support/semantic_config.py
 COPY tests/parity/support/native_reference.py /opt/oracle/tests/parity/support/native_reference.py
 COPY tests/parity/support/reference_adapters /opt/oracle/tests/parity/support/reference_adapters
 COPY tests/structure/__init__.py /opt/oracle/tests/structure/__init__.py

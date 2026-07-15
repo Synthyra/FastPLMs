@@ -43,6 +43,8 @@ def test_gpu_validation_stack_is_exactly_pinned() -> None:
     assert torch.__version__.split("+", maxsplit=1)[0] == "2.13.0"
     assert version("transformers") == "5.13.0"
     assert transformers.__version__ == "5.13.0"
+    assert version("huggingface-hub") == "1.23.0"
+    assert version("kernels") == "0.15.2"
     assert torch.version.cuda is not None
     assert torch.version.cuda.startswith("13.0")
 

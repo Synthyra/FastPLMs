@@ -102,7 +102,7 @@ residues and supports `mean`, `max`, `norm`, `median`, `std`, `var`, `cls`, and
 available for transactional streaming and exact resume. See the
 [embedding guide](docs/embedding_api.md).
 
-## ESMFold2 learned representation and FP8
+## ESMFold2 learned representation and experimental FP8
 
 FastPLMs supports exactly four ESMFold2 checkpoints: standard, fast,
 experimental cutoff 2025, and experimental fast cutoff 2025. Their learned
@@ -130,18 +130,27 @@ model = AutoModel.from_pretrained(
     device_map={"": "cuda:0"},
     esmc_precision="auto",
 ).eval()
-model.reload_esmc(precision="auto", device="cuda:0")
+print(model.esmc_precision_status)
+
+# FP8 is available as an explicit, experimental, inference-only opt-in.
+model.reload_esmc(precision="fp8", device="cuda:0")
 print(model.esmc_precision_status)
 ```
 
-`auto` selects FP8 only when ESMC is loaded directly onto a supported CUDA
-device and Transformer Engine reports availability. Otherwise it selects BF16
-and records the reason. Explicit `fp8` is strict. The validated path converts
+`auto` always resolves to BF16, including on FP8-capable GPUs. FP8 is marked
+experimental in the model manifest and is excluded from release numerical
+parity. Explicit `fp8` is strict: it raises unless ESMC is loaded directly onto a supported CUDA
+device with the validated Transformer Engine runtime. The FP8 path converts
 the 80 ESMC attention output projections to Transformer Engine linears and
-uses current-scaling FP8 inference while retaining canonical BF16 checkpoint
+uses current-scaling inference while retaining canonical BF16 checkpoint
 weights. Runtime quantization state is never serialized. Gradient-enabled and
-test-time-training paths reload BF16. See the [ESMFold2 guide](docs/esmfold2.md)
-for the measured three-reload compliance evidence.
+test-time-training paths reload BF16.
+
+The real-protein H100 panel supports BF16 as the default. Candidate BF16
+matched official BF16 in all 60 protein, seed, and model-variant cases. A prior
+FP8 diagnostic passed the historical hard FP8-versus-BF16 structure limits in
+48 of 60 cases, so FP8 folding is not a release-gated parity claim. See the
+[ESMFold2 guide](docs/esmfold2.md) for the diagnostic evidence before opting in.
 
 ## Model support and provenance
 

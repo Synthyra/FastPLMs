@@ -17,6 +17,10 @@ from safetensors.torch import load_file
 
 from fastplms.registry import ModelSpec, get_model_registry
 from tests.conftest import strict_fp32_matmul
+from tests.parity.support.esmc_calibration import (
+    ESMC_BOUNDARY_LENGTHS,
+    load_esmc_biological_holdout,
+)
 from tests.parity.support.native_reference import _tensor_digest, _token_result
 from tests.parity.support.reference_adapters.dplm2 import (
     DPLM2_3B_GENERATION_LIMITATION,
@@ -30,6 +34,7 @@ from tests.parity.test_model_parity import (
     _assert_esmc_sdpa_exact,
     _assert_outputs,
     _load_fast,
+    _numeric_contract,
     _semantic_config,
 )
 
@@ -172,10 +177,12 @@ def _run_native_inference(
     precision: str,
     backend: str | None,
     package_source: bool = False,
+    tensor_path: Path | None = None,
+    context_suffix: str = "native",
 ) -> None:
     device = torch.device("cuda")
     dtype = torch.float32 if precision == "fp32" else torch.bfloat16
-    tensors = load_file(result_dir / f"{precision}.safetensors", device="cpu")
+    tensors = load_file(tensor_path or result_dir / f"{precision}.safetensors", device="cpu")
     use_bf16_autocast = (
         dtype == torch.bfloat16 and spec.family.bf16_execution == "fp32_parameters_autocast"
     )
@@ -206,20 +213,20 @@ def _run_native_inference(
     with torch.inference_mode(), numeric_context:
         candidate = fast(**inputs, output_hidden_states=True)
     official = _official_output(tensors, device)
-    contract = FP32_CONTRACT if dtype == torch.float32 else BF16_CONTRACT
+    contract = _numeric_contract(spec, dtype, backend)
     _assert_outputs(
         spec,
         candidate,
         official,
         residue_mask,
         contract,
-        f"{spec.id}:{precision}:{backend or 'default'}:native",
+        f"{spec.id}:{precision}:{backend or 'default'}:{context_suffix}",
     )
     if spec.family.architecture == "ESMC" and backend in (None, "sdpa"):
         _assert_esmc_sdpa_exact(
             candidate,
             official,
-            f"{spec.id}:{precision}:{backend or 'default'}:native",
+            f"{spec.id}:{precision}:{backend or 'default'}:{context_suffix}",
         )
     del fast, candidate, official, tensors
     gc.collect()
@@ -260,6 +267,69 @@ def test_native_representatives_all_backends(
 
     _, result_dir = _result(spec)
     _run_native_inference(spec, result_dir, precision=precision, backend=backend)
+
+
+@pytest.mark.parametrize(
+    ("spec", "backend", "kind"),
+    [
+        pytest.param(
+            spec,
+            backend,
+            kind,
+            id=f"{spec.id}-{backend}-{kind}",
+            marks=[pytest.mark.large] if spec.size_category == "xlarge" else [],
+        )
+        for spec in SEQUENCE_SPECS
+        if spec.family.id == "esm_plusplus"
+        for backend in spec.family.attention
+        if "bfloat16" in REGISTRY.supported_attention_dtypes(spec.family.id, backend)
+        for kind in ("generated_kernel_boundary", "real_biological_holdout")
+    ],
+)
+def test_esmc_bf16_calibration_and_biological_holdout(
+    spec: ModelSpec,
+    backend: str,
+    kind: str,
+) -> None:
+    """Calibrate BF16 parity on pinned shape and biological panels."""
+
+    metadata, result_dir = _result(spec)
+    batches = metadata.get("calibration_batches")
+    assert isinstance(batches, list)
+    batch = next(item for item in batches if item["kind"] == kind)
+    assert batch["seed"] == 42
+    expected_biological = {
+        case["case_id"]: case for case in load_esmc_biological_holdout()
+    }
+    if kind == "generated_kernel_boundary":
+        observed_lengths = tuple(case["sequence_length"] for case in batch["cases"])
+        assert observed_lengths == ESMC_BOUNDARY_LENGTHS
+    else:
+        assert tuple(case["case_id"] for case in batch["cases"]) == tuple(expected_biological)
+    for case in batch["cases"]:
+        sequence = case["sequence"]
+        assert len(sequence) == case["sequence_length"]
+        assert hashlib.sha256(sequence.encode("ascii")).hexdigest() == case["sequence_sha256"]
+        if kind == "real_biological_holdout":
+            expected = expected_biological[case["case_id"]]
+            assert {
+                name: case[name]
+                for name in (
+                    "case_id",
+                    "sequence",
+                    "sequence_sha256",
+                    "source",
+                    "source_sha256",
+                )
+            } == expected
+    _run_native_inference(
+        spec,
+        result_dir,
+        precision="bf16",
+        backend=backend,
+        tensor_path=result_dir / "calibration" / f"{kind}.safetensors",
+        context_suffix=kind,
+    )
 
 
 @pytest.mark.parametrize(

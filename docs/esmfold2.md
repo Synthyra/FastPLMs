@@ -102,7 +102,8 @@ not the embedding utility.
 
 ## ESMC precision policy
 
-The public precision values are `auto`, `bf16`, `fp32`, and `fp8`:
+The accepted precision values are `auto`, `bf16`, `fp32`, and `fp8`. The
+manifest marks `fp8` as experimental:
 
 ```python
 model.reload_esmc(precision="auto", device="cuda")
@@ -113,15 +114,20 @@ print(status.as_dict())
 The status contains requested and resolved precision, reason, device, and the
 installed Transformer Engine version. Resolution is fail-closed:
 
-- `auto` selects FP8 only for direct loading onto a CUDA device when Transformer
-  Engine reports FP8 availability;
-- `auto` otherwise selects BF16 and records the exact reason;
-- explicit `fp8` raises when the device or Transformer Engine path is
+- `auto` always selects BF16, including on FP8-capable GPUs;
+- experimental explicit `fp8` raises when the device or Transformer Engine path is
   unavailable;
 - explicit `bf16` and `fp32` remain supported.
 
+FP8 must therefore be requested deliberately:
+
+```python
+model.reload_esmc(precision="fp8", device="cuda")
+assert model.esmc_precision_status.resolved == "fp8"
+```
+
 Converting every ESMC linear compounds quantization error across 80 layers.
-The validated path instead converts exactly each layer's attention output
+The experimental path instead converts exactly each layer's attention output
 projection, for 80 Transformer Engine linears in total. Their canonical
 parameters remain BF16. `Float8CurrentScaling` quantizes the GEMMs during the
 inference context, and sequence inputs are padded to a multiple of 16 before
@@ -150,22 +156,15 @@ precompiled. Core FastPLMs imports remain independent of Transformer Engine
 because the optional runtime is loaded only when the precision policy needs its
 capability probe or execution context.
 
-## Validation record
+## Historical FP8 diagnostic
 
-On July 15, 2026, the locked H100 PCIe environment passed all 15 focused
-ESMFold2 release tests with no failures, errors, or skips. The run covered all
-four variants, official-versus-local BF16 folding, FP8-versus-BF16 folding,
-three fresh reload cycles per variant, automatic FP8 selection, strict
-unavailable-device behavior, and the CUDA 13 Transformer Engine stack.
-
-Official-versus-local BF16 C-alpha RMSD ranged from `1.65e-6` to `2.86e-6`
-angstrom, lDDT-C-alpha was `1.0`, and confidence-output errors were zero. Across
-the four FP8 variants, the worst observed values were C-alpha RMSD `0.217190`
-angstrom, lDDT-C-alpha `0.994244`, pLDDT MAE `0.004952`, PAE MAE `0.133353`
-angstrom, pTM error `0.005495`, and mean probability Jensen-Shannon divergence
-`0.000346`. Each value meets its engineering target. This record applies only
-to the pinned checkpoint revisions and locked H100 environment documented by
-the manifest.
+A non-release H100 diagnostic over multiple real proteins and seeds found exact
+official-versus-candidate BF16 parity but model- and sequence-dependent FP8
+folding deviations. FP8 passed the historical hard structure limits in 48 of
+60 cases. The panel and its fixtures are not part of the release suite; current
+coverage is one explicit FP8 smoke per variant plus three reload cycles on the
+standard variant. This evidence motivates the BF16 `auto` policy and precludes
+an FP8 numerical-equivalence claim.
 
 ## Gradient-enabled paths
 

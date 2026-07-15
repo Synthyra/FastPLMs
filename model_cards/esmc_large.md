@@ -40,7 +40,7 @@ parameters loaded directly in BF16.
 
 ## Notes and limitations
 
-Reproducibility note: in the locked H100 environment, SDPA matches the pinned Biohub implementation exactly across complete hidden states, including special and padding positions. Alternative BF16 kernels use different reduction and tiling arithmetic. On one seeded batch of randomly generated compliance sequences, alternate-backend deep-state relative L2 errors were approximately 0.01 to 0.012. These values are not MSE, exclude padding from the biological-residue metric, and remain below the 0.03 hard limit. They describe that representative test batch rather than an expected error distribution for biological sequences. A strict test configured for the 0.01 engineering target may therefore report a small alternate-kernel miss; this does not indicate an architecture or checkpoint difference.
+Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager, Flex Attention, FlashAttention 2, and FlashAttention 3 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.02 and hard limit of 0.03. The global Q99.9, cosine, top-1, and Jensen-Shannon thresholds remain unchanged. Any target miss blocks release.
 
 ## Provenance
 

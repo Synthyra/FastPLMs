@@ -123,6 +123,24 @@ def test_dplm2_rotary_cache_follows_frequency_buffer_dtype() -> None:
     assert rotary._cos_cached.dtype == rotary.inv_freq.dtype == torch.bfloat16
 
 
+def test_dplm2_predict_contacts_derives_padding_mask_when_omitted() -> None:
+    model = DPLM2ForMaskedLM(DPLM2Config(**_common_config(64)), dropout=0.0).eval()
+    input_ids = torch.tensor([[0, 6, 7, 2, 1]])
+    expected_mask = input_ids.ne(model.config.pad_token_id)
+    observed: dict[str, torch.Tensor] = {}
+
+    def capture_modality_type(input_ids, attention_mask):
+        observed["attention_mask"] = attention_mask.detach().clone()
+        return torch.ones_like(input_ids)
+
+    model.esm._get_modality_type = capture_modality_type
+    contacts = model.predict_contacts(input_ids)
+
+    assert torch.equal(observed["attention_mask"], expected_mask)
+    assert contacts.shape == (1, input_ids.shape[1] - 2, input_ids.shape[1] - 2)
+    assert torch.isfinite(contacts).all()
+
+
 def test_dplm2_argmax_generation_preserves_modalities_and_fixed_positions() -> None:
     torch.manual_seed(17)
     model = DPLM2ForMaskedLM(DPLM2Config(**_common_config(64)), dropout=0.0).eval()

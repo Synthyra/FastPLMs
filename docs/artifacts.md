@@ -11,8 +11,16 @@ a Hub repository, uploads, deletes, commits, pushes, or opens a pull request.
 python tools/artifacts/build.py \
   esm2_8m \
   /cache/hub/models--Synthyra--ESM2-8M/snapshots/<revision> \
+  --tokenizer-dir \
+  /cache/hub/models--facebook--esm2_t6_8M_UR50D/snapshots/<official-revision> \
   --output-root dist/hub
 ```
+
+Tokenizer-mode artifacts built from a FastPLMs checkpoint require
+`--tokenizer-dir` pointing to the manifest-pinned official snapshot. The
+builder copies and records only the official tokenizer files declared by the
+manifest. Artifacts whose selected checkpoint is already the official snapshot
+may omit the option.
 
 Before writing output, the builder validates:
 
@@ -84,7 +92,8 @@ removes them.
 
 ```bash
 python tools/artifacts/build.py \
-  esm2_8m /cache/snapshot --output-root dist/hub --replace
+  esm2_8m /cache/fast-snapshot --tokenizer-dir /cache/official-snapshot \
+  --output-root dist/hub --replace
 ```
 
 The command validates the completed content manifest. The release artifact tier

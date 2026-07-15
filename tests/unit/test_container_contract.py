@@ -139,6 +139,51 @@ def test_reference_services_receive_only_the_exchange_and_cache_mounts() -> None
         assert "<<: *reference" in section
 
 
+def test_compose_and_bake_reference_contexts_are_synchronized() -> None:
+    compose = COMPOSE_FILE.read_text(encoding="utf-8")
+    bake = BAKE_FILE.read_text(encoding="utf-8")
+    expected = {
+        "reference-ankh": {"upstream_ankh": "vendor/upstream/ankh"},
+        "reference-biohub-esm": {
+            "upstream_biohub_esm": "vendor/upstream/biohub-esm",
+            "upstream_biohub_transformers": "vendor/upstream/biohub-transformers",
+        },
+        "reference-boltz2": {"upstream_boltz": "vendor/upstream/boltz"},
+        "reference-dplm": {"upstream_dplm": "vendor/upstream/dplm"},
+        "reference-e1": {"upstream_e1": "vendor/upstream/e1"},
+        "reference-esm2": {"upstream_fair_esm": "vendor/upstream/fair-esm"},
+        "reference-esmfold": {
+            "upstream_fair_esm": "vendor/upstream/fair-esm",
+            "upstream_openfold": "vendor/upstream/openfold",
+        },
+        "reference-esmfold2": {
+            "upstream_biohub_esm": "vendor/upstream/biohub-esm",
+            "upstream_biohub_transformers": "vendor/upstream/biohub-transformers",
+        },
+        "reference-protein-ttt": {
+            "upstream_protein_ttt": "vendor/upstream/protein-ttt"
+        },
+    }
+
+    for service, contexts in expected.items():
+        compose_tail = compose.split(f"  {service}:\n", maxsplit=1)[1]
+        next_service = re.search(r"\n  [^\s][^:\n]*:\n", compose_tail)
+        compose_section = (
+            compose_tail[: next_service.start()] if next_service is not None else compose_tail
+        )
+        bake_section = bake.split(f'target "{service}" {{', maxsplit=1)[1].split(
+            "\n}", maxsplit=1
+        )[0]
+        assert "additional_contexts:" in compose_section
+        assert "contexts = {" in bake_section
+        for name, relative_path in contexts.items():
+            assert f"{name}: ../{relative_path}" in compose_section
+            assert re.search(
+                rf"{re.escape(name)}\s*=\s*\"{re.escape(relative_path)}\"",
+                bake_section,
+            )
+
+
 def test_reference_protocol_contains_the_isolated_esmfold2_bundle_producer() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     protocol = dockerfile.split("FROM scratch AS reference-protocol", maxsplit=1)[1].split(
@@ -146,6 +191,7 @@ def test_reference_protocol_contains_the_isolated_esmfold2_bundle_producer() -> 
         maxsplit=1,
     )[0]
     assert "tests/structure/support/esmfold2_bundle.py" in protocol
+    assert "tests/parity/support/semantic_config.py" in protocol
     assert "src/fastplms" not in protocol
 
 

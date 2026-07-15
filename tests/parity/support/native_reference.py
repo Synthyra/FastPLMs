@@ -29,6 +29,7 @@ from tests.parity.support.reference_adapters import (
     OfficialGenerationUnavailable,
     snapshot_path,
 )
+from tests.parity.support.semantic_config import semantic_config as _semantic_config
 from tests.parity.support.state_transforms import (
     transform_parameter_names,
     transform_state,
@@ -49,102 +50,6 @@ _TOKENIZER_SETTINGS = (
     {"padding": "max_length", "truncation": True, "max_length": 12},
     {"padding": True, "truncation": True, "max_length": 5},
 )
-_SEMANTIC_PATHS: dict[str, tuple[str, ...]] = {
-    "vocab_size": (
-        "config.vocab_size",
-        "vocab_size",
-        "alphabet_size",
-        "embed.num_embeddings",
-        "embeddings.word_embeddings.num_embeddings",
-        "encoder.sequence_embed.num_embeddings",
-    ),
-    "d_model": (
-        "config.hidden_size",
-        "config.d_model",
-        "hidden_size",
-        "d_model",
-        "embed_dim",
-        "embed.embedding_dim",
-        "embeddings.word_embeddings.embedding_dim",
-        "encoder.sequence_embed.embedding_dim",
-    ),
-    "n_layers": (
-        "config.num_hidden_layers",
-        "config.num_layers",
-        "config.n_layers",
-        "num_layers",
-        "transformer.blocks",
-        "layers",
-        "encoder.layer",
-        "encoder.block",
-    ),
-    "n_heads": (
-        "config.num_attention_heads",
-        "config.num_heads",
-        "config.n_heads",
-        "attention_heads",
-        "transformer.blocks.0.attn.n_heads",
-        "layers.0.self_attn.num_heads",
-        "encoder.layer.0.attention.self.num_attention_heads",
-    ),
-    "d_ff": ("config.intermediate_size", "config.d_ff"),
-    "layer_norm_epsilon": ("config.layer_norm_eps", "config.layer_norm_epsilon"),
-    "max_positions": ("config.max_position_embeddings",),
-    "relative_buckets": ("config.relative_attention_num_buckets",),
-    "relative_max_distance": ("config.relative_attention_max_distance",),
-    "pad_token_id": ("config.pad_token_id", "padding_idx"),
-    "bos_token_id": ("config.bos_token_id", "cls_idx"),
-    "eos_token_id": ("config.eos_token_id", "eos_idx"),
-    "mask_token_id": ("config.mask_token_id", "mask_idx"),
-    "token_dropout": ("config.token_dropout", "token_dropout"),
-    "initializer_range": ("config.initializer_range",),
-    "classifier_dropout": ("config.classifier_dropout",),
-    "tie_word_embeddings": ("config.tie_word_embeddings",),
-}
-
-
-def _attribute(root: object, path: str) -> Any:
-    current = root
-    for part in path.split("."):
-        if part.isdigit() and hasattr(current, "__len__") and hasattr(current, "__getitem__"):
-            index = int(part)
-            if index >= len(current):
-                return None
-            current = current[index]
-        elif hasattr(current, part):
-            current = getattr(current, part)
-        else:
-            return None
-    return current
-
-
-def _semantic_config(model: nn.Module) -> dict[str, Any]:
-    roots: list[object] = [model]
-    if hasattr(model, "esm3"):
-        roots.insert(0, model.esm3)
-    result: dict[str, Any] = {}
-    for semantic_name, paths in _SEMANTIC_PATHS.items():
-        for root in roots:
-            for path in paths:
-                value = _attribute(root, path)
-                if value is None:
-                    continue
-                if isinstance(value, (nn.ModuleList, list, tuple)):
-                    value = len(value)
-                if torch.is_tensor(value) and value.numel() == 1:
-                    value = value.item()
-                if isinstance(value, (str, int, float, bool)):
-                    result[semantic_name] = value
-                    break
-            if semantic_name in result:
-                break
-    required = {"vocab_size", "d_model", "n_layers", "n_heads"}
-    missing = sorted(required.difference(result))
-    if missing:
-        raise RuntimeError(f"Official semantic configuration omits {missing}")
-    return result
-
-
 def _tensor_digest(tensor: torch.Tensor) -> dict[str, Any]:
     value = tensor.detach().cpu().contiguous()
     raw = value.view(torch.uint8).numpy().tobytes()
@@ -611,6 +516,29 @@ def run_request(request_path: Path, output_root: Path) -> Path:
         precision: sorted(tensors)
         for precision, tensors in precision_tensors.items()
     }
+    calibration_tensors: dict[str, dict[str, torch.Tensor]] = {}
+    calibration_batches = request.get("calibration_batches", [])
+    if calibration_batches:
+        if request["family"] != "esm_plusplus":
+            raise ValueError("Calibration batches are reserved for ESM++/ESMC requests")
+        for batch in calibration_batches:
+            kind = batch.get("kind")
+            cases = batch.get("cases")
+            if not isinstance(kind, str) or not isinstance(cases, list) or not cases:
+                raise ValueError(f"{request['model_id']}: invalid ESMC calibration batch")
+            sequences = [case["sequence"] for case in cases]
+            calibration_request = {**request, "sequences": sequences}
+            calibration_tensors[kind] = _inference_tensors(
+                model,
+                tokenizer,
+                calibration_request,
+                device,
+                torch.bfloat16,
+            )
+        metadata["calibration_batches"] = calibration_batches
+        metadata["calibration_tensor_keys"] = {
+            kind: sorted(tensors) for kind, tensors in calibration_tensors.items()
+        }
 
     output_root.mkdir(parents=True, exist_ok=True)
     destination = output_root / request["model_id"]
@@ -620,6 +548,10 @@ def run_request(request_path: Path, output_root: Path) -> Path:
     try:
         for precision, tensors in precision_tensors.items():
             save_file(tensors, temporary_path / f"{precision}.safetensors")
+        calibration_root = temporary_path / "calibration"
+        for kind, tensors in calibration_tensors.items():
+            calibration_root.mkdir(parents=True, exist_ok=True)
+            save_file(tensors, calibration_root / f"{kind}.safetensors")
         (temporary_path / "metadata.json").write_text(
             json.dumps(metadata, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
@@ -628,7 +560,7 @@ def run_request(request_path: Path, output_root: Path) -> Path:
     except BaseException:
         shutil.rmtree(temporary_path, ignore_errors=True)
         raise
-    del model, core, precision_tensors
+    del model, core, precision_tensors, calibration_tensors
     gc.collect()
     torch.cuda.empty_cache()
     return destination

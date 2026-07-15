@@ -204,8 +204,9 @@ Supported variants are restricted to:
 - `biohub/ESMFold2-Experimental-Fast-Cutoff2025`
 
 All four expose the learned ESMC projection and the `auto`, `bf16`, `fp32`, and
-`fp8` ESMC precision policy. See [ESMFold2](esmfold2.md) for the exact embedding,
-reload, and folding contracts.
+`fp8` ESMC precision policy. The manifest marks `fp8` as experimental; it is an
+explicit inference-only opt-in rather than a release numerical-parity claim.
+See [ESMFold2](esmfold2.md) for the exact embedding, reload, and folding contracts.
 
 The ESMFold2 folding checkpoint remains FP32 and folding computation uses CUDA
 BF16 autocast. Its ESMC backbone is governed independently by the requested

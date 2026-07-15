@@ -19,6 +19,14 @@ def _code(values: Iterable[str]) -> str:
     return ", ".join(f"`{value}`" for value in values)
 
 
+def _precision_contract(family: ModelFamily) -> str:
+    experimental = set(family.experimental_precisions)
+    return ", ".join(
+        f"`{value}` (experimental)" if value in experimental else f"`{value}`"
+        for value in family.precisions
+    )
+
+
 def _hub_license_label(family: ModelFamily) -> str:
     label = f"`{family.hub_license}`"
     if family.hub_license == "other":
@@ -71,7 +79,7 @@ def render_support(registry: ModelRegistry) -> str:
                     _tokenizer_class_label(family),
                     _code(sorted(family.auto_map)),
                     _code(family.attention),
-                    _code(family.precisions),
+                    _precision_contract(family),
                     f"`{family.bf16_execution}`",
                     f"`{family.extra}`",
                     f"`{family.reference_container}`",
@@ -162,10 +170,10 @@ Set `esmc_precision` to `auto`, `bf16`, `fp32`, or `fp8` when loading. The
 runtime can be rebuilt explicitly with
 `model.reload_esmc(precision=..., device=...)`; `model.esmc_precision_status`
 records the requested and resolved precision, reason, device, and Transformer
-Engine version. `auto` uses FP8 only
-for a direct load onto a supported CUDA device. Explicit `fp8` raises when the
-path is unavailable. Canonical BF16 weights are retained, and transient
-Transformer Engine quantization state is never serialized.
+Engine version. `auto` always resolves to BF16. Explicit `fp8` is an
+experimental, inference-only opt-in and raises when the path is unavailable.
+Canonical BF16 weights are retained, and transient Transformer Engine
+quantization state is never serialized.
 
 """
 

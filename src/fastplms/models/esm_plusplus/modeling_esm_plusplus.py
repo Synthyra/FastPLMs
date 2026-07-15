@@ -896,7 +896,12 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
 ### ESM++ Models
 class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
     """
-    ESM++ model. transformer model with no heads
+    ESM++ transformer backbone.
+
+    Official ESM++ checkpoints contain the sequence head even when loaded through
+    ``AutoModel``.  Keep that module in the base class so the checkpoint has one
+    exact state-dict contract across ``AutoModel`` and ``AutoModelForMaskedLM``;
+    the base forward path intentionally does not compute or return logits.
     """
 
     config_class = ESMplusplusConfig
@@ -913,6 +918,7 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
             dropout=config.dropout,
             attn_backend=config.attn_backend,
         )
+        self.sequence_head = RegressionHead(config.hidden_size, self.vocab_size)
         self.init_weights()
 
     def get_input_embeddings(self):

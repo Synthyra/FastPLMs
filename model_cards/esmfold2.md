@@ -56,10 +56,10 @@ Set `esmc_precision` to `auto`, `bf16`, `fp32`, or `fp8` when loading. The
 runtime can be rebuilt explicitly with
 `model.reload_esmc(precision=..., device=...)`; `model.esmc_precision_status`
 records the requested and resolved precision, reason, device, and Transformer
-Engine version. `auto` uses FP8 only
-for a direct load onto a supported CUDA device. Explicit `fp8` raises when the
-path is unavailable. Canonical BF16 weights are retained, and transient
-Transformer Engine quantization state is never serialized.
+Engine version. `auto` always resolves to BF16. Explicit `fp8` is an
+experimental, inference-only opt-in and raises when the path is unavailable.
+Canonical BF16 weights are retained, and transient Transformer Engine
+quantization state is never serialized.
 
 ## Provenance
 

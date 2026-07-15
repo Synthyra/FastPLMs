@@ -74,10 +74,12 @@ Only the standard, fast, experimental cutoff 2025, and experimental fast cutoff
 and exposes the learned width-256 representation.
 
 Use `esmc_precision="auto"` and inspect `model.esmc_precision_status`; FastPLMs
-1.0 selects the validated Transformer Engine FP8 path when ESMC is loaded
-directly onto a supported CUDA device. It otherwise resolves to BF16 with the
-reason recorded in status. Explicit `fp8` raises when unavailable. Use
-`model.reload_esmc()` to change the policy or destination.
+1.0 resolves `auto` to BF16 on every device. FP8 is an experimental, explicit,
+inference-only opt-in through `esmc_precision="fp8"` or
+`model.reload_esmc(precision="fp8", device="cuda")`, and it raises when the
+validated Transformer Engine path is unavailable. This avoids hardware-dependent
+changes in the automatic precision policy. See [ESMFold2](esmfold2.md) for the
+real-protein discrepancy results before enabling FP8.
 
 ## Development infrastructure
 

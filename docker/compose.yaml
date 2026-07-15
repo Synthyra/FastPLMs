@@ -111,47 +111,95 @@ services:
   reference-ankh:
     <<: *reference
     image: local/fastplms-reference-ankh:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-ankh}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-ankh
+      additional_contexts:
+        upstream_ankh: ../vendor/upstream/ankh
 
   reference-biohub-esm:
     <<: *reference
     image: local/fastplms-reference-biohub-esm:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-biohub-esm}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-biohub-esm
+      additional_contexts:
+        upstream_biohub_esm: ../vendor/upstream/biohub-esm
+        upstream_biohub_transformers: ../vendor/upstream/biohub-transformers
 
   reference-boltz2:
     <<: *reference
     image: local/fastplms-reference-boltz2:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-boltz2}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-boltz2
+      additional_contexts:
+        upstream_boltz: ../vendor/upstream/boltz
 
   reference-dplm:
     <<: *reference
     image: local/fastplms-reference-dplm:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-dplm}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-dplm
+      additional_contexts:
+        upstream_dplm: ../vendor/upstream/dplm
 
   reference-e1:
     <<: *reference
     image: local/fastplms-reference-e1:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-e1}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-e1
+      additional_contexts:
+        upstream_e1: ../vendor/upstream/e1
 
   reference-esm2:
     <<: *reference
     image: local/fastplms-reference-esm2:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-esm2}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-esm2
+      additional_contexts:
+        upstream_fair_esm: ../vendor/upstream/fair-esm
 
   reference-esmfold:
     <<: *reference
     image: local/fastplms-reference-esmfold:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-esmfold}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-esmfold
+      additional_contexts:
+        upstream_fair_esm: ../vendor/upstream/fair-esm
+        upstream_openfold: ../vendor/upstream/openfold
 
   reference-esmfold2:
     <<: *reference
     image: local/fastplms-reference-esmfold2:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-esmfold2}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-esmfold2
+      additional_contexts:
+        upstream_biohub_esm: ../vendor/upstream/biohub-esm
+        upstream_biohub_transformers: ../vendor/upstream/biohub-transformers
 
   reference-protein-ttt:
     <<: *reference
     image: local/fastplms-reference-protein-ttt:dev
-    build: {context: .., dockerfile: docker/Dockerfile, target: reference-protein-ttt}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: reference-protein-ttt
+      additional_contexts:
+        upstream_protein_ttt: ../vendor/upstream/protein-ttt
 
 volumes:
   hf-cache:

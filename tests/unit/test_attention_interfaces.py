@@ -241,6 +241,72 @@ def test_locked_kernel_is_hash_validated_before_import(
     assert events == ["validate", "import"]
 
 
+def test_locked_kernel_offline_resolves_sparse_snapshot_without_hub_api(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "snapshot"
+    variant_path = snapshot / "build" / "torch213-cxx11-cu130-x86_64-linux"
+    variant_path.mkdir(parents=True)
+    variant = SimpleNamespace(variant_str=variant_path.name)
+    expected_hash = f"sha256-{'a' * 64}"
+    events: list[str] = []
+    kernel = object()
+
+    def validate_kernel(*, repo_path: Path, variant: str, hash: str) -> None:
+        assert repo_path == snapshot
+        assert variant == variant_path.name
+        assert hash == expected_hash
+        events.append("validate")
+
+    def get_local_kernel(path: Path) -> object:
+        assert path == variant_path
+        events.append("import")
+        return kernel
+
+    monkeypatch.setattr(_kernel_lock, "_offline_snapshot_path", lambda *_: snapshot)
+    monkeypatch.setitem(sys.modules, "kernels", SimpleNamespace(get_local_kernel=get_local_kernel))
+    monkeypatch.setitem(
+        sys.modules,
+        "kernels.utils",
+        SimpleNamespace(validate_kernel=validate_kernel),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "kernels.variants",
+        SimpleNamespace(
+            get_variants_local=lambda path: [variant],
+            resolve_variants=lambda variants: (variants, []),
+        ),
+    )
+
+    assert (
+        _kernel_lock._load_offline_locked_kernel(
+            "kernels-community/flash-attn2",
+            "d" * 40,
+            {variant_path.name: SimpleNamespace(hash=expected_hash)},
+        )
+        is kernel
+    )
+    assert events == ["validate", "import"]
+
+
+def test_locked_kernel_offline_rejects_unlocked_cached_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "snapshot"
+    (snapshot / "build" / "unexpected-variant").mkdir(parents=True)
+    monkeypatch.setattr(_kernel_lock, "_offline_snapshot_path", lambda *_: snapshot)
+
+    with pytest.raises(RuntimeError, match="contains unlocked variants"):
+        _kernel_lock._load_offline_locked_kernel(
+            "kernels-community/flash-attn2",
+            "d" * 40,
+            {"expected-variant": SimpleNamespace(hash=f"sha256-{'a' * 64}")},
+        )
+
+
 def test_transformers_flash_hook_defers_binary_loading_until_execution(monkeypatch) -> None:
     dependency_checks: list[None] = []
     monkeypatch.setattr(
@@ -421,6 +487,78 @@ def test_kernels_flash_rejects_mixed_devices_before_loading(
     K = torch.empty(1, 4, 2, 8, dtype=torch.bfloat16, device="meta")
     with pytest.raises(RuntimeError, match=r"on one device.*cpu, meta, cpu"):
         _core.kernels_flash_attention_func(Q, K, Q, implementation="flash_attention_3")
+
+
+def test_causal_masked_flash_uses_varlen_and_zeroes_padding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _core,
+        "_validate_kernels_flash_device",
+        lambda *_args: torch.device("cpu"),
+    )
+    monkeypatch.setattr(
+        _core,
+        "_ensure_flash_kernels_loaded",
+        lambda _implementation: (object(), "flash_attn3"),
+    )
+    observed: dict[str, object] = {}
+
+    def varlen_forward(**kwargs):
+        observed.update(kwargs)
+        return kwargs["query_states"] + 1
+
+    monkeypatch.setattr(_core, "_kernels_flash_varlen_forward", varlen_forward)
+    monkeypatch.setattr(
+        _core,
+        "_kernels_flash_forward",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a masked causal call must not use dense FlashAttention")
+        ),
+    )
+    X = torch.zeros(2, 4, 2, 8, dtype=torch.bfloat16)
+    mask = torch.tensor([[1, 1, 0, 0], [1, 1, 1, 0]], dtype=torch.long)
+
+    output = _core.kernels_flash_attention_func(
+        X,
+        X,
+        X,
+        attention_mask_2d=mask,
+        causal=True,
+        implementation="flash_attention_3",
+    )
+
+    assert observed["causal"] is True
+    assert observed["query_states"].shape == (5, 2, 8)
+    assert torch.equal(output[mask.bool()], torch.ones(5, 2, 8, dtype=torch.bfloat16))
+    assert torch.count_nonzero(output[~mask.bool()]) == 0
+
+
+def test_masked_flash_validates_padding_mask_shape_before_kernel_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        _core,
+        "_validate_kernels_flash_device",
+        lambda *_args: torch.device("cpu"),
+    )
+    monkeypatch.setattr(
+        _core,
+        "_ensure_flash_kernels_loaded",
+        lambda _implementation: (_ for _ in ()).throw(
+            AssertionError("invalid masks must fail before kernel loading")
+        ),
+    )
+    X = torch.zeros(2, 4, 2, 8, dtype=torch.bfloat16)
+    with pytest.raises(ValueError, match=r"expected \(2, 4\), received \(2, 3\)"):
+        _core.kernels_flash_attention_func(
+            X,
+            X,
+            X,
+            attention_mask_2d=torch.ones(2, 3, dtype=torch.bool),
+            causal=True,
+            implementation="flash_attention_2",
+        )
 
 
 def test_flash_extra_has_no_source_build_path() -> None:

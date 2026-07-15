@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -64,6 +65,21 @@ class InterruptibleEmbeddingModel(SyntheticEmbeddingModel):
         return super()._embedding_batch(sequences)
 
 
+class SyntheticAllStatesModel(SyntheticEmbeddingModel):
+    def _embedding_batch(
+        self,
+        sequences: list[str],
+        *,
+        store_all_hidden_states: bool = False,
+    ) -> EmbeddingBatch:
+        assert store_all_hidden_states is True
+        batch = super()._embedding_batch(sequences)
+        return EmbeddingBatch(
+            X=torch.stack((batch.X, batch.X + 100), dim=1),
+            residue_mask=batch.residue_mask,
+        )
+
+
 class SyntheticE1Preparer:
     boundary_token_ids = torch.tensor([0, 1, 2, 3])
 
@@ -120,6 +136,44 @@ def test_full_embeddings_contain_biological_residues_only() -> None:
     assert result.metadata["residue_mask_policy"] == "biological-residues-only"
 
 
+@pytest.mark.parametrize("format", ("safetensors", "sqlite"))
+def test_all_hidden_state_embeddings_trim_token_axis_and_round_trip(
+    tmp_path, format: str
+) -> None:
+    output = tmp_path / ("all-states.sqlite" if format == "sqlite" else "all-states")
+    result = embed_dataset(
+        SyntheticAllStatesModel(),
+        ["ACD", "GG"],
+        full_embeddings=True,
+        store_all_hidden_states=True,
+        output=output,
+        format=format,
+    )
+
+    assert tuple(result[0].load_tensor().shape) == (2, 3, 2)
+    assert tuple(result[1].load_tensor().shape) == (2, 2, 2)
+    assert torch.equal(result[0].load_tensor()[1], result[0].load_tensor()[0] + 100)
+    loaded = (
+        load_sqlite_result(output)
+        if format == "sqlite"
+        else load_safetensors_result(output)
+    )
+    assert torch.equal(loaded[0].load_tensor(), result[0].load_tensor())
+    assert loaded.metadata["outputs"][0]["shape"] == [2, 3, 2]
+
+
+def test_all_hidden_states_require_full_embeddings() -> None:
+    with pytest.raises(
+        ValueError,
+        match="store_all_hidden_states=True requires full_embeddings=True",
+    ):
+        embed_dataset(
+            SyntheticAllStatesModel(),
+            ["ACD"],
+            store_all_hidden_states=True,
+        )
+
+
 def test_embedding_fingerprint_records_loaded_esmc_identity() -> None:
     model = SyntheticEmbeddingModel()
     model._esmc_source = "Synthyra/ESMplusplus_6B"
@@ -135,6 +189,58 @@ def test_embedding_fingerprint_records_loaded_esmc_identity() -> None:
     model._esmc_source_revision = "c" * 40
     changed = embed_dataset(model, ["ACD"], pooling="mean")
     assert changed.metadata["run_fingerprint"] != result.metadata["run_fingerprint"]
+
+
+def test_embedding_fingerprint_binds_persisted_parameters_and_buffers(tmp_path) -> None:
+    model = SyntheticEmbeddingModel()
+    model.register_buffer("running_value", torch.tensor([3.0]))
+    initial = embed_dataset(model, ["ACD"], output=tmp_path / "initial")
+
+    with torch.no_grad():
+        model.anchor.fill_(1)
+    changed_parameter = embed_dataset(model, ["ACD"], output=tmp_path / "parameter")
+    assert changed_parameter.metadata["model_state_fingerprint"] != (
+        initial.metadata["model_state_fingerprint"]
+    )
+    assert changed_parameter.metadata["run_fingerprint"] != initial.metadata["run_fingerprint"]
+
+    model.running_value.add_(1)
+    changed_buffer = embed_dataset(model, ["ACD"], output=tmp_path / "buffer")
+    assert changed_buffer.metadata["model_state_fingerprint"] != (
+        changed_parameter.metadata["model_state_fingerprint"]
+    )
+    assert initial.metadata["fingerprint_schema_version"] == 2
+    assert initial.metadata["model_state_fingerprint_source"] == "computed"
+
+
+def test_in_memory_embedding_skips_model_state_hash() -> None:
+    class NoStateDictEmbeddingModel(SyntheticEmbeddingModel):
+        def state_dict(
+            self,
+            *args: object,
+            **kwargs: object,
+        ) -> dict[str, torch.Tensor]:
+            del args, kwargs
+            raise AssertionError("in-memory embeddings must not hash the full model state")
+
+    result = embed_dataset(NoStateDictEmbeddingModel(), ["ACD"])
+
+    assert result.metadata["model_state_fingerprint"] is None
+    assert result.metadata["model_state_fingerprint_source"] == "not-computed"
+
+
+def test_caller_owned_model_state_fingerprint_overrides_state_hash() -> None:
+    model = SyntheticEmbeddingModel()
+    first = embed_dataset(model, ["ACD"], model_state_fingerprint="external-state-v1")
+    with torch.no_grad():
+        model.anchor.fill_(9)
+    second = embed_dataset(model, ["ACD"], model_state_fingerprint="external-state-v1")
+
+    assert second.metadata["run_fingerprint"] == first.metadata["run_fingerprint"]
+    assert second.metadata["model_state_fingerprint"] == "external-state-v1"
+    assert second.metadata["model_state_fingerprint_source"] == "caller"
+    with pytest.raises(ValueError, match="must not be empty"):
+        embed_dataset(model, ["ACD"], model_state_fingerprint="  ")
 
 
 def test_local_artifact_identity_fills_embedding_provenance() -> None:
@@ -184,7 +290,7 @@ def test_generic_embedding_uses_a_model_sequence_tokenizer_adapter() -> None:
         def _tokenize_sequence_batch(self, sequences, *, tokenizer, **kwargs):
             self.sequences = list(sequences)
             assert tokenizer is self.tokenizer
-            assert kwargs == {"return_tensors": "pt", "padding": True, "truncation": False}
+            assert kwargs == {"return_tensors": "pt", "padding": True, "truncation": True}
             return {
                 "input_ids": torch.tensor([[0, 4, 5, 2]]),
                 "attention_mask": torch.ones(1, 4, dtype=torch.long),
@@ -347,6 +453,34 @@ def test_resume_requires_matching_fingerprint(tmp_path) -> None:
     assert resumed.metadata["run_fingerprint"] == first.metadata["run_fingerprint"]
     with pytest.raises(ValueError, match="different run fingerprint"):
         embed_dataset(SyntheticEmbeddingModel(), ["GG"], output=output)
+
+
+def test_resume_rejects_legacy_fingerprint_schema(tmp_path) -> None:
+    output = tmp_path / "legacy-schema.sqlite"
+    embed_dataset(
+        SyntheticEmbeddingModel(),
+        ["ACD"],
+        output=output,
+        format="sqlite",
+    )
+    with sqlite3.connect(output) as connection:
+        run_id, metadata_json = connection.execute(
+            "SELECT run_id, metadata_json FROM runs"
+        ).fetchone()
+        metadata = json.loads(metadata_json)
+        metadata["fingerprint_schema_version"] = 1
+        connection.execute(
+            "UPDATE runs SET metadata_json = ? WHERE run_id = ?",
+            (json.dumps(metadata, sort_keys=True), run_id),
+        )
+
+    with pytest.raises(ValueError, match="incompatible run fingerprint schema"):
+        embed_dataset(
+            SyntheticEmbeddingModel(),
+            ["ACD"],
+            output=output,
+            format="sqlite",
+        )
 
 
 def test_legacy_pth_import_requires_explicit_unsafe_opt_in(tmp_path) -> None:

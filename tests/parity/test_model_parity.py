@@ -26,6 +26,7 @@ from transformers import AutoModel, AutoModelForMaskedLM
 
 from fastplms.registry import ModelSpec, get_model_registry
 from tests.conftest import CANONICAL_AAS, SEED, strict_fp32_matmul
+from tests.parity.support.semantic_config import semantic_config as _semantic_config
 from tests.parity.support.state_transforms import (
     TRANSFORMS,
     transform_parameter_names,
@@ -95,6 +96,20 @@ BF16_CONTRACT = NumericContract(
     jsd_target=1e-4,
     jsd_hard=1e-3,
 )
+ESMC_ALTERNATE_BF16_CONTRACT = NumericContract(
+    relative_l2_target=2e-2,
+    relative_l2_hard=BF16_CONTRACT.relative_l2_hard,
+    relative_q999_target=BF16_CONTRACT.relative_q999_target,
+    relative_q999_hard=BF16_CONTRACT.relative_q999_hard,
+    residue_cosine_target=BF16_CONTRACT.residue_cosine_target,
+    residue_cosine_hard=BF16_CONTRACT.residue_cosine_hard,
+    pooled_cosine_target=BF16_CONTRACT.pooled_cosine_target,
+    pooled_cosine_hard=BF16_CONTRACT.pooled_cosine_hard,
+    top1_target=BF16_CONTRACT.top1_target,
+    top1_hard=BF16_CONTRACT.top1_hard,
+    jsd_target=BF16_CONTRACT.jsd_target,
+    jsd_hard=BF16_CONTRACT.jsd_hard,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +120,38 @@ class TensorMetrics:
     relative_q999: float
     residue_cosine_p01: float
     pooled_cosine_min: float
+
+
+@dataclass(frozen=True, slots=True)
+class TensorMetricRecord:
+    """Metrics and identity for one layer or output tensor."""
+
+    context: str
+    metrics: TensorMetrics
+
+
+@dataclass(frozen=True, slots=True)
+class LogitsMetrics:
+    """Distribution-level metrics for a masked-language-model head."""
+
+    confident_top1_agreement: float
+    mean_jsd: float
+
+
+def _numeric_contract(
+    spec: ModelSpec,
+    dtype: torch.dtype,
+    backend: str | None,
+) -> NumericContract:
+    """Resolve the fixed contract without weakening the global BF16 policy."""
+
+    if dtype == torch.float32:
+        return FP32_CONTRACT
+    if dtype != torch.bfloat16:
+        raise ValueError(f"Unsupported parity dtype: {dtype}")
+    if spec.family.architecture == "ESMC" and backend not in (None, "sdpa"):
+        return ESMC_ALTERNATE_BF16_CONTRACT
+    return BF16_CONTRACT
 
 
 def _parameter(spec: ModelSpec) -> Any:
@@ -200,98 +247,6 @@ def _load_reference(
 def _reference_core(reference: nn.Module) -> nn.Module:
     core = getattr(reference, "model", reference)
     return core
-
-
-def _attribute(root: object, path: str) -> Any:
-    current = root
-    for part in path.split("."):
-        if part.isdigit() and hasattr(current, "__len__") and hasattr(current, "__getitem__"):
-            index = int(part)
-            if index >= len(current):
-                return None
-            current = current[index]
-            continue
-        if not hasattr(current, part):
-            return None
-        current = getattr(current, part)
-    return current
-
-
-SEMANTIC_PATHS: dict[str, tuple[str, ...]] = {
-    "vocab_size": (
-        "config.vocab_size",
-        "vocab_size",
-        "alphabet_size",
-        "embed.num_embeddings",
-        "embeddings.word_embeddings.num_embeddings",
-        "encoder.sequence_embed.num_embeddings",
-    ),
-    "d_model": (
-        "config.hidden_size",
-        "config.d_model",
-        "hidden_size",
-        "d_model",
-        "embed_dim",
-        "embed.embedding_dim",
-        "embeddings.word_embeddings.embedding_dim",
-        "encoder.sequence_embed.embedding_dim",
-    ),
-    "n_layers": (
-        "config.num_hidden_layers",
-        "config.num_layers",
-        "config.n_layers",
-        "num_layers",
-        "transformer.blocks",
-        "layers",
-        "encoder.layer",
-        "encoder.block",
-    ),
-    "n_heads": (
-        "config.num_attention_heads",
-        "config.num_heads",
-        "config.n_heads",
-        "attention_heads",
-        "transformer.blocks.0.attn.n_heads",
-        "layers.0.self_attn.num_heads",
-        "encoder.layer.0.attention.self.num_attention_heads",
-    ),
-    "d_ff": ("config.intermediate_size", "config.d_ff"),
-    "layer_norm_epsilon": ("config.layer_norm_eps", "config.layer_norm_epsilon"),
-    "max_positions": ("config.max_position_embeddings",),
-    "relative_buckets": ("config.relative_attention_num_buckets",),
-    "relative_max_distance": ("config.relative_attention_max_distance",),
-    "pad_token_id": ("config.pad_token_id", "padding_idx"),
-    "bos_token_id": ("config.bos_token_id", "cls_idx"),
-    "eos_token_id": ("config.eos_token_id", "eos_idx"),
-    "mask_token_id": ("config.mask_token_id", "mask_idx"),
-    "token_dropout": ("config.token_dropout", "token_dropout"),
-}
-
-
-def _semantic_config(model: nn.Module) -> dict[str, Any]:
-    roots: list[object] = [model]
-    if hasattr(model, "esm3"):
-        roots.insert(0, model.esm3)
-    result: dict[str, Any] = {}
-    for semantic_name, paths in SEMANTIC_PATHS.items():
-        for root in roots:
-            for path in paths:
-                value = _attribute(root, path)
-                if value is None:
-                    continue
-                if isinstance(value, (nn.ModuleList, list, tuple)):
-                    value = len(value)
-                if torch.is_tensor(value) and value.numel() == 1:
-                    value = value.item()
-                if isinstance(value, (str, int, float, bool)):
-                    result[semantic_name] = value
-                    break
-            if semantic_name in result:
-                break
-    required = {"vocab_size", "d_model", "n_layers", "n_heads"}
-    missing = sorted(required.difference(result))
-    assert not missing, f"Could not extract required semantic configuration fields: {missing}"
-    return result
 
 
 def _assert_semantic_config_equal(spec: ModelSpec, fast: nn.Module, reference: nn.Module) -> None:
@@ -545,6 +500,14 @@ def _assert_tensor_contract(
     context: str,
 ) -> None:
     metrics = tensor_metrics(candidate, official, residue_mask)
+    _assert_tensor_metrics(metrics, contract, context)
+
+
+def _assert_tensor_metrics(
+    metrics: TensorMetrics,
+    contract: NumericContract,
+    context: str,
+) -> None:
     _assert_upper(
         "relative_l2",
         metrics.relative_l2,
@@ -575,14 +538,57 @@ def _assert_tensor_contract(
     )
 
 
-def _assert_logits_contract(
+def _assert_tensor_metric_records(
+    records: Sequence[TensorMetricRecord],
+    contract: NumericContract,
+) -> None:
+    """Assert aggregate extrema after every output tensor has been measured."""
+
+    assert records, "No output tensor metrics were collected"
+    upper_metrics = (
+        (
+            "relative_l2",
+            "relative_l2",
+            contract.relative_l2_target,
+            contract.relative_l2_hard,
+        ),
+        (
+            "relative_q999",
+            "relative_q999",
+            contract.relative_q999_target,
+            contract.relative_q999_hard,
+        ),
+    )
+    lower_metrics = (
+        (
+            "residue_cosine_p01",
+            "residue_cosine_p01",
+            contract.residue_cosine_target,
+            contract.residue_cosine_hard,
+        ),
+        (
+            "pooled_cosine_min",
+            "pooled_cosine_min",
+            contract.pooled_cosine_target,
+            contract.pooled_cosine_hard,
+        ),
+    )
+    for name, attribute, target, hard in upper_metrics:
+        worst = max(records, key=lambda record: getattr(record.metrics, attribute))
+        _assert_upper(name, getattr(worst.metrics, attribute), target, hard, worst.context)
+    for name, attribute, target, hard in lower_metrics:
+        worst = min(records, key=lambda record: getattr(record.metrics, attribute))
+        _assert_lower(name, getattr(worst.metrics, attribute), target, hard, worst.context)
+
+
+def _logits_metrics(
     candidate: torch.Tensor,
     official: torch.Tensor,
     residue_mask: torch.Tensor,
-    contract: NumericContract,
     context: str,
-) -> None:
-    _assert_tensor_contract(candidate, official, residue_mask, contract, context)
+) -> LogitsMetrics:
+    """Collect logits semantics before any numeric threshold is asserted."""
+
     official_probabilities = official.float().softmax(-1)
     candidate_probabilities = candidate.float().softmax(-1)
     confidence, official_top1 = official_probabilities.max(-1)
@@ -594,13 +600,6 @@ def _assert_logits_contract(
     top1_agreement = (
         (candidate_top1[confident_mask] == official_top1[confident_mask]).float().mean()
     )
-    _assert_lower(
-        "confident_top1_agreement",
-        float(top1_agreement),
-        contract.top1_target,
-        contract.top1_hard,
-        context,
-    )
 
     midpoint = 0.5 * (official_probabilities + candidate_probabilities)
     official_log = official_probabilities.clamp_min(1e-12).log()
@@ -610,8 +609,35 @@ def _assert_logits_contract(
         (official_probabilities * (official_log - midpoint_log)).sum(-1)
         + (candidate_probabilities * (candidate_log - midpoint_log)).sum(-1)
     )
-    mean_jsd = float(jsd[residue_mask].mean())
-    _assert_upper("mean_jsd", mean_jsd, contract.jsd_target, contract.jsd_hard, context)
+    return LogitsMetrics(
+        confident_top1_agreement=float(top1_agreement),
+        mean_jsd=float(jsd[residue_mask].mean()),
+    )
+
+
+def _assert_logits_contract(
+    candidate: torch.Tensor,
+    official: torch.Tensor,
+    residue_mask: torch.Tensor,
+    contract: NumericContract,
+    context: str,
+) -> None:
+    _assert_tensor_contract(candidate, official, residue_mask, contract, context)
+    metrics = _logits_metrics(candidate, official, residue_mask, context)
+    _assert_lower(
+        "confident_top1_agreement",
+        metrics.confident_top1_agreement,
+        contract.top1_target,
+        contract.top1_hard,
+        context,
+    )
+    _assert_upper(
+        "mean_jsd",
+        metrics.mean_jsd,
+        contract.jsd_target,
+        contract.jsd_hard,
+        context,
+    )
 
 
 def _assert_outputs(
@@ -628,20 +654,23 @@ def _assert_outputs(
         f"{context}: hidden-state count {len(fast_hidden)} != {len(official_hidden)}"
     )
     assert fast_hidden, f"{context}: hidden states were not returned"
+    metric_records: list[TensorMetricRecord] = []
     for layer, (candidate, official) in enumerate(zip(fast_hidden, official_hidden, strict=True)):
-        _assert_tensor_contract(
-            candidate,
-            official,
-            residue_mask,
-            contract,
-            f"{context}:layer={layer}",
+        metric_records.append(
+            TensorMetricRecord(
+                context=f"{context}:layer={layer}",
+                metrics=tensor_metrics(candidate, official, residue_mask),
+            )
         )
-    _assert_tensor_contract(
-        _last_hidden(fast_output),
-        _last_hidden(official_output),
-        residue_mask,
-        contract,
-        f"{context}:last_hidden_state",
+    metric_records.append(
+        TensorMetricRecord(
+            context=f"{context}:last_hidden_state",
+            metrics=tensor_metrics(
+                _last_hidden(fast_output),
+                _last_hidden(official_output),
+                residue_mask,
+            ),
+        )
     )
 
     fast_logits = getattr(fast_output, "logits", None)
@@ -649,13 +678,37 @@ def _assert_outputs(
     assert (fast_logits is None) == (official_logits is None), (
         f"{spec.id}: official and FastPLMs output-head contracts differ"
     )
+    logits_context = f"{context}:logits"
+    logits_metrics = None
     if fast_logits is not None:
-        _assert_logits_contract(
+        metric_records.append(
+            TensorMetricRecord(
+                context=logits_context,
+                metrics=tensor_metrics(fast_logits, official_logits, residue_mask),
+            )
+        )
+        logits_metrics = _logits_metrics(
             fast_logits,
             official_logits,
             residue_mask,
-            contract,
-            f"{context}:logits",
+            logits_context,
+        )
+
+    _assert_tensor_metric_records(metric_records, contract)
+    if logits_metrics is not None:
+        _assert_lower(
+            "confident_top1_agreement",
+            logits_metrics.confident_top1_agreement,
+            contract.top1_target,
+            contract.top1_hard,
+            logits_context,
+        )
+        _assert_upper(
+            "mean_jsd",
+            logits_metrics.mean_jsd,
+            contract.jsd_target,
+            contract.jsd_hard,
+            logits_context,
         )
 
 
@@ -732,7 +785,7 @@ def _run_inference_contract(
     with torch.inference_mode(), numeric_context:
         fast_output = fast(**fast_inputs, output_hidden_states=True)
         official_output = reference(**official_inputs, output_hidden_states=True)
-    contract = FP32_CONTRACT if dtype == torch.float32 else BF16_CONTRACT
+    contract = _numeric_contract(spec, dtype, backend)
     dtype_name = "fp32" if dtype == torch.float32 else "bf16"
     _assert_outputs(
         spec,

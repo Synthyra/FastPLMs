@@ -5,11 +5,14 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from tools.remote.run import (
     REMOTE_CLEANUP_SCRIPT,
     SENSITIVE_SUFFIXES,
     SUITES,
     _is_sensitive,
+    _require_clean_repository,
     _run_report,
     remote_cleanup_command,
 )
@@ -59,6 +62,17 @@ def test_remote_runner_retrieves_the_complete_artifact_tree() -> None:
     assert "remote_workspace}/artifacts/." in source
 
 
+def test_remote_runner_rejects_a_dirty_exact_head(monkeypatch, tmp_path: Path) -> None:
+    def dirty_status(*args, **kwargs):
+        del args, kwargs
+        return subprocess.CompletedProcess([], 0, stdout="?? scratch.py\n")
+
+    monkeypatch.setattr(subprocess, "run", dirty_status)
+
+    with pytest.raises(RuntimeError, match="clean Git worktree"):
+        _require_clean_repository(tmp_path)
+
+
 def test_remote_run_report_is_machine_readable_and_secret_free() -> None:
     suite = SUITES["unit"]
     report = _run_report(
@@ -68,12 +82,26 @@ def test_remote_run_report_is_machine_readable_and_secret_free() -> None:
         started_at="2026-07-14T12:00:00+00:00",
         finished_at="2026-07-14T12:01:00+00:00",
         source_archive_sha256="a" * 64,
+        git_revision="b" * 40,
+        submodule_revisions={"vendor/upstream/example": "c" * 40},
+        execution_environment={
+            "host_kernel": "Linux 6.8.0 x86_64",
+            "docker_server": {"Version": "28.0.0"},
+            "gpus": ["NVIDIA H100, 580.1"],
+            "images": {"candidate": {"id": "sha256:" + "d" * 64}},
+        },
         failure_phase=None,
         failure=None,
         artifact_retrieval_returncode=0,
         cleanup_status="succeeded",
     )
     assert report["status"] == "passed"
+    assert report["schema_version"] == 2
+    assert report["git_revision"] == "b" * 40
+    assert report["submodule_revisions"] == {"vendor/upstream/example": "c" * 40}
+    environment = report["execution_environment"]
+    assert isinstance(environment, dict)
+    assert environment["images"]["candidate"]["id"] == "sha256:" + "d" * 64
     assert report["suite_contract"] == {
         "bake_targets": list(suite.bake_targets),
         "pre_commands": [list(command) for command in suite.pre_commands],
@@ -97,6 +125,9 @@ def test_remote_run_report_records_failure_without_exception_text() -> None:
         started_at="2026-07-14T12:00:00+00:00",
         finished_at="2026-07-14T12:01:00+00:00",
         source_archive_sha256="a" * 64,
+        git_revision="b" * 40,
+        submodule_revisions={},
+        execution_environment=None,
         failure_phase="suite",
         failure=failure,
         artifact_retrieval_returncode=0,
@@ -153,6 +184,7 @@ def test_check_runs_artifacts_and_manifest_selected_live_representatives() -> No
         "tests/release/test_published_automodel.py"
     )
     assert "tests/release/test_published_automodel.py" in joined
+    assert "tests/release/test_manifest_readiness.py" in joined
     assert "tools.remote.prepare_references" in joined
     for service in (
         "reference-esm2",
@@ -181,6 +213,53 @@ def test_artifact_suite_builds_every_artifact_before_offline_probe() -> None:
         "kernels download /workspace" in " ".join(command)
         for command in suite.pre_commands
     )
+
+
+def test_release_suite_aggregates_exact_head_artifact_reference_and_gpu_gates() -> None:
+    suite = SUITES["release"]
+    commands = [" ".join(command) for command in suite.pre_commands]
+    joined = "\n".join(commands)
+    for target in (
+        "candidate",
+        "candidate-structure",
+        "candidate-artifact",
+        "reference-esmfold",
+        "reference-esmfold2",
+    ):
+        assert target in suite.bake_targets
+    assert joined.index("tools.artifacts.build_all") < joined.index("kernels download /workspace")
+    assert joined.index("kernels download /workspace") < joined.index(
+        "tests/release/test_published_automodel.py"
+    )
+    assert "tests.parity.support.native_reference" in joined
+    assert "tests.structure.support.esmfold2_bundle" in joined
+    assert "--precision bf16" in joined
+    assert "--precision fp8" not in joined
+    assert "tests.structure.support.boltz2_bundle" not in joined
+    assert "tools.remote.python_matrix" in joined
+    command = " ".join(suite.command)
+    assert " structure " in f" {command} "
+    assert "candidate-fp8" not in suite.bake_targets
+    assert "reference-boltz2" not in suite.bake_targets
+    assert "--ignore=tests/structure/test_esmfold2_fp8_compliance.py" in command
+    assert "test_boltz2_live_folding_matches_pinned_official" in command
+    assert "test_esmfold2_isolated_bf16_and_fp8_folding_compliance" not in command
+    for path in ("tests/unit", "tests/integration", "tests/release", "tests/structure"):
+        assert path in command
+    assert "tests/parity/test_native_results.py" in command
+    for path in (
+        "tests/parity/test_esmfold2_common_parity.py",
+        "tests/parity/test_esmfold2_protein_data_parity.py",
+        "tests/parity/test_esmfold2_reimplemented_source_parity.py",
+        "tests/parity/test_esmfold2_residue_config_parity.py",
+        "tests/parity/test_esmfold2_source_slice3_parity.py",
+        "tests/parity/test_esmfold2_source_slice4_parity.py",
+    ):
+        assert path in command
+    assert "tests/parity/test_model_parity.py" not in command
+    assert "tests/parity/test_ankh_seq2seq_parity.py" not in command
+    assert "tests/parity/test_e1_source_independence_parity.py" not in command
+    assert "not artifact" in command
 
 
 def test_feature_suite_does_not_install_or_select_fp8() -> None:

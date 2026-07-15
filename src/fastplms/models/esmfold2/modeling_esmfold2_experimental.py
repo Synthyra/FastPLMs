@@ -559,13 +559,18 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 pretrained_model_name_or_path, **kwargs
             )
         esmc_precision = kwargs.pop("esmc_precision", None)
-        model = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        output_loading_info = bool(kwargs.get("output_loading_info", False))
+        loaded = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        if output_loading_info:
+            model, loading_info = loaded
+        else:
+            model = loaded
         if load_esmc:
             model.load_esmc(
                 model.config.esmc_id,
                 precision=esmc_precision or model.config.esmc_precision,
             )
-        return model
+        return (model, loading_info) if output_loading_info else model
 
     def apply_torch_compile(self, mode: str = "fixed_seqlen", dynamic: bool | None = None) -> None:
         if dynamic is None:

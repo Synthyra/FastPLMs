@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -73,6 +73,9 @@ def _run_report(
     started_at: str,
     finished_at: str,
     source_archive_sha256: str,
+    git_revision: str,
+    submodule_revisions: Mapping[str, str],
+    execution_environment: Mapping[str, object] | None,
     failure_phase: str | None,
     failure: BaseException | None,
     artifact_retrieval_returncode: int,
@@ -93,13 +96,18 @@ def _run_report(
         }
     passed = failure_record is None and cleanup_status in {"succeeded", "retained"}
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
         "suite": suite_name,
         "status": "passed" if passed else "failed",
         "started_at_utc": started_at,
         "finished_at_utc": finished_at,
         "source_archive_sha256": source_archive_sha256,
+        "git_revision": git_revision,
+        "submodule_revisions": dict(sorted(submodule_revisions.items())),
+        "execution_environment": (
+            dict(execution_environment) if execution_environment is not None else None
+        ),
         "artifact_retrieval": {
             "returncode": artifact_retrieval_returncode,
             "status": ("succeeded" if artifact_retrieval_returncode == 0 else "failed"),
@@ -192,6 +200,7 @@ _RUN_CHECK_ARTIFACTS = _compose_run(
     "-m",
     "pytest",
     "tests/release/test_published_automodel.py",
+    "tests/release/test_manifest_readiness.py",
     "-m",
     "artifact",
     "--junitxml=artifacts/junit/check-artifact.xml",
@@ -203,6 +212,16 @@ _RUN_CHECK_NATIVE_ASSERTIONS = _compose_run(
     "pytest",
     "tests/parity/test_native_results.py::test_native_representatives_all_backends",
     "--junitxml=artifacts/junit/check-native.xml",
+)
+_RUN_PYTHON_MATRIX = _compose_run(
+    "candidate",
+    "python",
+    "-m",
+    "tools.remote.python_matrix",
+    "--output",
+    "artifacts/python-matrix.json",
+    "--junit-output",
+    "artifacts/junit/python-matrix.xml",
 )
 _PREPARE_BOLTZ2_BUNDLE = _compose_run(
     "structure",
@@ -320,7 +339,19 @@ _RUN_RELEASE_STRUCTURE_REFERENCES = (
     *_RUN_ESMFOLD_CANDIDATES,
     _PREPARE_ESMFOLD2_BUNDLES,
     _RUN_ESMFOLD2_REFERENCE,
-    *_RUN_ESMFOLD2_CANDIDATES,
+    _RUN_ESMFOLD2_CANDIDATES[0],
+)
+
+# These source-parity modules are self-contained in the candidate environment.
+# Direct model parity plus ANKH and E1 parity remain in the isolated native
+# reference workflow because their official dependencies conflict with it.
+_RELEASE_LOCAL_PARITY_TESTS = (
+    "tests/parity/test_esmfold2_common_parity.py",
+    "tests/parity/test_esmfold2_protein_data_parity.py",
+    "tests/parity/test_esmfold2_reimplemented_source_parity.py",
+    "tests/parity/test_esmfold2_residue_config_parity.py",
+    "tests/parity/test_esmfold2_source_slice3_parity.py",
+    "tests/parity/test_esmfold2_source_slice4_parity.py",
 )
 
 
@@ -347,7 +378,7 @@ SUITES = {
             "tests/integration",
             "tests/release",
             "-m",
-            "not slow and not structure and not artifact",
+            "not gpu and not slow and not structure and not artifact",
             "--junitxml=artifacts/junit/check.xml",
         ),
         pre_commands=(
@@ -521,7 +552,14 @@ SUITES = {
         ),
     ),
     "release": Suite(
-        ("candidate",),
+        (
+            "candidate",
+            "candidate-structure",
+            "candidate-artifact",
+            *_SEQUENCE_REFERENCE_CONTAINERS,
+            "reference-esmfold",
+            "reference-esmfold2",
+        ),
         (
             "sudo",
             "docker",
@@ -530,26 +568,39 @@ SUITES = {
             "docker/compose.yaml",
             "run",
             "--rm",
-            "candidate",
+            "structure",
             "python",
             "-m",
             "pytest",
+            "tests/unit",
+            "tests/integration",
             "tests/release",
+            "tests/parity/test_native_results.py",
+            *_RELEASE_LOCAL_PARITY_TESTS,
+            "tests/structure",
+            "tests/parity/test_boltz_source_refactor.py",
+            "--ignore=tests/structure/test_esmfold2_fp8_compliance.py",
+            (
+                "--deselect=tests/structure/test_boltz2_folding_compliance.py::"
+                "test_boltz2_live_folding_matches_pinned_official"
+            ),
+            "-m",
+            "not artifact",
             "--junitxml=artifacts/junit/release.xml",
+        ),
+        pre_commands=(
+            _BUILD_ARTIFACTS,
+            _DOWNLOAD_KERNELS,
+            _RUN_CHECK_ARTIFACTS,
+            _PREPARE_REFERENCES,
+            *_RUN_NATIVE_REFERENCES,
+            *_RUN_RELEASE_STRUCTURE_REFERENCES,
+            _RUN_PYTHON_MATRIX,
         ),
     ),
     "python-matrix": Suite(
         ("candidate",),
-        _compose_run(
-            "candidate",
-            "python",
-            "-m",
-            "tools.remote.python_matrix",
-            "--output",
-            "artifacts/python-matrix.json",
-            "--junit-output",
-            "artifacts/junit/python-matrix.xml",
-        ),
+        _RUN_PYTHON_MATRIX,
     ),
 }
 
@@ -597,6 +648,48 @@ def _git_files(repository: Path) -> list[Path]:
     ]
     completed = subprocess.run(command, cwd=repository, check=True, capture_output=True)
     return [Path(raw.decode()) for raw in completed.stdout.split(b"\0") if raw]
+
+
+def _require_clean_repository(repository: Path) -> None:
+    completed = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={repository.resolve().as_posix()}",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+        ],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    if completed.stdout.strip():
+        raise RuntimeError(
+            "Remote runs require a clean Git worktree so the reported revision "
+            "identifies the exact source."
+        )
+
+
+def _git_head_revision(repository: Path) -> str:
+    completed = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"safe.directory={repository.resolve().as_posix()}",
+            "rev-parse",
+            "HEAD",
+        ],
+        cwd=repository,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    revision = completed.stdout.strip()
+    if GIT_REVISION_PATTERN.fullmatch(revision) is None:
+        raise RuntimeError(f"Git returned an invalid HEAD revision: {revision!r}")
+    return revision
 
 
 def _gitlink_revision(repository: Path, relative_root: Path) -> str:
@@ -709,7 +802,10 @@ def _submodule_files(
     return output, record
 
 
-def create_source_archive(repository: Path, destination: Path) -> None:
+def create_source_archive(
+    repository: Path,
+    destination: Path,
+) -> dict[str, dict[str, object]]:
     """Archive tracked/untracked source plus initialized submodule tracked files."""
 
     repository = repository.resolve()
@@ -749,6 +845,7 @@ def create_source_archive(repository: Path, destination: Path) -> None:
         provenance_info.uname = ""
         provenance_info.gname = ""
         archive.addfile(provenance_info, io.BytesIO(provenance_bytes))
+    return provenance
 
 
 def remote_cleanup_command(remote_base: str, remote_workspace: str) -> tuple[str, ...]:
@@ -818,11 +915,91 @@ class RemoteRunner:
             capture_output=capture,
         )
 
-    def _ssh_at(self, workspace: str, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    def _ssh_at(
+        self,
+        workspace: str,
+        command: Sequence[str],
+        *,
+        capture: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
         """Run one command from ``workspace`` without interpolating user shell text."""
 
         script = f"cd {shlex.quote(workspace)} && exec {shlex.join(command)}"
-        return self._ssh(("sh", "-lc", script))
+        return self._ssh(("sh", "-lc", script), capture=capture)
+
+    def _execution_environment(
+        self,
+        workspace: str,
+        suite: Suite,
+    ) -> dict[str, object]:
+        """Capture exact built image IDs and stable host runtime identities."""
+
+        bake = self._ssh_at(
+            workspace,
+            (
+                "sudo",
+                "docker",
+                "buildx",
+                "bake",
+                "-f",
+                "docker/docker-bake.hcl",
+                "--print",
+                *suite.bake_targets,
+            ),
+            capture=True,
+        )
+        bake_plan = json.loads(bake.stdout)
+        target_plan = bake_plan.get("target")
+        if not isinstance(target_plan, dict):
+            raise RuntimeError("Docker Bake did not return a target plan")
+
+        images: dict[str, object] = {}
+        for target in suite.bake_targets:
+            raw_target = target_plan.get(target)
+            if not isinstance(raw_target, dict):
+                raise RuntimeError(f"Docker Bake omitted target {target!r}")
+            tags = raw_target.get("tags")
+            if not isinstance(tags, list) or not tags or not isinstance(tags[0], str):
+                raise RuntimeError(f"Docker Bake target {target!r} has no image tag")
+            inspected = self._ssh(
+                ("sudo", "docker", "image", "inspect", tags[0]),
+                capture=True,
+            )
+            values = json.loads(inspected.stdout)
+            if not isinstance(values, list) or len(values) != 1:
+                raise RuntimeError(f"Docker returned invalid image identity for {target!r}")
+            value = values[0]
+            images[target] = {
+                "tag": tags[0],
+                "id": value["Id"],
+                "repo_digests": value.get("RepoDigests") or [],
+                "created": value["Created"],
+                "os": value["Os"],
+                "architecture": value["Architecture"],
+            }
+
+        docker_server = self._ssh(
+            ("sudo", "docker", "version", "--format", "{{json .Server}}"),
+            capture=True,
+        )
+        try:
+            gpu = self._ssh(
+                (
+                    "nvidia-smi",
+                    "--query-gpu=name,driver_version",
+                    "--format=csv,noheader",
+                ),
+                capture=True,
+            )
+            gpus = [line.strip() for line in gpu.stdout.splitlines() if line.strip()]
+        except subprocess.CalledProcessError:
+            gpus = []
+        return {
+            "host_kernel": self._ssh(("uname", "-srm"), capture=True).stdout.strip(),
+            "docker_server": json.loads(docker_server.stdout),
+            "gpus": gpus,
+            "images": images,
+        }
 
     def _remote_base(self) -> str:
         if self.config.remote_parent is not None:
@@ -838,6 +1015,8 @@ class RemoteRunner:
 
     def run(self) -> Path:
         started_at = dt.datetime.now(dt.UTC).isoformat()
+        _require_clean_repository(self.config.repository)
+        git_revision = _git_head_revision(self.config.repository)
         remote_base = self._remote_base()
         remote_workspace = str(PurePosixPath(remote_base) / self.run_id)
         if not remote_workspace.startswith(remote_base.rstrip("/") + "/"):
@@ -845,10 +1024,19 @@ class RemoteRunner:
         output = self.config.artifacts / self.run_id
         output.mkdir(parents=True, exist_ok=False)
         source_archive_sha256 = ""
+        submodule_revisions: dict[str, str] = {}
+        execution_environment: dict[str, object] | None = None
 
         with tempfile.TemporaryDirectory(prefix="fastplms-remote-") as temporary:
             archive = Path(temporary) / "source.tar.gz"
-            create_source_archive(self.config.repository, archive)
+            provenance = create_source_archive(self.config.repository, archive)
+            submodule_revisions = {
+                path: str(record["head_revision"])
+                for path, record in provenance.items()
+            }
+            _require_clean_repository(self.config.repository)
+            if _git_head_revision(self.config.repository) != git_revision:
+                raise RuntimeError("Git HEAD changed while the remote source archive was built.")
             with archive.open("rb") as stream:
                 source_archive_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
             self._ssh(("mkdir", "-p", remote_workspace))
@@ -886,6 +1074,8 @@ class RemoteRunner:
                         "--load",
                     ),
                 )
+            phase = "capture-environment"
+            execution_environment = self._execution_environment(remote_workspace, suite)
             for index, command in enumerate(suite.pre_commands):
                 phase = f"pre-command:{index}"
                 self._ssh_at(remote_workspace, command)
@@ -918,6 +1108,9 @@ class RemoteRunner:
                     started_at=started_at,
                     finished_at=dt.datetime.now(dt.UTC).isoformat(),
                     source_archive_sha256=source_archive_sha256,
+                    git_revision=git_revision,
+                    submodule_revisions=submodule_revisions,
+                    execution_environment=execution_environment,
                     failure_phase=(phase if active_failure is not None else "cleanup"),
                     failure=report_failure,
                     artifact_retrieval_returncode=retrieval_returncode,

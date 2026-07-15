@@ -1,18 +1,16 @@
-"""ESMFold2 AutoModel and parity tests."""
+"""ESMFold2 package behavior tests.
+
+Official parity is exercised only through the isolated bundles in
+``test_esmfold2_folding_compliance.py``.
+"""
 
 from __future__ import annotations
 
 import importlib
-import os
-import subprocess
-import sys
-import tempfile
 from types import SimpleNamespace
 
 import pytest
 import torch
-from transformers import AutoModel
-
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
     ESMplusplusForMaskedLM,
@@ -29,17 +27,11 @@ from fastplms.models.esmfold2.modeling_esmfold2_common import (
     maybe_subsample_msa,
 )
 from fastplms.registry import ModelSpec, get_model_registry
+from transformers.modeling_utils import PreTrainedModel
 
 REGISTRY = get_model_registry()
 ESMFOLD2_MODEL_KEYS = tuple(spec.id for spec in REGISTRY.by_family("esmfold2"))
 TEST_SEQUENCE = "MSTNPKPQRKTKRNT"
-OUTPUT_TOLERANCES = {
-    "distogram_logits": 0.0,
-    "plddt": 1e-6,
-    "pae": 0.0,
-    "ptm": 0.0,
-    "iptm": 0.0,
-}
 
 
 def test_esmfold2_config_uses_fastplms_esmplusplus_defaults() -> None:
@@ -214,6 +206,22 @@ def test_esmplusplus_masked_lm_can_skip_logits() -> None:
     assert with_logits.logits.shape == (1, 4, config.vocab_size)
 
 
+def test_esmplusplus_auto_classes_share_exact_checkpoint_keys() -> None:
+    config = ESMplusplusConfig(
+        vocab_size=16,
+        hidden_size=16,
+        num_attention_heads=4,
+        num_hidden_layers=1,
+        attn_backend="sdpa",
+    )
+
+    base_keys = set(ESMplusplusModel(config).state_dict())
+    masked_lm_keys = set(ESMplusplusForMaskedLM(config).state_dict())
+
+    assert base_keys == masked_lm_keys
+    assert "sequence_head.0.weight" in base_keys
+
+
 def test_esmfold2_loads_shared_esmplusplus_adapter(tmp_path) -> None:
     config = ESMplusplusConfig(
         vocab_size=16,
@@ -302,7 +310,7 @@ def test_esmfold2_load_esmc_fp8_is_strict_when_unavailable(monkeypatch) -> None:
         ESMFold2Model.load_esmc(model, "unused", precision="fp8")
 
 
-def test_esmfold2_load_esmc_auto_selects_fp8_when_te_is_available(monkeypatch) -> None:
+def test_esmfold2_load_esmc_auto_selects_bf16_without_probing_fp8(monkeypatch) -> None:
     import fastplms.models.esmfold2.modeling_esmfold2 as esmfold2_module
     from fastplms.models.esmfold2.modeling_esmfold2 import ESMFold2Model
 
@@ -330,18 +338,17 @@ def test_esmfold2_load_esmc_auto_selects_fp8_when_te_is_available(monkeypatch) -
     monkeypatch.setattr(
         esmfold2_module,
         "_te_fp8_capability",
-        lambda _device: (True, "FP8 is available."),
+        lambda _device: pytest.fail("auto must not probe FP8 capability"),
     )
     monkeypatch.setattr(
         esmfold2_module,
         "_load_fastplms_esmplusplus_for_esmfold2",
         fake_loader,
     )
-    module_paths = tuple(f"model.layers.{index}.attn.out_proj" for index in range(80))
     monkeypatch.setattr(
         esmfold2_module,
         "_convert_esmc_attention_outputs_to_te",
-        lambda _adapter: module_paths,
+        lambda _adapter: pytest.fail("auto must not convert ESMC to FP8"),
     )
 
     ESMFold2Model.load_esmc(model, "dummy-esm", precision="auto")
@@ -358,13 +365,59 @@ def test_esmfold2_load_esmc_auto_selects_fp8_when_te_is_available(monkeypatch) -
         torch.bfloat16,
     )
     assert model._esmc is adapter
-    assert model._esmc_fp8 is True
-    assert model._esmc_fp8_module_paths == module_paths
+    assert model._esmc_fp8 is False
+    assert model._esmc_fp8_module_paths == ()
     assert model._esmc_precision_status.requested == "auto"
-    assert model._esmc_precision_status.resolved == "fp8"
-    assert "Converted 80 projections" in model._esmc_precision_status.reason
+    assert model._esmc_precision_status.resolved == "bf16"
+    assert "defaults to BF16" in model._esmc_precision_status.reason
     assert model._ttt_lm_head is None
     assert all(not parameter.requires_grad for parameter in adapter.parameters())
+
+
+@pytest.mark.parametrize("experimental", [False, True], ids=("released", "experimental"))
+def test_esmfold2_from_pretrained_preserves_loading_info(monkeypatch, experimental) -> None:
+    from fastplms.models.esmfold2.modeling_esmfold2 import ESMFold2Model
+    from fastplms.models.esmfold2.modeling_esmfold2_experimental import (
+        ESMFold2ExperimentalModel,
+    )
+
+    model_class = ESMFold2ExperimentalModel if experimental else ESMFold2Model
+    config = SimpleNamespace(esmc_id="dummy-esmc", esmc_precision="auto")
+    calls: list[tuple[str, str]] = []
+    model = SimpleNamespace(
+        config=config,
+        load_esmc=lambda source, *, precision: calls.append((source, precision)),
+    )
+    loading_info = {
+        "missing_keys": [],
+        "unexpected_keys": [],
+        "mismatched_keys": [],
+        "error_msgs": [],
+    }
+
+    def fake_from_pretrained(cls, source, *args, **kwargs):
+        del args
+        assert cls is model_class
+        assert source == "dummy-fold"
+        assert kwargs["config"] is config
+        assert kwargs["output_loading_info"] is True
+        return model, loading_info
+
+    monkeypatch.setattr(
+        PreTrainedModel,
+        "from_pretrained",
+        classmethod(fake_from_pretrained),
+    )
+
+    loaded = model_class.from_pretrained(
+        "dummy-fold",
+        config=config,
+        output_loading_info=True,
+        esmc_precision="bf16",
+    )
+
+    assert loaded == (model, loading_info)
+    assert calls == [("dummy-esmc", "bf16")]
 
 
 def test_esmfold2_ttt_reloads_canonical_bf16_adapter() -> None:
@@ -484,67 +537,32 @@ def test_msa_column_masking_keeps_query_row() -> None:
     assert not masked[:, 1:, :].any()
 
 
-def _enable_deterministic_forward() -> None:
-    torch.backends.cuda.matmul.allow_tf32 = False
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-    torch.use_deterministic_algorithms(True)
-
-
 def _esmfold2_spec(model_key: str) -> ModelSpec:
     spec = REGISTRY[model_key]
     assert spec.family.id == "esmfold2"
     return spec
 
 
-def _load_official_model(model_key: str) -> torch.nn.Module:
+def _load_fast_model(model_key: str) -> torch.nn.Module:
     spec = _esmfold2_spec(model_key)
     is_experimental = "experimental" in spec.id
     module_name = (
-        "transformers.models.esmfold2.modeling_esmfold2_experimental"
+        "fastplms.models.esmfold2.modeling_esmfold2_experimental"
         if is_experimental
-        else "transformers.models.esmfold2.modeling_esmfold2"
+        else "fastplms.models.esmfold2.modeling_esmfold2"
     )
     class_name = "ESMFold2ExperimentalModel" if is_experimental else "ESMFold2Model"
-    module = importlib.import_module(module_name)
-    official_cls = getattr(module, class_name)
+    model_class = getattr(importlib.import_module(module_name), class_name)
     return (
-        official_cls.from_pretrained(
-            spec.official.repo_id,
-            revision=spec.official.revision,
-            load_esmc=False,
-            dtype=torch.float32,
-        )
-        .eval()
-        .cuda()
-    )
-
-
-def _load_fast_model(model_key: str) -> torch.nn.Module:
-    spec = _esmfold2_spec(model_key)
-    return (
-        AutoModel.from_pretrained(
+        model_class.from_pretrained(
             spec.fast.repo_id,
             revision=spec.fast.revision,
-            trust_remote_code=True,
             load_esmc=False,
             dtype=torch.float32,
         )
         .eval()
         .cuda()
     )
-
-
-def _run_short_fold(model: torch.nn.Module) -> dict[str, torch.Tensor]:
-    common_module_name = model.__class__.__module__.rsplit(".", 1)[0] + ".modeling_esmfold2_common"
-    common_module = importlib.import_module(common_module_name)
-    with common_module._seed_context(0), torch.no_grad():
-        return model.infer_protein(
-            TEST_SEQUENCE,
-            num_loops=1,
-            num_sampling_steps=2,
-            num_diffusion_samples=1,
-        )
 
 
 def test_esmfold2_fold_protein_accepts_msa_path(tmp_path, monkeypatch) -> None:
@@ -616,55 +634,6 @@ def test_esmfold2_fold_protein_without_msa_preserves_single_sequence(monkeypatch
     assert protein_input.msa is None
 
 
-def _aligned_rmsd(
-    actual: torch.Tensor,
-    expected: torch.Tensor,
-    atom_mask: torch.Tensor,
-) -> torch.Tensor:
-    mask = atom_mask[0].bool() if atom_mask.ndim == 2 else atom_mask.bool()
-    actual_coords = actual[0, mask].float()
-    expected_coords = expected[0, mask].float()
-
-    actual_centered = actual_coords - actual_coords.mean(dim=0, keepdim=True)
-    expected_centered = expected_coords - expected_coords.mean(dim=0, keepdim=True)
-    cov = actual_centered.T @ expected_centered
-    u, _, vh = torch.linalg.svd(cov)
-    det = torch.det(u @ vh)
-    correction = torch.eye(3, device=actual.device, dtype=torch.float32)
-    correction[2, 2] = torch.sign(det)
-    rotation = u @ correction @ vh
-    aligned = actual_centered @ rotation
-    return torch.sqrt(torch.mean(torch.sum((aligned - expected_centered) ** 2, dim=-1)))
-
-
-def _assert_forward_parity(model_key: str) -> None:
-    _enable_deterministic_forward()
-    official_model = _load_official_model(model_key)
-    fast_model = _load_fast_model(model_key)
-
-    official_output = _run_short_fold(official_model)
-    fast_output = _run_short_fold(fast_model)
-
-    for key, atol in OUTPUT_TOLERANCES.items():
-        torch.testing.assert_close(
-            fast_output[key],
-            official_output[key],
-            rtol=0.0,
-            atol=atol,
-            msg=f"ESMFold2 output mismatch: {key}",
-        )
-
-    rmsd = _aligned_rmsd(
-        fast_output["sample_atom_coords"],
-        official_output["sample_atom_coords"],
-        official_output["atom_pad_mask"],
-    )
-    assert rmsd.item() < 1e-2, f"Aligned coordinate RMSD too high: {rmsd.item()}"
-
-    del official_model, fast_model, official_output, fast_output
-    torch.cuda.empty_cache()
-
-
 @pytest.mark.structure
 @pytest.mark.gpu
 @pytest.mark.slow
@@ -682,56 +651,6 @@ def test_esmfold2_automodel_loads(model_key: str) -> None:
 
     del model
     torch.cuda.empty_cache()
-
-
-@pytest.mark.structure
-@pytest.mark.gpu
-@pytest.mark.slow
-@pytest.mark.parametrize("model_key", ESMFOLD2_MODEL_KEYS)
-def test_esmfold2_weight_parity(model_key: str) -> None:
-    official_model = _load_official_model(model_key)
-    fast_model = _load_fast_model(model_key)
-
-    official_state = official_model.state_dict()
-    fast_state = fast_model.state_dict()
-    assert official_state.keys() == fast_state.keys()
-
-    for name, official_tensor in official_state.items():
-        fast_tensor = fast_state[name]
-        torch.testing.assert_close(
-            fast_tensor,
-            official_tensor,
-            rtol=0.0,
-            atol=0.0,
-            msg=f"ESMFold2 parameter mismatch: {name}",
-        )
-
-    del official_model, fast_model
-    torch.cuda.empty_cache()
-
-
-@pytest.mark.structure
-@pytest.mark.gpu
-@pytest.mark.slow
-@pytest.mark.parametrize("model_key", ESMFOLD2_MODEL_KEYS)
-def test_esmfold2_forward_parity(model_key: str) -> None:
-    env = os.environ.copy()
-    with tempfile.TemporaryDirectory() as module_cache:
-        env["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
-        env["HF_MODULES_CACHE"] = module_cache
-        result = subprocess.run(
-            [
-                sys.executable,
-                __file__,
-                "--esmfold2-forward-parity",
-                model_key,
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            env=env,
-        )
-    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.structure
@@ -771,9 +690,3 @@ def test_esmfold2_input_builder_complex_and_exports() -> None:
 
     del model, features, result
     torch.cuda.empty_cache()
-
-
-if __name__ == "__main__":
-    assert len(sys.argv) == 3
-    assert sys.argv[1] == "--esmfold2-forward-parity"
-    _assert_forward_parity(sys.argv[2])

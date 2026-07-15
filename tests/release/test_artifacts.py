@@ -34,7 +34,11 @@ from tools.artifacts import (
     validate_weight_artifact,
     verify_checkpoint,
 )
-from tools.artifacts.build import _checkpoint_identity_hash, _validate_vendor_revisions
+from tools.artifacts.build import (
+    _checkpoint_identity_hash,
+    _tokenizer_checkpoint,
+    _validate_vendor_revisions,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -462,6 +466,65 @@ def test_artifact_copies_official_tokenizer_bytes_exactly(tmp_path: Path) -> Non
     provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["tokenizer_checkpoint"]["repo_id"] == official.repo_id
     assert provenance["tokenizer_checkpoint"]["revision"] == official.revision
+    assert provenance["tokenizer_checkpoint"]["files"] == {
+        "tokenizer.json": official.files[-1].encoded
+    }
+
+
+def test_esm3_uses_the_manifest_pinned_official_esmc_tokenizer() -> None:
+    registry = load_model_registry()
+    spec = registry["esm3_small"]
+    tokenizer_checkpoint = _tokenizer_checkpoint(registry, spec)
+
+    assert spec.tokenizer_source_id == "esmc_small"
+    assert tokenizer_checkpoint == registry["esmc_small"].official
+    assert tokenizer_checkpoint.repo_id == "biohub/ESMC-300M"
+    assert {Path(item.path).name for item in tokenizer_checkpoint.files}.issuperset(
+        {"special_tokens_map.json", "tokenizer.json", "tokenizer_config.json"}
+    )
+
+
+def test_fast_checkpoint_artifact_requires_explicit_official_tokenizer_snapshot(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    candidate_tokenizer = checkpoint / "tokenizer.json"
+    candidate_tokenizer.write_bytes(b'{"source":"candidate"}\n')
+    fast = replace(
+        spec.fast,
+        files=(
+            *spec.fast.files,
+            FileDigest("tokenizer.json", "sha256", hash_file(candidate_tokenizer)),
+        ),
+    )
+    official = replace(
+        spec.official,
+        files=(
+            *spec.official.files,
+            FileDigest("tokenizer.json", "sha256", "0" * 64),
+        ),
+    )
+    family = replace(spec.family, tokenizer_mode="tokenizer")
+    tokenizer_spec = replace(spec, family=family, fast=fast, official=official)
+    tokenizer_registry = ModelRegistry(
+        schema_version=registry.schema_version,
+        upstreams=registry.upstreams,
+        families={family.id: family},
+        models={tokenizer_spec.id: tokenizer_spec},
+        legal_files=registry.legal_files,
+    )
+
+    with pytest.raises(ArtifactError, match="requires the pinned official tokenizer snapshot"):
+        build_artifact(
+            tokenizer_spec,
+            tokenizer_registry,
+            checkpoint,
+            tmp_path / "artifact",
+            source_root,
+        )
 
 
 def test_checkpoint_verification_reports_hash_mismatch(tmp_path: Path) -> None:
@@ -697,6 +760,40 @@ def test_canonicalization_applies_declared_esm2_transform_before_sharding(
     assert torch.equal(converted["lm_head.bias"], source_state["lm_head.bias"])
     assert torch.equal(converted["lm_head.decoder.bias"], source_state["lm_head.bias"])
     assert record["state_transform"] == "esm2_hf_to_fastplms_v1"
+
+
+def test_canonical_esmfold_artifact_drops_only_declared_unused_state(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    output = tmp_path / "output"
+    checkpoint.mkdir()
+    weight = checkpoint / "model.safetensors"
+    source_state = {
+        "esm.encoder.layer.0.weight": torch.tensor([1.0]),
+        "esm.contact_head.regression.bias": torch.tensor([2.0]),
+        "mlm_head.bias": torch.tensor([3.0]),
+        "positional_encoding._float_tensor": torch.tensor([4.0]),
+    }
+    save_file(source_state, weight, metadata={"format": "pt"})
+    source = CheckpointSource(
+        repo_id="Synthyra/FastESMFold-synthetic",
+        revision="8" * 40,
+        files=(FileDigest("model.safetensors", "sha256", hash_file(weight)),),
+    )
+
+    canonicalize_checkpoint_weights(
+        checkpoint,
+        source,
+        output,
+        state_transform="esmfold_meta_to_fastplms_v1",
+        source_is_canonical=True,
+    )
+    converted: dict[str, torch.Tensor] = {}
+    for shard in sorted(output.glob("model-*.safetensors")):
+        converted.update(load_file(shard, device="cpu"))
+
+    assert set(converted) == {"esm.encoder.layer.0.weight"}
 
 
 def test_official_submodule_worktrees_match_manifest_revisions() -> None:

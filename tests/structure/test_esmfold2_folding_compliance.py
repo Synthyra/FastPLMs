@@ -32,38 +32,18 @@ bf16_hard_limits = {
     "ptm_error": 0.005,
     "iptm_error": 0.005,
 }
-fp8_targets = {
-    "ca_rmsd": 0.75,
-    "lddt_ca": 0.97,
-    "plddt_mae": 0.01,
-    "pae_mae": 0.50,
-    "ptm_error": 0.01,
-    "iptm_error": 0.01,
-    "mean_probability_jsd": 0.002,
-}
-fp8_hard_limits = {
-    "ca_rmsd": 1.50,
-    "lddt_ca": 0.95,
-    "plddt_mae": 0.02,
-    "pae_mae": 1.0,
-    "ptm_error": 0.02,
-    "iptm_error": 0.02,
-    "mean_probability_jsd": 0.005,
-}
-
-
 def _exchange_root() -> Path:
     return Path(os.environ.get("FASTPLMS_REFERENCE_EXCHANGE", "artifacts/reference"))
 
 
-def _bundle_paths(spec: ModelSpec) -> tuple[Path, Path, Path, Path]:
+def _bundle_paths(spec: ModelSpec) -> tuple[Path, Path, Path]:
     root = _exchange_root()
     request = (
         root / "structure" / "requests" / esmfold2_bundle.reference_container / f"{spec.id}.json"
     )
     reference = root / "structure" / "results" / "reference" / spec.id
     candidate = root / "structure" / "results" / "candidate" / spec.id
-    return request, reference, candidate / "bf16", candidate / "fp8"
+    return request, reference, candidate / "bf16"
 
 
 def _feature_tensors(tensors: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -471,17 +451,16 @@ def test_esmfold2_semantic_config_ignores_only_packaging_and_runtime_policy() ->
     "spec",
     [_spec_parameter(spec) for spec in get_model_registry().by_family("esmfold2")],
 )
-def test_esmfold2_isolated_bf16_and_fp8_folding_compliance(
+def test_esmfold2_isolated_bf16_folding_compliance(
     spec: ModelSpec,
     record_property: Callable[[str, object], None],
 ) -> None:
-    """Gate native BF16 parity and strict candidate FP8 parity for one snapshot."""
+    """Gate native BF16 parity for one compact stable request per variant."""
 
-    request_path, reference_path, bf16_path, fp8_path = _bundle_paths(spec)
+    request_path, reference_path, bf16_path = _bundle_paths(spec)
     request = load_request(request_path)
     reference_tensors, reference_metadata = load_bundle(reference_path)
     bf16_tensors, bf16_metadata = load_bundle(bf16_path)
-    fp8_tensors, fp8_metadata = load_bundle(fp8_path)
 
     _assert_bundle_identity(
         reference_metadata,
@@ -497,17 +476,8 @@ def test_esmfold2_isolated_bf16_and_fp8_folding_compliance(
         producer="candidate",
         precision="bf16",
     )
-    _assert_bundle_identity(
-        fp8_metadata,
-        request,
-        spec,
-        producer="candidate",
-        precision="fp8",
-    )
     assert bf16_metadata["semantic_config"] == reference_metadata["semantic_config"]
-    assert fp8_metadata["semantic_config"] == reference_metadata["semantic_config"]
     assert bf16_metadata["state"] == reference_metadata["state"]
-    assert fp8_metadata["state"] == reference_metadata["state"]
     _assert_exact_inputs(
         bf16_tensors,
         bf16_metadata,
@@ -515,16 +485,8 @@ def test_esmfold2_isolated_bf16_and_fp8_folding_compliance(
         reference_metadata,
         context=f"{spec.id} BF16 official parity",
     )
-    _assert_exact_inputs(
-        fp8_tensors,
-        fp8_metadata,
-        bf16_tensors,
-        bf16_metadata,
-        context=f"{spec.id} FP8/BF16 seeded inputs",
-    )
     _assert_valid_geometry(reference_tensors, context=f"{spec.id} official BF16")
     _assert_valid_geometry(bf16_tensors, context=f"{spec.id} FastPLMs BF16")
-    _assert_valid_geometry(fp8_tensors, context=f"{spec.id} FastPLMs FP8")
 
     bf16_metrics = _structure_metrics(bf16_tensors, reference_tensors)
     _assert_thresholds(
@@ -532,17 +494,6 @@ def test_esmfold2_isolated_bf16_and_fp8_folding_compliance(
         targets=bf16_targets,
         hard_limits=bf16_hard_limits,
         context=f"{spec.id} BF16 official parity",
-    )
-    fp8_metrics = _structure_metrics(fp8_tensors, bf16_tensors)
-    fp8_metrics["mean_probability_jsd"] = _mean_probability_jsd(
-        fp8_tensors,
-        bf16_tensors,
-    )
-    _assert_thresholds(
-        fp8_metrics,
-        targets=fp8_targets,
-        hard_limits=fp8_hard_limits,
-        context=f"{spec.id} FP8/BF16 parity",
     )
 
     record_property("fast_checkpoint_revision", spec.fast.revision)
@@ -554,5 +505,3 @@ def test_esmfold2_isolated_bf16_and_fp8_folding_compliance(
     )
     for name, value in bf16_metrics.items():
         record_property(f"bf16_{name}", value)
-    for name, value in fp8_metrics.items():
-        record_property(f"fp8_{name}", value)

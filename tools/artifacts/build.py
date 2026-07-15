@@ -710,7 +710,11 @@ def render_model_card(spec: ModelSpec) -> str:
 
     auto_classes = ", ".join(f"`{name}`" for name in sorted(spec.auto_map))
     attention = ", ".join(f"`{name}`" for name in spec.family.attention)
-    precision = ", ".join(f"`{name}`" for name in spec.family.precisions)
+    experimental_precisions = set(spec.family.experimental_precisions)
+    precision = ", ".join(
+        f"`{name}` (experimental)" if name in experimental_precisions else f"`{name}`"
+        for name in spec.family.precisions
+    )
     bf16_execution = _bf16_execution_description(spec.family.bf16_execution)
     license_yaml = render_hub_license_yaml(spec.family)
     checkpoint_terms = render_checkpoint_terms(spec.family)
@@ -914,6 +918,7 @@ def _provenance(
         }
 
     selected_checkpoint = spec.artifact_checkpoint
+    tokenizer_checkpoint = _tokenizer_checkpoint(registry, spec)
     return {
         "schema_version": 1,
         "fastplms_version": __version__,
@@ -931,7 +936,22 @@ def _provenance(
         "fast_checkpoint": checkpoint_record(spec.fast),
         "official_checkpoint": checkpoint_record(spec.official),
         "tokenizer_checkpoint": (
-            checkpoint_record(spec.official) if spec.family.tokenizer_mode == "tokenizer" else None
+            {
+                "repo_id": tokenizer_checkpoint.repo_id,
+                "revision": tokenizer_checkpoint.revision,
+                "files": {
+                    item.path: item.encoded
+                    for item in tokenizer_checkpoint.files
+                    if PurePosixPath(item.path).name in _TOKENIZER_FILE_NAMES
+                },
+                "unresolved_files": [
+                    path
+                    for path in tokenizer_checkpoint.unresolved_files
+                    if PurePosixPath(path).name in _TOKENIZER_FILE_NAMES
+                ],
+            }
+            if spec.family.tokenizer_mode == "tokenizer"
+            else None
         ),
         "oracle_assets": [
             {
@@ -950,6 +970,22 @@ def _provenance(
         },
         "upstreams": upstreams,
     }
+
+
+def _tokenizer_checkpoint(
+    registry: ModelRegistry,
+    spec: ModelSpec,
+) -> CheckpointSource:
+    """Resolve the manifest-declared official tokenizer identity for a model."""
+
+    if spec.tokenizer_source_id is None:
+        return spec.official
+    try:
+        return registry[spec.tokenizer_source_id].official
+    except KeyError as error:
+        raise ArtifactError(
+            f"Unknown tokenizer source {spec.tokenizer_source_id!r} for {spec.id}."
+        ) from error
 
 
 def _checkpoint_identity_hash_fields(
@@ -1006,6 +1042,18 @@ def build_artifact(
     source_root = source_root.resolve()
     validate_repository_legal_inventory(source_root, registry, spec)
     selected_checkpoint = spec.artifact_checkpoint
+    tokenizer_checkpoint = _tokenizer_checkpoint(registry, spec)
+    resolved_tokenizer_dir: Path | None = None
+    if spec.family.tokenizer_mode == "tokenizer":
+        if tokenizer_dir is not None:
+            resolved_tokenizer_dir = tokenizer_dir.resolve()
+        elif selected_checkpoint == tokenizer_checkpoint:
+            resolved_tokenizer_dir = checkpoint_dir
+        else:
+            raise ArtifactError(
+                f"{spec.id} packages a FastPLMs checkpoint and requires the pinned official "
+                "tokenizer snapshot via tokenizer_dir/--tokenizer-dir."
+            )
     output_root = output_root.resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     repository_name = spec.fast.repo_id.split("/", maxsplit=1)[1]
@@ -1020,11 +1068,11 @@ def build_artifact(
     temporary.mkdir(parents=True)
     try:
         _copy_checkpoint_assets(checkpoint_dir, temporary, selected_checkpoint)
-        if spec.family.tokenizer_mode == "tokenizer" and tokenizer_dir is not None:
+        if resolved_tokenizer_dir is not None:
             _copy_official_tokenizer_assets(
-                tokenizer_dir.resolve(),
+                resolved_tokenizer_dir,
                 temporary,
-                spec.official,
+                tokenizer_checkpoint,
             )
         canonical_weights = canonicalize_checkpoint_weights(
             checkpoint_dir,
@@ -1302,6 +1350,36 @@ def validate_artifact(path: Path) -> None:
                     or not isinstance(asset["size"], int)
                 ):
                     failures.append("invalid oracle asset provenance value")
+        tokenizer_checkpoint = provenance.get("tokenizer_checkpoint")
+        if tokenizer_checkpoint is not None:
+            tokenizer_files = (
+                tokenizer_checkpoint.get("files")
+                if isinstance(tokenizer_checkpoint, dict)
+                else None
+            )
+            if (
+                not isinstance(tokenizer_checkpoint, dict)
+                or not isinstance(tokenizer_checkpoint.get("repo_id"), str)
+                or not isinstance(tokenizer_checkpoint.get("revision"), str)
+                or not isinstance(tokenizer_files, dict)
+                or not tokenizer_files
+            ):
+                failures.append("official tokenizer provenance is missing or invalid")
+            else:
+                for relative_name, encoded_digest in tokenizer_files.items():
+                    if PurePosixPath(relative_name).name not in _TOKENIZER_FILE_NAMES:
+                        failures.append(
+                            f"tokenizer provenance contains a non-tokenizer file: {relative_name}"
+                        )
+                        continue
+                    try:
+                        algorithm, expected = encoded_digest.split(":", maxsplit=1)
+                        actual = hash_file(path / relative_name, algorithm)
+                    except (AttributeError, ArtifactError, OSError, ValueError):
+                        failures.append(f"invalid tokenizer provenance for {relative_name}")
+                        continue
+                    if actual != expected:
+                        failures.append(f"tokenizer digest mismatch for {relative_name}")
         upstreams = provenance.get("upstreams")
         if not isinstance(upstreams, list) or not upstreams:
             failures.append("upstream legal provenance is missing")
@@ -1341,6 +1419,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("checkpoint_dir", type=Path, help="Pinned local Hub snapshot")
     parser.add_argument("--output-root", type=Path, default=Path("dist/hub"))
     parser.add_argument("--source-root", type=Path, default=None)
+    parser.add_argument(
+        "--tokenizer-dir",
+        type=Path,
+        default=None,
+        help="Pinned official tokenizer snapshot (required for FastPLMs tokenizer checkpoints)",
+    )
     parser.add_argument("--replace", action="store_true")
     return parser.parse_args()
 
@@ -1352,6 +1436,7 @@ def main() -> None:
         checkpoint_dir=args.checkpoint_dir,
         output_root=args.output_root,
         source_root=args.source_root,
+        tokenizer_dir=args.tokenizer_dir,
         replace=args.replace,
     )
     validate_artifact(destination)

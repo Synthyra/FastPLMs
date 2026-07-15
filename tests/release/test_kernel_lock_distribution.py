@@ -14,6 +14,7 @@ from fastplms.attention import _kernel_lock
 ROOT = Path(__file__).resolve().parents[2]
 LOCK = ROOT / "kernels.lock"
 WHEEL_LOCK = "fastplms-1.0.0.dist-info/kernels.lock"
+WHEEL_NOTICES = "fastplms-1.0.0.dist-info/licenses/THIRD_PARTY_NOTICES.md"
 
 
 def _python(venv: Path) -> Path:
@@ -90,3 +91,4 @@ def test_editable_install_and_built_wheel_embed_the_exact_kernel_lock(
     assert len(wheels) == 1
     with zipfile.ZipFile(wheels[0]) as archive:
         assert archive.read(WHEEL_LOCK) == LOCK.read_bytes()
+        assert archive.read(WHEEL_NOTICES) == (ROOT / "THIRD_PARTY_NOTICES.md").read_bytes()

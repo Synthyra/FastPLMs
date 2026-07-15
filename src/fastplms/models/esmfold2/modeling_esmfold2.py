@@ -295,20 +295,27 @@ def _resolve_esmc_precision(requested: str, device: torch.device) -> ESMCPrecisi
     allowed = {"auto", "bf16", "fp32", "fp8"}
     if requested not in allowed:
         raise ValueError(f"precision must be one of {sorted(allowed)}, got {requested!r}.")
-    if requested in {"bf16", "fp32"}:
+    if requested in {"auto", "bf16", "fp32"}:
+        resolved = "bf16" if requested == "auto" else requested
+        reason = (
+            "Automatic precision defaults to BF16; select esmc_precision='fp8' "
+            "explicitly to opt in to the validated Transformer Engine path."
+            if requested == "auto"
+            else "Precision was selected explicitly."
+        )
         return ESMCPrecisionStatus(
             requested=requested,
-            resolved=requested,
-            reason="Precision was selected explicitly.",
+            resolved=resolved,
+            reason=reason,
             device=str(device),
             transformer_engine_version=_transformer_engine_version(),
         )
     available, reason = _te_fp8_capability(device)
-    if requested == "fp8" and not available:
+    if not available:
         raise RuntimeError(f"esmc_precision='fp8' is unavailable: {reason}")
     return ESMCPrecisionStatus(
         requested=requested,
-        resolved="fp8" if available else "bf16",
+        resolved="fp8",
         reason=reason,
         device=str(device),
         transformer_engine_version=_transformer_engine_version(),
@@ -1036,13 +1043,18 @@ class ESMFold2Model(
             kwargs["config"] = config
         # Pop the precision knob before forwarding to the HF loader.
         esmc_precision = kwargs.pop("esmc_precision", None)
-        model = super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
+        output_loading_info = bool(kwargs.get("output_loading_info", False))
+        loaded = super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
+        if output_loading_info:
+            model, loading_info = loaded
+        else:
+            model = loaded
         if load_esmc:
             model.load_esmc(
                 model.config.esmc_id,
                 precision=esmc_precision or model.config.esmc_precision,
             )
-        return model
+        return (model, loading_info) if output_loading_info else model
 
     def set_kernel_backend(self, backend: str | None) -> None:
         """Select kernel backend.

@@ -249,6 +249,13 @@ def _esmfold(
         raise StateTransformError("ESMFold checkpoint state cannot be empty.")
     canonical = any(key.startswith("esm.encoder.") for key in state)
     if canonical:
+        if expected_keys is not None:
+            expected_keys = frozenset(
+                key
+                for key in expected_keys
+                if key not in _ESMFOLD_DERIVED_BUFFERS
+                and not key.startswith(("mlm_head.", "esm.contact_head."))
+            )
         transformed = _map_state(
             state,
             lambda key: (

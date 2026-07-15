@@ -13,6 +13,7 @@ result = embed_dataset(
     output=None,
     format="safetensors",
     resume=True,
+    model_state_fingerprint=None,
 )
 ```
 
@@ -106,6 +107,12 @@ Each tensor has shape `(l_i, d)`, where `l_i` is the number of retained
 biological residues for record `i`. Padding is never persisted as a residue
 embedding.
 
+Passing `store_all_hidden_states=True` requires `full_embeddings=True` and
+returns one tensor with shape `(n, l_i, d)` per input, where `n` follows the
+model's hidden-state output order. The biological residue mask is applied only
+to the token axis. Safetensors and SQLite preserve this rank without flattening
+the state axis.
+
 ESMFold2 returns the learned projection with shape `(l_i, 256)`. Its dataset
 path accepts only single-chain sequences and FASTA records and supports the
 residue-statistic poolers. It rejects `cls` and `parti`.
@@ -159,6 +166,7 @@ Persisted results include:
 - pooling names and output slices;
 - truncation settings;
 - input and complete-run fingerprints;
+- fingerprint schema version and exact model-state fingerprint;
 - output tensor shapes and SHA-256 hashes.
 
 When a model is loaded from `dist/hub/<model>`, Transformers does not assign a
@@ -168,8 +176,18 @@ checkpoint-identity hash fields. Embedding metadata and resume fingerprints use
 those fields as the fallback, so local offline runs retain complete provenance.
 The packaging fields are excluded from semantic configuration parity.
 
-Changing any material input or setting changes the run fingerprint and prevents
-resume into an incompatible output.
+Run-fingerprint schema v2 binds the exact bytes, names, dtypes, and shapes of
+every model parameter and persistent buffer. State tensors are copied to CPU in
+bounded chunks rather than duplicating the complete model. Changing any
+material input, model state, or setting changes the run fingerprint and
+prevents resume into an incompatible output. Results written by older
+fingerprint schemas cannot be resumed.
+
+Models with meta-device tensors, custom offloading, or an externally managed
+state identity may pass the keyword-only `model_state_fingerprint` override.
+The caller is responsible for changing this value whenever the effective model
+state changes; metadata records whether the identity was computed or supplied
+by the caller.
 
 ## Legacy `.pth` files
 
