@@ -1,142 +1,150 @@
-# Attention Backends
+# Attention backends
 
-All FastPLMs sequence models share a common attention backend system controlled by `config.attn_backend`. This document covers how each backend works, when to use it, and how to configure it.
-
-## Overview
-
-| Backend | Key | Numerical Equivalence | Speed | Availability |
-|---------|-----|----------------------|-------|-------------|
-| PyTorch SDPA | `"sdpa"` | Exact | Fast | Any PyTorch >= 2.0 |
-| Flash Attention | `"kernels_flash"` | Approximate | Fastest | `pip install kernels` |
-| Flex Attention | `"flex"` | Near-exact | Very fast | PyTorch >= 2.11 in FastPLMs Docker images |
-| Auto | `"auto"` | Varies | Best available | Always |
-
-## SDPA (Default)
-
-PyTorch's `scaled_dot_product_attention` dispatches to a fused CUDA kernel (cuDNN or memory-efficient attention) that is faster and more memory-efficient than naive attention while being mathematically identical.
-
-**When to use:** Reproducibility, numerical sensitivity, general-purpose inference.
-
-**Implementation:** Each attention layer calls `F.scaled_dot_product_attention(query, key, value, attn_mask)` with a 4D mask of shape `(batch, 1, 1, seq_len)`.
-
-**Attention weights:** SDPA does not natively return attention weights. When `output_attentions=True` is requested, all backends (including SDPA) compute attention weights via a separate naive matrix multiplication: `scores = Q @ K^T`, softmax, then `context = scores @ V`. This separate computation negates the memory savings of fused attention, so `output_attentions=True` should only be used for inspection or contact prediction, not during high-throughput inference.
-
-## Flash Attention (`kernels_flash`)
-
-Flash Attention 2/3 tiles the attention computation into blocks that fit in SRAM and applies an online softmax algorithm. This avoids materializing the full `(seq_len, seq_len)` attention matrix in HBM, achieving O(n) memory and typically 2-4x faster throughput than SDPA on Ampere (A100) and Hopper (H100) GPUs at long sequence lengths.
-
-**When to use:** Maximum throughput on A100/H100, long sequences, large batch sizes.
-
-**Numerical properties:** The online softmax and tiling introduce floating-point rounding differences compared to standard attention. These are typically small but not guaranteed to be inconsequential. They can compound across layers and interact with low-precision dtypes (bf16/fp16). If exact reproducibility matters, use `"sdpa"`.
-
-**Installation:** FastPLMs uses the HuggingFace `kernels` package for pre-built Flash Attention binaries:
-
-```bash
-pip install kernels
-```
-
-No C++ compiler or CUDA toolkit version pinning required. The `kernels` package fetches a pre-compiled binary matched to your GPU architecture (SM80 for Ampere, SM90 for Hopper). If no compatible binary exists, the model gracefully falls back to `"flex"` or `"sdpa"`.
-
-**Implementation details:**
-
-1. Q, K, V are transposed from `(batch, heads, seq, dim)` to `(batch, seq, heads, dim)` for the kernels layout
-2. For variable-length batches, padding tokens are removed via `_unpad_input()` which computes cumulative sequence lengths
-3. The kernels flash function is called with the unpadded tensors
-4. `pad_input()` reconstructs the full padded layout
-5. Flash Attention 3 is tried first (Hopper GPUs), falling back to Flash Attention 2
-
-## Flex Attention (`flex`)
-
-PyTorch's `flex_attention` (PyTorch >= 2.11 in FastPLMs Docker images) generates a fused Triton kernel customized to the mask pattern. The primary advantage is **block masks** that skip padding tokens entirely at the CUDA block level, providing meaningful speedups on variable-length batches.
-
-**When to use:** Variable-length batches with significant padding, best sustained throughput with `torch.compile`.
-
-**Numerical properties:** Near-exact to SDPA. Differences are typically within floating-point rounding of naive computation.
-
-**First-call compilation:** The first forward pass triggers JIT compilation via Triton, which takes 30-120 seconds. All subsequent calls with the same mask shape are fast. When combined with `torch.compile`, this yields the best sustained throughput.
-
-**Implementation:**
-
-1. A block mask is created from the 2D attention mask via `create_block_mask(mask_mod, batch, 1, seq_len, seq_len)`
-2. The mask mod function returns True for positions that should attend to each other
-3. `flex_attention(query, key, value, block_mask=block_mask)` generates and runs the fused kernel
-4. E1 uses a block-causal variant where within-sequence attention is bidirectional but cross-sequence attention is causal
-
-## Auto (`auto`)
-
-Selects the best available backend in priority order: `kernels_flash` -> `flex` -> `sdpa`. Useful when you want maximum speed without manual configuration. The resolved backend may differ across machines depending on installed packages and GPU architecture.
-
-## Per-Family Caveats
-
-- **ANKH** supports only `sdpa` and `flex`. The flash-attention kernels can't accept the additive T5 relative position bias, so requesting `kernels_flash` (or `auto` resolving to it) silently falls back to `flex` (or `sdpa` if flex is unavailable). T5 attention is also unscaled (no `1/sqrt(d_kv)` factor) - the learned position bias absorbs the temperature.
-- **ESM3** supports `sdpa` and `flex` in the FastPLMs wrapper.
-- **E1** uses a block-causal flex variant: bidirectional within a sequence, causal across sequences in a packed multi-sequence batch.
-- **DPLM2** packs amino-acid and structure tokens in the same sequence; the attention mask logic accounts for the multimodal layout but the backend choice is otherwise unchanged.
-
-## Setting the Backend
-
-Every FastPLMs sequence model (ESM2, ESM++, ESM3, E1, DPLM, DPLM2, ANKH) supports **both** load-time and post-load backend switching. Pick whichever fits your workflow.
-
-### At Load Time
-
-Set `config.attn_backend` before calling `from_pretrained`:
+FastPLMs uses the Transformers attention interface. Callers select a backend at
+load time with `attn_implementation` or after loading with
+`set_attn_implementation()`.
 
 ```python
-from transformers import AutoConfig, AutoModelForMaskedLM
+from transformers import AutoModel
 
-config = AutoConfig.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
-config.attn_backend = "flex"
-model = AutoModelForMaskedLM.from_pretrained(
-    "Synthyra/ESM2-150M", config=config, trust_remote_code=True
+model = AutoModel.from_pretrained(
+    "Synthyra/ESM2-150M",
+    trust_remote_code=True,
+    attn_implementation="flex_attention",
 )
+model.set_attn_implementation("sdpa")
 ```
 
-### After Load Time
+For prepublication validation, `model_id` is the local manifest-built artifact
+under `dist/hub/<model>`. A Hub identifier is used only after that same 1.0
+artifact passes the offline artifact tier and is published separately.
 
-Every family's `PreTrainedModel` subclass exposes a mutable `attn_backend` property whose setter propagates the change to every attention submodule in-place:
+If the caller does not choose a backend, FastPLMs leaves the value unspecified
+and Transformers normally selects SDPA. FastPLMs does not implement an `auto`
+backend and never silently substitutes a different requested kernel.
+
+## Implementations
+
+| Name | Transformation | Mask | Main limitation |
+| --- | --- | --- | --- |
+| `eager` | Explicit score, softmax, and value products | Additive 4D mask | Materializes attention scores |
+| `sdpa` | `scaled_dot_product_attention` | Boolean or additive 4D mask | Kernel dispatch is selected by Torch |
+| `flex_attention` | Compiled Flex Attention score function | `BlockMask` | First shape and semantics require compilation |
+| `flash_attention_2` | Precompiled `kernels-community/flash-attn2` handler at revision `db6b51744f0c` | Packed 2D mask | ESM2 and ESM++ only |
+| `flash_attention_3` | Precompiled `kernels-community/flash-attn3` handler at revision `43f0bd269777` | Packed 2D mask | ESM2, ESM++, and DPLM only |
+
+The manifest lists the subset supported by each family. A requested name that
+is not listed for that family raises. A listed optional implementation that
+cannot be imported also raises, because dependency absence is a configuration
+error rather than evidence that another kernel was tested.
+
+## FlashAttention compatibility policy
+
+The `flash` extra installs Hugging Face `kernels`, not the `flash-attn` Python
+package. The adapters follow the
+[Transformers kernel-loading contract](https://huggingface.co/docs/transformers/v5.13.0/kernel_doc/loading_kernels)
+and resolve only the snapshot-pinned `kernels-community` repositories recorded
+in the manifest. The immutable snapshot revisions are
+`db6b51744f0cd7061386442c09df890fc6d9f47e` for FlashAttention 2 and
+`43f0bd269777115d94ff826e0d113ce9c1c9087b` for FlashAttention 3. The tracked
+`kernels.lock` records the exact hash of every published binary variant. The
+loader asks `kernels` to download and hash-validate the compatible variant
+before importing it. It never falls back to a branch, compiles source, imports
+the `flash_attn` package, or substitutes one FlashAttention version for another.
+
+After installing the `flash` extra, `kernels download .` may be used during
+image build or cache preparation to fetch both locked binaries. This command
+downloads precompiled artifacts only. It is not required when the runtime can
+populate its Hugging Face cache on first use.
+
+An explicit kernel-load failure reports the manifest-pinned repository and
+revision together with the underlying cause. The exception is not replaced by
+a generic dependency error, and no alternate backend is selected.
+
+Both pinned FlashAttention kernels are BF16-only. The Q, K, and V tensors must
+share one dtype and one CUDA device. CPU tensors and mixed-device inputs raise
+before binary download or import. Direct FP32 and FP16 calls raise before
+kernel loading. An
+FP32-resident model may use an advertised FlashAttention backend
+only inside CUDA BF16 autocast, where the operation resolves to BF16 while the
+stored parameters remain FP32. Parity, artifact, embedding, and benchmark
+paths derive their backend and dtype combinations from this manifest contract;
+they do not probe or fall back to an undeclared precision.
+
+On the locked H100 environment, FlashAttention 2 resolves an exact PyTorch
+2.13, CUDA 13, C++11 ABI, x86-64 artifact. FlashAttention 3 resolves a CUDA 13
+stable-ABI artifact. Both produce finite dense and mixed-padding outputs and
+match the shared SDPA reference at the fixed engineering target for ESM2 and
+ESM++. DPLM advertises FlashAttention 3 only; its FlashAttention 2 result
+remains outside the engineering target.
+
+DPLM advertises eager, SDPA, Flex Attention, and FlashAttention 3. Its pinned
+official BF16 contract keeps parameter storage in FP32 and uses CUDA BF16
+autocast. On the representative H100 case, eager and Flex have worst
+hidden-state relative L2 errors of `0.009212` and `0.006768`, respectively.
+Static BF16 parameter storage is not the official DPLM precision path and is
+not used to justify backend support.
+
+DPLM2 advertises SDPA only. Its pinned BF16 contract also keeps parameters in
+FP32 and evaluates them under CUDA BF16 autocast; static BF16 parameter storage
+raises before inference. On the representative H100 compliance case, the worst
+hidden-state relative L2 errors were `0.011772` for eager, `0.011231` for Flex
+Attention, `0.013495` for FlashAttention 2, and `0.012656` for FlashAttention 3.
+Each exceeds the fixed `0.01` engineering target. Explicit requests for any of
+those backends therefore raise, and their dead kernel paths are not retained in
+the DPLM2 implementation.
+
+ANKH advertises eager attention and SDPA only. Its SDPA path forces the math
+kernel and temporarily enables reduced-precision reduction so BF16 computation
+matches the official encoder, restoring the prior process policy after every
+call. Flex Attention is not supported: BF16, FP16, and FP32 probes each exceeded
+the fixed relative-L2 engineering target of `0.01` (`0.016673`, `0.015503`, and
+`0.016396`, respectively). This family support applies to the optimized ANKH
+encoder. The official sequence-to-sequence AutoClass remains eager-only because
+its delegated Transformers decoder is outside that encoder implementation.
+
+## Mask semantics
+
+`fastplms.attention` centralizes mask conversion. The same biological validity
+mask is normalized into:
+
+- a packed 2D token mask for FlashAttention;
+- a 4D mask for eager attention and SDPA;
+- a Flex `BlockMask` for padding, causal, block-causal, or declared custom
+  semantics.
+
+E1's block-causal pattern is a distinct semantic key. It is never represented
+as ordinary padding attention. Mixed-length and skewed-padding parity cases
+exercise every required representation.
+
+Flex functions and masks are cached only after explicit execution. The cache key
+contains device, dtype, query and key shape, the complete sequence-length tuple,
+and mask semantics. This prevents reuse across batches that have the same padded
+shape but different valid residues. Importing FastPLMs does not compile Flex or
+modify Dynamo or Inductor settings.
+
+## Attention outputs and `parti`
+
+The `parti` embedding pooler constructs an attention graph, so it requires:
 
 ```python
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
-model.attn_backend = "flex"  # every attention layer now uses flex
-
-model.attn_backend = "kernels_flash"  # flip to flash without reloading
+attn_implementation="eager"
 ```
 
-This is useful for benchmarking multiple backends on the same weights, or for falling back at runtime if a backend turns out to be unavailable on the current GPU. The setter validates that the requested backend is installed and raises `AssertionError` otherwise. ANKH's `kernels_flash` request silently falls back to `flex` or `sdpa` because the flash kernels cannot accept ANKH's additive relative position bias.
+It rejects sequences longer than 2,048 biological residues. Other backends do
+not materialize the complete attention graph as a side effect. Models that do
+not expose meaningful sequence attention, including ESMFold2, reject `parti`.
 
-## Backend Resolution
+## Validation
 
-Each model has a `resolve_attention_backend()` function that:
+Backend validation uses the same valid biological positions as official parity.
+It measures relative L2 error, relative 99.9th-percentile error, first-percentile
+residue cosine, per-sequence pooled cosine, confident-position top-1 agreement,
+and Jensen-Shannon divergence for probability tensors. A family-specific relaxed
+tolerance is not permitted. A failing advertised backend blocks release until
+the implementation is fixed or the backend is removed from the manifest and
+documentation.
 
-1. Validates the requested backend string
-2. For `"auto"`, probes available backends in order: kernels_flash -> flex -> sdpa
-3. Prints the resolved backend once (globally, to avoid log spam)
-4. Returns an `AttentionBackend` enum value
-
-The resolved enum is stored on each attention layer as `self.attn_backend` and on the encoder as `self.attention_backend`.
-
-## Mask Transformations
-
-`fastplms/attention.py::get_attention_mask()` builds a shared set of padding masks once per forward, and every family consumes the same output:
-
-| Backend | Mask produced by `get_attention_mask` | Shape |
-|---------|---------------------------------------|-------|
-| SDPA | Boolean 4D mask (True = valid) | `(batch, 1, 1, seq_len)` |
-| Flash | Boolean 2D mask (True = valid) | `(batch, seq_len)` |
-| Flex | `BlockMask` via `create_block_mask` | Opaque block mask object |
-
-Families that need an **additive** (float, `0.0`/`-inf`) mask -- ANKH is currently the only one, because T5 relative position bias is added directly to attention scores -- convert the shared bool mask with the `bool_to_additive_mask(bool_mask, dtype)` helper in `fastplms/attention.py`. Use the helper, don't hand-roll it:
-
-> Never call `.masked_fill(bool_mask, float("-inf"))` on a bool tensor. `bool(float("-inf"))` is `True`, so the result is a bool tensor and the mask is silently dropped. `bool_to_additive_mask` allocates the float tensor correctly and is the only sanctioned way to produce an additive mask inside the codebase.
-
-## Interaction with `torch.compile`
-
-- **SDPA**: Works well with `torch.compile` out of the box
-- **Flex**: Best performance when the entire model is compiled; the Triton kernel generation integrates with the compiler
-- **Flash**: `torch.compile` wraps the kernels call; dynamic warmup detects when compilation has stabilized
-
-The throughput benchmark (`testing/throughput.py`) applies `torch.compile` to all backends and uses dynamic warmup stabilization to ensure measurements reflect compiled performance.
-
-## s_max Tracking
-
-When `output_s_max=True` is passed (ESM2, E1), each attention layer computes the per-head maximum attention score bound: `max(||Q|| * ||K||)` per head. This is useful for numerical stability analysis and debugging but adds overhead and should not be enabled during production inference.
+Performance is measured separately from correctness. See
+[benchmarking](benchmarking.md) for compile-time, steady-state, padding, memory,
+and regression methodology.

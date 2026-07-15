@@ -1,0 +1,142 @@
+[
+  {
+    "repo_id": "kernels-community/flash-attn2",
+    "sha": "db6b51744f0cd7061386442c09df890fc6d9f47e",
+    "variants": {
+      "torch211-cxx11-cpu-x86_64-linux": {
+        "hash": "sha256-1e8f5c640ee6d45aae98e0337b1eac6682084d86da7883c9e043613d60da953a",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-cu126-aarch64-linux": {
+        "hash": "sha256-eff0d2520681d106364765c317b4d497f73d2838a32f521c9ec419a097d7e4d8",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-cu126-x86_64-linux": {
+        "hash": "sha256-89f8ecab7835608292fee924d527d26542381f9659d4ba1c9994b9ccdec8fb0a",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-cu128-aarch64-linux": {
+        "hash": "sha256-432851c98b56edde900b138ffeb1195b6a85640e8a4216b7fd02f36133058161",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-cu128-x86_64-linux": {
+        "hash": "sha256-e3ade9cf9cf1ea3d0c0e5dff398d04eb9ad9fa781786142c5a8a475462b33685",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-cu130-aarch64-linux": {
+        "hash": "sha256-2ab7710c2d8191a1e82aac1f7858232fdc07c68ba1a0775985cbb73f0efa15ce",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-cu130-x86_64-linux": {
+        "hash": "sha256-3e8f86d87b649fd2ac8aeccc5872654d07b3157240498db75a3f8baf1cc3706d",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-xpu20253-x86_64-linux": {
+        "hash": "sha256-44ade6d45eb6ec4d12018201e2373593312890a733197ed35d51915e50a2228c",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-cpu-x86_64-linux": {
+        "hash": "sha256-ee019e1930c47a94595469751dfd3822e88eb39f533ac60105ae92d2d8f9e5f8",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-cu126-aarch64-linux": {
+        "hash": "sha256-d8b01b0baeab9bdf73b04beebde13df36c6abda16eaf7a576d291ad19e79704e",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-cu126-x86_64-linux": {
+        "hash": "sha256-61d7cac70063b44574e3593fbaf275686673c273826c1eb6632c2a6d9f2ad563",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-cu130-aarch64-linux": {
+        "hash": "sha256-35ff5caf9744fa19e95c21fa8267668150312ac44b988c2d688a737484d69faa",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-cu130-x86_64-linux": {
+        "hash": "sha256-fef69620fff871f8535e00aaf9ab1e940f529f690c511e2843e89ffccdc44f49",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-cu132-aarch64-linux": {
+        "hash": "sha256-404a8ceb6cc75cf58e3d6bce8962bb5a667af6e07b25f0c43ac3ebbd1404ff42",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-cu132-x86_64-linux": {
+        "hash": "sha256-87bc38d4b142f771f40475351b06024601d9b91634585a8a99a2919cbcdedaef",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-xpu20253-x86_64-linux": {
+        "hash": "sha256-614f0afb8dbcfa7a57687c32f82228f62ddfddb992b802e6073d04caf535d510",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch213-cxx11-cpu-x86_64-linux": {
+        "hash": "sha256-06221756fa4f85fb4c683fd399df989e6faa9ebddc1243d894e8bf3c96a0b222",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch213-cxx11-cu126-aarch64-linux": {
+        "hash": "sha256-516d899591dbc8bba1155c9b6c4e2c1628be58dde68b7f24c09f82532751f623",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch213-cxx11-cu126-x86_64-linux": {
+        "hash": "sha256-570f2215ceeb777750dbc123206814797eda1657033c0fcbf69fd2f3c580c5bd",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch213-cxx11-cu130-aarch64-linux": {
+        "hash": "sha256-ef1028a133882222ba5d33654248acf9c01d851d0b0eed8c71753cd242a77d27",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch213-cxx11-cu130-x86_64-linux": {
+        "hash": "sha256-238cdad1945962331ad685a07119bb9e893ed976f11ecbf257e03d36682f95e4",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch213-cxx11-cu132-aarch64-linux": {
+        "hash": "sha256-4f26ede2a43e29301478405ba3c7c50fadb800324d1bc03fbbc32e9f449818b3",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch213-cxx11-cu132-x86_64-linux": {
+        "hash": "sha256-a48c5ff3def3cbff8474980badaf2d8e0d4a0b6752e6c376db81166ed54e0e6e",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch213-cxx11-xpu20260-x86_64-linux": {
+        "hash": "sha256-c500992b32efbccad8add1478de2399596c4645e58dbb58fd5db392005953851",
+        "hash_type": "git_lfs_concat"
+      }
+    }
+  },
+  {
+    "repo_id": "kernels-community/flash-attn3",
+    "sha": "43f0bd269777115d94ff826e0d113ce9c1c9087b",
+    "variants": {
+      "torch-stable-abi29-cu126-x86_64-linux": {
+        "hash": "sha256-f130ad586e33e2810a6a731e7a88f9183fbe98f95d8e085ef7db6f9153c64672",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch-stable-abi29-cu128-x86_64-linux": {
+        "hash": "sha256-1651bf516e1deb4f1db318e497cc081606a8193899bea95650f80b456ef78904",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch-stable-abi29-cu130-x86_64-linux": {
+        "hash": "sha256-8dc3c4645b8ed2c5ce27873f8c6deb4ecf60060b5f08f538389b3d79e8842a2f",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch210-cxx11-cu128-x86_64-linux": {
+        "hash": "sha256-43044b0121f22902a363c475e4d5edc46120af7abc126ad5db9782ef174dc284",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch210-cxx11-cu130-x86_64-linux": {
+        "hash": "sha256-3467b35235769ebec82256e08ec299856ac34733ed1ecc2e854890a4fcd0fdee",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-cu128-x86_64-linux": {
+        "hash": "sha256-67f2af03de8af4c76cce249662d210be955a0022c4b56ec9fd4cb200f0c86cdd",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch211-cxx11-cu130-x86_64-linux": {
+        "hash": "sha256-5283c2e8951a09c27b853f43fd757d8859fe560fb945b4ed0a68c64a618e236d",
+        "hash_type": "git_lfs_concat"
+      },
+      "torch212-cxx11-cu130-x86_64-linux": {
+        "hash": "sha256-cbee545d181d496af2349ffca6770f9d0941b30ffa25ddd1784abde66576de5f",
+        "hash_type": "git_lfs_concat"
+      }
+    }
+  }
+]

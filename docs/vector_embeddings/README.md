@@ -15,6 +15,12 @@ tags:
 
 Precomputed pooled protein embeddings for the Protify vector benchmark.
 
+> [!CAUTION]
+> This page documents a historical external dataset, not the FastPLMs 1.0
+> embedding format. FastPLMs writes sharded safetensors or transactional SQLite
+> and never writes new `.pth` files. Prefer the current
+> [embedding API](../embedding_api.md) for new runs.
+
 This dataset stores ready-to-use `.pth.gz` embedding artifacts for a broad panel of protein language models and controls. It is intended for fast downstream benchmarking in Protify without repeatedly embedding the same benchmark sequences on local GPUs.
 
 ## What Is Included
@@ -65,7 +71,7 @@ import gzip
 import torch
 
 with gzip.open(path, "rb") as handle:
-    embeddings = torch.load(handle, map_location="cpu")
+    embeddings = torch.load(handle, map_location="cpu", weights_only=True)
 
 first_key = next(iter(embeddings))
 first_vector = embeddings[first_key]
@@ -73,6 +79,11 @@ first_vector = embeddings[first_key]
 print(first_key)
 print(first_vector.shape, first_vector.dtype)
 ```
+
+Only load a legacy pickle from a source whose bytes and expected hash you
+trust. If an old payload cannot be read with `weights_only=True`, use the
+FastPLMs read-only legacy importer and its explicit unsafe-pickle opt-in. Never
+enable unsafe pickle loading for an untrusted download.
 
 Download with the Hugging Face CLI:
 
@@ -92,7 +103,8 @@ hf download Synthyra/vector_embeddings \
   --local-dir vector_embeddings
 ```
 
-The full `embeddings/` directory is about 189.22 GiB.
+The full directory is large. Inspect the current Hub repository size before a
+bulk download.
 
 ## Protify Usage
 
@@ -106,6 +118,9 @@ Typical workflow:
 4. Compare model families against negative controls such as `Random` and `OneHot-Protein`.
 
 ## Model Inventory
+
+This inventory is a historical snapshot of the external dataset. It is not the
+FastPLMs support matrix and is not generated from `src/fastplms/models.toml`.
 
 | Model | File | Size |
 | --- | --- | ---: |

@@ -1,27 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+*.egg-info/
 
-*.pyc
-*.png
-!docs/assets/*.png
+# Build and run outputs
+build/
+dist/
+/artifacts/
+results/
+.cache/
+*.db
+*.db-shm
+*.db-wal
+*.nbc
+*.nbi
+
+# Checkpoint and tensor payloads
+*.bin
+*.ckpt
 *.pth
 *.pt
 *.safetensors
-*.json
-!e1_fastplms/*.json
-*.bin
-.qodo
-*.db
-*.nbc
-*.nbi
-*.ckpt
-/results_classification_lora
-/results_regression_lora
-/testing/results
+!tests/goldens/**/*.safetensors
+
+# Local credentials and workstation state
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+.qodo/
+
+# Local planning and scratch material
 draft.md
-/dplm
-/E1
-/.cache
-/esm
-/testing/__pycache__
-/github_issues
-/internal
-/marketing
+github_issues/
+internal/
+marketing/
+/.codex-*
+/.codex_*
+/.claude

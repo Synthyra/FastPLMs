@@ -1,0 +1,18 @@
+numpy==1.26.4
+biopython==1.84
+dm-tree==0.1.8
+einops==0.8.0
+ml-collections==0.1.1
+omegaconf==2.3.0
+scipy==1.13.1
+ninja==1.11.1.4
+safetensors==0.6.2
+pytest==8.4.2
+huggingface-hub==0.36.0
+wheel==0.46.3
+# The pinned OpenFold package imports these modules eagerly. They belong only
+# to the isolated native ESMFold reference environment, never FastPLMs runtime.
+pytorch-lightning==1.9.5
+torchmetrics==0.11.4
+lightning-utilities==0.15.2
+dllogger @ git+https://github.com/NVIDIA/dllogger.git@0478734ff7be75adde8d160e04872664d1c62e5f

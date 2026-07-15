@@ -1,12 +1,27 @@
-[submodule "official/boltz"]
-	path = official/boltz
-	url = https://github.com/jwohlwend/boltz.git
-[submodule "official/e1"]
-	path = official/e1
-	url = https://github.com/Profluent-AI/E1.git
-[submodule "official/dplm"]
-	path = official/dplm
-	url = https://github.com/bytedance/dplm.git
-[submodule "official/esm"]
-	path = official/esm
+[submodule "vendor/upstream/ankh"]
+	path = vendor/upstream/ankh
+	url = https://github.com/agemagician/Ankh.git
+[submodule "vendor/upstream/biohub-esm"]
+	path = vendor/upstream/biohub-esm
 	url = https://github.com/Biohub/esm.git
+[submodule "vendor/upstream/biohub-transformers"]
+	path = vendor/upstream/biohub-transformers
+	url = https://github.com/Biohub/transformers.git
+[submodule "vendor/upstream/boltz"]
+	path = vendor/upstream/boltz
+	url = https://github.com/jwohlwend/boltz.git
+[submodule "vendor/upstream/dplm"]
+	path = vendor/upstream/dplm
+	url = https://github.com/bytedance/dplm.git
+[submodule "vendor/upstream/e1"]
+	path = vendor/upstream/e1
+	url = https://github.com/Profluent-AI/E1.git
+[submodule "vendor/upstream/fair-esm"]
+	path = vendor/upstream/fair-esm
+	url = https://github.com/facebookresearch/esm.git
+[submodule "vendor/upstream/openfold"]
+	path = vendor/upstream/openfold
+	url = https://github.com/aqlaboratory/openfold.git
+[submodule "vendor/upstream/protein-ttt"]
+	path = vendor/upstream/protein-ttt
+	url = https://github.com/anton-bushuiev/ProteinTTT.git

@@ -1,182 +1,77 @@
 # Contributing
 
-## Getting Started
+Changes should preserve scientific behavior, repository boundaries, and a clear
+audit trail. Do not commit or upload model weights as part of a source change.
 
-1. Fork the repository and clone your fork
-2. Use Python 3.12 (`.python-version` pins 3.12.3 for pyenv/uv-style tools)
-3. Pin packaging tools: `python -m pip install --upgrade pip==26.1.1 setuptools==70.2.0`
-4. Install cu128 PyTorch: `python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128`
-5. Install pinned direct dependencies: `python -m pip install -r requirements.txt`
-6. Tests run in Docker only (see below)
-
-## Code Style
-
-- **Python**: PEP 8, type hints in function signatures
-- **No unnecessary comments**: Only where logic is not self-evident
-- **Hard asserts**: No silent recovery or defensive error handling
-- **No `.get()`, `getattr()`, `hasattr()`**: Let missing keys throw `KeyError`/`AttributeError`
-
-### Import Ordering
-
-1. Standard library: `import xyz`
-2. Third-party: `from xyz import q`
-3. Local/repo: `from models.foo import Bar`
-
-Within each group, `import x` lines come before `from x import y` lines.
-
-### Import Grouping
-
-Never import from the same package on separate lines:
-
-```python
-# Bad
-from torch import nn
-from torch import optim
-
-# Good
-from torch import nn, optim
-
-# For many names, use parenthesized form
-from transformers import (
-    AutoConfig,
-    AutoModel,
-    AutoModelForMaskedLM,
-    PreTrainedModel,
-)
-```
-
-## Adding a New Model
-
-### 1. Create the Package
-
-```
-fastplms/new_model/
-    __init__.py
-    modeling_new_model.py    # PreTrainedModel + PretrainedConfig
-    get_weights.py           # Weight conversion from official checkpoint
-    README.md                # HuggingFace model card README
-    LICENSE                  # Model license
-
-testing/official/new_model.py  # Load official model for compliance testing
-```
-
-### 2. Implement the Model
-
-Your `modeling_*.py` should:
-
-- Subclass `PreTrainedModel` and `EmbeddingMixin`
-- Define a `PretrainedConfig` subclass with `attn_backend` attribute
-- Implement the `AttentionBackend` enum and backend resolution
-- Implement `_embed(input_ids, attention_mask)` returning last hidden states
-- Register in `config.json` via `auto_map`:
-
-```json
-{
-  "auto_map": {
-    "AutoConfig": "modeling_new_model.NewModelConfig",
-    "AutoModelForMaskedLM": "modeling_new_model.NewModelForMaskedLM"
-  }
-}
-```
-
-### 3. Add Weight Conversion
-
-`get_weights.py` should:
-1. Load the official checkpoint
-2. Remap parameter names to match your architecture
-3. Export `config.json`, `pytorch_model.bin`, and modeling source files
-4. The output directory can be pushed to HuggingFace
-
-### 4. Add Compliance Testing
-
-`testing/official/new_model.py` should expose:
-
-```python
-def load_official_model(reference_repo_id: str, device: torch.device, dtype: torch.dtype):
-    # Load and wrap the official model
-    # Return (wrapped_model, tokenizer) where wrapped_model has .logits and .hidden_states outputs
-    ...
-```
-
-### 5. Register in Test Configuration
-
-Add your model to `testing/conftest.py`:
-
-```python
-# In MODEL_REGISTRY (for fast CI, pick the smallest checkpoint)
-"new_model": {
-    "fast_path": "Synthyra/NewModel-150M",
-    "official_path": "org/official-model",
-    "load_official": "testing.official.new_model",
-    "model_type": "NewModel",
-    "uses_tokenizer": True,
-},
-
-# In FULL_MODEL_REGISTRY (all checkpoints with size_category)
-"new_model_150m": {
-    "fast_path": "Synthyra/NewModel-150M",
-    "official_path": "org/official-model-150m",
-    "load_official": "testing.official.new_model",
-    "model_type": "NewModel",
-    "uses_tokenizer": True,
-    "size_category": "small",
-},
-```
-
-### 6. Add HuggingFace README
-
-Create `fastplms/new_model/README.md` with the HuggingFace model card content and `fastplms/new_model/LICENSE` with the model license.
-
-### 7. Add a Per-Family Dockerfile
-
-Create `Dockerfile.<family>` that layers on top of `fastplms-base` and installs your model's native reference deps. Add the family to `build_images.sh` so `./build_images.sh` picks it up.
-
-If your model's native package conflicts with another (e.g. transformers version pin, torchtext pin), prefer either:
-- Loading the native package from a `sys.path`-injected submodule (see `testing/official/__init__.py` for the ESM++ pattern), or
-- Using a HuggingFace `transformers` reference class instead (DPLM uses `EsmForMaskedLM` for this reason).
-
-### 8. Add Parity Tolerances
-
-Add a `ParityTolerances(...)` entry in `FAMILY_TOLERANCES` at the top of `testing/test_parity.py`. Start with the default, then tighten as you investigate failures.
-
-### 9. Update `update_HF.py`
-
-Add entries for pushing your model's files to the Hub.
-
-## Running Tests
-
-All tests must run in Docker. Never run tests natively on Windows (missing Triton, flash-attention, CUDA kernels). Always pass `--ipc=host`.
+## Setup
 
 ```bash
-# Build base + your family image
-./build_images.sh new_model
-
-# Run your model's parity suite (its own image)
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-new_model \
-    python -m pytest /workspace/testing/test_parity.py -k new_model -v
-
-# Broader smoke tests in the monolithic image
-docker build -t fastplms .
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -k new_model -v
+git submodule update --init --recursive
+uv sync --extra dev
 ```
 
-## Required Passing Tests
+Run verification on the configured H100 host through `tools/remote/run.py`.
+Candidate PyTorch containers must use `ipc: host`.
 
-Before submitting a PR for a new model, ensure inside the family's Docker image:
+## Code rules
 
-1. `test_parity.py::test_tokenizer_parity[<family>]`
-2. `test_parity.py::test_weight_parity_fp32[<family>]`
-3. `test_parity.py::test_forward_parity_fp32[<family>-{single,uniform,skewed}]` (all three padding scenarios)
-4. `test_parity.py::test_forward_parity_bf16[<family>-{single,uniform,skewed}]`
-5. `test_parity.py::test_padding_does_not_pollute_valid_positions_fp32[<family>]` (tokenizer-mode families)
-6. `test_parity.py::test_backend_consistency_fp32[<family>]`
+- Keep production code under `src/fastplms` and examples under `examples`.
+- Do not import `vendor/upstream` from production code.
+- Do not download, compile, construct tokenizers, log, or mutate global Torch
+  settings at import time.
+- Use optional imports only inside the feature that requires them.
+- Prefer the shortest clear implementation. Retain complexity only with a
+  measured benefit and strict parity coverage.
+- Preserve checkpoint keys and aliases. If that is impossible, add a named
+  deterministic transform and an exact conversion test.
+- Use type annotations for public interfaces and explain non-obvious numerical
+  choices near the implementation.
 
-And in the monolithic image:
+Python identifiers use PEP 8 snake case. In prose and mathematical comments,
+scalar quantities and dimensions are lowercase, tensors and matrices use an
+uppercase alias, and shapes use parentheses:
 
-7. `test_automodel_loads` and `test_automodel_forward_pass`
-8. `test_nan_stability`
-9. `test_batch_single_match` (tokenizer-mode models)
+```python
+# H is the hidden-state tensor with shape (b, l, n, d).
+hidden_states = model_output.hidden_states
+```
 
-## Reporting Issues
+Do not write square-bracket shape signatures or uppercase dimension symbols in
+shapes. Run the notation checker before review.
 
-Found a bug or have a feature request? Open a [GitHub Issue](https://github.com/Synthyra/FastPLMs/issues).
+## Adding or changing a model
+
+First freeze the official configuration, tokenizer assets and behavior, state
+schema and aliases, representative outputs, source revision, environment, and
+licenses. Then:
+
+1. update `src/fastplms/models.toml` with immutable identities and a complete
+   conversion record;
+2. implement or change package code without importing the official checkout;
+3. update a public-API reference adapter in
+   `tests/parity/support/reference_adapters`;
+4. add exact configuration, tokenizer, state, alias, FP32, BF16, feature, and
+   backend cases;
+5. build and validate its offline local artifact;
+6. regenerate support data and model cards;
+7. run the required remote tiers.
+
+Never create a family-specific tolerance to make a failing comparison pass. Fix
+the implementation or remove the unsupported capability from the manifest and
+documentation.
+
+## Documentation
+
+State the input, transformation, output, validation evidence, and limitation.
+Avoid unsupported equivalence, performance, or biological claims. Execute code
+snippets, validate internal links, and run:
+
+```bash
+PYTHONPATH=src python -m tools.artifacts.generate_docs --check
+python tools/debug/check_notation.py
+```
+
+## Review scope
+
+Keep unrelated user changes intact. Do not commit, push, upload, delete a live
+Hub repository, or open a pull request unless the maintainer explicitly asks.

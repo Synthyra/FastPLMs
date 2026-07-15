@@ -1,287 +1,305 @@
-# Testing & Benchmarking
+# Testing and compliance
 
-FastPLMs uses pytest with Docker for all GPU testing. Tests cover model loading, attention backend consistency, weight/forward parity against official implementations, embedding stability, and throughput benchmarking.
+FastPLMs treats official equivalence as a release property. Routine goldens make
+development faster, but a release requires live comparison with the pinned
+official implementation in its native reference container.
 
-**Requires PyTorch 2.11+**. Flex attention uses Flash Attention 4 (FA4) as its backend on Hopper/Blackwell GPUs. The Dockerfiles pin PyTorch 2.11.0 with CUDA 12.8.
+All project verification runs on the declared H100 workstation through Docker.
+Every PyTorch container uses `--ipc=host` or Compose `ipc: host`.
 
-## Docker Layout
+## Run tiers
 
-Two Docker layouts are supported.
+| Tier | Purpose |
+| --- | --- |
+| `check` | Units, imports, local integration, checkpoint goldens, local artifacts, and live architecture representatives |
+| `compliance` | Every supported checkpoint against its live pinned official implementation |
+| `structure` | ESMFold, four ESMFold2 variants, Boltz2, feature preparation, export, and seeded stochastic output |
+| `feature` | DPLM generation, DPLM2 generation, ESM3 multimodal generation, TTT, E1 sequence and RAG adapters, binder flow, pooling, and conversion |
+| `artifact` | Fresh offline remote-code loading and save-reload for every local artifact |
+| `benchmark` | Separate H100 latency, throughput, padding, memory, and regression suite |
+| `python-matrix` | Locked, non-editable core-package smokes on Python 3.11, 3.13, and 3.14 |
 
-### Per-family images (recommended for parity / compliance work)
+The warm-cache 15-minute duration for `check` is a planning guideline, not a
+reason to weaken coverage. `compliance` has no runtime ceiling. Missing expected
+dependencies, checkpoints, reference containers, or backends are failures, not
+skips.
 
-A shared base image plus one image per model family. Each family image installs only that family's native reference deps, so we can run e.g. ESM++ tests against Biohub's `esm` package without breaking ESM2 tests that depend on `fair-esm` / `transformers.EsmForMaskedLM`.
+## Portable remote execution
 
-| Image tag | Native reference package |
-|-----------|---------------------------|
-| `fastplms-base` | none (torch 2.11.0, transformers 4.57.6, FastPLMs source, shared deps) |
-| `fastplms-esm2` | uses `transformers.EsmForMaskedLM` |
-| `fastplms-esm_plusplus` | Biohub `esm` runtime deps + `official/esm` submodule on `sys.path`. The `esm` package itself is **not** pip-installed (it depends on a Biohub `transformers` fork). |
-| `fastplms-esm3` | Biohub ESM3 runtime deps + `official/esm` submodule on `sys.path`; requires gated source-model access for official ESM3 parity/compliance. |
-| `fastplms-e1` | `pip install -e /app/official/e1` |
-| `fastplms-dplm` | uses `transformers.EsmForMaskedLM` (DPLM's native package conflicts with our torchtext pin) |
-| `fastplms-dplm2` | none beyond base |
-| `fastplms-ankh` | uses `transformers.T5EncoderModel` |
-| `fastplms-esmfold2` | Biohub `transformers` fork, ESMFold2 runtime deps, and structure export deps |
-
-Build:
-
-```bash
-git submodule update --init --recursive
-
-# Build base + every family image
-./build_images.sh
-
-# Build a specific subset
-./build_images.sh esm2 esm_plusplus
-```
-
-`build_images.sh` always builds `fastplms-base` first and then layers each requested family on top, with `--cache-from` chained so dep changes don't invalidate the base.
-
-### Monolithic image (legacy)
-
-The original `Dockerfile` (image tag `fastplms`) bundles everything compatible into a single image. Used by the broad test suites that don't need per-family isolation.
+The runner accepts connection data at invocation time, synchronizes an isolated
+workspace, preserves external model and container caches, and retrieves test and
+benchmark outputs:
 
 ```bash
-git submodule update --init --recursive
-docker build -t fastplms .
+python -m tools.remote \
+  --host user@gpu-host \
+  --identity /path/to/private-key \
+  --suite check
 ```
 
-## Running Tests
+Workstation names, identity paths, cache credentials, and secrets are not stored
+in tracked files. The runner archive excludes Git metadata, known credential
+names, private-key extensions, and ignored files. Before synchronization, every
+initialized upstream must have a clean tracked tree and a `HEAD` equal to its
+parent Git link. The runner records those revisions, the exact tracked-file
+inventory, and a tree digest in `.fastplms-source-provenance.json`. Artifact
+validation uses this record only in an extracted tree with no Git metadata and
+rejects missing, added, or modified upstream files.
 
-**Always pass `--ipc=host`** with PyTorch, otherwise multi-worker DataLoader and CUDA can deadlock.
-
-### Per-family parity / compliance
+Python 3.12 is the canonical GPU validation interpreter. Package compatibility
+for Python 3.11, 3.13, and 3.14 is checked separately on the same workstation:
 
 ```bash
-# ESM2 -- model_key in conftest.py is "esm2"
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm2 \
-    python -m pytest /workspace/testing/test_parity.py -k esm2 -v
-
-# ESM++ -- model_key is "esmc"
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm_plusplus \
-    python -m pytest /workspace/testing/test_parity.py -k esmc -v
-
-# ESM3 -- requires accepted access to biohub/esm3-sm-open-v1 for official parity
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm3 \
-    python -m pytest /workspace/testing/test_parity.py -k esm3 -v
-
-# Everything else
-for fam in e1 dplm dplm2 ankh; do
-    docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-$fam \
-        python -m pytest /workspace/testing/test_parity.py -k $fam -v
-done
+python -m tools.remote \
+  --host user@gpu-host \
+  --identity /path/to/private-key \
+  --suite python-matrix
 ```
 
-### Broader suites in the monolithic image
+The matrix reuses the candidate image and uv-managed interpreters. For each
+version it performs a frozen, core-only, non-editable install, removes the
+repository source from the import path, enables offline Hub behavior, disables
+CUDA visibility, compiles the installed package, loads `models.toml`, and runs
+a small ESM2 CPU forward. It does not select the `flash` extra. Results are
+recorded in JSON and JUnit. Python 3.12 remains the only environment used for
+the pinned CUDA 13.0, PyTorch 2.13.0, and Transformers 5.13.0 GPU release gates.
+
+For direct execution in an already synchronized checkout:
 
 ```bash
-# Fast tests (small models, no compliance, no structure)
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "gpu and not slow and not large and not structure" -v
-
-# All sequence model tests except 3B
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not large and not structure" -v
-
-# Full suite including 3B models (requires 40+ GB VRAM)
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not structure" -v
-
-# Structure models only (Boltz2, ESMFold, ESMFold2, ESMFold2-Fast)
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "structure" -v
-
-# Throughput benchmark (saves JSON/CSV/PNG)
-docker run --gpus all --ipc=host -v ${PWD}:/workspace fastplms python -m pytest /app/testing/test_throughput.py -v -s
-
-# Throughput benchmark, standalone, more configurable
-docker run --gpus all --ipc=host -v ${PWD}:/workspace fastplms python -m testing.throughput \
-    --model_paths Synthyra/ESM2-8M Synthyra/ESMplusplus_small \
-    --backends sdpa flex kernels_flash \
-    --batch_sizes 2 4 8 \
-    --sequence_lengths 64 128 256 512 1024 2048
-
-# Interactive shell
-docker run --gpus all --ipc=host -v ${PWD}:/workspace -it fastplms bash
+sudo docker buildx bake -f docker/docker-bake.hcl candidate --load
+sudo docker compose -f docker/compose.yaml run --rm candidate \
+  python -m pytest tests/unit tests/integration tests/release -v
 ```
 
-On Windows, replace `${PWD}` with `$(pwd)`.
+## Manifest-generated cases
 
-### Binder design workflow tests
+`tests/conftest.py` loads `src/fastplms/models.toml`. Each checkpoint contributes
+its AutoClasses, tokenizer mode, source revisions, state transform, reference
+container, dependencies, backends, dtypes, precision paths, and declared test
+tiers. Release tests fail when the manifest, Docker targets, artifact metadata,
+support tables, or model cards diverge.
 
-The FastPLMs binder design tutorial is tested in the ESMFold2 family image
-because it combines FastPLMs ESMFold2 experimental folding with the ESM++
-masked-LM regularizer.
+Any manifest `unresolved_files` entry is an explicit release blocker. A test may
+report it precisely, but must not guess a hash or silently omit the asset.
+
+## Reference isolation
+
+Each official adapter runs in a reference stage built from its pinned submodule
+and native dependency set. The adapter may call official public APIs and
+normalize output names and layout. It may not:
+
+- import `fastplms`;
+- add the FastPLMs source tree to `sys.path`;
+- patch official classes;
+- reuse a FastPLMs tokenizer or checkpoint loader;
+- duplicate an official forward pass in test code.
+
+Candidate code runs in a separate container. Comparisons exchange serialized
+inputs and outputs, not live Python objects.
+
+The H100 ESMFold reference image makes one documented build-only modification:
+`docker/constraints/openfold-sm90.patch` restricts the copied OpenFold
+`setup.py` extension architecture list to `sm90`. BuildKit cannot discover the
+host GPU, and the upstream fallback list contains architectures rejected by
+CUDA 12.1. The patch does not change the pinned submodule, extension source,
+model classes, checkpoint data, or the public ESMFold API. Its modified-file
+notice is `LICENSES/openfold/MODIFICATIONS.md`.
+
+The same native stage pins PyTorch Lightning `1.9.5`, TorchMetrics `0.11.4`,
+Lightning Utilities `0.15.2`, and NVIDIA DLLogger revision
+`0478734ff7be75adde8d160e04872664d1c62e5f`. Pinned OpenFold imports those
+packages eagerly; they are reference-container dependencies and are excluded
+from FastPLMs runtime images and package extras.
+
+## Exact contracts
+
+Every checkpoint must establish:
+
+- exact semantic configuration equality, excluding only declared packaging
+  fields;
+- exact tokenizer assets, vocabulary, special IDs, normalization, and behavior
+  for canonical, ambiguous, lowercase, whitespace, empty, truncated, and padded
+  inputs;
+- exact state-key sets, tensor shapes, dtypes, and `torch.equal` values after the
+  declared transform;
+- exact tied-weight and parameter-alias contracts;
+- one live BF16 mixed-length inference;
+- representative deep FP32 and BF16 comparisons across all layers, public
+  outputs, embeddings, skewed padding, and required attention backends.
+
+DPLM2 specifically asserts that input and output embeddings are not aliased and
+that the trained `esm.contact_head` keys are present. ANKH covers the official
+encoder and sequence-to-sequence heads separately; the named masked-LM extension
+is tested as an extension, not as official parity.
+
+## Numerical metrics
+
+Metrics include only valid biological positions. Padding and special positions
+cannot improve a score. The suite reports relative L2 error, relative
+99.9th-percentile error, first-percentile residue cosine, per-sequence pooled
+cosine, confident-position top-1 agreement, and Jensen-Shannon divergence for
+probability tensors.
+
+Repeated-run noise and official-baseline error calibrate a scalar threshold:
+
+```text
+f_repeat = median(error) + 6 * 1.4826 * MAD(error)
+
+e_allowed = min(
+    e_hard,
+    max(e_target, 10 * f_repeat, 1.25 * e_base, e_base + 6 * s_base),
+)
+```
+
+The first implementation must meet the engineering target, not only the hard
+limit.
+
+| Contract | Engineering target | Hard limit |
+| --- | ---: | ---: |
+| FP32 official relative L2 | `2e-6` | `2e-5` |
+| FP32 relative Q99.9 error | `1e-5` | `1e-4` |
+| BF16 official or backend relative L2 | `1e-2` | `3e-2` |
+| BF16 relative Q99.9 error | `2.5e-2` | `5e-2` |
+| BF16 residue cosine, first percentile | `>=0.999` | `>=0.995` |
+| BF16 pooled cosine, every sequence | `>=0.9995` | `>=0.995` |
+| BF16 confident top-1 agreement | `>=99.5%` | `>=99.0%` |
+| FP8 ESMFold2 projection relative L2 | `<=0.04` | `<=0.08` |
+| FP8 projection residue cosine, first percentile | `>=0.995` | `>=0.99` |
+| FP8 projection pooled cosine | `>=0.999` | `>=0.995` |
+
+There are no informational-only comparisons or permissive family-specific
+tolerances. A failing advertised backend blocks release until fixed or removed
+from both manifest and documentation.
+
+ESMFold2 FP8 is an active release capability on the locked H100 stack. The
+validated Transformer Engine path converts exactly the 80 ESMC attention
+output projections and retains canonical BF16 parameters. `auto` selects this
+path only for direct CUDA loading when Transformer Engine reports FP8
+availability; otherwise it records a BF16 fallback reason. Explicit `fp8`
+raises when unavailable.
+
+## ESMFold2 projection and structure
+
+Projection from identical ordered ESMC states is exact in FP32. The BF16
+relative L2 target is `5e-4`, with a hard limit of `1e-3`. The FP8 release suite
+verifies strict unavailable-device behavior, then runs three fresh
+BF16-to-FP8 reload cycles, mixed padding, odd boundary lengths, and finite-value
+assertions on supported hardware.
+
+Folding tests hash prepared features and sampled diffusion noise. They require
+exact discrete features and masks, valid geometry, and no NaNs. Coordinate and
+confidence thresholds are documented in [ESMFold2](esmfold2.md) and encoded once
+in the strict metric module.
+
+## Goldens
+
+Official-generated goldens use safetensors. Each includes the official source
+revision, checkpoint revision and hashes, environment fingerprint, deterministic
+generation command, input fingerprint, tensor names and shapes, dtypes, and
+output hashes. Goldens are read-only fixtures. They accelerate `check`, but they
+never replace live `compliance`.
+
+The manifest declares a required golden only through an `official_golden`
+record on a model entry. Both files are SHA-256 pinned and use fixed paths:
+
+```toml
+official_golden = { metadata = "tests/goldens/<model>.json=sha256:<digest>", tensors = "tests/goldens/<model>.safetensors=sha256:<digest>" }
+```
+
+Absence of this record means that the checkpoint golden is not complete. It
+must be reported as release work rather than represented by a placeholder or a
+synthetic fixture. Presence makes a missing, modified, or
+provenance-inconsistent bundle a `check` failure. Other tiers do not infer a
+golden requirement.
+
+The manifest-driven converter consumes only normalized output from an isolated
+native reference container. It does not load a model, import an upstream
+package, or download a checkpoint:
 
 ```bash
-# Unit tests for prompt reproducibility, input validation, pI filtering,
-# official-style selection scoring, and differentiable LM regularization.
-docker run --rm -v /home/ubuntu/FastPLMs:/app -w /app fastplms-esmfold2 \
-  python -m pytest /app/testing/test_binder_design_fastplms.py -m "not gpu" -v
+python -m tools.goldens \
+  --native-root artifacts/reference \
+  --output-root tests/goldens \
+  --model esm2_8m
 
-# CUDA dry run that writes trajectory, FASTA, results, selection, and structures
-# with fake folding functions so it is fast but still checks artifact plumbing.
-docker run --gpus all --rm -v /home/ubuntu/FastPLMs:/app -w /app fastplms-esmfold2 \
-  python -m pytest /app/testing/test_binder_design_fastplms.py \
-    -k tiny_design_dry_run_writes_outputs -v
+python -m tools.goldens \
+  --status-only \
+  --report-matrix \
+  --native-root artifacts/reference \
+  --output-root tests/goldens
 ```
 
-The verified EGFR example in [Binder Design Example](binder_design.md) used this
-focused test set: `11 passed, 2 deselected` for the non-GPU tests and `1 passed,
-12 deselected` for the CUDA dry run.
-
-## Pytest Markers
-
-| Marker | Description | VRAM |
-|--------|-------------|------|
-| `gpu` | Requires CUDA GPU | Varies |
-| `slow` | Loads two models simultaneously (compliance tests) | 2x model size |
-| `large` | 3B parameter models | 24+ GB |
-| `structure` | Structure prediction models (Boltz2, ESMFold, ESMFold2, ESMFold2-Fast) | 8+ GB |
-
-Use `-m` to filter and `-k` to select by name:
+The matrix is the manifest-wide source of truth for all `check` checkpoints. It
+reports each native request, reference container, normalized native result,
+compact bundle, and declaration state. A targeted native sequence run accepts
+one or more explicit model IDs:
 
 ```bash
-# Only compliance tests
-python -m pytest /workspace/testing/ -m slow -v
-
-# Exclude large models
-python -m pytest /workspace/testing/ -m "not large" -v
-
-# Only a specific model family
-python -m pytest /workspace/testing/ -k esm2 -v
+python -m tests.parity.support.native_reference \
+  --request-dir artifacts/reference/requests/reference-esm2 \
+  --output-dir artifacts/reference/results \
+  --model esm2_8m
 ```
 
-## Test File Map
+An official public-generation limitation is not generation parity. Only a
+checkpoint whose manifest capability is `official_unavailable` may carry a
+normalized limitation record, and that record must match the public method,
+exception type, and semantic reason exactly. All `required` DPLM and DPLM2
+checkpoints fail when generation output is absent. Feature tests retain viable
+family representatives even when one checkpoint's pinned official sampler is
+unusable.
 
-| File | What it tests | Markers |
-|------|---------------|---------|
-| `test_parity.py` | **Rigorous parity** vs official implementations: tokenizer parity, bit-exact weight parity, per-layer relative-std hidden-state diff (fp32 + bf16) across `single`/`uniform`/`skewed` padding scenarios, padding-isolation (`[short]` alone vs `[short, long_]` padded), backend consistency, end-to-end `embed_dataset` pipeline parity. Runs per family in its own Docker image. | `gpu` |
-| `test_automodel.py` | Model loading + forward pass validity (no NaN/Inf) | `gpu` |
-| `test_backend_consistency.py` | SDPA, Flex, Flash backends produce equivalent predictions (>= 95% agreement) | `gpu` |
-| `test_compliance.py` | Original (looser, bf16-only) weight/forward compliance against official implementations. Kept as a smoke layer; `test_parity.py` is the source of truth. | `slow`, `gpu` |
-| `test_embedding_mixin.py` | NaN stability, batch-vs-single match, FASTA parsing, DPLM2 utilities | `gpu` |
-| `test_binder_design_fastplms.py` | FastPLMs-only binder prompt reproducibility, input validation, ESM++ pseudoperplexity gradient, official selection metrics, pI filtering, and dry-run artifact writing | `gpu` for the dry run |
-| `test_throughput.py` | Throughput benchmark across models/backends/batch sizes; saves JSON/CSV/PNG | `slow`, `gpu` |
-| `test_structure_models.py` | Boltz2 and ESMFold loading + forward pass | `structure`, `slow`, `gpu` |
+For sequence models, the input is `metadata.json` plus `bf16.safetensors`. The
+converter retains token inputs, the biological-residue mask, the final hidden
+state, and logits when the official head returns them. For structure models,
+the input is the official `metadata.json` plus `bundle.safetensors`. In both
+cases it validates the model ID, checkpoint revision and file identities,
+reference environment, normalized tensor contract, and source-result hashes.
+It rejects candidate-produced structure bundles and legacy native results that
+do not carry an environment record.
 
-Each test file has both **default registry** tests (one small model per family for fast CI) and **full registry** tests (all 21+ checkpoints with size-based markers).
+The output is a compact safetensors file and JSON sidecar. The sidecar records
+upstream revisions, official checkpoint file identities, the native environment
+fingerprint, canonical generation command, deterministic input fingerprint,
+source-result file hashes, tensor hashes, and the output tensor-file hash. The
+converter prints a TOML declaration only when output is written to the canonical
+`tests/goldens` directory. It never edits `models.toml`; a reviewer adds the
+printed declaration only after validating both generated files. The read-only
+validator then verifies every recorded identity, shape, dtype, and hash.
 
-## Model Registries
+The sequence regression resolves the current package class from the manifest
+`auto_map` and loads only the pinned checkpoint weights. Generated remote-code
+artifacts have their own offline suite. This separation prevents stale Hub code
+from substituting for the package implementation under test.
 
-### Default Registry (`MODEL_REGISTRY`)
-
-Used by the base parametrized tests. One small model per family:
-
-| Key | Model | Family |
-|-----|-------|--------|
-| `esm2` | ESM2-8M | ESM2 |
-| `esmc` | ESMplusplus_small | ESM++ |
-| `esm3` | ESM3_small | ESM3 |
-| `e1` | Profluent-E1-150M | E1 |
-| `dplm` | DPLM-150M | DPLM |
-| `dplm2` | DPLM2-150M | DPLM2 |
-| `ankh` | ANKH_base | ANKH |
-
-### Full Registry (`FULL_MODEL_REGISTRY`)
-
-Used by the `test_full_*` parametrized tests. All checkpoints with `size_category`:
-
-| Category | Models | Marker |
-|----------|--------|--------|
-| `small` | ESM2-8M, ESM2-35M, E1-150M, DPLM-150M, DPLM2-150M | (none) |
-| `medium` | ESM2-150M, ESMC-small, E1-300M, ANKH-base | `slow` |
-| `large` | ESM2-650M, ESMC-large, ESM3-small, E1-600M, DPLM-650M, DPLM2-650M, ANKH-large, ANKH2-large, ANKH3-large | `slow` |
-| `xlarge` | ESM2-3B, ESMC-6B, DPLM-3B, DPLM2-3B, ANKH3-xl | `large` |
-
-### Structure Registry (`STRUCTURE_MODEL_REGISTRY`)
-
-| Key | Model |
-|-----|-------|
-| `boltz2` | Synthyra/Boltz2 |
-| `esmfold` | Synthyra/FastESMFold |
-| `esmfold2` | Synthyra/ESMFold2 |
-| `esmfold2_fast` | Synthyra/ESMFold2-Fast |
-
-## Parity Testing (`test_parity.py`)
-
-The parity suite is the source of truth for "FastPLMs matches the official implementation." It is intentionally strict: when it passes, FastPLMs and the native model agree at every layer to documented numerical tolerance, including under variable-length padded batches.
-
-### What each test checks
-
-| Test | Checks |
-|------|--------|
-| `test_tokenizer_parity` | Vocab size, every token id, every special token id (`pad`, `cls`, `eos`, `mask`, `unk`) match exactly. |
-| `test_weight_parity_fp32` | Per-parameter bit-exact equality. Expected extras (e.g. ANKH's `lm_head.weight`) are allowlisted. |
-| `test_forward_parity_fp32` | Per-layer relative-std-of-diff (`std(fast - native) / std(native)`), `last_hidden_state` MSE/maxabs, logits MSE. Parametrized over `single`/`uniform`/`skewed` padding scenarios. |
-| `test_forward_parity_bf16` | Same as fp32 with documented per-family tolerances. |
-| `test_padding_does_not_pollute_valid_positions_fp32` | Runs `[short]` alone and `[short, long_]` padded; asserts the short sequence's valid-position output matches across both. Catches mask-handling bugs that uniform-length tests miss. |
-| `test_backend_consistency_fp32` | SDPA vs `kernels_flash` vs `flex` on FastPLMs side, against SDPA as ground truth. |
-| `test_embed_dataset_pipeline_parity` | End-to-end `embed_dataset()` vs manual native forward + mean-pool. This is what downstream users actually call. |
-
-### Tolerances
-
-Per-family tolerances live in `FAMILY_TOLERANCES` at the top of `test_parity.py`. fp32 tolerances are tight (machine precision); bf16 tolerances are looser per-family because accumulated rounding scales with depth (ESMC has 30 layers, ANKH-base has 48, ESM2-8M has 6).
-
-### Adding a new family
-
-1. Add a registry entry in `testing/conftest.py` (`MODEL_REGISTRY` and `FULL_MODEL_REGISTRY`).
-2. Implement `testing/official/<family>.py` exporting `load_official_model(reference_repo_id, device, dtype)` that returns `(wrapped_model, tokenizer)` with `.forward()` returning `.logits`, `.hidden_states`.
-3. Add a `Dockerfile.<family>` that installs the family's native deps on top of `fastplms-base`, and add it to `build_images.sh`.
-4. Add a `ParityTolerances(...)` entry in `FAMILY_TOLERANCES` with reasonable starting values, then tighten as you investigate failures.
-
-## Compliance Testing (`test_compliance.py`)
-
-Older, looser test layer kept for backward compatibility. Compares FastPLM and official outputs in bf16 with MSE < 0.05 and prediction accuracy > 0.90. Use `test_parity.py` instead for new work.
-
-DPLM2 is excluded from weight compliance because the official model has an extra `contact_head` not present in the FastPLM version.
-
-## Throughput Benchmarking
-
-### Pytest Test (`test_throughput.py`)
-
-Benchmarks multiple model families across all 3 backends, batch sizes, and sequence lengths. Saves structured results:
-
-- `throughput_results.json`: machine-readable
-- `throughput_results.csv`: spreadsheet-friendly
-- `throughput_comparison.png`: visualization plot
-
-The pytest test uses fewer timed batches (25 vs 100) for faster execution.
-
-### Standalone Script (`testing/throughput.py`)
-
-More configurable, with CLI arguments:
+The pinned Biohub ESMC loader has a standalone reproducer so a native-loader
+failure cannot be mistaken for a FastPLMs inference failure:
 
 ```bash
-python -m testing.throughput \
-    --model_paths Synthyra/ESM2-8M Synthyra/ESMplusplus_small \
-    --backends sdpa flex kernels_flash \
-    --batch_sizes 2 4 8 \
-    --sequence_lengths 64 128 256 512 1024 2048 \
-    --warmup_batches 10 \
-    --timed_batches 100 \
-    --output_path /workspace/throughput_comparison.png
+python -m tests.parity.support.reference_adapters.biohub_loader_reproducer \
+  --repo-id biohub/ESMC-300M \
+  --revision a59b831785f907e96e6a246b1d142bfb76df31ee
 ```
 
-Both pytest and standalone output JSON and CSV in addition to the plot.
+Run it inside `reference-biohub-esm`. It prints the native package versions and
+then invokes the pinned public `ESMC.from_pretrained` method unchanged. Until
+that method materializes its meta-device parameters successfully, ESMC native
+goldens remain release blockers; the suite does not patch the loader or replace
+it with a FastPLMs path.
 
-### How throughput is measured
+## Artifacts
 
-1. Model is compiled via `torch.compile()`
-2. Dynamic warmup: 10-100 batches until latency stabilizes (relative change <= 10% over a 3-batch window)
-3. Timed phase: N batches with `torch.cuda.synchronize()` around the timing loop
-4. Reports non-padding tokens per second
+Artifact tests build from a pinned local checkpoint snapshot. They create a
+fresh environment with FastPLMs absent from `sys.path`, set
+`HF_HUB_OFFLINE=1`, pass `local_files_only=True` and `trust_remote_code=True`,
+load every advertised AutoClass, run inference, save, reload, and compare with
+the package-source implementation. Network access during this tier is a test
+failure.
 
-### Boltz2 Compliance
+## Test markers
 
-Boltz2 has its own compliance script (`testing/run_boltz2_compliance.py`) that compares:
-- Coordinate MAE/RMSE (raw and Kabsch-aligned)
-- Pairwise distance MAE
-- TM-score comparison
-
-```bash
-python -m testing.run_boltz2_compliance \
-    --device cuda \
-    --dtype float32 \
-    --seed 42 \
-    --num-sequences 3 \
-    --recycling-steps 3 \
-    --num-sampling-steps 200
-```
+The suite uses `gpu`, `slow`, `large`, and `structure` markers to describe
+resource needs. Markers do not authorize skipping a required release case. The
+runner chooses the appropriate image and tier, then treats an unmet declared
+requirement as a failure.

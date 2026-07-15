@@ -1,0 +1,162 @@
+name: fastplms
+
+x-accelerator: &accelerator
+  ipc: host
+  gpus: all
+  init: true
+
+x-common: &common
+  <<: *accelerator
+  working_dir: /workspace
+  environment:
+    HF_HOME: /cache/huggingface
+    TORCH_HOME: /cache/torch
+    XDG_CACHE_HOME: /cache/xdg
+    FASTPLMS_ARTIFACTS: /workspace/artifacts
+    FASTPLMS_CANDIDATE_ARTIFACTS: /workspace/dist/hub
+    FASTPLMS_REFERENCE_RESULTS: /workspace/artifacts/reference/results
+  volumes:
+    - ..:/workspace
+    - hf-cache:/cache/huggingface
+    - torch-cache:/cache/torch
+    - xdg-cache:/cache/xdg
+
+x-reference: &reference
+  <<: *accelerator
+  working_dir: /opt/oracle
+  environment:
+    HF_HOME: /cache/huggingface
+    TORCH_HOME: /cache/torch
+    XDG_CACHE_HOME: /cache/xdg
+  volumes:
+    - ../artifacts/reference:/exchange
+    - hf-cache:/cache/huggingface
+    - torch-cache:/cache/torch
+    - xdg-cache:/cache/xdg
+
+services:
+  candidate:
+    <<: *common
+    image: local/fastplms-candidate:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: candidate
+    command:
+      - python
+      - -m
+      - pytest
+      - tests/unit
+      - tests/integration
+      - -m
+      - not gpu and not slow and not structure
+
+  structure:
+    <<: *common
+    image: local/fastplms-structure:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: candidate-structure
+    command:
+      - python
+      - -m
+      - pytest
+      - tests/structure
+      - tests/parity/test_boltz_source_refactor.py
+      - -m
+      - structure
+
+  fp8:
+    <<: *common
+    image: local/fastplms-fp8:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: candidate-fp8
+    command: ["python", "-m", "pytest", "tests/structure", "-m", "structure"]
+
+  benchmark:
+    <<: *common
+    image: local/fastplms-fp8:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: candidate-fp8
+    entrypoint: ["python", "-m", "benchmarks.suite"]
+
+  artifact:
+    <<: *common
+    image: local/fastplms-artifact:dev
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: candidate-artifact
+    environment:
+      HF_HOME: /cache/huggingface
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      TORCH_HOME: /cache/torch
+      XDG_CACHE_HOME: /cache/xdg
+      FASTPLMS_ARTIFACTS: /workspace/artifacts
+      PYTHONPATH: ""
+    command:
+      - python
+      - -m
+      - pytest
+      - tests/release/test_published_automodel.py
+      - -m
+      - artifact
+
+  reference-ankh:
+    <<: *reference
+    image: local/fastplms-reference-ankh:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-ankh}
+
+  reference-biohub-esm:
+    <<: *reference
+    image: local/fastplms-reference-biohub-esm:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-biohub-esm}
+
+  reference-boltz2:
+    <<: *reference
+    image: local/fastplms-reference-boltz2:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-boltz2}
+
+  reference-dplm:
+    <<: *reference
+    image: local/fastplms-reference-dplm:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-dplm}
+
+  reference-e1:
+    <<: *reference
+    image: local/fastplms-reference-e1:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-e1}
+
+  reference-esm2:
+    <<: *reference
+    image: local/fastplms-reference-esm2:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-esm2}
+
+  reference-esmfold:
+    <<: *reference
+    image: local/fastplms-reference-esmfold:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-esmfold}
+
+  reference-esmfold2:
+    <<: *reference
+    image: local/fastplms-reference-esmfold2:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-esmfold2}
+
+  reference-protein-ttt:
+    <<: *reference
+    image: local/fastplms-reference-protein-ttt:dev
+    build: {context: .., dockerfile: docker/Dockerfile, target: reference-protein-ttt}
+
+volumes:
+  hf-cache:
+    name: fastplms-hf-cache
+  torch-cache:
+    name: fastplms-torch-cache
+  xdg-cache:
+    name: fastplms-xdg-cache
