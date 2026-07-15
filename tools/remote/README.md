@@ -34,10 +34,11 @@ local Hub artifact offline, and compares each manifest-declared representative
 architecture with its live pinned official implementation. Official-generated
 goldens cover the remaining checkpoint matrix during this routine gate.
 
-The `compliance` suite has no runtime ceiling. It compares every supported
+The `compliance` suite has no runtime ceiling. It compares every release-gated
 sequence checkpoint with its live pinned official implementation and also runs
-the complete Boltz2, ESMFold, and four-variant ESMFold2 folding gates, including
-ESMFold2 FP8 validation.
+the complete ESMFold and four-variant ESMFold2 folding gates, including ESMFold2
+FP8 validation. Boltz2 remains provisional and runs only in the focused
+`structure`, `artifact`, and `benchmark` tiers.
 
 The focused `structure` suite first produces isolated Meta ESMFold, Boltz2, and
 Biohub ESMFold2 reference bundles, then produces candidate bundles from the same

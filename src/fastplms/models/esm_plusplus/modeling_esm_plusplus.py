@@ -60,10 +60,17 @@ class ESMplusplusConfig(PretrainedConfig):
         problem_type: str | None = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
+        classifier_dropout: float = 0.1,
         attn_backend: str | None = None,
+        pad_token_id: int = 1,
+        mask_token_id: int = 32,
         **kwargs,
     ):
-        super().__init__(**kwargs)
+        super().__init__(
+            pad_token_id=pad_token_id,
+            mask_token_id=mask_token_id,
+            **kwargs,
+        )
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_attention_heads = num_attention_heads
@@ -72,6 +79,7 @@ class ESMplusplusConfig(PretrainedConfig):
         self.problem_type = problem_type
         self.dropout = dropout
         self.initializer_range = initializer_range
+        self.classifier_dropout = classifier_dropout
         self.tie_word_embeddings = False
         self.attn_backend = attn_backend
 
@@ -152,9 +160,13 @@ class RotaryEmbedding(torch.nn.Module):
         self._cos_k_cached: torch.Tensor | None = None
         self._sin_k_cached: torch.Tensor | None = None
 
-    def reset_parameters(self):
-        """Reset the parameters of the embedding."""
-        if "inv_freq" in self._buffers and isinstance(self._buffers["inv_freq"], torch.Tensor):
+    def reset_parameters(self, device: torch.device | str | None = None):
+        """Rebuild the non-persistent frequency buffers on ``device``."""
+        if device is not None:
+            buffer_device = torch.device(device)
+        elif "inv_freq" in self._buffers and isinstance(
+            self._buffers["inv_freq"], torch.Tensor
+        ):
             buffer_device = self._buffers["inv_freq"].device
         else:
             buffer_device = self.device
@@ -168,24 +180,27 @@ class RotaryEmbedding(torch.nn.Module):
         self.register_buffer("scale", scale)
 
     def _compute_inv_freq(self, device: torch.device | None = None) -> torch.Tensor:
-        """Compute inverse frequency bands.
-
-        Always computes on CPU then moves to the requested device. This matches
-        native Biohub ESMC, which computes inv_freq on CPU at
-        `__init__` and migrates via `.to(device)`. Computing directly on GPU
-        gives a ~3.7e-9 bit-level difference in inv_freq (fp32 transcendental
-        precision differs between CPU and GPU), which compounds through the 30
-        attention layers to ~1e-3 mse divergence from native at
-        `hidden_states[-2]`. The exact cache contract is covered by
-        `tests/release/test_esmplusplus_source_independence.py`.
-        """
-        cpu_inv_freq = 1 / (
+        """Compute inverse frequency bands on their execution device."""
+        return 1 / (
             self.base
-            ** (torch.arange(0, self.dim, 2, device="cpu", dtype=torch.float32) / self.dim)
+            ** (
+                torch.arange(0, self.dim, 2, device=device, dtype=torch.float32)
+                / self.dim
+            )
         )
-        if device is not None and torch.device(device).type != "cpu":
-            return cpu_inv_freq.to(device)
-        return cpu_inv_freq
+
+    def _apply(self, fn, recurse: bool = True):
+        """Move the module, then regenerate device-specific RoPE frequencies."""
+        if self.inv_freq.is_meta:
+            self.reset_parameters(device="cpu")
+        result = super()._apply(fn, recurse=recurse)
+        self.register_buffer(
+            "inv_freq",
+            self._compute_inv_freq(self.inv_freq.device),
+            persistent=False,
+        )
+        self._clear_cache()
+        return result
 
     def _cache_is_current(
         self,
@@ -252,13 +267,10 @@ class RotaryEmbedding(torch.nn.Module):
         Returns:
             Tuple of rotated query and key tensors
         """
-        # NOTE: do NOT recompute inv_freq here if device has changed. The native
-        # ESMC implementation computes inv_freq once on CPU at __init__ and
-        # relies on PyTorch's `.to(device)` to migrate the buffer. Recomputing
-        # the values directly on GPU gives a ~3.7e-9 bit-level difference vs the
-        # CPU-computed-then-moved values due to fp32 transcendental precision,
-        # which compounds through 30 attention layers to ~1e-3 mse divergence
-        # from native at `hidden_states[-2]`; the release test gates both paths.
+        # The pinned Biohub Transformers oracle recomputes inverse frequencies
+        # on the execution device. CPU and CUDA differ by about one FP32 ULP in
+        # some bands, which is immaterial in BF16 but accumulates measurably in
+        # deep FP32 execution.
         self._update_cos_sin_cache(q.shape[1], device=q.device, dtype=q.dtype)
         assert self._cos_cached is not None
         assert self._sin_cached is not None
@@ -486,7 +498,12 @@ class MultiHeadAttention(nn.Module):
             mask_semantics="padding",
         )
         context_heads = fn(
-            query_heads, key_heads, value_heads, block_mask=flex_block_mask, scale=self.scale
+            query_heads,
+            key_heads,
+            value_heads,
+            block_mask=flex_block_mask,
+            scale=self.scale,
+            kernel_options={"PRESCALE_QK": True, "BLOCK_N": 32},
         )
         return rearrange(context_heads, "b h s d -> b s (h d)"), None
 
@@ -643,7 +660,16 @@ class TransformerStack(nn.Module):
         attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
 
-        if sequence_id is None:
+        if sequence_id is None and attention_mask is not None:
+            attention_mask_2d, attention_mask_4d, flex_block_mask = (
+                self._sequence_id_attention_masks(
+                    sequence_id=attention_mask.to(device=x.device, dtype=torch.bool),
+                    batch_size=x.shape[0],
+                    seq_len=x.shape[1],
+                    device=x.device,
+                )
+            )
+        elif sequence_id is None:
             attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
                 effective_backend=self.attention_backend,
                 batch_size=x.shape[0],
@@ -663,11 +689,13 @@ class TransformerStack(nn.Module):
                 )
             )
 
-        if output_hidden_states and esmfold2_hidden_states:
-            assert hidden_states is not None
-            hidden_states += (x,)
-
-        for block_index, block in enumerate(self.blocks):
+        for block in self.blocks:
+            if output_hidden_states:
+                assert hidden_states is not None
+                # Biohub Transformers records the input to each block followed
+                # by the final normalized state. This gives n_layers + 1 states
+                # and, for ESMC-6B, the 81-state order consumed by ESMFold2.
+                hidden_states += (x,)
             if self.gradient_checkpointing and self.training:
                 x, attn_weights, s_max = self._gradient_checkpointing_func(
                     block.__call__,
@@ -690,10 +718,6 @@ class TransformerStack(nn.Module):
 
             if attentions is not None:
                 attentions += (attn_weights,)
-            if output_hidden_states:
-                assert hidden_states is not None
-                if not esmfold2_hidden_states or block_index < len(self.blocks) - 1:
-                    hidden_states += (x,)
             if full_s_max is not None:
                 full_s_max += (s_max,)
 
@@ -720,16 +744,17 @@ class TransformerStack(nn.Module):
         )
         if sequence_id.dtype == torch.bool:
             attention_mask_2d = sequence_id
+            # Biohub's boolean single-chain form groups biological positions
+            # together and padding positions together. Padding queries remain
+            # finite without allowing their states to enter residue attention.
             attention_mask_4d = (
-                attention_mask_2d[:, None, :, None] & attention_mask_2d[:, None, None, :]
+                sequence_id[:, None, :, None] == sequence_id[:, None, None, :]
             )
         else:
             attention_mask_2d = sequence_id != -1
             attention_mask_4d = (
-                attention_mask_2d[:, None, :, None]
-                & attention_mask_2d[:, None, None, :]
-                & (sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)).unsqueeze(1)
-            )
+                sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)
+            ).unsqueeze(1)
 
         if self.attention_backend.is_flash:
             assert sequence_id.dtype == torch.bool, (
@@ -746,14 +771,19 @@ class TransformerStack(nn.Module):
             if sequence_id.dtype == torch.bool:
 
                 def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-                    return sequence_id[batch_idx, q_idx] & sequence_id[batch_idx, kv_idx]
+                    del head_idx
+                    return (
+                        sequence_id[batch_idx, q_idx]
+                        == sequence_id[batch_idx, kv_idx]
+                    )
 
             else:
 
                 def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+                    del head_idx
                     q_id = sequence_id[batch_idx, q_idx]
                     kv_id = sequence_id[batch_idx, kv_idx]
-                    return (q_id != -1) & (q_id == kv_id)
+                    return q_id == kv_id
 
             flex_block_mask = create_block_mask(
                 mask_mod,
@@ -898,6 +928,8 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
+        if attention_mask is None:
+            attention_mask = input_ids.ne(self.config.pad_token_id)
         x = self.embed(input_ids)
         output_hidden_states = store_all_hidden_states or hidden_state_index != -1
         output = self.transformer(
@@ -932,6 +964,9 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         assert not (input_ids is not None and inputs_embeds is not None), (
             "You cannot specify both input_ids and inputs_embeds at the same time"
         )
+
+        if attention_mask is None and sequence_id is None and input_ids is not None:
+            attention_mask = input_ids.ne(self.config.pad_token_id)
 
         x = self.embed(input_ids) if inputs_embeds is None else inputs_embeds
 
@@ -998,6 +1033,8 @@ class ESMplusplusForMaskedLM(
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
+        if attention_mask is None:
+            attention_mask = input_ids.ne(self.config.pad_token_id)
         x = self.embed(input_ids)
         output_hidden_states = store_all_hidden_states or hidden_state_index != -1
         output = self.transformer(
@@ -1031,6 +1068,15 @@ class ESMplusplusForMaskedLM(
         compute_logits: bool = True,
         **kwargs,
     ) -> ESMplusplusOutput:
+        assert input_ids is not None or inputs_embeds is not None, (
+            "You have to specify either input_ids or inputs_embeds"
+        )
+        assert not (input_ids is not None and inputs_embeds is not None), (
+            "You cannot specify both input_ids and inputs_embeds at the same time"
+        )
+        if attention_mask is None and sequence_id is None and input_ids is not None:
+            attention_mask = input_ids.ne(self.config.pad_token_id)
+
         x = self.embed(input_ids) if inputs_embeds is None else inputs_embeds
 
         output = self.transformer(

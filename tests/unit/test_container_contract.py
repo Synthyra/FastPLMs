@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 from fastplms.registry import get_model_registry
@@ -220,3 +221,16 @@ def test_kernel_lock_is_available_to_source_and_artifact_images() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     assert dockerfile.count("COPY pyproject.toml uv.lock kernels.lock README.md LICENSE ./") == 2
     assert "!kernels.lock" in DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
+
+
+def test_candidate_validation_extra_supports_transformers_device_map() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dev = project["project"]["optional-dependencies"]["dev"]
+    assert "accelerate>=1.10,<2" in dev
+
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    candidate = dockerfile.split("FROM source AS candidate", maxsplit=1)[1].split(
+        "FROM candidate AS candidate-structure",
+        maxsplit=1,
+    )[0]
+    assert "--extra dev" in candidate

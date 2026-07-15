@@ -140,6 +140,36 @@ def _preferred_auto_class(spec: ModelSpec) -> str:
     return sorted(spec.auto_map)[0]
 
 
+def _family_usage_notes(spec: ModelSpec) -> str:
+    if spec.family.id != "esmfold2":
+        return ""
+    return """\
+## Learned representation and FP8
+
+ESMFold2 combines the ordered 81 ESMC-6B states `H: (b, l, 81, 2560)`
+with the checkpoint's learned projection:
+
+```python
+Z = model.project_esmc_hidden_states(H)  # Z: (b, l, 256)
+```
+
+`model.embed_dataset(..., full_embeddings=True)` returns one residue tensor
+with shape `(l, 256)` per single-chain input. Residue-statistic poolers are
+supported; `cls`, `parti`, complexes, ligands, MSAs, and chain-separated
+embedding inputs are rejected.
+
+Set `esmc_precision` to `auto`, `bf16`, `fp32`, or `fp8` when loading. The
+runtime can be rebuilt explicitly with
+`model.reload_esmc(precision=..., device=...)`; `model.esmc_precision_status`
+records the requested and resolved precision, reason, device, and Transformer
+Engine version. `auto` uses FP8 only
+for a direct load onto a supported CUDA device. Explicit `fp8` raises when the
+path is unavailable. Canonical BF16 weights are retained, and transient
+Transformer Engine quantization state is never serialized.
+
+"""
+
+
 def render_model_card(spec: ModelSpec) -> str:
     """Render one checkpoint card whose claims are limited to manifest evidence."""
 
@@ -151,6 +181,7 @@ def render_model_card(spec: ModelSpec) -> str:
     tokenizer_load = ""
     tokenizer_provenance = ""
     notes = ""
+    family_usage = _family_usage_notes(spec)
     if spec.family.tokenizer_class is not None:
         tokenizer_load = f"""
 The paired custom tokenizer is loaded through the same pinned artifact:
@@ -214,7 +245,7 @@ Leave attention unspecified for the Transformers default or request one of
 The BF16 execution policy is `{spec.family.bf16_execution}`:
 {_bf16_execution_description(spec.family)}.
 
-{notes}## Provenance
+{family_usage}{notes}## Provenance
 
 - FastPLMs checkpoint: `{spec.fast.repo_id}@{spec.fast.revision}`
 - Official checkpoint: `{spec.official.repo_id}@{spec.official.revision}`
@@ -233,11 +264,12 @@ release blocker.
 
 ## Validation boundary
 
-The release contract compares semantic configuration, tokenizer behavior, state
-keys, shapes, dtypes, values, aliases, and representative inference with the
-pinned official implementation. This metadata does not by itself claim that a
-particular build passed, that one backend is faster, or that an output has
-biological or therapeutic validity.
+For tiers declared by the manifest, the release contract compares applicable
+semantic configuration, tokenizer behavior, state keys, shapes, dtypes,
+values, aliases, and representative inference with the pinned official
+implementation. This metadata does not by itself claim that a particular build
+passed, that one backend is faster, or that an output has biological or
+therapeutic validity.
 
 ## License
 

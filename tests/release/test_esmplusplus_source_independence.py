@@ -170,11 +170,23 @@ def test_reimplemented_scaled_rotary_cache_is_exact(dtype: torch.dtype) -> None:
 
 
 @pytest.mark.gpu
-def test_reimplemented_rotary_is_exact_in_h100_bf16() -> None:
-    assert torch.cuda.is_available(), "ESM++ BF16 rotary parity requires CUDA"
+def test_reimplemented_rotary_matches_transformers_cuda_policy() -> None:
+    assert torch.cuda.is_available(), "ESM++ rotary parity requires CUDA"
     upstream_class = _load_upstream_rotary().RotaryEmbedding
     local = FastRotaryEmbedding(dim=64).eval().to("cuda")
     upstream = upstream_class(dim=64).eval().to("cuda")
+
+    # The original Biohub SDK migrates CPU-computed frequencies. The pinned
+    # Biohub Transformers oracle instead recomputes them on CUDA after a device
+    # move. Reproduce that public AutoModel policy on the independent upstream
+    # rotary implementation before comparing outputs.
+    cpu_migrated = upstream.inv_freq.clone()
+    cuda_native = upstream._compute_inv_freq(torch.device("cuda"))
+    assert not torch.equal(cpu_migrated, cuda_native)
+    upstream.register_buffer("inv_freq", cuda_native, persistent=False)
+    upstream._seq_len_cached = 0
+    upstream._cos_cached = None
+    upstream._sin_cached = None
 
     generator = torch.Generator(device="cuda").manual_seed(29)
     q = torch.randn((3, 65, 8, 64), generator=generator, device="cuda", dtype=torch.bfloat16)
@@ -182,7 +194,7 @@ def test_reimplemented_rotary_is_exact_in_h100_bf16() -> None:
     local_q, local_k = local(q, k)
     upstream_q, upstream_k = upstream(q, k)
 
-    assert torch.equal(local.inv_freq, upstream.inv_freq)
+    assert torch.equal(local.inv_freq, cuda_native)
     assert torch.equal(local._cos_cached, upstream._cos_cached)
     assert torch.equal(local._sin_cached, upstream._sin_cached)
     assert torch.equal(local_q, upstream_q)

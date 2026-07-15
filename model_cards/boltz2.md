@@ -38,6 +38,10 @@ Leave attention unspecified for the Transformers default or request one of
 The BF16 execution policy is `fp32_parameters_autocast`:
 FP32 parameters with CUDA BF16 autocast.
 
+## Notes and limitations
+
+Boltz2 is provisional in FastPLMs 1.0. Exact configuration, the declared inference-core state, feature preparation, and seeded execution remain tested, but native-environment BF16 end-to-end inference currently exceeds the fixed numerical-equivalence limits. FastPLMs therefore does not claim official inference equivalence for this checkpoint yet. Work on that numerical gap continues independently of the ESM++ and ESMFold2 release gates.
+
 ## Provenance
 
 - FastPLMs checkpoint: `Synthyra/Boltz2@3b148fc5efea109c065ec82ba8683d024de7134e`
@@ -48,7 +52,7 @@ FP32 parameters with CUDA BF16 autocast.
 - BF16 execution: `fp32_parameters_autocast`
 - Pinned upstreams: `boltz`
 - Reference container: `reference-boltz2`
-- Release tiers: `check`, `compliance`, `structure`, `artifact`, `benchmark`
+- Release tiers: `structure`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
 The local artifact records exact file identities, conversion provenance, source
@@ -57,11 +61,12 @@ release blocker.
 
 ## Validation boundary
 
-The release contract compares semantic configuration, tokenizer behavior, state
-keys, shapes, dtypes, values, aliases, and representative inference with the
-pinned official implementation. This metadata does not by itself claim that a
-particular build passed, that one backend is faster, or that an output has
-biological or therapeutic validity.
+For tiers declared by the manifest, the release contract compares applicable
+semantic configuration, tokenizer behavior, state keys, shapes, dtypes,
+values, aliases, and representative inference with the pinned official
+implementation. This metadata does not by itself claim that a particular build
+passed, that one backend is faster, or that an output has biological or
+therapeutic validity.
 
 ## License
 

@@ -510,6 +510,16 @@ def test_esmfold2_support_is_exactly_the_approved_four() -> None:
     }
 
 
+def test_boltz2_is_explicitly_provisional() -> None:
+    registry = load_model_registry()
+    spec = registry["boltz2"]
+    assert set(spec.family.test_tiers) == {"structure", "artifact", "benchmark"}
+    assert "check" not in spec.family.test_tiers
+    assert "compliance" not in spec.family.test_tiers
+    assert "provisional in FastPLMs 1.0" in spec.notes
+    assert "does not claim official inference equivalence" in spec.notes
+
+
 def test_esm2_native_oracle_assets_are_hash_pinned() -> None:
     registry = load_model_registry()
     for model in registry.by_family("esm2"):

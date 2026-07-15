@@ -150,6 +150,23 @@ precompiled. Core FastPLMs imports remain independent of Transformer Engine
 because the optional runtime is loaded only when the precision policy needs its
 capability probe or execution context.
 
+## Validation record
+
+On July 15, 2026, the locked H100 PCIe environment passed all 15 focused
+ESMFold2 release tests with no failures, errors, or skips. The run covered all
+four variants, official-versus-local BF16 folding, FP8-versus-BF16 folding,
+three fresh reload cycles per variant, automatic FP8 selection, strict
+unavailable-device behavior, and the CUDA 13 Transformer Engine stack.
+
+Official-versus-local BF16 C-alpha RMSD ranged from `1.65e-6` to `2.86e-6`
+angstrom, lDDT-C-alpha was `1.0`, and confidence-output errors were zero. Across
+the four FP8 variants, the worst observed values were C-alpha RMSD `0.217190`
+angstrom, lDDT-C-alpha `0.994244`, pLDDT MAE `0.004952`, PAE MAE `0.133353`
+angstrom, pTM error `0.005495`, and mean probability Jensen-Shannon divergence
+`0.000346`. Each value meets its engineering target. This record applies only
+to the pinned checkpoint revisions and locked H100 environment documented by
+the manifest.
+
 ## Gradient-enabled paths
 
 Test-time training and other gradient-enabled ESMC execution use canonical BF16

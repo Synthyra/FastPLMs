@@ -322,7 +322,7 @@ state_transform = "boltz2_inference_core_v1"
 conversion_provenance = "Input: the pinned official Boltz2 checkpoint. Transformation: select and map the supported Boltz2 inference-core parameters with boltz2_inference_core_v1. Output: the pinned Synthyra Boltz2 checkpoint. Validation: release parity covers state identity for the declared subset, feature preparation, seeded inference, and structure outputs. Limitation: this record does not claim support for undeclared upstream training components."
 representative = "boltz2"
 documentation = "docs/models.md#boltz2"
-test_tiers = ["check", "compliance", "structure", "artifact", "benchmark"]
+test_tiers = ["structure", "artifact", "benchmark"]
 runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "models/boltz"]
 auto_map = { AutoConfig = "fastplms.models.boltz.modeling_boltz2.Boltz2Config", AutoModel = "fastplms.models.boltz.modeling_boltz2.Boltz2Model" }
 
@@ -1024,6 +1024,7 @@ id = "boltz2"
 family = "boltz2"
 size_category = "structure"
 generation_contract = "not_applicable"
+notes = "Boltz2 is provisional in FastPLMs 1.0. Exact configuration, the declared inference-core state, feature preparation, and seeded execution remain tested, but native-environment BF16 end-to-end inference currently exceeds the fixed numerical-equivalence limits. FastPLMs therefore does not claim official inference equivalence for this checkpoint yet. Work on that numerical gap continues independently of the ESM++ and ESMFold2 release gates."
 fast_repo = "Synthyra/Boltz2"
 fast_revision = "3b148fc5efea109c065ec82ba8683d024de7134e"
 fast_files = [

@@ -97,6 +97,9 @@ _SEMANTIC_PATHS: dict[str, tuple[str, ...]] = {
     "eos_token_id": ("config.eos_token_id", "eos_idx"),
     "mask_token_id": ("config.mask_token_id", "mask_idx"),
     "token_dropout": ("config.token_dropout", "token_dropout"),
+    "initializer_range": ("config.initializer_range",),
+    "classifier_dropout": ("config.classifier_dropout",),
+    "tie_word_embeddings": ("config.tie_word_embeddings",),
 }
 
 

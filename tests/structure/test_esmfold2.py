@@ -153,17 +153,45 @@ def test_esmplusplus_esmfold2_hidden_state_layout() -> None:
     assert len(public_output.hidden_states) == config.num_hidden_layers + 1
     assert len(esmfold2_output.hidden_states) == config.num_hidden_layers + 1
     torch.testing.assert_close(
-        esmfold2_output.hidden_states[0],
+        public_output.hidden_states[0],
         model.embed(input_ids),
         rtol=0.0,
         atol=0.0,
     )
-    torch.testing.assert_close(
-        esmfold2_output.hidden_states[-1],
-        public_output.hidden_states[-1],
-        rtol=0.0,
-        atol=0.0,
+    for public_state, esmfold2_state in zip(
+        public_output.hidden_states,
+        esmfold2_output.hidden_states,
+        strict=True,
+    ):
+        torch.testing.assert_close(public_state, esmfold2_state, rtol=0.0, atol=0.0)
+
+
+def test_esmplusplus_config_has_official_special_token_ids() -> None:
+    config = ESMplusplusConfig()
+
+    assert config.pad_token_id == 1
+    assert config.mask_token_id == 32
+    assert config.classifier_dropout == 0.1
+    assert config.initializer_range == 0.02
+    assert config.tie_word_embeddings is False
+
+
+def test_esmplusplus_boolean_padding_keeps_eager_outputs_finite() -> None:
+    config = ESMplusplusConfig(
+        vocab_size=16,
+        hidden_size=16,
+        num_attention_heads=4,
+        num_hidden_layers=1,
+        attn_backend="eager",
     )
+    model = ESMplusplusModel(config).eval()
+    input_ids = torch.tensor([[0, 3, 1, 1]], dtype=torch.long)
+    sequence_id = torch.tensor([[True, True, False, False]])
+
+    with torch.no_grad():
+        output = model(input_ids=input_ids, sequence_id=sequence_id)
+
+    assert torch.isfinite(output.last_hidden_state).all()
 
 
 def test_esmplusplus_masked_lm_can_skip_logits() -> None:

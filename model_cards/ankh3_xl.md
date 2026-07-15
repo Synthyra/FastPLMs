@@ -61,11 +61,12 @@ release blocker.
 
 ## Validation boundary
 
-The release contract compares semantic configuration, tokenizer behavior, state
-keys, shapes, dtypes, values, aliases, and representative inference with the
-pinned official implementation. This metadata does not by itself claim that a
-particular build passed, that one backend is faster, or that an output has
-biological or therapeutic validity.
+For tiers declared by the manifest, the release contract compares applicable
+semantic configuration, tokenizer behavior, state keys, shapes, dtypes,
+values, aliases, and representative inference with the pinned official
+implementation. This metadata does not by itself claim that a particular build
+passed, that one backend is faster, or that an output has biological or
+therapeutic validity.
 
 ## License
 

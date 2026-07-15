@@ -74,9 +74,18 @@ they do not probe or fall back to an undeclared precision.
 On the locked H100 environment, FlashAttention 2 resolves an exact PyTorch
 2.13, CUDA 13, C++11 ABI, x86-64 artifact. FlashAttention 3 resolves a CUDA 13
 stable-ABI artifact. Both produce finite dense and mixed-padding outputs and
-match the shared SDPA reference at the fixed engineering target for ESM2 and
-ESM++. DPLM advertises FlashAttention 3 only; its FlashAttention 2 result
-remains outside the engineering target.
+meet the fixed engineering target for ESM2. For representative ESM++ BF16
+inference, FlashAttention 2 has a worst hidden-state relative L2 error of
+`0.0103531`, and FlashAttention 3 has an error of `0.0103972`. Both remain below
+the `0.03` hard limit but above the required `0.01` engineering target, so the
+current ESM++ declaration blocks the 1.0 release. DPLM advertises
+FlashAttention 3 only; its FlashAttention 2 result remains outside the
+engineering target.
+
+The same ESM++ run measures `0.0101378` for eager attention and `0.0100097` for
+Flex Attention. Exact configuration, tokenizer, state, alias, default BF16,
+FP32 eager, FP32 and BF16 SDPA, and FP32 Flex contracts pass. The release rule
+does not round these BF16 misses down or replace a requested backend with SDPA.
 
 DPLM advertises eager, SDPA, Flex Attention, and FlashAttention 3. Its pinned
 official BF16 contract keeps parameter storage in FP32 and uses CUDA BF16

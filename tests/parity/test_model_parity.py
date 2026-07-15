@@ -134,11 +134,12 @@ def _load_fast(
 ) -> nn.Module:
     # ANKH parity is the official encoder contract. Its masked-LM class is a
     # separately named FastPLMs extension and is not presented as upstream-equivalent.
-    auto_class = (
-        AutoModel
+    auto_class_name = (
+        "AutoModel"
         if spec.family.id == "ankh" or "AutoModelForMaskedLM" not in spec.auto_map
-        else AutoModelForMaskedLM
+        else "AutoModelForMaskedLM"
     )
+    auto_class = AutoModel if auto_class_name == "AutoModel" else AutoModelForMaskedLM
     artifact_root = os.environ.get("FASTPLMS_CANDIDATE_ARTIFACTS")
     if artifact_root:
         repository_name = spec.fast.repo_id.split("/", maxsplit=1)[-1]
@@ -147,8 +148,20 @@ def _load_fast(
             raise FileNotFoundError(
                 f"Candidate compliance artifact is missing for {spec.id}: {model_source}"
             )
-        load_kwargs: dict[str, Any] = {
-            "trust_remote_code": True,
+        # Native compliance already imports the current package to read the
+        # typed manifest. Loading the generated remote-code bridge in this same
+        # interpreter would deliberately fail its runtime-isolation guard.
+        # Resolve the manifest-declared package classes directly while keeping
+        # the artifact as the sole config, tokenizer-asset, and weight source.
+        config_path = spec.auto_map["AutoConfig"]
+        model_path = spec.auto_map[auto_class_name]
+        config_module, config_name = config_path.rsplit(".", maxsplit=1)
+        model_module, model_name = model_path.rsplit(".", maxsplit=1)
+        config_class = getattr(importlib.import_module(config_module), config_name)
+        model_class = getattr(importlib.import_module(model_module), model_name)
+        config = config_class.from_pretrained(model_source, local_files_only=True)
+        load_kwargs = {
+            "config": config,
             "local_files_only": True,
             "device_map": device,
         }
@@ -161,7 +174,8 @@ def _load_fast(
         }
     if dtype is not None:
         load_kwargs["dtype"] = dtype
-    model = auto_class.from_pretrained(model_source, **load_kwargs)
+    loader = model_class if artifact_root else auto_class
+    model = loader.from_pretrained(model_source, **load_kwargs)
     return model.eval()
 
 
@@ -498,9 +512,12 @@ def tensor_metrics(
     residue_cosines = F.cosine_similarity(valid_candidate, valid_official, dim=-1)
     residue_cosine_p01 = torch.quantile(residue_cosines, 0.01)
 
-    mask = residue_mask.unsqueeze(-1).to(dtype=torch.float32)
-    candidate_pooled = (candidate.float() * mask).sum(1) / mask.sum(1).clamp_min(1)
-    official_pooled = (official.float() * mask).sum(1) / mask.sum(1).clamp_min(1)
+    mask = residue_mask.unsqueeze(-1)
+    denominator = mask.sum(1).clamp_min(1)
+    candidate_values = candidate.float()
+    official_values = official.float()
+    candidate_pooled = torch.where(mask, candidate_values, 0.0).sum(1) / denominator
+    official_pooled = torch.where(mask, official_values, 0.0).sum(1) / denominator
     pooled_cosine_min = F.cosine_similarity(candidate_pooled, official_pooled, dim=-1).min()
     return TensorMetrics(
         relative_l2=float(relative_l2),
@@ -642,6 +659,35 @@ def _assert_outputs(
         )
 
 
+def _assert_esmc_sdpa_exact(
+    fast_output: object,
+    official_output: object,
+    context: str,
+) -> None:
+    """Require exact ESMC SDPA equality, including special and padding tokens."""
+
+    fast_hidden = _hidden_state_tuple(fast_output)
+    official_hidden = _hidden_state_tuple(official_output)
+    assert len(fast_hidden) == len(official_hidden)
+    for layer, (candidate, official) in enumerate(
+        zip(fast_hidden, official_hidden, strict=True)
+    ):
+        assert torch.equal(candidate, official), (
+            f"{context}:layer={layer}: full hidden states are not exact"
+        )
+
+    assert torch.equal(_last_hidden(fast_output), _last_hidden(official_output)), (
+        f"{context}: full last_hidden_state is not exact"
+    )
+    fast_logits = getattr(fast_output, "logits", None)
+    official_logits = getattr(official_output, "logits", None)
+    if fast_logits is not None or official_logits is not None:
+        assert fast_logits is not None and official_logits is not None
+        assert torch.equal(fast_logits, official_logits), (
+            f"{context}: full logits are not exact"
+        )
+
+
 def _run_inference_contract(
     spec: ModelSpec,
     dtype: torch.dtype,
@@ -696,6 +742,12 @@ def _run_inference_contract(
         contract,
         f"{spec.id}:{dtype_name}:{backend or 'default'}",
     )
+    if spec.family.architecture == "ESMC" and backend in (None, "sdpa"):
+        _assert_esmc_sdpa_exact(
+            fast_output,
+            official_output,
+            f"{spec.id}:{dtype_name}:{backend or 'default'}",
+        )
     del fast, reference, fast_output, official_output
     gc.collect()
     torch.cuda.empty_cache()

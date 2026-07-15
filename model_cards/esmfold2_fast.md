@@ -38,6 +38,29 @@ Leave attention unspecified for the Transformers default or request one of
 The BF16 execution policy is `fp32_parameters_autocast`:
 FP32 parameters with CUDA BF16 autocast.
 
+## Learned representation and FP8
+
+ESMFold2 combines the ordered 81 ESMC-6B states `H: (b, l, 81, 2560)`
+with the checkpoint's learned projection:
+
+```python
+Z = model.project_esmc_hidden_states(H)  # Z: (b, l, 256)
+```
+
+`model.embed_dataset(..., full_embeddings=True)` returns one residue tensor
+with shape `(l, 256)` per single-chain input. Residue-statistic poolers are
+supported; `cls`, `parti`, complexes, ligands, MSAs, and chain-separated
+embedding inputs are rejected.
+
+Set `esmc_precision` to `auto`, `bf16`, `fp32`, or `fp8` when loading. The
+runtime can be rebuilt explicitly with
+`model.reload_esmc(precision=..., device=...)`; `model.esmc_precision_status`
+records the requested and resolved precision, reason, device, and Transformer
+Engine version. `auto` uses FP8 only
+for a direct load onto a supported CUDA device. Explicit `fp8` raises when the
+path is unavailable. Canonical BF16 weights are retained, and transient
+Transformer Engine quantization state is never serialized.
+
 ## Provenance
 
 - FastPLMs checkpoint: `Synthyra/ESMFold2-Fast@407875bfcaa42552bfcb25acd67ee1888b790170`
@@ -57,11 +80,12 @@ release blocker.
 
 ## Validation boundary
 
-The release contract compares semantic configuration, tokenizer behavior, state
-keys, shapes, dtypes, values, aliases, and representative inference with the
-pinned official implementation. This metadata does not by itself claim that a
-particular build passed, that one backend is faster, or that an output has
-biological or therapeutic validity.
+For tiers declared by the manifest, the release contract compares applicable
+semantic configuration, tokenizer behavior, state keys, shapes, dtypes,
+values, aliases, and representative inference with the pinned official
+implementation. This metadata does not by itself claim that a particular build
+passed, that one backend is faster, or that an output has biological or
+therapeutic validity.
 
 ## License
 

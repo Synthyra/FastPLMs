@@ -690,6 +690,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "accelerate" },
     { name = "build" },
     { name = "mypy" },
     { name = "pytest" },
@@ -742,6 +743,7 @@ validation = [
 
 [package.metadata]
 requires-dist = [
+    { name = "accelerate", marker = "extra == 'dev'", specifier = ">=1.10,<2" },
     { name = "accelerate", marker = "extra == 'fp8'", specifier = ">=1.10,<2" },
     { name = "accelerate", marker = "extra == 'structure'", specifier = ">=1.10,<2" },
     { name = "accelerate", marker = "extra == 'train'", specifier = ">=1.10,<2" },

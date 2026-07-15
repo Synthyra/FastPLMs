@@ -127,13 +127,15 @@ def test_compliance_runs_native_services_before_candidate_comparison() -> None:
         assert service in suite.bake_targets
         assert service in commands
     assert "references" not in suite.bake_targets
-    for service in ("reference-boltz2", "reference-esmfold", "reference-esmfold2"):
+    for service in ("reference-esmfold", "reference-esmfold2"):
         assert service in suite.bake_targets
         assert service in commands
+    assert "reference-boltz2" not in suite.bake_targets
+    assert "tests.structure.support.boltz2_bundle" not in commands
     command = " ".join(suite.command)
     assert " fp8 " in f" {command} "
     assert "tests/parity/test_native_results.py" in command
-    assert "tests/structure/test_boltz2_folding_compliance.py" in command
+    assert "tests/structure/test_boltz2_folding_compliance.py" not in command
     assert "tests/structure/test_esmfold_folding_compliance.py" in command
     assert "tests/structure/test_esmfold2_folding_compliance.py" in command
     assert "tests/structure/test_esmfold2_fp8_compliance.py" in command

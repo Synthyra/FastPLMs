@@ -27,6 +27,7 @@ from tests.parity.test_model_parity import (
     EDGE_SEQUENCES,
     FP32_CONTRACT,
     _alias_groups,
+    _assert_esmc_sdpa_exact,
     _assert_outputs,
     _load_fast,
     _semantic_config,
@@ -214,6 +215,12 @@ def _run_native_inference(
         contract,
         f"{spec.id}:{precision}:{backend or 'default'}:native",
     )
+    if spec.family.architecture == "ESMC" and backend in (None, "sdpa"):
+        _assert_esmc_sdpa_exact(
+            candidate,
+            official,
+            f"{spec.id}:{precision}:{backend or 'default'}:native",
+        )
     del fast, candidate, official, tensors
     gc.collect()
     torch.cuda.empty_cache()

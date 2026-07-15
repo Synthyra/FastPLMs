@@ -40,6 +40,16 @@ loading, shared embeddings, and residue-aware pooling. It is also the language
 model used by ESMFold2. The model records the resolved attention implementation
 and rejects an unavailable requested kernel.
 
+On the locked H100 stack, exact semantic configuration, tokenizer, state,
+alias, default BF16, and SDPA contracts pass for the three checkpoints. The
+representative small checkpoint remains a FastPLMs 1.0 release blocker for
+deep BF16 parity: eager has relative L2 error `0.0101378`, Flex Attention has
+`0.0100097`, FlashAttention 2 has `0.0103531`, and FlashAttention 3 has
+`0.0103972`, against a fixed engineering target of `0.01`. Each passes the
+`0.03` hard limit, but the first implementation is required to meet the
+engineering target. Larger backend sweeps are not presented as passed while
+the representative checkpoint fails.
+
 ### ESM3
 
 ESM3 retains sequence, structure, and function tracks and generation helpers
@@ -218,6 +228,13 @@ chemistry or plotting dependency enters the core package.
 Boltz2 retains FP32 parameters and runs supported CUDA BF16 structure inference
 inside autocast. Static BF16 parameter loading is not its declared compliance
 or artifact-validation path.
+
+Boltz2 is provisional in FastPLMs 1.0. Exact configuration, the declared
+inference-core state, feature preparation, and seeded execution remain covered,
+but native-environment BF16 end-to-end inference currently exceeds the fixed
+numerical-equivalence limits. FastPLMs does not yet claim official inference
+equivalence for Boltz2. Its ongoing structure tests remain available without
+blocking the ESM++ and ESMFold2 release gates.
 
 ## Test-time training
 

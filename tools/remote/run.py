@@ -314,6 +314,15 @@ _RUN_STRUCTURE_REFERENCES = (
     *_RUN_ESMFOLD2_CANDIDATES,
 )
 
+_RUN_RELEASE_STRUCTURE_REFERENCES = (
+    _PREPARE_ESMFOLD_BUNDLE,
+    *_RUN_ESMFOLD_REFERENCES,
+    *_RUN_ESMFOLD_CANDIDATES,
+    _PREPARE_ESMFOLD2_BUNDLES,
+    _RUN_ESMFOLD2_REFERENCE,
+    *_RUN_ESMFOLD2_CANDIDATES,
+)
+
 
 SUITES = {
     "check": Suite(
@@ -396,7 +405,6 @@ SUITES = {
             "reference-e1",
             "reference-dplm",
             "reference-ankh",
-            "reference-boltz2",
             "reference-esmfold",
             "reference-esmfold2",
         ),
@@ -413,7 +421,6 @@ SUITES = {
             "-m",
             "pytest",
             "tests/parity/test_native_results.py",
-            "tests/structure/test_boltz2_folding_compliance.py",
             "tests/structure/test_esmfold_folding_compliance.py",
             "tests/structure/test_esmfold2_folding_compliance.py",
             "tests/structure/test_esmfold2_fp8_compliance.py",
@@ -423,7 +430,7 @@ SUITES = {
             _BUILD_ARTIFACTS,
             _PREPARE_REFERENCES,
             *_RUN_NATIVE_REFERENCES,
-            *_RUN_STRUCTURE_REFERENCES,
+            *_RUN_RELEASE_STRUCTURE_REFERENCES,
         ),
     ),
     "structure": Suite(

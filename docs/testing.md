@@ -12,8 +12,8 @@ Every PyTorch container uses `--ipc=host` or Compose `ipc: host`.
 | Tier | Purpose |
 | --- | --- |
 | `check` | Units, imports, local integration, checkpoint goldens, local artifacts, and live architecture representatives |
-| `compliance` | Every supported checkpoint against its live pinned official implementation |
-| `structure` | ESMFold, four ESMFold2 variants, Boltz2, feature preparation, export, and seeded stochastic output |
+| `compliance` | Every checkpoint whose manifest declares the release compliance tier against its live pinned official implementation |
+| `structure` | ESMFold, four ESMFold2 variants, provisional Boltz2 diagnostics, feature preparation, export, and seeded stochastic output |
 | `feature` | DPLM generation, DPLM2 generation, ESM3 multimodal generation, TTT, E1 sequence and RAG adapters, binder flow, pooling, and conversion |
 | `artifact` | Fresh offline remote-code loading and save-reload for every local artifact |
 | `benchmark` | Separate H100 latency, throughput, padding, memory, and regression suite |
@@ -23,6 +23,12 @@ The warm-cache 15-minute duration for `check` is a planning guideline, not a
 reason to weaken coverage. `compliance` has no runtime ceiling. Missing expected
 dependencies, checkpoints, reference containers, or backends are failures, not
 skips.
+
+Boltz2 is intentionally outside the FastPLMs 1.0 `check` and `compliance`
+claims while its native-environment BF16 numerical gap remains under
+investigation. Its exact state/configuration, feature, seeded-execution,
+artifact, and benchmark diagnostics remain in the focused tiers. This is an
+explicit provisional boundary, not a relaxed tolerance or silent skip.
 
 ## Portable remote execution
 
@@ -114,7 +120,7 @@ from FastPLMs runtime images and package extras.
 
 ## Exact contracts
 
-Every checkpoint must establish:
+Every release-gated checkpoint declaring `compliance` must establish:
 
 - exact semantic configuration equality, excluding only declared packaging
   fields;

@@ -3,8 +3,8 @@
 FastPLMs provides compact, Hugging Face-compatible implementations of protein
 language and structure models. Each supported family has a pinned official
 repository under `vendor/upstream/` and a declared checkpoint conversion.
-Release workflows compare configuration, tokenization, parameters, aliases,
-and inference against that official source.
+For release-gated families, workflows compare configuration, tokenization,
+parameters, aliases, and inference against that official source.
 
 The package is intentionally small at runtime. Official repositories are parity
 oracles, not dependencies, and are never copied into runtime images or imported
@@ -70,11 +70,15 @@ CUDA 13, C++11 ABI artifact and `kernels-community/flash-attn3` at revision
 binds those immutable snapshots to exact variant hashes. At first execution,
 FastPLMs downloads and validates the compatible binary before importing it;
 `kernels download .` can populate the cache ahead of service startup. CPU or
-mixed-device Q, K, and V fail before that download. ESM2 and ESM++ advertise both after dense and
-mixed-padding H100 parity checks. DPLM advertises FlashAttention 3 only because
-FlashAttention 2 misses its engineering relative-L2 target. DPLM2 advertises
-SDPA only because all tested alternate backends miss its deep-parity engineering
-target. Source compilation is not a fallback.
+mixed-device Q, K, and V fail before that download. ESM2 advertises both pinned
+kernels after dense and mixed-padding H100 parity checks. ESM++ currently
+declares both as intended capabilities, but its representative BF16 deep-state
+errors are `0.0103531` for FlashAttention 2 and `0.0103972` for FlashAttention
+3, just above the fixed `0.01` engineering target. FastPLMs 1.0 is therefore
+blocked on those ESM++ paths. DPLM advertises FlashAttention 3 only because
+FlashAttention 2 misses the same target. DPLM2 advertises SDPA only because all
+tested alternate backends miss its deep-parity target. Source compilation is
+not a fallback.
 
 ## Embed sequences
 
@@ -153,6 +157,22 @@ paths, upstream source revisions, containers, licenses, and test coverage.
 The generated [support matrix](docs/generated/support.md) lists the current
 families and checkpoints.
 
+ESM++ and the four supported ESMFold2 variants are release-gated against their
+pinned Biohub implementations. Boltz2 remains available as a provisional
+structure implementation: configuration, declared inference-core weights,
+feature preparation, and seeded execution are tested, but native-environment
+BF16 end-to-end inference does not yet meet the fixed numerical-equivalence
+limits. FastPLMs 1.0 therefore makes no official-inference-equivalence claim for
+Boltz2, and Boltz2 does not block the ESM++ or ESMFold2 release gates.
+
+The current ESMFold2 gate passes. ESM++ exact configuration, tokenization,
+state, alias, default BF16, and SDPA contracts pass, but its representative
+BF16 eager, Flex Attention, FlashAttention 2, and FlashAttention 3 deep-state
+comparisons remain slightly above the fixed engineering target. The hard limit
+is not used to present those paths as release-ready. FastPLMs 1.0 should not be
+tagged until the ESM++ target is met or the failing capabilities are removed
+from the manifest and documentation.
+
 Initialize the exact upstream sources with:
 
 ```bash
@@ -179,8 +199,11 @@ python -m tools.remote \
 ```
 
 The release tiers are `check`, `compliance`, `structure`, `feature`, `artifact`,
-and `benchmark`. Missing required dependencies or backends fail rather than
-skip. Python 3.12 is the canonical GPU environment; `--suite python-matrix`
+and `benchmark`. Boltz2 remains in the focused `structure`, `artifact`, and
+`benchmark` tiers while its equivalence work continues; it is not part of the
+FastPLMs 1.0 `check` or `compliance` claim. Missing required dependencies or
+backends fail rather than skip. Python 3.12 is the canonical GPU environment;
+`--suite python-matrix`
 validates locked, non-editable core installs on Python 3.11, 3.13, and 3.14.
 Benchmarks run outside pytest, use pre-tokenized tensors and CUDA events, and
 retain raw samples and environment metadata. See the
