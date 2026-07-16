@@ -30,6 +30,19 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = tomllib.loads((ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8"))
 PROBE = ROOT / "tools" / "artifacts" / "offline_probe.py"
 
+_EXACT_INITIAL_AUTO_CLASS = {
+    "ankh": "AutoModelForSeq2SeqLM",
+    "boltz2": "AutoModel",
+    "dplm": "AutoModelForMaskedLM",
+    "dplm2": "AutoModelForMaskedLM",
+    "e1": "AutoModelForMaskedLM",
+    "esm2": "AutoModelForMaskedLM",
+    "esm3": "AutoModel",
+    "esm_plusplus": "AutoModelForMaskedLM",
+    "esmfold": "AutoModel",
+    "esmfold2": "AutoModel",
+}
+
 
 def _cases() -> list[Any]:
     cases: list[Any] = []
@@ -49,6 +62,7 @@ def _cases() -> list[Any]:
                     repository_name,
                     auto_class,
                     class_path,
+                    auto_class == _EXACT_INITIAL_AUTO_CLASS[family_id],
                     id=f"{model['id']}-{auto_class}",
                     marks=marks,
                 )
@@ -64,6 +78,7 @@ def _run_probe(
     class_path: str,
     implementation: str,
     output: Path,
+    exact_initial_weights: bool,
     attn_implementation: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
@@ -90,6 +105,8 @@ def _run_probe(
         command.extend(("--runtime-site-package", str(path)))
     if attn_implementation is not None:
         command.extend(("--attn-implementation", attn_implementation))
+    if not exact_initial_weights and auto_class != "AutoConfig":
+        command.append("--allow-incomplete-initial-weight-loading")
     if implementation == "package":
         command.extend(("--source-root", str(ROOT / "src")))
     environment = os.environ.copy()
@@ -224,6 +241,7 @@ def test_offline_probe_accepts_exact_weight_loading(tmp_path: Path) -> None:
 def test_offline_probe_semantic_config_excludes_artifact_identity() -> None:
     config = SimpleNamespace(
         to_dict=lambda: {
+            "auto_map": {"AutoConfig": "modeling_fastplms.ToyConfig"},
             "hidden_size": 8,
             "fastplms_model_id": "toy",
             "fastplms_checkpoint_repo_id": "organization/toy",
@@ -301,7 +319,14 @@ def test_package_probe_disables_remote_code_collection_only_while_saving(
 
 
 @pytest.mark.parametrize(
-    ("model_id", "family", "repository_name", "auto_class", "class_path"),
+    (
+        "model_id",
+        "family",
+        "repository_name",
+        "auto_class",
+        "class_path",
+        "exact_initial_weights",
+    ),
     _cases(),
 )
 def test_local_artifact_offline_autoclass_parity(
@@ -310,6 +335,7 @@ def test_local_artifact_offline_autoclass_parity(
     repository_name: str,
     auto_class: str,
     class_path: str,
+    exact_initial_weights: bool,
     tmp_path: Path,
 ) -> None:
     """Load offline, infer, save/reload, and match unchanged package source."""
@@ -326,6 +352,7 @@ def test_local_artifact_offline_autoclass_parity(
         class_path=class_path,
         implementation="artifact",
         output=artifact_output,
+        exact_initial_weights=exact_initial_weights,
     )
     assert isolated.returncode == 0, isolated.stdout + isolated.stderr
     package = _run_probe(
@@ -335,6 +362,7 @@ def test_local_artifact_offline_autoclass_parity(
         class_path=class_path,
         implementation="package",
         output=package_output,
+        exact_initial_weights=exact_initial_weights,
     )
     assert package.returncode == 0, package.stdout + package.stderr
     assert json.loads(artifact_output.read_text(encoding="utf-8")) == json.loads(
@@ -397,6 +425,7 @@ def test_local_artifact_locked_flash_backend(
         "family": family,
         "auto_class": "AutoModel",
         "class_path": class_path,
+        "exact_initial_weights": False,
         "attn_implementation": attn_implementation,
     }
     isolated = _run_probe(

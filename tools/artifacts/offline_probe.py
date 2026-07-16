@@ -127,6 +127,7 @@ def _semantic_config(config: Any) -> dict[str, Any]:
     for name in (
         "_commit_hash",
         "_name_or_path",
+        "auto_map",
         "fastplms_checkpoint_hash",
         "fastplms_checkpoint_repo_id",
         "fastplms_checkpoint_revision",
@@ -431,6 +432,7 @@ def probe(
     source_root: Path | None,
     reload_only: bool = False,
     attn_implementation: str | None = None,
+    allow_incomplete_initial_weight_loading: bool = False,
 ) -> dict[str, Any]:
     """Load, infer, save, and reload one advertised class."""
 
@@ -489,8 +491,17 @@ def probe(
                     local_files_only=True,
                     trust_remote_code=False,
                 )
-                if first != _semantic_config(reloaded):
-                    raise AssertionError("Configuration changed across save/reload")
+                second = _semantic_config(reloaded)
+                if first != second:
+                    changed = {
+                        key: {"before": first.get(key), "after": second.get(key)}
+                        for key in sorted(first.keys() | second.keys())
+                        if first.get(key) != second.get(key)
+                    }
+                    raise AssertionError(
+                        "Configuration changed across save/reload: "
+                        + json.dumps(changed, sort_keys=True, default=str)
+                    )
         return result
 
     if not torch.cuda.is_available():
@@ -498,12 +509,14 @@ def probe(
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
 
-    model = _load_model_exact(
-        auto_type,
-        artifact,
-        trust_remote_code=trust_remote_code,
+    load_kwargs = {
+        "trust_remote_code": trust_remote_code,
         **_load_kwargs(family, bf16_execution, torch, attn_implementation),
-    ).eval()
+    }
+    if allow_incomplete_initial_weight_loading:
+        model = auto_type.from_pretrained(artifact, **load_kwargs).eval()
+    else:
+        model = _load_model_exact(auto_type, artifact, **load_kwargs).eval()
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
     output = _exercise(model, artifact, family, bf16_execution, torch)
@@ -577,6 +590,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reload-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
+        "--allow-incomplete-initial-weight-loading",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--runtime-site-package",
         action="append",
         default=[],
@@ -601,6 +619,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         source_root=arguments.source_root,
         reload_only=arguments.reload_only,
         attn_implementation=arguments.attn_implementation,
+        allow_incomplete_initial_weight_loading=(
+            arguments.allow_incomplete_initial_weight_loading
+        ),
     )
     arguments.output.write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n",
