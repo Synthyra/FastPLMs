@@ -42,6 +42,10 @@ from fastplms.models.dplm2.modeling_dplm2 import (  # noqa: E402
     DPLM2Config,
     DPLM2Model,
 )
+from fastplms.models.esm2.modeling_fastesm import (  # noqa: E402
+    EsmSelfAttention,
+    FastEsmConfig,
+)
 from fastplms.registry import get_model_registry  # noqa: E402
 
 FUNCTION_BACKENDS = (
@@ -610,7 +614,7 @@ def test_transformers_513_exposes_every_advertised_handler() -> None:
             "esm_plusplus",
             "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py",
             "PreTrainedESMplusplusModel",
-            ("flash_attention_2", "flash_attention_3"),
+            ("flash_attention_2",),
         ),
         (
             "dplm",
@@ -744,6 +748,42 @@ def test_dplm_families_reject_unadvertised_attention(
             model.set_attn_implementation(implementation)
         with pytest.raises(ValueError, match="does not support"):
             model.attn_backend = implementation
+
+
+@pytest.mark.parametrize(
+    "implementation",
+    ("flex_attention", "flash_attention_2", "flash_attention_3"),
+)
+def test_esm2_training_rejects_unsupported_attention_dropout(
+    implementation: str,
+) -> None:
+    attention = EsmSelfAttention(
+        FastEsmConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.1,
+            attn_backend=implementation,
+        )
+    )
+    heads = torch.randn(1, 2, 3, 4)
+
+    with pytest.raises(RuntimeError, match=r"inference-only.*dropout.*eager or SDPA"):
+        attention._attn(heads, heads, heads)
+
+
+def test_esm2_config_normalizes_null_boundary_token_ids(tmp_path: Path) -> None:
+    config = FastEsmConfig(bos_token_id=None, eos_token_id=None)
+
+    assert config.bos_token_id == 0
+    assert config.eos_token_id == 2
+
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "fast_esm", "bos_token_id": None, "eos_token_id": None}),
+        encoding="utf-8",
+    )
+    reloaded = FastEsmConfig.from_pretrained(tmp_path, local_files_only=True)
+    assert reloaded.bos_token_id == 0
+    assert reloaded.eos_token_id == 2
 
 
 @pytest.mark.parametrize("should_raise", (False, True))

@@ -754,11 +754,9 @@ def test_canonicalization_applies_declared_esm2_transform_before_sharding(
         "esm.embeddings.word_embeddings.weight",
         "esm.encoder.layer.0.attention.self.query.weight",
         "lm_head.bias",
-        "lm_head.decoder.bias",
         "lm_head.decoder.weight",
     }
     assert torch.equal(converted["lm_head.bias"], source_state["lm_head.bias"])
-    assert torch.equal(converted["lm_head.decoder.bias"], source_state["lm_head.bias"])
     assert record["state_transform"] == "esm2_hf_to_fastplms_v1"
 
 

@@ -13,10 +13,10 @@ from safetensors.torch import load_file
 
 from fastplms.registry import ModelSpec, get_model_registry
 from tests.parity.test_model_parity import (
-    BF16_CONTRACT,
     _assert_logits_contract,
     _assert_tensor_contract,
     _last_hidden,
+    _numeric_contract,
 )
 from tools.goldens import validate_golden_bundle
 
@@ -93,11 +93,12 @@ def test_declared_sequence_golden_matches_candidate(spec: ModelSpec) -> None:
     )
     with torch.inference_mode(), numeric_context:
         output = model(**inputs, output_hidden_states=True)
+    contract = _numeric_contract(spec, torch.bfloat16, None)
     _assert_tensor_contract(
         _last_hidden(output),
         tensors["output__last_hidden_state"].to(device),
         residue_mask,
-        BF16_CONTRACT,
+        contract,
         f"{spec.id}:bf16:golden:last_hidden_state",
     )
     official_logits = tensors.get("output__logits")
@@ -110,7 +111,7 @@ def test_declared_sequence_golden_matches_candidate(spec: ModelSpec) -> None:
             candidate_logits,
             official_logits.to(device),
             residue_mask,
-            BF16_CONTRACT,
+            contract,
             f"{spec.id}:bf16:golden:logits",
         )
     del model, output, tensors

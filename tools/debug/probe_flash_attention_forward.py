@@ -18,6 +18,10 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
 )
 
 BACKENDS = ("flash_attention_2", "flash_attention_3")
+MODEL_BACKENDS = {
+    "esm2": BACKENDS,
+    "esm_plusplus": ("flash_attention_2",),
+}
 
 
 def _metrics(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
@@ -168,15 +172,16 @@ def _model_results() -> dict[str, Any]:
         torch.manual_seed(23)
         model = model_class(config).eval().to(device="cuda", dtype=torch.bfloat16)
         outputs: dict[str, torch.Tensor] = {}
+        backends = MODEL_BACKENDS[family]
         with torch.inference_mode():
-            for backend in ("eager", "sdpa", *BACKENDS):
+            for backend in ("eager", "sdpa", *backends):
                 model.attn_backend = backend
                 outputs[backend] = _last_hidden_state(
                     model(input_ids=input_ids, attention_mask=attention_mask)
                 ).detach()
         valid = attention_mask
         family_results: dict[str, Any] = {}
-        for backend in BACKENDS:
+        for backend in backends:
             family_results[backend] = {
                 "vs_eager": _metrics(outputs[backend][valid], outputs["eager"][valid]),
                 "vs_sdpa": _metrics(outputs[backend][valid], outputs["sdpa"][valid]),

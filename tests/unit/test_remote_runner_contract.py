@@ -166,6 +166,12 @@ def test_compliance_runs_native_services_before_candidate_comparison() -> None:
     command = " ".join(suite.command)
     assert " fp8 " in f" {command} "
     assert "tests/parity/test_native_results.py" in command
+    fp8_stack_test = (
+        "tests/release/test_validation_stack.py::"
+        "test_fp8_validation_stack_uses_the_cuda13_transformer_engine_core"
+    )
+    assert fp8_stack_test in command
+    assert f"--deselect={fp8_stack_test}" not in command
     assert "tests/structure/test_boltz2_folding_compliance.py" not in command
     assert "tests/structure/test_esmfold_folding_compliance.py" in command
     assert "tests/structure/test_esmfold2_folding_compliance.py" in command
@@ -177,6 +183,7 @@ def test_check_runs_artifacts_and_manifest_selected_live_representatives() -> No
     commands = [" ".join(command) for command in suite.pre_commands]
     joined = "\n".join(commands)
     assert "candidate-artifact" in suite.bake_targets
+    assert "candidate-structure" in suite.bake_targets
     assert "tools.artifacts.build_all" in joined
     assert "kernels download /workspace" in joined
     assert joined.index("tools.artifacts.build_all") < joined.index("kernels download /workspace")
@@ -199,9 +206,16 @@ def test_check_runs_artifacts_and_manifest_selected_live_representatives() -> No
         assert all("--deep-only" in command for command in matching)
     assert "test_native_representatives_all_backends" in joined
     command = " ".join(suite.command)
+    assert " structure " in f" {command} "
     assert "tests/unit" in command
     assert "tests/integration" in command
     assert "tests/release" in command
+
+
+def test_unit_suite_uses_the_structure_dependency_superset() -> None:
+    suite = SUITES["unit"]
+    assert suite.bake_targets == ("candidate-structure",)
+    assert " structure " in f" {' '.join(suite.command)} "
 
 
 def test_artifact_suite_builds_every_artifact_before_offline_probe() -> None:
@@ -241,7 +255,13 @@ def test_release_suite_aggregates_exact_head_artifact_reference_and_gpu_gates() 
     assert " structure " in f" {command} "
     assert "candidate-fp8" not in suite.bake_targets
     assert "reference-boltz2" not in suite.bake_targets
+    assert "--ignore=tests/structure/test_structure_models.py" in command
     assert "--ignore=tests/structure/test_esmfold2_fp8_compliance.py" in command
+    fp8_stack_test = (
+        "tests/release/test_validation_stack.py::"
+        "test_fp8_validation_stack_uses_the_cuda13_transformer_engine_core"
+    )
+    assert f"--deselect={fp8_stack_test}" in command
     assert "test_boltz2_live_folding_matches_pinned_official" in command
     assert "test_esmfold2_isolated_bf16_and_fp8_folding_compliance" not in command
     for path in ("tests/unit", "tests/integration", "tests/release", "tests/structure"):
@@ -300,6 +320,7 @@ def test_structure_suite_produces_isolated_folding_bundles_before_gating() -> No
     suite_command = " ".join(suite.command)
     assert "tests/structure" in suite_command
     assert "tests/parity/test_boltz_source_refactor.py" in suite_command
+    assert "--ignore=tests/structure/test_structure_models.py" in suite_command
     assert "-m structure" in suite_command
     assert "structure and gpu" not in suite_command
     esmfold2_commands = [

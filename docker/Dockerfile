@@ -219,7 +219,8 @@ COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
 COPY LICENSES/fair-esm /licenses/fair-esm
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130 && \
-    pip install -e /opt/oracle/vendor/upstream/fair-esm pytest==9.0.2 safetensors==0.6.2
+    pip install -e /opt/oracle/vendor/upstream/fair-esm huggingface-hub==0.36.2 \
+        numpy==1.26.4 pytest==9.0.2 safetensors==0.6.2
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/fair-esm:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.parity.support.reference_adapters.esm2"]

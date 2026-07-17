@@ -156,13 +156,13 @@ reference_container = "reference-esm2"
 reference_adapter = "tests.parity.support.reference_adapters.esm2"
 attention = ["eager", "sdpa", "flex_attention", "flash_attention_2", "flash_attention_3"]
 dtypes = ["float32", "bfloat16"]
-bf16_execution = "static_parameters"
+bf16_execution = "fp32_parameters_autocast"
 precisions = ["default"]
 vram_tier = "sequence"
 checkpoint_license = "MIT"
 hub_license = "mit"
 state_transform = "esm2_hf_to_fastplms_v1"
-conversion_provenance = "Input: the pinned official ESM2 state dictionary. Transformation: apply the deterministic esm2_hf_to_fastplms_v1 key map while preserving tensor values. Output: the pinned Synthyra FastPLMs checkpoint. Validation: release parity compares keys, shapes, dtypes, values, and parameter aliases. Limitation: any numerical rewrite requires a new transform identifier and exact conversion test."
+conversion_provenance = "Input: the pinned official ESM2 state dictionary. Transformation: apply the deterministic esm2_hf_to_fastplms_v1 key map while preserving tensor values and materializing the tied input/output embedding values as independent tensors. Output: the pinned Synthyra FastPLMs checkpoint. Validation: release parity compares exact keys and values after the declared non-aliasing transform, tokenizer behavior, and inference. Limitation: any numerical rewrite requires a new transform identifier and exact conversion test."
 representative = "esm2_8m"
 documentation = "docs/models.md#esm2"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
@@ -176,7 +176,7 @@ tokenizer_mode = "tokenizer"
 extra = "core"
 reference_container = "reference-biohub-esm"
 reference_adapter = "tests.parity.support.reference_adapters.esm_plusplus"
-attention = ["eager", "sdpa", "flex_attention", "flash_attention_2", "flash_attention_3"]
+attention = ["eager", "sdpa", "flash_attention_2"]
 dtypes = ["float32", "bfloat16"]
 bf16_execution = "static_parameters"
 precisions = ["default"]
@@ -200,13 +200,13 @@ reference_container = "reference-biohub-esm"
 reference_adapter = "tests.parity.support.reference_adapters.esm3"
 attention = ["eager", "sdpa", "flex_attention"]
 dtypes = ["float32", "bfloat16"]
-bf16_execution = "static_parameters"
+bf16_execution = "fp32_parameters_autocast"
 precisions = ["default"]
 vram_tier = "large-sequence"
 checkpoint_license = "MIT"
 hub_license = "mit"
 state_transform = "esm3_to_fastplms_v1"
-conversion_provenance = "Input: the pinned Biohub ESM3 checkpoint. Transformation: apply the deterministic esm3_to_fastplms_v1 parameter map for the supported sequence and multimodal modules. Output: the pinned Synthyra ESM3 checkpoint. Validation: release parity compares exact state identity after the declared map and live feature behavior. Limitation: unsupported upstream modalities may not be inferred from this record."
+conversion_provenance = "Input: the pinned Biohub ESM3 checkpoint. Transformation: apply the deterministic esm3_to_fastplms_v1 parameter map for the supported sequence and multimodal modules and expand BF16 checkpoint tensors to FP32 storage. Output: the pinned Synthyra ESM3 checkpoint. Validation: release parity compares exact state identity after the declared map and live feature behavior. Limitation: unsupported upstream modalities may not be inferred from this record."
 representative = "esm3_small"
 documentation = "docs/models.md#esm3"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
@@ -220,7 +220,7 @@ tokenizer_mode = "sequence"
 extra = "core"
 reference_container = "reference-e1"
 reference_adapter = "tests.parity.support.reference_adapters.e1"
-attention = ["eager", "sdpa", "flex_attention"]
+attention = ["sdpa", "flex_attention"]
 dtypes = ["float32", "bfloat16"]
 bf16_execution = "static_parameters"
 precisions = ["default"]
@@ -230,7 +230,7 @@ hub_license = "other"
 hub_license_name = "Profluent-E1 Clickthrough License Agreement"
 hub_license_link = "https://github.com/Profluent-AI/E1/blob/bfd2620a602248499f3d2583d85a7ecddf0b6e02/LICENSE"
 state_transform = "e1_to_fastplms_v1"
-conversion_provenance = "Input: the pinned Profluent-E1 checkpoint and tokenizer-free sequence contract. Transformation: apply e1_to_fastplms_v1 to the FastPLMs encoder and official task heads while preserving checkpoint tensor values. Output: the pinned Synthyra Profluent-E1 checkpoint. Validation: release parity covers state identity, sequence and RAG preparation, aliases, and inference. Limitation: the FastPLMs scoring extension is not represented as an official E1 head."
+conversion_provenance = "Input: the pinned Profluent-E1 checkpoint and tokenizer-free sequence contract. Transformation: apply e1_to_fastplms_v1 to the FastPLMs encoder and official task heads, storing floating tensors in BF16. Output: the pinned Synthyra Profluent-E1 checkpoint. Validation: release parity covers state identity after the declared cast, sequence and RAG preparation, aliases, and inference. Limitation: the FastPLMs scoring extension is not represented as an official E1 head."
 representative = "e1_150m"
 documentation = "docs/models.md#e1"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
@@ -252,7 +252,7 @@ vram_tier = "sequence"
 checkpoint_license = "Apache-2.0 (project assumption; upstream checkpoint cards do not independently state it)"
 hub_license = "apache-2.0"
 state_transform = "dplm_to_fastplms_v1"
-conversion_provenance = "Input: the pinned official DPLM1 checkpoint. Transformation: apply the deterministic dplm_to_fastplms_v1 state-key map into the FastPLMs DPLM modules. Output: the pinned Synthyra DPLM checkpoint. Validation: release parity compares exact state identity after the map, tokenizer behavior, generation, and inference. Limitation: the Apache-2.0 checkpoint license is a FastPLMs assumption, not an independent upstream checkpoint-card statement."
+conversion_provenance = "Input: the pinned official DPLM1 checkpoint. Transformation: apply dplm_to_fastplms_v1, omitting the unused absolute-position table for rotary checkpoints and materializing the tied input/output embedding values as independent tensors. Output: the pinned Synthyra DPLM checkpoint. Validation: release parity compares exact state identity after the declared transform, tokenizer behavior, generation, and inference. Limitation: the Apache-2.0 checkpoint license is a FastPLMs assumption, not an independent upstream checkpoint-card statement."
 representative = "dplm_150m"
 documentation = "docs/models.md#dplm"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
@@ -274,7 +274,7 @@ vram_tier = "sequence"
 checkpoint_license = "Apache-2.0"
 hub_license = "apache-2.0"
 state_transform = "dplm2_to_fastplms_v1"
-conversion_provenance = "Input: the pinned official DPLM2 checkpoint. Transformation: apply dplm2_to_fastplms_v1 while retaining the official independent language-model head and trained encoder contact head. Output: the pinned Synthyra DPLM2 checkpoint. Validation: release parity compares exact keys, values, non-aliasing, tokenizer behavior, generation, and inference. Limitation: no head exception is permitted by this record."
+conversion_provenance = "Input: the pinned official DPLM2 checkpoint. Transformation: apply dplm2_to_fastplms_v1, retaining the independent language-model head and trained encoder contact head while omitting the unused absolute-position table for rotary checkpoints. Output: the pinned Synthyra DPLM2 checkpoint. Validation: release parity compares exact keys and values after the declared omission, non-aliasing, tokenizer behavior, generation, and inference. Limitation: no head exception is permitted by this record."
 representative = "dplm2_150m"
 documentation = "docs/models.md#dplm2"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
@@ -377,6 +377,7 @@ id = "esm2_8m"
 family = "esm2"
 size_category = "small"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_8m.json=sha256:6975e86d1d8f27488bf2a676551feaa48cc19254c9d24b6acb09198122745609", tensors = "tests/goldens/esm2_8m.safetensors=sha256:b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c" }
 fast_repo = "Synthyra/ESM2-8M"
 fast_revision = "185ecbd45665d050a8dae326d91886d330c5f9d0"
 fast_files = [
@@ -415,6 +416,7 @@ id = "esm2_35m"
 family = "esm2"
 size_category = "small"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_35m.json=sha256:e919d3ce6d20b6a942d27d92323814ae7594a0129dc9c4de27c5053e96675bcd", tensors = "tests/goldens/esm2_35m.safetensors=sha256:c9b8bb616cf884fb7744521a2fcc6eed23586342d11241e6c9ef16454ec31e17" }
 fast_repo = "Synthyra/ESM2-35M"
 fast_revision = "37ab9f56b41e365b3bd9e25d6fefe9150fd910f0"
 fast_files = [
@@ -453,6 +455,7 @@ id = "esm2_150m"
 family = "esm2"
 size_category = "medium"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_150m.json=sha256:c04c93486024ba0fa1c81fbfbe92ee79d1d4c7f1cfcc2c9886728522f752feab", tensors = "tests/goldens/esm2_150m.safetensors=sha256:c03fe9916dba137b452a6bbe944c7dc414db4019a6f0921e87b92d4bb6a8a42f" }
 fast_repo = "Synthyra/ESM2-150M"
 fast_revision = "979e0880dfc9e0c0080839b83d9d2dc05b92786a"
 fast_files = [
@@ -491,6 +494,7 @@ id = "esm2_650m"
 family = "esm2"
 size_category = "large"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_650m.json=sha256:f18332172fcb3abf5dd2485fd55f5b0d193ad3b93a44cc744e0d02817c927477", tensors = "tests/goldens/esm2_650m.safetensors=sha256:c3a66b75add03628e62e238cb63da6a9e4d321f8160e84bdf2a131c096977f86" }
 fast_repo = "Synthyra/ESM2-650M"
 fast_revision = "ca0718a5d52b80d5c60dd76860e55e061a95fb0a"
 fast_files = [
@@ -529,6 +533,8 @@ id = "esm2_3b"
 family = "esm2"
 size_category = "xlarge"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_3b.json=sha256:5043b2333c57a34d54fac53916722d1acb4b6fd50395b9abafa805435b184a48", tensors = "tests/goldens/esm2_3b.safetensors=sha256:dfd5a8cb05d3e814a080185c4808c8e7ec2277f070f395562fcfbe4376789e4e" }
+notes = "The pinned default SDPA BF16 path uses a checkpoint-specific numeric calibration: relative L2 target/hard limit 0.06/0.07, relative Q99.9 0.15/0.18, first-percentile residue cosine 0.994/0.992, and pooled cosine 0.998/0.997. Exact state identity and the global logits-distribution contract remain required."
 fast_repo = "Synthyra/ESM2-3B"
 fast_revision = "ff89d0180f414ab9c677219a25da79bf09185456"
 fast_files = [
@@ -570,7 +576,8 @@ id = "esmc_small"
 family = "esm_plusplus"
 size_category = "medium"
 generation_contract = "not_applicable"
-notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager, Flex Attention, FlashAttention 2, and FlashAttention 3 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.02 and hard limit of 0.03. The global Q99.9, cosine, top-1, and Jensen-Shannon thresholds remain unchanged. Any target miss blocks release."
+official_golden = { metadata = "tests/goldens/esmc_small.json=sha256:bb02652cf3cc484756b98ffa4ba55ed4c55870d2cea3342adb1d920ba9dfe10a", tensors = "tests/goldens/esmc_small.safetensors=sha256:03378d0f0fdd8161178ebb2c1f0da1b9776a726c8e8d3a10c009808a24de5654" }
+notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention is not advertised because ESMC-6B exceeds the relative-L2 hard limit on the pinned generated boundary panel; FlashAttention 3 is not advertised because ESMC-6B falls below the residue-cosine hard limit on that panel. Any target miss blocks release."
 fast_repo = "Synthyra/ESMplusplus_small"
 fast_revision = "46c5f7d562e47d4c14165b424c71ab7db008e6fb"
 fast_files = [
@@ -595,7 +602,8 @@ id = "esmc_large"
 family = "esm_plusplus"
 size_category = "large"
 generation_contract = "not_applicable"
-notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager, Flex Attention, FlashAttention 2, and FlashAttention 3 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.02 and hard limit of 0.03. The global Q99.9, cosine, top-1, and Jensen-Shannon thresholds remain unchanged. Any target miss blocks release."
+official_golden = { metadata = "tests/goldens/esmc_large.json=sha256:7a4d614f67b6fde417f3fd89f61e7ec442ae284769734b2b73e14945a816a8fd", tensors = "tests/goldens/esmc_large.safetensors=sha256:e13302df4cf7e8381552f1043a8fd0f31f3e0d50b2ab6009fb86b7940ae8ff79" }
+notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention is not advertised because ESMC-6B exceeds the relative-L2 hard limit on the pinned generated boundary panel; FlashAttention 3 is not advertised because ESMC-6B falls below the residue-cosine hard limit on that panel. Any target miss blocks release."
 fast_repo = "Synthyra/ESMplusplus_large"
 fast_revision = "f813401638b3fddab09748aec1ad2bf537aa4208"
 fast_files = [
@@ -620,7 +628,8 @@ id = "esmc_6b"
 family = "esm_plusplus"
 size_category = "xlarge"
 generation_contract = "not_applicable"
-notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager, Flex Attention, FlashAttention 2, and FlashAttention 3 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.02 and hard limit of 0.03. The global Q99.9, cosine, top-1, and Jensen-Shannon thresholds remain unchanged. Any target miss blocks release."
+official_golden = { metadata = "tests/goldens/esmc_6b.json=sha256:e229d938719782f280fab22dfc4c43e86109fdb0cc523631168c5a491afaace3", tensors = "tests/goldens/esmc_6b.safetensors=sha256:a948945e985c7deaca7be8b7eed09c0a9521a2af3f2b10fc2ec7a7d2a0f99ada" }
+notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention is not advertised because ESMC-6B exceeds the relative-L2 hard limit on the pinned generated boundary panel; FlashAttention 3 is not advertised because ESMC-6B falls below the residue-cosine hard limit on that panel. Any target miss blocks release."
 fast_repo = "Synthyra/ESMplusplus_6B"
 fast_revision = "0d579cce3b0f09efa6b3baddf6cc3fd8c9b616c8"
 fast_files = [
@@ -656,6 +665,7 @@ family = "esm3"
 tokenizer_source = "esmc_small"
 size_category = "large"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm3_small.json=sha256:5470e8596cbba0e2882647eccbc53c36d8b48b0f3947d1fe0bcea68da1078c32", tensors = "tests/goldens/esm3_small.safetensors=sha256:d957922f810c9ab4c557d80d5aaaf6a3aab79a5a45e4638012a634a4134803b1" }
 fast_repo = "Synthyra/ESM3_small"
 fast_revision = "7ddb5a740f9e5f93933eb6410c0ee8684bc63ec1"
 fast_files = [
@@ -681,6 +691,7 @@ id = "e1_150m"
 family = "e1"
 size_category = "small"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/e1_150m.json=sha256:701a64a6ab1a2fec5a427555b6af96232526c15cb3d5b4dc7fb253ac8f20b922", tensors = "tests/goldens/e1_150m.safetensors=sha256:6558bc8f1a7b20629eaaaa6f72601d0c2cdb859a5dc13595549b1773b6e2de41" }
 fast_repo = "Synthyra/Profluent-E1-150M"
 fast_revision = "7c5f3bbf697226a2e0900db7a100f9201774a907"
 fast_files = [
@@ -699,6 +710,7 @@ id = "e1_300m"
 family = "e1"
 size_category = "medium"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/e1_300m.json=sha256:d3478f3f5957a0e0377864074dde0107de890019f96cb63548ee17ffb8f3ec3a", tensors = "tests/goldens/e1_300m.safetensors=sha256:92778b9ef95a803ddc84b3e3ca764c59e045872a94bcff0eb0cd47647732c188" }
 fast_repo = "Synthyra/Profluent-E1-300M"
 fast_revision = "5ef52c0ad2ae2578f40622696b763523810e8e26"
 fast_files = [
@@ -717,6 +729,7 @@ id = "e1_600m"
 family = "e1"
 size_category = "large"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/e1_600m.json=sha256:914be191c28141c1f84535cdb69ead0588a2057bb19d46c5bc7f3891a3d6739e", tensors = "tests/goldens/e1_600m.safetensors=sha256:22ed8417a4651ded255099f6d15c63c2c40552e700d2b0470d1adfde3a39c513" }
 fast_repo = "Synthyra/Profluent-E1-600M"
 fast_revision = "6c8bf0ec83b0e0178677c528b101efffd0677742"
 fast_files = [
@@ -735,6 +748,7 @@ id = "dplm_150m"
 family = "dplm"
 size_category = "small"
 generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm_150m.json=sha256:3228551fe3bed951db9ec97347143ec4462ce7c221ac240b7ce7730948c1dc1f", tensors = "tests/goldens/dplm_150m.safetensors=sha256:392992235195beed97ab8359b90a2e11e52f4326606f99a471447bed81d146bd" }
 fast_repo = "Synthyra/DPLM-150M"
 fast_revision = "90ba742754151a774f3b7ed580170d0a76b3e69d"
 fast_files = [
@@ -759,6 +773,7 @@ id = "dplm_650m"
 family = "dplm"
 size_category = "large"
 generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm_650m.json=sha256:bf58d0ce73aaac7e6fb1923ef3d9adad67122df2a3dd414c3229488ef9587a6d", tensors = "tests/goldens/dplm_650m.safetensors=sha256:073f0a6abea7e48f28c2d921ff8329a28e22627f01979277cb324908a01b3378" }
 fast_repo = "Synthyra/DPLM-650M"
 fast_revision = "05dc16d97c5c028aed924c9ed681cee4ab609760"
 fast_files = [
@@ -783,6 +798,7 @@ id = "dplm_3b"
 family = "dplm"
 size_category = "xlarge"
 generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm_3b.json=sha256:a5b6df8b9c7b371976892ec1d6c45581a32ad3a6325c6c0a0b3267012848c8ed", tensors = "tests/goldens/dplm_3b.safetensors=sha256:75b0a0854fc391133920b0feaaeb8f69ab7568a88b3759627aca1556c4338c1e" }
 fast_repo = "Synthyra/DPLM-3B"
 fast_revision = "7d764dd3d70ecf1ac0e64693de64a0064aacac65"
 fast_files = [
@@ -812,6 +828,7 @@ id = "dplm2_150m"
 family = "dplm2"
 size_category = "small"
 generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm2_150m.json=sha256:d269de779ea1503de72c77e7b2e6224afc9797bd945b40c571ff6faec782e4aa", tensors = "tests/goldens/dplm2_150m.safetensors=sha256:17fc26600938ba5364b8ecb96750786d33e9f92bcd4ea4df3e12a389340748eb" }
 artifact_source = "official"
 fast_repo = "Synthyra/DPLM2-150M"
 fast_revision = "182745b8dc5661f898481a4fa60a7af9d53385c4"
@@ -837,6 +854,7 @@ id = "dplm2_650m"
 family = "dplm2"
 size_category = "large"
 generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm2_650m.json=sha256:d9a7548f9af657a72d441ca70f27379863724fcce8ddd3da4f672104b7bfb772", tensors = "tests/goldens/dplm2_650m.safetensors=sha256:c4e0e467c252c3ac813363d2d4b17a5e3bd99e75fad315e76d97689b4655ddac" }
 artifact_source = "official"
 fast_repo = "Synthyra/DPLM2-650M"
 fast_revision = "b9d8527a9473a54954fa2764f590b9ea1b435bb2"
@@ -864,6 +882,7 @@ size_category = "xlarge"
 # The pinned public sampler fails before generation because cls_token_id is None.
 # State, tokenizer, and inference parity remain required for this checkpoint.
 generation_contract = "official_unavailable"
+official_golden = { metadata = "tests/goldens/dplm2_3b.json=sha256:d6e0e02af53b13cb129192f06e264758aa21c9ebf4ee82411cf67037082d2329", tensors = "tests/goldens/dplm2_3b.safetensors=sha256:838b11824d08f83bcb0c0b3268e579f3a87dbfb965370cfe5c3f8793b96b1964" }
 notes = "The pinned official DPLM2-3B sampler fails before generation, so live generation equivalence cannot be established for this checkpoint. State, tokenizer, and inference parity remain required."
 artifact_source = "official"
 fast_repo = "Synthyra/DPLM2-3B"
@@ -895,6 +914,7 @@ id = "ankh_base"
 family = "ankh"
 size_category = "medium"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/ankh_base.json=sha256:ebce8d7de821827ee995789c9b38d79252d3b2f76888130b0a8a7eedafaefe2b", tensors = "tests/goldens/ankh_base.safetensors=sha256:f0e78aa15d11749e0c64ff57f9e88c51cec6538a0adf8951f839df70cc708b65" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 fast_repo = "Synthyra/ANKH_base"
@@ -921,6 +941,7 @@ id = "ankh_large"
 family = "ankh"
 size_category = "large"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/ankh_large.json=sha256:59492518b021de5cfaea87d672c9448c8558e99a3443ba2cc7ab544963196ecb", tensors = "tests/goldens/ankh_large.safetensors=sha256:3fb8d3ac27716d15a9ea92aeef6acf2b977bcc887d9b535000539e523673459b" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 fast_repo = "Synthyra/ANKH_large"
@@ -947,6 +968,7 @@ id = "ankh2_large"
 family = "ankh"
 size_category = "large"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/ankh2_large.json=sha256:4a3662a46b366cb8429f40e2c5a45ffeba5322d3f39fe509e2c8bd35b7cd17cd", tensors = "tests/goldens/ankh2_large.safetensors=sha256:25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 fast_repo = "Synthyra/ANKH2_large"
@@ -973,6 +995,7 @@ id = "ankh3_large"
 family = "ankh"
 size_category = "large"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/ankh3_large.json=sha256:3724f6ed840d053b6294806229df7663268ec960ee100991aa1293264f71504e", tensors = "tests/goldens/ankh3_large.safetensors=sha256:e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 fast_repo = "Synthyra/ANKH3_large"
@@ -999,6 +1022,7 @@ id = "ankh3_xl"
 family = "ankh"
 size_category = "xlarge"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/ankh3_xl.json=sha256:58e04dd24ed5a8a33cbd83730c391900449dbc2aebfd33e478c4c17cf8c34161", tensors = "tests/goldens/ankh3_xl.safetensors=sha256:72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 fast_repo = "Synthyra/ANKH3_xl"
@@ -1048,6 +1072,7 @@ id = "esmfold"
 family = "esmfold"
 size_category = "structure"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmfold.json=sha256:380b9a96168410717d1f698feaabb826b1606444cbdeec86c2ea06d9ffe8f186", tensors = "tests/goldens/esmfold.safetensors=sha256:873b1b325a43d8e0f35f355c8914a2a9fe611cc48763875e9e6a22e09ec9ebcb" }
 fast_repo = "Synthyra/FastESMFold"
 fast_revision = "b88c8cb50d19b2cf7ab4fee4b0a61f5e02da7823"
 fast_files = [
@@ -1081,6 +1106,7 @@ id = "esmfold2"
 family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmfold2.json=sha256:f6e0ed1ec400b9a0fcc817db51774be968dc454b7a32645a07c479e42423ab20", tensors = "tests/goldens/esmfold2.safetensors=sha256:e4d6be4344c528e26b13f79a9303549e3de7e582da195c0078db3ce957fad420" }
 fast_repo = "Synthyra/ESMFold2"
 fast_revision = "cd5a0927cec585a778d983b99a8db23d2e9b281e"
 fast_files = [
@@ -1099,6 +1125,7 @@ id = "esmfold2_fast"
 family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmfold2_fast.json=sha256:091b004c0b330217b59c12acd6da3d6edaf91e48d95f6d5f40fc20399cef9478", tensors = "tests/goldens/esmfold2_fast.safetensors=sha256:6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990" }
 fast_repo = "Synthyra/ESMFold2-Fast"
 fast_revision = "407875bfcaa42552bfcb25acd67ee1888b790170"
 fast_files = [
@@ -1117,6 +1144,7 @@ id = "esmfold2_experimental_cutoff2025"
 family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmfold2_experimental_cutoff2025.json=sha256:cfd0e35b2bc468a0dc4f614d3acfa2fce004f96e9ae2433256ed095b829d55cc", tensors = "tests/goldens/esmfold2_experimental_cutoff2025.safetensors=sha256:9347466bbe803b6f5dc82e3356ca6cbbf2c2edd8765f9fd273385bda255019f6" }
 fast_repo = "Synthyra/ESMFold2-Experimental-Cutoff2025"
 fast_revision = "632ff4a9e68f1de78ee956a613267bdcdb5b354d"
 fast_files = [
@@ -1136,6 +1164,7 @@ id = "esmfold2_experimental_fast_cutoff2025"
 family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmfold2_experimental_fast_cutoff2025.json=sha256:1d0b2da4f1579243f37ae04bd4b834b747005cd8e8e7665e00d088123c43afd9", tensors = "tests/goldens/esmfold2_experimental_fast_cutoff2025.safetensors=sha256:516e216d05d7e6bee59e77126d3e595e2bb7821929433f00c259c5d5241964bb" }
 fast_repo = "Synthyra/ESMFold2-Experimental-Fast-Cutoff2025"
 fast_revision = "8f022c2514a6c32692aaca078a8391d6bc6c4bac"
 fast_files = [

@@ -102,8 +102,7 @@ def test_esmplusplus_sequence_id_masks_cross_chain_attention() -> None:
 
 
 @pytest.mark.gpu
-def test_esmplusplus_flex_sequence_id_masks_run() -> None:
-    device = torch.device("cuda")
+def test_esmplusplus_rejects_unadvertised_flex_attention() -> None:
     config = ESMplusplusConfig(
         vocab_size=16,
         hidden_size=64,
@@ -111,14 +110,9 @@ def test_esmplusplus_flex_sequence_id_masks_run() -> None:
         num_hidden_layers=1,
         attn_backend="flex_attention",
     )
-    model = ESMplusplusModel(config).to(device=device).eval()
-    input_ids = torch.tensor([[0, 3, 4, 2]], device=device, dtype=torch.long)
-    sequence_id = torch.tensor([[0, 0, 1, 1]], device=device, dtype=torch.long)
 
-    with torch.no_grad():
-        output = model(input_ids=input_ids, sequence_id=sequence_id)
-
-    assert output.last_hidden_state.shape == (1, 4, 64)
+    with pytest.raises(ValueError, match=r"does not support 'flex_attention'"):
+        ESMplusplusModel(config)
 
 
 def test_esmplusplus_esmfold2_hidden_state_layout() -> None:

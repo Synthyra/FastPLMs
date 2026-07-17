@@ -104,6 +104,7 @@ def test_compose_centralizes_gpu_and_ipc_configuration() -> None:
     assert "gpus: all" in compose
     assert "HF_HOME: /cache/huggingface" in compose
     assert "TORCH_HOME: /cache/torch" in compose
+    assert compose.count('CUBLAS_WORKSPACE_CONFIG: ":4096:8"') == 2
     for volume in ("hf", "torch", "xdg"):
         assert f"name: fastplms-{volume}-cache" in compose
 
@@ -114,6 +115,15 @@ def test_dependency_tool_caches_match_their_buildkit_mounts() -> None:
     assert "PIP_CACHE_DIR=/root/.cache/pip" in dockerfile
     assert "--mount=type=cache,target=/root/.cache/uv" in dockerfile
     assert "--mount=type=cache,target=/root/.cache/pip" in dockerfile
+
+
+def test_reference_esm2_installs_oracle_runtime_dependencies() -> None:
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    section = dockerfile.split("FROM python312 AS reference-esm2", maxsplit=1)[1].split(
+        "FROM python310-reference AS reference-boltz2", maxsplit=1
+    )[0]
+    assert "huggingface-hub==0.36.2" in section
+    assert "numpy==1.26.4" in section
 
 
 def test_reference_services_receive_only_the_exchange_and_cache_mounts() -> None:

@@ -892,7 +892,7 @@ class E1PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
     all_tied_weights_keys: ClassVar[dict[str, str]] = {}
     _supports_flash_attn_2 = False
     _supports_flash_attn_3 = False
-    _fastplms_attention_implementations = ("eager", "sdpa", "flex_attention")
+    _fastplms_attention_implementations = ("sdpa", "flex_attention")
     _is_internal_encoder = False
     _tokenizer_source: str | os.PathLike | None = None
     _tokenizer_local_files_only = False

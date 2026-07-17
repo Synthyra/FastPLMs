@@ -6,6 +6,7 @@ from typing import Any, ClassVar
 
 import torch
 import torch.nn as nn
+from tokenizers import pre_tokenizers
 from torch.nn import functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from transformers import (
@@ -144,7 +145,13 @@ def _load_ankh_tokenizer(config: FastAnkhConfig):
         )
     revision = getattr(config, "_commit_hash", None)
     tokenizer_kwargs = {"revision": revision} if revision else {}
-    return AutoTokenizer.from_pretrained(name_or_path, **tokenizer_kwargs)
+    tokenizer = AutoTokenizer.from_pretrained(name_or_path, **tokenizer_kwargs)
+    tokenizer.backend_tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(
+        replacement="\u2581",
+        prepend_scheme="never",
+        split=True,
+    )
+    return tokenizer
 
 
 # ---------------------------------------------------------------------------

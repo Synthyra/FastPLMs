@@ -14,6 +14,9 @@ from tests.parity.support.esmc_calibration import (
     ESMC_BOUNDARY_LENGTHS,
     load_esmc_biological_holdout,
 )
+from tests.parity.support.reference_adapters.dplm2 import (
+    DPLM2_3B_GENERATION_LIMITATION,
+)
 
 SCHEMA_VERSION = 1
 SEED = 42
@@ -128,6 +131,11 @@ def prepare_reference_requests(output_root: Path) -> tuple[Path, ...]:
         }
         if spec.family.id == "esm_plusplus":
             request["calibration_batches"] = _esmc_calibration_batches()
+        if spec.generation_contract == "official_unavailable":
+            request["generation_policy"] = spec.generation_contract
+            request["official_generation_limitation"] = dict(
+                DPLM2_3B_GENERATION_LIMITATION
+            )
         path = output_root / "requests" / spec.family.reference_container / f"{spec.id}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         encoded = json.dumps(request, indent=2, sort_keys=True) + "\n"

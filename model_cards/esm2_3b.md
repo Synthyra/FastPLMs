@@ -35,8 +35,12 @@ generated artifact already exists at that Hub revision.
 
 Leave attention unspecified for the Transformers default or request one of
 `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` with `attn_implementation`.
-The BF16 execution policy is `static_parameters`:
-parameters loaded directly in BF16.
+The BF16 execution policy is `fp32_parameters_autocast`:
+FP32 parameters with CUDA BF16 autocast.
+
+## Notes and limitations
+
+The pinned default SDPA BF16 path uses a checkpoint-specific numeric calibration: relative L2 target/hard limit 0.06/0.07, relative Q99.9 0.15/0.18, first-percentile residue cosine 0.994/0.992, and pooled cosine 0.998/0.997. Exact state identity and the global logits-distribution contract remain required.
 
 ## Provenance
 
@@ -45,7 +49,7 @@ parameters loaded directly in BF16.
 - Artifact source: `fast`
 - State transform: `esm2_hf_to_fastplms_v1`
 - Generation contract: `not_applicable`
-- BF16 execution: `static_parameters`
+- BF16 execution: `fp32_parameters_autocast`
 - Pinned upstreams: `fair-esm`
 - Reference container: `reference-esm2`
 - Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`

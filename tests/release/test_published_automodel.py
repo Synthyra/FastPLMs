@@ -392,12 +392,6 @@ def test_local_artifact_offline_autoclass_parity(
             "flash_attention_2",
         ),
         (
-            "esm_plusplus",
-            "ESMplusplus_small",
-            "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusModel",
-            "flash_attention_3",
-        ),
-        (
             "dplm",
             "DPLM-150M",
             "fastplms.models.dplm.modeling_dplm.DPLMModel",

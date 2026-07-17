@@ -229,7 +229,10 @@ class _OfficialDPLM2ForwardWrapper(nn.Module):
         # The official multimodal wrapper calls the embedding block once, then
         # its inner ESM model calls the same block again. The second result is
         # the encoder's semantic input hidden state.
-        hidden_states = tuple(captured[1:])
+        # The multimodal wrapper computes embeddings before calling its inner
+        # network, which computes them a second time. The pinned 3B checkpoint
+        # selects the inner network directly, so that path has no duplicate.
+        hidden_states = tuple(captured[1:] if _accepts_type_ids(self.model) else captured)
         if not hidden_states or hidden_states[-1] is not last_hidden_state:
             hidden_states = (*hidden_states, last_hidden_state)
         return SimpleNamespace(

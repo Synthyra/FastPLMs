@@ -29,7 +29,7 @@ CHECKPOINTS = {
 }
 BACKENDS_BY_CHECKPOINT = {
     "esm2_8m": BACKENDS,
-    "esmc_small": BACKENDS,
+    "esmc_small": ("flash_attention_2",),
     "dplm_150m": ("flash_attention_3",),
 }
 

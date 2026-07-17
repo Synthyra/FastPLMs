@@ -157,7 +157,8 @@ E1 has no tokenizer dependency. Its dedicated adapter accepts raw protein
 sequences and preserves official boundary-token, context, and retrieval-augmented
 generation preparation. Launches display `Profluent-E1` as required by the
 upstream agreement. E1 legal files and modified-file notices are distributed
-with relevant artifacts and containers.
+with relevant artifacts and containers. E1 advertises SDPA and Flex Attention;
+its eager path is not advertised because it misses the pinned output contract.
 
 ### ANKH
 

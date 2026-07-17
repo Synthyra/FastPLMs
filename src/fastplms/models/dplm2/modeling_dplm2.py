@@ -942,18 +942,19 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple[torch.Tensor], DPLM2MaskedLMOutput]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        direct_dplm_esm = getattr(self.config, "dplm_type", None) == "dplm_esm"
 
         if attention_mask is None:
             assert input_ids is not None
             attention_mask = input_ids.ne(self.pad_id)
 
-        if type_ids is None:
+        if type_ids is None and not direct_dplm_esm:
             assert input_ids is not None
             type_ids = self._get_modality_type(input_ids, attention_mask)
 
         if input_ids is not None:
             input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
-            if inputs_embeds is None:
+            if inputs_embeds is None and not direct_dplm_esm:
                 # The official multimodal wrapper applies the embedding block
                 # once before entering EsmForDPLM2. The inner ESM model then
                 # applies it a second time using these intermediate embeddings.

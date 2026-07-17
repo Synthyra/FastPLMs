@@ -108,4 +108,13 @@ def semantic_config(model: nn.Module) -> dict[str, Any]:
     return result
 
 
-__all__ = ["SEMANTIC_PATHS", "semantic_config"]
+def transformed_semantic_config(model: nn.Module, transform_name: str) -> dict[str, Any]:
+    """Extract semantics after applying a declared checkpoint conversion."""
+
+    result = semantic_config(model)
+    if transform_name == "dplm_to_fastplms_v1":
+        result["tie_word_embeddings"] = False
+    return result
+
+
+__all__ = ["SEMANTIC_PATHS", "semantic_config", "transformed_semantic_config"]

@@ -91,9 +91,6 @@ def test_esmfold2_geometry_extractor_is_literal_only_and_reproducible(
     "transform_id",
     [
         "identity",
-        "e1_to_fastplms_v1",
-        "dplm_to_fastplms_v1",
-        "dplm2_to_fastplms_v1",
         "ankh_t5_to_fastplms_v1",
     ],
 )
@@ -117,8 +114,34 @@ def test_identity_key_transforms_are_value_exact_and_non_aliasing(
         assert transformed[key].data_ptr() != source[key].data_ptr()
 
 
+def test_precision_and_rotary_table_transforms_match_published_artifacts() -> None:
+    source = {
+        "encoder.weight": torch.tensor([1.25], dtype=torch.float32),
+        "esm.embeddings.position_embeddings.weight": torch.ones(2, 2),
+    }
+    expected = {"encoder.weight"}
+
+    e1 = apply_state_transform(
+        "e1_to_fastplms_v1",
+        {"encoder.weight": source["encoder.weight"]},
+        expected_keys=expected,
+    )
+    assert e1["encoder.weight"].dtype is torch.bfloat16
+
+    for transform_id in ("dplm_to_fastplms_v1", "dplm2_to_fastplms_v1"):
+        transformed = apply_state_transform(
+            transform_id,
+            source,
+            expected_keys=expected,
+        )
+        assert set(transformed) == expected
+
+
 def test_esm2_transform_matches_parity_mapping_and_is_idempotent() -> None:
-    from tests.parity.support.state_transforms import transform_state
+    from tests.parity.support.state_transforms import (
+        transform_preserves_aliases,
+        transform_state,
+    )
 
     source = {
         "embed_tokens.weight": torch.arange(6, dtype=torch.float32).reshape(2, 3),
@@ -148,8 +171,7 @@ def test_esm2_transform_matches_parity_mapping_and_is_idempotent() -> None:
         source["layers.0.self_attn.rot_emb.inv_freq"],
     )
     assert transformed["lm_head.bias"].data_ptr() != source["lm_head.bias"].data_ptr()
-    assert transformed["lm_head.decoder.bias"].data_ptr() != source["lm_head.bias"].data_ptr()
-    assert transformed["lm_head.bias"].data_ptr() != transformed["lm_head.decoder.bias"].data_ptr()
+    assert not transform_preserves_aliases("esm2_hf_to_fastplms_v1")
 
     canonical = apply_state_transform(
         "esm2_hf_to_fastplms_v1",

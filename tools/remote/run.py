@@ -359,6 +359,7 @@ SUITES = {
     "check": Suite(
         (
             "candidate",
+            "candidate-structure",
             "candidate-artifact",
             *_SEQUENCE_REFERENCE_CONTAINERS,
         ),
@@ -370,7 +371,7 @@ SUITES = {
             "docker/compose.yaml",
             "run",
             "--rm",
-            "candidate",
+            "structure",
             "python",
             "-m",
             "pytest",
@@ -391,7 +392,7 @@ SUITES = {
         ),
     ),
     "unit": Suite(
-        ("candidate",),
+        ("candidate-structure",),
         (
             "sudo",
             "docker",
@@ -400,7 +401,7 @@ SUITES = {
             "docker/compose.yaml",
             "run",
             "--rm",
-            "candidate",
+            "structure",
             "python",
             "-m",
             "pytest",
@@ -452,6 +453,10 @@ SUITES = {
             "-m",
             "pytest",
             "tests/parity/test_native_results.py",
+            (
+                "tests/release/test_validation_stack.py::"
+                "test_fp8_validation_stack_uses_the_cuda13_transformer_engine_core"
+            ),
             "tests/structure/test_esmfold_folding_compliance.py",
             "tests/structure/test_esmfold2_folding_compliance.py",
             "tests/structure/test_esmfold2_fp8_compliance.py",
@@ -486,6 +491,7 @@ SUITES = {
             "pytest",
             "tests/structure",
             "tests/parity/test_boltz_source_refactor.py",
+            "--ignore=tests/structure/test_structure_models.py",
             "-m",
             "structure",
             "--junitxml=artifacts/junit/structure.xml",
@@ -579,7 +585,12 @@ SUITES = {
             *_RELEASE_LOCAL_PARITY_TESTS,
             "tests/structure",
             "tests/parity/test_boltz_source_refactor.py",
+            "--ignore=tests/structure/test_structure_models.py",
             "--ignore=tests/structure/test_esmfold2_fp8_compliance.py",
+            (
+                "--deselect=tests/release/test_validation_stack.py::"
+                "test_fp8_validation_stack_uses_the_cuda13_transformer_engine_core"
+            ),
             (
                 "--deselect=tests/structure/test_boltz2_folding_compliance.py::"
                 "test_boltz2_live_folding_matches_pinned_official"

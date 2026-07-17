@@ -19,6 +19,21 @@ def _identity(state: State) -> dict[str, torch.Tensor]:
     return dict(state)
 
 
+def _cast_floating(state: State, dtype: torch.dtype) -> dict[str, torch.Tensor]:
+    return {
+        key: value.to(dtype=dtype) if value.is_floating_point() else value
+        for key, value in state.items()
+    }
+
+
+def _drop_unused_rotary_position_table(state: State) -> dict[str, torch.Tensor]:
+    return {
+        key: value
+        for key, value in state.items()
+        if key != "esm.embeddings.position_embeddings.weight"
+    }
+
+
 def _esm2_fair_to_fastplms(state: State) -> dict[str, torch.Tensor]:
     """Map the pinned Meta ESM2 module names to the Hugging Face ESM schema."""
 
@@ -64,7 +79,6 @@ def _esm2_fair_to_fastplms(state: State) -> dict[str, torch.Tensor]:
             target = "lm_head.decoder.weight"
         elif key == "lm_head.bias":
             mapped["lm_head.bias"] = value
-            mapped["lm_head.decoder.bias"] = value
             continue
         elif key.startswith("lm_head."):
             target = key
@@ -145,10 +159,10 @@ TRANSFORMS: dict[str, Transform] = {
     "identity": _identity,
     "esm2_hf_to_fastplms_v1": _esm2_fair_to_fastplms,
     "esmc_to_fastplms_v1": _esmc_to_fastplms,
-    "esm3_to_fastplms_v1": _identity,
-    "e1_to_fastplms_v1": _identity,
-    "dplm_to_fastplms_v1": _identity,
-    "dplm2_to_fastplms_v1": _identity,
+    "esm3_to_fastplms_v1": lambda state: _cast_floating(state, torch.float32),
+    "e1_to_fastplms_v1": lambda state: _cast_floating(state, torch.bfloat16),
+    "dplm_to_fastplms_v1": _drop_unused_rotary_position_table,
+    "dplm2_to_fastplms_v1": _drop_unused_rotary_position_table,
     "ankh_t5_to_fastplms_v1": _identity,
     "esmfold_meta_to_fastplms_v1": _esmfold_meta_to_fastplms,
 }
@@ -170,3 +184,9 @@ def transform_parameter_names(name: str, parameter_name: str) -> tuple[str, ...]
     marker = torch.empty(0)
     transformed = transform_state(name, {parameter_name: marker})
     return tuple(transformed)
+
+
+def transform_preserves_aliases(name: str) -> bool:
+    """Return whether the declared conversion retains source parameter aliases."""
+
+    return name not in {"dplm_to_fastplms_v1", "esm2_hf_to_fastplms_v1"}

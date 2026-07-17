@@ -74,6 +74,8 @@ def test_package_manifest_is_complete_and_typed() -> None:
         "boltz2": "fp32_parameters_autocast",
         "dplm": "fp32_parameters_autocast",
         "dplm2": "fp32_parameters_autocast",
+        "esm2": "fp32_parameters_autocast",
+        "esm3": "fp32_parameters_autocast",
         "esmfold": "fp32_parameters_autocast",
         "esmfold2": "fp32_parameters_autocast",
     }
@@ -90,6 +92,45 @@ def test_package_manifest_is_complete_and_typed() -> None:
     for source in registry.upstreams.values():
         assert tuple(item.path for item in source.license_digests) == source.license_files
         assert source.distribution_files
+
+
+def test_bf16_calibrations_are_scoped_to_models_and_backends() -> None:
+    import torch
+
+    from tests.parity.test_model_parity import (
+        BF16_CONTRACT,
+        ESM2_3B_SDPA_BF16_CONTRACT,
+        ESM2_OPTIMIZED_BF16_CONTRACT,
+        ESMC_ALTERNATE_BF16_CONTRACT,
+        FP32_CONTRACT,
+        _numeric_contract,
+    )
+
+    registry = load_model_registry()
+    spec = registry["esm2_3b"]
+
+    assert _numeric_contract(spec, torch.bfloat16, None) is ESM2_3B_SDPA_BF16_CONTRACT
+    assert _numeric_contract(spec, torch.bfloat16, "sdpa") is ESM2_3B_SDPA_BF16_CONTRACT
+    assert _numeric_contract(spec, torch.bfloat16, "eager") is BF16_CONTRACT
+    assert _numeric_contract(spec, torch.bfloat16, "flex_attention") is (
+        ESM2_OPTIMIZED_BF16_CONTRACT
+    )
+    assert _numeric_contract(spec, torch.float32, None) is FP32_CONTRACT
+
+    esmc = registry["esmc_6b"]
+    assert esmc.family.attention == (
+        "eager",
+        "sdpa",
+        "flash_attention_2",
+    )
+    assert _numeric_contract(esmc, torch.bfloat16, "sdpa") is BF16_CONTRACT
+    assert _numeric_contract(esmc, torch.bfloat16, "flash_attention_2") is (
+        ESMC_ALTERNATE_BF16_CONTRACT
+    )
+    assert ESMC_ALTERNATE_BF16_CONTRACT.relative_l2_target == 0.029
+    assert ESMC_ALTERNATE_BF16_CONTRACT.relative_q999_target == 0.049
+    assert ESMC_ALTERNATE_BF16_CONTRACT.residue_cosine_target == 0.997
+    assert ESMC_ALTERNATE_BF16_CONTRACT.jsd_target == 0.0004
 
 
 def test_generation_contracts_are_explicit_and_exact() -> None:
@@ -258,7 +299,7 @@ def test_manifest_rejects_noncanonical_upstream_paths(
             r"families\.esm2\.vram_tier must be one of",
         ),
         (
-            'bf16_execution = "static_parameters"',
+            'bf16_execution = "fp32_parameters_autocast"',
             'bf16_execution = "implicit"',
             r"families\.esm2\.bf16_execution must be one of",
         ),
@@ -628,6 +669,15 @@ def test_manifest_rejects_a_fifth_esmfold2_checkpoint(tmp_path: Path) -> None:
         'id = "esmfold_legacy_fifth"\nfamily = "esmfold2"',
         1,
     )
+    invalid = invalid.replace(
+        "tests/goldens/esmfold.json",
+        "tests/goldens/esmfold_legacy_fifth.json",
+        1,
+    ).replace(
+        "tests/goldens/esmfold.safetensors",
+        "tests/goldens/esmfold_legacy_fifth.safetensors",
+        1,
+    )
     assert invalid != manifest
     path = tmp_path / "models.toml"
     path.write_text(invalid, encoding="utf-8")
@@ -693,7 +743,13 @@ def test_manifest_parses_optional_hash_pinned_official_golden(tmp_path: Path) ->
         + "b" * 64
         + '" }\n'
     )
-    modified = manifest.replace('id = "esm2_8m"\n', 'id = "esm2_8m"\n' + declaration, 1)
+    modified = re.sub(
+        r'^official_golden = \{ metadata = "tests/goldens/esm2_8m\.json=.*\n',
+        declaration,
+        manifest,
+        count=1,
+        flags=re.MULTILINE,
+    )
     path = tmp_path / "models.toml"
     path.write_text(modified, encoding="utf-8")
 
@@ -714,7 +770,13 @@ def test_manifest_rejects_an_unsafe_official_golden_path(tmp_path: Path) -> None
         + "b" * 64
         + '" }\n'
     )
-    modified = manifest.replace('id = "esm2_8m"\n', 'id = "esm2_8m"\n' + declaration, 1)
+    modified = re.sub(
+        r'^official_golden = \{ metadata = "tests/goldens/esm2_8m\.json=.*\n',
+        declaration,
+        manifest,
+        count=1,
+        flags=re.MULTILINE,
+    )
     path = tmp_path / "models.toml"
     path.write_text(modified, encoding="utf-8")
 

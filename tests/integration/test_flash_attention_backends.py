@@ -28,6 +28,7 @@ from tools.debug.probe_flash_attention_forward import _model_results, _shared_re
 from tools.debug.probe_flash_checkpoint_forward import _run_checkpoint
 
 _FLASH_BACKENDS = ("flash_attention_2", "flash_attention_3")
+_ESMC_FLASH_BACKENDS = ("flash_attention_2",)
 
 
 def _tiny_model_spec(family_id: str) -> tuple[type[torch.nn.Module], Any]:
@@ -78,7 +79,7 @@ def test_manifest_flash_inventory_is_exact() -> None:
     }
     assert advertised == {
         "esm2": _FLASH_BACKENDS,
-        "esm_plusplus": _FLASH_BACKENDS,
+        "esm_plusplus": _ESMC_FLASH_BACKENDS,
         "dplm": ("flash_attention_3",),
     }
     assert importlib.util.find_spec("flash_attn") is None
@@ -124,7 +125,8 @@ def test_explicit_flash_from_pretrained_uses_only_pinned_kernels(
         for name in get_model_registry().families[family_id].attention
         if name in _FLASH_BACKENDS
     )
-    assert advertised == _FLASH_BACKENDS
+    expected_backends = _FLASH_BACKENDS if family_id == "esm2" else _ESMC_FLASH_BACKENDS
+    assert advertised == expected_backends
     for backend in advertised:
         _core._FLASH_KERNELS.pop(backend, None)
         model = (
@@ -183,8 +185,10 @@ def test_advertised_small_models_run_finite_flash_forwards() -> None:
     assert torch.cuda.is_available(), "FlashAttention integration requires CUDA."
     results = _model_results()
     assert set(results) == {"esm2", "esm_plusplus"}
-    for family_results in results.values():
-        for backend in _FLASH_BACKENDS:
+    for family_id, family_results in results.items():
+        expected_backends = _FLASH_BACKENDS if family_id == "esm2" else _ESMC_FLASH_BACKENDS
+        assert set(family_results) == set(expected_backends)
+        for backend in expected_backends:
             metrics = family_results[backend]
             assert metrics["finite"] is True
             assert metrics["vs_sdpa"]["relative_l2"] <= 1e-2
@@ -266,7 +270,7 @@ def test_dplm_tiny_flash_attention_3_forward_parity_and_backward(
     ("model_id", "model_class", "backends"),
     (
         ("esm2_8m", FastEsmForMaskedLM, _FLASH_BACKENDS),
-        ("esmc_small", ESMplusplusForMaskedLM, _FLASH_BACKENDS),
+        ("esmc_small", ESMplusplusForMaskedLM, _ESMC_FLASH_BACKENDS),
         ("dplm_150m", DPLMModel, ("flash_attention_3",)),
     ),
 )

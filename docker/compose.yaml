@@ -9,6 +9,7 @@ x-common: &common
   <<: *accelerator
   working_dir: /workspace
   environment:
+    CUBLAS_WORKSPACE_CONFIG: ":4096:8"
     HF_HOME: /cache/huggingface
     TORCH_HOME: /cache/torch
     XDG_CACHE_HOME: /cache/xdg
@@ -25,6 +26,7 @@ x-reference: &reference
   <<: *accelerator
   working_dir: /opt/oracle
   environment:
+    CUBLAS_WORKSPACE_CONFIG: ":4096:8"
     HF_HOME: /cache/huggingface
     TORCH_HOME: /cache/torch
     XDG_CACHE_HOME: /cache/xdg

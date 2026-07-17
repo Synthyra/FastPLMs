@@ -1,0 +1,183 @@
+{
+  "checkpoint": {
+    "files": {
+      "config.json": "git-sha1:1232d0aee4be551021d8e70e66ed2b062df917bf",
+      "pytorch_model.bin": "sha256:2ee07356b125d1e3e57503c204111fd7323347fc4735d41d3caac57c2a78e116",
+      "special_tokens_map.json": "git-sha1:121c8d54f8ea66cdf678f48b3cb37c05b4de5c0d",
+      "tokenizer_config.json": "git-sha1:aad24fba9f1bad2d74ed79d414ddcd60e6b0f812",
+      "vocab.txt": "git-sha1:9abfdf5472c0ed970648b683b86ab131256b3e42"
+    },
+    "repo_id": "facebook/esmfold_v1",
+    "revision": "75a3841ee059df2bf4d56688166c8fb459ddd97a"
+  },
+  "environment": {
+    "details": {
+      "cuda_device": "NVIDIA H100 PCIe",
+      "cuda_runtime": "12.1",
+      "packages": "{\"esm\":\"2.0.1\",\"openfold\":\"unknown\",\"transformers\":null}",
+      "python": "3.10.12",
+      "torch": "2.2.2+cu121"
+    },
+    "fingerprint": "7da0cb1455d0769e0c48e6ebbdfc10a1ffaa256d3c66ea53727555a7291746fe"
+  },
+  "generation_command": [
+    "python",
+    "-m",
+    "tools.goldens",
+    "--native-root",
+    "artifacts/reference",
+    "--output-root",
+    "tests/goldens",
+    "--model",
+    "esmfold"
+  ],
+  "input_fingerprint": "f04e1b135c58b016c4892874f07ab4f2d0a1d5c7bae8d6b3c793e9a213789124",
+  "model_id": "esmfold",
+  "schema_version": 1,
+  "source_files": {
+    "native/bundle.safetensors": "c05dca537fb181ba870dc5719f79699aa67d527b0b41df45a0bb1351665f85e5",
+    "native/metadata.json": "879021f65bc841eec8ca345eed96fdb612ae1a5f00c3de48130f928c8f7b03c8"
+  },
+  "sources": [
+    {
+      "id": "fair-esm",
+      "revision": "2b369911bb5b4b0dda914521b9475cad1656b2ac",
+      "url": "https://github.com/facebookresearch/esm.git"
+    },
+    {
+      "id": "openfold",
+      "revision": "4b41059694619831a7db195b7e0988fc4ff3a307",
+      "url": "https://github.com/aqlaboratory/openfold.git"
+    }
+  ],
+  "tensor_file": {
+    "path": "esmfold.safetensors",
+    "sha256": "873b1b325a43d8e0f35f355c8914a2a9fe611cc48763875e9e6a22e09ec9ebcb"
+  },
+  "tensors": {
+    "output__aatype": {
+      "dtype": "int64",
+      "sha256": "12e353264f5c6697211bb27df7fa1fd108dc8019355ea1b66baf150efcd89abf",
+      "shape": [
+        1,
+        17
+      ]
+    },
+    "output__aligned_confidence_probs": {
+      "dtype": "float32",
+      "sha256": "783aefc0eb745dac9102115b12329c46261bd187c0e8cc33ed6cd6699a138a57",
+      "shape": [
+        1,
+        17,
+        17,
+        64
+      ]
+    },
+    "output__atom14_atom_exists": {
+      "dtype": "float32",
+      "sha256": "39d00d48fb9e6355df1d745fd05e40079002b33a96d2c02ab35763436cbc78ef",
+      "shape": [
+        1,
+        17,
+        14
+      ]
+    },
+    "output__atom37_atom_exists": {
+      "dtype": "float32",
+      "sha256": "8660de4e7c67484fa52a10ceae7f694aba0f3e22b9019d37477a981e228516a2",
+      "shape": [
+        1,
+        17,
+        37
+      ]
+    },
+    "output__chain_index": {
+      "dtype": "int64",
+      "sha256": "eec3ee5312bee6dad430af43fb71ac95e6ad0f44b4d4ed977a285ca56ef201b0",
+      "shape": [
+        1,
+        17
+      ]
+    },
+    "output__distogram_logits": {
+      "dtype": "bfloat16",
+      "sha256": "f812607760e27af921f4f31bc5a1cf1ec796752b0d4b7d77a5643457427dc4f9",
+      "shape": [
+        1,
+        17,
+        17,
+        64
+      ]
+    },
+    "output__lm_logits": {
+      "dtype": "bfloat16",
+      "sha256": "4bac20c86ded2489f81b4d5216ea4e949b6f5c79a21c664bc339da9addd8569a",
+      "shape": [
+        1,
+        17,
+        23
+      ]
+    },
+    "output__mean_plddt": {
+      "dtype": "float32",
+      "sha256": "7a5d58ad6175772ee49d42728d2b6750079500b69011a2d5b54f25e0c9917582",
+      "shape": [
+        1
+      ]
+    },
+    "output__plddt": {
+      "dtype": "bfloat16",
+      "sha256": "fc8052d8207eb5fd4f7911331dc872e93b93fc59d33cdb04616ad4c20794de3c",
+      "shape": [
+        1,
+        17,
+        37
+      ]
+    },
+    "output__positions": {
+      "dtype": "float32",
+      "sha256": "95c5322ee14f387b30184b143615938936411ef8c748ca61a7386a3380a5e215",
+      "shape": [
+        8,
+        1,
+        17,
+        14,
+        3
+      ]
+    },
+    "output__predicted_aligned_error": {
+      "dtype": "float32",
+      "sha256": "8b407575ddf53428577ee01c87f934532ccbbf4853be3d8a5970e252783b951e",
+      "shape": [
+        1,
+        17,
+        17
+      ]
+    },
+    "output__ptm": {
+      "dtype": "float32",
+      "sha256": "ad4d22c0cede0d19446953b16cd20cf79fc065ca7e784d1c8e0abf481717b4f5",
+      "shape": [
+        1
+      ]
+    },
+    "output__ptm_logits": {
+      "dtype": "bfloat16",
+      "sha256": "516eee815e3424be539c82b893a6c23f3a3e13d417448eef0d2102bcabc892e7",
+      "shape": [
+        1,
+        17,
+        17,
+        64
+      ]
+    },
+    "output__residue_index": {
+      "dtype": "int64",
+      "sha256": "a4bdd35642ad0ef486b9e1132a861bf10733d26d2dbf2c21e42b7ffc12f0d80f",
+      "shape": [
+        1,
+        17
+      ]
+    }
+  }
+}

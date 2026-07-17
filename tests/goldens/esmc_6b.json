@@ -1,0 +1,114 @@
+{
+  "checkpoint": {
+    "files": {
+      "config.json": "git-sha1:19f5fb09e4f630fb5b748a497183c22a87ec5102",
+      "model-00001-of-00006.safetensors": "sha256:bd90149ff223e6ac1a0cac6147a5ae0df20d3a21df4f65356a1f19cd14f4aa8a",
+      "model-00002-of-00006.safetensors": "sha256:f75e2144d8269fe2eb4b3e0823fb089b94f176d8024153e85b8fb573a42294fa",
+      "model-00003-of-00006.safetensors": "sha256:f699f01ecc9691d9c6470492765fe54b8b5d2e9f277c139e89427433ffdfe0b2",
+      "model-00004-of-00006.safetensors": "sha256:46add1b7be098bbfdc3073884851ba3057f1b33ea23a158b650a37007dabd13d",
+      "model-00005-of-00006.safetensors": "sha256:1e1cb62f060a34e18f54a31a76683ef888b8cec59e73315f5b31d25d45a1f88c",
+      "model-00006-of-00006.safetensors": "sha256:56c73e13ae96e777ce65eee99364056069ef93b646470f352f83c5f1037b1b18",
+      "special_tokens_map.json": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+      "tokenizer.json": "git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+      "tokenizer_config.json": "git-sha1:2238856624f8d39f03af53a2576c2d9b18c82f61"
+    },
+    "repo_id": "biohub/ESMC-6B",
+    "revision": "45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a"
+  },
+  "environment": {
+    "details": {
+      "cuda_device": "NVIDIA H100 PCIe",
+      "cuda_runtime": "13.0",
+      "packages": "{\"accelerate\":\"1.13.0\",\"anyio\":\"4.14.2\",\"asttokens\":\"3.0.2\",\"attrs\":\"26.1.0\",\"biopython\":\"1.87\",\"biotite\":\"1.7.1\",\"biotraj\":\"1.2.2\",\"boto3\":\"1.43.49\",\"botocore\":\"1.43.49\",\"brotli\":\"1.2.0\",\"certifi\":\"2026.6.17\",\"charset-normalizer\":\"3.4.9\",\"cloudpathlib\":\"0.24.0\",\"comm\":\"0.2.3\",\"contourpy\":\"1.3.3\",\"cuda-bindings\":\"13.0.3\",\"cuda-pathfinder\":\"1.2.2\",\"cuda-toolkit\":\"13.0.3.0\",\"cycler\":\"0.12.1\",\"decorator\":\"5.3.1\",\"dna_features_viewer\":\"3.1.5\",\"einops\":\"0.8.2\",\"esm\":\"3.3.0\",\"executing\":\"2.2.1\",\"filelock\":\"3.29.0\",\"fonttools\":\"4.63.0\",\"fsspec\":\"2026.4.0\",\"h11\":\"0.16.0\",\"hf-xet\":\"1.5.1\",\"httpcore\":\"1.0.9\",\"httpx\":\"0.28.1\",\"huggingface_hub\":\"0.36.2\",\"idna\":\"3.18\",\"iniconfig\":\"2.3.0\",\"ipython\":\"9.15.0\",\"ipython_pygments_lexers\":\"1.1.1\",\"ipywidgets\":\"8.1.8\",\"jedi\":\"0.20.0\",\"jinja2\":\"3.1.6\",\"jmespath\":\"1.1.0\",\"joblib\":\"1.5.3\",\"jupyterlab_widgets\":\"3.0.16\",\"kiwisolver\":\"1.5.0\",\"markupsafe\":\"3.0.3\",\"matplotlib\":\"3.11.0\",\"matplotlib-inline\":\"0.2.2\",\"mpmath\":\"1.3.0\",\"msgpack\":\"1.2.1\",\"msgpack-numpy\":\"0.4.8\",\"narwhals\":\"2.24.0\",\"networkx\":\"3.6.1\",\"numpy\":\"1.26.4\",\"nvidia-cublas\":\"13.1.1.3\",\"nvidia-cuda-cupti\":\"13.0.85\",\"nvidia-cuda-nvrtc\":\"13.0.88\",\"nvidia-cuda-runtime\":\"13.0.96\",\"nvidia-cudnn-cu13\":\"9.20.0.48\",\"nvidia-cufft\":\"12.0.0.61\",\"nvidia-cufile\":\"1.15.1.6\",\"nvidia-curand\":\"10.4.0.35\",\"nvidia-cusolver\":\"12.0.4.66\",\"nvidia-cusparse\":\"12.6.3.3\",\"nvidia-cusparselt-cu13\":\"0.8.1\",\"nvidia-nccl-cu13\":\"2.29.7\",\"nvidia-nvjitlink\":\"13.2.78\",\"nvidia-nvshmem-cu13\":\"3.4.5\",\"nvidia-nvtx\":\"13.0.85\",\"packaging\":\"26.2\",\"pandas\":\"3.0.3\",\"parso\":\"0.8.7\",\"pexpect\":\"4.9.0\",\"pillow\":\"12.3.0\",\"pip\":\"26.1.1\",\"pluggy\":\"1.6.0\",\"prompt_toolkit\":\"3.0.52\",\"psutil\":\"7.2.2\",\"ptyprocess\":\"0.7.0\",\"pure_eval\":\"0.2.3\",\"py3dmol\":\"2.5.5\",\"pydssp\":\"0.9.1\",\"pygments\":\"2.20.0\",\"pygtrie\":\"2.5.0\",\"pyparsing\":\"3.3.2\",\"pytest\":\"9.0.2\",\"python-dateutil\":\"2.9.0.post0\",\"pyyaml\":\"6.0.3\",\"rdkit\":\"2026.3.4\",\"regex\":\"2026.7.10\",\"requests\":\"2.34.2\",\"s3transfer\":\"0.19.1\",\"safetensors\":\"0.5.3\",\"scikit-learn\":\"1.9.0\",\"scipy\":\"1.17.1\",\"setuptools\":\"78.1.0\",\"six\":\"1.17.0\",\"stack-data\":\"0.6.3\",\"sympy\":\"1.14.0\",\"tenacity\":\"9.1.4\",\"threadpoolctl\":\"3.6.0\",\"tokenizers\":\"0.22.2\",\"torch\":\"2.13.0+cu130\",\"tqdm\":\"4.68.4\",\"traitlets\":\"5.15.1\",\"transformers\":\"4.57.6\",\"triton\":\"3.7.1\",\"typing_extensions\":\"4.15.0\",\"urllib3\":\"2.7.0\",\"uv\":\"0.10.12\",\"wcwidth\":\"0.8.2\",\"widgetsnbextension\":\"4.0.15\",\"zstd\":\"1.5.7.3\"}",
+      "python": "3.12.3",
+      "torch": "2.13.0+cu130"
+    },
+    "fingerprint": "2ee39b50c310ea21ecbb1e87a69bb9a05076126031d2e6566014ba794dd57c1b"
+  },
+  "generation_command": [
+    "python",
+    "-m",
+    "tools.goldens",
+    "--native-root",
+    "artifacts/reference",
+    "--output-root",
+    "tests/goldens",
+    "--model",
+    "esmc_6b"
+  ],
+  "input_fingerprint": "182b178e6588beba6a1c681379e3bc8068824eccecc192891173efb89c5068f6",
+  "model_id": "esmc_6b",
+  "schema_version": 1,
+  "source_files": {
+    "native/bf16.safetensors": "3c41e3d2b47b03cf573f229df1fb2b15f3d8287ef8ed6eb0336f89f212214d78",
+    "native/metadata.json": "43b4fc3571d0ae565ddad8423e8e1e90de2daf484bae4192b2f61d867e4e8990"
+  },
+  "sources": [
+    {
+      "id": "biohub-esm",
+      "revision": "82ee35553d39169d678f784c8d3f8712ffd7d2c4",
+      "url": "https://github.com/Biohub/esm.git"
+    },
+    {
+      "id": "biohub-transformers",
+      "revision": "3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf",
+      "url": "https://github.com/Biohub/transformers.git"
+    }
+  ],
+  "tensor_file": {
+    "path": "esmc_6b.safetensors",
+    "sha256": "a948945e985c7deaca7be8b7eed09c0a9521a2af3f2b10fc2ec7a7d2a0f99ada"
+  },
+  "tensors": {
+    "input__attention_mask": {
+      "dtype": "int64",
+      "sha256": "a4e9ccfdfcb15d75f04569d8635f6121b56d1316e59da2db60416ce57f78551f",
+      "shape": [
+        3,
+        63
+      ]
+    },
+    "input__input_ids": {
+      "dtype": "int64",
+      "sha256": "7c017cc9226e1262e354dd8494e871929c0ef516214ad8afa58c97df32885bed",
+      "shape": [
+        3,
+        63
+      ]
+    },
+    "input__sequence_id": {
+      "dtype": "bool",
+      "sha256": "546670f3d1d77f83906edd5dac50f17e99493f27136e41b2fcae8d6d3d9613ba",
+      "shape": [
+        3,
+        63
+      ]
+    },
+    "output__last_hidden_state": {
+      "dtype": "bfloat16",
+      "sha256": "397f1a0b45fbb7d486e7785264a37d42de19568d16fdb1d575f79c2389763d2b",
+      "shape": [
+        3,
+        63,
+        2560
+      ]
+    },
+    "output__logits": {
+      "dtype": "bfloat16",
+      "sha256": "952de90dae9c1868c2006148bcbe04d4fa2886beec6908bc702a097a96315b1f",
+      "shape": [
+        3,
+        63,
+        64
+      ]
+    },
+    "residue_mask": {
+      "dtype": "bool",
+      "sha256": "73319c84be8834bd1df5ff869f2137ac3aef45c900f775c33824b61bda50eb24",
+      "shape": [
+        3,
+        63
+      ]
+    }
+  }
+}

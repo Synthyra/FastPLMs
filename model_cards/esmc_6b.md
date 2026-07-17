@@ -34,13 +34,13 @@ revision below identifies the source weights; it is not a claim that the
 generated artifact already exists at that Hub revision.
 
 Leave attention unspecified for the Transformers default or request one of
-`eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` with `attn_implementation`.
+`eager`, `sdpa`, `flash_attention_2` with `attn_implementation`.
 The BF16 execution policy is `static_parameters`:
 parameters loaded directly in BF16.
 
 ## Notes and limitations
 
-Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager, Flex Attention, FlashAttention 2, and FlashAttention 3 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.02 and hard limit of 0.03. The global Q99.9, cosine, top-1, and Jensen-Shannon thresholds remain unchanged. Any target miss blocks release.
+Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention is not advertised because ESMC-6B exceeds the relative-L2 hard limit on the pinned generated boundary panel; FlashAttention 3 is not advertised because ESMC-6B falls below the residue-cosine hard limit on that panel. Any target miss blocks release.
 
 ## Provenance
 

@@ -123,6 +123,31 @@ def test_dplm2_rotary_cache_follows_frequency_buffer_dtype() -> None:
     assert rotary._cos_cached.dtype == rotary.inv_freq.dtype == torch.bfloat16
 
 
+def test_dplm2_direct_esm_checkpoint_applies_embeddings_once() -> None:
+    config = DPLM2Config(**_common_config(64), dplm_type="dplm_esm")
+    model = DPLM2ForMaskedLM(config, dropout=0.0).eval()
+    calls = 0
+
+    def count_embedding_calls(
+        _module: torch.nn.Module,
+        _inputs: tuple[object, ...],
+        _output: object,
+    ) -> None:
+        nonlocal calls
+        calls += 1
+
+    handle = model.esm.embeddings.register_forward_hook(count_embedding_calls)
+    try:
+        model(
+            input_ids=torch.tensor([[0, 6, 7, 2]]),
+            attention_mask=torch.ones(1, 4, dtype=torch.long),
+        )
+    finally:
+        handle.remove()
+
+    assert calls == 1
+
+
 def test_dplm2_predict_contacts_derives_padding_mask_when_omitted() -> None:
     model = DPLM2ForMaskedLM(DPLM2Config(**_common_config(64)), dropout=0.0).eval()
     input_ids = torch.tensor([[0, 6, 7, 2, 1]])

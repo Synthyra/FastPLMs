@@ -13,7 +13,6 @@ import torch
 from transformers import AutoModelForMaskedLM, AutoTokenizer, EsmTokenizer
 
 from fastplms.models.ankh.modeling_ankh import (
-    FAST_ANKH_ENCODER,
     FastAnkhConfig,
     _load_ankh_tokenizer,
 )
@@ -25,7 +24,7 @@ from fastplms.models.dplm2.modeling_dplm2 import (
 )
 from fastplms.models.dplm2.tokenization_dplm2 import DPLM2Tokenizer
 from fastplms.models.e1.modeling_e1 import E1BatchPreparer, E1Config, E1ForMaskedLM, get_tokenizer
-from fastplms.models.esm2.modeling_fastesm import FastEsmPreTrainedModel
+from fastplms.models.esm2.modeling_fastesm import FastEsmPreTrainedModel, FastEsmTokenizer
 from fastplms.models.esm3.modeling_esm3 import (
     SEQUENCE_VOCAB as ESM3_SEQUENCE_VOCAB,
 )
@@ -151,6 +150,34 @@ def test_esm_tokenizer_loaders_use_checkpoint_provenance(
     assert requests == [(f"local-{model_name.lower()}-artifact", {"revision": "c" * 40})]
 
 
+def test_esm2_tokenizer_normalizes_cls_as_bos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tokenizer = SimpleNamespace(bos_token_id=None, cls_token="<cls>")
+    monkeypatch.setattr(
+        EsmTokenizer,
+        "from_pretrained",
+        staticmethod(lambda *_args, **_kwargs: tokenizer),
+    )
+    owner = SimpleNamespace(
+        _fastplms_tokenizer=None,
+        config=SimpleNamespace(_name_or_path="local-esm2-artifact", _commit_hash=None),
+    )
+
+    actual = FastEsmPreTrainedModel.tokenizer.fget(owner)
+
+    assert actual.bos_token == "<cls>"
+
+
+def test_esm2_tokenizer_rejects_residues_outside_official_alphabet() -> None:
+    tokenizer = object.__new__(FastEsmTokenizer)
+    tokenizer._token_to_id = {"A": 5}
+
+    assert tokenizer._convert_token_to_id("A") == 5
+    with pytest.raises(KeyError, match="J"):
+        tokenizer._convert_token_to_id("J")
+
+
 @pytest.mark.parametrize(
     ("model_class", "model_name"),
     (
@@ -174,7 +201,10 @@ def test_esm_tokenizer_loaders_reject_missing_checkpoint_provenance(
 def test_ankh_tokenizer_loader_uses_checkpoint_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    expected_tokenizer = object()
+    class Tokenizer:
+        backend_tokenizer = SimpleNamespace(pre_tokenizer=None)
+
+    expected_tokenizer = Tokenizer()
     requests: list[tuple[str, dict[str, str]]] = []
 
     def load_tokenizer(source: str, **kwargs: str) -> object:
@@ -186,6 +216,7 @@ def test_ankh_tokenizer_loader_uses_checkpoint_provenance(
 
     assert _load_ankh_tokenizer(config) is expected_tokenizer
     assert requests == [("local-ankh-artifact", {"revision": "d" * 40})]
+    assert expected_tokenizer.backend_tokenizer.pre_tokenizer is not None
 
 
 CANONICAL_SEQUENCES = [
@@ -224,13 +255,9 @@ def _fast_tokenizer(config: dict):
     if config["model_type"] == "ANKH":
         # ANKH artifacts are built from the manifest's pinned official source,
         # including its byte-exact tokenizer assets.
-        encoder = FAST_ANKH_ENCODER(
-            _tiny_ankh_config(
-                config["official_path"],
-                config["official_revision"],
-            )
+        return _load_ankh_tokenizer(
+            _tiny_ankh_config(config["official_path"], config["official_revision"])
         )
-        return encoder.tokenizer
     if config["model_type"] == "ESMC":
         return EsmSequenceTokenizer()
     if config["model_type"] in ("ESM2", "DPLM"):
@@ -246,6 +273,10 @@ def _fast_tokenizer(config: dict):
 
 
 def _reference_tokenizer(config: dict):
+    if config["model_type"] == "ANKH":
+        return _load_ankh_tokenizer(
+            _tiny_ankh_config(config["official_path"], config["official_revision"])
+        )
     if config["model_type"] == "ESMC":
         return EsmSequenceTokenizer()
     if config["model_type"] in ("ESM2", "DPLM"):

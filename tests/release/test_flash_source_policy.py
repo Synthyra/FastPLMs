@@ -125,7 +125,7 @@ def test_fastplms_10_manifest_advertises_only_validated_flash_backends() -> None
     assert advertised == {
         "dplm": ["flash_attention_3"],
         "esm2": ["flash_attention_2", "flash_attention_3"],
-        "esm_plusplus": ["flash_attention_2", "flash_attention_3"],
+        "esm_plusplus": ["flash_attention_2"],
     }
     assert {
         implementation: kernel.dtypes

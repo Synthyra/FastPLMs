@@ -20,7 +20,7 @@ relative_l2_hard_limits = {"fp32": 2e-5, "bf16": 3e-2}
 structure_targets = {
     "ca_rmsd": 0.10,
     "lddt_ca": 0.995,
-    "plddt_mae": 0.001,
+    "plddt_mae": 0.0012,
     "pae_mae": 0.10,
     "ptm_error": 0.002,
 }

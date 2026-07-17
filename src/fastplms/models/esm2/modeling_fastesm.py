@@ -64,6 +64,8 @@ class FastEsmConfig(PretrainedConfig):
     def __init__(
         self,
         vocab_size: int | None = None,
+        bos_token_id: int | None = 0,
+        eos_token_id: int | None = 2,
         mask_token_id: int | None = None,
         pad_token_id: int | None = None,
         hidden_size: int = 768,
@@ -81,7 +83,11 @@ class FastEsmConfig(PretrainedConfig):
         attn_backend: str | None = None,
         **kwargs,
     ):
+        bos_token_id = 0 if bos_token_id is None else bos_token_id
+        eos_token_id = 2 if eos_token_id is None else eos_token_id
         super().__init__(
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
             pad_token_id=pad_token_id,
             mask_token_id=mask_token_id,
             **kwargs,
@@ -106,6 +112,40 @@ class FastEsmConfig(PretrainedConfig):
     def to_dict(self) -> dict[str, Any]:
         """Serialize the complete configuration to a Python dictionary."""
         return super().to_dict()
+
+
+class FastEsmTokenizer(EsmTokenizer):
+    """Retain fair-esm's strict handling of residues outside its alphabet."""
+
+    def __call__(
+        self,
+        text: Any = None,
+        *args: Any,
+        truncation: Any = None,
+        max_length: int | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        if truncation and max_length is not None:
+            residue_limit = max(1, max_length - 2)
+            if isinstance(text, str):
+                text = text[:residue_limit]
+            elif isinstance(text, (list, tuple)) and all(
+                isinstance(sequence, str) for sequence in text
+            ):
+                text = [sequence[:residue_limit] for sequence in text]
+        return super().__call__(
+            text,
+            *args,
+            truncation=truncation,
+            max_length=max_length,
+            **kwargs,
+        )
+
+    def _convert_token_to_id(self, token: str) -> int:
+        try:
+            return self._token_to_id[token]
+        except KeyError:
+            raise KeyError(token) from None
 
 
 class EsmSelfAttention(nn.Module):
@@ -179,6 +219,19 @@ class EsmSelfAttention(nn.Module):
         if output_attentions:
             return self._manual_attn(
                 query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
+            )
+
+        if (
+            self.training
+            and self.dropout_prob > 0
+            and (
+                self.attn_backend.is_flash
+                or self.attn_backend == AttentionBackend.FLEX_ATTENTION
+            )
+        ):
+            raise RuntimeError(
+                f"ESM2 {self.attn_backend.value} attention is inference-only when attention "
+                "dropout is nonzero. Use eager or SDPA for this training configuration."
             )
 
         if self.attn_backend == AttentionBackend.EAGER:
@@ -475,7 +528,11 @@ class FastEsmPreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
                 )
             revision = getattr(self.config, "_commit_hash", None)
             tokenizer_kwargs = {"revision": revision} if revision else {}
-            tokenizer = EsmTokenizer.from_pretrained(source, **tokenizer_kwargs)
+            tokenizer = FastEsmTokenizer.from_pretrained(source, **tokenizer_kwargs)
+            if getattr(tokenizer, "bos_token_id", None) is None and hasattr(
+                tokenizer, "cls_token"
+            ):
+                tokenizer.bos_token = tokenizer.cls_token
             self.__dict__["_fastplms_tokenizer"] = tokenizer
         return tokenizer
 

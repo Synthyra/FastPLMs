@@ -68,6 +68,29 @@ def _identity(
     return _map_state(state, lambda key: key, expected_keys)
 
 
+def _cast_floating(
+    state: Mapping[str, torch.Tensor],
+    expected_keys: frozenset[str] | None,
+    dtype: torch.dtype,
+) -> StateDict:
+    transformed = _identity(state, expected_keys)
+    return {
+        key: value.to(dtype=dtype) if value.is_floating_point() else value
+        for key, value in transformed.items()
+    }
+
+
+def _drop_unused_rotary_position_table(
+    state: Mapping[str, torch.Tensor],
+    expected_keys: frozenset[str] | None,
+) -> StateDict:
+    return _map_state(
+        state,
+        lambda key: None if key == "esm.embeddings.position_embeddings.weight" else key,
+        expected_keys,
+    )
+
+
 def _esm2(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
@@ -138,7 +161,6 @@ def _esm2(
             target = "lm_head.decoder.weight"
         elif key == "lm_head.bias":
             store(key, "lm_head.bias")
-            store(key, "lm_head.decoder.bias")
             continue
         elif key.startswith("lm_head."):
             target = key
@@ -183,11 +205,22 @@ def _esm3(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
-    return _map_state(
+    transformed = _map_state(
         state,
         lambda key: key if key.startswith("esm3.") else f"esm3.{key}",
         expected_keys,
     )
+    return {
+        key: value.to(dtype=torch.float32) if value.is_floating_point() else value
+        for key, value in transformed.items()
+    }
+
+
+def _e1(
+    state: Mapping[str, torch.Tensor],
+    expected_keys: frozenset[str] | None,
+) -> StateDict:
+    return _cast_floating(state, expected_keys, torch.bfloat16)
 
 
 def _boltz2(
@@ -295,9 +328,9 @@ _TRANSFORMS: dict[str, Transform] = {
     "esm2_hf_to_fastplms_v1": _esm2,
     "esmc_to_fastplms_v1": _esmc,
     "esm3_to_fastplms_v1": _esm3,
-    "e1_to_fastplms_v1": _identity,
-    "dplm_to_fastplms_v1": _identity,
-    "dplm2_to_fastplms_v1": _identity,
+    "e1_to_fastplms_v1": _e1,
+    "dplm_to_fastplms_v1": _drop_unused_rotary_position_table,
+    "dplm2_to_fastplms_v1": _drop_unused_rotary_position_table,
     # FastAnkh's official encoder-decoder class retains the complete T5 state.
     "ankh_t5_to_fastplms_v1": _identity,
     "boltz2_inference_core_v1": _boltz2,

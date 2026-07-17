@@ -29,9 +29,10 @@ from tests.parity.support.reference_adapters import (
     OfficialGenerationUnavailable,
     snapshot_path,
 )
-from tests.parity.support.semantic_config import semantic_config as _semantic_config
+from tests.parity.support.semantic_config import transformed_semantic_config
 from tests.parity.support.state_transforms import (
     transform_parameter_names,
+    transform_preserves_aliases,
     transform_state,
 )
 
@@ -118,8 +119,10 @@ def _state_contract(model: nn.Module, transform_name: str) -> dict[str, Any]:
     for name, parameter in model.named_parameters(remove_duplicate=False):
         mapped = transform_parameter_names(transform_name, name)
         by_parameter.setdefault(id(parameter), set()).update(mapped)
-    aliases = sorted(
-        sorted(names) for names in by_parameter.values() if len(names) > 1
+    aliases = (
+        sorted(sorted(names) for names in by_parameter.values() if len(names) > 1)
+        if transform_preserves_aliases(transform_name)
+        else []
     )
     return {"tensors": tensors, "aliases": aliases}
 
@@ -130,7 +133,7 @@ def _normalize_tokenizer_error(message: str) -> str:
     return message.replace(
         "python, numpy, pytorch or tensorflow object.",
         "python, numpy or pytorch object.",
-    )
+    ).replace("python, numpy, or pytorch object.", "python, numpy or pytorch object.")
 
 
 def _token_result(tokenizer: object, sequences: Sequence[str], options: Mapping[str, Any]) -> Any:
@@ -478,7 +481,7 @@ def run_request(request_path: Path, output_root: Path) -> Path:
         "reference_files": request["reference_files"],
         "state_transform": request["state_transform"],
         "environment": _environment_metadata(),
-        "semantic_config": _semantic_config(core),
+        "semantic_config": transformed_semantic_config(core, request["state_transform"]),
         "state": _state_contract(core, request["state_transform"]),
         "tokenizer": _tokenizer_contract(
             tokenizer,

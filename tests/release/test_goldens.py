@@ -511,6 +511,14 @@ def test_native_requests_carry_manifest_checkpoint_file_identities(tmp_path: Pat
         assert request["reference_repo_id"] == spec.official.repo_id
         assert request["reference_revision"] == spec.official.revision
         assert request["reference_files"] == _official_files(spec)
+        if spec.generation_contract == "official_unavailable":
+            assert request["generation_policy"] == spec.generation_contract
+            assert request["official_generation_limitation"] == (
+                DPLM2_3B_GENERATION_LIMITATION
+            )
+        else:
+            assert "generation_policy" not in request
+            assert "official_generation_limitation" not in request
         assert tuple(map(len, request["sequences"])) == MIXED_LENGTHS
 
 
@@ -523,9 +531,9 @@ def test_manifest_generation_matrix_covers_every_check_checkpoint(
     entries = golden_generation_matrix(registry, native_root, output_root)
     specs = check_tier_specs(registry)
     assert tuple(entry.model_id for entry in entries) == tuple(spec.id for spec in specs)
-    assert len(entries) == 29
+    assert len(entries) == 28
     assert sum(entry.kind == "sequence" for entry in entries) == 23
-    assert sum(entry.kind == "structure" for entry in entries) == 6
+    assert sum(entry.kind == "structure" for entry in entries) == 5
     for entry, spec in zip(entries, specs, strict=True):
         assert entry.reference_container == spec.family.reference_container
         assert entry.metadata_path == output_root / f"{spec.id}.json"
@@ -658,4 +666,4 @@ def test_golden_status_reports_manifest_wide_generation_matrix(
     assert tuple(entry["model_id"] for entry in entries) == tuple(
         spec.id for spec in check_tier_specs(registry)
     )
-    assert len(entries) == 29
+    assert len(entries) == 28

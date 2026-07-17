@@ -1,0 +1,87 @@
+{
+  "checkpoint": {
+    "files": {
+      "config.json": "git-sha1:1abf33e52ee3d6be67d780ec57d32ac2b27b5306",
+      "pytorch_model.bin": "sha256:517b6e8b279dedcb477af240b35c46bd6eb3307723eb281e60d4b2c8a87b889b",
+      "special_tokens_map.json": "git-sha1:55b145827029ae9672e50d4bb368540daacce791",
+      "tokenizer.json": "git-sha1:212c5ef08819fa2463c6289ba4ef7db30e715c0a",
+      "tokenizer_config.json": "git-sha1:d7fe02ba6f2b18d9ccfa19ac129c9fdc9ec24d09"
+    },
+    "repo_id": "ElnaggarLab/ankh-large",
+    "revision": "74b371dbfa3ee0a05d32ae74df0c2e0b82d6b9a6"
+  },
+  "environment": {
+    "details": {
+      "cuda_device": "NVIDIA H100 PCIe",
+      "cuda_runtime": "13.0",
+      "packages": "{\"aiohappyeyeballs\":\"2.7.1\",\"aiohttp\":\"3.14.1\",\"aiosignal\":\"1.4.0\",\"ankh\":\"1.10.0\",\"async-timeout\":\"5.0.1\",\"attrs\":\"26.1.0\",\"biopython\":\"1.80\",\"certifi\":\"2026.6.17\",\"charset-normalizer\":\"3.4.9\",\"cuda-bindings\":\"13.0.3\",\"cuda-pathfinder\":\"1.2.2\",\"cuda-toolkit\":\"13.0.3.0\",\"datasets\":\"2.20.0\",\"dill\":\"0.3.8\",\"exceptiongroup\":\"1.3.1\",\"filelock\":\"3.29.0\",\"frozenlist\":\"1.8.0\",\"fsspec\":\"2024.5.0\",\"hf-xet\":\"1.5.1\",\"huggingface_hub\":\"0.36.2\",\"idna\":\"3.18\",\"iniconfig\":\"2.3.0\",\"jinja2\":\"3.1.6\",\"markupsafe\":\"3.0.3\",\"mpmath\":\"1.3.0\",\"multidict\":\"6.7.1\",\"multiprocess\":\"0.70.16\",\"networkx\":\"3.4.2\",\"numpy\":\"1.26.4\",\"nvidia-cublas\":\"13.1.1.3\",\"nvidia-cuda-cupti\":\"13.0.85\",\"nvidia-cuda-nvrtc\":\"13.0.88\",\"nvidia-cuda-runtime\":\"13.0.96\",\"nvidia-cudnn-cu13\":\"9.20.0.48\",\"nvidia-cufft\":\"12.0.0.61\",\"nvidia-cufile\":\"1.15.1.6\",\"nvidia-curand\":\"10.4.0.35\",\"nvidia-cusolver\":\"12.0.4.66\",\"nvidia-cusparse\":\"12.6.3.3\",\"nvidia-cusparselt-cu13\":\"0.8.1\",\"nvidia-nccl-cu13\":\"2.29.7\",\"nvidia-nvjitlink\":\"13.2.78\",\"nvidia-nvshmem-cu13\":\"3.4.5\",\"nvidia-nvtx\":\"13.0.85\",\"packaging\":\"26.2\",\"pandas\":\"2.3.3\",\"pip\":\"26.1.1\",\"pluggy\":\"1.6.0\",\"propcache\":\"0.5.2\",\"pyarrow\":\"25.0.0\",\"pyarrow-hotfix\":\"0.7\",\"pygments\":\"2.20.0\",\"pytest\":\"8.4.2\",\"python-dateutil\":\"2.9.0.post0\",\"pytz\":\"2026.2\",\"pyyaml\":\"6.0.3\",\"regex\":\"2026.7.10\",\"requests\":\"2.34.2\",\"safetensors\":\"0.6.2\",\"sentencepiece\":\"0.1.99\",\"setuptools\":\"78.1.0\",\"six\":\"1.17.0\",\"sympy\":\"1.14.0\",\"tokenizers\":\"0.13.3\",\"tomli\":\"2.4.1\",\"torch\":\"2.13.0+cu130\",\"tqdm\":\"4.68.4\",\"transformers\":\"4.25.1\",\"triton\":\"3.7.1\",\"typing_extensions\":\"4.15.0\",\"tzdata\":\"2026.3\",\"urllib3\":\"2.7.0\",\"xxhash\":\"3.8.1\",\"yarl\":\"1.24.2\"}",
+      "python": "3.10.12",
+      "torch": "2.13.0+cu130"
+    },
+    "fingerprint": "8b5a3c1563644f6c019f497de8a3d707c8f8711499e601e310810f1a599ae5d7"
+  },
+  "generation_command": [
+    "python",
+    "-m",
+    "tools.goldens",
+    "--native-root",
+    "artifacts/reference",
+    "--output-root",
+    "tests/goldens",
+    "--model",
+    "ankh_large"
+  ],
+  "input_fingerprint": "8b9b29613bd3a3455c5d5c47eb884cd698a52d8621ae1906571a4a4c97a80ee1",
+  "model_id": "ankh_large",
+  "schema_version": 1,
+  "source_files": {
+    "native/bf16.safetensors": "fdba8593cfb54ee4532e8f9fef7d5df110d66d245797ba37bb5c24049d918c2e",
+    "native/metadata.json": "7df438c5257521541034e7b8e8190c0c4f4cd31d6fb2b00c4f2c502296f68244"
+  },
+  "sources": [
+    {
+      "id": "ankh",
+      "revision": "02b4e25ce5389b9e771c9df6e546c62af1216f8e",
+      "url": "https://github.com/agemagician/Ankh.git"
+    }
+  ],
+  "tensor_file": {
+    "path": "ankh_large.safetensors",
+    "sha256": "3fb8d3ac27716d15a9ea92aeef6acf2b977bcc887d9b535000539e523673459b"
+  },
+  "tensors": {
+    "input__attention_mask": {
+      "dtype": "int64",
+      "sha256": "37b3e21090fc901d75954c7a7d000a6359ab4bbc9dd0bf8354c5634f1bc70a45",
+      "shape": [
+        3,
+        62
+      ]
+    },
+    "input__input_ids": {
+      "dtype": "int64",
+      "sha256": "0c1af56968fd959dbdd7ff32df0e44986766d188b1dc4fbcb0028558e9094b95",
+      "shape": [
+        3,
+        62
+      ]
+    },
+    "output__last_hidden_state": {
+      "dtype": "bfloat16",
+      "sha256": "b8f603b15932d06c2aad9baabf6e7811ecf937589078a078ad79745414b21733",
+      "shape": [
+        3,
+        62,
+        1536
+      ]
+    },
+    "residue_mask": {
+      "dtype": "bool",
+      "sha256": "5cdc874e7bff8e7a0a5752d0a4e9c46e6575f188f6ced645f33930d174a90f78",
+      "shape": [
+        3,
+        62
+      ]
+    }
+  }
+}
