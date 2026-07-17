@@ -8,7 +8,9 @@ import torch
 from fastplms.models.dplm.modeling_dplm import DPLMConfig, DPLMForMaskedLM
 from fastplms.models.dplm2.modeling_dplm2 import (
     DPLM2Config,
+    DPLM2EncoderOutput,
     DPLM2ForMaskedLM,
+    DPLM2Model,
     ModifiedRotaryEmbedding,
 )
 
@@ -146,6 +148,36 @@ def test_dplm2_direct_esm_checkpoint_applies_embeddings_once() -> None:
         handle.remove()
 
     assert calls == 1
+
+
+def test_dplm2_automodel_infers_official_multimodal_types_and_returns_pooling() -> None:
+    model = object.__new__(DPLM2Model)
+    torch.nn.Module.__init__(model)
+    model.config = DPLM2Config(**_common_config(64))
+    input_ids = torch.tensor([[33, 50, 34, 1, 0, 6, 2, 1]])
+    expected_mask = input_ids.ne(model.config.pad_token_id)
+    expected_types = torch.tensor([[0, 0, 0, 2, 1, 1, 1, 2]])
+    observed: dict[str, torch.Tensor] = {}
+
+    class CapturingEncoder(torch.nn.Module):
+        def forward(self, **kwargs: object) -> DPLM2EncoderOutput:
+            observed["attention_mask"] = kwargs["attention_mask"].detach().clone()
+            observed["type_ids"] = kwargs["type_ids"].detach().clone()
+            return DPLM2EncoderOutput(
+                last_hidden_state=torch.zeros(
+                    1, input_ids.shape[1], model.config.hidden_size
+                )
+            )
+
+    model.esm = CapturingEncoder()
+    model.pooler = torch.nn.Identity()
+    output = model(input_ids=input_ids)
+    tuple_output = model(input_ids=input_ids, return_dict=False)
+
+    assert torch.equal(observed["attention_mask"], expected_mask)
+    assert torch.equal(observed["type_ids"], expected_types)
+    assert output.pooler_output is not None
+    assert tuple_output[1] is not None
 
 
 def test_dplm2_predict_contacts_derives_padding_mask_when_omitted() -> None:

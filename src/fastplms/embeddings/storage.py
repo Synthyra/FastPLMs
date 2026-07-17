@@ -168,8 +168,15 @@ def save_safetensors_result(
     if current:
         shards.append(current)
 
+    requested_path = Path(path)
+    shard_prefix = (
+        f"{requested_path.stem}-embeddings"
+        if requested_path.suffix in {".json", ".safetensors"}
+        else "embeddings"
+    )
     shard_names = [
-        f"embeddings-{i + 1:05d}-of-{len(shards):05d}.safetensors" for i in range(len(shards))
+        f"{shard_prefix}-{i + 1:05d}-of-{len(shards):05d}.safetensors"
+        for i in range(len(shards))
     ]
     for name, tensors in zip(shard_names, shards, strict=True):
         temporary = index_path.parent / f".{name}.tmp"

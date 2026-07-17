@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from tools.remote.run import (
     REMOTE_CLEANUP_SCRIPT,
     SENSITIVE_SUFFIXES,
     SUITES,
+    RemoteRunner,
+    RunnerConfig,
     _is_sensitive,
     _require_clean_repository,
     _run_report,
@@ -60,6 +63,87 @@ def test_remote_runner_retrieves_the_complete_artifact_tree() -> None:
         encoding="utf-8"
     )
     assert "remote_workspace}/artifacts/." in source
+
+
+@pytest.mark.parametrize(
+    ("failure_phase", "failing_command"),
+    (
+        ("create-remote-workspace", "mkdir"),
+        ("upload-source-archive", "scp"),
+        ("extract-source-archive", "tar"),
+        ("remove-source-archive", "rm"),
+    ),
+)
+def test_remote_staging_failures_are_reported_and_cleaned(
+    monkeypatch,
+    tmp_path: Path,
+    failure_phase: str,
+    failing_command: str,
+) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    identity = tmp_path / "identity"
+    identity.write_text("test", encoding="utf-8")
+    artifacts = tmp_path / "artifacts"
+    revision = "a" * 40
+
+    monkeypatch.setattr("tools.remote.run._require_clean_repository", lambda _repository: None)
+    monkeypatch.setattr("tools.remote.run._git_head_revision", lambda _repository: revision)
+
+    def write_archive(_repository: Path, destination: Path) -> dict[str, dict[str, object]]:
+        destination.write_bytes(b"archive")
+        return {}
+
+    monkeypatch.setattr("tools.remote.run.create_source_archive", write_archive)
+
+    runner = RemoteRunner(
+        RunnerConfig(
+            host="gpu-host",
+            identity=identity,
+            repository=repository,
+            suite="unit",
+            artifacts=artifacts,
+        )
+    )
+    monkeypatch.setattr(runner, "_remote_base", lambda: "/remote/fastplms-runs")
+    ssh_commands: list[tuple[str, ...]] = []
+
+    def run_ssh(command, *, capture=False):
+        del capture
+        value = tuple(command)
+        ssh_commands.append(value)
+        if failing_command in {"mkdir", "tar", "rm"} and value[0] == failing_command:
+            raise subprocess.CalledProcessError(7, value)
+        return subprocess.CompletedProcess(value, 0, stdout="")
+
+    monkeypatch.setattr(runner, "_ssh", run_ssh)
+
+    def run_local(command, *, check, **kwargs):
+        del kwargs
+        value = tuple(command)
+        if "-r" in value:
+            assert check is False
+            return subprocess.CompletedProcess(value, 1)
+        if failing_command == "scp":
+            assert check is True
+            raise subprocess.CalledProcessError(6, value)
+        return subprocess.CompletedProcess(value, 0)
+
+    monkeypatch.setattr(subprocess, "run", run_local)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        runner.run()
+
+    cleanup = remote_cleanup_command(
+        "/remote/fastplms-runs",
+        f"/remote/fastplms-runs/{runner.run_id}",
+    )
+    assert cleanup in ssh_commands
+    report_path = artifacts / runner.run_id / "remote-run.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    assert report["failure"]["phase"] == failure_phase
+    assert report["remote_cleanup"] == "succeeded"
 
 
 def test_remote_runner_rejects_a_dirty_exact_head(monkeypatch, tmp_path: Path) -> None:

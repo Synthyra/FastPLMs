@@ -504,6 +504,42 @@ def test_e1_config_uses_static_token_constants() -> None:
     assert config.eos_token_id == 2
 
 
+def test_e1_sequence_preparer_uses_model_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class RecordingPreparer:
+        def __init__(self, *, data_prep_config, **kwargs: object) -> None:
+            observed["config"] = data_prep_config
+            observed["kwargs"] = kwargs
+
+    monkeypatch.setattr(
+        "fastplms.models.e1.modeling_e1.E1BatchPreparer",
+        RecordingPreparer,
+    )
+    config = E1Config(
+        hidden_size=8,
+        intermediate_size=16,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        num_key_value_heads=1,
+        max_num_sequences=7,
+        max_num_positions_within_seq=31,
+        max_num_positions_global=64,
+    )
+    model = object.__new__(E1ForMaskedLM)
+    torch.nn.Module.__init__(model)
+    model.config = config
+    model.__dict__["_fastplms_tokenizer_kwargs"] = {}
+    model.__dict__["_fastplms_prep_tokens"] = None
+
+    assert model.prep_tokens is model.prep_tokens
+    prep_config = observed["config"]
+    assert prep_config.max_num_sequences == 7
+    assert prep_config.max_num_positions_within_seq == 31
+
+
 def test_e1_get_tokenizer_prefers_local_model_dir(tmp_path: Path) -> None:
     shutil.copyfile(_e1_tokenizer_json(), tmp_path / "tokenizer.json")
 

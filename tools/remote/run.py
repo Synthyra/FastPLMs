@@ -1037,37 +1037,51 @@ class RemoteRunner:
         source_archive_sha256 = ""
         submodule_revisions: dict[str, str] = {}
         execution_environment: dict[str, object] | None = None
-
-        with tempfile.TemporaryDirectory(prefix="fastplms-remote-") as temporary:
-            archive = Path(temporary) / "source.tar.gz"
-            provenance = create_source_archive(self.config.repository, archive)
-            submodule_revisions = {
-                path: str(record["head_revision"])
-                for path, record in provenance.items()
-            }
-            _require_clean_repository(self.config.repository)
-            if _git_head_revision(self.config.repository) != git_revision:
-                raise RuntimeError("Git HEAD changed while the remote source archive was built.")
-            with archive.open("rb") as stream:
-                source_archive_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
-            self._ssh(("mkdir", "-p", remote_workspace))
-            subprocess.run(
-                [
-                    *self.scp_prefix,
-                    str(archive),
-                    f"{self.config.host}:{remote_workspace}/source.tar.gz",
-                ],
-                check=True,
-            )
-            self._ssh(("tar", "-xzf", f"{remote_workspace}/source.tar.gz", "-C", remote_workspace))
-            self._ssh(("rm", f"{remote_workspace}/source.tar.gz"))
-
         suite = SUITES[self.config.suite]
         phase = "initialize"
         retrieval_returncode = -1
         cleanup_status = "retained" if self.config.keep_remote else "pending"
         cleanup_failure: BaseException | None = None
+        remote_workspace_touched = False
+        remote_workspace_created = False
         try:
+            with tempfile.TemporaryDirectory(prefix="fastplms-remote-") as temporary:
+                phase = "create-source-archive"
+                archive = Path(temporary) / "source.tar.gz"
+                provenance = create_source_archive(self.config.repository, archive)
+                submodule_revisions = {
+                    path: str(record["head_revision"])
+                    for path, record in provenance.items()
+                }
+                _require_clean_repository(self.config.repository)
+                if _git_head_revision(self.config.repository) != git_revision:
+                    raise RuntimeError(
+                        "Git HEAD changed while the remote source archive was built."
+                    )
+                with archive.open("rb") as stream:
+                    source_archive_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+
+                phase = "create-remote-workspace"
+                remote_workspace_touched = True
+                self._ssh(("mkdir", "-p", remote_workspace))
+                remote_workspace_created = True
+
+                phase = "upload-source-archive"
+                subprocess.run(
+                    [
+                        *self.scp_prefix,
+                        str(archive),
+                        f"{self.config.host}:{remote_workspace}/source.tar.gz",
+                    ],
+                    check=True,
+                )
+                phase = "extract-source-archive"
+                self._ssh(
+                    ("tar", "-xzf", f"{remote_workspace}/source.tar.gz", "-C", remote_workspace)
+                )
+                phase = "remove-source-archive"
+                self._ssh(("rm", f"{remote_workspace}/source.tar.gz"))
+
             phase = "initialize-artifacts"
             self._ssh(("mkdir", "-p", f"{remote_workspace}/artifacts/junit"))
             for target in suite.bake_targets:
@@ -1095,15 +1109,18 @@ class RemoteRunner:
             phase = "complete"
         finally:
             active_failure = sys.exception()
-            remote_artifacts = f"{self.config.host}:{remote_workspace}/artifacts/."
-            retrieval = subprocess.run(
-                [*self.scp_prefix, "-r", remote_artifacts, str(output)],
-                check=False,
-            )
-            retrieval_returncode = retrieval.returncode
+            if remote_workspace_created:
+                remote_artifacts = f"{self.config.host}:{remote_workspace}/artifacts/."
+                retrieval = subprocess.run(
+                    [*self.scp_prefix, "-r", remote_artifacts, str(output)],
+                    check=False,
+                )
+                retrieval_returncode = retrieval.returncode
             try:
-                if not self.config.keep_remote:
+                if not self.config.keep_remote and remote_workspace_touched:
                     self._ssh(remote_cleanup_command(remote_base, remote_workspace))
+                    cleanup_status = "succeeded"
+                elif not self.config.keep_remote:
                     cleanup_status = "succeeded"
             except BaseException as error:
                 cleanup_failure = error

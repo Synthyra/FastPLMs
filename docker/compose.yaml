@@ -2,8 +2,14 @@ name: fastplms
 
 x-accelerator: &accelerator
   ipc: host
-  gpus: all
   init: true
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
 
 x-common: &common
   <<: *accelerator

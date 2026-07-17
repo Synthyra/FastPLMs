@@ -101,7 +101,9 @@ def test_reference_stages_copy_distribution_licenses_for_each_source_context() -
 def test_compose_centralizes_gpu_and_ipc_configuration() -> None:
     compose = COMPOSE_FILE.read_text(encoding="utf-8")
     assert "ipc: host" in compose
-    assert "gpus: all" in compose
+    assert "driver: nvidia" in compose
+    assert "count: all" in compose
+    assert "capabilities: [gpu]" in compose
     assert "HF_HOME: /cache/huggingface" in compose
     assert "TORCH_HOME: /cache/torch" in compose
     assert compose.count('CUBLAS_WORKSPACE_CONFIG: ":4096:8"') == 2

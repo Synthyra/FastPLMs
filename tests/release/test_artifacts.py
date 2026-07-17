@@ -282,6 +282,38 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
         validate_artifact(first)
 
 
+@pytest.mark.parametrize(
+    "relative_name",
+    (
+        "../outside.txt",
+        "/absolute.txt",
+        "C:/absolute.txt",
+        "nested//non-normalized.txt",
+        r"nested\windows-path.txt",
+    ),
+)
+def test_artifact_validation_rejects_unsafe_manifest_paths(
+    tmp_path: Path,
+    relative_name: str,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    artifact = build_artifact(spec, registry, checkpoint, tmp_path / "artifact", source_root)
+    manifest_path = artifact / "artifact-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[relative_name] = "sha256:" + "0" * 64
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    with pytest.raises(ArtifactError, match="invalid artifact manifest path"):
+        validate_artifact(artifact)
+
+
 def test_different_runtime_bundles_fail_without_replacing_loaded_runtime(
     tmp_path: Path,
 ) -> None:
@@ -428,13 +460,22 @@ def test_artifact_copies_official_tokenizer_bytes_exactly(tmp_path: Path) -> Non
 
     candidate_tokenizer = checkpoint / "tokenizer.json"
     official_tokenizer = official_snapshot / "tokenizer.json"
+    candidate_tokenizer_config = checkpoint / "tokenizer_config.json"
+    official_tokenizer_config = official_snapshot / "tokenizer_config.json"
     candidate_tokenizer.write_bytes(b'{"source":"candidate"}\n')
     official_tokenizer.write_bytes(b'{"source":"official"}\n')
+    candidate_tokenizer_config.write_bytes(b'{"tokenizer_class":"CandidateTokenizer"}\n')
+    official_tokenizer_config.write_bytes(b'{"tokenizer_class":"BuiltInTokenizer"}\n')
     fast = replace(
         spec.fast,
         files=(
             *spec.fast.files,
             FileDigest("tokenizer.json", "sha256", hash_file(candidate_tokenizer)),
+            FileDigest(
+                "tokenizer_config.json",
+                "sha256",
+                hash_file(candidate_tokenizer_config),
+            ),
         ),
     )
     official = replace(
@@ -442,6 +483,11 @@ def test_artifact_copies_official_tokenizer_bytes_exactly(tmp_path: Path) -> Non
         files=(
             *spec.official.files,
             FileDigest("tokenizer.json", "sha256", hash_file(official_tokenizer)),
+            FileDigest(
+                "tokenizer_config.json",
+                "sha256",
+                hash_file(official_tokenizer_config),
+            ),
         ),
     )
     family = replace(spec.family, tokenizer_mode="tokenizer")
@@ -463,12 +509,106 @@ def test_artifact_copies_official_tokenizer_bytes_exactly(tmp_path: Path) -> Non
         tokenizer_dir=official_snapshot,
     )
     assert (artifact / "tokenizer.json").read_bytes() == official_tokenizer.read_bytes()
+    assert (
+        artifact / "tokenizer_config.json"
+    ).read_bytes() == official_tokenizer_config.read_bytes()
     provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["tokenizer_checkpoint"]["repo_id"] == official.repo_id
     assert provenance["tokenizer_checkpoint"]["revision"] == official.revision
     assert provenance["tokenizer_checkpoint"]["files"] == {
-        "tokenizer.json": official.files[-1].encoded
+        "tokenizer.json": official.files[-2].encoded,
+        "tokenizer_config.json": official.files[-1].encoded,
     }
+
+
+def test_artifact_rewrites_custom_tokenizer_auto_map_to_local_bridge(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    official_snapshot = tmp_path / "official"
+    checkpoint.mkdir()
+    official_snapshot.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+
+    runtime_path = source_root / "src" / "fastplms" / "models" / "toy" / "modeling_toy.py"
+    runtime_path.write_text(
+        runtime_path.read_text(encoding="utf-8") + "\nclass ToyTokenizer: pass\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    candidate_tokenizer = checkpoint / "tokenizer.json"
+    official_tokenizer = official_snapshot / "tokenizer.json"
+    official_tokenizer_config = official_snapshot / "tokenizer_config.json"
+    candidate_tokenizer.write_text('{"source":"candidate"}\n', encoding="utf-8")
+    official_tokenizer.write_text('{"source":"official"}\n', encoding="utf-8")
+    official_tokenizer_config.write_text(
+        json.dumps(
+            {
+                "auto_map": {
+                    "AutoProcessor": "upstream_processing.UpstreamProcessor",
+                    "AutoTokenizer": [
+                        "upstream_tokenization.UpstreamTokenizer",
+                        None,
+                    ],
+                },
+                "preserved": True,
+                "tokenizer_class": "UpstreamTokenizer",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fast = replace(
+        spec.fast,
+        files=(
+            *spec.fast.files,
+            FileDigest("tokenizer.json", "sha256", hash_file(candidate_tokenizer)),
+        ),
+    )
+    official = replace(
+        spec.official,
+        files=(
+            *spec.official.files,
+            FileDigest("tokenizer.json", "sha256", hash_file(official_tokenizer)),
+            FileDigest(
+                "tokenizer_config.json",
+                "sha256",
+                hash_file(official_tokenizer_config),
+            ),
+        ),
+    )
+    family = replace(
+        spec.family,
+        tokenizer_mode="tokenizer",
+        tokenizer_class="fastplms.models.toy.modeling_toy.ToyTokenizer",
+    )
+    tokenizer_spec = replace(spec, family=family, fast=fast, official=official)
+    tokenizer_registry = ModelRegistry(
+        schema_version=registry.schema_version,
+        upstreams=registry.upstreams,
+        families={family.id: family},
+        models={tokenizer_spec.id: tokenizer_spec},
+        legal_files=registry.legal_files,
+    )
+
+    artifact = build_artifact(
+        tokenizer_spec,
+        tokenizer_registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        tokenizer_dir=official_snapshot,
+    )
+
+    tokenizer_config = json.loads(
+        (artifact / "tokenizer_config.json").read_text(encoding="utf-8")
+    )
+    assert tokenizer_config["auto_map"] == {
+        "AutoProcessor": "upstream_processing.UpstreamProcessor",
+        "AutoTokenizer": ["modeling_fastplms.ToyTokenizer", None],
+    }
+    assert tokenizer_config["preserved"] is True
+    assert "ToyTokenizer =" in (artifact / "modeling_fastplms.py").read_text(encoding="utf-8")
+    validate_artifact(artifact)
 
 
 def test_esm3_uses_the_manifest_pinned_official_esmc_tokenizer() -> None:

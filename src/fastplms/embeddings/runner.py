@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,48 @@ def _attention_kernel_metadata(backend: str | None) -> dict[str, Any] | None:
     }
 
 
+def _fingerprint_jsonable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _fingerprint_jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_fingerprint_jsonable(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return {
+        "class": f"{value.__class__.__module__}.{value.__class__.__qualname__}",
+        "value": str(value),
+    }
+
+
+def _tokenizer_content_sha256(tokenizer: Any) -> str:
+    content: dict[str, Any] = {
+        "init_kwargs": getattr(tokenizer, "init_kwargs", None),
+        "special_tokens_map": getattr(tokenizer, "special_tokens_map", None),
+        "model_max_length": getattr(tokenizer, "model_max_length", None),
+        "padding_side": getattr(tokenizer, "padding_side", None),
+        "truncation_side": getattr(tokenizer, "truncation_side", None),
+    }
+    get_vocab = getattr(tokenizer, "get_vocab", None)
+    if callable(get_vocab):
+        content["vocabulary"] = get_vocab()
+    get_added_vocab = getattr(tokenizer, "get_added_vocab", None)
+    if callable(get_added_vocab):
+        content["added_vocabulary"] = get_added_vocab()
+    backend = getattr(tokenizer, "backend_tokenizer", None)
+    backend_to_str = getattr(backend, "to_str", None)
+    if callable(backend_to_str):
+        content["backend"] = backend_to_str()
+    serialized = json.dumps(
+        _fingerprint_jsonable(content),
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
 def _tokenizer_metadata(model: Any, tokenizer: Any | None) -> dict[str, Any]:
     resolved = tokenizer if tokenizer is not None else getattr(model, "tokenizer", None)
     if resolved is None:
@@ -169,7 +212,27 @@ def _tokenizer_metadata(model: Any, tokenizer: Any | None) -> dict[str, Any]:
         "name_or_path": getattr(resolved, "name_or_path", None),
         "vocab_size": getattr(resolved, "vocab_size", None),
         "special_token_ids": list(getattr(resolved, "all_special_ids", ())),
+        "content_sha256": _tokenizer_content_sha256(resolved),
     }
+
+
+@contextmanager
+def _temporary_eval(model: Any) -> Iterator[None]:
+    was_training = getattr(model, "training", None)
+    eval_method = getattr(model, "eval", None)
+    train_method = getattr(model, "train", None)
+    if (
+        not isinstance(was_training, bool)
+        or not callable(eval_method)
+        or not callable(train_method)
+    ):
+        yield
+        return
+    eval_method()
+    try:
+        yield
+    finally:
+        train_method(was_training)
 
 
 def _software_versions() -> dict[str, str | None]:
@@ -514,6 +577,7 @@ def embed_dataset(
             f"{sorted(requested_unsupported)}."
         )
 
+    tokenizer_metadata = _tokenizer_metadata(model, tokenizer)
     (
         input_fingerprint,
         run_fingerprint,
@@ -528,7 +592,7 @@ def embed_dataset(
         truncate=truncate,
         dtype=dtype,
         model_kwargs=model_kwargs,
-        tokenizer_metadata=_tokenizer_metadata(model, tokenizer),
+        tokenizer_metadata=tokenizer_metadata,
         model_state_fingerprint=model_state_fingerprint,
         persist_output=output is not None,
     )
@@ -590,7 +654,7 @@ def embed_dataset(
         pool_slices = pooler.output_slices(pooled_width // len(pooling_names))
     need_attentions = "parti" in pooling_names
 
-    with torch.inference_mode():
+    with _temporary_eval(model), torch.inference_mode():
         for start in range(start_position, len(records), batch_size):
             batch_records = records[start : start + batch_size]
             sequences = [
@@ -710,7 +774,7 @@ def embed_dataset(
         "esmc_revision": getattr(model, "_esmc_source_revision", None),
         "esmc_files": getattr(model, "_esmc_source_files", None),
         "token_policy": token_policy,
-        "tokenizer": _tokenizer_metadata(model, tokenizer),
+        "tokenizer": tokenizer_metadata,
         "pooling": list(pooling_names),
         "pool_slices": pool_slices,
         "full_embeddings": full_embeddings,

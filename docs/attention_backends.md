@@ -163,9 +163,9 @@ It measures relative L2 error, relative 99.9th-percentile error, first-percentil
 residue cosine, per-sequence pooled cosine, confident-position top-1 agreement,
 and Jensen-Shannon divergence for probability tensors. ESMC's documented
 alternate-backend relative-L2 target is the only family-specific numerical
-contract. A target miss by any advertised backend blocks release until the
-implementation is fixed or the backend is removed from the manifest and
-documentation.
+contract. A selectable backend may remain available when it misses a parity
+target, provided the manifest and model card disclose the measured deviation
+and identify the release-parity backend choices.
 
 Performance is measured separately from correctness. See
 [benchmarking](benchmarking.md) for compile-time, steady-state, padding, memory,

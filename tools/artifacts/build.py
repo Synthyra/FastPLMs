@@ -15,7 +15,7 @@ import re
 import shutil
 import subprocess
 from collections.abc import Iterable, Mapping
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
@@ -555,6 +555,34 @@ def _artifact_auto_map(spec: ModelSpec) -> dict[str, str]:
     }
 
 
+def _configure_custom_tokenizer(path: Path, spec: ModelSpec) -> None:
+    """Point a manifest-declared custom tokenizer at the flat artifact bridge."""
+
+    class_path = spec.family.tokenizer_class
+    if class_path is None:
+        return
+    config_path = path / "tokenizer_config.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ArtifactError(
+            f"Custom tokenizer {class_path!r} requires a valid tokenizer_config.json."
+        ) from error
+    if not isinstance(config, dict):
+        raise ArtifactError("tokenizer_config.json must contain a JSON object.")
+    raw_auto_map = config.get("auto_map")
+    if raw_auto_map is None or isinstance(raw_auto_map, (list, tuple)):
+        auto_map: dict[str, Any] = {}
+    elif isinstance(raw_auto_map, dict):
+        auto_map = dict(raw_auto_map)
+    else:
+        raise ArtifactError("tokenizer_config.json auto_map must be an object or legacy list.")
+    class_name = class_path.rsplit(".", maxsplit=1)[1]
+    auto_map["AutoTokenizer"] = [f"modeling_fastplms.{class_name}", None]
+    config["auto_map"] = auto_map
+    _write_json(config_path, config)
+
+
 def _bf16_execution_description(policy: str) -> str:
     if policy == "static_parameters":
         return "parameters are loaded directly in BF16"
@@ -926,6 +954,15 @@ def _provenance(
         "architecture": spec.family.architecture,
         "auto_map": dict(spec.auto_map),
         "tokenizer_class": spec.family.tokenizer_class,
+        "tokenizer_auto_map": (
+            [
+                "modeling_fastplms."
+                + spec.family.tokenizer_class.rsplit(".", maxsplit=1)[1],
+                None,
+            ]
+            if spec.family.tokenizer_class is not None
+            else None
+        ),
         "bf16_execution": spec.family.bf16_execution,
         "checkpoint_license": spec.family.checkpoint_license,
         "hub_license_metadata": dict(spec.family.hub_license_metadata),
@@ -1022,6 +1059,32 @@ def _content_manifest(root: Path) -> dict[str, str]:
     return result
 
 
+def _resolve_artifact_manifest_path(root: Path, relative_name: str) -> Path:
+    """Resolve one portable manifest path while keeping it inside the artifact."""
+
+    relative = PurePosixPath(relative_name)
+    windows_relative = PureWindowsPath(relative_name)
+    if (
+        not relative_name
+        or relative.is_absolute()
+        or windows_relative.is_absolute()
+        or windows_relative.drive
+        or "\\" in relative_name
+        or ".." in relative.parts
+        or "." in relative.parts
+        or relative_name != relative.as_posix()
+    ):
+        raise ArtifactError(f"invalid artifact manifest path: {relative_name!r}")
+    resolved = root.joinpath(*relative.parts).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise ArtifactError(
+            f"artifact manifest path escapes the artifact root: {relative_name!r}"
+        ) from error
+    return resolved
+
+
 def build_artifact(
     spec: ModelSpec,
     registry: ModelRegistry,
@@ -1074,6 +1137,7 @@ def build_artifact(
                 temporary,
                 tokenizer_checkpoint,
             )
+        _configure_custom_tokenizer(temporary, spec)
         canonical_weights = canonicalize_checkpoint_weights(
             checkpoint_dir,
             selected_checkpoint,
@@ -1217,7 +1281,11 @@ def validate_artifact(path: Path) -> None:
         except ValueError:
             failures.append(f"invalid digest entry for {relative_name}")
             continue
-        artifact_file = path.joinpath(*PurePosixPath(relative_name).parts)
+        try:
+            artifact_file = _resolve_artifact_manifest_path(path, relative_name)
+        except ArtifactError as error:
+            failures.append(str(error))
+            continue
         if not artifact_file.is_file():
             failures.append(f"missing {relative_name}")
             continue
@@ -1351,6 +1419,22 @@ def validate_artifact(path: Path) -> None:
                 ):
                     failures.append("invalid oracle asset provenance value")
         tokenizer_checkpoint = provenance.get("tokenizer_checkpoint")
+        tokenizer_auto_map = provenance.get("tokenizer_auto_map")
+        if tokenizer_auto_map is not None:
+            try:
+                tokenizer_config = json.loads(
+                    (path / "tokenizer_config.json").read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError):
+                tokenizer_config = None
+            configured_auto_map = (
+                tokenizer_config.get("auto_map", {}).get("AutoTokenizer")
+                if isinstance(tokenizer_config, dict)
+                and isinstance(tokenizer_config.get("auto_map"), dict)
+                else None
+            )
+            if configured_auto_map != tokenizer_auto_map:
+                failures.append("custom tokenizer AutoTokenizer mapping differs from provenance")
         if tokenizer_checkpoint is not None:
             tokenizer_files = (
                 tokenizer_checkpoint.get("files")
@@ -1371,6 +1455,14 @@ def validate_artifact(path: Path) -> None:
                         failures.append(
                             f"tokenizer provenance contains a non-tokenizer file: {relative_name}"
                         )
+                        continue
+                    if (
+                        PurePosixPath(relative_name).name == "tokenizer_config.json"
+                        and tokenizer_auto_map is not None
+                    ):
+                        # This file is intentionally rewritten to point at the
+                        # artifact-local bridge. Its final digest is enforced by
+                        # artifact-manifest.json and the mapping above.
                         continue
                     try:
                         algorithm, expected = encoded_digest.split(":", maxsplit=1)

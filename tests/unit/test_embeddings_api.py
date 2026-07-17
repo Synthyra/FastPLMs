@@ -14,6 +14,7 @@ from fastplms.embeddings import (
     EmbeddingInput,
     EmbeddingResult,
     LazyTensorReference,
+    Pooler,
     embed_dataset,
     load_legacy_pth,
     load_safetensors_result,
@@ -62,6 +63,16 @@ class InterruptibleEmbeddingModel(SyntheticEmbeddingModel):
         self.calls += 1
         if self.calls == self.fail_on_call:
             raise RuntimeError("simulated interruption")
+        return super()._embedding_batch(sequences)
+
+
+class TrainingAwareEmbeddingModel(SyntheticEmbeddingModel):
+    def __init__(self) -> None:
+        super().__init__()
+        self.observed_training: list[bool] = []
+
+    def _embedding_batch(self, sequences: list[str]) -> EmbeddingBatch:
+        self.observed_training.append(self.training)
         return super()._embedding_batch(sequences)
 
 
@@ -123,6 +134,22 @@ def test_result_preserves_order_and_duplicates() -> None:
     with pytest.raises(ValueError, match="Duplicate id"):
         result.as_dict()
     assert list(result.as_dict(duplicates="first")) == ["first", "second"]
+
+
+def test_embedding_temporarily_uses_eval_and_restores_training_state() -> None:
+    model = TrainingAwareEmbeddingModel()
+    model.train()
+
+    embed_dataset(model, ["ACD"])
+
+    assert model.observed_training == [False]
+    assert model.training is True
+
+    interrupted = InterruptibleEmbeddingModel(fail_on_call=1)
+    interrupted.train()
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        embed_dataset(interrupted, ["ACD"])
+    assert interrupted.training is True
 
 
 def test_full_embeddings_contain_biological_residues_only() -> None:
@@ -243,6 +270,50 @@ def test_caller_owned_model_state_fingerprint_overrides_state_hash() -> None:
         embed_dataset(model, ["ACD"], model_state_fingerprint="  ")
 
 
+def test_tokenizer_content_changes_run_fingerprint() -> None:
+    class Tokenizer:
+        all_special_ids = (0, 2)
+        name_or_path = "synthetic/tokenizer"
+        vocab_size = 4
+        special_tokens_map = {"bos_token": "<bos>", "eos_token": "<eos>"}
+        model_max_length = 32
+        padding_side = "right"
+        truncation_side = "right"
+
+        def __init__(self, vocab, *, mode: str = "first") -> None:
+            self._vocab = vocab
+            self.init_kwargs = {"mode": mode}
+
+        def get_vocab(self):
+            return self._vocab
+
+    model = SyntheticEmbeddingModel()
+    first = embed_dataset(
+        model,
+        ["ACD"],
+        tokenizer=Tokenizer({"<bos>": 0, "A": 1, "<eos>": 2, "D": 3}),
+    )
+    changed_vocab = embed_dataset(
+        model,
+        ["ACD"],
+        tokenizer=Tokenizer({"<bos>": 0, "D": 1, "<eos>": 2, "A": 3}),
+    )
+    changed_config = embed_dataset(
+        model,
+        ["ACD"],
+        tokenizer=Tokenizer(
+            {"<bos>": 0, "A": 1, "<eos>": 2, "D": 3},
+            mode="second",
+        ),
+    )
+
+    assert first.metadata["tokenizer"]["content_sha256"] != (
+        changed_vocab.metadata["tokenizer"]["content_sha256"]
+    )
+    assert first.metadata["run_fingerprint"] != changed_vocab.metadata["run_fingerprint"]
+    assert first.metadata["run_fingerprint"] != changed_config.metadata["run_fingerprint"]
+
+
 def test_local_artifact_identity_fills_embedding_provenance() -> None:
     model = SyntheticEmbeddingModel()
     model.config._name_or_path = "dist/hub/ESM2-8M"
@@ -314,6 +385,34 @@ def test_all_poolers_and_output_slices() -> None:
     assert torch.isfinite(result[0].load_tensor()).all()
     assert result.metadata["pool_slices"]["mean"] == (0, 2)
     assert result.metadata["pool_slices"]["parti"] == (14, 16)
+
+
+def test_poolers_ignore_nonfinite_excluded_positions_and_reject_nonfinite_output() -> None:
+    X = torch.tensor([[[1.0, 2.0], [3.0, 4.0], [torch.nan, torch.inf]]])
+    M = torch.tensor([[True, True, False]])
+
+    pooled = Pooler(("mean", "norm", "std", "var"))(X, M)
+
+    assert torch.isfinite(pooled).all()
+    torch.testing.assert_close(
+        pooled,
+        torch.tensor(
+            [
+                [
+                    2.0,
+                    3.0,
+                    10.0**0.5,
+                    20.0**0.5,
+                    1.0,
+                    1.0,
+                    1.0,
+                    1.0,
+                ]
+            ]
+        ),
+    )
+    with pytest.raises(ValueError, match="produced non-finite output"):
+        Pooler("mean")(torch.tensor([[[torch.nan], [1.0]]]), torch.tensor([[True, False]]))
 
 
 def test_parti_requires_eager_attention() -> None:
@@ -432,6 +531,23 @@ def test_safetensors_round_trip_is_lazy(tmp_path) -> None:
     }
     assert run_manifest["record_count"] == len(source)
     assert torch.equal(loaded[1].load_tensor(), source[1].load_tensor())
+
+
+def test_named_safetensors_outputs_do_not_share_shards(tmp_path) -> None:
+    first_source = embed_dataset(SyntheticEmbeddingModel(), ["ACD"])
+    second_source = embed_dataset(SyntheticEmbeddingModel(), ["GGG"])
+    first_path = tmp_path / "first.safetensors"
+    second_path = tmp_path / "second.safetensors"
+
+    save_safetensors_result(first_source, first_path)
+    save_safetensors_result(second_source, second_path)
+
+    first_loaded = load_safetensors_result(first_path)
+    second_loaded = load_safetensors_result(second_path)
+    assert torch.equal(first_loaded[0].load_tensor(), first_source[0].load_tensor())
+    assert torch.equal(second_loaded[0].load_tensor(), second_source[0].load_tensor())
+    assert list(tmp_path.glob("first-embeddings-*.safetensors"))
+    assert list(tmp_path.glob("second-embeddings-*.safetensors"))
 
 
 def test_safetensors_run_manifest_rejects_mismatched_index(tmp_path) -> None:

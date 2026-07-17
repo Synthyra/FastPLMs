@@ -776,7 +776,19 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
         output_s_max: Optional[bool] = False,
         return_dict: Optional[bool] = None,
         type_ids: Optional[torch.Tensor] = None,
-    ) -> DPLM2EncoderOutput:
+    ) -> Union[Tuple[torch.Tensor, ...], BaseModelOutputWithPoolingAndCrossAttentions]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        direct_dplm_esm = getattr(self.config, "dplm_type", None) == "dplm_esm"
+        if input_ids is not None:
+            normalized_input_ids = _normalize_dplm2_input_ids(
+                input_ids, self.config.vocab_size
+            )
+            if attention_mask is None:
+                attention_mask = normalized_input_ids.ne(self.config.pad_token_id)
+            if type_ids is None and not direct_dplm_esm:
+                type_ids = _infer_modality_type(normalized_input_ids, attention_mask)
+            input_ids = normalized_input_ids
+
         outputs = self.esm(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -790,11 +802,18 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
         sequence_output = outputs.last_hidden_state
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
-        return DPLM2EncoderOutput(
+        if not return_dict:
+            return (sequence_output, pooled_output) + tuple(
+                value
+                for value in (outputs.hidden_states, outputs.attentions, outputs.s_max)
+                if value is not None
+            )
+
+        return BaseModelOutputWithPoolingAndCrossAttentions(
             last_hidden_state=sequence_output,
+            pooler_output=pooled_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
-            s_max=outputs.s_max,
         )
 
 
@@ -1168,8 +1187,16 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
 
 # Importing the DPLM2 model implementation makes its paired tokenizer visible
 # to AutoTokenizer. This is registration only; it performs no I/O or downloads.
-AutoTokenizer.register(
-    DPLM2Config,
-    tokenizer_class=DPLM2Tokenizer,
-    exist_ok=True,
-)
+try:
+    AutoTokenizer.register(
+        DPLM2Config,
+        tokenizer_class=DPLM2Tokenizer,
+        exist_ok=True,
+    )
+except TypeError:
+    # Transformers 4.x used this name; 5.x prefers tokenizer_class.
+    AutoTokenizer.register(
+        DPLM2Config,
+        slow_tokenizer_class=DPLM2Tokenizer,
+        exist_ok=True,
+    )

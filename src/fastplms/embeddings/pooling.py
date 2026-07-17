@@ -117,20 +117,22 @@ class Pooler:
         M = _validate_inputs(X, residue_mask)
         M_expanded = M.unsqueeze(-1)
         count = M_expanded.sum(dim=1).clamp_min(1)
+        X_residues = X.masked_fill(~M_expanded, 0)
         outputs: list[Tensor] = []
 
         for name in self.names:
             if name == "mean":
-                Y = (X * M_expanded).sum(dim=1) / count
+                Y = X_residues.sum(dim=1) / count
             elif name == "max":
                 Y = X.masked_fill(~M_expanded, -torch.inf).max(dim=1).values
             elif name == "norm":
-                Y = torch.linalg.vector_norm(X * M_expanded, ord=2, dim=1)
+                Y = torch.linalg.vector_norm(X_residues, ord=2, dim=1)
             elif name == "median":
                 Y = X.masked_fill(~M_expanded, torch.nan).nanmedian(dim=1).values
             elif name in {"var", "std"}:
-                mean = (X * M_expanded).sum(dim=1, keepdim=True) / count.unsqueeze(1)
-                variance = (((X - mean) ** 2) * M_expanded).sum(dim=1) / count
+                mean = X_residues.sum(dim=1, keepdim=True) / count.unsqueeze(1)
+                centered = (X - mean).masked_fill(~M_expanded, 0)
+                variance = (centered**2).sum(dim=1) / count
                 Y = variance.sqrt() if name == "std" else variance
             elif name == "cls":
                 Y = X[:, 0]
@@ -152,6 +154,11 @@ class Pooler:
                     w = pagerank_weights(A_residue).to(dtype=X.dtype)
                     pooled.append(w @ X_i.index_select(0, indices))
                 Y = torch.stack(pooled)
+            if not bool(torch.isfinite(Y).all()):
+                raise ValueError(
+                    f"Pooling operation {name!r} produced non-finite output from "
+                    "biological residue embeddings."
+                )
             outputs.append(Y)
 
         return torch.cat(outputs, dim=-1)

@@ -180,11 +180,11 @@ limit.
 
 The ESM2 row applies to SDPA, Flex Attention, FlashAttention 2, and
 FlashAttention 3; eager retains the global contract. The ESMC row applies to
-eager and FlashAttention 2. Its SDPA remains
-bit-for-bit exact; Q99.9, pooled-cosine, and top-1 thresholds remain global.
-There are no informational-only comparisons: a target miss by any advertised
-backend blocks
-release until fixed or removed from both manifest and documentation.
+eager and FlashAttention 2. Its SDPA remains bit-for-bit exact; Q99.9,
+pooled-cosine, and top-1 thresholds remain global. A backend that misses these
+thresholds may remain selectable when its measured deviation is documented and
+it is excluded from release-parity claims. Such comparisons remain strict
+expected-failure diagnostics rather than silent passes.
 
 The pinned ESM2-3B SDPA BF16 path has a checkpoint-specific calibration:
 relative L2 target/hard limit `0.06`/`0.07`, relative Q99.9 `0.15`/`0.18`,

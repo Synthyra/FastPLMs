@@ -971,7 +971,13 @@ class E1PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
         tokenizer_kwargs = self.__dict__.get("_fastplms_tokenizer_kwargs")
         if tokenizer_kwargs is None:
             raise RuntimeError("E1 tokenizer settings were not initialized.")
-        preparer = E1BatchPreparer(**tokenizer_kwargs)
+        preparer = E1BatchPreparer(
+            data_prep_config=DataPrepConfig(
+                max_num_sequences=self.config.max_num_sequences,
+                max_num_positions_within_seq=self.config.max_num_positions_within_seq,
+            ),
+            **tokenizer_kwargs,
+        )
         self.__dict__["_fastplms_prep_tokens"] = preparer
         return preparer
 
