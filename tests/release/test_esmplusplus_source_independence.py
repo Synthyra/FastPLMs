@@ -204,9 +204,11 @@ def test_reimplemented_rotary_matches_transformers_cuda_policy() -> None:
 def test_esmplusplus_advertises_only_pinned_flash_kernels() -> None:
     assert PreTrainedESMplusplusModel._supports_flash_attn is True
     assert PreTrainedESMplusplusModel._supports_flash_attn_2 is True
-    assert PreTrainedESMplusplusModel._supports_flash_attn_3 is False
+    assert PreTrainedESMplusplusModel._supports_flash_attn_3 is True
     assert PreTrainedESMplusplusModel._fastplms_attention_implementations == (
         "eager",
         "sdpa",
+        "flex_attention",
         "flash_attention_2",
+        "flash_attention_3",
     )

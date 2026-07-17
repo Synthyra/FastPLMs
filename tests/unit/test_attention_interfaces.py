@@ -614,7 +614,7 @@ def test_transformers_513_exposes_every_advertised_handler() -> None:
             "esm_plusplus",
             "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py",
             "PreTrainedESMplusplusModel",
-            ("flash_attention_2",),
+            ("flash_attention_2", "flash_attention_3"),
         ),
         (
             "dplm",

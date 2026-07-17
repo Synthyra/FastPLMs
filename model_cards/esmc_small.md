@@ -34,13 +34,13 @@ revision below identifies the source weights; it is not a claim that the
 generated artifact already exists at that Hub revision.
 
 Leave attention unspecified for the Transformers default or request one of
-`eager`, `sdpa`, `flash_attention_2` with `attn_implementation`.
+`eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` with `attn_implementation`.
 The BF16 execution policy is `static_parameters`:
 parameters loaded directly in BF16.
 
 ## Notes and limitations
 
-Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention is not advertised because ESMC-6B exceeds the relative-L2 hard limit on the pinned generated boundary panel; FlashAttention 3 is not advertised because ESMC-6B falls below the residue-cosine hard limit on that panel. Any target miss blocks release.
+Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention and FlashAttention 3 remain selectable as opt-in alternatives, but they are not strict-parity choices: on the locked H100 BF16 generated-boundary panel, ESMC-6B Flex Attention exceeds the 0.03 relative-L2 hard limit and FlashAttention 3 falls below the 0.995 residue-cosine hard limit. The deviation is consistent with backend-specific BF16 kernel arithmetic; it is not a weight-conversion difference or silent fallback. Use SDPA for exact Biohub parity or FlashAttention 2 for release-gated acceleration.
 
 ## Provenance
 

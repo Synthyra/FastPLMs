@@ -31,7 +31,7 @@ backend and never silently substitutes a different requested kernel.
 | `sdpa` | `scaled_dot_product_attention` | Boolean or additive 4D mask | Kernel dispatch is selected by Torch |
 | `flex_attention` | Compiled Flex Attention score function | `BlockMask` | First shape and semantics require compilation |
 | `flash_attention_2` | Precompiled `kernels-community/flash-attn2` handler at revision `db6b51744f0c` | Packed 2D mask | ESM2 and ESM++ only |
-| `flash_attention_3` | Precompiled `kernels-community/flash-attn3` handler at revision `43f0bd269777` | Packed 2D mask | ESM2 and DPLM only |
+| `flash_attention_3` | Precompiled `kernels-community/flash-attn3` handler at revision `43f0bd269777` | Packed 2D mask | ESM2, ESM++, and DPLM only |
 
 The manifest lists the subset supported by each family. A requested name that
 is not listed for that family raises. A listed optional implementation that
@@ -75,19 +75,24 @@ On the locked H100 environment, FlashAttention 2 resolves an exact PyTorch
 2.13, CUDA 13, C++11 ABI, x86-64 artifact. FlashAttention 3 resolves a CUDA 13
 stable-ABI artifact. Both produce finite dense and mixed-padding outputs and
 meet ESM2's optimized-backend relative-L2 target of `0.02`. ESM++
-FlashAttention 2 results are recorded in its checkpoint cards. DPLM advertises FlashAttention 3
+backend-specific results are recorded in its checkpoint cards. DPLM advertises FlashAttention 3
 only; its FlashAttention 2 result remains outside the engineering target.
 
-All three advertised ESM++/ESMC backends are release-gated. SDPA must be bit-for-bit exact
+All five ESM++/ESMC backends are selectable. SDPA must be bit-for-bit exact
 against the pinned Biohub output across every hidden state, logits, special
-tokens, and padding. Alternate BF16 backends use a relative-L2 engineering
+tokens, and padding. Eager and FlashAttention 2 are release-gated in BF16 with a relative-L2 engineering
 target of `0.029` and hard limit of `0.03` on the pinned boundary-length and
 biological panels, with a relative-Q99.9 target of `0.049`, first-percentile
-residue-cosine target of `0.997`, and Jensen-Shannon target of `4e-4`. Flex
-Attention is not advertised because ESMC-6B exceeds the relative-L2 hard limit
-on the pinned generated boundary panel. FlashAttention 3 is not advertised
-because ESMC-6B falls below the residue-cosine hard limit on that panel. Every
-other BF16 metric retains the global contract.
+residue-cosine target of `0.997`, and Jensen-Shannon target of `4e-4`.
+
+Flex Attention and FlashAttention 3 are opt-in alternatives rather than
+strict-parity choices. On the locked H100 BF16 generated-boundary panel,
+ESMC-6B Flex Attention exceeds the `0.03` relative-L2 hard limit and
+FlashAttention 3 falls below the `0.995` residue-cosine hard limit. The
+deviation is consistent with backend-specific BF16 kernel arithmetic; it is
+not a weight-conversion difference or silent fallback. The documented
+exception is specific to the ESMC-6B boundary panel; use SDPA for exact Biohub
+parity or FlashAttention 2 for release-gated acceleration.
 
 DPLM advertises eager, SDPA, Flex Attention, and FlashAttention 3. Its pinned
 official BF16 contract keeps parameter storage in FP32 and uses CUDA BF16

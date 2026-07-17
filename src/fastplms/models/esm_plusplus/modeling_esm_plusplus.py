@@ -809,11 +809,13 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
     all_tied_weights_keys: ClassVar[dict[str, str]] = {}
     _supports_flash_attn = True
     _supports_flash_attn_2 = True
-    _supports_flash_attn_3 = False
+    _supports_flash_attn_3 = True
     _fastplms_attention_implementations = (
         "eager",
         "sdpa",
+        "flex_attention",
         "flash_attention_2",
+        "flash_attention_3",
     )
 
     @classmethod

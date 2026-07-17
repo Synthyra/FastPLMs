@@ -121,7 +121,9 @@ def test_bf16_calibrations_are_scoped_to_models_and_backends() -> None:
     assert esmc.family.attention == (
         "eager",
         "sdpa",
+        "flex_attention",
         "flash_attention_2",
+        "flash_attention_3",
     )
     assert _numeric_contract(esmc, torch.bfloat16, "sdpa") is BF16_CONTRACT
     assert _numeric_contract(esmc, torch.bfloat16, "flash_attention_2") is (

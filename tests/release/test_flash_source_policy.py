@@ -115,7 +115,7 @@ def test_no_docker_script_or_documentation_command_builds_source_flash_attn() ->
     )
 
 
-def test_fastplms_10_manifest_advertises_only_validated_flash_backends() -> None:
+def test_fastplms_10_manifest_advertises_only_pinned_flash_backends() -> None:
     registry = get_model_registry()
     advertised = {
         family.id: sorted(set(family.attention).intersection(_FLASH_BACKENDS))
@@ -125,7 +125,7 @@ def test_fastplms_10_manifest_advertises_only_validated_flash_backends() -> None
     assert advertised == {
         "dplm": ["flash_attention_3"],
         "esm2": ["flash_attention_2", "flash_attention_3"],
-        "esm_plusplus": ["flash_attention_2"],
+        "esm_plusplus": ["flash_attention_2", "flash_attention_3"],
     }
     assert {
         implementation: kernel.dtypes

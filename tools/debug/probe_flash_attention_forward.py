@@ -20,7 +20,7 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
 BACKENDS = ("flash_attention_2", "flash_attention_3")
 MODEL_BACKENDS = {
     "esm2": BACKENDS,
-    "esm_plusplus": ("flash_attention_2",),
+    "esm_plusplus": BACKENDS,
 }
 
 

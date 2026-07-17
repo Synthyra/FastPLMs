@@ -28,7 +28,7 @@ from tools.debug.probe_flash_attention_forward import _model_results, _shared_re
 from tools.debug.probe_flash_checkpoint_forward import _run_checkpoint
 
 _FLASH_BACKENDS = ("flash_attention_2", "flash_attention_3")
-_ESMC_FLASH_BACKENDS = ("flash_attention_2",)
+_ESMC_FLASH_BACKENDS = _FLASH_BACKENDS
 
 
 def _tiny_model_spec(family_id: str) -> tuple[type[torch.nn.Module], Any]:
