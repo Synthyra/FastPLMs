@@ -130,6 +130,67 @@ compares configuration, state and output against package source. Network access,
 an undeclared import, a missing legal text, or a missing conversion record fails
 the tier.
 
+## Publish files without weights
+
+Use the separate publisher to update runtime code, configuration, tokenizer or
+processor assets, model cards, licenses, and notices from an existing local
+artifact:
+
+```bash
+PYTHONPATH=src python -m tools.artifacts.publish \
+  --files-only \
+  esmfold2 esmfold2_fast \
+  esmfold2_experimental_cutoff2025 \
+  esmfold2_experimental_fast_cutoff2025 \
+  --artifact-root dist/hub \
+  --dry-run
+```
+
+Review the complete file plan, then repeat without `--dry-run`:
+
+```bash
+PYTHONPATH=src python -m tools.artifacts.publish \
+  --files-only \
+  esmfold2 esmfold2_fast \
+  esmfold2_experimental_cutoff2025 \
+  esmfold2_experimental_fast_cutoff2025 \
+  --artifact-root dist/hub
+```
+
+The command accepts only model IDs declared in `models.toml`. Use `--all`
+instead of positional IDs to select every manifest model explicitly.
+Authentication comes from `HF_TOKEN` or the cached Hugging Face login; tokens
+are not accepted as command-line arguments.
+
+Before the first commit, the publisher:
+
+1. Checks the local artifact and model identities.
+2. Verifies every selected non-weight file against `artifact-manifest.json`.
+3. Verifies the remote checkpoint weight identities against `models.toml`.
+4. Records the current remote commit as `parent_commit`.
+5. Preflights every selected repository.
+
+Each Hub update is one add-only commit made from explicit
+`CommitOperationAdd` entries. The command never creates a repository, adds a
+delete operation, uploads a weight-shaped path, or changes repository settings.
+The parent commit makes the update fail if another process changes the target
+branch between preflight and commit.
+
+`artifact-manifest.json` and `provenance.json` are intentionally withheld. They
+describe the complete local artifact, including its canonical weight shard
+layout, which may differ from the unchanged remote layout. All safetensors,
+PyTorch checkpoint formats, and weight index files are also withheld.
+
+Files-only publishing does not construct a fresh artifact. Build and validate
+the artifact first whenever runtime sources, generated model cards, legal
+inventory, configuration, or tokenizer assets have changed. The publisher does
+not read or hash local checkpoint shards, so the upload step itself performs no
+large weight I/O.
+
+The completed command prints each new Hub commit. Update the corresponding
+`fast_revision` values in `models.toml` before declaring those commits as a new
+FastPLMs release baseline.
+
 ## Generated cards and support data
 
 Run `PYTHONPATH=src python -m tools.artifacts.generate_docs` to render model cards and the

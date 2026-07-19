@@ -123,6 +123,21 @@ PYTHONPATH=src python -m tools.artifacts.build \
   --output-root dist/hub
 ```
 
+Preview an add-only Hub update that excludes checkpoint weights:
+
+```bash
+PYTHONPATH=src python -m tools.artifacts.publish \
+  --files-only esm2_150m \
+  --artifact-root dist/hub \
+  --dry-run
+```
+
+Remove `--dry-run` only after reviewing every planned path. The publisher must
+remain manifest-scoped, add-only, protected by the remote parent commit, and
+free of token command-line arguments. It must never upload weight-shaped paths,
+create repositories, delete remote files, or publish complete-artifact
+attestations during a files-only update.
+
 ## Change policy
 
 - Inspect the manifest, family code, tests, and current docs before changing a

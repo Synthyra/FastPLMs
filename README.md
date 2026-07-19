@@ -22,6 +22,7 @@ workflows compare the resulting FastPLMs artifact against that official source.
 - [Attention backends](#attention-backends)
 - [Design choices](#design-choices)
 - [Validation and reproducibility](#validation-and-reproducibility)
+- [Files-only Hub publication](#files-only-hub-publication)
 - [Documentation](#documentation)
 - [Contributing and citation](#contributing-and-citation)
 
@@ -611,6 +612,23 @@ inference-core state, feature preparation, and seeded execution are tested, but
 native-environment BF16 end-to-end inference does not yet meet the fixed
 numerical-equivalence limits. FastPLMs therefore makes no official inference
 equivalence claim for Boltz2.
+
+## Files-only Hub publication
+
+After building and validating local artifacts, update Hub runtime files and
+model cards without uploading or deleting checkpoint weights:
+
+```bash
+PYTHONPATH=src python -m tools.artifacts.publish \
+  --files-only esmfold2 esmfold2_fast \
+  --artifact-root dist/hub \
+  --dry-run
+```
+
+Remove `--dry-run` after reviewing the exact add-only file plan. Repository
+targets come exclusively from `models.toml`; authentication uses `HF_TOKEN` or
+the cached Hugging Face login. See [Local Hub artifacts](docs/artifacts.md) for
+the full safety contract and the four-model ESMFold2 command.
 
 ## Documentation
 
