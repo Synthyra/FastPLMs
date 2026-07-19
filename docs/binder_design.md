@@ -1,6 +1,6 @@
 # Binder design example
 
-`examples/tutorials/binder_design_fastplms.py` is a research workflow that
+`examples/binder_design_fastplms.py` is a research workflow that
 optimizes a soft binder sequence against ESMFold2 structural objectives and an
 ESM++ sequence prior. It is an example, not a package runtime service and not a
 claim that a designed sequence binds experimentally.
@@ -20,17 +20,25 @@ Each optimization step:
 5. updates only mutable binder logits;
 6. retains the lowest-loss discrete candidate.
 
-Approved ESMFold2 variants then act as critics. The workflow writes sequences,
-loss trajectories, structures, confidence fields, and a selection table under
-the requested output directory.
+The two supported Cutoff2025 experimental ESMFold2 variants then act as
+critics. Candidates are ranked by mean iPTM across those critics. The workflow
+writes sequences, loss trajectories, structures, confidence fields, and a
+selection table under the requested output directory.
+
+![FastPLMs EGFR minibinder design](assets/egfr_fastplms_binder_design.png)
 
 ## Run
 
-Install the `structure` dependency group and the example's declared analysis
-dependencies, then run on the validated GPU image:
+Run inside the project environment with the `structure` extra and the example's
+analysis dependencies:
 
 ```bash
-python examples/tutorials/binder_design_fastplms.py \
+uv run \
+  --extra structure \
+  --with abnumber \
+  --with pandas \
+  --with pyarrow \
+  python examples/binder_design_fastplms.py \
   --target-name pd-l1 \
   --binder-name minibinder \
   --batch-size 4 \
@@ -41,6 +49,11 @@ python examples/tutorials/binder_design_fastplms.py \
 Pass `--target-sequence` instead of `--target-name` for a custom target. Pass
 `--binder-sequence` with `#` at mutable positions instead of a named binder
 prompt.
+
+The example writes `trajectory.jsonl`, `best_sequences.fasta`,
+`results.parquet`, `selection.parquet`, and critic-specific structure and
+confidence files. Retain the complete command, model revisions, seed, and
+output directory when comparing campaigns.
 
 ## Validation boundary
 

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 import torch
 
-from examples.tutorials import binder_design_fastplms as binder
+from examples import binder_design_fastplms as binder
 
 APPROVED_CRITIC = "ESMFold2-Experimental-Fast-Cutoff2025"
 

@@ -5,6 +5,11 @@ are copied from the pinned repositories under `vendor/upstream/`. Supplemental
 provenance and modified-file notices are maintained here because they describe
 the FastPLMs distribution rather than an upstream repository.
 
+Keep distributable license files in this directory rather than beside runtime
+modules under `src/fastplms/`. Model-specific license summaries belong in the
+generated cards under `model_cards/`; the canonical legal texts and notices
+listed here control.
+
 `src/fastplms/models.toml` records the SHA-256 digest of every required file.
 Artifact construction verifies both the canonical upstream copy and this
 distribution copy before writing any output. Missing or changed content is a

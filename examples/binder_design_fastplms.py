@@ -8,9 +8,9 @@
 #     "tqdm",
 # ]
 # ///
-"""Local FastPLMs binder-design research workflow.
+"""Local FastPLMs binder-design research example.
 
-This is a FastPLMs-only variant of the Biohub ESMFold2 binder design tutorial.
+This is a FastPLMs-only variant of the Biohub ESMFold2 binder design workflow.
 It uses FastPLMs ESMFold2 experimental checkpoints for folding and FastPLMs
 ESM++ checkpoints for the masked-LM regularizer.
 """

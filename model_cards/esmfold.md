@@ -14,29 +14,65 @@ This checkpoint uses the FastPLMs `ESMFold` implementation.
 Its input mode is `structure` and its advertised AutoClasses
 are `AutoConfig`, `AutoModel`.
 
-## Load
+## Quick start
 
 ```python
 from transformers import AutoModel
 
-artifact_path = "dist/hub/FastESMFold"
+model_id = "Synthyra/FastESMFold"
 model = AutoModel.from_pretrained(
-    artifact_path,
-    local_files_only=True,
+    model_id,
     trust_remote_code=True,
-)
+).eval()
 ```
 
-
-After publication, replace `artifact_path` with the Hub repository ID and pass
-the immutable revision of the published FastPLMs 1.0 artifact. The checkpoint
-revision below identifies the source weights; it is not a claim that the
-generated artifact already exists at that Hub revision.
+This example uses the published Hub repository. For offline validation, build
+the manifest-pinned artifact and replace `model_id` with its local
+`dist/hub/<model>` path, then pass `local_files_only=True`.
 
 Leave attention unspecified for the Transformers default or request one of
 `eager`, `sdpa`, `flex_attention` with `attn_implementation`.
 The BF16 execution policy is `fp32_parameters_autocast`:
 FP32 parameters with CUDA BF16 autocast.
+
+## Protein structure prediction
+
+ESMFold accepts a raw sequence and returns structure tensors and confidence:
+
+```python
+import torch
+
+model = model.cuda().eval()
+with torch.inference_mode():
+    output = model.infer(
+        "MKTLLILAVVAAALA",
+        num_recycles=4,
+    )
+
+print(output["mean_plddt"])
+
+summary = model.fold_protein(
+    "MKTLLILAVVAAALA",
+    return_pdb_string=True,
+)
+with open("prediction.pdb", "w", encoding="utf-8") as handle:
+    handle.write(summary["pdb_string"])
+print(summary["plddt"], summary["ptm"])
+```
+
+FastPLMs does not expose ProteinTTT for ESMFold. The pinned folding checkpoint
+does not contain a trained masked-language-model head for that objective, so
+`ttt()` and TTT folding requests raise explicitly.
+
+## Runtime contract
+
+- Input mode: `structure`
+- Advertised AutoClasses: `AutoConfig`, `AutoModel`
+- Attention implementations: `eager`, `sdpa`, `flex_attention`
+- Precision policies: `default`
+- BF16 execution: `fp32_parameters_autocast`
+- Generation contract: `not_applicable`
+- Optional dependency group: `structure`
 
 ## Provenance
 
@@ -44,7 +80,6 @@ FP32 parameters with CUDA BF16 autocast.
 - Official checkpoint: `facebook/esmfold_v1@75a3841ee059df2bf4d56688166c8fb459ddd97a`
 - Artifact source: `fast`
 - State transform: `esmfold_meta_to_fastplms_v1`
-- Generation contract: `not_applicable`
 - BF16 execution: `fp32_parameters_autocast`
 - Pinned upstreams: `fair-esm`, `openfold`
 - Reference container: `reference-esmfold`

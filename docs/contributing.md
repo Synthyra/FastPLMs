@@ -63,12 +63,18 @@ documentation.
 ## Documentation
 
 State the input, transformation, output, validation evidence, and limitation.
-Avoid unsupported equivalence, performance, or biological claims. Execute code
-snippets, validate internal links, and run:
+Avoid unsupported equivalence, performance, or biological claims. Keep
+first-party model cards under `model_cards/`, legal texts under `LICENSES/`,
+and runnable scripts directly under `examples/`. Generated cards and support
+tables must be changed through `src/fastplms/models.toml` or their renderer.
+
+Execute code snippets, validate internal links, and run:
 
 ```bash
 PYTHONPATH=src python -m tools.artifacts.generate_docs --check
-python tools/debug/check_notation.py
+python -m tools.debug.check_notation
+python -m pytest tests/release/test_documentation.py \
+  tests/release/test_model_card_licenses.py -v
 ```
 
 ## Review scope

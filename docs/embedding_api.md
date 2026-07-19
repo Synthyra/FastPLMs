@@ -21,6 +21,29 @@ The operation accepts sequences, `(id, sequence)` pairs, `EmbeddingInput`
 values, or a FASTA path. It preserves input order, FASTA identifiers, and
 duplicate records.
 
+## Argument reference
+
+| Argument | Meaning |
+| --- | --- |
+| `inputs` | Sequence iterable, `(id, sequence)` pairs, `EmbeddingInput` values, or FASTA path |
+| `batch_size` | Number of records prepared together; must be positive |
+| `pooling` | One pooler or an ordered pooler sequence; required unless `full_embeddings=True` |
+| `full_embeddings` | Return residue-level tensors instead of pooled vectors |
+| `output` | Safetensors directory or SQLite file; omit for in-memory results |
+| `format` | `safetensors` or `sqlite` when `output` is set |
+| `resume` | Reuse an exact compatible ordered prefix when persistent output exists |
+| `tokenizer` | Explicit tokenizer override for a compatible tokenizer-mode family |
+| `max_length` | Optional maximum prepared sequence length |
+| `truncate` | Truncate to `max_length`; disabling it retains the complete sequence |
+| `dtype` | Output tensor dtype; `None` retains the model output dtype |
+| `shard_size` | Target safetensors shard size in bytes |
+| `model_state_fingerprint` | Caller-supplied state identity for offloaded or externally managed models |
+| `**model_kwargs` | Family-specific embedding controls such as hidden-state selection |
+
+`store_all_hidden_states=True` is a model keyword and requires
+`full_embeddings=True`. `full_embeddings=True` cannot be combined with an
+explicit pooler. Invalid combinations raise before persistence begins.
+
 ## Result types
 
 ```python
@@ -89,6 +112,12 @@ result = model.embed_dataset(
 )
 print(result.metadata["pool_slices"])
 ```
+
+Choose poolers based on the downstream object. `mean` is a stable sequence
+summary, `max` highlights large per-feature responses, and `std` or `var`
+captures within-sequence dispersion. Concatenating poolers increases output
+width and should be treated as a feature-design decision rather than a free
+accuracy improvement.
 
 ## Full residue embeddings
 

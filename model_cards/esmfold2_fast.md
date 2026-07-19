@@ -14,52 +14,103 @@ This checkpoint uses the FastPLMs `ESMFold2` implementation.
 Its input mode is `structure` and its advertised AutoClasses
 are `AutoConfig`, `AutoModel`.
 
-## Load
+## Quick start
 
 ```python
 from transformers import AutoModel
 
-artifact_path = "dist/hub/ESMFold2-Fast"
+model_id = "Synthyra/ESMFold2-Fast"
 model = AutoModel.from_pretrained(
-    artifact_path,
-    local_files_only=True,
+    model_id,
     trust_remote_code=True,
-)
+).eval()
 ```
 
-
-After publication, replace `artifact_path` with the Hub repository ID and pass
-the immutable revision of the published FastPLMs 1.0 artifact. The checkpoint
-revision below identifies the source weights; it is not a claim that the
-generated artifact already exists at that Hub revision.
+This example uses the published Hub repository. For offline validation, build
+the manifest-pinned artifact and replace `model_id` with its local
+`dist/hub/<model>` path, then pass `local_files_only=True`.
 
 Leave attention unspecified for the Transformers default or request one of
 `eager`, `sdpa`, `flex_attention` with `attn_implementation`.
 The BF16 execution policy is `fp32_parameters_autocast`:
 FP32 parameters with CUDA BF16 autocast.
 
-## Learned representation and FP8
+## Protein folding
 
-ESMFold2 combines the ordered 81 ESMC-6B states `H: (b, l, 81, 2560)`
-with the checkpoint's learned projection:
+The single-protein helper returns typed structure and confidence outputs:
+
+```python
+result = model.fold_protein(
+    "MSTNPKPQRKTKRNT",
+    num_loops=1,
+    num_sampling_steps=200,
+    num_diffusion_samples=1,
+    seed=7,
+)
+pdb_text = model.result_to_pdb(result)
+cif_text = model.result_to_cif(result)
+print(result.ptm, result.plddt.mean().item())
+```
+
+For complexes, construct the model's `StructurePredictionInput` with explicit
+protein, DNA, RNA, ligand, and MSA objects. Confidence scores are model outputs
+and do not establish biochemical activity.
+
+## Learned representation and ESMC precision
+
+ESMFold2 combines the ordered 81 ESMC-6B states `H: (b, l, 81, 2560)` with the
+checkpoint's learned projection:
 
 ```python
 Z = model.project_esmc_hidden_states(H)  # Z: (b, l, 256)
 ```
 
-`model.embed_dataset(..., full_embeddings=True)` returns one residue tensor
-with shape `(l, 256)` per single-chain input. Residue-statistic poolers are
-supported; `cls`, `parti`, complexes, ligands, MSAs, and chain-separated
-embedding inputs are rejected.
+`model.embed_dataset(..., full_embeddings=True)` returns one `(l, 256)` residue
+tensor per single-chain input. It rejects complexes, ligands, MSAs,
+chain-separated inputs, `cls`, and `parti` in the embedding path.
 
-Set `esmc_precision` to `auto`, `bf16`, `fp32`, or `fp8` when loading. The
-runtime can be rebuilt explicitly with
-`model.reload_esmc(precision=..., device=...)`; `model.esmc_precision_status`
-records the requested and resolved precision, reason, device, and Transformer
-Engine version. `auto` always resolves to BF16. Explicit `fp8` is an
-experimental, inference-only opt-in and raises when the path is unavailable.
-Canonical BF16 weights are retained, and transient Transformer Engine
-quantization state is never serialized.
+Set `esmc_precision` to `auto`, `bf16`, `fp32`, or `fp8` when loading.
+`auto` always resolves to BF16. Explicit FP8 is experimental, inference-only,
+and strict:
+
+```python
+model.reload_esmc(precision="fp8", device="cuda:0")
+print(model.esmc_precision_status)
+```
+
+FP8 raises when the validated CUDA and Transformer Engine path is unavailable.
+Canonical BF16 weights are retained, and transient quantization state is never
+serialized.
+
+## Optional folding TTT
+
+The standard and Fast checkpoints expose opt-in folding TTT on their ESMC
+backbone:
+
+```python
+adapted = model.fold_protein_ttt(
+    "MSTNPKPQRKTKRNT",
+    num_loops=1,
+    num_sampling_steps=50,
+    seed=7,
+    ttt_config={"steps": 3, "batch_size": 1, "seed": 7},
+)
+print(adapted.ttt_metrics)
+```
+
+Entering a gradient-enabled path reloads canonical BF16 ESMC weights. TTT adds
+latency and memory, can worsen a prediction, and does not calibrate confidence
+or establish biological validity.
+
+## Runtime contract
+
+- Input mode: `structure`
+- Advertised AutoClasses: `AutoConfig`, `AutoModel`
+- Attention implementations: `eager`, `sdpa`, `flex_attention`
+- Precision policies: `auto`, `fp32`, `bf16`, `fp8` (experimental)
+- BF16 execution: `fp32_parameters_autocast`
+- Generation contract: `not_applicable`
+- Optional dependency group: `structure`
 
 ## Provenance
 
@@ -67,7 +118,6 @@ quantization state is never serialized.
 - Official checkpoint: `biohub/ESMFold2-Fast@b28d8ace5e05e61e5bec1e6820cfd3e221819d12`
 - Artifact source: `fast`
 - State transform: `identity`
-- Generation contract: `not_applicable`
 - BF16 execution: `fp32_parameters_autocast`
 - Pinned upstreams: `biohub-esm`, `biohub-transformers`, `protein-ttt`
 - Reference container: `reference-esmfold2`

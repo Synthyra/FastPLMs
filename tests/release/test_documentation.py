@@ -14,10 +14,17 @@ from tools.debug.check_notation import (
 
 ROOT = Path(__file__).resolve().parents[2]
 MARKDOWN_ROOTS = (
+    ROOT / "AGENTS.md",
+    ROOT / "CLAUDE.md",
     ROOT / "README.md",
     ROOT / "THIRD_PARTY_NOTICES.md",
+    ROOT / "LICENSES",
+    ROOT / "benchmarks" / "README.md",
+    ROOT / "docker" / "README.md",
     ROOT / "docs",
     ROOT / "model_cards",
+    ROOT / "tools" / "debug" / "README.md",
+    ROOT / "tools" / "remote" / "README.md",
     ROOT / "vendor" / "README.md",
 )
 FENCE_PATTERN = re.compile(
@@ -38,6 +45,8 @@ UNBACKED_CLAIM_PATTERNS = (
         re.I,
     ),
 )
+LICENSE_FILE_PATTERN = re.compile(r"^LICEN[CS]E(?:[._-].*)?$", re.I)
+MODEL_CARD_FILE_PATTERN = re.compile(r"^(?:MODEL_CARD|README)\.md$", re.I)
 
 
 def _markdown_files() -> tuple[Path, ...]:
@@ -111,6 +120,23 @@ def test_notation_inventory_includes_container_and_provenance_docs() -> None:
     }.issubset(paths)
 
 
+def test_runtime_model_packages_do_not_embed_licenses_or_model_cards() -> None:
+    model_root = ROOT / "src" / "fastplms" / "models"
+    misplaced = sorted(
+        path.relative_to(ROOT).as_posix()
+        for path in model_root.rglob("*")
+        if path.is_file()
+        and (
+            LICENSE_FILE_PATTERN.fullmatch(path.name)
+            or MODEL_CARD_FILE_PATTERN.fullmatch(path.name)
+        )
+    )
+    assert not misplaced, (
+        "Runtime model packages must not embed license files or model cards; "
+        "use LICENSES/ and model_cards/:\n" + "\n".join(misplaced)
+    )
+
+
 def test_manifest_generated_documentation_is_current() -> None:
     failures = synchronize(ROOT, check=True)
     assert not failures, "\n" + "\n".join(failures)
@@ -181,7 +207,10 @@ def test_readme_automodel_snippet_executes_without_network(monkeypatch) -> None:
         @classmethod
         def from_pretrained(cls, model_id, **kwargs):
             observed.update(model_id=model_id, kwargs=kwargs)
-            return object()
+            return cls()
+
+        def eval(self):
+            return self
 
     monkeypatch.setattr(transformers, "AutoModel", FakeAutoModel)
     snippet = _python_snippet(ROOT / "README.md", 'attn_implementation="flex_attention"')

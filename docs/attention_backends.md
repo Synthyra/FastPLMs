@@ -38,6 +38,21 @@ is not listed for that family raises. A listed optional implementation that
 cannot be imported also raises, because dependency absence is a configuration
 error rather than evidence that another kernel was tested.
 
+## Choosing a backend
+
+| Need | Start with | Why |
+| --- | --- | --- |
+| Official-parity or general inference | `sdpa` | It is the stable declared path for every sequence family |
+| Attention maps or `parti` pooling | `eager` | It materializes the attention graph required by those outputs |
+| Variable-length batches with compiled masks | `flex_attention` | Its `BlockMask` can avoid padded attention work |
+| Precompiled BF16 CUDA kernel on a declared family | `flash_attention_2` or `flash_attention_3` | The immutable binary and compatible runtime are validated before import |
+| Reproducible benchmark comparison | Set the exact backend explicitly | Leaving it unspecified delegates selection to Transformers and Torch |
+
+Start from the family row in the
+[generated support matrix](generated/support.md). Do not request a backend
+because another model family exposes it. ESMC-6B, DPLM2, and ANKH have
+family-specific numerical boundaries described below.
+
 ## FlashAttention compatibility policy
 
 The `flash` extra installs Hugging Face `kernels`, not the `flash-attn` Python

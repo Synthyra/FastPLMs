@@ -11,9 +11,11 @@ src/fastplms/       installable package
 tests/              unit, integration, parity, structure, and release tests
 benchmarks/         standalone H100 performance harness
 docker/             candidate, runtime, and reference container definitions
+examples/           runnable training and protein-design workflows
 tools/              artifact, conversion, remote, and debugging commands
 vendor/upstream/    pinned official Git submodules
 LICENSES/           distributable third-party legal texts
+model_cards/        generated checkpoint cards
 ```
 
 Production modules live only under `src/fastplms`. They may use public Python
@@ -49,6 +51,27 @@ same provenance in the output.
 Adding a model only in Python code is therefore insufficient. A release-visible
 model must be represented completely in the manifest and pass all generated
 consistency checks.
+
+## Loading and artifact flow
+
+The same model contract is used from source conversion through downstream
+inference:
+
+1. the manifest selects an immutable checkpoint and pinned official source;
+2. the artifact builder verifies checkpoint, tokenizer, source, and legal file
+   identities;
+3. the named state transformation produces canonical FastPLMs weights;
+4. the builder writes a self-contained runtime bundle and generated model card;
+5. Transformers loads the artifact through an advertised AutoClass with
+   `trust_remote_code=True`;
+6. model-specific preparation identifies biological residues or structure
+   entities before shared APIs transform the output;
+7. parity and artifact suites compare the same declared behavior against the
+   isolated official reference.
+
+This flow keeps user loading simple without making the official checkout a
+runtime dependency. A local artifact under `dist/hub/<model>` and a published
+copy use the same Transformers interface.
 
 ## Runtime package
 

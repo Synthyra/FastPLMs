@@ -2,10 +2,27 @@
 
 FastPLMs models follow Transformers `PreTrainedModel` conventions, so standard
 Trainer, Accelerate, distributed, and adapter workflows can operate on package
-models. Training dependencies are isolated in the `train` extra.
+models. Core training dependencies are isolated in the `train` extra.
 
 ```bash
 uv sync --extra train
+```
+
+The runnable example also uses plotting and evaluation packages. Resolve them
+without adding them to the runtime package:
+
+```bash
+uv run \
+  --extra train \
+  --with matplotlib \
+  --with scikit-learn \
+  --with scipy \
+  --with seaborn \
+  python examples/fine_tuning.py \
+  --task classification \
+  --model_path Synthyra/ESM2-8M \
+  --batch_size 8 \
+  --epochs 2
 ```
 
 ## Sequence tasks

@@ -18,13 +18,17 @@ one-sided 95% regression gates without modifying the baseline.
 
 ```bash
 python -m benchmarks \
-  --model Synthyra/ESM2-8M \
+  --model dist/hub/ESM2-8M \
   --backend sdpa \
   --mode steady \
   --batch-size 1 \
   --sequence-length 512 \
+  --local-files-only \
   --output artifacts/benchmarks/esm2-sdpa.json
 ```
+
+Build the manifest-pinned local artifact first. If a published Hub artifact is
+used instead, pass its immutable revision and retain it in the report.
 
 Use `--lengths 1024 512 256 128 64 64 32 32 --batch-size 8` for the
 padding-efficiency case. Every report includes raw CUDA-event samples, logical

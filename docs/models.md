@@ -121,8 +121,16 @@ model = AutoModelForMaskedLM.from_pretrained(
 ).cuda().eval()
 vocab = tokenizer.get_vocab()
 l = 64
-structure = [vocab["<cls_struct>"], *([50] * l), vocab["<eos_struct>"]]
-amino_acids = [vocab["<cls_aa>"], *([vocab["A"]] * l), vocab["<eos_aa>"]]
+structure = [
+    vocab["<cls_struct>"],
+    *([vocab["<mask_struct>"]] * l),
+    vocab["<eos_struct>"],
+]
+amino_acids = [
+    vocab["<cls_aa>"],
+    *([vocab["<mask_aa>"]] * l),
+    vocab["<eos_aa>"],
+]
 X = torch.tensor([structure + amino_acids], device="cuda")
 
 with torch.inference_mode():

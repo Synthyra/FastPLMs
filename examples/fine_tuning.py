@@ -531,14 +531,7 @@ def train_classification_model(
 
 # Main function
 if __name__ == "__main__":
-    """
-    With default arguments on 4070 laptop GPU
-    py -m fine_tuning_example --task classification --batch_size 8 --epochs 2
-        Runs in 80 seconds with test accuracy of ~89%
-    py -m fine_tuning_example --task regression --batch_size 2 \
-        --max_length 1024 --grad_accum 4 --epochs 2
-        Runs in 7 minutes with test Spearman correlation of ~0.72
-    """
+    """Run sequence classification, protein-pair regression, or both."""
     import argparse
 
     # Examples of PLMs with efficient implementations offered by Synthyra

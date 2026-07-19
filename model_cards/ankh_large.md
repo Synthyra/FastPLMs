@@ -14,33 +14,131 @@ This checkpoint uses the FastPLMs `ANKH` implementation.
 Its input mode is `tokenizer` and its advertised AutoClasses
 are `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
 
-## Load
+## Quick start
 
 ```python
 from transformers import AutoModel
 
-artifact_path = "dist/hub/ANKH_large"
+model_id = "Synthyra/ANKH_large"
 model = AutoModel.from_pretrained(
-    artifact_path,
-    local_files_only=True,
+    model_id,
     trust_remote_code=True,
-)
+).eval()
 ```
 
-
-After publication, replace `artifact_path` with the Hub repository ID and pass
-the immutable revision of the published FastPLMs 1.0 artifact. The checkpoint
-revision below identifies the source weights; it is not a claim that the
-generated artifact already exists at that Hub revision.
+This example uses the published Hub repository. For offline validation, build
+the manifest-pinned artifact and replace `model_id` with its local
+`dist/hub/<model>` path, then pass `local_files_only=True`.
 
 Leave attention unspecified for the Transformers default or request one of
 `eager`, `sdpa` with `attn_implementation`.
 The BF16 execution policy is `static_parameters`:
 parameters loaded directly in BF16.
 
+## Tokenization and forward inference
+
+Load the tokenizer from the same artifact as the model. Padding is represented
+explicitly by the attention mask:
+
+```python
+import torch
+from transformers import AutoTokenizer
+
+model_id = "Synthyra/ANKH_large"
+tokenizer = AutoTokenizer.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+)
+batch = tokenizer(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    padding=True,
+    return_tensors="pt",
+)
+
+with torch.inference_mode():
+    output = model(**batch)
+
+print(output.last_hidden_state.shape)
+```
+
+## Dataset embeddings
+
+The shared embedding API accepts sequences, `(id, sequence)` pairs,
+`EmbeddingInput` records, or a FASTA path. Results preserve order and duplicate
+identifiers:
+
+```python
+result = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    batch_size=2,
+    pooling=("mean", "std"),
+)
+
+for record in result:
+    print(record.id, record.sequence, record.tensor.shape)
+```
+
+Set `full_embeddings=True` for one residue tensor with shape `(l, d)` per
+sequence. Set `output` to a directory for transactional safetensors or choose
+`format="sqlite"` for batch-level commits and exact resume. Pooling excludes
+boundary, padding, and other non-biological positions.
+
+For a long FASTA run, stream completed batches into SQLite:
+
+```python
+persisted = model.embed_dataset(
+    "proteins.fasta",
+    batch_size=64,
+    pooling=("mean",),
+    output="protein-embeddings.sqlite",
+    format="sqlite",
+    resume=True,
+)
+```
+
+Resume verifies the input order, model state, tokenizer policy, backend, dtype,
+and pooling configuration. It never appends incompatible records to an
+existing run.
+
+## Encoder and sequence-to-sequence use
+
+`AutoModel` loads the optimized ANKH encoder. The official-compatible decoder
+and language-model head are available through `AutoModelForSeq2SeqLM`:
+
+```python
+import torch
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+
+model_id = "Synthyra/ANKH_large"
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+).eval()
+batch = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
+
+with torch.inference_mode():
+    generated_ids = seq2seq.generate(**batch, max_new_tokens=16)
+print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
+```
+
+The separately named masked-language-model extension is a FastPLMs extension,
+not an official ANKH masked-language-model equivalent. ANKH artifacts retain
+CC BY-NC-SA 4.0 terms.
+
 ## Notes and limitations
 
 ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head.
+
+## Runtime contract
+
+- Input mode: `tokenizer`
+- Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
+- Attention implementations: `eager`, `sdpa`
+- Precision policies: `default`
+- BF16 execution: `static_parameters`
+- Generation contract: `not_applicable`
+- Optional dependency group: `core`
 
 ## Provenance
 
@@ -48,7 +146,6 @@ ANKH parity covers the official encoder and sequence-to-sequence heads. AutoMode
 - Official checkpoint: `ElnaggarLab/ankh-large@74b371dbfa3ee0a05d32ae74df0c2e0b82d6b9a6`
 - Artifact source: `official`
 - State transform: `ankh_t5_to_fastplms_v1`
-- Generation contract: `not_applicable`
 - BF16 execution: `static_parameters`
 - Pinned upstreams: `ankh`
 - Reference container: `reference-ankh`

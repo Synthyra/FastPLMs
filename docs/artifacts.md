@@ -8,7 +8,7 @@ a Hub repository, uploads, deletes, commits, pushes, or opens a pull request.
 ## Build
 
 ```bash
-python tools/artifacts/build.py \
+PYTHONPATH=src python -m tools.artifacts.build \
   esm2_8m \
   /cache/hub/models--Synthyra--ESM2-8M/snapshots/<revision> \
   --tokenizer-dir \
@@ -91,7 +91,7 @@ removes them.
 ## Validate
 
 ```bash
-python tools/artifacts/build.py \
+PYTHONPATH=src python -m tools.artifacts.build \
   esm2_8m /cache/fast-snapshot --tokenizer-dir /cache/official-snapshot \
   --output-root dist/hub --replace
 ```

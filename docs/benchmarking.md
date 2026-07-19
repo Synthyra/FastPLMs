@@ -86,15 +86,21 @@ Run a single ESMC-plus-projection case with:
 
 ```bash
 python -m benchmarks \
-  --model biohub/ESMFold2 \
+  --model dist/hub/ESMFold2 \
   --auto-class AutoModel \
   --backend sdpa \
   --precision bf16 \
   --mode esmc_projection \
   --batch-size 1 \
   --sequence-length 512 \
+  --local-files-only \
   --output artifacts/benchmarks/esmfold2-esmc-projection.json
 ```
+
+Build and validate `dist/hub/ESMFold2` from the manifest-pinned checkpoint
+before running this command. For a published artifact, pass its exact
+`Synthyra/ESMFold2` revision instead of benchmarking a mutable upstream
+identifier.
 
 Explicit FP8 fails when Transformer Engine or compatible hardware is
 unavailable. It never falls back to BF16 under an FP8 label.

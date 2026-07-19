@@ -8,4 +8,20 @@ PYTHONPATH=src python tools/artifacts/generate_docs.py
 ```
 
 Use `--check` to reject stale cards without writing files. Edit the typed
-manifest or the renderer, not an individual generated card.
+manifest or the renderer, not an individual generated card. Keep model cards
+in this directory rather than beside runtime modules under
+`src/fastplms/models/`.
+
+Each card combines:
+
+- direct Hub and offline artifact loading;
+- family-appropriate preparation, inference, embedding, generation, or folding
+  examples;
+- declared AutoClasses, backends, precision, and generation behavior;
+- immutable checkpoint and upstream provenance;
+- validation boundaries, limitations, and checkpoint terms.
+
+Examples must follow the current public API. Do not restore legacy backend
+names, pickle embedding output, unsupported TTT paths, or capabilities from
+another family. Release tests compile every Python fence, validate local links
+and Hub license metadata, and check representative family-specific sections.
