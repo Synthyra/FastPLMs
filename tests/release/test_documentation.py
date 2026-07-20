@@ -213,14 +213,14 @@ def test_readme_automodel_snippet_executes_without_network(monkeypatch) -> None:
             return self
 
     monkeypatch.setattr(transformers, "AutoModel", FakeAutoModel)
-    snippet = _python_snippet(ROOT / "README.md", 'attn_implementation="flex_attention"')
+    snippet = _python_snippet(ROOT / "README.md", 'attn_implementation="sdpa"')
     exec(compile(snippet, "README.md", "exec"), {})
 
     assert observed == {
         "model_id": "Synthyra/ESM2-150M",
         "kwargs": {
             "trust_remote_code": True,
-            "attn_implementation": "flex_attention",
+            "attn_implementation": "sdpa",
         },
     }
 

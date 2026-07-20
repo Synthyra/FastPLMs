@@ -10,9 +10,11 @@ tags:
 
 # Synthyra/ESMFold2-Experimental-Cutoff2025
 
-This checkpoint uses the FastPLMs `ESMFold2` implementation.
-Its input mode is `structure` and its advertised AutoClasses
-are `AutoConfig`, `AutoModel`.
+This checkpoint packages the FastPLMs `ESMFold2` implementation.
+
+Accepted inputs are raw amino-acid sequences or typed molecular-complex
+specifications; low-level forward accepts prepared feature tensors.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
 ## Quick start
 
@@ -28,12 +30,12 @@ model = AutoModel.from_pretrained(
 
 This example uses the published Hub repository. For offline validation, build
 the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/<model>` path, then pass `local_files_only=True`.
+`dist/hub/ESMFold2-Experimental-Cutoff2025` path, then pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default or request one of
-`eager`, `sdpa`, `flex_attention` with `attn_implementation`.
-The BF16 execution policy is `fp32_parameters_autocast`:
-FP32 parameters with CUDA BF16 autocast.
+Leave attention unspecified for the Transformers default. Supported explicit
+choices are `eager`, `sdpa`, `flex_attention`.
+Pass the selected name through `attn_implementation`.
+For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Protein folding
 
@@ -52,17 +54,47 @@ cif_text = model.result_to_cif(result)
 print(result.ptm, result.plddt.mean().item())
 ```
 
-For complexes, construct the model's `StructurePredictionInput` with explicit
-protein, DNA, RNA, ligand, and MSA objects. Confidence scores are model outputs
-and do not establish biochemical activity.
+No target structure is required. For complexes, construct the input from the
+types exposed by the loaded artifact:
+
+```python
+types = model.input_types
+complex_input = types.StructurePredictionInput(
+    sequences=[
+        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
+        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
+        types.DNAInput(id="C", sequence="ATGC"),
+        types.LigandInput(id="L", smiles="O"),
+    ]
+)
+complex_result = model.fold(
+    complex_input,
+    num_loops=1,
+    num_sampling_steps=200,
+    seed=7,
+)
+print(complex_result.ptm, complex_result.plddt.mean().item())
+```
+
+The typed interface also supports RNA, protein MSAs, modifications, covalent
+bonds, pockets, and distogram conditioning. Prepared `ref_pos` values are
+component reference geometries created during featurization, not target
+coordinates. Predicted coordinates and confidence scores are outputs and do
+not establish biochemical activity.
 
 ## Learned representation and ESMC precision
 
 ESMFold2 combines the ordered 81 ESMC-6B states `H: (b, l, 81, 2560)` with the
-checkpoint's learned projection:
+checkpoint's learned projection. Retrieve the resulting residue representation
+through the public embedding API:
 
 ```python
-Z = model.project_esmc_hidden_states(H)  # Z: (b, l, 256)
+representations = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    batch_size=2,
+    full_embeddings=True,
+)
+print(representations[0].tensor.shape)  # (sequence_length, 256)
 ```
 
 `model.embed_dataset(..., full_embeddings=True)` returns one `(l, 256)` residue
@@ -106,7 +138,7 @@ signals, not experimental evidence of affinity or specificity. See the
 
 ## Runtime contract
 
-- Input mode: `structure`
+- Public input: Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`
 - Precision policies: `auto`, `fp32`, `bf16`, `fp8` (experimental)

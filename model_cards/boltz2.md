@@ -10,9 +10,11 @@ tags:
 
 # Synthyra/Boltz2
 
-This checkpoint uses the FastPLMs `Boltz2` implementation.
-Its input mode is `structure` and its advertised AutoClasses
-are `AutoConfig`, `AutoModel`.
+This checkpoint packages the FastPLMs `Boltz2` implementation.
+
+Accepted inputs are raw amino-acid sequences through the convenience API, or
+prepared model features.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
 ## Quick start
 
@@ -28,12 +30,12 @@ model = AutoModel.from_pretrained(
 
 This example uses the published Hub repository. For offline validation, build
 the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/<model>` path, then pass `local_files_only=True`.
+`dist/hub/Boltz2` path, then pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default or request one of
-`eager` with `attn_implementation`.
-The BF16 execution policy is `fp32_parameters_autocast`:
-FP32 parameters with CUDA BF16 autocast.
+Leave attention unspecified for the Transformers default. Supported explicit
+choices are `eager`.
+Pass the selected name through `attn_implementation`.
+For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Protein structure prediction
 
@@ -56,18 +58,21 @@ print(output.sample_atom_coords.shape)
 print(output.plddt, output.ptm, output.iptm)
 ```
 
-Boltz2 is provisional in FastPLMs 1.0. Configuration, declared inference-core
-weights, feature preparation, and seeded execution are tested, but
-native-environment BF16 end-to-end inference does not yet meet the fixed
-numerical-equivalence limits.
+The validation boundary below describes the currently supported inference
+subset and its provisional status.
 
 ## Notes and limitations
 
-Boltz2 is provisional in FastPLMs 1.0. Exact configuration, the declared inference-core state, feature preparation, and seeded execution remain tested, but native-environment BF16 end-to-end inference currently exceeds the fixed numerical-equivalence limits. FastPLMs therefore does not claim official inference equivalence for this checkpoint yet. Work on that numerical gap continues independently of the ESM++ and ESMFold2 release gates.
+Boltz2 is provisional in FastPLMs 1.0. Exact configuration, the declared
+inference-core state, feature preparation, and seeded execution remain tested,
+but native-environment BF16 end-to-end inference currently exceeds the fixed
+numerical-equivalence limits. FastPLMs therefore does not claim official
+inference equivalence for this checkpoint yet. Work on that numerical gap
+continues independently of the ESM++ and ESMFold2 release gates.
 
 ## Runtime contract
 
-- Input mode: `structure`
+- Public input: Raw amino-acid sequences through the convenience API, or prepared model features
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`
 - Attention implementations: `eager`
 - Precision policies: `default`

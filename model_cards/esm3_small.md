@@ -10,9 +10,11 @@ tags:
 
 # Synthyra/ESM3_small
 
-This checkpoint uses the FastPLMs `ESM3` implementation.
-Its input mode is `tokenizer` and its advertised AutoClasses
-are `AutoConfig`, `AutoModel`.
+This checkpoint packages the FastPLMs `ESM3` implementation.
+
+Accepted inputs are sequence, structure, and function tracks prepared through
+the multimodal helpers.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
 ## Quick start
 
@@ -28,12 +30,12 @@ model = AutoModel.from_pretrained(
 
 This example uses the published Hub repository. For offline validation, build
 the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/<model>` path, then pass `local_files_only=True`.
+`dist/hub/ESM3_small` path, then pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default or request one of
-`eager`, `sdpa`, `flex_attention` with `attn_implementation`.
-The BF16 execution policy is `fp32_parameters_autocast`:
-FP32 parameters with CUDA BF16 autocast.
+Leave attention unspecified for the Transformers default. Supported explicit
+choices are `eager`, `sdpa`, `flex_attention`.
+Pass the selected name through `attn_implementation`.
+For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Dataset embeddings
 
@@ -74,10 +76,11 @@ Resume verifies the input order, model state, tokenizer policy, backend, dtype,
 and pooling configuration. It never appends incompatible records to an
 existing run.
 
-## Sequence and multimodal inference
+## Sequence inference and masked-sequence generation
 
-ESM3 owns its sequence preparation because its forward pass can combine
-sequence, structure, and function tracks:
+ESM3 owns its sequence preparation. This example exercises the sequence track;
+the public input contract also supports structure and function tracks through
+the multimodal helpers:
 
 ```python
 import torch
@@ -113,7 +116,7 @@ tracks, not experimental measurements of structure or function.
 
 ## Runtime contract
 
-- Input mode: `tokenizer`
+- Public input: Sequence, structure, and function tracks prepared through the multimodal helpers
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`
 - Precision policies: `default`

@@ -31,8 +31,6 @@ from fastplms.registry import (
 )
 from tools.artifacts.license_metadata import (
     parse_hub_license_metadata,
-    render_checkpoint_terms,
-    render_hub_license_yaml,
     validate_hub_license_metadata,
 )
 from tools.conversion import StateTransformError, apply_state_transform
@@ -583,14 +581,6 @@ def _configure_custom_tokenizer(path: Path, spec: ModelSpec) -> None:
     _write_json(config_path, config)
 
 
-def _bf16_execution_description(policy: str) -> str:
-    if policy == "static_parameters":
-        return "parameters are loaded directly in BF16"
-    if policy == "fp32_parameters_autocast":
-        return "parameters remain FP32 and the forward pass uses CUDA BF16 autocast"
-    raise ArtifactError(f"Unsupported BF16 execution policy: {policy!r}")
-
-
 def _build_runtime_archive(package_root: Path) -> bytes:
     """Return a deterministic archive of unchanged package runtime sources."""
 
@@ -734,86 +724,11 @@ def _write_bootstrap(path: Path, spec: ModelSpec, runtime_hash: str) -> None:
 
 
 def render_model_card(spec: ModelSpec) -> str:
-    """Render a concise card whose claims do not exceed manifest evidence."""
+    """Render the canonical generated card used by documentation and artifacts."""
 
-    auto_classes = ", ".join(f"`{name}`" for name in sorted(spec.auto_map))
-    attention = ", ".join(f"`{name}`" for name in spec.family.attention)
-    experimental_precisions = set(spec.family.experimental_precisions)
-    precision = ", ".join(
-        f"`{name}` (experimental)" if name in experimental_precisions else f"`{name}`"
-        for name in spec.family.precisions
-    )
-    bf16_execution = _bf16_execution_description(spec.family.bf16_execution)
-    license_yaml = render_hub_license_yaml(spec.family)
-    checkpoint_terms = render_checkpoint_terms(spec.family)
-    notes = ""
-    if spec.notes:
-        notes = f"""\
-## Notes and limitations
+    from tools.artifacts.generate_docs import render_model_card as render_canonical_card
 
-{spec.notes}
-
-"""
-    return f"""---
-library_name: transformers
-{license_yaml}
----
-
-# {spec.fast.repo_id}
-
-This artifact packages the FastPLMs `{spec.family.architecture}` implementation
-with one immutable checkpoint snapshot. It accepts the input mode documented for
-the model family, applies the local FastPLMs model code, and returns the
-corresponding Transformers model output.
-
-## Load
-
-```python
-from transformers import AutoModel
-
-artifact_path = "."
-model = AutoModel.from_pretrained(
-    artifact_path,
-    local_files_only=True,
-    trust_remote_code=True,
-)
-```
-
-After publication, replace `artifact_path` with the Hub repository ID and pass
-the immutable revision of the published FastPLMs 1.0 artifact. The checkpoint
-revision in `provenance.json` identifies the source weights, not a future
-artifact commit.
-
-Advertised AutoClasses: {auto_classes}.
-
-## Runtime contract
-
-- Input mode: `{spec.family.tokenizer_mode}`
-- Attention implementations: {attention}
-- Precision policies: {precision}
-- BF16 execution: `{spec.family.bf16_execution}` ({bf16_execution})
-- Generation contract: `{spec.generation_contract}`
-- Optional dependency group: `{spec.family.extra}`
-
-{notes}## Provenance and validation boundary
-
-The official comparison source is `{spec.official.repo_id}` at revision
-`{spec.official.revision}`. The source implementation is pinned through
-`{spec.family.upstreams[0]}`. Exact file identities and the state transformation
-`{spec.family.state_transform}` are recorded in `provenance.json`.
-The artifact weight source is `{spec.artifact_source}` checkpoint
-`{spec.artifact_checkpoint.repo_id}` at revision
-`{spec.artifact_checkpoint.revision}`.
-
-The artifact metadata identifies the intended compliance contract. It is not a
-claim of experimental validation, biological activity, or therapeutic effect.
-
-## License
-
-Checkpoint terms: {checkpoint_terms}. The Hub model-card identifier is
-`{spec.family.hub_license}`. Applicable upstream texts and notices are included
-under `LICENSES/` and in `THIRD_PARTY_NOTICES.md`.
-"""
+    return render_canonical_card(spec, allow_generic_family=True)
 
 
 def _validate_vendor_revisions(source_root: Path, registry: ModelRegistry, spec: ModelSpec) -> None:

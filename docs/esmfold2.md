@@ -10,7 +10,8 @@ FastPLMs supports exactly four Biohub ESMFold2 variants:
 | `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` |
 
 Other snapshots are not advertised in code, artifacts, tests, or documentation.
-This repository does not delete or modify any live Hub repository.
+Local artifact building does not modify the Hub. Files-only publication is a
+separate, add-only workflow described in [Hub artifacts](artifacts.md).
 
 ## Loading
 
@@ -41,6 +42,47 @@ an independent precision policy: its canonical BF16 weights may remain BF16 or
 be used to reconstruct the transient FP8 inference path without changing the
 folding checkpoint's FP32 storage.
 
+## Inputs and outputs
+
+For a single protein, pass the amino-acid sequence to `fold_protein`:
+
+```python
+result = model.fold_protein(
+    "MSTNPKPQRKTKRNT",
+    num_loops=1,
+    num_sampling_steps=200,
+    seed=7,
+)
+print(result.ptm, result.plddt.mean().item())
+```
+
+For complexes, use the typed input schema exposed by the loaded model:
+
+```python
+types = model.input_types
+complex_input = types.StructurePredictionInput(
+    sequences=[
+        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
+        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
+        types.DNAInput(id="C", sequence="ATGC"),
+        types.LigandInput(id="L", smiles="O"),
+    ]
+)
+result = model.fold(
+    complex_input,
+    num_loops=1,
+    num_sampling_steps=200,
+    seed=7,
+)
+print(result.ptm, result.plddt.mean().item())
+```
+
+The schema also supports RNA, protein MSAs, modifications, covalent bonds,
+pockets, and distogram conditioning. It does not require a known target
+structure. Prepared feature tensors include `ref_pos`, but this is component
+reference geometry created during featurization, not the target coordinates.
+Atomic coordinates and confidence fields are model outputs.
+
 ## Learned sequence representation
 
 Biohub ESMC-6B provides the embedding state followed by 80 transformer-layer
@@ -54,11 +96,8 @@ H: (b, l, 81, 2560)
 For each state, `base_z_linear` applies layer normalization and a bias-free
 linear map to width 256. The softmax of `base_z_combine` gives 81 scalar weights.
 The weighted states are combined with the same matrix multiplication order as
-Biohub:
-
-```python
-Z = model.project_esmc_hidden_states(H, residue_mask=M)
-```
+Biohub. The low-level operation maps `H` and its residue mask `M` to
+`Z = model.project_esmc_hidden_states(H, residue_mask=M)`.
 
 The result is:
 

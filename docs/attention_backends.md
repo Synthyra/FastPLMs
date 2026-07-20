@@ -15,9 +15,10 @@ model = AutoModel.from_pretrained(
 model.set_attn_implementation("sdpa")
 ```
 
-For prepublication validation, `model_id` is the local manifest-built artifact
-under `dist/hub/<model>`. A Hub identifier is used only after that same 1.0
-artifact passes the offline artifact tier and is published separately.
+Published Hub repositories are the normal user-facing model IDs. Pin
+`revision` when the exact published model-code snapshot matters. Contributors
+can use a manifest-built artifact under `dist/hub/<model>` for local,
+offline validation before publishing an update.
 
 If the caller does not choose a backend, FastPLMs leaves the value unspecified
 and Transformers normally selects SDPA. FastPLMs does not implement an `auto`

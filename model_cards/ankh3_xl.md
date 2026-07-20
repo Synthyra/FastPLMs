@@ -10,9 +10,13 @@ tags:
 
 # Synthyra/ANKH3_xl
 
-This checkpoint uses the FastPLMs `ANKH` implementation.
-Its input mode is `tokenizer` and its advertised AutoClasses
-are `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
+This checkpoint packages the FastPLMs `ANKH` implementation.
+
+Accepted inputs are amino-acid sequences tokenized for encoder or sequence-to-
+sequence use.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`,
+`AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`,
+`AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
 
 ## Quick start
 
@@ -28,12 +32,12 @@ model = AutoModel.from_pretrained(
 
 This example uses the published Hub repository. For offline validation, build
 the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/<model>` path, then pass `local_files_only=True`.
+`dist/hub/ANKH3_xl` path, then pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default or request one of
-`eager`, `sdpa` with `attn_implementation`.
-The BF16 execution policy is `static_parameters`:
-parameters loaded directly in BF16.
+Leave attention unspecified for the Transformers default. Supported explicit
+choices are `eager`, `sdpa`.
+Pass the selected name through `attn_implementation`.
+For BF16 execution, this family uses parameters loaded directly in BF16.
 
 ## Tokenization and forward inference
 
@@ -122,17 +126,18 @@ with torch.inference_mode():
 print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
 ```
 
-The separately named masked-language-model extension is a FastPLMs extension,
-not an official ANKH masked-language-model equivalent. ANKH artifacts retain
-CC BY-NC-SA 4.0 terms.
+ANKH artifacts retain CC BY-NC-SA 4.0 terms. The notes below distinguish the
+official heads from FastPLMs extensions.
 
 ## Notes and limitations
 
-ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head.
+ANKH parity covers the official encoder and sequence-to-sequence heads.
+AutoModelForMaskedLM exposes the separately named FastPLMs synthesized
+masked-LM extension and is not an official ANKH head.
 
 ## Runtime contract
 
-- Input mode: `tokenizer`
+- Public input: Amino-acid sequences tokenized for encoder or sequence-to-sequence use
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
 - Attention implementations: `eager`, `sdpa`
 - Precision policies: `default`

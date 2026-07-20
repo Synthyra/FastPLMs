@@ -68,9 +68,10 @@ different runtime-bundle hash in the same interpreter fails explicitly and
 leaves the first runtime intact. Isolate different bundles in separate Python
 processes. Production code never imports a submodule checkout.
 
-The checkpoint source is selected by the manifest. This matters for ANKH, where
-the artifact uses the official sequence-to-sequence checkpoint so the official
-decoder and LM head are present. The named state transform is deterministic.
+The release artifact tier selects the checkpoint source declared by the
+manifest. This matters for ANKH, where the artifact uses the official
+sequence-to-sequence checkpoint so the official decoder and LM head are
+present. The named state transform is deterministic.
 Weights are written as explicit safetensors shards no larger than 5 GiB with a
 sorted index. Trusted legacy `.bin` input is loaded with `weights_only=True` and
 is never copied into the output.
@@ -139,26 +140,26 @@ artifact:
 ```bash
 PYTHONPATH=src python -m tools.artifacts.publish \
   --files-only \
-  esmfold2 esmfold2_fast \
-  esmfold2_experimental_cutoff2025 \
-  esmfold2_experimental_fast_cutoff2025 \
   --artifact-root dist/hub \
   --dry-run
 ```
+
+`--artifact-root` points to the local parent directory that contains each
+manifest-built model artifact, such as `dist/hub/ESM2-8M`. It selects the
+validated local files to publish. It is not a Hub repository path or a request
+to upload the directory wholesale.
 
 Review the complete file plan, then repeat without `--dry-run`:
 
 ```bash
 PYTHONPATH=src python -m tools.artifacts.publish \
   --files-only \
-  esmfold2 esmfold2_fast \
-  esmfold2_experimental_cutoff2025 \
-  esmfold2_experimental_fast_cutoff2025 \
   --artifact-root dist/hub
 ```
 
-The command accepts only model IDs declared in `models.toml`. Use `--all`
-instead of positional IDs to select every manifest model explicitly.
+With no positional model IDs, the command selects every model declared in
+`models.toml`. Pass one or more manifest model IDs to publish only that subset.
+`--all` remains an explicit alias for the default all-model selection.
 Authentication comes from `HF_TOKEN` or the cached Hugging Face login; tokens
 are not accepted as command-line arguments.
 
@@ -187,9 +188,10 @@ inventory, configuration, or tokenizer assets have changed. The publisher does
 not read or hash local checkpoint shards, so the upload step itself performs no
 large weight I/O.
 
-The completed command prints each new Hub commit. Update the corresponding
-`fast_revision` values in `models.toml` before declaring those commits as a new
-FastPLMs release baseline.
+The completed command prints each new Hub commit. Before declaring those
+commits as a new FastPLMs release baseline, update the corresponding
+`fast_revision` values and the digests of any changed manifest-pinned
+non-weight `fast_files`, such as `config.json` or tokenizer assets.
 
 ## Generated cards and support data
 

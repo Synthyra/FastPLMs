@@ -10,9 +10,11 @@ tags:
 
 # Synthyra/FastESMFold
 
-This checkpoint uses the FastPLMs `ESMFold` implementation.
-Its input mode is `structure` and its advertised AutoClasses
-are `AutoConfig`, `AutoModel`.
+This checkpoint packages the FastPLMs `ESMFold` implementation.
+
+Accepted inputs are raw amino-acid sequences through folding helpers, or
+prepared residue tensors.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
 ## Quick start
 
@@ -28,12 +30,12 @@ model = AutoModel.from_pretrained(
 
 This example uses the published Hub repository. For offline validation, build
 the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/<model>` path, then pass `local_files_only=True`.
+`dist/hub/FastESMFold` path, then pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default or request one of
-`eager`, `sdpa`, `flex_attention` with `attn_implementation`.
-The BF16 execution policy is `fp32_parameters_autocast`:
-FP32 parameters with CUDA BF16 autocast.
+Leave attention unspecified for the Transformers default. Supported explicit
+choices are `eager`, `sdpa`, `flex_attention`.
+Pass the selected name through `attn_implementation`.
+For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Protein structure prediction
 
@@ -66,7 +68,7 @@ does not contain a trained masked-language-model head for that objective, so
 
 ## Runtime contract
 
-- Input mode: `structure`
+- Public input: Raw amino-acid sequences through folding helpers, or prepared residue tensors
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`
 - Precision policies: `default`

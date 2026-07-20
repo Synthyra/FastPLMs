@@ -56,8 +56,9 @@ uses the sequence representation and excludes non-protein track tokens.
 DPLM generation starts from a tokenized sequence whose biological positions
 define the requested length. The sampler replaces those positions with the mask
 token, predicts all positions, retains the most confident predictions, and
-repeats until no masks remain. Set `partial_masks=True` at positions that must
-remain fixed.
+repeats until no masks remain. The optional `partial_masks` argument is a
+boolean tensor with the same shape and device as `input_tokens`; `True` marks
+positions that must remain fixed.
 
 ```python
 import torch
@@ -224,7 +225,8 @@ storage.
 
 ### Boltz2
 
-Boltz2 accepts its native prepared structure inputs and preserves trunk,
+Boltz2 accepts a raw amino-acid sequence through its protein helper or prepared
+model features through its lower-level interface. It preserves trunk,
 diffusion, confidence, and export behavior. Its larger scientific dependency
 set is isolated in the `structure` extra and structure candidate image. No
 chemistry or plotting dependency enters the core package.
@@ -253,5 +255,7 @@ Before code changes, capture the official configuration, tokenizer files and
 behavior, state-key and alias schema, outputs, source revision, environment, and
 licenses. Add the immutable checkpoint identities and conversion record to the
 manifest. Then add official-generated goldens, a live reference case, artifact
-loading, and all feature tests declared for the family. A backend is supported
-only after it meets the common parity thresholds.
+loading, and all feature tests declared for the family. A selectable backend
+must have an explicit implementation, failure behavior, and documented
+numerical boundary. Only backends that meet the applicable release thresholds
+may be described as parity paths.

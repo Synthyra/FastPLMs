@@ -104,7 +104,7 @@ distribution_files = [
   "NOTICE=sha256:6de9db0320b4ee82f665c0951d8fd4cd53701a659c9dbce9bc3e3ea6afc4c6b3",
   "Apache-2.0.txt=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
   "BSD-3-Clause.txt=sha256:36e1987f2f17db7f8ad36cd7a37dbb7aeaaf0ab68b97ab4b9d3556f3a7a76ae8",
-  "MODIFICATIONS.md=sha256:3e359898a1d66f74d685cdc8a1a066b84bdd5801d578674cf1a45a349a669390",
+  "MODIFICATIONS.md=sha256:2506f47c0f5475af8e8ff2cff13eb8b79e8e25a08a054cdd617bf336536750ca",
 ]
 
 [[upstreams]]
@@ -151,6 +151,7 @@ distribution_files = [
 architecture = "ESM2"
 upstreams = ["fair-esm"]
 tokenizer_mode = "tokenizer"
+public_input = "Amino-acid sequences tokenized to residue IDs"
 extra = "core"
 reference_container = "reference-esm2"
 reference_adapter = "tests.parity.support.reference_adapters.esm2"
@@ -173,6 +174,7 @@ auto_map = { AutoConfig = "fastplms.models.esm2.modeling_fastesm.FastEsmConfig",
 architecture = "ESMC"
 upstreams = ["biohub-esm", "biohub-transformers"]
 tokenizer_mode = "tokenizer"
+public_input = "Amino-acid sequences tokenized to residue IDs"
 extra = "core"
 reference_container = "reference-biohub-esm"
 reference_adapter = "tests.parity.support.reference_adapters.esm_plusplus"
@@ -186,7 +188,7 @@ hub_license = "mit"
 state_transform = "esmc_to_fastplms_v1"
 conversion_provenance = "Input: the pinned Biohub ESMC checkpoint. Transformation: apply the deterministic esmc_to_fastplms_v1 parameter map into the FastPLMs ESMC modules. Output: the pinned Synthyra ESMplusplus checkpoint. Validation: release parity compares keys, shapes, dtypes, values, aliases, and live inference. Limitation: runtime attention and precision selection are not serialized weight transforms."
 representative = "esmc_small"
-documentation = "docs/models.md#esm"
+documentation = "docs/models.md#esm-and-esmc"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
 runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esm_plusplus", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusConfig", AutoModel = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusModel", AutoModelForMaskedLM = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForMaskedLM" }
@@ -195,6 +197,7 @@ auto_map = { AutoConfig = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ES
 architecture = "ESM3"
 upstreams = ["biohub-esm", "biohub-transformers"]
 tokenizer_mode = "tokenizer"
+public_input = "Sequence, structure, and function tracks prepared through the multimodal helpers"
 extra = "core"
 reference_container = "reference-biohub-esm"
 reference_adapter = "tests.parity.support.reference_adapters.esm3"
@@ -217,6 +220,7 @@ auto_map = { AutoConfig = "fastplms.models.esm3.modeling_esm3.FastESM3Config", A
 architecture = "E1"
 upstreams = ["e1"]
 tokenizer_mode = "sequence"
+public_input = "Raw amino-acid sequences prepared by the native E1 adapter"
 extra = "core"
 reference_container = "reference-e1"
 reference_adapter = "tests.parity.support.reference_adapters.e1"
@@ -241,6 +245,7 @@ auto_map = { AutoConfig = "fastplms.models.e1.modeling_e1.E1Config", AutoModel =
 architecture = "DPLM"
 upstreams = ["dplm"]
 tokenizer_mode = "tokenizer"
+public_input = "Amino-acid sequences tokenized to masked or partially masked residue IDs"
 extra = "core"
 reference_container = "reference-dplm"
 reference_adapter = "tests.parity.support.reference_adapters.dplm"
@@ -263,6 +268,7 @@ auto_map = { AutoConfig = "fastplms.models.dplm.modeling_dplm.DPLMConfig", AutoM
 architecture = "DPLM2"
 upstreams = ["dplm"]
 tokenizer_mode = "tokenizer"
+public_input = "Tokenized amino-acid and structure tracks with explicit modality boundaries"
 extra = "core"
 reference_container = "reference-dplm"
 reference_adapter = "tests.parity.support.reference_adapters.dplm2"
@@ -286,6 +292,7 @@ tokenizer_class = "fastplms.models.dplm2.tokenization_dplm2.DPLM2Tokenizer"
 architecture = "ANKH"
 upstreams = ["ankh"]
 tokenizer_mode = "tokenizer"
+public_input = "Amino-acid sequences tokenized for encoder or sequence-to-sequence use"
 extra = "core"
 reference_container = "reference-ankh"
 reference_adapter = "tests.parity.support.reference_adapters.ankh"
@@ -308,6 +315,7 @@ auto_map = { AutoConfig = "fastplms.models.ankh.modeling_ankh.FastAnkhConfig", A
 architecture = "Boltz2"
 upstreams = ["boltz"]
 tokenizer_mode = "structure"
+public_input = "Raw amino-acid sequences through the convenience API, or prepared model features"
 extra = "structure"
 reference_container = "reference-boltz2"
 reference_adapter = "tests.parity.support.reference_adapters.boltz"
@@ -330,6 +338,7 @@ auto_map = { AutoConfig = "fastplms.models.boltz.modeling_boltz2.Boltz2Config", 
 architecture = "ESMFold"
 upstreams = ["fair-esm", "openfold"]
 tokenizer_mode = "structure"
+public_input = "Raw amino-acid sequences through folding helpers, or prepared residue tensors"
 extra = "structure"
 reference_container = "reference-esmfold"
 reference_adapter = "tests.parity.support.reference_adapters.esmfold"
@@ -353,6 +362,7 @@ architecture = "ESMFold2"
 upstreams = ["biohub-esm", "biohub-transformers", "protein-ttt"]
 backbone_model = "esmc_6b"
 tokenizer_mode = "structure"
+public_input = "Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors"
 extra = "structure"
 reference_container = "reference-esmfold2"
 reference_adapter = "tests.parity.support.reference_adapters.esmfold2"

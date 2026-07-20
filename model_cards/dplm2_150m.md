@@ -10,9 +10,13 @@ tags:
 
 # Synthyra/DPLM2-150M
 
-This checkpoint uses the FastPLMs `DPLM2` implementation.
-Its input mode is `tokenizer` and its advertised AutoClasses
-are `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
+This checkpoint packages the FastPLMs `DPLM2` implementation.
+
+Accepted inputs are tokenized amino-acid and structure tracks with explicit
+modality boundaries.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`,
+`AutoModelForMaskedLM`, `AutoModelForSequenceClassification`,
+`AutoModelForTokenClassification`.
 
 ## Quick start
 
@@ -28,12 +32,12 @@ model = AutoModel.from_pretrained(
 
 This example uses the published Hub repository. For offline validation, build
 the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/<model>` path, then pass `local_files_only=True`.
+`dist/hub/DPLM2-150M` path, then pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default or request one of
-`sdpa` with `attn_implementation`.
-The BF16 execution policy is `fp32_parameters_autocast`:
-FP32 parameters with CUDA BF16 autocast.
+Leave attention unspecified for the Transformers default. Supported explicit
+choices are `sdpa`.
+Pass the selected name through `attn_implementation`.
+For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Dataset embeddings
 
@@ -115,7 +119,7 @@ supported by `model.embed_dataset(...)`.
 
 ## Runtime contract
 
-- Input mode: `tokenizer`
+- Public input: Tokenized amino-acid and structure tracks with explicit modality boundaries
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
 - Attention implementations: `sdpa`
 - Precision policies: `default`

@@ -4,8 +4,10 @@ FastPLMs treats official equivalence as a release property. Routine goldens make
 development faster, but a release requires live comparison with the pinned
 official implementation in its native reference container.
 
-All project verification runs on the declared H100 workstation through Docker.
-Every PyTorch container uses `--ipc=host` or Compose `ipc: host`.
+GPU release and benchmark suites run on the declared H100 workstation through
+Docker. Portable unit and documentation checks can also run locally. Every
+Dockerized PyTorch run uses `--ipc=host` directly or receives `ipc: host` from
+Compose.
 
 ## Run tiers
 
@@ -148,19 +150,10 @@ cannot improve a score. The suite reports relative L2 error, relative
 cosine, confident-position top-1 agreement, and Jensen-Shannon divergence for
 probability tensors.
 
-Repeated-run noise and official-baseline error calibrate a scalar threshold:
-
-```text
-f_repeat = median(error) + 6 * 1.4826 * MAD(error)
-
-e_allowed = min(
-    e_hard,
-    max(e_target, 10 * f_repeat, 1.25 * e_base, e_base + 6 * s_base),
-)
-```
-
-The first implementation must meet the engineering target, not only the hard
-limit.
+The tables below record the fixed engineering targets and hard limits enforced
+by the release tests. Repeated runs and official baselines are diagnostic
+evidence, but they do not silently widen those limits. A new implementation
+must meet the engineering target, not only the hard limit.
 
 | Contract | Engineering target | Hard limit |
 | --- | ---: | ---: |

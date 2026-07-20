@@ -2,10 +2,9 @@
 
 <img width="2816" height="1536" alt="FastPLMs Hero Image" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
 
-FastPLMs provides compact, Hugging Face-compatible implementations of protein
-language and structure models. The project keeps the familiar Transformers
-interface while making attention, embedding, generation, folding, provenance,
-and validation behavior explicit.
+FastPLMs provides Hugging Face-compatible protein language and structure
+models. It keeps the familiar Transformers interface while making attention,
+embedding, generation, folding, and validation behavior explicit.
 
 The runtime package does not import an official model checkout. Each supported
 family instead has a pinned upstream source under `vendor/upstream/`, an
@@ -42,9 +41,9 @@ FastPLMs separates those concerns:
 - Official repositories are isolated parity oracles, not production
   dependencies.
 
-The architecture is not the whole claim. A model is release-visible only when
-its configuration, tokenizer behavior, state transformation, representative
-inference, artifact contents, and legal inventory are defined and tested.
+A supported model is more than an architecture implementation. Its
+configuration, input preparation, checkpoint conversion, representative
+inference, artifact contents, and legal inventory are all defined and tested.
 
 ## Supported models
 
@@ -53,18 +52,18 @@ checkpoint list. It is rendered from
 [`src/fastplms/models.toml`](src/fastplms/models.toml), which also defines valid
 AutoClasses, attention backends, precision paths, and release tiers.
 
-| Family | Primary use | Input contract | Important distinction |
+| Family | Primary use | Typical user input | Important distinction |
 | --- | --- | --- | --- |
-| ESM2 | Sequence representations and masked language modeling | Tokenizer | Preserves ESM2 encoder, MLM, contact, and classification contracts |
-| ESM++ / ESMC | Sequence representations and masked language modeling | Tokenizer | Biohub ESMC implementation and ESMFold2 language-model backbone |
-| ESM3 | Multimodal protein modeling and generation | Model sequence helpers | Retains sequence, structure, and function tracks |
-| E1 | Retrieval-augmented protein encoding | Raw sequences | No tokenizer; native E1 preparation is preserved |
-| DPLM | Discrete diffusion protein generation | Tokenizer | Confidence-based iterative unmasking |
-| DPLM2 | Amino-acid and structure co-generation | Multimodal tokenizer | Separate structure and amino-acid boundary tokens |
-| ANKH | T5 protein encoding and sequence-to-sequence modeling | Tokenizer | Optimized encoder plus official-compatible seq2seq head |
-| ESMFold | Sequence-to-structure inference | Raw sequences | Meta ESMFold contract with FastPLMs ESM2 backbone |
-| ESMFold2 | Sequence and complex structure prediction | Structure inputs | Learned ESMC state projection and explicit ESMC precision policy |
-| Boltz2 | Structure prediction | Prepared structure inputs | Provisional end-to-end numerical-equivalence status |
+| ESM2 | Sequence representations and masked language modeling | Amino-acid sequences tokenized to residue IDs | Preserves ESM2 encoder, MLM, contact, and classification contracts |
+| ESM++ / ESMC | Sequence representations and masked language modeling | Amino-acid sequences tokenized to residue IDs | Biohub ESMC implementation and ESMFold2 language-model backbone |
+| ESM3 | Multimodal protein modeling and generation | Sequence, structure, and function tracks | Retains all three tracks through its multimodal interface |
+| E1 | Retrieval-augmented protein encoding | Raw amino-acid sequences | No tokenizer; native E1 preparation is preserved |
+| DPLM | Discrete diffusion protein generation | Amino-acid sequences tokenized to masked residue IDs | Confidence-based iterative unmasking |
+| DPLM2 | Amino-acid and structure co-generation | Amino-acid and structure token tracks | Separate structure and amino-acid boundary tokens |
+| ANKH | T5 protein encoding and sequence-to-sequence modeling | Amino-acid sequences tokenized for encoder or seq2seq use | Optimized encoder plus official-compatible seq2seq head |
+| ESMFold | Sequence-to-structure inference | Raw amino-acid sequences | Meta ESMFold contract with FastPLMs ESM2 backbone |
+| ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Learned ESMC state projection and explicit ESMC precision policy |
+| Boltz2 | Structure prediction | Raw amino-acid sequences or prepared model features | Provisional end-to-end numerical-equivalence status |
 
 The model manifest, not this summary, controls support. A backend or AutoClass
 that is valid for one family may be rejected by another.
@@ -117,14 +116,15 @@ from transformers import AutoModel
 model = AutoModel.from_pretrained(
     "Synthyra/ESM2-150M",
     trust_remote_code=True,
-    attn_implementation="flex_attention",
+    attn_implementation="sdpa",
 )
 model.eval()
 ```
 
-The Hub identifier assumes that the manifest-built FastPLMs 1.0 artifact has
-been published. Before publication, build the local artifact and replace the
-identifier with `dist/hub/ESM2-150M`.
+Use the published Hub identifier for ordinary loading. Pin `revision` when an
+immutable model-code snapshot is required. Contributors can instead build the
+manifest-pinned artifact under `dist/hub/ESM2-150M` and load it locally before
+publication.
 
 Tokenizer-based models use the tokenizer paired with the same artifact:
 
@@ -386,8 +386,9 @@ does not contain a trained masked-language-model head for that objective.
 
 ### ESMFold2 folding and learned representations
 
-ESMFold2 exposes a simple single-protein helper and lower-level complex input
-types:
+ESMFold2 accepts amino-acid sequences and typed molecular-complex
+specifications. A target structure is not an input. Atomic coordinates and
+confidence values are produced by the model.
 
 ```python
 from transformers import AutoModel
@@ -410,13 +411,57 @@ pdb_text = folder.result_to_pdb(result)
 print(result.ptm, result.plddt.mean().item())
 ```
 
+Build complexes with the input types exposed by the loaded artifact:
+
+```python
+types = folder.input_types
+complex_input = types.StructurePredictionInput(
+    sequences=[
+        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
+        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
+        types.DNAInput(id="C", sequence="ATGC"),
+        types.LigandInput(id="L", smiles="O"),
+    ]
+)
+complex_result = folder.fold(
+    complex_input,
+    num_loops=1,
+    num_sampling_steps=200,
+    seed=7,
+)
+print(complex_result.ptm, complex_result.plddt.mean().item())
+```
+
+Protein inputs can also carry an MSA, and the typed interface supports RNA,
+ligands, modifications, covalent bonds, pockets, and distogram conditioning.
+Prepared features contain fields such as `ref_pos`; these are component
+reference geometries created during featurization, not a known target
+structure.
+
 Its learned sequence representation combines 81 ordered ESMC hidden states
-with the folding checkpoint's projection:
+with the folding checkpoint's projection. Use the public embedding API to
+retrieve the resulting residue representation:
+
+```python
+representations = folder.embed_dataset(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    batch_size=2,
+    full_embeddings=True,
+)
+print(representations[0].tensor.shape)  # (sequence_length, 256)
+```
+
+For lower-level integrations that already hold the ordered ESMC hidden-state
+stack, the projection is also exposed directly:
 
 ```python
 # H: (b, l, 81, 2560)
 Z = folder.project_esmc_hidden_states(H)  # Z: (b, l, 256)
 ```
+
+Here, `H` is the 81-state ESMC representation for a prepared sequence batch,
+not a target structure. The dataset embedding API is the higher-level path for
+ordinary sequence inputs.
 
 `folder.embed_dataset(..., full_embeddings=True)` returns one `(l, 256)` tensor
 per single-chain sequence. The embedding path rejects complexes, ligands, MSAs,
@@ -620,15 +665,21 @@ model cards without uploading or deleting checkpoint weights:
 
 ```bash
 PYTHONPATH=src python -m tools.artifacts.publish \
-  --files-only esmfold2 esmfold2_fast \
+  --files-only \
   --artifact-root dist/hub \
   --dry-run
 ```
 
+`--artifact-root` is the local directory containing one built artifact
+subdirectory per selected model. It tells the publisher which validated files
+to upload; it is not a remote Hub path and does not change where models are
+published.
+
 Remove `--dry-run` after reviewing the exact add-only file plan. Repository
-targets come exclusively from `models.toml`; authentication uses `HF_TOKEN` or
-the cached Hugging Face login. See [Local Hub artifacts](docs/artifacts.md) for
-the full safety contract and the four-model ESMFold2 command.
+targets come exclusively from `models.toml`, and omitting model IDs selects
+every supported model by default. Pass positional model IDs to restrict the
+update. Authentication uses `HF_TOKEN` or the cached Hugging Face login. See
+[Local Hub artifacts](docs/artifacts.md) for the full safety contract.
 
 ## Documentation
 

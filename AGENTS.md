@@ -101,8 +101,9 @@ sudo docker compose -f docker/compose.yaml run --rm candidate \
   python -m pytest tests/parity -k esm2 -v
 ```
 
-Always pass `--ipc=host` to Dockerized PyTorch runs. Respect the `gpu`, `slow`,
-`large`, and `structure` markers before running expensive suites.
+Compose supplies `ipc: host` for its services. Pass `--ipc=host` to raw
+Dockerized PyTorch runs. Respect the `gpu`, `slow`, `large`, and `structure`
+markers before running expensive suites.
 
 Regenerate and check documentation:
 
@@ -127,16 +128,18 @@ Preview an add-only Hub update that excludes checkpoint weights:
 
 ```bash
 PYTHONPATH=src python -m tools.artifacts.publish \
-  --files-only esm2_150m \
+  --files-only \
   --artifact-root dist/hub \
   --dry-run
 ```
 
 Remove `--dry-run` only after reviewing every planned path. The publisher must
-remain manifest-scoped, add-only, protected by the remote parent commit, and
-free of token command-line arguments. It must never upload weight-shaped paths,
-create repositories, delete remote files, or publish complete-artifact
-attestations during a files-only update.
+select every manifest model when no positional model IDs are provided; model
+IDs restrict the operation to that explicit subset. It must remain
+manifest-scoped, add-only, protected by the remote parent commit, and free of
+token command-line arguments. It must never upload weight-shaped paths, create
+repositories, delete remote files, or publish complete-artifact attestations
+during a files-only update.
 
 ## Change policy
 

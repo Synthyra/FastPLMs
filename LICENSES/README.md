@@ -10,10 +10,10 @@ modules under `src/fastplms/`. Model-specific license summaries belong in the
 generated cards under `model_cards/`; the canonical legal texts and notices
 listed here control.
 
-`src/fastplms/models.toml` records the SHA-256 digest of every required file.
-Artifact construction verifies both the canonical upstream copy and this
-distribution copy before writing any output. Missing or changed content is a
-release error.
+`src/fastplms/models.toml` records the SHA-256 digest of every legal file
+required by a distributable model artifact. Artifact construction verifies the
+declared upstream and distribution copies before writing output. Missing or
+changed declared content is a release error.
 
 Digests use the UTF-8 text stored by Git with LF line endings. Validation
 normalizes CRLF or LF checkouts to that canonical representation, and artifact
@@ -44,6 +44,13 @@ construction always writes LF. No other whitespace or content is normalized.
 | OpenFold | `openfold/PROVENANCE.md` | Pinned revision and parity-oracle boundary |
 | ProteinTTT | `protein-ttt/LICENSE` | Verbatim MIT license |
 | ProteinTTT | `protein-ttt/PROVENANCE.md` | Pinned revision and optional-workflow boundary |
+
+## Reference-only notices
+
+Some legal records apply only to isolated parity environments and are not
+copied into model artifacts. `dllogger/PROVENANCE.md` records the pinned
+DLLogger dependency and installed-license check used by the ESMFold reference
+image. FastPLMs production code does not import or distribute DLLogger.
 
 The pinned E1 repository contains its agreement, attribution guidelines, and
 notice, but does not include standalone Apache-2.0 or BSD-3-Clause files. The

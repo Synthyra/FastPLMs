@@ -129,6 +129,27 @@ def test_files_only_plan_excludes_weights_and_complete_artifact_attestations(
     ]
 
 
+@pytest.mark.parametrize("model_id", tuple(get_model_registry()))
+def test_files_only_plan_supports_every_manifest_model(
+    tmp_path: Path,
+    model_id: str,
+) -> None:
+    spec = get_model_registry()[model_id]
+    _files_only_artifact(tmp_path, spec)
+    api = FakeApi(spec)
+
+    plan = prepare_files_only_plan(
+        spec,
+        artifact_root=tmp_path,
+        revision="main",
+        api=api,  # type: ignore[arg-type]
+    )
+
+    assert plan.model_id == model_id
+    assert plan.repo_id == spec.fast.repo_id
+    assert not any(_is_weight_path(path) for path in plan.files)
+
+
 def test_files_only_publish_uses_additions_and_parent_commit_only(
     tmp_path: Path,
 ) -> None:
@@ -214,13 +235,14 @@ def test_files_only_rejects_remote_weight_identity_mismatch(tmp_path: Path) -> N
         )
 
 
-def test_files_only_selection_requires_manifest_ids_or_explicit_all() -> None:
+def test_files_only_selection_defaults_to_every_manifest_model() -> None:
     registry = get_model_registry()
     assert [spec.id for spec in _selected_specs(registry, ("esm2_8m",), all_models=False)] == [
         "esm2_8m"
     ]
-    with pytest.raises(ArtifactError, match="at least one"):
-        _selected_specs(registry, (), all_models=False)
+    expected = list(registry)
+    assert [spec.id for spec in _selected_specs(registry, (), all_models=False)] == expected
+    assert [spec.id for spec in _selected_specs(registry, (), all_models=True)] == expected
     with pytest.raises(ArtifactError, match="not both"):
         _selected_specs(registry, ("esm2_8m",), all_models=True)
     with pytest.raises(ArtifactError, match="Unknown model IDs"):

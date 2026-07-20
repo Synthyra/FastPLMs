@@ -1,20 +1,28 @@
 # Embedding API
 
 FastPLMs exposes the same dataset operation as `fastplms.embed_dataset(model,
-...)` and `model.embed_dataset(...)`.
+...)` and `model.embed_dataset(...)`. This minimal example loads a tokenizer-
+based model and returns one mean-pooled vector per sequence:
 
 ```python
+from transformers import AutoModel
+
+from fastplms import EmbeddingInput, embed_dataset
+
+model = AutoModel.from_pretrained(
+    "Synthyra/ESM2-150M",
+    trust_remote_code=True,
+).eval()
 result = embed_dataset(
     model,
-    inputs,
+    [
+        EmbeddingInput("protein-a", "MSTNPKPQRKTKRNT"),
+        EmbeddingInput("protein-b", "MKTIIALSYIFCLVFA"),
+    ],
     batch_size=2,
     pooling=("mean",),
-    full_embeddings=False,
-    output=None,
-    format="safetensors",
-    resume=True,
-    model_state_fingerprint=None,
 )
+print(result[0].id, result[0].tensor.shape)
 ```
 
 The operation accepts sequences, `(id, sequence)` pairs, `EmbeddingInput`

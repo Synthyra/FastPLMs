@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import textwrap
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -63,12 +64,10 @@ def render_support(registry: ModelRegistry) -> str:
         "This file is generated from `src/fastplms/models.toml`. A listed capability is",
         "selectable. Strict-parity exceptions are documented in the checkpoint cards.",
         "",
-        "## Families",
+        "## Family interfaces",
         "",
-        "| Family | Architecture | Checkpoints | Input | Tokenizer class | AutoClasses | "
-        "Attention | Precision | BF16 execution | Extra | Reference | Checkpoint terms | "
-        "Hub license | Tiers |",
-        "| --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Family | Architecture | Checkpoints | Public input | AutoClasses | Tokenizer class |",
+        "| --- | --- | ---: | --- | --- | --- |",
     ]
     for family in registry.families.values():
         count = len(registry.by_family(family.id))
@@ -79,14 +78,54 @@ def render_support(registry: ModelRegistry) -> str:
                     f"`{family.id}`",
                     family.architecture,
                     str(count),
-                    f"`{family.tokenizer_mode}`",
-                    _tokenizer_class_label(family),
+                    family.public_input.replace("|", "\\|"),
                     _code(sorted(family.auto_map)),
+                    _tokenizer_class_label(family),
+                )
+            )
+            + " |"
+        )
+
+    lines.extend(
+        (
+            "",
+            "## Family execution",
+            "",
+            "| Family | Attention | Precision | BF16 execution | Extra | Reference |",
+            "| --- | --- | --- | --- | --- | --- |",
+        )
+    )
+    for family in registry.families.values():
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    f"`{family.id}`",
                     _code(family.attention),
                     _precision_contract(family),
                     f"`{family.bf16_execution}`",
                     f"`{family.extra}`",
                     f"`{family.reference_container}`",
+                )
+            )
+            + " |"
+        )
+
+    lines.extend(
+        (
+            "",
+            "## Family release contracts",
+            "",
+            "| Family | Checkpoint terms | Hub license | Tiers |",
+            "| --- | --- | --- | --- |",
+        )
+    )
+    for family in registry.families.values():
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    f"`{family.id}`",
                     family.checkpoint_license.replace("|", "\\|"),
                     _hub_license_label(family),
                     _code(family.test_tiers),
@@ -239,7 +278,7 @@ existing run.
 """
 
 
-def _family_usage_notes(spec: ModelSpec) -> str:
+def _family_usage_notes(spec: ModelSpec, *, allow_generic: bool = False) -> str:
     family_id = spec.family.id
     model_id = spec.fast.repo_id
     if family_id == "esm2":
@@ -287,10 +326,11 @@ checkpoint.
 """
     if family_id == "esm3":
         return f"""\
-## Sequence and multimodal inference
+## Sequence inference and masked-sequence generation
 
-ESM3 owns its sequence preparation because its forward pass can combine
-sequence, structure, and function tracks:
+ESM3 owns its sequence preparation. This example exercises the sequence track;
+the public input contract also supports structure and function tracks through
+the multimodal helpers:
 
 ```python
 import torch
@@ -446,9 +486,8 @@ with torch.inference_mode():
 print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
 ```
 
-The separately named masked-language-model extension is a FastPLMs extension,
-not an official ANKH masked-language-model equivalent. ANKH artifacts retain
-CC BY-NC-SA 4.0 terms.
+ANKH artifacts retain CC BY-NC-SA 4.0 terms. The notes below distinguish the
+official heads from FastPLMs extensions.
 
 """
     if family_id == "boltz2":
@@ -474,10 +513,8 @@ print(output.sample_atom_coords.shape)
 print(output.plddt, output.ptm, output.iptm)
 ```
 
-Boltz2 is provisional in FastPLMs 1.0. Configuration, declared inference-core
-weights, feature preparation, and seeded execution are tested, but
-native-environment BF16 end-to-end inference does not yet meet the fixed
-numerical-equivalence limits.
+The validation boundary below describes the currently supported inference
+subset and its provisional status.
 
 """
     if family_id == "esmfold":
@@ -581,17 +618,47 @@ cif_text = model.result_to_cif(result)
 print(result.ptm, result.plddt.mean().item())
 ```
 
-For complexes, construct the model's `StructurePredictionInput` with explicit
-protein, DNA, RNA, ligand, and MSA objects. Confidence scores are model outputs
-and do not establish biochemical activity.
+No target structure is required. For complexes, construct the input from the
+types exposed by the loaded artifact:
+
+```python
+types = model.input_types
+complex_input = types.StructurePredictionInput(
+    sequences=[
+        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
+        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
+        types.DNAInput(id="C", sequence="ATGC"),
+        types.LigandInput(id="L", smiles="O"),
+    ]
+)
+complex_result = model.fold(
+    complex_input,
+    num_loops=1,
+    num_sampling_steps=200,
+    seed=7,
+)
+print(complex_result.ptm, complex_result.plddt.mean().item())
+```
+
+The typed interface also supports RNA, protein MSAs, modifications, covalent
+bonds, pockets, and distogram conditioning. Prepared `ref_pos` values are
+component reference geometries created during featurization, not target
+coordinates. Predicted coordinates and confidence scores are outputs and do
+not establish biochemical activity.
 
 ## Learned representation and ESMC precision
 
 ESMFold2 combines the ordered 81 ESMC-6B states `H: (b, l, 81, 2560)` with the
-checkpoint's learned projection:
+checkpoint's learned projection. Retrieve the resulting residue representation
+through the public embedding API:
 
 ```python
-Z = model.project_esmc_hidden_states(H)  # Z: (b, l, 256)
+representations = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    batch_size=2,
+    full_embeddings=True,
+)
+print(representations[0].tensor.shape)  # (sequence_length, 256)
 ```
 
 `model.embed_dataset(..., full_embeddings=True)` returns one `(l, 256)` residue
@@ -612,10 +679,12 @@ Canonical BF16 weights are retained, and transient quantization state is never
 serialized.
 
 {ttt_note}{binder_note}"""
+    if allow_generic:
+        return ""
     raise ValueError(f"Unsupported model-card family: {family_id!r}")
 
 
-def render_model_card(spec: ModelSpec) -> str:
+def render_model_card(spec: ModelSpec, *, allow_generic_family: bool = False) -> str:
     """Render one checkpoint card whose claims are limited to manifest evidence."""
 
     auto_class = _preferred_auto_class(spec)
@@ -626,14 +695,40 @@ def render_model_card(spec: ModelSpec) -> str:
     notes = ""
     sequence_forward = _sequence_forward_usage(spec)
     embedding_usage = _embedding_usage(spec)
-    family_usage = _family_usage_notes(spec)
+    family_usage = _family_usage_notes(spec, allow_generic=allow_generic_family)
+    local_artifact = spec.fast.repo_id.rsplit("/", maxsplit=1)[-1]
+    public_input_intro = textwrap.fill(
+        "Accepted inputs are "
+        f"{spec.family.public_input[0].lower() + spec.family.public_input[1:]}.",
+        width=79,
+    )
+    auto_class_intro = textwrap.fill(
+        f"Supported Transformers entry points are {_code(sorted(spec.auto_map))}.",
+        width=79,
+    )
+    attention_intro = textwrap.fill(
+        "Leave attention unspecified for the Transformers default. Supported "
+        f"explicit choices are {_code(spec.family.attention)}.",
+        width=79,
+    )
+    bf16_intro = textwrap.fill(
+        "For BF16 execution, this family uses "
+        f"{_bf16_execution_description(spec.family)}.",
+        width=79,
+    )
     if spec.family.tokenizer_class is not None:
         tokenizer_provenance = f"- Tokenizer class: `{spec.family.tokenizer_class}`\n"
     if spec.notes:
+        wrapped_notes = textwrap.fill(
+            spec.notes,
+            width=79,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
         notes = f"""\
 ## Notes and limitations
 
-{spec.notes}
+{wrapped_notes}
 
 """
     return f"""---
@@ -648,9 +743,10 @@ tags:
 
 # {spec.fast.repo_id}
 
-This checkpoint uses the FastPLMs `{spec.family.architecture}` implementation.
-Its input mode is `{spec.family.tokenizer_mode}` and its advertised AutoClasses
-are {_code(sorted(spec.auto_map))}.
+This checkpoint packages the FastPLMs `{spec.family.architecture}` implementation.
+
+{public_input_intro}
+{auto_class_intro}
 
 ## Quick start
 
@@ -666,16 +762,15 @@ model = {auto_class}.from_pretrained(
 
 This example uses the published Hub repository. For offline validation, build
 the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/<model>` path, then pass `local_files_only=True`.
+`dist/hub/{local_artifact}` path, then pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default or request one of
-{_code(spec.family.attention)} with `attn_implementation`.
-The BF16 execution policy is `{spec.family.bf16_execution}`:
-{_bf16_execution_description(spec.family)}.
+{attention_intro}
+Pass the selected name through `attn_implementation`.
+{bf16_intro}
 
 {sequence_forward}{embedding_usage}{family_usage}{notes}## Runtime contract
 
-- Input mode: `{spec.family.tokenizer_mode}`
+- Public input: {spec.family.public_input}
 - Advertised AutoClasses: {_code(sorted(spec.auto_map))}
 - Attention implementations: {_code(spec.family.attention)}
 - Precision policies: {_precision_contract(spec.family)}

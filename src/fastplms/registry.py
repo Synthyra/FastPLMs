@@ -91,6 +91,7 @@ _FAMILY_FIELDS = frozenset(
         "architecture",
         "upstreams",
         "tokenizer_mode",
+        "public_input",
         "extra",
         "reference_container",
         "reference_adapter",
@@ -273,6 +274,7 @@ class ModelFamily:
     architecture: str
     upstreams: tuple[str, ...]
     tokenizer_mode: str
+    public_input: str
     extra: RuntimeExtra
     reference_container: str
     reference_adapter: str
@@ -899,6 +901,7 @@ def _parse_families(
         tokenizer_mode = _require_str(value, "tokenizer_mode", context)
         if tokenizer_mode not in _ALLOWED_TOKENIZER_MODES:
             raise RegistryError(f"Unsupported tokenizer mode in {context}: {tokenizer_mode!r}")
+        public_input = _require_str(value, "public_input", context)
         attention = _require_str_list(value, "attention", context)
         if not set(attention).issubset(_ALLOWED_ATTENTION):
             raise RegistryError(f"Unsupported attention implementation in {context}.")
@@ -998,6 +1001,7 @@ def _parse_families(
             architecture=_require_str(value, "architecture", context),
             upstreams=source_ids,
             tokenizer_mode=tokenizer_mode,
+            public_input=public_input,
             extra=extra,
             reference_container=reference_container,
             reference_adapter=reference_adapter,

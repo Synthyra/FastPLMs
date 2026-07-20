@@ -1,15 +1,18 @@
 # Fine-tuning
 
-FastPLMs models follow Transformers `PreTrainedModel` conventions, so standard
-Trainer, Accelerate, distributed, and adapter workflows can operate on package
-models. Core training dependencies are isolated in the `train` extra.
+FastPLMs models follow Transformers `PreTrainedModel` conventions, so
+compatible family and task-head combinations can use Trainer, Accelerate,
+distributed, and adapter workflows. Core training dependencies are isolated in
+the `train` extra.
 
 ```bash
 uv sync --extra train
 ```
 
-The runnable example also uses plotting and evaluation packages. Resolve them
-without adding them to the runtime package:
+The runnable classification and regression example currently targets ESM2,
+whose artifacts advertise `AutoModelForSequenceClassification`. It also uses
+plotting and evaluation packages, which can be resolved without adding them to
+the runtime package:
 
 ```bash
 uv run \

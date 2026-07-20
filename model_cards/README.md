@@ -4,7 +4,7 @@ Checkpoint cards in this directory are generated from
 `src/fastplms/models.toml`:
 
 ```bash
-PYTHONPATH=src python tools/artifacts/generate_docs.py
+PYTHONPATH=src python -m tools.artifacts.generate_docs
 ```
 
 Use `--check` to reject stale cards without writing files. Edit the typed
@@ -23,5 +23,6 @@ Each card combines:
 
 Examples must follow the current public API. Do not restore legacy backend
 names, pickle embedding output, unsupported TTT paths, or capabilities from
-another family. Release tests compile every Python fence, validate local links
-and Hub license metadata, and check representative family-specific sections.
+another family. Release tests compile the examples, validate local links and
+Hub license metadata, and check representative family-specific sections. They
+do not execute every model example or establish a scientific result.

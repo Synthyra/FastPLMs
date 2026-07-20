@@ -5,20 +5,50 @@
 This file is generated from `src/fastplms/models.toml`. A listed capability is
 selectable. Strict-parity exceptions are documented in the checkpoint cards.
 
-## Families
+## Family interfaces
 
-| Family | Architecture | Checkpoints | Input | Tokenizer class | AutoClasses | Attention | Precision | BF16 execution | Extra | Reference | Checkpoint terms | Hub license | Tiers |
-| --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `esm2` | ESM2 | 5 | `tokenizer` | `n/a` | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default` | `fp32_parameters_autocast` | `core` | `reference-esm2` | MIT | `mit` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
-| `esm_plusplus` | ESMC | 3 | `tokenizer` | `n/a` | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default` | `static_parameters` | `core` | `reference-biohub-esm` | MIT | `mit` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
-| `esm3` | ESM3 | 1 | `tokenizer` | `n/a` | `AutoConfig`, `AutoModel` | `eager`, `sdpa`, `flex_attention` | `default` | `fp32_parameters_autocast` | `core` | `reference-biohub-esm` | MIT | `mit` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
-| `e1` | E1 | 3 | `sequence` | `n/a` | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `sdpa`, `flex_attention` | `default` | `static_parameters` | `core` | `reference-e1` | Profluent-E1-Agreement | `other` ([Profluent-E1 Clickthrough License Agreement](https://github.com/Profluent-AI/E1/blob/bfd2620a602248499f3d2583d85a7ecddf0b6e02/LICENSE)) | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
-| `dplm` | DPLM | 3 | `tokenizer` | `n/a` | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `eager`, `sdpa`, `flex_attention`, `flash_attention_3` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` | Apache-2.0 (project assumption; upstream checkpoint cards do not independently state it) | `apache-2.0` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
-| `dplm2` | DPLM2 | 3 | `tokenizer` | `fastplms.models.dplm2.tokenization_dplm2.DPLM2Tokenizer` | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `sdpa` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` | Apache-2.0 | `apache-2.0` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
-| `ankh` | ANKH | 5 | `tokenizer` | `n/a` | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `eager`, `sdpa` | `default` | `static_parameters` | `core` | `reference-ankh` | CC-BY-NC-SA-4.0 | `cc-by-nc-sa-4.0` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
-| `boltz2` | Boltz2 | 1 | `structure` | `n/a` | `AutoConfig`, `AutoModel` | `eager` | `default` | `fp32_parameters_autocast` | `structure` | `reference-boltz2` | MIT | `mit` | `structure`, `artifact`, `benchmark` |
-| `esmfold` | ESMFold | 1 | `structure` | `n/a` | `AutoConfig`, `AutoModel` | `eager`, `sdpa`, `flex_attention` | `default` | `fp32_parameters_autocast` | `structure` | `reference-esmfold` | MIT | `mit` | `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark` |
-| `esmfold2` | ESMFold2 | 4 | `structure` | `n/a` | `AutoConfig`, `AutoModel` | `eager`, `sdpa`, `flex_attention` | `auto`, `fp32`, `bf16`, `fp8` (experimental) | `fp32_parameters_autocast` | `structure` | `reference-esmfold2` | MIT | `mit` | `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark` |
+| Family | Architecture | Checkpoints | Public input | AutoClasses | Tokenizer class |
+| --- | --- | ---: | --- | --- | --- |
+| `esm2` | ESM2 | 5 | Amino-acid sequences tokenized to residue IDs | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
+| `esm_plusplus` | ESMC | 3 | Amino-acid sequences tokenized to residue IDs | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM` | `n/a` |
+| `esm3` | ESM3 | 1 | Sequence, structure, and function tracks prepared through the multimodal helpers | `AutoConfig`, `AutoModel` | `n/a` |
+| `e1` | E1 | 3 | Raw amino-acid sequences prepared by the native E1 adapter | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
+| `dplm` | DPLM | 3 | Amino-acid sequences tokenized to masked or partially masked residue IDs | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
+| `dplm2` | DPLM2 | 3 | Tokenized amino-acid and structure tracks with explicit modality boundaries | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `fastplms.models.dplm2.tokenization_dplm2.DPLM2Tokenizer` |
+| `ankh` | ANKH | 5 | Amino-acid sequences tokenized for encoder or sequence-to-sequence use | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
+| `boltz2` | Boltz2 | 1 | Raw amino-acid sequences through the convenience API, or prepared model features | `AutoConfig`, `AutoModel` | `n/a` |
+| `esmfold` | ESMFold | 1 | Raw amino-acid sequences through folding helpers, or prepared residue tensors | `AutoConfig`, `AutoModel` | `n/a` |
+| `esmfold2` | ESMFold2 | 4 | Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors | `AutoConfig`, `AutoModel` | `n/a` |
+
+## Family execution
+
+| Family | Attention | Precision | BF16 execution | Extra | Reference |
+| --- | --- | --- | --- | --- | --- |
+| `esm2` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default` | `fp32_parameters_autocast` | `core` | `reference-esm2` |
+| `esm_plusplus` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default` | `static_parameters` | `core` | `reference-biohub-esm` |
+| `esm3` | `eager`, `sdpa`, `flex_attention` | `default` | `fp32_parameters_autocast` | `core` | `reference-biohub-esm` |
+| `e1` | `sdpa`, `flex_attention` | `default` | `static_parameters` | `core` | `reference-e1` |
+| `dplm` | `eager`, `sdpa`, `flex_attention`, `flash_attention_3` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` |
+| `dplm2` | `sdpa` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` |
+| `ankh` | `eager`, `sdpa` | `default` | `static_parameters` | `core` | `reference-ankh` |
+| `boltz2` | `eager` | `default` | `fp32_parameters_autocast` | `structure` | `reference-boltz2` |
+| `esmfold` | `eager`, `sdpa`, `flex_attention` | `default` | `fp32_parameters_autocast` | `structure` | `reference-esmfold` |
+| `esmfold2` | `eager`, `sdpa`, `flex_attention` | `auto`, `fp32`, `bf16`, `fp8` (experimental) | `fp32_parameters_autocast` | `structure` | `reference-esmfold2` |
+
+## Family release contracts
+
+| Family | Checkpoint terms | Hub license | Tiers |
+| --- | --- | --- | --- |
+| `esm2` | MIT | `mit` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
+| `esm_plusplus` | MIT | `mit` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
+| `esm3` | MIT | `mit` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
+| `e1` | Profluent-E1-Agreement | `other` ([Profluent-E1 Clickthrough License Agreement](https://github.com/Profluent-AI/E1/blob/bfd2620a602248499f3d2583d85a7ecddf0b6e02/LICENSE)) | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
+| `dplm` | Apache-2.0 (project assumption; upstream checkpoint cards do not independently state it) | `apache-2.0` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
+| `dplm2` | Apache-2.0 | `apache-2.0` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
+| `ankh` | CC-BY-NC-SA-4.0 | `cc-by-nc-sa-4.0` | `check`, `compliance`, `feature`, `artifact`, `benchmark` |
+| `boltz2` | MIT | `mit` | `structure`, `artifact`, `benchmark` |
+| `esmfold` | MIT | `mit` | `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark` |
+| `esmfold2` | MIT | `mit` | `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark` |
 
 ## Checkpoints
 

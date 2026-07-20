@@ -57,7 +57,7 @@ def test_model_cards_include_family_appropriate_usage() -> None:
             "## Tokenization and forward inference",
             "## Masked language modeling and contacts",
         ),
-        "esm3": ("## Sequence and multimodal inference",),
+        "esm3": ("## Sequence inference and masked-sequence generation",),
         "esm_plusplus": ("## Tokenization and forward inference", "## ESMC behavior"),
         "esmfold": ("## Protein structure prediction",),
         "esmfold2": ("## Protein folding", "## Learned representation and ESMC precision"),
@@ -114,15 +114,22 @@ def test_model_card_renderers_surface_typed_limitations(
     registry = load_model_registry()
     for spec in registry.values():
         card = renderer(spec)
+        assert f"Public input: {spec.family.public_input}" in card
+        assert "Input mode:" not in card
+        assert "Internal preparation mode:" not in card
         assert f"Generation contract: `{spec.generation_contract}`" in card
         if spec.notes:
             assert "## Notes and limitations" in card
-            assert spec.notes in card
+            assert " ".join(spec.notes.split()) in " ".join(card.split())
 
 
 def test_support_table_exposes_generation_contracts() -> None:
     registry = load_model_registry()
     support = render_support(registry)
+    assert "| Public input |" in support
+    assert "| Input |" not in support
+    for family in registry.families.values():
+        assert family.public_input in support
     assert "| Generation contract |" in support
     dplm2_3b_row = next(line for line in support.splitlines() if line.startswith("| `dplm2_3b`"))
     assert "`official_unavailable`" in dplm2_3b_row

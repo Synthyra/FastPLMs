@@ -147,6 +147,7 @@ def _synthetic_registry(source_root: Path, checkpoint: Path) -> tuple[ModelRegis
         architecture="Toy",
         upstreams=("toy",),
         tokenizer_mode="sequence",
+        public_input="Synthetic token IDs",
         extra="core",
         reference_container="reference-toy",
         reference_adapter="tests.parity.support.reference_adapters.toy",

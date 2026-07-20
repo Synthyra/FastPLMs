@@ -10,9 +10,12 @@ tags:
 
 # Synthyra/ESM2-3B
 
-This checkpoint uses the FastPLMs `ESM2` implementation.
-Its input mode is `tokenizer` and its advertised AutoClasses
-are `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
+This checkpoint packages the FastPLMs `ESM2` implementation.
+
+Accepted inputs are amino-acid sequences tokenized to residue IDs.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`,
+`AutoModelForMaskedLM`, `AutoModelForSequenceClassification`,
+`AutoModelForTokenClassification`.
 
 ## Quick start
 
@@ -28,12 +31,13 @@ model = AutoModel.from_pretrained(
 
 This example uses the published Hub repository. For offline validation, build
 the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/<model>` path, then pass `local_files_only=True`.
+`dist/hub/ESM2-3B` path, then pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default or request one of
-`eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` with `attn_implementation`.
-The BF16 execution policy is `fp32_parameters_autocast`:
-FP32 parameters with CUDA BF16 autocast.
+Leave attention unspecified for the Transformers default. Supported explicit
+choices are `eager`, `sdpa`, `flex_attention`, `flash_attention_2`,
+`flash_attention_3`.
+Pass the selected name through `attn_implementation`.
+For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Tokenization and forward inference
 
@@ -131,11 +135,15 @@ high-throughput embedding path unless those maps are required.
 
 ## Notes and limitations
 
-The pinned default SDPA BF16 path uses a checkpoint-specific numeric calibration: relative L2 target/hard limit 0.06/0.07, relative Q99.9 0.15/0.18, first-percentile residue cosine 0.994/0.992, and pooled cosine 0.998/0.997. Exact state identity and the global logits-distribution contract remain required.
+The pinned default SDPA BF16 path uses a checkpoint-specific numeric
+calibration: relative L2 target/hard limit 0.06/0.07, relative Q99.9 0.15/0.18,
+first-percentile residue cosine 0.994/0.992, and pooled cosine 0.998/0.997.
+Exact state identity and the global logits-distribution contract remain
+required.
 
 ## Runtime contract
 
-- Input mode: `tokenizer`
+- Public input: Amino-acid sequences tokenized to residue IDs
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3`
 - Precision policies: `default`

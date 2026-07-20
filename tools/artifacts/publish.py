@@ -330,9 +330,7 @@ def _selected_specs(
     selected = tuple(model_ids)
     if all_models and selected:
         raise ArtifactError("Pass model IDs or --all, not both.")
-    if not all_models and not selected:
-        raise ArtifactError("Pass at least one model ID or use --all.")
-    if all_models:
+    if all_models or not selected:
         selected = tuple(registry)
     unknown = sorted(set(selected).difference(registry))
     if unknown:
@@ -350,7 +348,11 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Required safety mode: upload no checkpoint weights and delete no remote files",
     )
-    parser.add_argument("--all", action="store_true", help="Publish every manifest model")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Explicit alias for the default behavior of publishing every manifest model",
+    )
     parser.add_argument("--artifact-root", type=Path, default=Path("dist/hub"))
     parser.add_argument("--revision", default="main")
     parser.add_argument(
