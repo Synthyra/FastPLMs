@@ -59,6 +59,12 @@ loading requires explicit unsafe-pickle opt-in.
 combined with pooling. Pooling no longer includes BOS, EOS, padding, chain
 delimiters, or non-protein structure tokens.
 
+Plain ESM2, DPLM, and DPLM2 `AutoModel` loads no longer create a randomly
+initialized ESM pooler, because the released masked-language-model checkpoints
+do not contain trained pooler weights. Custom models that need that head must
+set `add_pooling_layer=True`; the choice is serialized in the config and the
+pooled tensor is returned as `pooler_output`.
+
 ## ANKH
 
 Use `FastAnkhModel` or `AutoModel` for the official encoder and

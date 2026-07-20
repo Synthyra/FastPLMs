@@ -54,6 +54,13 @@ Start from the family row in the
 because another model family exposes it. ESMC-6B, DPLM2, and ANKH have
 family-specific numerical boundaries described below.
 
+`output_attentions=True` requires the full materialized attention-probability
+matrix. PyTorch SDPA and Flex Attention do not return that matrix, and the
+pinned FlashAttention kernels do not expose it through the FastPLMs contract.
+FastPLMs therefore uses eager attention for that forward call and emits a
+runtime warning describing the backend switch and its quadratic memory cost.
+The configured backend is retained for later calls.
+
 ## FlashAttention compatibility policy
 
 The `flash` extra installs Hugging Face `kernels`, not the `flash-attn` Python

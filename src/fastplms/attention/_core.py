@@ -7,6 +7,7 @@ FastPLMs never downloads or compiles code.
 
 from __future__ import annotations
 
+import warnings
 from collections import OrderedDict
 from enum import Enum
 
@@ -524,6 +525,28 @@ class AttentionBackend(str, Enum):  # noqa: UP042
 
 
 VALID_ATTENTION_BACKENDS = tuple(b.value for b in AttentionBackend)
+
+
+def warn_attention_backend_fallback(
+    requested_backend: str | AttentionBackend,
+    *,
+    effective_backend: str | AttentionBackend,
+    reason: str,
+) -> None:
+    """Warn when one forward call cannot honor the configured backend."""
+
+    requested = resolve_attention_backend(requested_backend).value
+    effective = resolve_attention_backend(effective_backend).value
+    if requested == effective:
+        return
+    warnings.warn(
+        f"{reason} The requested {requested!r} attention implementation cannot "
+        f"satisfy this call, so FastPLMs is using {effective!r} attention for this "
+        "call only. This can change performance and memory use; the configured "
+        "backend remains unchanged for subsequent calls.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 
 def resolve_attention_backend(

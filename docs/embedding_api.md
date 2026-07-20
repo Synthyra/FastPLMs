@@ -26,14 +26,14 @@ print(result[0].id, result[0].tensor.shape)
 ```
 
 The operation accepts sequences, `(id, sequence)` pairs, `EmbeddingInput`
-values, or a FASTA path. It preserves input order, FASTA identifiers, and
-duplicate records.
+values, an insertion-ordered `{id: sequence}` mapping, or a FASTA path. It
+preserves input order, mapping and FASTA identifiers, and duplicate records.
 
 ## Argument reference
 
 | Argument | Meaning |
 | --- | --- |
-| `inputs` | Sequence iterable, `(id, sequence)` pairs, `EmbeddingInput` values, or FASTA path |
+| `inputs` | Sequence iterable, `(id, sequence)` pairs, `EmbeddingInput` values, `{id: sequence}` mapping, or FASTA path |
 | `batch_size` | Number of records prepared together; must be positive |
 | `pooling` | One pooler or an ordered pooler sequence; required unless `full_embeddings=True` |
 | `full_embeddings` | Return residue-level tensors instead of pooled vectors |
@@ -157,21 +157,30 @@ residue-statistic poolers. It rejects `cls` and `parti`.
 ## Safetensors storage
 
 With `format="safetensors"`, `output` names an output directory. FastPLMs writes
-transactional temporary files and then publishes:
+generation-scoped shards and then transactionally publishes:
 
 ```text
 output/
-  embeddings-00001-of-000NN.safetensors
+  embeddings-run-00001-00001.safetensors
   index.json
   run.json
 ```
 
-The default shard target is 2 GiB. The JSON index preserves record position,
+The default maximum shard size is 2 GiB. Tensors are packed across inference
+batches and written one shard at a time, so the complete tensor dataset is
+never materialized in host memory. Each completed shard publishes an
+incomplete ordered prefix that a matching `resume=True` call can continue.
+An interrupted, not-yet-full shard is recomputed. The JSON index preserves record position,
 identifier, sequence, shape, dtype, tensor hash, and shard key. Loading the
 result creates lazy references rather than reading every shard into memory.
 `run.json` is the transactional commit marker: it stores the complete run
-metadata and the SHA-256 digest of `index.json`. Loading and resume reject a
-missing or mismatched manifest instead of accepting a partially published run.
+metadata, the SHA-256 digest of `index.json`, and the authoritative index
+snapshot. It is atomically replaced only after the standalone index and every
+referenced shard are durable. Overwrites use new shard names and remove the
+previous generation only after the new run manifest commits, so an interruption
+between the two metadata writes still leaves the last committed generation
+readable. Legacy manifests without an embedded snapshot retain strict
+index-digest validation.
 
 ## SQLite streaming and resume
 

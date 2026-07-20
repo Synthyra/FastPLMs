@@ -32,6 +32,10 @@ FastPLMs preserves ESM2 tokenization, encoder outputs, masked-language-model
 head, contact head, tied weights, and checkpoint keys. Eager, SDPA, Flex
 Attention, and both revision-pinned Hugging Face FlashAttention kernels are
 tested against the pinned checkpoint and Transformers references.
+Plain `AutoModel` omits the optional ESM pooler because the published
+masked-language-model checkpoints contain no trained pooler weights. Pass
+`add_pooling_layer=True` only when intentionally initializing and training
+that head.
 
 ### ESM++ and ESMC
 
@@ -101,6 +105,16 @@ with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
 Static BF16 parameter storage is not an advertised DPLM precision path. The
 official autocast contract is exact at every hidden state with SDPA and meets
 the fixed engineering target with eager, Flex Attention, and FlashAttention 3.
+Released DPLM checkpoints configure attention-probability dropout as zero.
+For custom fine-tuning configurations with a nonzero value, FastPLMs applies
+that dropout in eager and SDPA training calls. Flex Attention and
+FlashAttention 3 fail closed for nonzero training dropout because those paths
+do not implement the declared stochastic contract. Evaluation always uses
+zero attention dropout. Decoder cross-attention supports eager and SDPA and
+fails closed when another backend is requested.
+Plain DPLM and DPLM2 `AutoModel` loads likewise omit the optional untrained ESM
+pooler by default; it remains available through explicit
+`add_pooling_layer=True`.
 
 ### DPLM2
 

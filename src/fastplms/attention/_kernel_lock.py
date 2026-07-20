@@ -22,10 +22,16 @@ def require_kernels_package() -> None:
 def _kernel_lock_path() -> Path:
     """Return the lock from an artifact, checkout, or installed distribution."""
     source_path = Path(__file__).resolve()
-    candidates = (
+    candidates = [
         source_path.parents[1] / "kernels.lock",
         source_path.parents[3] / "kernels.lock",
-    )
+    ]
+    try:
+        import fastplms
+
+        candidates.extend(Path(root) / "kernels.lock" for root in fastplms.__path__)
+    except (ImportError, AttributeError):
+        pass
     for candidate in candidates:
         if candidate.is_file():
             return candidate

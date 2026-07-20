@@ -48,6 +48,7 @@ try:  # noqa: SIM105
         get_attention_mask,
         kernels_flash_attention_func,
         resolve_attention_backend,
+        warn_attention_backend_fallback,
     )
 except ImportError:
     pass  # Running as HF Hub composite; shared definitions are above
@@ -135,6 +136,14 @@ class EsmSelfAttention(nn.Module):
         output_attentions: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if output_attentions:
+            warn_attention_backend_fallback(
+                self.attn_backend,
+                effective_backend=AttentionBackend.EAGER,
+                reason=(
+                    "output_attentions=True requires the full materialized attention "
+                    "probability matrix, which optimized PyTorch attention APIs do not return."
+                ),
+            )
             return self._manual_attn(query_heads, key_heads, value_heads, attention_mask_4d)
 
         if self.attn_backend == AttentionBackend.EAGER:

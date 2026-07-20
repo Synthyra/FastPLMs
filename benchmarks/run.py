@@ -56,12 +56,12 @@ class MeasurementBlock:
     padded_tokens_per_second: float
 
 
-def _require_torch():
+def _require_torch(*, require_cuda: bool = True):
     try:
         import torch
     except ImportError as error:
         raise RuntimeError("The benchmark image must include PyTorch") from error
-    if not torch.cuda.is_available():
+    if require_cuda and not torch.cuda.is_available():
         raise RuntimeError("FastPLMs performance benchmarks require a CUDA GPU")
     return torch
 
@@ -205,9 +205,9 @@ def prepare_inputs(
     revision: str | None,
     local_files_only: bool,
 ) -> tuple[dict[str, Any], int, int, list[str]]:
-    """Prepare static GPU inputs and return biological/padded token counts."""
+    """Prepare static device inputs and return biological/padded token counts."""
 
-    torch = _require_torch()
+    torch = _require_torch(require_cuda=False)
     sequences = sequences_for_lengths(lengths)
     prep_tokens = getattr(getattr(model, "model", None), "prep_tokens", None)
     if prep_tokens is not None and hasattr(prep_tokens, "get_batch_kwargs"):

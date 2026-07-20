@@ -14,7 +14,7 @@ from transformers import AutoModelForSeq2SeqLM
 from fastplms.registry import ModelSpec, get_model_registry
 from tests.parity.support.reference_adapters.ankh import load_official_seq2seq
 
-pytestmark = (pytest.mark.compliance, pytest.mark.gpu, pytest.mark.slow)
+pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.slow]
 ANKH_SPECS = get_model_registry().by_family("ankh")
 
 

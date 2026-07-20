@@ -7,6 +7,7 @@ import contextlib
 import dataclasses
 import hashlib
 import importlib
+import importlib.abc
 import importlib.util
 import json
 import os
@@ -16,6 +17,24 @@ import tempfile
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
+
+
+class _BlockInstalledFastPLMs(importlib.abc.MetaPathFinder):
+    """Prevent a probe from satisfying artifact imports from an installed wheel."""
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: object = None,
+        target: object = None,
+    ) -> None:
+        del path, target
+        if fullname == "fastplms" and fullname not in sys.modules:
+            raise ModuleNotFoundError(
+                "Artifact remote code attempted to import an installed FastPLMs package "
+                "instead of installing its embedded runtime."
+            )
+        return None
 
 
 def _runtime_site_packages() -> tuple[Path, ...]:
@@ -44,12 +63,14 @@ def _add_runtime_site_packages(paths: Iterable[Path]) -> None:
 
 
 def _require_artifact_isolation() -> None:
-    """Reject artifact probes that can see an installed FastPLMs package."""
+    """Reject loaded FastPLMs state and guard against installed-package imports."""
 
     if not sys.flags.isolated:
         raise RuntimeError("Artifact mode must run under python -I")
-    if "fastplms" in sys.modules or importlib.util.find_spec("fastplms") is not None:
-        raise RuntimeError("FastPLMs must be absent from sys.path in artifact mode")
+    if "fastplms" in sys.modules:
+        raise RuntimeError("FastPLMs must not be imported before artifact loading")
+    if not any(isinstance(finder, _BlockInstalledFastPLMs) for finder in sys.meta_path):
+        sys.meta_path.insert(0, _BlockInstalledFastPLMs())
 
 
 def _tensor_digest(tensor: Any) -> str:
@@ -61,9 +82,19 @@ def _tensor_digest(tensor: Any) -> str:
     return digest.hexdigest()
 
 
-def _state_digest(model: Any) -> str:
+def _matches_key_prefix(name: str, prefixes: Iterable[str]) -> bool:
+    return any(name == prefix or name.startswith(f"{prefix}.") for prefix in prefixes)
+
+
+def _state_digest(
+    model: Any,
+    *,
+    excluded_prefixes: Iterable[str] = (),
+) -> str:
     digest = hashlib.sha256()
     for name, tensor in sorted(model.state_dict().items()):
+        if _matches_key_prefix(name, excluded_prefixes):
+            continue
         digest.update(name.encode())
         digest.update(_tensor_digest(tensor).encode())
     return digest.hexdigest()
@@ -395,8 +426,15 @@ def _run_isolated_reload(
         return result
 
 
-def _load_model_exact(auto_type: Any, artifact: Path, **kwargs: Any) -> Any:
-    """Load a model while rejecting every incomplete weight-loading outcome."""
+def _load_model_exact(
+    auto_type: Any,
+    artifact: Path,
+    *,
+    expected_missing_key_prefixes: Iterable[str] = (),
+    expected_unexpected_key_prefixes: Iterable[str] = (),
+    **kwargs: Any,
+) -> Any:
+    """Load a model while rejecting every undeclared weight-loading outcome."""
 
     loaded = auto_type.from_pretrained(
         artifact,
@@ -408,14 +446,38 @@ def _load_model_exact(auto_type: Any, artifact: Path, **kwargs: Any) -> Any:
     model, loading_info = loaded
     if not isinstance(loading_info, dict):
         raise RuntimeError("Transformers returned invalid model loading diagnostics")
+    diagnostics: dict[str, list[Any]] = {}
+    for name in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs"):
+        values = loading_info.get(name, [])
+        if not isinstance(values, (list, tuple, set, frozenset)):
+            raise RuntimeError(f"Transformers returned invalid {name} loading diagnostics")
+        diagnostics[name] = sorted(values, key=repr)
+
+    unexpected_missing = [
+        key
+        for key in diagnostics["missing_keys"]
+        if not isinstance(key, str)
+        or not _matches_key_prefix(key, expected_missing_key_prefixes)
+    ]
+    unexpected_checkpoint_keys = [
+        key
+        for key in diagnostics["unexpected_keys"]
+        if not isinstance(key, str)
+        or not _matches_key_prefix(key, expected_unexpected_key_prefixes)
+    ]
     failures = {
-        name: loading_info.get(name)
-        for name in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs")
-        if loading_info.get(name)
+        name: values
+        for name, values in (
+            ("missing_keys", unexpected_missing),
+            ("unexpected_keys", unexpected_checkpoint_keys),
+            ("mismatched_keys", diagnostics["mismatched_keys"]),
+            ("error_msgs", diagnostics["error_msgs"]),
+        )
+        if values
     }
     if failures:
         raise RuntimeError(
-            "Exact AutoModel weight loading failed: "
+            "Validated AutoModel weight loading failed: "
             + json.dumps(failures, sort_keys=True, default=str)
         )
     return model
@@ -432,7 +494,8 @@ def probe(
     source_root: Path | None,
     reload_only: bool = False,
     attn_implementation: str | None = None,
-    allow_incomplete_initial_weight_loading: bool = False,
+    expected_missing_key_prefixes: Iterable[str] = (),
+    expected_unexpected_key_prefixes: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Load, infer, save, and reload one advertised class."""
 
@@ -513,15 +576,22 @@ def probe(
         "trust_remote_code": trust_remote_code,
         **_load_kwargs(family, bf16_execution, torch, attn_implementation),
     }
-    if allow_incomplete_initial_weight_loading:
-        model = auto_type.from_pretrained(artifact, **load_kwargs).eval()
-    else:
-        model = _load_model_exact(auto_type, artifact, **load_kwargs).eval()
+    model = _load_model_exact(
+        auto_type,
+        artifact,
+        expected_missing_key_prefixes=expected_missing_key_prefixes,
+        expected_unexpected_key_prefixes=expected_unexpected_key_prefixes,
+        **load_kwargs,
+    ).eval()
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
     output = _exercise(model, artifact, family, bf16_execution, torch)
     result = {
         "state": _state_digest(model),
+        "pretrained_state": _state_digest(
+            model,
+            excluded_prefixes=expected_missing_key_prefixes,
+        ),
         "output": _output_digest(output),
     }
 
@@ -536,6 +606,26 @@ def probe(
             tokenizer.save_pretrained(save_path)
         del output, model
         torch.cuda.empty_cache()
+        torch.manual_seed(314159)
+        torch.cuda.manual_seed_all(314159)
+        independently_loaded = _load_model_exact(
+            auto_type,
+            artifact,
+            expected_missing_key_prefixes=expected_missing_key_prefixes,
+            expected_unexpected_key_prefixes=expected_unexpected_key_prefixes,
+            **load_kwargs,
+        ).eval()
+        independently_loaded_state = _state_digest(
+            independently_loaded,
+            excluded_prefixes=expected_missing_key_prefixes,
+        )
+        del independently_loaded
+        torch.cuda.empty_cache()
+        if independently_loaded_state != result["pretrained_state"]:
+            raise RuntimeError(
+                "Pretrained AutoModel weights depend on the initialization seed; "
+                "one or more shared/base weights were not loaded from the checkpoint"
+            )
         if implementation == "artifact":
             reloaded_result = _run_isolated_reload(
                 artifact=save_path,
@@ -590,8 +680,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reload-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
-        "--allow-incomplete-initial-weight-loading",
-        action="store_true",
+        "--expected-missing-key-prefix",
+        action="append",
+        default=[],
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--expected-unexpected-key-prefix",
+        action="append",
+        default=[],
         help=argparse.SUPPRESS,
     )
     parser.add_argument(
@@ -619,9 +716,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         source_root=arguments.source_root,
         reload_only=arguments.reload_only,
         attn_implementation=arguments.attn_implementation,
-        allow_incomplete_initial_weight_loading=(
-            arguments.allow_incomplete_initial_weight_loading
-        ),
+        expected_missing_key_prefixes=arguments.expected_missing_key_prefix,
+        expected_unexpected_key_prefixes=arguments.expected_unexpected_key_prefix,
     )
     arguments.output.write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n",

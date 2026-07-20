@@ -14,6 +14,7 @@ from torch import Tensor
 
 from .pooling import Pooler
 from .storage import (
+    SafetensorsStreamWriter,
     append_sqlite_records,
     initialize_sqlite_run,
     load_result,
@@ -97,7 +98,12 @@ def parse_fasta(path: str | Path) -> list[EmbeddingInput]:
 
 
 def _normalize_inputs(
-    inputs: Iterable[str | EmbeddingInput | tuple[str, str]] | str | Path,
+    inputs: (
+        Iterable[str | EmbeddingInput | tuple[str, str]]
+        | Mapping[str, str]
+        | str
+        | Path
+    ),
 ) -> list[EmbeddingInput]:
     is_fasta_path = isinstance(inputs, Path)
     if isinstance(inputs, str):
@@ -109,6 +115,8 @@ def _normalize_inputs(
         return parse_fasta(inputs)
     if isinstance(inputs, str):
         values: Iterable[str | EmbeddingInput | tuple[str, str]] = [inputs]
+    elif isinstance(inputs, Mapping):
+        values = inputs.items()
     else:
         values = inputs
     records: list[EmbeddingInput] = []
@@ -533,7 +541,12 @@ def _output_descriptor(position: int, record: EmbeddingRecord) -> dict[str, Any]
 
 def embed_dataset(
     model: Any,
-    inputs: Iterable[str | EmbeddingInput | tuple[str, str]] | str | Path,
+    inputs: (
+        Iterable[str | EmbeddingInput | tuple[str, str]]
+        | Mapping[str, str]
+        | str
+        | Path
+    ),
     *,
     batch_size: int = 2,
     pooling: str | Sequence[str] | None = ("mean",),
@@ -596,9 +609,10 @@ def embed_dataset(
         model_state_fingerprint=model_state_fingerprint,
         persist_output=output is not None,
     )
+    output_already_exists = output is not None and _output_exists(output, format)
     existing: EmbeddingResult | None = None
     start_position = 0
-    if output is not None and resume and _output_exists(output, format):
+    if output is not None and resume and output_already_exists:
         existing = load_result(output, format=format)
         if existing.metadata.get("fingerprint_schema_version") != (
             _RUN_FINGERPRINT_SCHEMA_VERSION
@@ -638,10 +652,11 @@ def embed_dataset(
             resume=resume,
         )
 
+    stream_safetensors = output is not None and format == "safetensors"
     pooler = Pooler(pooling_names) if pooling_names else None
     attention_backend = _attention_backend(model)
     output_records: list[EmbeddingRecord] = (
-        [] if sqlite_run_id is not None else list(existing or ())
+        [] if sqlite_run_id is not None or stream_safetensors else list(existing or ())
     )
     output_descriptors = [
         _output_descriptor(position, record) for position, record in enumerate(existing or ())
@@ -652,6 +667,28 @@ def embed_dataset(
         if pooled_width % len(pooling_names) != 0:
             raise ValueError("Stored pooled width is inconsistent with pooling metadata.")
         pool_slices = pooler.output_slices(pooled_width // len(pooling_names))
+
+    safetensors_writer: SafetensorsStreamWriter | None = None
+    if stream_safetensors:
+        assert output is not None
+        transactional_overwrite = output_already_exists and not resume
+        safetensors_writer = SafetensorsStreamWriter(
+            output,
+            {
+                "format_version": 1,
+                "fingerprint_schema_version": _RUN_FINGERPRINT_SCHEMA_VERSION,
+                "run_fingerprint": run_fingerprint,
+                "input_fingerprint": input_fingerprint,
+                "model_state_fingerprint": resolved_model_state_fingerprint,
+                "model_state_fingerprint_source": model_state_fingerprint_source,
+                "complete": False,
+            },
+            shard_size=shard_size,
+            existing=existing or (),
+            reuse_existing=bool(resume and existing is not None),
+            publish_initial=not transactional_overwrite,
+            publish_incremental=not transactional_overwrite,
+        )
     need_attentions = "parti" in pooling_names
 
     with _temporary_eval(model), torch.inference_mode():
@@ -730,6 +767,8 @@ def embed_dataset(
             )
             if output is not None and sqlite_run_id is not None:
                 append_sqlite_records(output, sqlite_run_id, start, new_records)
+            elif safetensors_writer is not None:
+                safetensors_writer.append(new_records)
             else:
                 output_records.extend(new_records)
 
@@ -796,6 +835,8 @@ def embed_dataset(
     if output is not None and sqlite_run_id is not None:
         update_sqlite_run_metadata(output, sqlite_run_id, metadata)
         return load_sqlite_result(output, run_id=sqlite_run_id)
+    if safetensors_writer is not None:
+        return safetensors_writer.publish(complete=True, metadata=metadata)
     result = EmbeddingResult(output_records, metadata)
     if output is not None:
         return save_result(result, output, format=format, shard_size=shard_size)

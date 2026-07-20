@@ -63,10 +63,13 @@ and extracts it into a hash-named directory in the Transformers module cache.
 It then installs that bundled package and exposes the manifest-advertised
 classes. This step performs no network access or compilation. The first load
 does require a writable module cache for local extraction. Release validation
-runs each artifact in a fresh interpreter. Loading a second artifact with a
-different runtime-bundle hash in the same interpreter fails explicitly and
-leaves the first runtime intact. Isolate different bundles in separate Python
-processes. Production code never imports a submodule checkout.
+runs each artifact in a fresh interpreter. Complementary family bundles from
+the same FastPLMs release can extend the loaded package in one interpreter,
+including after importing the installed wheel. Runtime files shared by two
+bundles must have identical hashes; an overlapping source conflict fails
+explicitly and leaves the first runtime intact. Isolate incompatible releases
+in separate Python processes. Production code never imports a submodule
+checkout.
 
 The release artifact tier selects the checkpoint source declared by the
 manifest. This matters for ANKH, where the artifact uses the official

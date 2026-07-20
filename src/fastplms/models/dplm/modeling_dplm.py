@@ -55,6 +55,7 @@ try:
         create_block_mask,
         flex_attention,
         BlockMask,
+        warn_attention_backend_fallback,
     )
     from fastplms.embeddings import EmbeddingMixin, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
@@ -75,6 +76,7 @@ class DPLMMaskedLMOutput(ModelOutput):
 @dataclass
 class DPLMEncoderOutput(ModelOutput):
     last_hidden_state: Optional[torch.Tensor] = None
+    pooler_output: Optional[torch.Tensor] = None
     hidden_states: Optional[Tuple[torch.Tensor, ...]] = None
     attentions: Optional[Tuple[torch.Tensor, ...]] = None
     s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
@@ -86,10 +88,12 @@ class DPLMConfig(EsmConfig):
     def __init__(
         self,
         attn_backend: Optional[str] = None,
+        add_pooling_layer: bool = False,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.attn_backend = attn_backend
+        self.add_pooling_layer = add_pooling_layer
         self.tie_word_embeddings = False
 
 
@@ -158,6 +162,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         super().__init__(config, position_embedding_type)
         self.config = config
         self.scale = self.attention_head_size**-0.5
+        self.dropout_prob = float(config.attention_probs_dropout_prob)
         self.attn_backend = resolve_attention_backend(config.attn_backend)
         if self.position_embedding_type == "rotary":
             self.rotary_embeddings = RotaryEmbedding(dim=self.attention_head_size)
@@ -219,7 +224,23 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         value_layer = value_layer.contiguous()
 
         if is_cross_attention:
+            if self.attn_backend not in {
+                AttentionBackend.EAGER,
+                AttentionBackend.SDPA,
+            }:
+                raise RuntimeError(
+                    f"DPLM cross-attention does not implement {self.attn_backend.value!r}. "
+                    "Use eager or SDPA for decoder cross-attention."
+                )
             if output_attentions:
+                warn_attention_backend_fallback(
+                    self.attn_backend,
+                    effective_backend=AttentionBackend.EAGER,
+                    reason=(
+                        "output_attentions=True requires the full materialized attention "
+                        "probability matrix, which optimized PyTorch attention APIs do not return."
+                    ),
+                )
                 attn_output, attn_weights, s_max = self._manual_attn(
                     query_layer,
                     key_layer,
@@ -227,7 +248,16 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
                     cross_attn_mask,
                     output_s_max,
                 )
-            else:
+            elif self.attn_backend == AttentionBackend.EAGER:
+                attn_output, _, s_max = self._manual_attn(
+                    query_layer,
+                    key_layer,
+                    value_layer,
+                    cross_attn_mask,
+                    output_s_max,
+                )
+                attn_weights = None
+            elif self.attn_backend == AttentionBackend.SDPA:
                 attn_output, attn_weights = self._sdpa_attn(
                     query_layer,
                     key_layer,
@@ -269,8 +299,29 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         output_s_max: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
         if output_attentions:
+            warn_attention_backend_fallback(
+                self.attn_backend,
+                effective_backend=AttentionBackend.EAGER,
+                reason=(
+                    "output_attentions=True requires the full materialized attention "
+                    "probability matrix, which optimized PyTorch attention APIs do not return."
+                ),
+            )
             return self._manual_attn(
                 query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
+            )
+
+        if (
+            self.training
+            and self.dropout_prob > 0
+            and (
+                self.attn_backend.is_flash
+                or self.attn_backend == AttentionBackend.FLEX_ATTENTION
+            )
+        ):
+            raise RuntimeError(
+                f"DPLM {self.attn_backend.value} attention is inference-only when attention "
+                "dropout is nonzero. Use eager or SDPA for this training configuration."
             )
 
         if self.attn_backend == AttentionBackend.EAGER:
@@ -319,8 +370,23 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
     ) -> Tuple[torch.Tensor, torch.Tensor, Optional[List[torch.Tensor]]]:
         attn_weights = torch.matmul(query_heads, key_heads.transpose(-1, -2))
         if attention_mask_4d is not None:
-            attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
+            if attention_mask_4d.dtype == torch.bool:
+                attn_weights = attn_weights.masked_fill(
+                    attention_mask_4d.logical_not(),
+                    float("-inf"),
+                )
+            else:
+                attn_weights = attn_weights + attention_mask_4d.to(
+                    device=attn_weights.device,
+                    dtype=attn_weights.dtype,
+                )
         attn_weights = F.softmax(attn_weights, dim=-1)
+        if self.dropout_prob > 0 and self.training:
+            attn_weights = F.dropout(
+                attn_weights,
+                p=self.dropout_prob,
+                training=True,
+            )
         context_heads = torch.matmul(attn_weights, value_heads)
         attn_output = rearrange(context_heads, "b h s d -> b s (h d)")
         s_max = self._compute_s_max(query_heads, key_heads) if output_s_max else None
@@ -397,6 +463,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
                 key_heads,
                 value_heads,
                 attn_mask=attention_mask_4d,
+                dropout_p=self.dropout_prob if self.training else 0.0,
                 scale=1.0,
             )
         return rearrange(context_heads, "b h s d -> b s (h d)"), None
@@ -727,10 +794,11 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
         elif attention_mask.dim() == 2:
             attention_mask_2d = attention_mask.bool()
         elif attention_mask.dim() == 4:
-            assert input_ids is not None, (
-                "4D attention_mask requires input_ids to infer token-level mask."
+            raise ValueError(
+                "DPLM accepts a two-dimensional padding mask. Passing a four-dimensional "
+                "custom attention mask is unsupported because it cannot be applied to both "
+                "the embedding and optimized-attention paths without changing semantics."
             )
-            attention_mask_2d = input_ids.ne(self.config.pad_token_id)
         else:
             raise ValueError(f"Unsupported attention_mask shape: {attention_mask.shape}")
 
@@ -778,10 +846,13 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
 class DPLMModel(DPLMPreTrainedModel, EmbeddingMixin):
     config_class = DPLMConfig
 
-    def __init__(self, config, add_pooling_layer=True):
+    def __init__(self, config, add_pooling_layer: bool | None = None):
         DPLMPreTrainedModel.__init__(self, config)
         self.config = config
         self.esm = FAST_DPLM_ENCODER(config)
+        if add_pooling_layer is None:
+            add_pooling_layer = config.add_pooling_layer
+        config.add_pooling_layer = bool(add_pooling_layer)
         self.pooler = EsmPooler(config) if add_pooling_layer else None
         self.post_init()
 
@@ -850,6 +921,7 @@ class DPLMModel(DPLMPreTrainedModel, EmbeddingMixin):
 
         return DPLMEncoderOutput(
             last_hidden_state=sequence_output,
+            pooler_output=pooled_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,

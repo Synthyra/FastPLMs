@@ -67,8 +67,8 @@ print(output.last_hidden_state.shape)
 ## Dataset embeddings
 
 The shared embedding API accepts sequences, `(id, sequence)` pairs,
-`EmbeddingInput` records, or a FASTA path. Results preserve order and duplicate
-identifiers:
+`EmbeddingInput` records, insertion-ordered `{id: sequence}` mappings, or a
+FASTA path. Results preserve order and duplicate identifiers:
 
 ```python
 result = model.embed_dataset(
@@ -82,9 +82,10 @@ for record in result:
 ```
 
 Set `full_embeddings=True` for one residue tensor with shape `(l, d)` per
-sequence. Set `output` to a directory for transactional safetensors or choose
-`format="sqlite"` for batch-level commits and exact resume. Pooling excludes
-boundary, padding, and other non-biological positions.
+sequence. Set `output` to a directory for bounded-memory, transactional
+safetensors with ordered-prefix resume, or choose `format="sqlite"` for
+batch-level database commits and exact resume. Pooling excludes boundary,
+padding, and other non-biological positions.
 
 For a long FASTA run, stream completed batches into SQLite:
 
@@ -110,6 +111,13 @@ head through Transformers. It is also the language-model family used by
 ESMFold2. Request SDPA when exact pinned Biohub inference parity is required;
 the provenance section records backend-specific validation boundaries for this
 checkpoint.
+
+> **Numerical-backend warning:** Flex Attention and FlashAttention 3 are
+> explicit speed-oriented alternatives, not strict-parity backends for ESMC.
+> On the locked H100 BF16 boundary panel, ESMC-6B Flex exceeds the `0.03`
+> relative-L2 hard limit and FlashAttention 3 falls below the `0.995`
+> first-percentile residue-cosine hard limit. Use SDPA for exact pinned Biohub
+> parity or FlashAttention 2 for release-gated acceleration.
 
 ## Notes and limitations
 

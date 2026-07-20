@@ -65,9 +65,14 @@ Transformer Engine quantization state is never serialized.
 
 Low-rank adapters are appropriate when full-model optimization is unnecessary.
 Record exact target module names and verify that only intended parameters have
-`requires_grad=True`. Save adapter configuration and base checkpoint revision
-together. Reload into the same architecture and run a held-out inference check
-before treating the artifact as usable.
+`requires_grad=True`. A separately trained task head, such as `classifier`, must
+also be listed in PEFT's `modules_to_save`; setting `requires_grad=True` alone
+does not include that head in the adapter checkpoint. Save adapter configuration
+and base checkpoint revision together. Reload into the same architecture and run
+a held-out inference check before treating the artifact as usable.
+
+LoRA is enabled by default in the runnable example. Pass `--no-use-lora` to
+fine-tune the full model instead.
 
 ## Reproducibility and evaluation
 

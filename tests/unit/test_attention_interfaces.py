@@ -6,6 +6,7 @@ import ast
 import inspect
 import json
 import sys
+import warnings
 from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +21,7 @@ _TRANSFORMERS_FLASH_HANDLERS = {
 
 import fastplms.attention.interfaces as attention_interfaces  # noqa: E402
 import fastplms.models.ankh.modeling_ankh as ankh_module  # noqa: E402
+import fastplms.models.dplm.modeling_dplm as dplm_module  # noqa: E402
 from fastplms.attention import (  # noqa: E402
     FASTPLMS_ATTENTION_FUNCTIONS,
     FASTPLMS_ATTENTION_MASKS,
@@ -37,6 +39,7 @@ from fastplms.models.ankh.modeling_ankh import (  # noqa: E402
 from fastplms.models.dplm.modeling_dplm import (  # noqa: E402
     DPLMConfig,
     DPLMModel,
+    ModifiedEsmSelfAttention,
 )
 from fastplms.models.dplm2.modeling_dplm2 import (  # noqa: E402
     DPLM2Config,
@@ -45,6 +48,7 @@ from fastplms.models.dplm2.modeling_dplm2 import (  # noqa: E402
 from fastplms.models.esm2.modeling_fastesm import (  # noqa: E402
     EsmSelfAttention,
     FastEsmConfig,
+    FastEsmModel,
 )
 from fastplms.registry import get_model_registry  # noqa: E402
 
@@ -771,6 +775,219 @@ def test_esm2_training_rejects_unsupported_attention_dropout(
         attention._attn(heads, heads, heads)
 
 
+@pytest.mark.parametrize(
+    "implementation",
+    ("sdpa", "flex_attention", "flash_attention_2", "flash_attention_3"),
+)
+def test_output_attentions_warns_when_falling_back_to_eager(
+    implementation: str,
+) -> None:
+    attention = EsmSelfAttention(
+        FastEsmConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.0,
+            position_embedding_type="absolute",
+            attn_backend=implementation,
+        )
+    )
+    heads = torch.randn(1, 2, 3, 4)
+
+    with pytest.warns(
+        RuntimeWarning,
+        match=rf"output_attentions=True.*{implementation!r}.*using 'eager'",
+    ):
+        _, weights, _ = attention._attn(
+            heads,
+            heads,
+            heads,
+            output_attentions=True,
+        )
+
+    assert weights is not None
+    assert attention.attn_backend.value == implementation
+
+
+def test_output_attentions_does_not_warn_for_configured_eager() -> None:
+    attention = EsmSelfAttention(
+        FastEsmConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.0,
+            position_embedding_type="absolute",
+            attn_backend="eager",
+        )
+    )
+    heads = torch.randn(1, 2, 3, 4)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _, weights, _ = attention._attn(
+            heads,
+            heads,
+            heads,
+            output_attentions=True,
+        )
+
+    assert weights is not None
+
+
+@pytest.mark.parametrize("training", (False, True))
+def test_dplm_sdpa_uses_attention_dropout_only_during_training(
+    monkeypatch: pytest.MonkeyPatch,
+    training: bool,
+) -> None:
+    attention = ModifiedEsmSelfAttention(
+        DPLMConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.25,
+            position_embedding_type="absolute",
+            attn_backend="sdpa",
+        )
+    )
+    attention.train(training)
+    heads = torch.randn(1, 2, 3, 4)
+    observed: dict[str, float] = {}
+
+    def fake_sdpa(*args, **kwargs):
+        observed["dropout_p"] = kwargs["dropout_p"]
+        return args[0]
+
+    monkeypatch.setattr(dplm_module.F, "scaled_dot_product_attention", fake_sdpa)
+    attention._sdpa_attn(heads, heads, heads)
+
+    assert observed["dropout_p"] == (0.25 if training else 0.0)
+
+
+def test_dplm_manual_attention_applies_configured_training_dropout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attention = ModifiedEsmSelfAttention(
+        DPLMConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.25,
+            position_embedding_type="absolute",
+            attn_backend="eager",
+        )
+    )
+    attention.train()
+    heads = torch.randn(1, 2, 3, 4)
+    observed: dict[str, object] = {}
+
+    def fake_dropout(tensor, *, p, training):
+        observed.update(p=p, training=training)
+        return tensor
+
+    monkeypatch.setattr(dplm_module.F, "dropout", fake_dropout)
+    attention._manual_attn(heads, heads, heads)
+
+    assert observed == {"p": 0.25, "training": True}
+
+
+@pytest.mark.parametrize(
+    "implementation",
+    ("flex_attention", "flash_attention_3"),
+)
+def test_dplm_training_rejects_unsupported_attention_dropout(
+    implementation: str,
+) -> None:
+    attention = ModifiedEsmSelfAttention(
+        DPLMConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.1,
+            position_embedding_type="absolute",
+            attn_backend=implementation,
+        )
+    )
+    heads = torch.randn(1, 2, 3, 4)
+
+    with pytest.raises(RuntimeError, match=r"inference-only.*dropout.*eager or SDPA"):
+        attention._attn(heads, heads, heads)
+
+
+@pytest.mark.parametrize("implementation", ("eager", "sdpa"))
+def test_dplm_cross_attention_executes_the_requested_supported_backend(
+    implementation: str,
+) -> None:
+    attention = ModifiedEsmSelfAttention(
+        DPLMConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.0,
+            position_embedding_type="absolute",
+            attn_backend=implementation,
+        )
+    ).eval()
+    hidden_states = torch.randn(1, 3, 8)
+    encoder_hidden_states = torch.randn(1, 4, 8)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        output, weights, _ = attention(
+            hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+        )
+
+    assert output.shape == hidden_states.shape
+    assert torch.isfinite(output).all()
+    assert weights is None
+
+
+def test_dplm_eager_cross_attention_applies_additive_encoder_mask() -> None:
+    attention = ModifiedEsmSelfAttention(
+        DPLMConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.0,
+            position_embedding_type="absolute",
+            attn_backend="eager",
+        )
+    ).eval()
+    additive_mask = torch.tensor([[[[0.0, 0.0, -10_000.0, -10_000.0]]]])
+
+    output, weights, _ = attention(
+        torch.randn(1, 3, 8),
+        encoder_hidden_states=torch.randn(1, 4, 8),
+        encoder_attention_mask=additive_mask,
+        output_attentions=True,
+    )
+
+    assert torch.isfinite(output).all()
+    assert weights is not None
+    assert torch.isfinite(weights).all()
+    assert torch.equal(weights[..., 2:], torch.zeros_like(weights[..., 2:]))
+
+
+@pytest.mark.parametrize("implementation", ("flex_attention", "flash_attention_3"))
+def test_dplm_cross_attention_rejects_unimplemented_backends(
+    implementation: str,
+) -> None:
+    attention = ModifiedEsmSelfAttention(
+        DPLMConfig(
+            hidden_size=8,
+            num_attention_heads=2,
+            attention_probs_dropout_prob=0.0,
+            position_embedding_type="absolute",
+            attn_backend=implementation,
+        )
+    ).eval()
+
+    with pytest.raises(RuntimeError, match=r"cross-attention.*Use eager or SDPA"):
+        attention(
+            torch.randn(1, 3, 8),
+            encoder_hidden_states=torch.randn(1, 4, 8),
+        )
+    with pytest.raises(RuntimeError, match=r"cross-attention.*Use eager or SDPA"):
+        attention(
+            torch.randn(1, 3, 8),
+            encoder_hidden_states=torch.randn(1, 4, 8),
+            output_attentions=True,
+        )
+
+
 def test_esm2_config_normalizes_null_boundary_token_ids(tmp_path: Path) -> None:
     config = FastEsmConfig(bos_token_id=None, eos_token_id=None)
 
@@ -784,6 +1001,104 @@ def test_esm2_config_normalizes_null_boundary_token_ids(tmp_path: Path) -> None:
     reloaded = FastEsmConfig.from_pretrained(tmp_path, local_files_only=True)
     assert reloaded.bos_token_id == 0
     assert reloaded.eos_token_id == 2
+
+
+def test_esm_family_base_automodels_do_not_create_untrained_poolers() -> None:
+    esm2_config = FastEsmConfig(
+        vocab_size=16,
+        hidden_size=8,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=16,
+        position_embedding_type="absolute",
+        attn_backend="sdpa",
+    )
+    dplm_config = DPLMConfig(
+        vocab_size=16,
+        hidden_size=8,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=16,
+        position_embedding_type="absolute",
+        attn_backend="eager",
+    )
+    dplm2_config = DPLM2Config(
+        vocab_size=16,
+        hidden_size=8,
+        num_hidden_layers=1,
+        num_attention_heads=2,
+        intermediate_size=16,
+        position_embedding_type="absolute",
+        attn_backend="sdpa",
+    )
+
+    assert FastEsmModel(esm2_config).pooler is None
+    assert DPLMModel(dplm_config).pooler is None
+    assert DPLM2Model(dplm2_config).pooler is None
+    assert FastEsmModel(esm2_config, add_pooling_layer=True).pooler is not None
+    assert DPLMModel(dplm_config, add_pooling_layer=True).pooler is not None
+    assert DPLM2Model(dplm2_config, add_pooling_layer=True).pooler is not None
+
+
+@pytest.mark.parametrize(
+    ("model_class", "config"),
+    [
+        (
+            FastEsmModel,
+            FastEsmConfig(
+                vocab_size=16,
+                hidden_size=8,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                intermediate_size=16,
+                pad_token_id=1,
+                mask_token_id=5,
+                position_embedding_type="absolute",
+                attn_backend="eager",
+            ),
+        ),
+        (
+            DPLMModel,
+            DPLMConfig(
+                vocab_size=16,
+                hidden_size=8,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                intermediate_size=16,
+                pad_token_id=1,
+                position_embedding_type="absolute",
+                attn_backend="eager",
+            ),
+        ),
+        (
+            DPLM2Model,
+            DPLM2Config(
+                vocab_size=16,
+                hidden_size=8,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                intermediate_size=16,
+                pad_token_id=1,
+                position_embedding_type="absolute",
+                attn_backend="sdpa",
+            ),
+        ),
+    ],
+)
+def test_optional_esm_pooler_is_returned_and_round_trips(
+    model_class: type,
+    config: object,
+    tmp_path: Path,
+) -> None:
+    model = model_class(config, add_pooling_layer=True).eval()
+    model.save_pretrained(tmp_path)
+    reloaded = model_class.from_pretrained(tmp_path).eval()
+    output = reloaded(input_ids=torch.tensor([[0, 3, 4, 2]]))
+
+    assert reloaded.config.add_pooling_layer is True
+    assert reloaded.pooler is not None
+    assert output.pooler_output is not None
+    assert output.pooler_output.shape == (1, 8)
 
 
 @pytest.mark.parametrize("should_raise", (False, True))

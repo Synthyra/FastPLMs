@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +13,7 @@ from torch import nn
 from fastplms.embeddings import (
     EmbeddingBatch,
     EmbeddingInput,
+    EmbeddingRecord,
     EmbeddingResult,
     LazyTensorReference,
     Pooler,
@@ -24,6 +26,7 @@ from fastplms.embeddings import (
     save_safetensors_result,
     save_sqlite_result,
 )
+from fastplms.embeddings.storage import SafetensorsStreamWriter
 
 
 class SyntheticEmbeddingModel(nn.Module):
@@ -134,6 +137,23 @@ def test_result_preserves_order_and_duplicates() -> None:
     with pytest.raises(ValueError, match="Duplicate id"):
         result.as_dict()
     assert list(result.as_dict(duplicates="first")) == ["first", "second"]
+
+
+def test_mapping_inputs_embed_values_with_mapping_keys_as_ids() -> None:
+    inputs = {
+        "protein-a": "ACD",
+        "protein-b": "GG",
+    }
+
+    result = embed_dataset(SyntheticEmbeddingModel(), inputs, pooling="mean")
+
+    assert [record.id for record in result] == ["protein-a", "protein-b"]
+    assert [record.sequence for record in result] == ["ACD", "GG"]
+    assert result[0].load_tensor()[0].item() == pytest.approx(
+        sum(map(ord, "ACD")) / len("ACD")
+    )
+    with pytest.raises(ValueError, match="at least one sequence"):
+        embed_dataset(SyntheticEmbeddingModel(), {}, pooling="mean")
 
 
 def test_embedding_temporarily_uses_eval_and_restores_training_state() -> None:
@@ -533,6 +553,166 @@ def test_safetensors_round_trip_is_lazy(tmp_path) -> None:
     assert torch.equal(loaded[1].load_tensor(), source[1].load_tensor())
 
 
+def test_safetensors_streaming_resumes_an_ordered_prefix(tmp_path) -> None:
+    path = tmp_path / "stream-safe"
+    inputs = ["ACD", "GG", "M"]
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        embed_dataset(
+            InterruptibleEmbeddingModel(fail_on_call=3),
+            inputs,
+            batch_size=1,
+            output=path,
+            format="safetensors",
+            shard_size=8,
+        )
+    partial = load_safetensors_result(path)
+    assert len(partial) == 1
+    assert partial.metadata["complete"] is False
+
+    resumed = embed_dataset(
+        InterruptibleEmbeddingModel(fail_on_call=None),
+        inputs,
+        batch_size=1,
+        output=path,
+        format="safetensors",
+        shard_size=8,
+    )
+    assert [record.sequence for record in resumed] == inputs
+    assert resumed.metadata["complete"] is True
+    assert len(resumed.metadata["outputs"]) == 3
+
+
+def test_safetensors_streaming_packs_batches_into_shards(tmp_path) -> None:
+    output = tmp_path / "packed"
+    embed_dataset(
+        SyntheticEmbeddingModel(),
+        ["AC", "GG", "MM"],
+        batch_size=1,
+        output=output,
+        format="safetensors",
+        shard_size=24,
+    )
+
+    assert len(list(output.glob("*.safetensors"))) == 1
+
+
+def test_safetensors_manifest_rejects_shard_path_traversal(tmp_path) -> None:
+    output = tmp_path / "safe"
+    save_safetensors_result(
+        EmbeddingResult(
+            [EmbeddingRecord("protein", "AC", torch.tensor([1.0, 2.0]))],
+            {"complete": True},
+        ),
+        output,
+    )
+    index_path = output / "index.json"
+    run_path = output / "run.json"
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    payload["records"][0]["tensor"]["file"] = "../outside.safetensors"
+    encoded = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode()
+    index_path.write_bytes(encoded)
+    run = json.loads(run_path.read_text(encoding="utf-8"))
+    run["index_payload"] = payload
+    run["index"]["sha256"] = hashlib.sha256(encoded).hexdigest()
+    run_path.write_text(json.dumps(run, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="outside its output directory"):
+        load_safetensors_result(output)
+
+
+def test_pooler_rejects_duplicate_operations() -> None:
+    with pytest.raises(ValueError, match="Duplicate pooling operations"):
+        Pooler(("mean", "mean"))
+
+
+def test_failed_safetensors_overwrite_preserves_previous_valid_generation(tmp_path) -> None:
+    output = tmp_path / "safe"
+    original = EmbeddingResult(
+        [EmbeddingRecord("old", "AC", torch.tensor([1.0, 2.0]))],
+        {"complete": True},
+    )
+    save_safetensors_result(original, output, shard_size=8)
+    replacement = EmbeddingResult(
+        [
+            EmbeddingRecord("new", "GG", torch.tensor([3.0, 4.0])),
+            EmbeddingRecord("too-large", "M", torch.arange(3, dtype=torch.float32)),
+        ],
+        {"complete": True},
+    )
+
+    with pytest.raises(ValueError, match="cannot fit"):
+        save_safetensors_result(replacement, output, shard_size=8)
+
+    loaded = load_safetensors_result(output)
+    assert [(record.id, record.sequence) for record in loaded] == [("old", "AC")]
+    assert torch.equal(loaded[0].load_tensor(), torch.tensor([1.0, 2.0]))
+
+
+def test_interrupted_embedding_overwrite_preserves_previous_generation(tmp_path) -> None:
+    output = tmp_path / "safe"
+    original = embed_dataset(
+        SyntheticEmbeddingModel(),
+        ["AC"],
+        output=output,
+        format="safetensors",
+    )
+
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        embed_dataset(
+            InterruptibleEmbeddingModel(fail_on_call=2),
+            ["GG", "M"],
+            batch_size=1,
+            output=output,
+            format="safetensors",
+            resume=False,
+        )
+
+    loaded = load_safetensors_result(output)
+    assert [(record.id, record.sequence) for record in loaded] == [
+        (record.id, record.sequence) for record in original
+    ]
+    assert torch.equal(loaded[0].load_tensor(), original[0].load_tensor())
+
+
+def test_interrupted_metadata_publish_recovers_last_committed_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "safe"
+    original = EmbeddingResult(
+        [EmbeddingRecord("old", "AC", torch.tensor([1.0, 2.0]))],
+        {"complete": True},
+    )
+    save_safetensors_result(original, output, shard_size=8)
+
+    writer = SafetensorsStreamWriter(
+        output,
+        {"complete": False},
+        shard_size=8,
+        publish_initial=False,
+        publish_incremental=False,
+    )
+    writer.append(
+        [EmbeddingRecord("new", "GG", torch.tensor([3.0, 4.0]))],
+        publish=False,
+    )
+    run_manifest_path = output / "run.json"
+    original_replace = Path.replace
+
+    def interrupt_manifest_replace(path: Path, target: Path) -> Path:
+        if Path(target) == run_manifest_path:
+            raise OSError("simulated metadata publication interruption")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", interrupt_manifest_replace)
+    with pytest.raises(OSError, match="metadata publication interruption"):
+        writer.publish(complete=True)
+
+    loaded = load_safetensors_result(output)
+    assert [(record.id, record.sequence) for record in loaded] == [("old", "AC")]
+    assert torch.equal(loaded[0].load_tensor(), torch.tensor([1.0, 2.0]))
+
+
 def test_named_safetensors_outputs_do_not_share_shards(tmp_path) -> None:
     first_source = embed_dataset(SyntheticEmbeddingModel(), ["ACD"])
     second_source = embed_dataset(SyntheticEmbeddingModel(), ["GGG"])
@@ -550,13 +730,26 @@ def test_named_safetensors_outputs_do_not_share_shards(tmp_path) -> None:
     assert list(tmp_path.glob("second-embeddings-*.safetensors"))
 
 
-def test_safetensors_run_manifest_rejects_mismatched_index(tmp_path) -> None:
+def test_safetensors_manifest_snapshot_recovers_mismatched_standalone_index(
+    tmp_path: Path,
+) -> None:
     output = tmp_path / "safe"
     source = embed_dataset(SyntheticEmbeddingModel(), ["ACD"])
     save_safetensors_result(source, output)
     index_path = output / "index.json"
     index_path.write_text(index_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
 
+    recovered = load_safetensors_result(output)
+    assert len(recovered) == 1
+    assert recovered[0].sequence == "ACD"
+
+    run_path = output / "run.json"
+    legacy_manifest = json.loads(run_path.read_text(encoding="utf-8"))
+    legacy_manifest.pop("index_payload")
+    run_path.write_text(
+        json.dumps(legacy_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     with pytest.raises(ValueError, match="does not match its index"):
         load_safetensors_result(output)
 

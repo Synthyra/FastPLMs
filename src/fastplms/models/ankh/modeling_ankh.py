@@ -24,6 +24,7 @@ try:
         bool_to_additive_mask,
         get_attention_mask,
         resolve_attention_backend,
+        warn_attention_backend_fallback,
     )
     from fastplms.embeddings import EmbeddingMixin, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
@@ -299,6 +300,14 @@ class AnkhSelfAttention(nn.Module):
                 )
 
         if output_attentions:
+            warn_attention_backend_fallback(
+                self.attn_backend,
+                effective_backend=AttentionBackend.EAGER,
+                reason=(
+                    "output_attentions=True requires the full materialized attention "
+                    "probability matrix, which optimized PyTorch attention APIs do not return."
+                ),
+            )
             attn_output, attn_weights = self._manual_attn(
                 query_heads, key_heads, value_heads, position_bias
             )

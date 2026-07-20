@@ -20,6 +20,7 @@ from ._core import (
     pad_input,
     resolve_attention_backend,
     set_config_attn_implementation,
+    warn_attention_backend_fallback,
 )
 from .interfaces import (
     FASTPLMS_ATTENTION_FUNCTIONS,
@@ -52,4 +53,5 @@ __all__ = [
     "resolve_attention_backend",
     "set_config_attn_implementation",
     "validate_transformers_attention_interfaces",
+    "warn_attention_backend_fallback",
 ]

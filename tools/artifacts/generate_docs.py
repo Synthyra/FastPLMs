@@ -239,8 +239,8 @@ def _embedding_usage(spec: ModelSpec) -> str:
 ## Dataset embeddings
 
 The shared embedding API accepts sequences, `(id, sequence)` pairs,
-`EmbeddingInput` records, or a FASTA path. Results preserve order and duplicate
-identifiers:
+`EmbeddingInput` records, insertion-ordered `{id: sequence}` mappings, or a
+FASTA path. Results preserve order and duplicate identifiers:
 
 ```python
 result = model.embed_dataset(
@@ -254,9 +254,10 @@ for record in result:
 ```
 
 Set `full_embeddings=True` for one residue tensor with shape `(l, d)` per
-sequence. Set `output` to a directory for transactional safetensors or choose
-`format="sqlite"` for batch-level commits and exact resume. Pooling excludes
-boundary, padding, and other non-biological positions.
+sequence. Set `output` to a directory for bounded-memory, transactional
+safetensors with ordered-prefix resume, or choose `format="sqlite"` for
+batch-level database commits and exact resume. Pooling excludes boundary,
+padding, and other non-biological positions.
 
 For a long FASTA run, stream completed batches into SQLite:
 
@@ -312,6 +313,11 @@ print(logits.shape, contacts.shape)
 Contact prediction materializes attention maps and should not be enabled in a
 high-throughput embedding path unless those maps are required.
 
+Plain `AutoModel` omits the optional ESM pooler because this masked-language-
+model checkpoint contains no trained pooler weights. Pass
+`add_pooling_layer=True` only when intentionally initializing and training that
+head.
+
 """
     if family_id == "esm_plusplus":
         return """\
@@ -322,6 +328,13 @@ head through Transformers. It is also the language-model family used by
 ESMFold2. Request SDPA when exact pinned Biohub inference parity is required;
 the provenance section records backend-specific validation boundaries for this
 checkpoint.
+
+> **Numerical-backend warning:** Flex Attention and FlashAttention 3 are
+> explicit speed-oriented alternatives, not strict-parity backends for ESMC.
+> On the locked H100 BF16 boundary panel, ESMC-6B Flex exceeds the `0.03`
+> relative-L2 hard limit and FlashAttention 3 falls below the `0.995`
+> first-percentile residue-cosine hard limit. Use SDPA for exact pinned Biohub
+> parity or FlashAttention 2 for release-gated acceleration.
 
 """
     if family_id == "esm3":
@@ -419,6 +432,10 @@ print(sequence)
 Omitting `max_iter` uses the official 500-step schedule. A shorter schedule
 changes the sampling process rather than providing an equivalent faster mode.
 
+Plain `AutoModel` omits the optional ESM pooler because this diffusion
+checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
+only when intentionally initializing and training that head.
+
 """
     if family_id == "dplm2":
         return f"""\
@@ -460,6 +477,10 @@ Generic `cls_token`, `eos_token`, `mask_token`, and `unk_token` aliases are
 intentionally unset. Callers constructing multimodal tensors must choose the
 amino-acid or structure token explicitly. Raw amino-acid sequences remain
 supported by `model.embed_dataset(...)`.
+
+Plain `AutoModel` omits the optional ESM pooler because this co-generation
+checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
+only when intentionally initializing and training that head.
 
 """
     if family_id == "ankh":

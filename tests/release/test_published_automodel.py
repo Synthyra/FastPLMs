@@ -30,17 +30,32 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = tomllib.loads((ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8"))
 PROBE = ROOT / "tools" / "artifacts" / "offline_probe.py"
 
-_EXACT_INITIAL_AUTO_CLASS = {
-    "ankh": "AutoModelForSeq2SeqLM",
-    "boltz2": "AutoModel",
-    "dplm": "AutoModelForMaskedLM",
-    "dplm2": "AutoModelForMaskedLM",
-    "e1": "AutoModelForMaskedLM",
-    "esm2": "AutoModelForMaskedLM",
-    "esm3": "AutoModel",
-    "esm_plusplus": "AutoModelForMaskedLM",
-    "esmfold": "AutoModel",
-    "esmfold2": "AutoModel",
+_INITIAL_WEIGHT_ALLOWANCES: dict[
+    tuple[str, str],
+    tuple[tuple[str, ...], tuple[str, ...]],
+] = {
+    ("ankh", "AutoModel"): ((), ("decoder", "lm_head")),
+    ("ankh", "AutoModelForMaskedLM"): ((), ("decoder",)),
+    ("ankh", "AutoModelForSequenceClassification"): (
+        ("classifier",),
+        ("decoder", "lm_head"),
+    ),
+    ("ankh", "AutoModelForTokenClassification"): (
+        ("classifier",),
+        ("decoder", "lm_head"),
+    ),
+    ("dplm", "AutoModel"): ((), ("lm_head",)),
+    ("dplm", "AutoModelForSequenceClassification"): (("classifier",), ("lm_head",)),
+    ("dplm", "AutoModelForTokenClassification"): (("classifier",), ("lm_head",)),
+    ("dplm2", "AutoModel"): ((), ("lm_head",)),
+    ("dplm2", "AutoModelForSequenceClassification"): (("classifier",), ("lm_head",)),
+    ("dplm2", "AutoModelForTokenClassification"): (("classifier",), ("lm_head",)),
+    ("e1", "AutoModel"): ((), ("mlm_head",)),
+    ("e1", "AutoModelForSequenceClassification"): (("classifier",), ("mlm_head",)),
+    ("e1", "AutoModelForTokenClassification"): (("classifier",), ("mlm_head",)),
+    ("esm2", "AutoModel"): ((), ("lm_head",)),
+    ("esm2", "AutoModelForSequenceClassification"): (("classifier",), ("lm_head",)),
+    ("esm2", "AutoModelForTokenClassification"): (("classifier",), ("lm_head",)),
 }
 
 
@@ -52,6 +67,10 @@ def _cases() -> list[Any]:
         auto_map = model.get("auto_map", families[family_id]["auto_map"])
         repository_name = model["fast_repo"].split("/", maxsplit=1)[1]
         for auto_class, class_path in sorted(auto_map.items()):
+            expected_missing, expected_unexpected = _INITIAL_WEIGHT_ALLOWANCES.get(
+                (family_id, auto_class),
+                ((), ()),
+            )
             marks = [pytest.mark.artifact, pytest.mark.gpu, pytest.mark.slow]
             if model["size_category"] == "xlarge":
                 marks.append(pytest.mark.large)
@@ -62,7 +81,8 @@ def _cases() -> list[Any]:
                     repository_name,
                     auto_class,
                     class_path,
-                    auto_class == _EXACT_INITIAL_AUTO_CLASS[family_id],
+                    expected_missing,
+                    expected_unexpected,
                     id=f"{model['id']}-{auto_class}",
                     marks=marks,
                 )
@@ -78,7 +98,8 @@ def _run_probe(
     class_path: str,
     implementation: str,
     output: Path,
-    exact_initial_weights: bool,
+    expected_missing_key_prefixes: tuple[str, ...] = (),
+    expected_unexpected_key_prefixes: tuple[str, ...] = (),
     attn_implementation: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     command = [
@@ -105,8 +126,10 @@ def _run_probe(
         command.extend(("--runtime-site-package", str(path)))
     if attn_implementation is not None:
         command.extend(("--attn-implementation", attn_implementation))
-    if not exact_initial_weights and auto_class != "AutoConfig":
-        command.append("--allow-incomplete-initial-weight-loading")
+    for prefix in expected_missing_key_prefixes:
+        command.extend(("--expected-missing-key-prefix", prefix))
+    for prefix in expected_unexpected_key_prefixes:
+        command.extend(("--expected-unexpected-key-prefix", prefix))
     if implementation == "package":
         command.extend(("--source-root", str(ROOT / "src")))
     environment = os.environ.copy()
@@ -128,8 +151,22 @@ def test_generated_flash_artifacts_resolve_their_embedded_kernel_lock() -> None:
     """Remote code must not depend on a checkout or installed FastPLMs wheel."""
 
     expected = (ROOT / "kernels.lock").read_bytes()
-    for repository_name in ("ESM2-8M", "ESMplusplus_small", "DPLM-150M"):
-        package = ROOT / "dist" / "hub" / repository_name / "fastplms"
+    repository_names = ("ESM2-8M", "ESMplusplus_small", "DPLM-150M")
+    packages = [
+        ROOT / "dist" / "hub" / repository_name / "fastplms"
+        for repository_name in repository_names
+    ]
+    missing = [
+        repository_name
+        for repository_name, package in zip(repository_names, packages, strict=True)
+        if not package.is_dir()
+    ]
+    if missing:
+        pytest.skip(
+            "requires locally built Hub artifacts for " + ", ".join(missing)
+        )
+
+    for repository_name, package in zip(repository_names, packages, strict=True):
         lock = package / "kernels.lock"
         module_path = package / "attention" / "_kernel_lock.py"
         assert lock.read_bytes() == expected
@@ -180,6 +217,25 @@ def test_isolated_reload_rejects_incomplete_saved_remote_code(tmp_path: Path) ->
     )
     assert set(complete) == {"config"}
 
+    original_modeling = (artifact / "modeling_isolation.py").read_text(encoding="utf-8")
+    (artifact / "modeling_isolation.py").write_text(
+        "from fastplms import __version__\n"
+        "from .support_config import IsolationConfig\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="Isolated saved-artifact reload failed"):
+        _run_isolated_reload(
+            artifact=artifact,
+            family="isolation-test",
+            bf16_execution="static_parameters",
+            auto_class="AutoConfig",
+            class_path="unused.IsolationConfig",
+        )
+    (artifact / "modeling_isolation.py").write_text(
+        original_modeling,
+        encoding="utf-8",
+    )
+
     support.unlink()
     with pytest.raises(RuntimeError, match="Isolated saved-artifact reload failed"):
         _run_isolated_reload(
@@ -216,7 +272,7 @@ def test_offline_probe_rejects_incomplete_weight_loading(tmp_path: Path) -> None
                 "error_msgs": [],
             }
 
-    with pytest.raises(RuntimeError, match="Exact AutoModel weight loading failed"):
+    with pytest.raises(RuntimeError, match="Validated AutoModel weight loading failed"):
         _load_model_exact(AutoType, tmp_path, trust_remote_code=True)
 
 
@@ -236,6 +292,71 @@ def test_offline_probe_accepts_exact_weight_loading(tmp_path: Path) -> None:
             }
 
     assert _load_model_exact(AutoType, tmp_path, trust_remote_code=False) is model
+
+
+def test_offline_probe_accepts_transformers_set_loading_diagnostics(tmp_path: Path) -> None:
+    model = object()
+
+    class AutoType:
+        @staticmethod
+        def from_pretrained(
+            *args: object,
+            **kwargs: object,
+        ) -> tuple[object, dict[str, object]]:
+            assert args == (tmp_path,)
+            assert kwargs["output_loading_info"] is True
+            return model, {
+                "missing_keys": set(),
+                "unexpected_keys": set(),
+                "mismatched_keys": set(),
+                "error_msgs": [],
+            }
+
+    assert _load_model_exact(AutoType, tmp_path) is model
+
+
+def test_offline_probe_allows_only_declared_task_head_keys(tmp_path: Path) -> None:
+    model = object()
+
+    class AutoType:
+        loading_info = {
+            "missing_keys": ["classifier.weight", "classifier.bias"],
+            "unexpected_keys": ["lm_head.decoder.weight"],
+            "mismatched_keys": [],
+            "error_msgs": [],
+        }
+
+        @classmethod
+        def from_pretrained(
+            cls,
+            *args: object,
+            **kwargs: object,
+        ) -> tuple[object, dict[str, object]]:
+            assert args == (tmp_path,)
+            assert kwargs["output_loading_info"] is True
+            return model, cls.loading_info
+
+    assert (
+        _load_model_exact(
+            AutoType,
+            tmp_path,
+            expected_missing_key_prefixes=("classifier",),
+            expected_unexpected_key_prefixes=("lm_head",),
+        )
+        is model
+    )
+
+    AutoType.loading_info = {
+        **AutoType.loading_info,
+        "missing_keys": ["classifier.weight", "encoder.layer.0.weight"],
+    }
+    with pytest.raises(RuntimeError, match="encoder.layer.0.weight"):
+        _load_model_exact(
+            AutoType,
+            tmp_path,
+            expected_missing_key_prefixes=("classifier",),
+            expected_unexpected_key_prefixes=("lm_head",),
+        )
 
 
 def test_offline_probe_semantic_config_excludes_artifact_identity() -> None:
@@ -325,7 +446,8 @@ def test_package_probe_disables_remote_code_collection_only_while_saving(
         "repository_name",
         "auto_class",
         "class_path",
-        "exact_initial_weights",
+        "expected_missing_key_prefixes",
+        "expected_unexpected_key_prefixes",
     ),
     _cases(),
 )
@@ -335,7 +457,8 @@ def test_local_artifact_offline_autoclass_parity(
     repository_name: str,
     auto_class: str,
     class_path: str,
-    exact_initial_weights: bool,
+    expected_missing_key_prefixes: tuple[str, ...],
+    expected_unexpected_key_prefixes: tuple[str, ...],
     tmp_path: Path,
 ) -> None:
     """Load offline, infer, save/reload, and match unchanged package source."""
@@ -352,7 +475,8 @@ def test_local_artifact_offline_autoclass_parity(
         class_path=class_path,
         implementation="artifact",
         output=artifact_output,
-        exact_initial_weights=exact_initial_weights,
+        expected_missing_key_prefixes=expected_missing_key_prefixes,
+        expected_unexpected_key_prefixes=expected_unexpected_key_prefixes,
     )
     assert isolated.returncode == 0, isolated.stdout + isolated.stderr
     package = _run_probe(
@@ -362,7 +486,8 @@ def test_local_artifact_offline_autoclass_parity(
         class_path=class_path,
         implementation="package",
         output=package_output,
-        exact_initial_weights=exact_initial_weights,
+        expected_missing_key_prefixes=expected_missing_key_prefixes,
+        expected_unexpected_key_prefixes=expected_unexpected_key_prefixes,
     )
     assert package.returncode == 0, package.stdout + package.stderr
     assert json.loads(artifact_output.read_text(encoding="utf-8")) == json.loads(
@@ -419,7 +544,14 @@ def test_local_artifact_locked_flash_backend(
         "family": family,
         "auto_class": "AutoModel",
         "class_path": class_path,
-        "exact_initial_weights": False,
+        "expected_missing_key_prefixes": _INITIAL_WEIGHT_ALLOWANCES.get(
+            (family, "AutoModel"),
+            ((), ()),
+        )[0],
+        "expected_unexpected_key_prefixes": _INITIAL_WEIGHT_ALLOWANCES.get(
+            (family, "AutoModel"),
+            ((), ()),
+        )[1],
         "attn_implementation": attn_implementation,
     }
     isolated = _run_probe(

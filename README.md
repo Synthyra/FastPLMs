@@ -174,6 +174,20 @@ result = embed_dataset(
 )
 ```
 
+Insertion-ordered mappings are also accepted and preserve their keys as record
+identifiers:
+
+```python
+result = model.embed_dataset(
+    {
+        "protein-a": "MSTNPKPQRKTKRNT",
+        "protein-b": "MKTIIALSYIFCLVFA",
+    },
+    batch_size=2,
+    pooling="mean",
+)
+```
+
 `EmbeddingResult` preserves order, duplicate identifiers, and the original
 sequence. Each record contains an identifier, sequence, and tensor:
 
@@ -186,6 +200,12 @@ for record in result.records:
 Calling `result.as_dict(key="id")` raises when identifiers repeat unless an
 explicit duplicate policy is provided. This avoids silently overwriting FASTA
 records.
+
+Safetensors output packs generation-scoped shards across batches and can resume
+from the last completed shard after interruption. An interrupted partial shard
+is recomputed. Tensor memory is bounded by the configured shard size rather than
+the full dataset size. SQLite remains
+available when database transactions and queryable records are preferred.
 
 ### FASTA input and in-memory output
 

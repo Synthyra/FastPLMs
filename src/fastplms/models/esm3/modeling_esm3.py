@@ -37,6 +37,7 @@ try:
         _get_flex_attention_fn,
         create_block_mask,
         resolve_attention_backend,
+        warn_attention_backend_fallback,
     )
     from fastplms.embeddings import EmbeddingMixin
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
@@ -823,6 +824,15 @@ class MultiHeadAttention(nn.Module):
         else:
             mask = None
 
+        if output_attentions and self.attn_backend != AttentionBackend.EAGER:
+            warn_attention_backend_fallback(
+                self.attn_backend,
+                effective_backend=AttentionBackend.EAGER,
+                reason=(
+                    "output_attentions=True requires the full materialized attention "
+                    "probability matrix, which optimized PyTorch attention APIs do not return."
+                ),
+            )
         if output_attentions or self.attn_backend == AttentionBackend.EAGER:
             attn_scores = torch.einsum("bhld,bhsd->bhls", query, key) * self.scale
             if mask is not None:

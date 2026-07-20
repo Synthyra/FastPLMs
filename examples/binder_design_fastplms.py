@@ -669,6 +669,7 @@ def design_binder(
     learning_rate: float = DEFAULT_LEARNING_RATE,
     temperature_min: float = DEFAULT_TEMPERATURE_MIN,
     output_dir: str | Path | None = None,
+    device: torch.device | str = "cuda",
 ) -> tuple[list[str], dict[int, dict[str, torch.Tensor]], list[dict[str, Any]]]:
     assert (target_name is None) ^ (target_sequence is None), (
         "Provide either target name or target sequence."
@@ -677,7 +678,7 @@ def design_binder(
         "Provide either binder name or binder sequence."
     )
 
-    device = torch.device("cuda")
+    device = torch.device(device)
     if target_name is not None:
         assert target_name in TARGET_SEQUENCES, target_name
         target_sequence = TARGET_SEQUENCES[target_name]
@@ -714,6 +715,8 @@ def design_binder(
     best_iptm: list[float] = [-1.0] * batch_size
     best_loss: list[float] = [float("inf")] * batch_size
     best_sequences: list[str] = [""] * batch_size
+    best_logits: list[torch.Tensor | None] = [None] * batch_size
+    best_steps: list[int | None] = [None] * batch_size
     model_names = list(inversion_models)
 
     progress = tqdm(range(steps), desc="design", dynamic_ncols=True)
@@ -755,6 +758,7 @@ def design_binder(
                 n_passes=4,
             )
         plm_grad = torch.autograd.grad(plm_loss.mean(), logits)[0]
+        candidate_logits = logits.detach().clone()
 
         logits.grad = normalized_gradient_tensor(structure_grad, gradient_mask) + (
             0.05 if is_antibody else 0.15
@@ -777,9 +781,13 @@ def design_binder(
                     best_iptm[batch_idx] = current_iptm
                     best_sequences[batch_idx] = sequences[batch_idx]
                     best_loss[batch_idx] = current_loss
+                    best_logits[batch_idx] = candidate_logits[batch_idx].cpu()
+                    best_steps[batch_idx] = step
             elif current_loss < best_loss[batch_idx]:
                 best_sequences[batch_idx] = sequences[batch_idx]
                 best_loss[batch_idx] = current_loss
+                best_logits[batch_idx] = candidate_logits[batch_idx].cpu()
+                best_steps[batch_idx] = step
 
         if step % log_interval == 0:
             loss_str = "  ".join(
@@ -792,6 +800,8 @@ def design_binder(
         )
 
     assert all(seq != "" for seq in best_sequences)
+    assert all(value is not None for value in best_logits)
+    assert all(value is not None for value in best_steps)
     result_dir = Path(output_dir) if output_dir is not None else None
     if result_dir is not None:
         result_dir.mkdir(parents=True, exist_ok=True)
@@ -847,7 +857,7 @@ def design_binder(
                 logits_path_obj = result_dir / f"{structure_stem}_logits.pt"
                 cif_path.write_text(cif_text, encoding="utf-8")
                 pdb_path.write_text(pdb_text, encoding="utf-8")
-                torch.save(logits[batch_idx].detach().cpu(), logits_path_obj)
+                torch.save(best_logits[batch_idx], logits_path_obj)
                 logits_path = str(logits_path_obj)
 
             row = {
@@ -858,7 +868,8 @@ def design_binder(
                 "binder_sequence": binder_seq,
                 "target_length": target_length,
                 "binder_length": len(binder_seq),
-                "final_loss": float(trajectory[steps - 1]["total_loss"][batch_idx].item()),
+                "final_loss": best_loss[batch_idx],
+                "selected_step": best_steps[batch_idx],
                 "ptm": ptm_value,
                 "iptm": iptm_value,
                 "mean_plddt": mean_plddt,
@@ -871,7 +882,11 @@ def design_binder(
 
     if result_dir is not None:
         _write_results_table(result_dir / "results.parquet", critic_results)
-        _write_official_selection_table(result_dir / "selection.parquet", critic_results)
+        _write_official_selection_table(
+            result_dir / "selection.parquet",
+            critic_results,
+            required_hero_critics=tuple(critic_models),
+        )
     return best_sequences, trajectory, critic_results
 
 
@@ -944,6 +959,7 @@ def select_official_designs(
     top_k: int = DEFAULT_SELECTION_TOP_K,
     consensus_iptm_threshold: float = DEFAULT_CONSENSUS_IPTM_THRESHOLD,
     group_columns: tuple[str, ...] = ("target_name", "binder_name"),
+    required_hero_critics: tuple[str, ...] | None = None,
 ) -> Any:
     """Rank candidates using the official ESM binder-design selection strategy."""
     df = annotate_official_selection_scores(result_df)
@@ -957,6 +973,7 @@ def select_official_designs(
         "hero_iptm_max",
         "critic_count",
         "hero_critic_count",
+        "required_hero_critic_count",
         "batch_idx",
         "binder_sequence",
         "is_antibody",
@@ -971,6 +988,21 @@ def select_official_designs(
 
         return pd.DataFrame(columns=selection_columns)
 
+    if required_hero_critics is None:
+        required_hero_critics = tuple(dict.fromkeys(df["critic_name"].dropna().tolist()))
+    else:
+        required_hero_critics = tuple(dict.fromkeys(required_hero_critics))
+    if not required_hero_critics:
+        raise ValueError("At least one required hero critic must be specified")
+    required_hero_critic_count = len(required_hero_critics)
+    is_required_hero_critic = df["critic_name"].isin(required_hero_critics)
+    df["hero_iptm_score_component"] = df["official_iptm_score_component"].where(
+        is_required_hero_critic
+    )
+    df["scored_hero_critic_name"] = df["critic_name"].where(
+        is_required_hero_critic & df["hero_iptm_score_component"].notna()
+    )
+
     key_columns = [*available_group_columns, "designed_sequence"]
     summary_columns = [
         "batch_idx",
@@ -982,19 +1014,19 @@ def select_official_designs(
         column: (column, "first") for column in summary_columns if column in df.columns
     }
     scores = df.groupby(key_columns, as_index=False).agg(
-        iptm_score=("official_iptm_score_component", "mean"),
-        hero_iptm_min=("official_iptm_score_component", "min"),
-        hero_iptm_median=("official_iptm_score_component", "median"),
-        hero_iptm_max=("official_iptm_score_component", "max"),
-        critic_count=("critic_name", "count"),
-        hero_critic_count=(
-            "official_iptm_score_component",
-            lambda values: int(values.notna().sum()),
-        ),
+        iptm_score=("hero_iptm_score_component", "mean"),
+        hero_iptm_min=("hero_iptm_score_component", "min"),
+        hero_iptm_median=("hero_iptm_score_component", "median"),
+        hero_iptm_max=("hero_iptm_score_component", "max"),
+        critic_count=("critic_name", "nunique"),
+        hero_critic_count=("scored_hero_critic_name", "nunique"),
         **summary_aggregations,
     )
+    scores["required_hero_critic_count"] = required_hero_critic_count
     scores["selection_score"] = scores["iptm_score"].fillna(0.0)
-    scores["all_hero_critics_pass"] = scores["hero_iptm_min"].gt(consensus_iptm_threshold)
+    scores["all_hero_critics_pass"] = scores["hero_critic_count"].eq(
+        required_hero_critic_count
+    ) & scores["hero_iptm_min"].gt(consensus_iptm_threshold)
     scores["consensus_iptm_threshold"] = consensus_iptm_threshold
 
     if available_group_columns:
@@ -1009,8 +1041,15 @@ def select_official_designs(
     return scores.nlargest(min(len(scores), top_k), "selection_score").reset_index(drop=True)
 
 
-def _write_official_selection_table(path: Path, rows: list[dict[str, Any]]) -> None:
-    selection_df = select_official_designs(rows)
+def _write_official_selection_table(
+    path: Path,
+    rows: list[dict[str, Any]],
+    required_hero_critics: tuple[str, ...] | None = None,
+) -> None:
+    selection_df = select_official_designs(
+        rows,
+        required_hero_critics=required_hero_critics,
+    )
     selection_df.to_parquet(path, index=False)
 
 
@@ -1078,6 +1117,7 @@ class FastPLMsBinderDesign:
         kernel_backend: str | None = None,
         compile_model: bool = False,
     ) -> None:
+        self.device = torch.device(device)
         self.inversion_models = {
             model_name: _load_fold_model(
                 model_name,
@@ -1134,6 +1174,7 @@ class FastPLMsBinderDesign:
             batch_size=batch_size,
             steps=steps,
             output_dir=output_dir,
+            device=self.device,
         )
 
 

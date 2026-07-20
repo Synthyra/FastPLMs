@@ -29,6 +29,7 @@ try:
         get_attention_mask,
         kernels_flash_attention_func,
         resolve_attention_backend,
+        warn_attention_backend_fallback,
     )
     from fastplms.embeddings import EmbeddingMixin, Pooler, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
@@ -56,30 +57,39 @@ class ESMplusplusConfig(PretrainedConfig):
         hidden_size: int = 960,
         num_attention_heads: int = 15,
         num_hidden_layers: int = 30,
-        num_labels: int = 2,
+        num_labels: int | None = None,
         problem_type: str | None = None,
         dropout: float = 0.0,
         initializer_range: float = 0.02,
         classifier_dropout: float = 0.1,
+        classifier_pooling_types: list[str] | None = None,
         attn_backend: str | None = None,
         pad_token_id: int = 1,
         mask_token_id: int = 32,
         **kwargs,
     ):
+        if num_labels is None:
+            configured_labels = kwargs.get("id2label")
+            num_labels = len(configured_labels) if configured_labels else 2
         super().__init__(
             pad_token_id=pad_token_id,
             mask_token_id=mask_token_id,
+            num_labels=num_labels,
             **kwargs,
         )
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_attention_heads = num_attention_heads
         self.num_hidden_layers = num_hidden_layers
-        self.num_labels = num_labels
         self.problem_type = problem_type
         self.dropout = dropout
         self.initializer_range = initializer_range
         self.classifier_dropout = classifier_dropout
+        self.classifier_pooling_types = (
+            list(classifier_pooling_types)
+            if classifier_pooling_types is not None
+            else None
+        )
         self.tie_word_embeddings = False
         self.attn_backend = attn_backend
 
@@ -397,6 +407,14 @@ class MultiHeadAttention(nn.Module):
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if output_attentions:
+            warn_attention_backend_fallback(
+                self.attn_backend,
+                effective_backend=AttentionBackend.EAGER,
+                reason=(
+                    "output_attentions=True requires the full materialized attention "
+                    "probability matrix, which optimized PyTorch attention APIs do not return."
+                ),
+            )
             return self._manual_attn(
                 query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
             )
@@ -1119,25 +1137,34 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
     """
 
     def __init__(self, config: ESMplusplusConfig, **kwargs):
+        pooling_types = kwargs.pop("pooling_types", None)
+        if pooling_types is None:
+            pooling_types = config.classifier_pooling_types or ["mean", "var"]
+        elif not isinstance(pooling_types, list):
+            raise TypeError("pooling_types must be a non-empty list of strings.")
+        elif not pooling_types:
+            raise ValueError("pooling_types must contain at least one pooling operation.")
+        elif not all(isinstance(pooling_type, str) for pooling_type in pooling_types):
+            raise TypeError("pooling_types must be a non-empty list of strings.")
+        if "parti" in pooling_types:
+            raise ValueError(
+                "pooling_types cannot contain 'parti' for sequence classification "
+                "because the classifier does not expose layer attentions to its pooler."
+            )
+        config.classifier_pooling_types = list(pooling_types)
+
         ESMplusplusForMaskedLM.__init__(self, config, **kwargs)
         self.config = config
         self.num_labels = config.num_labels
         self.classifier = RegressionHead(
-            config.hidden_size * 2, config.num_labels, config.hidden_size * 4
+            config.hidden_size * len(pooling_types),
+            config.num_labels,
+            config.hidden_size * 4,
         )
         # Large intermediate projections help with sequence classification tasks (*4)
         self.mse = nn.MSELoss()
         self.ce = nn.CrossEntropyLoss()
         self.bce = nn.BCEWithLogitsLoss()
-        # if kwargs has pooling_types, use them, otherwise use ['cls', 'mean']
-        if (
-            "pooling_types" in kwargs
-            and isinstance(kwargs["pooling_types"], list[str])
-            and len(kwargs["pooling_types"]) > 0
-        ):
-            pooling_types = kwargs["pooling_types"]
-        else:
-            pooling_types = ["mean", "var"]
         self.pooler = Pooler(pooling_types)
         self.init_weights()
 
@@ -1176,6 +1203,24 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         return_dict: bool | None = None,
         **kwargs,
     ) -> ESMplusplusOutput:
+        pooling_mask = attention_mask
+        if pooling_mask is None:
+            if sequence_id is not None:
+                pooling_mask = (
+                    sequence_id
+                    if sequence_id.dtype == torch.bool
+                    else sequence_id.ne(-1)
+                )
+            elif input_ids is not None:
+                pooling_mask = input_ids.ne(self.config.pad_token_id)
+            else:
+                assert inputs_embeds is not None
+                pooling_mask = torch.ones(
+                    inputs_embeds.shape[:2],
+                    dtype=torch.bool,
+                    device=inputs_embeds.device,
+                )
+
         output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1188,7 +1233,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         )
 
         last_hidden_state = output.last_hidden_state
-        features = self.pooler(last_hidden_state, attention_mask)
+        features = self.pooler(last_hidden_state, pooling_mask)
         logits = self.classifier(features)
 
         loss = None

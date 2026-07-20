@@ -49,6 +49,7 @@ try:
         FastPLMsAttentionMixin,
         get_attention_mask,
         resolve_attention_backend,
+        warn_attention_backend_fallback,
     )
     from fastplms.embeddings import EmbeddingMixin, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
@@ -141,6 +142,7 @@ class DPLM2Config(EsmConfig):
     def __init__(
         self,
         attn_backend: Optional[str] = None,
+        add_pooling_layer: bool = False,
         aa_type: int = 1,
         struct_type: int = 0,
         pad_type: int = 2,
@@ -148,6 +150,7 @@ class DPLM2Config(EsmConfig):
     ):
         super().__init__(**kwargs)
         self.attn_backend = attn_backend
+        self.add_pooling_layer = add_pooling_layer
         self.aa_type = aa_type
         self.struct_type = struct_type
         self.pad_type = pad_type
@@ -383,6 +386,14 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         output_s_max: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
         if output_attentions:
+            warn_attention_backend_fallback(
+                self.attn_backend,
+                effective_backend=AttentionBackend.EAGER,
+                reason=(
+                    "output_attentions=True requires the full materialized attention "
+                    "probability matrix, which optimized PyTorch attention APIs do not return."
+                ),
+            )
             return self._manual_attn(
                 query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
             )
@@ -731,10 +742,13 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
 class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
     config_class = DPLM2Config
 
-    def __init__(self, config, add_pooling_layer=True):
+    def __init__(self, config, add_pooling_layer: bool | None = None):
         DPLM2PreTrainedModel.__init__(self, config)
         self.config = config
         self.esm = FAST_DPLM2_ENCODER(config)
+        if add_pooling_layer is None:
+            add_pooling_layer = config.add_pooling_layer
+        config.add_pooling_layer = bool(add_pooling_layer)
         self.pooler = EsmPooler(config) if add_pooling_layer else None
         self.post_init()
 

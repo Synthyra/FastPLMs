@@ -36,6 +36,7 @@ from tools.artifacts import (
 )
 from tools.artifacts.build import (
     _checkpoint_identity_hash,
+    _copy_attention_kernel_lock,
     _tokenizer_checkpoint,
     _validate_vendor_revisions,
 )
@@ -82,6 +83,23 @@ def test_e1_runtime_artifact_closes_over_split_modules() -> None:
         "retrieval.py",
     ):
         assert (source_root / source_name).is_file()
+
+
+@pytest.mark.parametrize("model_id", ("esm2_8m", "esmc_small", "dplm_150m"))
+def test_flash_artifact_build_embeds_the_kernel_lock(
+    model_id: str,
+    tmp_path: Path,
+) -> None:
+    """Exercise the kernel-lock build step without requiring checkpoint weights."""
+
+    registry = get_model_registry()
+    _copy_attention_kernel_lock(
+            ROOT,
+            tmp_path,
+            registry,
+            registry[model_id],
+        )
+    assert (tmp_path / "kernels.lock").read_bytes() == (ROOT / "kernels.lock").read_bytes()
 
 
 def _synthetic_registry(source_root: Path, checkpoint: Path) -> tuple[ModelRegistry, ModelSpec]:
@@ -366,7 +384,7 @@ def test_different_runtime_bundles_fail_without_replacing_loaded_runtime(
             try:
                 load_bridge(Path(sys.argv[2]), "artifact_second")
             except RuntimeError as error:
-                if "different FastPLMs runtime" not in str(error):
+                if "incompatible runtime sources" not in str(error):
                     raise
             else:
                 raise AssertionError("A different runtime bundle loaded silently")
@@ -380,6 +398,210 @@ def test_different_runtime_bundles_fail_without_replacing_loaded_runtime(
     )
     completed = subprocess.run(
         [sys.executable, "-I", "-S", str(probe), str(first), str(second)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_complementary_fastplms_artifacts_load_in_one_process(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, first_spec = _synthetic_registry(source_root, checkpoint)
+
+    second_module = source_root / "src" / "fastplms" / "models" / "toy_second"
+    second_module.mkdir(parents=True)
+    (second_module / "modeling_toy_second.py").write_text(
+        "class ToySecondConfig: pass\nclass ToySecondModel: pass\n",
+        encoding="utf-8",
+    )
+    second_family = replace(
+        first_spec.family,
+        id="toy_second",
+        runtime_paths=("__init__.py", "models/toy_second"),
+        auto_map_items=(
+            (
+                "AutoConfig",
+                "fastplms.models.toy_second.modeling_toy_second.ToySecondConfig",
+            ),
+            (
+                "AutoModel",
+                "fastplms.models.toy_second.modeling_toy_second.ToySecondModel",
+            ),
+        ),
+    )
+    second_spec = replace(
+        first_spec,
+        id="toy_second",
+        family=second_family,
+        fast=replace(first_spec.fast, repo_id="Synthyra/ToyModelSecond"),
+    )
+    registry = ModelRegistry(
+        schema_version=registry.schema_version,
+        upstreams=registry.upstreams,
+        families={
+            first_spec.family.id: first_spec.family,
+            second_family.id: second_family,
+        },
+        models={
+            first_spec.id: first_spec,
+            second_spec.id: second_spec,
+        },
+        runtime_assets=registry.runtime_assets,
+        attention_kernels=registry.attention_kernels,
+        legal_files=registry.legal_files,
+    )
+    first = build_artifact(
+        first_spec,
+        registry,
+        checkpoint,
+        tmp_path / "first",
+        source_root,
+    )
+    second = build_artifact(
+        second_spec,
+        registry,
+        checkpoint,
+        tmp_path / "second",
+        source_root,
+    )
+
+    probe = tmp_path / "compatible_runtime_probe.py"
+    probe.write_text(
+        textwrap.dedent(
+            """\
+            import importlib.util
+            import sys
+            import types
+            from pathlib import Path
+
+
+            def load_bridge(root, package_name):
+                package = types.ModuleType(package_name)
+                package.__package__ = package_name
+                package.__path__ = [str(root)]
+                sys.modules[package_name] = package
+                module_name = f"{package_name}.modeling_fastplms"
+                spec = importlib.util.spec_from_file_location(
+                    module_name,
+                    root / "modeling_fastplms.py",
+                )
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+                return module
+
+
+            first = load_bridge(Path(sys.argv[1]), "artifact_first")
+            runtime = sys.modules["fastplms"]
+            second = load_bridge(Path(sys.argv[2]), "artifact_second")
+            assert sys.modules["fastplms"] is runtime
+            assert len(runtime.__fastplms_artifact_runtime_hashes__) == 2
+            assert first.ToyConfig().__class__ is first.ToyConfig
+            assert second.ToySecondConfig().__class__ is second.ToySecondConfig
+            """
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", str(probe), str(first), str(second)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_matching_installed_fastplms_runtime_is_reused(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    source_package = source_root / "src" / "fastplms"
+    kernel_lock = source_package / "kernels.lock"
+    kernel_lock.write_text('[{"revision": "synthetic"}]\n', encoding="utf-8")
+    artifact = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+    )
+    kernel_lock.unlink()
+    distribution_root = tmp_path / "installed-distribution"
+    distribution_info = distribution_root / "fastplms-1.0.0.dist-info"
+    distribution_info.mkdir(parents=True)
+    (distribution_info / "METADATA").write_text(
+        "Metadata-Version: 2.4\nName: fastplms\nVersion: 1.0.0\n",
+        encoding="utf-8",
+    )
+    (distribution_info / "kernels.lock").write_text(
+        '[{"revision": "synthetic"}]\n',
+        encoding="utf-8",
+    )
+    (distribution_info / "RECORD").write_text(
+        "fastplms-1.0.0.dist-info/METADATA,,\n"
+        "fastplms-1.0.0.dist-info/kernels.lock,,\n"
+        "fastplms-1.0.0.dist-info/RECORD,,\n",
+        encoding="utf-8",
+    )
+
+    probe = tmp_path / "installed_runtime_probe.py"
+    probe.write_text(
+        textwrap.dedent(
+            """\
+            import importlib.util
+            import sys
+            import types
+            from pathlib import Path
+
+            source_package = Path(sys.argv[1])
+            artifact = Path(sys.argv[2])
+            sys.path.insert(0, sys.argv[3])
+            installed_spec = importlib.util.spec_from_file_location(
+                "fastplms",
+                source_package / "__init__.py",
+                submodule_search_locations=[str(source_package)],
+            )
+            installed = importlib.util.module_from_spec(installed_spec)
+            sys.modules["fastplms"] = installed
+            installed_spec.loader.exec_module(installed)
+
+            artifact_package = types.ModuleType("artifact")
+            artifact_package.__package__ = "artifact"
+            artifact_package.__path__ = [str(artifact)]
+            sys.modules["artifact"] = artifact_package
+            bridge_spec = importlib.util.spec_from_file_location(
+                "artifact.modeling_fastplms",
+                artifact / "modeling_fastplms.py",
+            )
+            bridge = importlib.util.module_from_spec(bridge_spec)
+            sys.modules["artifact.modeling_fastplms"] = bridge
+            bridge_spec.loader.exec_module(bridge)
+
+            assert sys.modules["fastplms"] is installed
+            assert bridge.ToyConfig().__class__ is bridge.ToyConfig
+            assert installed.__fastplms_artifact_installed_root__ == str(source_package.resolve())
+            """
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            str(probe),
+            str(source_root / "src" / "fastplms"),
+            str(artifact),
+            str(distribution_root),
+        ],
         cwd=tmp_path,
         capture_output=True,
         text=True,

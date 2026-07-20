@@ -24,6 +24,7 @@ try:
         BlockMask,
         FastPLMsAttentionMixin,
         resolve_attention_backend,
+        warn_attention_backend_fallback,
     )
     from fastplms.embeddings import EmbeddingMixin, Pooler, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
@@ -465,6 +466,14 @@ class Attention(nn.Module):
             effective_layer_type = AttentionLayerType.WITHIN_SEQ
 
         if output_attentions:
+            warn_attention_backend_fallback(
+                self.attn_backend,
+                effective_backend=AttentionBackend.EAGER,
+                reason=(
+                    "output_attentions=True requires the full materialized attention "
+                    "probability matrix, which optimized PyTorch attention APIs do not return."
+                ),
+            )
             return self._manual_attn(
                 query_states,
                 key_states,

@@ -25,6 +25,9 @@ from transformers import (
     TrainingArguments,
 )
 
+DEFAULT_MODEL = "Synthyra/ESM2-8M"
+CLASSIFIER_MODULE_NAME = "classifier"
+
 # Shared arguments for the trainer
 BASE_TRAINER_KWARGS = {
     "warmup_steps": 500,
@@ -40,6 +43,15 @@ BASE_TRAINER_KWARGS = {
     "report_to": "none",
     "label_names": ["labels"],
 }
+
+
+def _ensure_classifier_persistence(lora_config: Any) -> Any:
+    """Ensure PEFT saves the independently trained classification head."""
+    modules_to_save = list(lora_config.modules_to_save or ())
+    if CLASSIFIER_MODULE_NAME not in modules_to_save:
+        modules_to_save.append(CLASSIFIER_MODULE_NAME)
+    lora_config.modules_to_save = modules_to_save
+    return lora_config
 
 
 # Dataset classes
@@ -187,7 +199,7 @@ def initialize_model(
     if use_lora:
         # Default LoRA configuration if none provided
         if lora_config is None:
-            # Target modules for ESM++ or ESM2 models
+            # Target modules for the ESM2 sequence-classification artifacts.
             target_modules = ["layernorm_qkv.1", "out_proj", "query", "key", "value", "dense"]
 
             lora_config = LoraConfig(
@@ -196,14 +208,16 @@ def initialize_model(
                 lora_dropout=0.01,
                 bias="none",
                 target_modules=target_modules,
+                modules_to_save=[CLASSIFIER_MODULE_NAME],
             )
+
+        # A custom configuration must preserve the task head too. Marking the
+        # head trainable without modules_to_save would omit it from an adapter
+        # checkpoint and restore an untrained head after reload.
+        lora_config = _ensure_classifier_persistence(lora_config)
 
         # Apply LoRA to the model
         model = get_peft_model(model, lora_config)
-
-        # Unfreeze the classifier head
-        for param in model.classifier.parameters():
-            param.requires_grad = True
 
         # Print parameter statistics
         total_params = sum(p.numel() for p in model.parameters())
@@ -326,7 +340,7 @@ def plot_classification_results(
 
 # Training functions
 def train_regression_model(
-    model_name: str = "Synthyra/ESMplusplus_small",
+    model_name: str = DEFAULT_MODEL,
     use_lora: bool = True,
     custom_lora_config: Any = None,
     batch_size: int = 8,
@@ -431,7 +445,7 @@ def train_regression_model(
 
 
 def train_classification_model(
-    model_name: str = "Synthyra/ESMplusplus_small",
+    model_name: str = DEFAULT_MODEL,
     use_lora: bool = True,
     custom_lora_config: Any = None,
     batch_size: int = 8,
@@ -534,10 +548,9 @@ if __name__ == "__main__":
     """Run sequence classification, protein-pair regression, or both."""
     import argparse
 
-    # Examples of PLMs with efficient implementations offered by Synthyra
+    # Examples whose published artifacts advertise
+    # AutoModelForSequenceClassification.
     MODEL_LIST = [
-        "Synthyra/ESMplusplus_small",
-        "Synthyra/ESMplusplus_large",
         "Synthyra/ESM2-8M",
         "Synthyra/ESM2-35M",
         "Synthyra/ESM2-150M",
@@ -553,10 +566,14 @@ if __name__ == "__main__":
         help="Task to train model for",
     )
     parser.add_argument(
-        "--model_path", type=str, default="Synthyra/ESM2-8M", help="Path to the model to train"
+        "--model_path", type=str, default=DEFAULT_MODEL, help="Path to the model to train"
     )
     parser.add_argument(
-        "--use_lora", action="store_true", default=True, help="Whether to use LoRA for fine-tuning"
+        "--use-lora",
+        "--use_lora",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use LoRA (pass --no-use-lora to fine-tune the full model)",
     )
     parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training")
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate for training")

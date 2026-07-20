@@ -99,6 +99,11 @@ class Pooler:
         unknown = set(names) - POOLING_NAMES
         if unknown:
             raise ValueError(f"Unknown pooling operations: {sorted(unknown)}.")
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(
+                f"Duplicate pooling operations are not supported: {duplicates}."
+            )
         self.names = names
 
     def output_slices(self, d: int) -> dict[str, tuple[int, int]]:

@@ -68,8 +68,8 @@ print(output.last_hidden_state.shape)
 ## Dataset embeddings
 
 The shared embedding API accepts sequences, `(id, sequence)` pairs,
-`EmbeddingInput` records, or a FASTA path. Results preserve order and duplicate
-identifiers:
+`EmbeddingInput` records, insertion-ordered `{id: sequence}` mappings, or a
+FASTA path. Results preserve order and duplicate identifiers:
 
 ```python
 result = model.embed_dataset(
@@ -83,9 +83,10 @@ for record in result:
 ```
 
 Set `full_embeddings=True` for one residue tensor with shape `(l, d)` per
-sequence. Set `output` to a directory for transactional safetensors or choose
-`format="sqlite"` for batch-level commits and exact resume. Pooling excludes
-boundary, padding, and other non-biological positions.
+sequence. Set `output` to a directory for bounded-memory, transactional
+safetensors with ordered-prefix resume, or choose `format="sqlite"` for
+batch-level database commits and exact resume. Pooling excludes boundary,
+padding, and other non-biological positions.
 
 For a long FASTA run, stream completed batches into SQLite:
 
@@ -133,6 +134,10 @@ print(sequence)
 
 Omitting `max_iter` uses the official 500-step schedule. A shorter schedule
 changes the sampling process rather than providing an equivalent faster mode.
+
+Plain `AutoModel` omits the optional ESM pooler because this diffusion
+checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
+only when intentionally initializing and training that head.
 
 ## Runtime contract
 

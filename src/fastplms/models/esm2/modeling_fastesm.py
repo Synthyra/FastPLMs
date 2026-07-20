@@ -33,6 +33,7 @@ try:
         get_attention_mask,
         kernels_flash_attention_func,
         resolve_attention_backend,
+        warn_attention_backend_fallback,
     )
     from fastplms.embeddings import EmbeddingMixin, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
@@ -43,6 +44,7 @@ except ImportError:
 @dataclass
 class FastEsmEncoderOutput(ModelOutput):
     last_hidden_state: torch.Tensor | None = None
+    pooler_output: torch.Tensor | None = None
     hidden_states: tuple[torch.Tensor, ...] | None = None
     attentions: tuple[torch.Tensor, ...] | None = None
     s_max: tuple[list[torch.Tensor], ...] | None = None
@@ -80,6 +82,7 @@ class FastEsmConfig(PretrainedConfig):
         position_embedding_type: str = "rotary",
         emb_layer_norm_before: bool | None = None,
         token_dropout: bool = True,
+        add_pooling_layer: bool = False,
         attn_backend: str | None = None,
         **kwargs,
     ):
@@ -107,6 +110,7 @@ class FastEsmConfig(PretrainedConfig):
         self.emb_layer_norm_before = emb_layer_norm_before
         self.tie_word_embeddings = False
         self.token_dropout = token_dropout
+        self.add_pooling_layer = add_pooling_layer
         self.attn_backend = attn_backend
 
     def to_dict(self) -> dict[str, Any]:
@@ -217,6 +221,14 @@ class EsmSelfAttention(nn.Module):
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if output_attentions:
+            warn_attention_backend_fallback(
+                self.attn_backend,
+                effective_backend=AttentionBackend.EAGER,
+                reason=(
+                    "output_attentions=True requires the full materialized attention "
+                    "probability matrix, which optimized PyTorch attention APIs do not return."
+                ),
+            )
             return self._manual_attn(
                 query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
             )
@@ -682,10 +694,13 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
 
 
 class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config, add_pooling_layer: bool | None = True, **kwargs):
+    def __init__(self, config, add_pooling_layer: bool | None = None, **kwargs):
         FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
         self.esm = FAST_ESM_ENCODER(config)
+        if add_pooling_layer is None:
+            add_pooling_layer = config.add_pooling_layer
+        config.add_pooling_layer = bool(add_pooling_layer)
         self.pooler = EsmPooler(config) if add_pooling_layer else None
         self.post_init()
 
@@ -745,10 +760,11 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
             output_s_max=output_s_max,
         )
         sequence_output = outputs.last_hidden_state
-        _pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
+        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         return FastEsmEncoderOutput(
             last_hidden_state=sequence_output,
+            pooler_output=pooled_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,

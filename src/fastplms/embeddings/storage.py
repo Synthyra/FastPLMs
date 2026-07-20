@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -123,111 +124,280 @@ def _load_safetensor(path: Path, key: str) -> Tensor:
         return handle.get_tensor(key)
 
 
+def _safetensors_shard_prefix(path: str | Path) -> str:
+    requested_path = Path(path)
+    if requested_path.suffix in {".json", ".safetensors"}:
+        return f"{requested_path.stem}-embeddings"
+    return "embeddings"
+
+
+def _authoritative_index_payload(path: str | Path) -> dict[str, Any] | None:
+    """Return the last atomically committed index snapshot when available."""
+
+    run_manifest_path = _run_manifest_path(path)
+    if run_manifest_path.is_file():
+        try:
+            run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            run_manifest = None
+        if isinstance(run_manifest, dict):
+            snapshot = run_manifest.get("index_payload")
+            if isinstance(snapshot, dict):
+                return snapshot
+    index_path = _index_path(path)
+    if not index_path.is_file():
+        return None
+    try:
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _referenced_shards(
+    index_path: Path,
+    payload: dict[str, Any] | None = None,
+) -> set[Path]:
+    if payload is None:
+        payload = _authoritative_index_payload(index_path)
+    if payload is None:
+        return set()
+    shards: set[Path] = set()
+    for item in payload.get("records", ()):
+        relative = item.get("tensor", {}).get("file")
+        if not isinstance(relative, str):
+            continue
+        candidate = (index_path.parent / relative).resolve()
+        if candidate.parent == index_path.parent.resolve():
+            shards.add(candidate)
+    return shards
+
+
+class SafetensorsStreamWriter:
+    """Bounded-memory, resumable safetensors publisher."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        metadata: dict[str, Any],
+        *,
+        shard_size: int = DEFAULT_SHARD_SIZE,
+        existing: Iterable[EmbeddingRecord] = (),
+        reuse_existing: bool = False,
+        publish_initial: bool = True,
+        publish_incremental: bool = True,
+    ) -> None:
+        try:
+            from safetensors.torch import save_file
+        except ImportError as error:
+            raise ImportError("Saving embeddings requires the 'safetensors' package.") from error
+        if shard_size <= 0:
+            raise ValueError("shard_size must be positive.")
+
+        self.path = Path(path)
+        self.index_path = _index_path(path)
+        self.run_manifest_path = _run_manifest_path(path)
+        self.index_path.parent.mkdir(parents=True, exist_ok=True)
+        self.metadata = _jsonable(metadata)
+        self.shard_size = shard_size
+        self.publish_incremental = publish_incremental
+        self._save_file = save_file
+        authoritative_payload = _authoritative_index_payload(path)
+        self._old_shards = _referenced_shards(self.index_path, authoritative_payload)
+        self._records_json: list[dict[str, Any]] = []
+        if reuse_existing:
+            if authoritative_payload is None:
+                raise ValueError("Cannot resume without an authoritative safetensors index.")
+            self._records_json = list(authoritative_payload.get("records", ()))
+            expected_prefix_length = sum(1 for _ in existing)
+            if expected_prefix_length != len(self._records_json):
+                raise ValueError(
+                    "The resumable safetensors prefix does not match the validated "
+                    "embedding records."
+                )
+        prefix = _safetensors_shard_prefix(path)
+        generations = []
+        for candidate in self.index_path.parent.glob(f"{prefix}-run-*-*.safetensors"):
+            parts = candidate.stem.split("-")
+            try:
+                generations.append(int(parts[-2]))
+            except (IndexError, ValueError):
+                continue
+        self._generation = max(generations, default=0) + 1
+        self._prefix = prefix
+        self._shard_index = 0
+        self._current: dict[str, Tensor] = {}
+        self._pending: list[
+            tuple[EmbeddingRecord, str, str, tuple[int, ...], str]
+        ] = []
+        self._current_size = 0
+
+        for temporary in self.index_path.parent.glob(f".{prefix}-run-*-*.safetensors.tmp"):
+            temporary.unlink(missing_ok=True)
+        for temporary in (
+            self.index_path.with_name(f".{self.index_path.name}.tmp"),
+            self.run_manifest_path.with_name(f".{self.run_manifest_path.name}.tmp"),
+        ):
+            temporary.unlink(missing_ok=True)
+        for orphan in self.index_path.parent.glob(f"{prefix}-run-*-*.safetensors"):
+            if orphan.resolve() not in self._old_shards:
+                orphan.unlink(missing_ok=True)
+        if publish_initial:
+            self._publish_metadata(complete=False)
+
+    def _write_shard(self) -> None:
+        if not self._current:
+            return
+        self._shard_index += 1
+        name = (
+            f"{self._prefix}-run-{self._generation:05d}-"
+            f"{self._shard_index:05d}.safetensors"
+        )
+        temporary = self.index_path.parent / f".{name}.tmp"
+        destination = self.index_path.parent / name
+        self._save_file(self._current, temporary)
+        temporary.replace(destination)
+        for record, key, dtype_name, shape, digest in self._pending:
+            self._records_json.append(
+                {
+                    "id": record.id,
+                    "sequence": record.sequence,
+                    "tensor": {
+                        "file": name,
+                        "key": key,
+                        "dtype": dtype_name,
+                        "shape": list(shape),
+                        "sha256": digest,
+                    },
+                }
+            )
+        self._current = {}
+        self._pending = []
+        self._current_size = 0
+
+    def append(
+        self,
+        records: Iterable[EmbeddingRecord],
+        *,
+        publish: bool | None = None,
+    ) -> None:
+        """Persist records while retaining at most one shard of tensors."""
+
+        for record in records:
+            position = len(self._records_json) + len(self._pending)
+            tensor = record.load_tensor().detach().cpu().contiguous()
+            if tensor.dtype not in _DTYPE_NAMES:
+                raise TypeError(f"Unsupported tensor dtype {tensor.dtype}.")
+            nbytes = tensor.numel() * tensor.element_size()
+            if nbytes > self.shard_size:
+                raise ValueError(
+                    f"Embedding {position} requires {nbytes} bytes and cannot fit in a "
+                    f"{self.shard_size}-byte safetensors shard."
+                )
+            if self._current and self._current_size + nbytes > self.shard_size:
+                self._write_shard()
+                if self.publish_incremental:
+                    self._publish_metadata(complete=False)
+                position = len(self._records_json)
+            key = f"embedding_{position:08d}"
+            self._current[key] = tensor
+            self._current_size += nbytes
+            self._pending.append(
+                (
+                    record,
+                    key,
+                    _DTYPE_NAMES[tensor.dtype],
+                    tuple(tensor.shape),
+                    tensor_sha256(tensor),
+                )
+            )
+        if publish:
+            self.publish(complete=False)
+
+    def _publish_metadata(
+        self,
+        *,
+        complete: bool,
+        metadata: dict[str, Any] | None = None,
+    ) -> EmbeddingResult:
+        """Atomically expose one self-consistent metadata generation."""
+
+        if metadata is not None:
+            self.metadata = _jsonable(metadata)
+        self.metadata["complete"] = complete
+        payload = {
+            "version": 1,
+            "format": "fastplms-embedding-safetensors",
+            "metadata": self.metadata,
+            "records": self._records_json,
+        }
+        temporary_index = self.index_path.with_name(f".{self.index_path.name}.tmp")
+        temporary_index.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary_index.replace(self.index_path)
+
+        index_sha256 = hashlib.sha256(self.index_path.read_bytes()).hexdigest()
+        run_manifest = {
+            "version": 1,
+            "format": "fastplms-embedding-run",
+            "index": {"file": self.index_path.name, "sha256": index_sha256},
+            "index_payload": payload,
+            "metadata": self.metadata,
+            "record_count": len(self._records_json),
+        }
+        temporary_manifest = self.run_manifest_path.with_name(
+            f".{self.run_manifest_path.name}.tmp"
+        )
+        temporary_manifest.write_text(
+            json.dumps(run_manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        temporary_manifest.replace(self.run_manifest_path)
+
+        referenced = {
+            (self.index_path.parent / item["tensor"]["file"]).resolve()
+            for item in self._records_json
+        }
+        for obsolete in self._old_shards.difference(referenced):
+            obsolete.unlink(missing_ok=True)
+        for orphan in self.index_path.parent.glob(
+            f"{self._prefix}-run-*-*.safetensors"
+        ):
+            if orphan.resolve() not in referenced:
+                orphan.unlink(missing_ok=True)
+        self._old_shards = referenced
+        return load_safetensors_result(self.index_path)
+
+    def publish(
+        self,
+        *,
+        complete: bool,
+        metadata: dict[str, Any] | None = None,
+    ) -> EmbeddingResult:
+        """Flush the current shard and atomically expose a consistent generation."""
+
+        self._write_shard()
+        return self._publish_metadata(complete=complete, metadata=metadata)
+
+
 def save_safetensors_result(
     result: EmbeddingResult,
     path: str | Path,
     *,
     shard_size: int = DEFAULT_SHARD_SIZE,
 ) -> EmbeddingResult:
-    """Write sharded safetensors, an index, and a validated run manifest."""
+    """Write sharded safetensors without materializing the full result."""
 
-    try:
-        from safetensors.torch import save_file
-    except ImportError as error:
-        raise ImportError("Saving embeddings requires the 'safetensors' package.") from error
-    if shard_size <= 0:
-        raise ValueError("shard_size must be positive.")
-
-    index_path = _index_path(path)
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    materialized = [record.load_tensor() for record in result]
-    shards: list[dict[str, Tensor]] = []
-    current: dict[str, Tensor] = {}
-    current_size = 0
-    locations: list[tuple[int, str, str, tuple[int, ...], str]] = []
-
-    for position, X in enumerate(materialized):
-        X = X.detach().cpu().contiguous()
-        key = f"embedding_{position:08d}"
-        nbytes = X.numel() * X.element_size()
-        if nbytes > shard_size:
-            raise ValueError(
-                f"Embedding {position} requires {nbytes} bytes and cannot fit in a "
-                f"{shard_size}-byte safetensors shard."
-            )
-        if current and current_size + nbytes > shard_size:
-            shards.append(current)
-            current = {}
-            current_size = 0
-        shard_index = len(shards)
-        current[key] = X
-        current_size += nbytes
-        locations.append(
-            (shard_index, key, _DTYPE_NAMES[X.dtype], tuple(X.shape), tensor_sha256(X))
-        )
-    if current:
-        shards.append(current)
-
-    requested_path = Path(path)
-    shard_prefix = (
-        f"{requested_path.stem}-embeddings"
-        if requested_path.suffix in {".json", ".safetensors"}
-        else "embeddings"
+    writer = SafetensorsStreamWriter(
+        path,
+        result.metadata,
+        shard_size=shard_size,
+        publish_initial=False,
     )
-    shard_names = [
-        f"{shard_prefix}-{i + 1:05d}-of-{len(shards):05d}.safetensors"
-        for i in range(len(shards))
-    ]
-    for name, tensors in zip(shard_names, shards, strict=True):
-        temporary = index_path.parent / f".{name}.tmp"
-        save_file(tensors, temporary)
-        temporary.replace(index_path.parent / name)
-
-    records_json = []
-    for record, location in zip(result, locations, strict=True):
-        shard_index, key, dtype_name, shape, digest = location
-        records_json.append(
-            {
-                "id": record.id,
-                "sequence": record.sequence,
-                "tensor": {
-                    "file": shard_names[shard_index],
-                    "key": key,
-                    "dtype": dtype_name,
-                    "shape": list(shape),
-                    "sha256": digest,
-                },
-            }
-        )
-    metadata = _jsonable(result.metadata)
-    payload = {
-        "version": 1,
-        "format": "fastplms-embedding-safetensors",
-        "metadata": metadata,
-        "records": records_json,
-    }
-    temporary_index = index_path.with_name(f".{index_path.name}.tmp")
-    temporary_index.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    temporary_index.replace(index_path)
-
-    index_sha256 = hashlib.sha256(index_path.read_bytes()).hexdigest()
-    run_manifest_path = _run_manifest_path(path)
-    run_manifest = {
-        "version": 1,
-        "format": "fastplms-embedding-run",
-        "index": {"file": index_path.name, "sha256": index_sha256},
-        "metadata": metadata,
-        "record_count": len(records_json),
-    }
-    temporary_manifest = run_manifest_path.with_name(f".{run_manifest_path.name}.tmp")
-    temporary_manifest.write_text(
-        json.dumps(run_manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    temporary_manifest.replace(run_manifest_path)
-    return load_safetensors_result(index_path)
+    writer.append(result, publish=False)
+    return writer.publish(complete=bool(result.metadata.get("complete", True)))
 
 
 def load_safetensors_result(path: str | Path) -> EmbeddingResult:
@@ -237,11 +407,20 @@ def load_safetensors_result(path: str | Path) -> EmbeddingResult:
     run_manifest_path = _run_manifest_path(path)
     if not run_manifest_path.is_file():
         raise ValueError(f"Missing safetensors run manifest: {run_manifest_path}.")
-    index_bytes = index_path.read_bytes()
-    payload = json.loads(index_bytes.decode("utf-8"))
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    snapshot = run_manifest.get("index_payload")
+    if snapshot is None:
+        index_bytes = index_path.read_bytes()
+        payload = json.loads(index_bytes.decode("utf-8"))
+    elif isinstance(snapshot, dict):
+        payload = snapshot
+        index_bytes = (
+            json.dumps(payload, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+    else:
+        raise ValueError("Safetensors run manifest contains an invalid index snapshot.")
     if payload.get("format") != "fastplms-embedding-safetensors":
         raise ValueError(f"Not a FastPLMs embedding index: {index_path}.")
-    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
     expected_index = {
         "file": index_path.name,
         "sha256": hashlib.sha256(index_bytes).hexdigest(),
@@ -257,7 +436,12 @@ def load_safetensors_result(path: str | Path) -> EmbeddingResult:
     records: list[EmbeddingRecord] = []
     for item in payload["records"]:
         tensor = item["tensor"]
-        tensor_path = index_path.parent / tensor["file"]
+        relative_path = Path(tensor["file"])
+        tensor_path = (index_path.parent / relative_path).resolve()
+        if relative_path.is_absolute() or tensor_path.parent != index_path.parent.resolve():
+            raise ValueError(
+                "Safetensors index references a tensor shard outside its output directory."
+            )
         reference = LazyTensorReference(
             source=str(tensor_path),
             key=tensor["key"],
@@ -506,16 +690,17 @@ def load_result(path: str | Path, *, format: str = "safetensors") -> EmbeddingRe
 
 __all__ = [
     "DEFAULT_SHARD_SIZE",
+    "SafetensorsStreamWriter",
     "append_sqlite_records",
     "initialize_sqlite_run",
     "load_legacy_pth",
     "load_result",
     "load_safetensors_result",
     "load_sqlite_result",
+    "safetensors_result_exists",
     "save_result",
     "save_safetensors_result",
     "save_sqlite_result",
-    "safetensors_result_exists",
     "tensor_sha256",
     "update_sqlite_run_metadata",
 ]
