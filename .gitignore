@@ -48,3 +48,6 @@ marketing/
 /.codex-*
 /.codex_*
 /.claude
+/tmp
+/output
+*.log
