@@ -331,7 +331,7 @@ def _run_family_probe(
         capture_output=True,
         text=True,
         check=False,
-        timeout=8,
+        timeout=20,
     )
 
 

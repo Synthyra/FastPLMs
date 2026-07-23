@@ -120,64 +120,44 @@ def test_python_matrix_is_documented() -> None:
         assert "Python 3.12" in document
 
 
-def test_every_pr_workflow_parallelizes_required_cpu_and_package_gates() -> None:
+def test_pr_workflow_keeps_only_the_cpu_and_package_gates() -> None:
     workflow = (ROOT / ".github/workflows/cpu-contracts.yml").read_text(encoding="utf-8")
 
-    jobs = (
-        "cpu-contracts:",
-        "static:",
-        "runtime-import-closure:",
-        "docs-licenses:",
-        "distributions:",
-        "extras-resolution:",
-        "wheel-smoke:",
-    )
-    for job in jobs:
-        assert job in workflow
-    assert 'python: ["3.11", "3.12", "3.13", "3.14"]' in workflow
-    assert workflow.count("persist-credentials: false") == len(jobs)
-    assert workflow.count("submodules: false") == len(jobs)
+    assert "  cpu-contracts:" in workflow
+    assert "  quality-package:" in workflow
+    for removed_job in (
+        "  static:",
+        "  runtime-import-closure:",
+        "  docs-licenses:",
+        "  distributions:",
+        "  extras-resolution:",
+        "  wheel-smoke:",
+    ):
+        assert removed_job not in workflow
+    assert "matrix:" not in workflow
+    assert "actions/upload-artifact@" not in workflow
+    assert workflow.count("persist-credentials: false") == 2
+    assert workflow.count("submodules: false") == 2
+    assert "timeout-minutes: 5" in workflow
     assert "tests/cpu -m cpu_contract -n auto" in workflow
-    assert '"torch==2.13.0" "transformers==5.13.0"' in workflow
     assert 'HF_HUB_OFFLINE: "1"' in workflow
     assert 'TRANSFORMERS_OFFLINE: "1"' in workflow
     assert 'PYTHONNOUSERSITE: "1"' in workflow
     assert "mypy --python-version 3.12" in workflow
-    assert '"mypy==1.20.2" "ruff==0.15.21"' in workflow
+    assert "ruff check src tests tools examples" in workflow
     assert "tools.artifacts.generate_docs --check" in workflow
     assert "test_model_card_licenses.py" in workflow
-    assert "tools.remote.distribution_inspect" in workflow
-    assert '--source-root "$GITHUB_WORKSPACE/src"' in workflow
-    assert "extras-resolution (${{ matrix.extra }}, 3.12)" in workflow
-    assert "uv pip compile pyproject.toml" in workflow
-    assert "--python-platform x86_64-unknown-linux-gnu" in workflow
-    assert '--torch-backend="${{ matrix.torch_backend }}"' in workflow
-    for extra in ("cpu", "structure", "binder", "cueq", "reporting", "flash", "fp8", "train"):
-        assert f"- extra: {extra}" in workflow
-    assert "cuequivariance-ops-torch-cu13" in workflow
-    assert "transformer-engine-cu13" in workflow
-    assert "torch_backend: cu130" in workflow
-    resolution_job = workflow.split("  extras-resolution:", maxsplit=1)[1].split(
-        "  wheel-smoke:", maxsplit=1
-    )[0]
-    assert "--group validation" in resolution_job
-    assert "uv pip install" not in resolution_job
-    assert "import " not in resolution_job
-    assert "kernels download" not in workflow
-    assert "import transformer_engine" not in workflow
+    assert "python -m build --wheel" in workflow
     assert "tools/remote/python_support_smoke.py" in workflow
-    distributions_job = workflow.split("  distributions:", maxsplit=1)[1].split(
-        "  extras-resolution:", maxsplit=1
-    )[0]
-    assert "uv venv --python 3.12 .sdist-smoke-venv" in distributions_job
-    assert "dist/*.tar.gz" in distributions_job
-    assert "artifacts/sdist-smoke-3.12.json" in distributions_job
+    assert "tools/remote/runtime_import_closure.py" in workflow
     assert "docker" not in workflow.lower()
 
 
 def test_cpu_contract_install_is_frozen_to_the_checked_lock() -> None:
     workflow = (ROOT / ".github/workflows/cpu-contracts.yml").read_text(encoding="utf-8")
-    cpu_job = workflow.split("  cpu-contracts:", maxsplit=1)[1].split("  static:", maxsplit=1)[0]
+    cpu_job = workflow.split("  cpu-contracts:", maxsplit=1)[1].split(
+        "  quality-package:", maxsplit=1
+    )[0]
 
     assert "uv lock --check" in cpu_job
     assert "uv sync --frozen --python 3.12 --no-default-groups" in cpu_job
@@ -197,7 +177,8 @@ def test_cpu_contract_install_is_frozen_to_the_checked_lock() -> None:
 def test_hopper_workflow_represents_real_validation_tiers_and_fails_unconfigured() -> None:
     workflow = (ROOT / ".github/workflows/h100-validation.yml").read_text(encoding="utf-8")
 
-    assert "schedule:" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert "schedule:" not in workflow
     for tier in ("golden-smoke", "nightly", "release-candidate", "benchmark-capture"):
         assert tier in workflow
     for suite in (
@@ -213,7 +194,7 @@ def test_hopper_workflow_represents_real_validation_tiers_and_fails_unconfigured
     assert "exact GH200/aarch64 validation host" in workflow
     assert "never reports an unconfigured Hopper/SM90 tier as green" in workflow
     assert "Legacy secret names remain stable" in workflow
-    assert "'h100-validation' || 'h100-nightly'" in workflow
+    assert "environment: h100-validation" in workflow
     assert "revision:" in workflow
     assert "^[0-9a-f]{40}$" in workflow
     assert '"$REQUESTED_REVISION" != "$WORKFLOW_REVISION"' in workflow

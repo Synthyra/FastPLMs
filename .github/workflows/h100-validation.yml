@@ -17,9 +17,6 @@ on:
           - nightly
           - release-candidate
           - benchmark-capture
-  schedule:
-    - cron: "17 3 * * *"
-
 permissions:
   contents: read
 
@@ -31,13 +28,13 @@ jobs:
   remote-h100:
     name: hopper-sm90-${{ matrix.suite }}
     runs-on: ubuntu-latest
-    environment: ${{ github.event_name == 'workflow_dispatch' && 'h100-validation' || 'h100-nightly' }}
+    environment: h100-validation
     timeout-minutes: 360
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        suite: ${{ fromJSON(github.event_name == 'schedule' && '["nightly"]' || inputs.tier == 'release-candidate' && '["compliance","artifact","structure","benchmark"]' || inputs.tier == 'benchmark-capture' && '["benchmark-capture"]' || inputs.tier == 'nightly' && '["nightly"]' || '["gpu-golden-smoke"]') }}
+        suite: ${{ fromJSON(inputs.tier == 'release-candidate' && '["compliance","artifact","structure","benchmark"]' || inputs.tier == 'benchmark-capture' && '["benchmark-capture"]' || inputs.tier == 'nightly' && '["nightly"]' || '["gpu-golden-smoke"]') }}
     env:
       # Legacy secret names remain stable; release evidence is bound to the configured GH200.
       FASTPLMS_H100_HOST: ${{ secrets.FASTPLMS_H100_HOST }}

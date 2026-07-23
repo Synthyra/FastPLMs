@@ -39,16 +39,12 @@ with the checked-in sequence and structure goldens. It does not build local Hub
 artifacts, download attention kernels, or build/import a live official
 reference implementation. Artifact construction remains in `artifact`,
 `nightly`, and `release`.
-The parallel GitHub `CPU and package contracts` workflow is the normal required
-pull-request gate. Its required CPU status is `cpu-contracts (3.12)`. The
-workflow runs the separate hermetic CPU contract plus lint, bounded strict
-typing, generated-document, license, model-card, wheel/sdist, runtime-import,
-dependency-resolution, and clean-wheel jobs on Python 3.11 through 3.14. The
-dependency-resolution matrix checks every public extra: `cpu`, `dev`, `structure`,
-`binder`, `cueq`, `reporting`, `flash`, `fp8`, and `train`. It separately resolves
-the published `structure` plus `binder` combination. The CUDA-only `cueq` and
-`fp8` cases resolve against Linux CUDA 13 metadata without importing GPU-only
-libraries or downloading and compiling attention kernels.
+The GitHub `CPU and package contracts` workflow is the normal required
+pull-request gate. It intentionally exposes only two jobs: the required
+`cpu-contracts (3.12)` status and one consolidated Python 3.12 quality/package
+smoke. Cross-version wheels, source distributions, public-extra resolution,
+live references, and GPU validation are explicit workstation or release suites,
+not automatic pull-request jobs.
 
 `gpu-golden-smoke` is the conditional Hopper/SM90 tier. The current release run
 uses the exact containerized Linux aarch64 environment on the configured GH200,
@@ -152,27 +148,23 @@ and immutable report are attached to the exact audited commit. For PRs touching
 model, attention, generation, embedding, or structure execution paths, that
 exact-SHA golden-smoke status and report are required pre-merge. The protected
 `h100-validation` GitHub environment should require an authorized
-reviewer and hold the manual-workflow workstation secrets. Scheduled nightly
-runs use a separately restricted, non-interactive `h100-nightly` environment
-with the same connection contract. No `pull_request` or `pull_request_target`
-event receives SSH material. Manual `release-candidate` runs launch
+reviewer and hold the manual-workflow workstation secrets. No `pull_request`,
+`pull_request_target`, or scheduled event receives SSH material. Manual
+`release-candidate` runs launch
 `compliance`, `artifact`, `structure`, and baseline-gated `benchmark` suites for
-the same checkout; the scheduled workflow runs `nightly`. The manual
+the same checkout; `nightly` is also an explicit manual tier. The manual
 `benchmark-capture` choice produces the descriptive report needed to propose
 a baseline without treating it as a passing regression gate. All workflow runs
-share one repository-wide Hopper/SM90 concurrency group, so nightly, release,
-and manual validation queue rather than contending for accelerator memory.
+share one repository-wide Hopper/SM90 concurrency group, so validation tiers
+queue rather than contending for accelerator memory.
 
 ## Python package-support matrix
 
-Python 3.12 remains the canonical GPU validation environment. Every pull request
-builds the wheel independently on Python 3.11, 3.12, 3.13, and 3.14, installs it
-into a second clean CPU-only environment, imports all 37 advertised AutoClass
-targets, and runs a finite tiny-model forward. The remote `python-matrix` suite
-reuses the already-validated canonical 3.12 candidate and runs the non-canonical
-3.11, 3.13, and 3.14 members concurrently. It builds one wheel, then installs
-that exact wheel with Torch 2.13.0 and Transformers 5.13.0 into a separate
-CPU-only environment for each interpreter:
+Python 3.12 remains the canonical GPU validation environment. Pull-request CI
+builds and smokes one Python 3.12 wheel. The explicit remote `python-matrix`
+suite runs the non-canonical 3.11, 3.13, and 3.14 members concurrently. It
+builds one wheel, then installs that exact wheel with Torch 2.13.0 and
+Transformers 5.13.0 into a separate CPU-only environment for each interpreter:
 
 ```bash
 python -m tools.remote \

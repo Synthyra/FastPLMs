@@ -25,11 +25,6 @@ then rejects platform or device drift between preflight and the loaded images.
 | `artifact` | Fresh offline remote-code loading and save-reload for every local artifact |
 | `benchmark` | Separate GH200/aarch64 latency, throughput, padding, memory, and exact-device regression suite |
 | `python-matrix` | Clean-wheel, non-editable core-package smokes on Python 3.11-3.14 |
-| `extras-matrix` | Clean resolution-only checks for every public extra against the exact validation contract on Linux x86-64; cuEquivariance and FP8 resolve against CUDA 13.0 |
-
-`extras-matrix` is a package-resolution metadata check only. Its x86-64 runner
-does not provide GPU compliance, parity, or benchmark evidence. Current GPU
-release confirmation remains restricted to the exact GH200/aarch64 target.
 
 Routine `check` consumes goldens and never builds an official reference image.
 Live references are reserved for the frozen exact-head `compliance` release
@@ -87,20 +82,16 @@ bounded disk-spooled generator and FASTA streaming; generation and TTT; PEFT;
 injected-core structure and binder flows; publication security; and curated
 offline documentation examples.
 
-Lint, typing, generated docs, licenses, model cards, wheel/sdist inspection, and
-runtime import closure run in parallel. Clean-wheel smoke jobs cover Python
-3.11, 3.12, 3.13, and 3.14, while a clean Python 3.12 source-distribution smoke
-guards the independent build and install path. A separate clean resolution-only
-matrix verifies every declared public extra: `cpu`, `dev`, `structure`, `binder`,
-`cueq`, `reporting`, `flash`, `fp8`, and `train`. It also resolves the published
-`structure` plus `binder` workflow as one environment. Every case includes the
-exact Torch 2.13.0 and Transformers 5.13.0 validation group without importing GPU
-runtimes; the cuEquivariance and FP8 cases use the CUDA 13.0 dependency index.
-The runtime-import closure separately requires import-time dependencies in core
-source to be core requirements. Manifest-scoped structure modules map to the
-`structure` extra, while deferred function or lambda imports and imports protected
-by an explicit `ImportError` handler must resolve to one unambiguous intended
-extra.
+Pull-request CI is intentionally limited to two jobs. The required CPU gate
+runs the full offline contract above. One consolidated Python 3.12 quality and
+package smoke runs lint, bounded strict typing, generated-document and release
+checks, builds one wheel, loads its advertised AutoClasses in a clean
+environment, and checks the runtime import closure. GitHub does not run
+cross-version wheel matrices, source-distribution inspection, every-extra
+resolution, live official implementations, or GPU suites on each pull request.
+Those checks remain release-time responsibilities through the explicit
+`python-matrix`, `check`, `compliance`, and release suites on the declared
+workstation.
 
 ## Cost-controlled schedule
 
@@ -111,11 +102,11 @@ extra.
   environment releases SSH material only after approval. Candidate output is
   compared with checked-in goldens; no reference image is built. Its exact-SHA
   status and report are required pre-merge for those relevant changes.
-- Nightly: sharded real-checkpoint goldens, eager/SDPA/Flex execution,
-  generation, PEFT, structure, artifacts, FP8, and throughput by family. The
-  GH200 job does not download, build, or execute FA2/FA3 kernels; FA2 retains
-  separate prior focused evidence and FA3 is explicitly unavailable in the
-  current linux/arm64 lock.
+- Manually dispatched nightly tier: sharded real-checkpoint goldens,
+  eager/SDPA/Flex execution, generation, PEFT, structure, artifacts, FP8, and
+  throughput by family. The GH200 job does not download, build, or execute
+  FA2/FA3 kernels; FA2 retains separate prior focused evidence and FA3 is
+  explicitly unavailable in the current linux/arm64 lock.
 - Release candidate: every live pinned reference, checkpoint/state/tokenizer
   contract, published artifact, structure panel, and benchmark on one frozen
   exact head.
@@ -125,9 +116,8 @@ for one checkpoint in one isolated process, build independent Buildx targets in
 parallel, and publish JUnit, duration, cache, environment, and immutable report
 telemetry. GH200/aarch64 benchmarking records cold compilation separately from warm
 throughput; a missing baseline remains a release blocker rather than a synthetic
-placeholder. Scheduled runs use the separately restricted `h100-nightly`
-environment so maintainer approval remains mandatory for PR and manual release
-dispatches without blocking the unattended nightly tier.
+placeholder. All GH200 tiers are manual dispatches through the protected
+`h100-validation` environment. GitHub has no scheduled accelerator workflow.
 
 Every remote report contains a structured kernel-capability record. It names
 the measured eager, SDPA, and Flex backends, identifies the pinned FA2 revision

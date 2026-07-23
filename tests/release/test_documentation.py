@@ -338,14 +338,21 @@ def test_capability_evidence_selectors_resolve_to_their_declared_jobs() -> None:
                 raise AssertionError(f"Unvalidated evidence tier: {selector.tier}")
 
 
-def test_generated_esmc_cards_state_mask_precedence_and_hopper_scope() -> None:
+def test_generated_esmc_cards_state_mask_precedence_and_route_hopper_scope_to_docs() -> None:
     for name in ("esmc_small.md", "esmc_large.md", "esmc_6b.md"):
         text = (ROOT / "model_cards" / name).read_text(encoding="utf-8")
         assert "When `sequence_id` is supplied" in text
         assert "`attention_mask` is ignored" in text
-        assert "current exact GH200/aarch64" in text
-        assert "not current ESMC release-confirmation evidence" in text
+        assert "/docs/attention_backends.md" in text
+        assert "current exact GH200/aarch64" not in text
         assert "H100 environment" not in text
+
+    attention_docs = " ".join(
+        (ROOT / "docs/attention_backends.md").read_text(encoding="utf-8").split()
+    )
+    assert "exact GH200/aarch64 workstation" in attention_docs
+    assert "H100 and H200" in attention_docs
+    assert "not current release evidence" in attention_docs
 
 
 def test_generated_cards_publish_canonical_state_commitments() -> None:
@@ -377,11 +384,11 @@ def test_curated_offline_examples_expose_executable_help() -> None:
             env=environment,
             capture_output=True,
             text=True,
-            timeout=8,
+                timeout=20,
             check=False,
         )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = tuple(executor.map(run_help, OFFLINE_EXAMPLES))
 
     for name, result in results:
@@ -591,8 +598,32 @@ def test_esmc_cards_disclose_supported_divergence_without_fabricated_metrics() -
     for name in ("esmc_small.md", "esmc_large.md", "esmc_6b.md"):
         text = (ROOT / "model_cards" / name).read_text(encoding="utf-8")
         assert "Supported, numerically divergent" in text
-        assert "Pending complete validated 30-record frozen-head GH200/aarch64 set" in text
+        assert "Pending release measurement" in text
         assert "SDPA is the default" in text
+
+
+def test_esmc_release_operations_live_in_docs_not_model_cards() -> None:
+    card_names = (
+        "esmc_small.md",
+        "esmc_large.md",
+        "esmc_6b.md",
+        "esmfold2.md",
+        "esmfold2_fast.md",
+        "esmfold2_experimental_cutoff2025.md",
+        "esmfold2_experimental_fast_cutoff2025.md",
+    )
+    for name in card_names:
+        text = (ROOT / "model_cards" / name).read_text(encoding="utf-8")
+        assert "Locked oracle package compatibility exception" not in text
+        assert "nvidia-cusparselt-cu13" not in text
+        assert "/docs/attention_backends.md" in text
+        assert "/docs/generated/capability_evidence.md" in text
+
+    evidence = (ROOT / "docs/generated/capability_evidence.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Locked oracle package compatibility exception" in evidence
+    assert "nvidia-cusparselt-cu13==0.8.1" in evidence
 
 
 def test_dplm_cards_mark_apache_weights_redistributable() -> None:

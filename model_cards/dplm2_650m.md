@@ -23,8 +23,7 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 Install the current FastPLMs package:
 
 ```bash
-python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git"
+python -m pip install "fastplms @ git+https://github.com/Synthyra/FastPLMs.git"
 ```
 
 Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The declared CPU gate covers tiny offline contracts; published checkpoint throughput and parity require the documented device tier. The Hub quick start below requires network

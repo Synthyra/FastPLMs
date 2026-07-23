@@ -30,6 +30,13 @@ BINDER_IMAGE_URL = (
     "https://raw.githubusercontent.com/Synthyra/FastPLMs/main/"
     "docs/assets/egfr_fastplms_binder_design.png"
 )
+ESMC_RELEASE_DOCUMENTATION = """\
+Detailed backend measurements, release guardrails, and the GH200 package
+compatibility exception are maintained in the
+[attention backend guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/attention_backends.md)
+and
+[release evidence manifest](https://github.com/Synthyra/FastPLMs/blob/main/docs/generated/capability_evidence.md).
+"""
 
 FAMILY_DOCUMENTATION = {
     "esm2": ("../models.md#esm2", "../../examples/embedding_and_retrieval.py"),
@@ -2100,17 +2107,14 @@ def _esmc_diagnostic_table(
             _table_row(
                 "`sdpa`",
                 "Recommended fidelity path",
-                "Pending complete validated 30-record frozen-head GH200/aarch64 set",
+                "Pending release measurement",
             ),
         ]
         for backend, support in backend_rows:
             if backend in ESMC_UNAVAILABLE_BACKENDS:
-                status = (
-                    "Current GH200/aarch64 lock: unavailable; pending structured "
-                    "schema-v3 availability record"
-                )
+                status = "Unavailable on current GH200/aarch64 lock"
             else:
-                status = "Pending complete validated 30-record frozen-head GH200/aarch64 set"
+                status = "Pending release measurement"
             lines.append(
                 _table_row(
                     f"`{backend}`",
@@ -2118,17 +2122,6 @@ def _esmc_diagnostic_table(
                     status,
                 )
             )
-        lines.extend(
-            (
-                "",
-                "No threshold, report from another checkpoint, or result from another",
-                "accelerator is substituted for a measurement. A release set contains all",
-                "30 model/backend/panel records from one exact GH200 device and aarch64 runtime:",
-                "18 eager/SDPA/Flex measurements include relative L2, Q99.9, residue",
-                "cosine, pooled cosine, top-1, and Jensen-Shannon distributions; 12",
-                "FlashAttention 2/3 records explicitly attest locked-platform unavailability.",
-            )
-        )
         return "\n".join(lines)
 
     display_backends = ("sdpa", *(backend for backend, _ in backend_rows))
@@ -3104,7 +3097,6 @@ head.
             model_id=spec.id,
             evidence=esmc_evidence,
         )
-        pip_check_disclosure = _esmc_pip_check_disclosure(esmc_evidence, heading="##")
         return f"""\
 ## ESMC behavior
 
@@ -3117,14 +3109,9 @@ Those deviations produce diagnostic warnings rather than strict parity
 failures; dispatch integrity, masks, finite outputs, shapes, and catastrophic
 biological disagreement remain hard gates.
 
-The current locked GH200/aarch64 release image executes eager, SDPA, and Flex.
-It has no validated FlashAttention 2 kernel and no locked aarch64 artifact for
-the manifest-pinned FlashAttention 3 kernel. Both Flash backends remain
-supported, non-experimental interfaces, but requests fail closed without
-dispatch on this image. Prior real FlashAttention 2 execution was captured in
-separate workstation JUnit, but that immutable report and environment
-attestation are not bundled in this repository. It is not reused as a current
-ESMC release distribution or numerical claim.
+The current GH200/aarch64 release environment validates eager, SDPA, and Flex.
+Flash requests fail closed because compatible locked kernels are unavailable
+on this platform.
 
 When `sequence_id` is supplied, it is authoritative for ESMC attention grouping
 and padding, and `attention_mask` is ignored. Values greater than or equal to
@@ -3133,22 +3120,7 @@ use `attention_mask` as the padding contract.
 
 {esmc_table}
 
-{pip_check_disclosure}
-
-No number is inferred from a threshold or copied from a different checkpoint.
-Before release, replace each pending cell only through the strict 30-record
-ingestion gate tied to this exact Hub revision, runtime revision, BF16 dtype,
-the current exact GH200/aarch64 accelerator and container identity, and both
-locked sequence panels. The set contains 18 eager/SDPA/Flex measurement records
-and 12 structured Flash locked-platform unavailable records. H100 and H200
-remain Hopper-class deployment examples, but they are not current ESMC \
-release-confirmation evidence.
-Results are never
-carried across device, platform, source, lock, or image identities.
-Diagnostic JSON is written under `artifacts/diagnostics/esmc/`. Catastrophe
-guardrails (relative L2 `0.25`, Q99.9 `0.50`, residue cosine `0.90`, pooled
-cosine `0.95`, top-1 `0.80`, Jensen-Shannon `0.05`) detect corruption and do
-not constitute parity or quality claims.
+{ESMC_RELEASE_DOCUMENTATION}
 
 """
     if family_id == "esm3":
@@ -3428,7 +3400,6 @@ does not contain a trained masked-language-model head for that objective, so
             model_id="esmc_6b",
             evidence=esmc_evidence,
         )
-        pip_check_disclosure = _esmc_pip_check_disclosure(esmc_evidence, heading="##")
         if spec.msa_conditioning:
             msa_contract = """\
 ## Alignment-conditioning contract
@@ -3594,11 +3565,7 @@ ESMFold2 does not advertise FlashAttention for the folding interface.
 
 {esmc_table}
 
-{pip_check_disclosure}
-
-Metrics must be tied to the exact ESMFold2 and ESMC revisions, dtype, current
-GH200/aarch64 device and container images, dependency lock, source attestations,
-and sequence panel. Pending cells are not performance or parity claims.
+{ESMC_RELEASE_DOCUMENTATION}
 
 ## Hash-pinned CCD runtime asset
 

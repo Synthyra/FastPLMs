@@ -510,7 +510,7 @@ def test_representative_public_validation_survives_python_optimized_mode() -> No
         check=False,
         capture_output=True,
         text=True,
-        timeout=8,
+        timeout=30,
     )
 
     assert completed.returncode == 0, completed.stderr

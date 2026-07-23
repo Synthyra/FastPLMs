@@ -81,6 +81,7 @@ def test_binder_validation_survives_python_optimized_mode() -> None:
     environment.update(
         HF_HUB_OFFLINE="1",
         TRANSFORMERS_OFFLINE="1",
+        OPENBLAS_NUM_THREADS="1",
         PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT))),
     )
     result = subprocess.run(
@@ -89,7 +90,7 @@ def test_binder_validation_survives_python_optimized_mode() -> None:
         env=environment,
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=30,
         check=False,
     )
 

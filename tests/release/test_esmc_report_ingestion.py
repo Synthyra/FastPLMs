@@ -358,7 +358,7 @@ def test_default_generation_stays_explicitly_pending_and_ignores_environment(
     card = render_model_card(REGISTRY["esmc_small"])
     manifest = render_capability_evidence(REGISTRY)
 
-    assert "Pending complete validated 30-record frozen-head GH200/aarch64 set" in card
+    assert "Pending release measurement" in card
     assert "Status: pending" in manifest
     assert "ESMC-6B Flex Attention exceeds" not in card
 

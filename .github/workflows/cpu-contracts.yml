@@ -2,15 +2,13 @@ name: CPU and package contracts
 
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: cpu-package-${{ github.ref }}
+  group: pr-confidence-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -23,6 +21,7 @@ env:
   XDG_CACHE_HOME: ${{ github.workspace }}/.ci-cache/xdg
   PYTHONHASHSEED: "0"
   OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
   MKL_NUM_THREADS: "1"
   PYTEST_XDIST_AUTO_NUM_WORKERS: "4"
   PYTHONNOUSERSITE: "1"
@@ -33,7 +32,7 @@ jobs:
   cpu-contracts:
     name: cpu-contracts (3.12)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -47,10 +46,9 @@ jobs:
           version: "0.10.12"
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - name: Verify the dependency lock is current
-        run: uv lock --check
-      - name: Install the exact CPU contract environment
+      - name: Install the locked CPU environment
         run: |
+          uv lock --check
           uv sync --frozen --python 3.12 --no-default-groups \
             --group validation --extra cpu --extra dev --extra structure --extra train
       - name: Run the hermetic CPU gate
@@ -62,20 +60,11 @@ jobs:
           .venv/bin/python -m pytest tests/cpu -m cpu_contract -n auto \
             --dist=loadscope --durations=25 \
             --junitxml=artifacts/junit/cpu-contract.xml
-      - name: Upload CPU test and resource reports
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: cpu-contract-reports
-          path: |
-            artifacts/junit/cpu-contract.xml
-            artifacts/telemetry/cpu-contract.json
-          if-no-files-found: error
 
-  static:
-    name: lint-and-typing (3.12.13)
+  quality-package:
+    name: quality-package (3.12)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -83,100 +72,24 @@ jobs:
           submodules: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12.13"
+          python-version: "3.12"
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.10.12"
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - name: Install static-analysis dependencies
+      - name: Install the locked quality environment
         run: |
-          uv venv --python 3.12.13
-          uv pip install --python .venv/bin/python \
-            "mypy==1.20.2" "pytest==9.1.1" "ruff==0.15.21"
-      - name: Lint and type-check public orchestration contracts
+          uv lock --check
+          uv sync --frozen --python 3.12 --no-default-groups \
+            --group validation --extra cpu --extra dev
+      - name: Check source, typing, generated docs, and release contracts
         run: |
           .venv/bin/ruff check src tests tools examples benchmarks
           mapfile -t MYPY_TARGETS < tools/typing-critical-files.txt
           .venv/bin/mypy --python-version 3.12 --ignore-missing-imports \
-            --explicit-package-bases \
-            --follow-imports=silent \
+            --explicit-package-bases --follow-imports=silent \
             "${MYPY_TARGETS[@]}"
-      - name: Test typing gate contracts
-        run: |
-          .venv/bin/python -m pytest \
-            tests/release/test_static_typing_scope.py \
-            tests/release/test_typing_no_regression_gate.py \
-            -q
-      - name: Report broad typing no-regression debt (non-blocking)
-        continue-on-error: true
-        run: |
-          mkdir -p artifacts/typing
-          .venv/bin/python -m tools.typing_gate compare \
-            --baseline tools/typing-baselines/c240d8a.json \
-            --raw-output artifacts/typing/broad-mypy.txt \
-            --scope-manifest tools/typing-diagnostic-files.txt \
-            --repo-root . \
-            --output artifacts/typing/no-regression.json
-      - name: Upload broad typing report
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58dc250532a479d7789f # v6
-        with:
-          name: broad-typing-report
-          path: |
-            artifacts/typing/broad-mypy.txt
-            artifacts/typing/no-regression.json
-          if-no-files-found: error
-
-  runtime-import-closure:
-    name: runtime-import-closure (3.12)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          submodules: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - name: Check installable runtime dependency closure
-        run: |
-          python tools/remote/runtime_import_closure.py \
-            --source-root src/fastplms \
-            --pyproject pyproject.toml \
-            --output artifacts/runtime-import-closure.json
-      - name: Upload runtime import-closure evidence
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: runtime-import-closure
-          path: artifacts/runtime-import-closure.json
-          if-no-files-found: error
-
-  docs-licenses:
-    name: docs-licenses-model-cards (3.12)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          submodules: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.10.12"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: Install documentation test dependencies
-        run: |
-          uv venv --python 3.12
-          uv pip install --python .venv/bin/python --torch-backend=cpu \
-            "torch==2.13.0" "transformers==5.13.0" -e ".[dev]"
-      - name: Check generated docs, licenses, cards, and source boundaries
-        run: |
           PYTHONPATH=src .venv/bin/python -m tools.artifacts.generate_docs --check
           .venv/bin/python -m pytest \
             tests/release/test_binder_example_contracts.py \
@@ -187,199 +100,23 @@ jobs:
             tests/release/test_model_card_licenses.py \
             tests/release/test_optimized_mode_contracts.py \
             tests/release/test_production_source_boundary.py \
+            tests/release/test_python_support_matrix.py \
+            tests/release/test_static_typing_scope.py \
+            tests/release/test_typing_no_regression_gate.py \
             tests/release/test_workflow_declared_inputs.py \
-            --junitxml=artifacts/junit/docs-licenses.xml
-      - name: Upload documentation report
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: docs-licenses-junit
-          path: artifacts/junit/docs-licenses.xml
-          if-no-files-found: error
-
-  distributions:
-    name: wheel-sdist-inspection (3.12)
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          submodules: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.10.12"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: Install package-validation dependencies
+            -q
+      - name: Build and smoke one clean wheel
         run: |
-          uv venv --python 3.12
-          uv pip install --python .venv/bin/python --torch-backend=cpu \
-            "torch==2.13.0" "transformers==5.13.0" -e ".[dev]"
-      - name: Build and inspect wheel and source distribution
-        run: |
-          .venv/bin/python -m build
-          .venv/bin/python -m tools.remote.distribution_inspect \
-            --dist dist --project-root . \
-            --output artifacts/distribution-inspection.json
-          .venv/bin/python -m pytest \
-            tests/release/test_distribution_inspection.py \
-            tests/release/test_kernel_lock_distribution.py \
-            --junitxml=artifacts/junit/distributions.xml
-      - name: Install and smoke the source distribution in a clean CPU environment
-        run: |
-          uv venv --python 3.12 .sdist-smoke-venv
-          uv pip install --python .sdist-smoke-venv/bin/python --torch-backend=cpu \
-            "torch==2.13.0" "transformers==5.13.0" dist/*.tar.gz
-          .sdist-smoke-venv/bin/python -I tools/remote/python_support_smoke.py \
-            --expected-python 3.12 \
-            --source-root "$GITHUB_WORKSPACE/src" \
-            > artifacts/sdist-smoke-3.12.json
-      - name: Upload inspected distributions
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: inspected-distributions
-          path: |
-            artifacts/distribution-inspection.json
-            artifacts/junit/distributions.xml
-            artifacts/sdist-smoke-3.12.json
-            dist/*.whl
-            dist/*.tar.gz
-          if-no-files-found: error
-
-  extras-resolution:
-    name: extras-resolution (${{ matrix.extra }}, 3.12)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - extra: structure
-            sentinel: biotite
-            torch_backend: cpu
-          - extra: binder
-            sentinel: abnumber
-            torch_backend: cpu
-          - extra: structure-binder
-            primary_extra: structure
-            secondary_extra: binder
-            sentinel: biotite
-            secondary_sentinel: abnumber
-            torch_backend: cpu
-          - extra: cueq
-            sentinel: cuequivariance-ops-torch-cu13
-            torch_backend: cu130
-          - extra: reporting
-            sentinel: matplotlib
-            torch_backend: cpu
-          - extra: flash
-            sentinel: kernels
-            torch_backend: cpu
-          - extra: fp8
-            sentinel: transformer-engine-cu13
-            torch_backend: cu130
-          - extra: train
-            sentinel: peft
-            torch_backend: cpu
-          - extra: dev
-            sentinel: pytest
-            torch_backend: cpu
-          - extra: cpu
-            sentinel: torch
-            torch_backend: cpu
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          submodules: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.10.12"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: Resolve the declared extra without installing or importing it
-        shell: bash
-        run: |
-          mkdir -p artifacts/resolution
-          PRIMARY_EXTRA="${{ matrix.primary_extra || matrix.extra }}"
-          SECONDARY_EXTRA="${{ matrix.secondary_extra }}"
-          EXTRA_ARGS=(--extra "$PRIMARY_EXTRA")
-          if [[ -n "$SECONDARY_EXTRA" ]]; then
-            EXTRA_ARGS+=(--extra "$SECONDARY_EXTRA")
-          fi
-          uv pip compile pyproject.toml \
-            "${EXTRA_ARGS[@]}" \
-            --group validation \
-            --python-version 3.12 \
-            --python-platform x86_64-unknown-linux-gnu \
-            --torch-backend="${{ matrix.torch_backend }}" \
-            --output-file "artifacts/resolution/${{ matrix.extra }}.txt"
-          grep -Eq '^torch==2\.13\.0(\+[A-Za-z0-9._-]+)?([[:space:]]|$)' \
-            "artifacts/resolution/${{ matrix.extra }}.txt"
-          grep -Eq '^transformers==5\.13\.0([[:space:]]|$)' \
-            "artifacts/resolution/${{ matrix.extra }}.txt"
-          grep -Eq '^${{ matrix.sentinel }}==' \
-            "artifacts/resolution/${{ matrix.extra }}.txt"
-          SECONDARY_SENTINEL="${{ matrix.secondary_sentinel }}"
-          if [[ -n "$SECONDARY_SENTINEL" ]]; then
-            grep -Eq "^${SECONDARY_SENTINEL}==" \
-              "artifacts/resolution/${{ matrix.extra }}.txt"
-          fi
-      - name: Upload dependency-resolution evidence
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: extras-resolution-${{ matrix.extra }}
-          path: artifacts/resolution/${{ matrix.extra }}.txt
-          if-no-files-found: error
-
-  wheel-smoke:
-    name: wheel-smoke (${{ matrix.python }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.11", "3.12", "3.13", "3.14"]
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          submodules: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: ${{ matrix.python }}
-      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.10.12"
-          enable-cache: true
-          cache-dependency-glob: uv.lock
-      - name: Build the wheel in an isolated build environment
-        run: |
-          uv venv --python ${{ matrix.python }} .build-venv
-          uv pip install --python .build-venv/bin/python build
-          .build-venv/bin/python -m build --wheel
-      - name: Install and smoke the wheel in a clean CPU environment
-        run: |
-          uv venv --python ${{ matrix.python }} .smoke-venv
+          .venv/bin/python -m build --wheel
+          uv venv --python 3.12 .smoke-venv
           uv pip install --python .smoke-venv/bin/python --torch-backend=cpu \
             "torch==2.13.0" "transformers==5.13.0" dist/*.whl
-          mkdir -p artifacts
           .smoke-venv/bin/python -I tools/remote/python_support_smoke.py \
-            --expected-python ${{ matrix.python }} \
-            --source-root "$GITHUB_WORKSPACE/src" \
-            > artifacts/wheel-smoke-${{ matrix.python }}.json
-      - name: Upload clean-wheel evidence
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: wheel-smoke-${{ matrix.python }}
-          path: artifacts/wheel-smoke-${{ matrix.python }}.json
-          if-no-files-found: error
+            --expected-python 3.12 \
+            --source-root "$GITHUB_WORKSPACE/src"
+      - name: Check runtime import closure
+        run: |
+          .venv/bin/python tools/remote/runtime_import_closure.py \
+            --source-root src/fastplms \
+            --pyproject pyproject.toml \
+            --output artifacts/runtime-import-closure.json

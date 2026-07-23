@@ -133,14 +133,9 @@ Those deviations produce diagnostic warnings rather than strict parity
 failures; dispatch integrity, masks, finite outputs, shapes, and catastrophic
 biological disagreement remain hard gates.
 
-The current locked GH200/aarch64 release image executes eager, SDPA, and Flex.
-It has no validated FlashAttention 2 kernel and no locked aarch64 artifact for
-the manifest-pinned FlashAttention 3 kernel. Both Flash backends remain
-supported, non-experimental interfaces, but requests fail closed without
-dispatch on this image. Prior real FlashAttention 2 execution was captured in
-separate workstation JUnit, but that immutable report and environment
-attestation are not bundled in this repository. It is not reused as a current
-ESMC release distribution or numerical claim.
+The current GH200/aarch64 release environment validates eager, SDPA, and Flex.
+Flash requests fail closed because compatible locked kernels are unavailable
+on this platform.
 
 When `sequence_id` is supplied, it is authoritative for ESMC attention grouping
 and padding, and `attention_mask` is ignored. Values greater than or equal to
@@ -149,48 +144,18 @@ use `attention_mask` as the padding contract.
 
 | Backend | Support | Measurement status |
 | --- | --- | --- |
-| `sdpa` | Recommended fidelity path | Pending complete validated 30-record frozen-head GH200/aarch64 set |
-| `eager` | Supported | Pending complete validated 30-record frozen-head GH200/aarch64 set |
-| `flash_attention_2` | Supported | Current GH200/aarch64 lock: unavailable; pending structured schema-v3 availability record |
-| `flex_attention` | Supported, numerically divergent | Pending complete validated 30-record frozen-head GH200/aarch64 set |
-| `flash_attention_3` | Supported, numerically divergent | Current GH200/aarch64 lock: unavailable; pending structured schema-v3 availability record |
+| `sdpa` | Recommended fidelity path | Pending release measurement |
+| `eager` | Supported | Pending release measurement |
+| `flash_attention_2` | Supported | Unavailable on current GH200/aarch64 lock |
+| `flex_attention` | Supported, numerically divergent | Pending release measurement |
+| `flash_attention_3` | Supported, numerically divergent | Unavailable on current GH200/aarch64 lock |
 
-No threshold, report from another checkpoint, or result from another
-accelerator is substituted for a measurement. A release set contains all
-30 model/backend/panel records from one exact GH200 device and aarch64 runtime:
-18 eager/SDPA/Flex measurements include relative L2, Q99.9, residue
-cosine, pooled cosine, top-1, and Jensen-Shannon distributions; 12
-FlashAttention 2/3 records explicitly attest locked-platform unavailability.
+Detailed backend measurements, release guardrails, and the GH200 package
+compatibility exception are maintained in the
+[attention backend guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/attention_backends.md)
+and
+[release evidence manifest](https://github.com/Synthyra/FastPLMs/blob/main/docs/generated/capability_evidence.md).
 
-## Locked oracle package compatibility exception
-
-The frozen oracle lock permits exactly one nonzero `pip check` diagnostic:
-`nvidia-cusparselt-cu13 0.8.1 is not supported on this platform`. It applies only to
-`nvidia-cusparselt-cu13==0.8.1` on
-`NVIDIA GH200 480GB` / `linux` /
-`aarch64`. The vendor filename tag is
-`py3-none-manylinux2014_aarch64`, while the wheel metadata declares
-`py3-none-manylinux2014_sbsa`. The exact wheel is
-`nvidia_cusparselt_cu13-0.8.1-py3-none-manylinux2014_aarch64.whl` with SHA-256 `4dca476c50bf4780d46cd0bfbd82e2bc10a08e4fef7950917ce8d7578d22a23f`.
-FastPLMs accepts this vendor metadata mismatch only after the lock, installed
-inventory, wheel bytes, metadata tag, and target identity all match. The wheel
-is not rewritten (`validated-vendor-metadata-exception-no-wheel-rewrite`). Any additional diagnostic or
-identity drift fails closed.
-
-
-No number is inferred from a threshold or copied from a different checkpoint.
-Before release, replace each pending cell only through the strict 30-record
-ingestion gate tied to this exact Hub revision, runtime revision, BF16 dtype,
-the current exact GH200/aarch64 accelerator and container identity, and both
-locked sequence panels. The set contains 18 eager/SDPA/Flex measurement records
-and 12 structured Flash locked-platform unavailable records. H100 and H200
-remain Hopper-class deployment examples, but they are not current ESMC release-confirmation evidence.
-Results are never
-carried across device, platform, source, lock, or image identities.
-Diagnostic JSON is written under `artifacts/diagnostics/esmc/`. Catastrophe
-guardrails (relative L2 `0.25`, Q99.9 `0.50`, residue cosine `0.90`, pooled
-cosine `0.95`, top-1 `0.80`, Jensen-Shannon `0.05`) detect corruption and do
-not constitute parity or quality claims.
 
 ## Runtime contract
 

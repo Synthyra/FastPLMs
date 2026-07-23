@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -84,31 +83,8 @@ def test_static_ci_consumes_the_checked_typing_scope_without_inline_shrinkage() 
     assert "--follow-imports=silent" in workflow
     assert '"${MYPY_TARGETS[@]}"' in workflow
     assert "src/fastplms/registry.py tools/remote" not in workflow
-    broad_step = workflow.split(
-        "- name: Report broad typing no-regression debt (non-blocking)",
-        maxsplit=1,
-    )[1].split("\n      - name:", maxsplit=1)[0]
-    logical_broad_step = " ".join(
-        line.strip().removesuffix("\\").strip()
-        for line in broad_step.splitlines()
-    )
-    command_match = re.search(
-        r"(\.venv/bin/python -m tools\.typing_gate compare .*?)"
-        r"(?=\s+- name:|\Z)",
-        logical_broad_step,
-    )
-    assert command_match is not None
-    assert command_match.group(1) == (
-        ".venv/bin/python -m tools.typing_gate compare "
-        "--baseline tools/typing-baselines/c240d8a.json "
-        "--raw-output artifacts/typing/broad-mypy.txt "
-        "--scope-manifest tools/typing-diagnostic-files.txt "
-        "--repo-root . --output artifacts/typing/no-regression.json"
-    )
-    assert ".venv/bin/mypy" not in broad_step
-    assert "tools/typing-baselines/c240d8a.json" in workflow
-    assert "artifacts/typing/no-regression.json" in workflow
-    assert "name: broad-typing-report" in workflow
-    assert "continue-on-error: true" in workflow
+    assert "Report broad typing no-regression debt" not in workflow
+    assert "tools.typing_gate compare" not in workflow
+    assert "continue-on-error: true" not in workflow
     assert "tests/release/test_static_typing_scope.py" in workflow
     assert "tests/release/test_typing_no_regression_gate.py" in workflow

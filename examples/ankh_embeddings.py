@@ -13,12 +13,6 @@ if __package__:
 else:
     from _runtime import add_execution_arguments, resolve_execution
 
-from fastplms.models.ankh.modeling_ankh import (
-    tokenize_ankh_decoder_prompts,
-    tokenize_ankh_sequences,
-)
-
-
 def configure_offline() -> None:
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -66,6 +60,11 @@ def generate_ankh_task(
 ) -> Any:
     """Generate after an explicit task prompt without shifting the source."""
     import torch
+
+    from fastplms.models.ankh.modeling_ankh import (
+        tokenize_ankh_decoder_prompts,
+        tokenize_ankh_sequences,
+    )
 
     encoded = tokenize_ankh_sequences(
         tokenizer,

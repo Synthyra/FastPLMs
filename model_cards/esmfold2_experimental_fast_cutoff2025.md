@@ -153,36 +153,16 @@ ESMFold2 does not advertise FlashAttention for the folding interface.
 
 | Backend | Support | Measurement status |
 | --- | --- | --- |
-| `sdpa` | Recommended fidelity path | Pending complete validated 30-record frozen-head GH200/aarch64 set |
-| `eager` | Supported | Pending complete validated 30-record frozen-head GH200/aarch64 set |
-| `flex_attention` | Supported, numerically divergent | Pending complete validated 30-record frozen-head GH200/aarch64 set |
+| `sdpa` | Recommended fidelity path | Pending release measurement |
+| `eager` | Supported | Pending release measurement |
+| `flex_attention` | Supported, numerically divergent | Pending release measurement |
 
-No threshold, report from another checkpoint, or result from another
-accelerator is substituted for a measurement. A release set contains all
-30 model/backend/panel records from one exact GH200 device and aarch64 runtime:
-18 eager/SDPA/Flex measurements include relative L2, Q99.9, residue
-cosine, pooled cosine, top-1, and Jensen-Shannon distributions; 12
-FlashAttention 2/3 records explicitly attest locked-platform unavailability.
+Detailed backend measurements, release guardrails, and the GH200 package
+compatibility exception are maintained in the
+[attention backend guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/attention_backends.md)
+and
+[release evidence manifest](https://github.com/Synthyra/FastPLMs/blob/main/docs/generated/capability_evidence.md).
 
-## Locked oracle package compatibility exception
-
-The frozen oracle lock permits exactly one nonzero `pip check` diagnostic:
-`nvidia-cusparselt-cu13 0.8.1 is not supported on this platform`. It applies only to
-`nvidia-cusparselt-cu13==0.8.1` on
-`NVIDIA GH200 480GB` / `linux` /
-`aarch64`. The vendor filename tag is
-`py3-none-manylinux2014_aarch64`, while the wheel metadata declares
-`py3-none-manylinux2014_sbsa`. The exact wheel is
-`nvidia_cusparselt_cu13-0.8.1-py3-none-manylinux2014_aarch64.whl` with SHA-256 `4dca476c50bf4780d46cd0bfbd82e2bc10a08e4fef7950917ce8d7578d22a23f`.
-FastPLMs accepts this vendor metadata mismatch only after the lock, installed
-inventory, wheel bytes, metadata tag, and target identity all match. The wheel
-is not rewritten (`validated-vendor-metadata-exception-no-wheel-rewrite`). Any additional diagnostic or
-identity drift fails closed.
-
-
-Metrics must be tied to the exact ESMFold2 and ESMC revisions, dtype, current
-GH200/aarch64 device and container images, dependency lock, source attestations,
-and sequence panel. Pending cells are not performance or parity claims.
 
 ## Hash-pinned CCD runtime asset
 

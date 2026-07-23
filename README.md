@@ -794,7 +794,10 @@ status is `cpu-contracts (3.12)` in the `CPU and package contracts` workflow. It
 hides CUDA, blocks socket and Hub downloads, rejects skips and xfails, and
 targets less than five minutes on four hosted CPU cores. Live official
 references are reserved for the release-candidate `compliance` tier; routine
-checks consume immutable goldens.
+checks consume immutable goldens. Pull-request CI has only one additional
+consolidated Python 3.12 quality/package smoke; cross-version, every-extra,
+official-reference, and GPU validation run only through explicit workstation
+or release suites.
 
 The canonical Docker workflow uses one candidate image and isolated official
 reference images:

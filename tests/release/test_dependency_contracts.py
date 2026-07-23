@@ -174,19 +174,15 @@ def test_reporting_extra_is_separate_from_training_runtime() -> None:
     assert train_names.isdisjoint(reporting_names)
 
 
-def test_resolution_matrix_covers_every_public_extra_and_binder_combination() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    extras = project["project"]["optional-dependencies"]
+def test_pr_ci_avoids_the_public_extra_resolution_matrix() -> None:
     workflow = (ROOT / ".github" / "workflows" / "cpu-contracts.yml").read_text(
         encoding="utf-8"
     )
 
-    for extra in extras:
-        assert f"- extra: {extra}" in workflow
-    assert "- extra: structure-binder" in workflow
-    assert "primary_extra: structure" in workflow
-    assert "secondary_extra: binder" in workflow
-    assert "secondary_sentinel: abnumber" in workflow
+    assert "matrix:" not in workflow
+    assert "extras-resolution" not in workflow
+    assert "uv lock --check" in workflow
+    assert "uv sync --frozen" in workflow
 
 
 def test_runtime_import_closure_rejects_undeclared_literal_dynamic_import(
