@@ -352,3 +352,27 @@ def test_generator_inputs_are_consumed_once_and_keep_stable_order() -> None:
 
     assert consumed == ["A", "CCCC", "GG"]
     assert [record.sequence for record in result] == consumed
+
+
+test_strict_embedding_controls_fail_before_consuming_inputs = (
+    contracts.test_strict_embedding_controls_fail_before_consuming_inputs
+)
+test_decoder_input_ids_require_nonempty_2d_int32_or_int64 = (
+    contracts.test_decoder_input_ids_require_nonempty_2d_int32_or_int64
+)
+test_decoder_attention_masks_are_exact_finite_binary_shapes = (
+    contracts.test_decoder_attention_masks_are_exact_finite_binary_shapes
+)
+test_embedding_batch_adapter_outputs_are_validated = (
+    contracts.test_embedding_batch_adapter_outputs_are_validated
+)
+test_embedding_value_types_fail_closed = contracts.test_embedding_value_types_fail_closed
+test_pagerank_controls_require_finite_valid_values = (
+    contracts.test_pagerank_controls_require_finite_valid_values
+)
+test_tensor_sha256_uses_bounded_chunks_and_preserves_legacy_digest = (
+    contracts.test_tensor_sha256_uses_bounded_chunks_and_preserves_legacy_digest
+)
+test_sqlite_lazy_references_are_absolute_after_cwd_change = (
+    contracts.test_sqlite_lazy_references_are_absolute_after_cwd_change
+)

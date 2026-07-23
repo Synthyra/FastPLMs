@@ -188,7 +188,9 @@ published atomically. Files-only publication is forbidden for this migration.
 
 ANKH parity covers the official encoder and sequence-to-sequence heads.
 AutoModelForMaskedLM exposes the separately named FastPLMs synthesized
-masked-LM extension and is not an official ANKH head.
+masked-LM extension and is not an official ANKH head. The official PyTorch
+shard index is deliberately excluded: the builder verifies every declared
+source shard directly and writes a new canonical safetensors index.
 
 ## Runtime contract
 

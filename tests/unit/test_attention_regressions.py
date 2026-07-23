@@ -675,7 +675,7 @@ def test_esmplusplus_chain_masks_fail_closed_without_assertions(
         )
 
     stack.attention_backend = AttentionBackend.FLEX_ATTENTION
-    monkeypatch.setattr(esmpp_module, "create_block_mask", None)
+    monkeypatch.setattr(_core, "create_block_mask", None)
     with pytest.raises(RuntimeError, match="create_block_mask is unavailable"):
         stack._sequence_id_attention_masks(
             sequence_id=torch.ones(2, 4, dtype=torch.bool),

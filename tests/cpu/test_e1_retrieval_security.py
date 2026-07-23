@@ -74,6 +74,25 @@ def test_mmseqs2_default_is_cpu_offline_and_immutable() -> None:
         retrieval.HomologueSearcher(target_db="target", use_gpu=True)
 
 
+@pytest.mark.parametrize(
+    "kwargs",
+    (
+        {"target_db": ""},
+        {"target_db": "target", "sensitivity": float("nan")},
+        {"target_db": "target", "max_seqs": True},
+        {"target_db": "target", "min_seq_id": -0.1},
+        {"target_db": "target", "coverage": 1.1},
+        {"target_db": "target", "phase_timeout": float("inf")},
+        {"target_db": "target", "allow_pull": 1},
+    ),
+)
+def test_mmseqs2_constructor_rejects_unsafe_runtime_values(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        retrieval.HomologueSearcher(**kwargs)
+
+
 def test_mmseqs2_missing_image_fails_without_pull(monkeypatch: pytest.MonkeyPatch) -> None:
     searcher = retrieval.HomologueSearcher(target_db="target")
     calls: list[list[str]] = []
@@ -126,6 +145,7 @@ def test_mmseqs2_explicit_pull_is_reinspected_and_digest_verified(
         (_inspect_payload(digest="sha256:" + "b" * 64), "RepoDigests"),
         (_inspect_payload(repository="example.invalid/mmseqs2"), "RepoDigests"),
         (_inspect_payload(image_id="mutable-image-id"), "image ID"),
+        (_inspect_payload(architecture="s390x"), "architecture"),
     ),
 )
 def test_mmseqs2_inspect_rejects_wrong_digest_and_image_id(
@@ -147,6 +167,24 @@ def test_mmseqs2_inspect_rejects_wrong_digest_and_image_id(
     assert cause in str(raised.value.__cause__)
 
 
+def test_mmseqs2_inspect_preserves_non_missing_docker_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    searcher = retrieval.HomologueSearcher(target_db="target")
+
+    def fake_run(command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        del kwargs
+        if command[:3] == ["docker", "image", "inspect"]:
+            return _completed(command, returncode=13, stderr="permission denied")
+        return _completed(command)
+
+    monkeypatch.setattr(searcher, "_run_docker_command", fake_run)
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        searcher._ensure_docker_image()
+    assert raised.value.returncode == 13
+    assert raised.value.stderr == "permission denied"
+
+
 def test_mmseqs2_phase_timeout_preserves_subprocess_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -154,7 +192,8 @@ def test_mmseqs2_phase_timeout_preserves_subprocess_error(
     expired = subprocess.TimeoutExpired(["docker", "run"], timeout=7.5)
 
     def timeout(*args, **kwargs):
-        del args, kwargs
+        del args
+        assert kwargs["timeout"] == 7.5
         raise expired
 
     monkeypatch.setattr(retrieval.subprocess, "run", timeout)
@@ -177,6 +216,31 @@ def test_mmseqs2_realpath_validation_rejects_symlink_escape(
 
     with pytest.raises(ValueError, match="resolve under"):
         searcher._validate_paths_under_cwd("escape/target")
+
+
+@pytest.mark.parametrize(
+    ("sequence", "seq_id"),
+    (
+        ("ACD\n>injected", "query"),
+        ("ACDEFG", "query\n>injected"),
+    ),
+)
+def test_mmseqs2_rejects_fasta_and_filename_injection_before_docker(
+    sequence: str,
+    seq_id: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    searcher = retrieval.HomologueSearcher(target_db="target")
+    monkeypatch.setattr(
+        searcher,
+        "_ensure_docker_image",
+        lambda: (_ for _ in ()).throw(AssertionError("Docker must not run")),
+    )
+
+    with pytest.raises(ValueError):
+        searcher.search(sequence, "results", seq_id=seq_id)
 
 
 def test_mmseqs2_result_provenance_controls_cache_reuse(

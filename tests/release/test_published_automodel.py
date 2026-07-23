@@ -18,7 +18,9 @@ import pytest
 
 from tools.artifacts.offline_probe import (
     ProbeCase,
+    _assert_complete_saved_auto_map,
     _exercise,
+    _load_class,
     _load_kwargs,
     _load_model_exact,
     _run_isolated_reload,
@@ -232,6 +234,8 @@ def test_isolated_reload_rejects_incomplete_saved_remote_code(tmp_path: Path) ->
         bf16_execution="static_parameters",
         auto_class="AutoConfig",
         class_path="unused.IsolationConfig",
+        implementation="artifact",
+        source_root=None,
     )
     assert set(complete) == {"config"}
 
@@ -248,6 +252,8 @@ def test_isolated_reload_rejects_incomplete_saved_remote_code(tmp_path: Path) ->
             bf16_execution="static_parameters",
             auto_class="AutoConfig",
             class_path="unused.IsolationConfig",
+            implementation="artifact",
+            source_root=None,
         )
     (artifact / "modeling_isolation.py").write_text(
         original_modeling,
@@ -262,6 +268,8 @@ def test_isolated_reload_rejects_incomplete_saved_remote_code(tmp_path: Path) ->
             bf16_execution="static_parameters",
             auto_class="AutoConfig",
             class_path="unused.IsolationConfig",
+            implementation="artifact",
+            source_root=None,
         )
 
 
@@ -440,7 +448,7 @@ def test_structure_probe_runs_prediction_inside_bf16_autocast(tmp_path: Path) ->
     assert not state["autocast_enabled"]
 
 
-def test_package_probe_disables_remote_code_collection_only_while_saving(
+def test_package_probe_uses_unmodified_remote_code_save(
     tmp_path: Path,
 ) -> None:
     class FakeModel:
@@ -457,8 +465,68 @@ def test_package_probe_disables_remote_code_collection_only_while_saving(
 
     model = FakeModel()
     _save_model_for_probe(model, tmp_path, "package")
-    assert model.observed == [False]
+    assert model.observed == [True]
     assert model.is_remote_code()
+
+
+def test_package_probe_propagates_unmodified_save_failure(
+    tmp_path: Path,
+) -> None:
+    class FakeModel:
+        def __init__(self) -> None:
+            self.observed: list[bool] = []
+
+        @classmethod
+        def is_remote_code(cls) -> bool:
+            return True
+
+        def save_pretrained(self, _path: Path, *, safe_serialization: bool) -> None:
+            assert safe_serialization
+            self.observed.append(self.is_remote_code())
+            raise RuntimeError("synthetic save failure")
+
+    model = FakeModel()
+    with pytest.raises(RuntimeError, match="synthetic save failure"):
+        _save_model_for_probe(model, tmp_path, "package")
+
+    assert model.observed == [True]
+    assert model.is_remote_code()
+
+
+def test_package_class_uses_transformers_autoclass_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeClass:
+        _auto_class: ClassVar[str | None] = None
+
+        @classmethod
+        def register_for_auto_class(cls, auto_class: str) -> None:
+            cls._auto_class = auto_class
+
+    monkeypatch.setattr(
+        "tools.artifacts.offline_probe.importlib.import_module",
+        lambda _name: SimpleNamespace(FakeClass=FakeClass),
+    )
+    assert _load_class("package", "AutoModel", "fake.module.FakeClass") is FakeClass
+    assert FakeClass._auto_class == "AutoModel"
+
+
+def test_saved_auto_map_must_remain_complete_and_non_null(tmp_path: Path) -> None:
+    expected = {"AutoConfig", "AutoModel", "AutoModelForMaskedLM"}
+    config = {
+        "auto_map": {
+            "AutoConfig": "modeling_saved.Config",
+            "AutoModel": "modeling_saved.Model",
+            "AutoModelForMaskedLM": "modeling_saved.ForMaskedLM",
+        }
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    _assert_complete_saved_auto_map(tmp_path, expected_auto_classes=expected)
+
+    config["auto_map"]["AutoModelForMaskedLM"] = "modeling_saved.None"
+    (tmp_path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="null or invalid"):
+        _assert_complete_saved_auto_map(tmp_path, expected_auto_classes=expected)
 
 
 def test_batch_probe_establishes_artifact_isolation_once(

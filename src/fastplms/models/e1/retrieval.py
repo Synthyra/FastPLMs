@@ -6,6 +6,7 @@ import hashlib
 import itertools
 import json
 import math
+import numbers
 import os
 import platform
 import random
@@ -72,6 +73,8 @@ IndexedSequence = tuple[int, str]
 
 _SHA256_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IMAGE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SAFE_SEQUENCE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_SAFE_QUERY_SEQUENCE_RE = re.compile(r"^[A-Za-z*.-]+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +125,12 @@ def _parse_pinned_image_reference(reference: str) -> _PinnedImageReference:
         raise ValueError("docker_image must include an explicit version tag before its digest")
     repository = name_and_version[:last_colon]
     version = name_and_version[last_colon + 1 :]
-    if not repository or _IMAGE_VERSION_RE.fullmatch(version) is None:
+    if (
+        not repository
+        or repository.endswith("/")
+        or "@" in repository
+        or _IMAGE_VERSION_RE.fullmatch(version) is None
+    ):
         raise ValueError("docker_image contains an invalid repository or version tag")
     if _SHA256_DIGEST_RE.fullmatch(digest) is None:
         raise ValueError("docker_image must include a lowercase sha256 digest")
@@ -159,8 +167,10 @@ def _file_sha256(path: str) -> str:
 def _sequence_output_dir(output_dir: str, seq_id: str) -> str:
     """Return the per-sequence directory after enforcing path containment."""
 
-    if not isinstance(seq_id, str) or not seq_id or "\x00" in seq_id:
-        raise ValueError("seq_id must be a non-empty string without null bytes")
+    if not isinstance(seq_id, str) or _SAFE_SEQUENCE_ID_RE.fullmatch(seq_id) is None:
+        raise ValueError(
+            "seq_id must use only ASCII letters, digits, dot, underscore, and hyphen"
+        )
     if (
         seq_id in {".", ".."}
         or PurePosixPath(seq_id).name != seq_id
@@ -877,6 +887,34 @@ class HomologueSearcher:
         target_db_identity: str | None = None,
     ) -> None:
         image_reference = _parse_pinned_image_reference(docker_image)
+        if not isinstance(target_db, str) or not target_db or "\x00" in target_db:
+            raise ValueError("target_db must be a non-empty path without null bytes")
+        numeric_values = {
+            "sensitivity": sensitivity,
+            "min_seq_id": min_seq_id,
+            "coverage": coverage,
+        }
+        for name, value in numeric_values.items():
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, numbers.Real)
+                or not math.isfinite(float(value))
+            ):
+                raise ValueError(f"{name} must be a finite real number")
+        if sensitivity <= 0:
+            raise ValueError("sensitivity must be positive")
+        if not 0.0 <= min_seq_id <= 1.0:
+            raise ValueError("min_seq_id must be in [0, 1]")
+        if not 0.0 <= coverage <= 1.0:
+            raise ValueError("coverage must be in [0, 1]")
+        if isinstance(max_seqs, bool) or not isinstance(max_seqs, int) or max_seqs < 1:
+            raise ValueError("max_seqs must be an integer >= 1")
+        if split_memory_limit is not None and (
+            not isinstance(split_memory_limit, str)
+            or not split_memory_limit.strip()
+            or "\x00" in split_memory_limit
+        ):
+            raise ValueError("split_memory_limit must be None or a non-empty string")
         if type(use_gpu) is not bool:
             raise TypeError("use_gpu must be a boolean")
         if type(allow_pull) is not bool:
@@ -894,7 +932,11 @@ class HomologueSearcher:
             not isinstance(target_db_identity, str) or not target_db_identity.strip()
         ):
             raise ValueError("target_db_identity must be None or a non-empty string")
-        if use_gpu and docker_image == DOCKER_IMAGE:
+        if (
+            use_gpu
+            and image_reference.repository == MMSEQS2_IMAGE_REPOSITORY
+            and image_reference.digest == MMSEQS2_CPU_MANIFEST_DIGEST
+        ):
             raise ValueError(
                 "The default MMseqs2 image is CPU-only. GPU search requires an explicit "
                 "digest-pinned image compatible with the host architecture."
@@ -902,16 +944,20 @@ class HomologueSearcher:
         self.target_db = target_db
         self.docker_image = docker_image
         self._image_reference = image_reference
-        self.sensitivity = sensitivity
+        self.sensitivity = float(sensitivity)
         self.max_seqs = max_seqs
-        self.min_seq_id = min_seq_id
-        self.coverage = coverage
-        self.split_memory_limit = split_memory_limit
+        self.min_seq_id = float(min_seq_id)
+        self.coverage = float(coverage)
+        self.split_memory_limit = (
+            split_memory_limit.strip() if split_memory_limit is not None else None
+        )
         self.use_gpu = use_gpu
         self.allow_pull = allow_pull
         self.allow_network = allow_network
         self.phase_timeout = float(phase_timeout)
-        self.target_db_identity = target_db_identity
+        self.target_db_identity = (
+            target_db_identity.strip() if target_db_identity is not None else None
+        )
         self._verified_image_identity: _DockerImageIdentity | None = None
 
     @staticmethod
@@ -925,7 +971,7 @@ class HomologueSearcher:
         phase: str = "docker command",
         **kwargs,
     ) -> subprocess.CompletedProcess:
-        kwargs.setdefault("timeout", self.phase_timeout)
+        kwargs["timeout"] = self.phase_timeout
         try:
             return subprocess.run(cmd, **kwargs)
         except subprocess.TimeoutExpired as error:
@@ -986,7 +1032,15 @@ class HomologueSearcher:
             check=check,
         )
         if inspect.returncode != 0:
-            return None
+            stderr = inspect.stderr if isinstance(inspect.stderr, str) else ""
+            if "no such image" in stderr.lower() or "not found" in stderr.lower():
+                return None
+            raise subprocess.CalledProcessError(
+                inspect.returncode,
+                inspect.args,
+                output=inspect.stdout,
+                stderr=inspect.stderr,
+            )
         try:
             payload = json.loads(inspect.stdout)
             if (
@@ -1141,7 +1195,15 @@ class HomologueSearcher:
                 return False
             if runtime.get("reference") != self.docker_image:
                 return False
+            if runtime.get("repository") != self._image_reference.repository:
+                return False
+            if runtime.get("version") != self._image_reference.version:
+                return False
             if runtime.get("manifest_digest") != self._image_reference.digest:
+                return False
+            if runtime.get("os") != "linux":
+                return False
+            if runtime.get("architecture") != _docker_architecture():
                 return False
             image_id = runtime.get("image_id")
             if not isinstance(image_id, str) or _SHA256_DIGEST_RE.fullmatch(image_id) is None:
@@ -1247,6 +1309,13 @@ class HomologueSearcher:
         )
 
     def search(self, sequence: str, output_dir: str, seq_id: str | None = None) -> str:
+        if (
+            not isinstance(sequence, str)
+            or _SAFE_QUERY_SEQUENCE_RE.fullmatch(sequence) is None
+        ):
+            raise ValueError(
+                "sequence must be a non-empty unaligned ASCII protein sequence"
+            )
         if seq_id is None:
             seq_id = self._seq_hash(sequence)
         seq_output_dir = _sequence_output_dir(output_dir, seq_id)
@@ -1355,6 +1424,8 @@ class HomologueSearcher:
     ) -> dict[str, str]:
         if seq_ids is None:
             seq_ids = [self._seq_hash(seq) for seq in sequences]
+        if len(seq_ids) != len(sequences):
+            raise ValueError("seq_ids must contain exactly one identifier per sequence")
         self._validate_paths_under_cwd(output_dir)
         os.makedirs(output_dir, exist_ok=True)
         results: dict[str, str] = {}

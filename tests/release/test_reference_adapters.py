@@ -220,9 +220,18 @@ def test_biohub_reference_is_locked_attested_and_arm64_native() -> None:
     assert "--force-reinstall" not in stage
     assert "cp -a /opt/oracle/vendor/upstream/biohub-transformers" in stage
     assert "cp -a /opt/oracle/vendor/upstream/biohub-esm" in stage
+    assert stage.count("--exclude=**/__pycache__ ") == 2
+    assert stage.count("--exclude=**/__pycache__/**") == 2
+    assert stage.count("--exclude=**/*.pyc") == 2
+    assert stage.count("--exclude=**/*.pyo") == 2
     assert "verify-pip-check" in stage
     assert "dist-info/WHEEL" not in stage
     assert "manylinux2014_sbsa" not in stage
+    assert "test ! -e /opt/oracle/tools/remote/__init__.py" in stage
+    assert "import tools.remote.biohub_reference_environment" in stage
+    assert "import tools.remote.biohub_reference_lock" in stage
+    assert "import tools.remote.reference_source_attestation" in stage
+    assert "find_spec('tools.remote.run') is None" in stage
     assert "reference_source_attestation create" in stage
     assert "reference_source_attestation verify" in stage
     assert stage.count("--contract /opt/oracle/biohub-esm-source-contract.json") == 2

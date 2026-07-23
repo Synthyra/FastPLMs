@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
 
@@ -39,6 +39,13 @@ ESMFOLD2_REPRESENTATION_PROFILE = "esmfold2_representation"
 STRUCTURE_STARTUP_PROFILE = "structure_startup"
 STRUCTURE_DEDICATED_MODE = "structure"
 ESMFOLD2_DEDICATED_MODE = "representation"
+FLASH_BACKEND_HISTORICAL_EVIDENCE = {
+    "flash_attention_2": "separate_historical_focused_evidence_only",
+    "flash_attention_3": "none",
+}
+FLASH_BACKEND_CLAIM_INELIGIBILITY_REASON = (
+    "locked_release_environment_kernel_unavailable"
+)
 _COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _RUNTIME_REVISION_PATTERN = re.compile(
@@ -60,7 +67,7 @@ def _artifact_repository_name(spec: ModelSpec) -> str:
     parts = spec.fast.repo_id.split("/")
     if len(parts) != 2 or not all(parts) or parts[1] in {".", ".."}:
         raise ValueError(f"Invalid registry repository ID for {spec.id}: {spec.fast.repo_id!r}")
-    return parts[1]
+    return cast(str, parts[1])
 
 
 def _is_link_like(path: Path) -> bool:
@@ -388,7 +395,7 @@ def _selected_backends(
     """Select a declared backend subset while preserving manifest order."""
 
     if requested_backends is None:
-        return spec.family.attention
+        return cast(tuple[str, ...], spec.family.attention)
     requested = set(requested_backends)
     selected = tuple(
         backend for backend in spec.family.attention if backend in requested
@@ -416,13 +423,22 @@ def _arguments(
     claim_eligible: bool | None = None,
     matrix_kind: str = "fixed",
 ) -> SimpleNamespace:
-    if claim_eligible is None:
+    historical_evidence = "current_release_execution"
+    claim_eligibility_reason = "fixed_release_benchmark_matrix"
+    if backend in FLASH_BACKEND_HISTORICAL_EVIDENCE:
+        claim_eligible = False
+        historical_evidence = FLASH_BACKEND_HISTORICAL_EVIDENCE[backend]
+        claim_eligibility_reason = FLASH_BACKEND_CLAIM_INELIGIBILITY_REASON
+    elif claim_eligible is None:
         claim_eligible = mode in {
             "compile",
             "steady",
             "projection",
             "esmc_projection",
         }
+    if not claim_eligible and backend not in FLASH_BACKEND_HISTORICAL_EVIDENCE:
+        historical_evidence = "not_applicable"
+        claim_eligibility_reason = "descriptive_or_startup_measurement"
     return SimpleNamespace(
         model=spec.fast.repo_id,
         revision=spec.fast.revision,
@@ -440,6 +456,8 @@ def _arguments(
         suite_profile=profile,
         dedicated_mode=dedicated_mode,
         claim_eligible=claim_eligible,
+        claim_eligibility_reason=claim_eligibility_reason,
+        historical_evidence=historical_evidence,
         matrix_kind=matrix_kind,
     )
 
@@ -953,6 +971,8 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "suite_profile": case.suite_profile,
                 "dedicated_mode": case.dedicated_mode,
                 "claim_eligible": case.claim_eligible,
+                "claim_eligibility_reason": case.claim_eligibility_reason,
+                "historical_evidence": case.historical_evidence,
                 "matrix_kind": case.matrix_kind,
                 "artifact": getattr(case, "artifact_identity", None),
                 "artifact_dependencies": getattr(case, "artifact_dependencies", {}),

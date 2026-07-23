@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, overload
 
 from torch import Tensor
 
@@ -37,10 +37,19 @@ class LazyTensorReference:
     def load(self, *, verify: bool = True) -> Tensor:
         """Load X and optionally verify its content digest."""
 
+        if not isinstance(verify, bool):
+            raise TypeError("verify must be a boolean.")
         X = self._loader()
+        if not isinstance(X, Tensor):
+            raise TypeError(f"Stored tensor loader for {self.key!r} must return a Tensor.")
         if tuple(X.shape) != self.shape:
             raise ValueError(
                 f"Stored tensor {self.key!r} has shape {tuple(X.shape)}, expected {self.shape}."
+            )
+        dtype = str(X.dtype).removeprefix("torch.")
+        if dtype != self.dtype:
+            raise ValueError(
+                f"Stored tensor {self.key!r} has dtype {dtype!r}, expected {self.dtype!r}."
             )
         if verify:
             from .storage import tensor_sha256
@@ -62,9 +71,19 @@ class EmbeddingRecord:
     sequence: str
     tensor: TensorValue
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id:
+            raise ValueError("EmbeddingRecord.id must be a non-empty string.")
+        if not isinstance(self.sequence, str) or not self.sequence:
+            raise ValueError("EmbeddingRecord.sequence must be a non-empty string.")
+        if not isinstance(self.tensor, (Tensor, LazyTensorReference)):
+            raise TypeError("EmbeddingRecord.tensor must be a Tensor or LazyTensorReference.")
+
     def load_tensor(self, *, verify: bool = True) -> Tensor:
         """Return X regardless of whether this record is memory-backed or lazy."""
 
+        if not isinstance(verify, bool):
+            raise TypeError("verify must be a boolean.")
         if isinstance(self.tensor, LazyTensorReference):
             return self.tensor.load(verify=verify)
         return self.tensor
@@ -79,9 +98,7 @@ class EmbeddingResult(Sequence[EmbeddingRecord]):
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self.records: Sequence[EmbeddingRecord] = (
-            records
-            if getattr(records, "_fastplms_immutable_sequence", False)
-            else tuple(records)
+            records if getattr(records, "_fastplms_immutable_sequence", False) else tuple(records)
         )
         self.metadata = dict(metadata or {})
 
@@ -91,9 +108,13 @@ class EmbeddingResult(Sequence[EmbeddingRecord]):
     def __iter__(self) -> Iterator[EmbeddingRecord]:
         return iter(self.records)
 
-    def __getitem__(
-        self, index: int | slice
-    ) -> EmbeddingRecord | Sequence[EmbeddingRecord]:
+    @overload
+    def __getitem__(self, index: int, /) -> EmbeddingRecord: ...
+
+    @overload
+    def __getitem__(self, index: slice, /) -> Sequence[EmbeddingRecord]: ...
+
+    def __getitem__(self, index: int | slice) -> EmbeddingRecord | Sequence[EmbeddingRecord]:
         return self.records[index]
 
     def as_dict(
@@ -105,8 +126,12 @@ class EmbeddingResult(Sequence[EmbeddingRecord]):
     ) -> dict[str, TensorValue]:
         """Convert records to a mapping under an explicit duplicate policy."""
 
+        if key not in {"id", "sequence"}:
+            raise ValueError("key must be 'id' or 'sequence'.")
         if duplicates not in {"error", "first", "last"}:
             raise ValueError("duplicates must be 'error', 'first', or 'last'.")
+        if not isinstance(materialize, bool):
+            raise TypeError("materialize must be a boolean.")
         output: dict[str, TensorValue] = {}
         for record in self.records:
             record_key = getattr(record, key)
@@ -124,6 +149,8 @@ class EmbeddingResult(Sequence[EmbeddingRecord]):
     def materialize(self, *, verify: bool = True) -> EmbeddingResult:
         """Return an equivalent result with every X loaded into CPU memory."""
 
+        if not isinstance(verify, bool):
+            raise TypeError("verify must be a boolean.")
         return EmbeddingResult(
             [
                 EmbeddingRecord(

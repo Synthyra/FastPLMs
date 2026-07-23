@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import torch
@@ -11,13 +12,23 @@ POOLING_NAMES = frozenset({"mean", "max", "norm", "median", "std", "var", "cls",
 
 
 def _validate_inputs(X: Tensor, M: Tensor) -> Tensor:
+    if not isinstance(X, Tensor) or not isinstance(M, Tensor):
+        raise TypeError("X and M must be tensors.")
     if X.ndim != 3:
         raise ValueError(f"X must have shape (b, l, d), got {tuple(X.shape)}.")
+    if not X.is_floating_point():
+        raise TypeError("X must use a floating-point embedding dtype.")
     if M.shape != X.shape[:2]:
         raise ValueError(f"M must have shape (b, l)={tuple(X.shape[:2])}, got {tuple(M.shape)}.")
+    if M.is_complex():
+        raise TypeError("M must be a boolean or binary numeric residue mask.")
+    if not bool(torch.isfinite(M).all()) or not bool(((M == 0) | (M == 1)).all()):
+        raise ValueError("M must contain only finite binary mask values.")
     M = M.to(device=X.device, dtype=torch.bool)
     if not bool(M.any(dim=1).all()):
         raise ValueError("Every sample must contain at least one biological residue.")
+    if not bool((torch.isfinite(X) | ~M.unsqueeze(-1)).all()):
+        raise ValueError("Biological residue embeddings produced non-finite output.")
     return M
 
 
@@ -68,11 +79,29 @@ def pagerank_weights(
     probabilities; dangling rows transition uniformly.
     """
 
+    if not isinstance(A, Tensor):
+        raise TypeError("A must be a tensor.")
     if A.ndim != 2 or A.shape[0] != A.shape[1]:
         raise ValueError(f"A must be square, got shape {tuple(A.shape)}.")
+    if not A.is_floating_point():
+        raise TypeError("A must use a floating-point attention dtype.")
+    if not isinstance(damping, (int, float)) or isinstance(damping, bool):
+        raise TypeError("damping must be a finite float in [0, 1).")
+    if not math.isfinite(float(damping)) or not 0 <= damping < 1:
+        raise ValueError("damping must be a finite float in [0, 1).")
+    if not isinstance(tolerance, (int, float)) or isinstance(tolerance, bool):
+        raise TypeError("tolerance must be a positive finite float.")
+    if not math.isfinite(float(tolerance)) or tolerance <= 0:
+        raise ValueError("tolerance must be a positive finite float.")
+    if not isinstance(max_iterations, int) or isinstance(max_iterations, bool):
+        raise TypeError("max_iterations must be a positive integer.")
+    if max_iterations <= 0:
+        raise ValueError("max_iterations must be a positive integer.")
     length = A.shape[0]
     if length == 0:
         raise ValueError("PageRank requires at least one residue.")
+    if not bool(torch.isfinite(A).all()):
+        raise ValueError("A must contain only finite attention values.")
     work_dtype = torch.float64 if A.dtype == torch.float64 else torch.float32
     P = A.detach().to(dtype=work_dtype).clamp_min(0)
     row_sum = P.sum(dim=-1, keepdim=True)
@@ -93,7 +122,14 @@ class Pooler:
     """Apply one or more pooling operations to biological residue rows."""
 
     def __init__(self, pooling: str | Sequence[str] = ("mean",)) -> None:
-        names = (pooling,) if isinstance(pooling, str) else tuple(pooling)
+        pooling_value: object = pooling
+        if isinstance(pooling_value, (bytes, bytearray)) or not isinstance(
+            pooling_value, (str, Sequence)
+        ):
+            raise TypeError("pooling must be a name or a sequence of names.")
+        names = (pooling_value,) if isinstance(pooling_value, str) else tuple(pooling_value)
+        if not all(isinstance(name, str) for name in names):
+            raise TypeError("pooling names must be strings.")
         if not names:
             raise ValueError("At least one pooling operation is required.")
         unknown = set(names) - POOLING_NAMES
@@ -101,14 +137,16 @@ class Pooler:
             raise ValueError(f"Unknown pooling operations: {sorted(unknown)}.")
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
-            raise ValueError(
-                f"Duplicate pooling operations are not supported: {duplicates}."
-            )
+            raise ValueError(f"Duplicate pooling operations are not supported: {duplicates}.")
         self.names = names
 
     def output_slices(self, d: int) -> dict[str, tuple[int, int]]:
         """Return the output interval assigned to each pooler."""
 
+        if not isinstance(d, int) or isinstance(d, bool):
+            raise TypeError("d must be a positive integer.")
+        if d <= 0:
+            raise ValueError("d must be a positive integer.")
         return {name: (i * d, (i + 1) * d) for i, name in enumerate(self.names)}
 
     def __call__(

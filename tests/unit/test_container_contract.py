@@ -231,6 +231,7 @@ def test_reference_protocol_only_copies_existing_repository_paths() -> None:
     assert copied_sources
     missing = [source for source in copied_sources if not (ROOT / source).exists()]
     assert missing == []
+    assert "COPY tools/remote/__init__.py" not in protocol
     assert "tests/parity/support/semantic_config.py" in protocol
     assert "src/fastplms" not in protocol
 

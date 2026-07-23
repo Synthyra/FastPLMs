@@ -19,12 +19,12 @@ import shutil
 import sys
 import tempfile
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from functools import wraps
 from importlib import metadata
 from numbers import Integral, Real
 from pathlib import Path
-from typing import Any
+from typing import Any, ParamSpec, TypeVar, cast
 
 import numpy as np
 import torch
@@ -54,6 +54,8 @@ CLASSIFIER_MODULE_NAME = "classifier"
 EXAMPLE_ATTENTION_BACKENDS = ("eager", "sdpa", "flex_attention")
 _OUTPUT_RESERVATION_FILE = ".fastplms-output-reservation.json"
 _IMMUTABLE_REVISION = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 _PINNED_DEFAULT_REVISIONS = {
     ("model", DEFAULT_MODEL): DEFAULT_MODEL_REVISION,
     ("dataset", DEFAULT_CLASSIFICATION_DATASET): DEFAULT_CLASSIFICATION_DATASET_REVISION,
@@ -143,14 +145,14 @@ def _guard_training_output(
     *,
     lora_default: str,
     full_default: str,
-):
+) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:
     """Reserve a task output before the decorated function performs any work."""
 
-    def decorate(function: Any) -> Any:
+    def decorate(function: Callable[_P, _R]) -> Callable[_P, _R]:
         function_signature = inspect.signature(function)
 
         @wraps(function)
-        def guarded(*args: Any, **kwargs: Any) -> Any:
+        def guarded(*args: _P.args, **kwargs: _P.kwargs) -> _R:
             bound = function_signature.bind(*args, **kwargs)
             bound.apply_defaults()
             output_dir = bound.arguments["output_dir"]
@@ -610,7 +612,7 @@ def initialize_model(
     lora_config: Any = None,
     model_revision: str | None = None,
     attn_backend: str = "sdpa",
-):
+) -> tuple[Any, Any]:
     """
     Initialize a model with optional LoRA support
 
@@ -1001,7 +1003,7 @@ def _held_out_reload_verification(
     if row_count < 1:
         raise ValueError("Final-artifact verification requires a non-empty held-out dataset.")
     held_out_rows = [verification_dataset[index] for index in range(min(2, row_count))]
-    prediction_output = trainer.predict(held_out_rows)
+    prediction_output = trainer.predict(held_out_rows)  # type: ignore[arg-type]
     prediction_values = getattr(prediction_output, "predictions", None)
     if prediction_values is None:
         prediction_values = prediction_output[0]
@@ -1133,7 +1135,7 @@ def _save_reload_verify_final_artifact(
     expected_hashes = _persisted_parameter_hashes(trainer.model, use_lora=use_lora)
     staging = Path(tempfile.mkdtemp(prefix=".final-model-", dir=output_root))
     try:
-        trainer.save_model(staging)
+        trainer.save_model(os.fspath(staging))
         save_tokenizer = getattr(tokenizer, "save_pretrained", None)
         if not callable(save_tokenizer):
             raise TypeError("The training tokenizer must implement save_pretrained().")
@@ -1226,7 +1228,12 @@ def compute_metrics_regression(p: EvalPrediction) -> dict[str, float]:
     """Compute Spearman correlation for regression tasks."""
     predictions, labels = p.predictions, p.label_ids
     predictions = predictions[0] if isinstance(predictions, tuple) else predictions
-    return {"spearman_correlation": _spearman_correlation(predictions, labels)}
+    return {
+        "spearman_correlation": _spearman_correlation(
+            predictions,
+            cast(np.ndarray, labels),
+        )
+    }
 
 
 def compute_metrics_classification(p: EvalPrediction) -> dict[str, float]:
@@ -1564,17 +1571,18 @@ def train_regression_model(
 
     # Evaluate and visualize results
     print("Evaluating and visualizing results...")
-    predictions, labels, metrics = trainer.predict(test_dataset)
+    predictions, labels, _prediction_metrics = trainer.predict(test_dataset)
     preds = predictions[0] if isinstance(predictions, tuple) else predictions
+    label_values = cast(np.ndarray, labels)
     if plot_results:
         correlation = plot_regression_results(
             preds.flatten(),
-            labels.flatten(),
+            label_values.flatten(),
             Path(output_dir) / "regression_results.png",
             "Protein-Protein Affinity",
         )
     else:
-        correlation = _spearman_correlation(preds, labels)
+        correlation = _spearman_correlation(preds, label_values)
     print(f"Final Spearman correlation on test set: {correlation:.3f}")
     return trainer, test_dataset
 
@@ -1766,7 +1774,8 @@ def train_classification_model(
     else:
         predictions, labels, _ = trainer.predict(test_dataset)
         preds = predictions[0] if isinstance(predictions, tuple) else predictions
-        accuracy = float((np.argmax(preds, axis=-1).reshape(-1) == labels.reshape(-1)).mean())
+        label_values = cast(np.ndarray, labels)
+        accuracy = float((np.argmax(preds, axis=-1).reshape(-1) == label_values.reshape(-1)).mean())
     print(f"Final accuracy on test set: {accuracy:.3f}")
 
     return trainer

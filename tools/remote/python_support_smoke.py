@@ -155,7 +155,7 @@ def run_smoke(expected_python: str, source_root: Path) -> dict[str, object]:
         token_dropout=False,
         attn_backend="eager",
     )
-    model = FastEsmModel(config, add_pooling_layer=False).eval()  # type: ignore[no-untyped-call]
+    model = FastEsmModel(config, add_pooling_layer=False).eval()
     input_ids = torch.tensor(((0, 5, 6, 2, 1),), dtype=torch.long, device="cpu")
     attention_mask = input_ids.ne(1)
     with torch.inference_mode():

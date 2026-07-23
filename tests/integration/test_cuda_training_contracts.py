@@ -248,7 +248,7 @@ def test_eager_sdpa_and_flex_match_forward_and_backward_on_cuda() -> None:
     )
     attention_mask = input_ids.ne(1)
     outputs: dict[str, torch.Tensor] = {}
-    embedding_gradients: dict[str, torch.Tensor] = {}
+    parameter_gradients: dict[str, dict[str, torch.Tensor]] = {}
 
     with strict_fp32_matmul():
         for backend in ("eager", "sdpa", "flex_attention"):
@@ -263,17 +263,28 @@ def test_eager_sdpa_and_flex_match_forward_and_backward_on_cuda() -> None:
             assert loss.is_cuda
             assert torch.isfinite(loss)
             loss.backward()
-            gradients = [
-                parameter.grad
-                for parameter in model.parameters()
+            gradients = {
+                name: parameter.grad.detach().clone()
+                for name, parameter in model.named_parameters()
                 if parameter.grad is not None
-            ]
+            }
             assert gradients
-            assert all(torch.isfinite(gradient).all() for gradient in gradients)
-            outputs[backend] = output.detach()
-            embedding_gradients[backend] = (
-                model.get_input_embeddings().weight.grad.detach().clone()
+            assert all(
+                torch.isfinite(gradient).all() for gradient in gradients.values()
             )
+            outputs[backend] = output.detach()
+            parameter_gradients[backend] = gradients
+
+    expected_attention_projections = (
+        "query",
+        "key",
+        "value",
+        "attention.output.dense",
+    )
+    assert all(
+        any(projection in name for name in parameter_gradients["eager"])
+        for projection in expected_attention_projections
+    )
 
     torch.testing.assert_close(outputs["sdpa"], outputs["eager"], rtol=1e-5, atol=1e-6)
     torch.testing.assert_close(
@@ -282,18 +293,25 @@ def test_eager_sdpa_and_flex_match_forward_and_backward_on_cuda() -> None:
         rtol=1e-5,
         atol=1e-5,
     )
-    torch.testing.assert_close(
-        embedding_gradients["sdpa"],
-        embedding_gradients["eager"],
-        rtol=1e-5,
-        atol=1e-6,
+    assert parameter_gradients["sdpa"].keys() == parameter_gradients["eager"].keys()
+    for name, eager_gradient in parameter_gradients["eager"].items():
+        torch.testing.assert_close(
+            parameter_gradients["sdpa"][name],
+            eager_gradient,
+            rtol=1e-5,
+            atol=1e-6,
+        )
+    assert (
+        parameter_gradients["flex_attention"].keys()
+        == parameter_gradients["sdpa"].keys()
     )
-    torch.testing.assert_close(
-        embedding_gradients["flex_attention"],
-        embedding_gradients["sdpa"],
-        rtol=1e-5,
-        atol=1e-5,
-    )
+    for name, sdpa_gradient in parameter_gradients["sdpa"].items():
+        torch.testing.assert_close(
+            parameter_gradients["flex_attention"][name],
+            sdpa_gradient,
+            rtol=1e-5,
+            atol=1e-5,
+        )
 
 
 def test_ttt_step_reset_and_save_reload_execute_on_cuda(tmp_path: Path) -> None:

@@ -174,6 +174,21 @@ def test_reporting_extra_is_separate_from_training_runtime() -> None:
     assert train_names.isdisjoint(reporting_names)
 
 
+def test_resolution_matrix_covers_every_public_extra_and_binder_combination() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    extras = project["project"]["optional-dependencies"]
+    workflow = (ROOT / ".github" / "workflows" / "cpu-contracts.yml").read_text(
+        encoding="utf-8"
+    )
+
+    for extra in extras:
+        assert f"- extra: {extra}" in workflow
+    assert "- extra: structure-binder" in workflow
+    assert "primary_extra: structure" in workflow
+    assert "secondary_extra: binder" in workflow
+    assert "secondary_sentinel: abnumber" in workflow
+
+
 def test_runtime_import_closure_rejects_undeclared_literal_dynamic_import(
     tmp_path: Path,
 ) -> None:
@@ -187,5 +202,133 @@ def test_runtime_import_closure_rejects_undeclared_literal_dynamic_import(
     with pytest.raises(
         RuntimeImportClosureError,
         match="undeclared literal dynamic dependencies",
+    ):
+        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+
+
+def test_runtime_import_closure_rejects_optional_extra_as_core_import(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "runtime"
+    source_root.mkdir()
+    (source_root / "unconditional.py").write_text("import pandas\n", encoding="utf-8")
+
+    with pytest.raises(
+        RuntimeImportClosureError,
+        match="Unconditional import dependency scope mismatch",
+    ):
+        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+
+
+def test_runtime_import_closure_keeps_top_level_control_flow_import_time(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "runtime"
+    source_root.mkdir()
+    (source_root / "conditional.py").write_text(
+        "enabled = True\n"
+        "if enabled:\n"
+        "    import pandas\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeImportClosureError,
+        match="Unconditional import dependency scope mismatch",
+    ):
+        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+
+
+def test_runtime_import_closure_records_guarded_dependency_intended_extra(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "runtime"
+    source_root.mkdir()
+    (source_root / "guarded.py").write_text(
+        "import importlib\n"
+        "def load_kernel():\n"
+        '    return importlib.import_module("kernels")\n',
+        encoding="utf-8",
+    )
+
+    payload = inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+
+    assert payload["feature_gated_dynamic_imports"] == [
+        {
+            "declared_scopes": ["extra:flash"],
+            "kind": "dynamic",
+            "line": 3,
+            "module": "kernels",
+            "required_scope": "extra:flash",
+            "source": "guarded.py",
+            "source_scope": "core",
+        }
+    ]
+
+
+def test_runtime_import_closure_uses_manifest_scope_for_feature_module(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "runtime"
+    module_root = source_root / "models" / "feature"
+    module_root.mkdir(parents=True)
+    (source_root / "models.toml").write_text(
+        "[families.feature]\n"
+        'extra = "structure"\n'
+        'runtime_paths = ["models/feature"]\n',
+        encoding="utf-8",
+    )
+    (module_root / "module.py").write_text("import scipy\n", encoding="utf-8")
+
+    payload = inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+
+    assert payload["import_time_dependencies"] == [
+        {
+            "declared_scopes": ["extra:reporting", "extra:structure"],
+            "kind": "static",
+            "line": 1,
+            "module": "scipy",
+            "required_scope": "extra:structure",
+            "source": "models/feature/module.py",
+            "source_scope": "extra:structure",
+        }
+    ]
+
+
+def test_runtime_import_closure_rejects_escaping_manifest_runtime_path(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "runtime"
+    source_root.mkdir()
+    (source_root / "module.py").write_text("import torch\n", encoding="utf-8")
+    (source_root / "models.toml").write_text(
+        "[families.feature]\n"
+        'extra = "structure"\n'
+        'runtime_paths = ["../outside"]\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeImportClosureError,
+        match="non-portable runtime path",
+    ):
+        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+
+
+def test_runtime_import_closure_rejects_ambiguous_guarded_extra(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "runtime"
+    source_root.mkdir()
+    (source_root / "guarded.py").write_text(
+        "def load_accelerate():\n"
+        "    import accelerate\n"
+        "    return accelerate\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        RuntimeImportClosureError,
+        match="does not map to one intended dependency scope",
     ):
         inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")

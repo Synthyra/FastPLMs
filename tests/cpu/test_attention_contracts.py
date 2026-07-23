@@ -1,10 +1,13 @@
 """Mandatory attention dispatch, masking, fallback, and cache contracts."""
 
+from collections import OrderedDict
+
 import pytest
 import torch
 
 import fastplms.attention.interfaces as attention_interfaces
 import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module
+from fastplms.attention import _core as attention_core
 from fastplms.models.esm2.modeling_fastesm import FastEsmConfig, FastEsmModel
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
@@ -40,6 +43,24 @@ test_compiled_flex_cache_key_covers_execution_not_batch_contents = (
 )
 test_flex_block_mask_supports_disjoint_valid_spans_and_exact_cache_keys = (
     interface_contracts.test_flex_block_mask_supports_disjoint_valid_spans_and_exact_cache_keys
+)
+test_flex_block_mask_key_separates_equal_bytes_with_different_pattern_dtypes = (
+    interface_contracts.test_flex_block_mask_key_separates_equal_bytes_with_different_pattern_dtypes
+)
+test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache = (
+    interface_contracts.test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache
+)
+test_flash_kernel_variant_mismatch_fails_closed = (
+    interface_contracts.test_flash_kernel_variant_mismatch_fails_closed
+)
+test_locked_kernel_is_hash_validated_before_import = (
+    interface_contracts.test_locked_kernel_is_hash_validated_before_import
+)
+test_locked_kernel_offline_resolves_sparse_snapshot_without_hub_api = (
+    interface_contracts.test_locked_kernel_offline_resolves_sparse_snapshot_without_hub_api
+)
+test_locked_kernel_offline_rejects_unlocked_cached_variant = (
+    interface_contracts.test_locked_kernel_offline_rejects_unlocked_cached_variant
 )
 
 test_attention_masks_require_exact_batch_sequence_shape = (
@@ -117,6 +138,9 @@ test_flash_attention_2_dense_and_varlen_use_autograd_wrappers = (
 test_flash_attention_2_dense_and_varlen_preserve_lora_and_input_gradients = (
     contracts.test_flash_attention_2_dense_and_varlen_preserve_lora_and_input_gradients
 )
+test_flash_attention_2_rejects_low_level_only_kernel_artifact = (
+    contracts.test_flash_attention_2_rejects_low_level_only_kernel_artifact
+)
 test_flash_attention_3_preserves_internal_type_errors = (
     contracts.test_flash_attention_3_preserves_internal_type_errors
 )
@@ -179,6 +203,7 @@ def test_esmc_flex_dispatch_is_compiled_once_and_receives_exact_padding_mask(
 
     sentinel_block_mask = object()
     observed: dict[str, object] = {
+        "block_masks_created": 0,
         "compiled": 0,
         "compile_requests": [],
         "dispatches": [],
@@ -187,6 +212,7 @@ def test_esmc_flex_dispatch_is_compiled_once_and_receives_exact_padding_mask(
     compiled = None
 
     def fake_create_block_mask(mask_mod, *shape, **kwargs):
+        observed["block_masks_created"] = int(observed["block_masks_created"]) + 1
         observed["mask_mod"] = mask_mod
         observed["block_mask_shape"] = shape
         observed["block_mask_device"] = kwargs["device"]
@@ -216,8 +242,9 @@ def test_esmc_flex_dispatch_is_compiled_once_and_receives_exact_padding_mask(
             compiled = run_flex
         return compiled
 
+    monkeypatch.setattr(attention_core, "_flex_block_masks", OrderedDict())
+    monkeypatch.setattr(attention_core, "create_block_mask", fake_create_block_mask)
     monkeypatch.setattr(esmpp_module, "flex_attention", object())
-    monkeypatch.setattr(esmpp_module, "create_block_mask", fake_create_block_mask)
     monkeypatch.setattr(
         esmpp_module,
         "_get_flex_attention_fn",
@@ -249,6 +276,8 @@ def test_esmc_flex_dispatch_is_compiled_once_and_receives_exact_padding_mask(
         "shape": (2, 2, 5, 4),
         "mask_semantics": "padding",
     }
+    assert observed["block_masks_created"] == 1
+    assert len(attention_core._flex_block_masks) == 1
     assert isinstance(dispatches, list) and len(dispatches) == 2
     for dispatch in dispatches:
         assert dispatch["query_shape"] == (2, 2, 5, 4)
@@ -389,7 +418,32 @@ def test_eager_and_sdpa_match_for_dense_and_mixed_padding_with_gradients() -> No
         ).view(1, 1, -1)
         (eager_output.last_hidden_state * valid * gradient_probe).sum().backward()
         (sdpa_output.last_hidden_state * valid * gradient_probe).sum().backward()
-        eager_grad = eager.get_input_embeddings().weight.grad
-        sdpa_grad = sdpa.get_input_embeddings().weight.grad
-        assert eager_grad is not None and sdpa_grad is not None
-        torch.testing.assert_close(sdpa_grad, eager_grad, rtol=3e-5, atol=3e-6)
+        eager_gradients = {
+            name: parameter.grad
+            for name, parameter in eager.named_parameters()
+            if parameter.grad is not None
+        }
+        sdpa_gradients = {
+            name: parameter.grad
+            for name, parameter in sdpa.named_parameters()
+            if parameter.grad is not None
+        }
+        assert eager_gradients
+        assert sdpa_gradients.keys() == eager_gradients.keys()
+        expected_attention_projections = (
+            "query",
+            "key",
+            "value",
+            "attention.output.dense",
+        )
+        assert all(
+            any(projection in name for name in eager_gradients)
+            for projection in expected_attention_projections
+        )
+        for name, eager_gradient in eager_gradients.items():
+            torch.testing.assert_close(
+                sdpa_gradients[name],
+                eager_gradient,
+                rtol=3e-5,
+                atol=3e-6,
+            )

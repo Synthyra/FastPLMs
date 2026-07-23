@@ -17,9 +17,9 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 _CPU_CONTRACT_MARKER = ".fastplms-cpu-contract.json"
 _CPU_FORBIDDEN_READ_ROOTS = tuple(
@@ -197,7 +197,7 @@ def _semantic_config(config: Any) -> dict[str, Any]:
 
 
 def _save_model_for_probe(model: Any, save_path: Path, implementation: str) -> None:
-    """Save through the normal Transformers path for package and remote classes."""
+    """Exercise the unmodified Transformers save path for every implementation."""
 
     del implementation
     model.save_pretrained(save_path, safe_serialization=True)
@@ -209,7 +209,48 @@ def _load_class(implementation: str, auto_class: str, class_path: str) -> type:
 
         return getattr(transformers, auto_class)
     module_name, class_name = class_path.rsplit(".", maxsplit=1)
-    return getattr(importlib.import_module(module_name), class_name)
+    package_class = getattr(importlib.import_module(module_name), class_name)
+    register = getattr(package_class, "register_for_auto_class", None)
+    if not callable(register):
+        raise RuntimeError(f"{class_path} cannot register for {auto_class}")
+    register(auto_class)
+    if getattr(package_class, "_auto_class", None) != auto_class:
+        raise RuntimeError(f"{class_path} did not register for {auto_class}")
+    config_class = getattr(package_class, "config_class", None)
+    if auto_class != "AutoConfig" and config_class is not None:
+        config_register = getattr(config_class, "register_for_auto_class", None)
+        if not callable(config_register):
+            raise RuntimeError(f"{class_path} config cannot register for AutoConfig")
+        config_register("AutoConfig")
+        if getattr(config_class, "_auto_class", None) != "AutoConfig":
+            raise RuntimeError(f"{class_path} config did not register for AutoConfig")
+    return package_class
+
+
+def _assert_complete_saved_auto_map(
+    save_path: Path,
+    *,
+    expected_auto_classes: set[str],
+) -> None:
+    """Require every advertised AutoClass to survive normal serialization."""
+
+    try:
+        config = json.loads((save_path / "config.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("Saved AutoClass config is missing or malformed") from error
+    auto_map = config.get("auto_map") if isinstance(config, dict) else None
+    if not isinstance(auto_map, dict) or set(auto_map) != expected_auto_classes:
+        raise RuntimeError("Saved config does not preserve the complete advertised auto_map")
+    invalid = {
+        name: target
+        for name, target in auto_map.items()
+        if not isinstance(target, str) or not target or target.endswith(".None")
+    }
+    if invalid:
+        raise RuntimeError(
+            "Saved config contains null or invalid AutoClass targets: "
+            + json.dumps(invalid, sort_keys=True)
+        )
 
 
 def _load_kwargs(
@@ -324,11 +365,13 @@ def _load_saved_artifact(
     family: str,
     bf16_execution: str,
     auto_class: str,
+    implementation: str,
     attn_implementation: str | None = None,
 ) -> dict[str, Any]:
-    """Load one saved directory exactly once in an isolated artifact process."""
+    """Load one saved directory exactly once through its advertised AutoClass."""
 
-    _require_artifact_isolation()
+    if implementation == "artifact":
+        _require_artifact_isolation()
     auto_type = _load_class("artifact", auto_class, "")
     if auto_class == "AutoConfig":
         config = auto_type.from_pretrained(
@@ -371,9 +414,11 @@ def _run_isolated_reload(
     bf16_execution: str,
     auto_class: str,
     class_path: str,
+    implementation: str,
+    source_root: Path | None,
     attn_implementation: str | None = None,
 ) -> dict[str, Any]:
-    """Reload a saved remote-code directory without inheriting Python module state."""
+    """Reload a saved directory through its AutoClass in a fresh process."""
 
     with tempfile.TemporaryDirectory(prefix="fastplms-isolated-reload-") as directory:
         isolation_root = Path(directory)
@@ -394,11 +439,13 @@ def _run_isolated_reload(
             "--class-path",
             class_path,
             "--implementation",
-            "artifact",
+            implementation,
             "--output",
             str(output),
             "--reload-only",
         ]
+        if source_root is not None:
+            command.extend(("--source-root", str(source_root.resolve())))
         for path in _runtime_site_packages():
             command.extend(("--runtime-site-package", str(path)))
         if attn_implementation is not None:
@@ -505,8 +552,6 @@ def _prepare_probe_environment(
             raise ValueError("Artifact mode must not receive a package source root")
         _require_artifact_isolation()
         return
-    if reload_only:
-        raise ValueError("Reload-only mode is restricted to isolated artifacts")
     if source_root is None:
         raise ValueError("Package mode requires --source-root")
     source_path = str(source_root.resolve())
@@ -544,6 +589,7 @@ def probe(
             family=family,
             bf16_execution=bf16_execution,
             auto_class=auto_class,
+            implementation=implementation,
             attn_implementation=attn_implementation,
         )
 
@@ -557,6 +603,7 @@ def probe(
             local_files_only=True,
             trust_remote_code=trust_remote_code,
         )
+        expected_auto_classes = set(config.auto_map)
         first = _semantic_config(config)
         result = {
             "config": hashlib.sha256(
@@ -565,34 +612,23 @@ def probe(
         }
         with tempfile.TemporaryDirectory(prefix="fastplms-config-reload-") as directory:
             config.save_pretrained(directory)
-            if implementation == "artifact":
-                reloaded_result = _run_isolated_reload(
-                    artifact=Path(directory),
-                    family=family,
-                    bf16_execution=bf16_execution,
-                    auto_class=auto_class,
-                    class_path=class_path,
-                    attn_implementation=attn_implementation,
-                )
-                if reloaded_result != result:
-                    raise AssertionError("Configuration changed across isolated save/reload")
-            else:
-                reloaded = auto_type.from_pretrained(
-                    directory,
-                    local_files_only=True,
-                    trust_remote_code=False,
-                )
-                second = _semantic_config(reloaded)
-                if first != second:
-                    changed = {
-                        key: {"before": first.get(key), "after": second.get(key)}
-                        for key in sorted(first.keys() | second.keys())
-                        if first.get(key) != second.get(key)
-                    }
-                    raise AssertionError(
-                        "Configuration changed across save/reload: "
-                        + json.dumps(changed, sort_keys=True, default=str)
-                    )
+            save_path = Path(directory)
+            _assert_complete_saved_auto_map(
+                save_path,
+                expected_auto_classes=expected_auto_classes,
+            )
+            reloaded_result = _run_isolated_reload(
+                artifact=save_path,
+                family=family,
+                bf16_execution=bf16_execution,
+                auto_class=auto_class,
+                class_path=class_path,
+                implementation=implementation,
+                source_root=source_root,
+                attn_implementation=attn_implementation,
+            )
+            if reloaded_result != result:
+                raise AssertionError("Configuration changed across isolated AutoClass save/reload")
         return result
 
     if not torch.cuda.is_available():
@@ -625,7 +661,12 @@ def probe(
 
     with tempfile.TemporaryDirectory(prefix="fastplms-model-reload-") as directory:
         save_path = Path(directory)
+        expected_auto_classes = set(model.config.auto_map)
         _save_model_for_probe(model, save_path, implementation)
+        _assert_complete_saved_auto_map(
+            save_path,
+            expected_auto_classes=expected_auto_classes,
+        )
         try:
             tokenizer = _tokenizer(artifact, model.config)
         except (OSError, ValueError):
@@ -654,37 +695,22 @@ def probe(
                 "Pretrained AutoModel weights depend on the initialization seed; "
                 "one or more shared/base weights were not loaded from the checkpoint"
             )
-        if implementation == "artifact":
-            reloaded_result = _run_isolated_reload(
-                artifact=save_path,
-                family=family,
-                bf16_execution=bf16_execution,
-                auto_class=auto_class,
-                class_path=class_path,
-                attn_implementation=attn_implementation,
-            )
-            if reloaded_result != result:
-                raise AssertionError("Model changed across isolated save/reload")
-        else:
-            torch.manual_seed(42)
-            torch.cuda.manual_seed_all(42)
-            reloaded = _load_model_exact(
-                auto_type,
-                save_path,
-                trust_remote_code=False,
-                **_load_kwargs(family, bf16_execution, torch, attn_implementation),
-            ).eval()
-            if _state_digest(reloaded) != result["state"]:
-                raise AssertionError("State changed across save/reload")
-            reloaded_output = _exercise(
-                reloaded,
-                save_path,
-                family,
-                bf16_execution,
-                torch,
-            )
-            if _output_digest(reloaded_output) != result["output"]:
-                raise AssertionError("Inference changed across save/reload")
+        reloaded_result = _run_isolated_reload(
+            artifact=save_path,
+            family=family,
+            bf16_execution=bf16_execution,
+            auto_class=auto_class,
+            class_path=class_path,
+            implementation=implementation,
+            source_root=source_root,
+            attn_implementation=attn_implementation,
+        )
+        expected_reload_result = {
+            "state": result["state"],
+            "output": result["output"],
+        }
+        if reloaded_result != expected_reload_result:
+            raise AssertionError("Model changed across isolated AutoClass save/reload")
     return result
 
 
@@ -904,9 +930,10 @@ def _probe_tiny_cpu_model(
         module = sys.modules.get("fastplms.models.boltz.modeling_boltz2")
         if module is None:
             raise RuntimeError("The remote Boltz2 runtime module was not loaded.")
-        module.Boltz2InferenceCore = _TinyBoltzCore
+        dynamic_module: Any = module
+        dynamic_module.Boltz2InferenceCore = _TinyBoltzCore
 
-    auto_type = _load_class("artifact", auto_class, "")
+    auto_type: Any = _load_class("artifact", auto_class, "")
     model = auto_type.from_config(config, trust_remote_code=True).eval()
     if not model.is_remote_code() or model._auto_class != auto_class:
         raise AssertionError(f"{auto_class} did not retain its remote AutoClass registration.")
@@ -925,13 +952,13 @@ def _probe_tiny_cpu_model(
         with tempfile.TemporaryDirectory(prefix="fastplms-cpu-structure-reload-") as directory:
             save_path = Path(directory)
             _save_model_for_probe(model, save_path, "artifact")
-            reloaded = _load_model_exact(
-                auto_type,
-                save_path,
-                local_files_only=True,
-                trust_remote_code=True,
-                **({"load_esmc": False} if family == "esmfold2" else {}),
-            ).eval()
+            reload_kwargs: dict[str, Any] = {
+                "local_files_only": True,
+                "trust_remote_code": True,
+            }
+            if family == "esmfold2":
+                reload_kwargs["load_esmc"] = False
+            reloaded = _load_model_exact(auto_type, save_path, **reload_kwargs).eval()
             if _cpu_state_digest(reloaded) != before:
                 raise AssertionError("Structure AutoClass state changed across save/reload.")
         return {
@@ -952,9 +979,12 @@ def _probe_tiny_cpu_model(
     _assert_nested_cpu_output(tuple_output, structured.to_tuple(), torch)
 
     loss = getattr(structured, "loss", None)
-    if has_loss and (loss is None or not torch.isfinite(loss)):
-        raise AssertionError("Advertised task AutoClass did not return a finite loss.")
-    objective = loss if has_loss else _cpu_primary_tensor(structured, torch).float().square().mean()
+    if has_loss:
+        if loss is None or not torch.isfinite(loss):
+            raise AssertionError("Advertised task AutoClass did not return a finite loss.")
+        objective = loss
+    else:
+        objective = _cpu_primary_tensor(structured, torch).float().square().mean()
     objective.backward()
     gradients = [
         parameter.grad
@@ -1117,29 +1147,40 @@ def _install_cpu_probe_hermetic_guards() -> None:
     def blocked(*_args: object, **_kwargs: object) -> None:
         raise RuntimeError("Network access is forbidden in the tiny CPU AutoClass probe.")
 
-    socket.create_connection = blocked
-    socket.getaddrinfo = blocked
-    socket.socket.connect = blocked
-    socket.socket.connect_ex = blocked
-    socket.socket.sendto = blocked
+    socket_module: Any = socket
+    socket_type: Any = socket.socket
+    socket_module.create_connection = blocked
+    socket_module.getaddrinfo = blocked
+    socket_type.connect = blocked
+    socket_type.connect_ex = blocked
+    socket_type.sendto = blocked
     if hasattr(socket.socket, "sendmsg"):
-        socket.socket.sendmsg = blocked
+        socket_type.sendmsg = blocked
 
     import huggingface_hub
     import huggingface_hub._snapshot_download
     import huggingface_hub.file_download
 
-    huggingface_hub.hf_hub_download = blocked
-    huggingface_hub.snapshot_download = blocked
-    huggingface_hub.file_download.hf_hub_download = blocked
-    huggingface_hub.file_download.http_get = blocked
-    huggingface_hub._snapshot_download.snapshot_download = blocked
+    hub_module: Any = huggingface_hub
+    file_download_module: Any = huggingface_hub.file_download
+    snapshot_download_module: Any = huggingface_hub._snapshot_download
+    hub_module.hf_hub_download = blocked
+    hub_module.snapshot_download = blocked
+    file_download_module.hf_hub_download = blocked
+    file_download_module.http_get = blocked
+    snapshot_download_module.snapshot_download = blocked
 
     def assert_portable_path(file: object) -> None:
-        if not isinstance(file, (str, bytes, os.PathLike)):
+        if isinstance(file, str):
+            path_value = file
+        elif isinstance(file, os.PathLike):
+            path_value = os.fspath(file)
+            if not isinstance(path_value, str):
+                return
+        else:
             return
         try:
-            resolved = Path(file).resolve()
+            resolved = Path(path_value).resolve()
         except (OSError, TypeError, ValueError):
             return
         if any(resolved == root or root in resolved.parents for root in _CPU_FORBIDDEN_READ_ROOTS):
@@ -1147,9 +1188,9 @@ def _install_cpu_probe_hermetic_guards() -> None:
                 f"Tiny CPU AutoClass probes may not access submodule/reference path: {resolved}"
             )
 
-    original_builtin_open = builtins.open
-    original_io_open = io.open
-    original_os_open = os.open
+    original_builtin_open = cast(Callable[..., Any], builtins.open)
+    original_io_open = cast(Callable[..., Any], io.open)
+    original_os_open = cast(Callable[..., int], os.open)
 
     def guarded_builtin_open(file: object, *args: Any, **kwargs: Any) -> Any:
         assert_portable_path(file)

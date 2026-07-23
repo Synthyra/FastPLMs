@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import warnings
 from collections import OrderedDict
+from collections.abc import Callable
 from enum import Enum
 from threading import RLock
 
@@ -100,7 +101,10 @@ def _get_flex_block_mask(
     device: torch.device,
     dtype: torch.dtype | None,
     mask_semantics: str,
-    mask_mod,
+    mask_mod: Callable[
+        [torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+        torch.Tensor,
+    ],
 ) -> BlockMask:
     """Return a bounded, exact-pattern cached Flex ``BlockMask``.
 

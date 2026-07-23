@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, overload
 
 import torch
 from torch import Tensor
@@ -130,8 +130,8 @@ class _InputSpool(Sequence[EmbeddingInput]):
         self,
         values: Iterable[str | EmbeddingInput | tuple[str, str]],
     ) -> None:
-        self._temporary: tempfile.TemporaryDirectory[str] | None = (
-            tempfile.TemporaryDirectory(prefix="fastplms-inputs-")
+        self._temporary: tempfile.TemporaryDirectory[str] | None = tempfile.TemporaryDirectory(
+            prefix="fastplms-inputs-"
         )
         self.path = Path(self._temporary.name) / "inputs.sqlite"
         self._connection: sqlite3.Connection | None = sqlite3.connect(self.path)
@@ -187,10 +187,15 @@ class _InputSpool(Sequence[EmbeddingInput]):
             for input_id, sequence in rows:
                 yield EmbeddingInput(input_id, sequence)
 
-    def __getitem__(
-        self, index: int | slice
-    ) -> EmbeddingInput | list[EmbeddingInput]:
+    @overload
+    def __getitem__(self, index: int, /) -> EmbeddingInput: ...
+
+    @overload
+    def __getitem__(self, index: slice, /) -> list[EmbeddingInput]: ...
+
+    def __getitem__(self, index: int | slice) -> EmbeddingInput | list[EmbeddingInput]:
         connection = self._require_connection()
+
         if isinstance(index, slice):
             start, stop, step = index.indices(self._count)
             if step != 1:
@@ -236,13 +241,12 @@ def _normalize_inputs(
             is_fasta_path = Path(inputs).is_file()
         except OSError:
             is_fasta_path = False
-    should_spool = disk_backed or is_fasta_path or not isinstance(
-        inputs, (str, Sequence, Mapping)
-    )
-    if is_fasta_path:
-        values: Iterable[str | EmbeddingInput | tuple[str, str]] = iter_fasta(inputs)
+    should_spool = disk_backed or is_fasta_path or not isinstance(inputs, (str, Sequence, Mapping))
+    values: Iterable[str | EmbeddingInput | tuple[str, str]]
+    if isinstance(inputs, Path):
+        values = iter_fasta(inputs)
     elif isinstance(inputs, str):
-        values: Iterable[str | EmbeddingInput | tuple[str, str]] = [inputs]
+        values = iter_fasta(inputs) if is_fasta_path else [inputs]
     elif isinstance(inputs, Mapping):
         values = inputs.items()
     else:
@@ -279,7 +283,7 @@ def _validate_untruncated_lengths(
 
 def _model_device(model: Any) -> torch.device:
     try:
-        return next(model.parameters()).device
+        return torch.device(next(model.parameters()).device)
     except (AttributeError, StopIteration):
         return torch.device("cpu")
 
@@ -370,9 +374,7 @@ def _tokenizer_metadata(model: Any, tokenizer: Any | None) -> dict[str, Any]:
         # non-secret source policy to resume identity without serializing a Hub
         # token or forcing lazy tokenizer initialization.
         for candidate in (model, getattr(model, "model", None)):
-            settings = getattr(candidate, "__dict__", {}).get(
-                "_fastplms_tokenizer_kwargs"
-            )
+            settings = getattr(candidate, "__dict__", {}).get("_fastplms_tokenizer_kwargs")
             if isinstance(settings, Mapping):
                 token_value = settings.get("token")
                 return {
@@ -629,9 +631,7 @@ def _model_identity_metadata(model: Any) -> dict[str, Any]:
         "weights_revision": getattr(config, "fastplms_weights_revision", None),
         "runtime_revision": getattr(config, "fastplms_runtime_revision", None),
         "source_tree_sha256": getattr(config, "fastplms_source_tree_sha256", None),
-        "runtime_bundle_sha256": getattr(
-            config, "fastplms_runtime_bundle_sha256", None
-        ),
+        "runtime_bundle_sha256": getattr(config, "fastplms_runtime_bundle_sha256", None),
     }
 
 
@@ -770,9 +770,7 @@ def _run_fingerprint(
             "batch_size": batch_size,
             "batch_window_size": batch_window_size,
             "max_tokens_per_batch": max_tokens_per_batch,
-            "input_storage": (
-                "disk-spool" if isinstance(records, _InputSpool) else "memory"
-            ),
+            "input_storage": ("disk-spool" if isinstance(records, _InputSpool) else "memory"),
         },
         "model_kwargs": {
             key: _fingerprint_jsonable(value) for key, value in sorted(model_kwargs.items())
@@ -901,8 +899,7 @@ def _embedding_context(
     if hidden_state_source == "decoder":
         has_decoder_batch = callable(getattr(model, "_embedding_batch", None))
         declares_decoder_stack = (
-            model_metadata is not None
-            and model_metadata.get("hidden_state_stack") == "decoder"
+            model_metadata is not None and model_metadata.get("hidden_state_stack") == "decoder"
         )
         if not has_decoder_batch or not declares_decoder_stack:
             raise ValueError(
@@ -980,6 +977,79 @@ def embed_dataset(
 ) -> EmbeddingResult:
     """Embed protein sequences with stable ordering and residue-only pooling."""
 
+    for name, value in (
+        ("batch_size", batch_size),
+        ("shard_size", shard_size),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"{name} must be a positive integer.")
+        if value <= 0:
+            raise ValueError(f"{name} must be a positive integer.")
+    for optional_name, optional_value in (
+        ("max_length", max_length),
+        ("max_tokens_per_batch", max_tokens_per_batch),
+        ("batch_window_size", batch_window_size),
+    ):
+        if optional_value is not None and (
+            not isinstance(optional_value, int) or isinstance(optional_value, bool)
+        ):
+            raise TypeError(f"{optional_name} must be a positive integer when provided.")
+        if optional_value is not None and optional_value <= 0:
+            raise ValueError(f"{optional_name} must be a positive integer when provided.")
+    for name, value in (
+        ("full_embeddings", full_embeddings),
+        ("resume", resume),
+        ("truncate", truncate),
+    ):
+        if not isinstance(value, bool):
+            raise TypeError(f"{name} must be a boolean.")
+    if not isinstance(format, str):
+        raise TypeError("format must be a string.")
+    if output is not None and not isinstance(output, (str, Path)):
+        raise TypeError("output must be a path or None.")
+    if model_state_fingerprint is not None and (
+        not isinstance(model_state_fingerprint, str) or not model_state_fingerprint
+    ):
+        raise ValueError("model_state_fingerprint must be a non-empty string when provided.")
+    if hidden_state_source not in {"encoder", "decoder"}:
+        raise ValueError("hidden_state_source must be 'encoder' or 'decoder'.")
+    hidden_state_index = model_kwargs.get("hidden_state_index", -1)
+    if not isinstance(hidden_state_index, int) or isinstance(hidden_state_index, bool):
+        raise TypeError("hidden_state_index must be an integer.")
+    store_all_hidden_states = model_kwargs.get("store_all_hidden_states", False)
+    if not isinstance(store_all_hidden_states, bool):
+        raise TypeError("store_all_hidden_states must be a boolean.")
+    if decoder_input_ids is not None:
+        if not isinstance(decoder_input_ids, Tensor):
+            raise TypeError("decoder_input_ids must be a tensor.")
+        if decoder_input_ids.is_meta:
+            raise ValueError("decoder_input_ids cannot be a meta tensor.")
+        if decoder_input_ids.ndim != 2 or decoder_input_ids.shape[1] == 0:
+            raise ValueError("decoder_input_ids must have non-empty shape (batch, sequence).")
+        if decoder_input_ids.dtype not in {torch.int32, torch.int64}:
+            raise TypeError("decoder_input_ids must use torch.int32 or torch.int64.")
+    if decoder_attention_mask is not None:
+        if not isinstance(decoder_attention_mask, Tensor):
+            raise TypeError("decoder_attention_mask must be a tensor.")
+        if decoder_attention_mask.is_meta:
+            raise ValueError("decoder_attention_mask cannot be a meta tensor.")
+        if decoder_attention_mask.is_complex() or not bool(
+            torch.isfinite(decoder_attention_mask).all()
+        ):
+            raise ValueError("decoder_attention_mask must contain finite binary values.")
+        if not bool(((decoder_attention_mask == 0) | (decoder_attention_mask == 1)).all()):
+            raise ValueError("decoder_attention_mask must contain finite binary values.")
+    pooling_names = (
+        (("mean",) if not full_embeddings else ())
+        if pooling is None
+        else ((pooling,) if isinstance(pooling, str) else tuple(pooling))
+    )
+    if full_embeddings and pooling is not None:
+        raise ValueError("full_embeddings=True cannot be combined with pooling.")
+    if not full_embeddings and not pooling_names:
+        raise ValueError("pooling is required unless full_embeddings=True.")
+    pooler = Pooler(pooling_names) if pooling_names else None
+
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
     if format == "pth" or (output is not None and Path(output).suffix.lower() == ".pth"):
@@ -1001,9 +1071,7 @@ def embed_dataset(
             "_embedding_batch_identity is required with _embedding_batch_fn so persisted "
             "runs bind the family-specific embedding behavior."
         )
-    if _embedding_batch_identity is not None and not isinstance(
-        _embedding_batch_identity, Mapping
-    ):
+    if _embedding_batch_identity is not None and not isinstance(_embedding_batch_identity, Mapping):
         raise TypeError("_embedding_batch_identity must be a mapping when provided.")
     if isinstance(_allowed_unsupported_pooling, (str, bytes)) or not isinstance(
         _allowed_unsupported_pooling, Sequence
@@ -1014,8 +1082,7 @@ def embed_dataset(
     allowed_unsupported_pooling = frozenset(_allowed_unsupported_pooling)
     if allowed_unsupported_pooling and _embedding_batch_fn is None:
         raise ValueError(
-            "_allowed_unsupported_pooling is only valid with a family-specific "
-            "_embedding_batch_fn."
+            "_allowed_unsupported_pooling is only valid with a family-specific _embedding_batch_fn."
         )
     resolved_batch_window_size = (
         batch_size * _DEFAULT_BATCH_WINDOW_MULTIPLIER
@@ -1072,9 +1139,7 @@ def embed_dataset(
         model_kwargs=model_kwargs,
     )
     if _embedding_batch_identity is not None:
-        embedding_context["family_adapter"] = _fingerprint_jsonable(
-            _embedding_batch_identity
-        )
+        embedding_context["family_adapter"] = _fingerprint_jsonable(_embedding_batch_identity)
         if allowed_unsupported_pooling:
             embedding_context["family_adapter_pooling_override"] = sorted(
                 allowed_unsupported_pooling
@@ -1186,9 +1251,7 @@ def embed_dataset(
     safetensors_writer: SafetensorsStreamWriter | None = None
     if stream_safetensors:
         if output is None:
-            raise RuntimeError(
-                "Safetensors streaming was enabled without an output destination."
-            )
+            raise RuntimeError("Safetensors streaming was enabled without an output destination.")
         transactional_overwrite = output_already_exists and not resume
         safetensors_writer = SafetensorsStreamWriter(
             output,
@@ -1286,16 +1349,31 @@ def embed_dataset(
                         model_kwargs=batch_model_kwargs,
                     )
                 X = batch.X
-                M = batch.residue_mask.to(device=X.device, dtype=torch.bool)
-                if need_attentions:
-                    # Custom embedding adapters own their inference path, so retain
-                    # the same fail-closed length contract at their boundary.
-                    _validate_parti_length(M)
-                valid_X_shape = X.ndim == 3 and M.shape == X.shape[:2]
+                raw_mask = batch.residue_mask
+                if not isinstance(X, Tensor) or not isinstance(raw_mask, Tensor):
+                    raise TypeError("Embedding batches must provide Tensor X and residue_mask.")
+                if X.is_meta or raw_mask.is_meta:
+                    raise ValueError("Embedding batches cannot contain meta tensors.")
+                if not X.is_floating_point():
+                    raise TypeError("Embedding batches must use a floating-point X dtype.")
+                if raw_mask.is_complex() or not bool(torch.isfinite(raw_mask).all()):
+                    raise ValueError("Embedding residue_mask must contain finite binary values.")
+                if not bool(((raw_mask == 0) | (raw_mask == 1)).all()):
+                    raise ValueError("Embedding residue_mask must contain finite binary values.")
+                M = raw_mask.to(device=X.device, dtype=torch.bool)
+                valid_X_shape = (
+                    X.ndim == 3
+                    and X.shape[0] == len(batch_records)
+                    and X.shape[-1] > 0
+                    and M.shape == X.shape[:2]
+                )
                 valid_all_states_shape = (
                     X.ndim == 4
                     and store_all_hidden_states
                     and full_embeddings
+                    and X.shape[0] == len(batch_records)
+                    and X.shape[1] > 0
+                    and X.shape[-1] > 0
                     and M.shape == (X.shape[0], X.shape[2])
                 )
                 if not (valid_X_shape or valid_all_states_shape):
@@ -1304,6 +1382,18 @@ def embed_dataset(
                         "(b, states, l, d) when storing all hidden states, and "
                         "residue_mask with shape (b, l)."
                     )
+                if not bool(M.any(dim=1).all()):
+                    raise ValueError("Every embedding sample must contain a biological residue.")
+                finite_selected = (
+                    torch.isfinite(X) | ~M.unsqueeze(-1)
+                    if X.ndim == 3
+                    else torch.isfinite(X) | ~M[:, None, :, None]
+                )
+                if not bool(finite_selected.all()):
+                    raise ValueError("Biological residue embeddings produced non-finite output.")
+                if need_attentions:
+                    # Validate the biological graph only after mask integrity is established.
+                    _validate_parti_length(M)
                 if dtype is not None:
                     X = X.to(dtype=dtype)
 
@@ -1347,9 +1437,7 @@ def embed_dataset(
                     window_start,
                     new_records,
                     replace_metadata=(
-                        sqlite_initial_metadata
-                        if sqlite_replace_on_first_commit
-                        else None
+                        sqlite_initial_metadata if sqlite_replace_on_first_commit else None
                     ),
                 )
                 sqlite_replace_on_first_commit = False
@@ -1411,9 +1499,7 @@ def embed_dataset(
             "batch_size": batch_size,
             "batch_window_size": resolved_batch_window_size,
             "max_tokens_per_batch": max_tokens_per_batch,
-            "input_storage": (
-                "disk-spool" if isinstance(records, _InputSpool) else "memory"
-            ),
+            "input_storage": ("disk-spool" if isinstance(records, _InputSpool) else "memory"),
             "ordering": "bounded-length-bucketed-stable-output",
             "resume_commit_granularity": (
                 "not-applicable"

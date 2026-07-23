@@ -20,6 +20,8 @@ from benchmarks.suite import (
     ESMFOLD2_DEDICATED_MODE,
     ESMFOLD2_REPRESENTATION_PROFILE,
     FIXED_SHAPES,
+    FLASH_BACKEND_CLAIM_INELIGIBILITY_REASON,
+    FLASH_BACKEND_HISTORICAL_EVIDENCE,
     SEQUENCE_FORWARD_PROFILE,
     STRUCTURE_DEDICATED_MODE,
     STRUCTURE_STARTUP_PROFILE,
@@ -174,6 +176,30 @@ def test_gh200_matrix_explicitly_selects_eager_sdpa_and_flex_only() -> None:
         }
         if spec.family.tokenizer_mode != "structure":
             assert measured == expected
+
+
+def test_flash_benchmark_cases_are_never_claim_eligible() -> None:
+    cases = list(benchmark_cases(family=None, quick=False, local_files_only=True))
+    flash_cases = [case for case in cases if case.backend in FLASH_BACKEND_HISTORICAL_EVIDENCE]
+
+    assert {case.backend for case in flash_cases} == set(FLASH_BACKEND_HISTORICAL_EVIDENCE)
+    assert all(not case.claim_eligible for case in flash_cases)
+    assert all(
+        case.claim_eligibility_reason == FLASH_BACKEND_CLAIM_INELIGIBILITY_REASON
+        for case in flash_cases
+    )
+    for case in flash_cases:
+        assert case.historical_evidence == FLASH_BACKEND_HISTORICAL_EVIDENCE[case.backend]
+
+    current_cases = [
+        case
+        for case in cases
+        if case.backend in {"eager", "sdpa", "flex_attention"} and case.claim_eligible
+    ]
+    assert current_cases
+    assert all(
+        case.historical_evidence == "current_release_execution" for case in current_cases
+    )
 
 
 def test_esmfold2_matrix_separates_projection_from_esmc_precision() -> None:

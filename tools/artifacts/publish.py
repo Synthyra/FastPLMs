@@ -42,8 +42,8 @@ from tools.artifacts.build import (
     _validate_bootstrap,
     _validate_registry_provenance,
     _validate_runtime_bundle,
-    _validated_runtime_snapshot,
     _validated_release_tool_snapshot,
+    _validated_runtime_snapshot,
     hash_file,
     render_model_card,
     validate_artifact,
@@ -614,7 +614,9 @@ def _assert_current_release_texts(
     except OSError as error:
         raise ArtifactError("Artifact model card is missing.") from error
     if b"<runtime-revision>" in actual_card:
-        raise ArtifactError("Artifact model card retains an unresolved runtime-revision placeholder.")
+        raise ArtifactError(
+            "Artifact model card retains an unresolved runtime-revision placeholder."
+        )
     if actual_card != expected["README.md"]:
         raise ArtifactError("Artifact model card differs from the current source tree.")
     for relative_name, expected_payload in expected.items():

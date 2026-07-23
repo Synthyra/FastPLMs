@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -72,7 +73,7 @@ jobs:
           if-no-files-found: error
 
   static:
-    name: lint-and-typing (3.12)
+    name: lint-and-typing (3.12.13)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -82,7 +83,7 @@ jobs:
           submodules: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: "3.12.13"
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.10.12"
@@ -90,15 +91,42 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Install static-analysis dependencies
         run: |
-          uv venv --python 3.12
+          uv venv --python 3.12.13
           uv pip install --python .venv/bin/python \
-            "mypy==1.20.2" "ruff==0.15.21"
+            "mypy==1.20.2" "pytest==9.1.1" "ruff==0.15.21"
       - name: Lint and type-check public orchestration contracts
         run: |
           .venv/bin/ruff check src tests tools examples benchmarks
           mapfile -t MYPY_TARGETS < tools/typing-critical-files.txt
           .venv/bin/mypy --python-version 3.12 --ignore-missing-imports \
+            --explicit-package-bases \
+            --follow-imports=silent \
             "${MYPY_TARGETS[@]}"
+      - name: Test typing gate contracts
+        run: |
+          .venv/bin/python -m pytest \
+            tests/release/test_static_typing_scope.py \
+            tests/release/test_typing_no_regression_gate.py \
+            -q
+      - name: Report broad typing no-regression debt (non-blocking)
+        continue-on-error: true
+        run: |
+          mkdir -p artifacts/typing
+          .venv/bin/python -m tools.typing_gate compare \
+            --baseline tools/typing-baselines/c240d8a.json \
+            --raw-output artifacts/typing/broad-mypy.txt \
+            --scope-manifest tools/typing-diagnostic-files.txt \
+            --repo-root . \
+            --output artifacts/typing/no-regression.json
+      - name: Upload broad typing report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58dc250532a479d7789f # v6
+        with:
+          name: broad-typing-report
+          path: |
+            artifacts/typing/broad-mypy.txt
+            artifacts/typing/no-regression.json
+          if-no-files-found: error
 
   runtime-import-closure:
     name: runtime-import-closure (3.12)
@@ -151,6 +179,7 @@ jobs:
         run: |
           PYTHONPATH=src .venv/bin/python -m tools.artifacts.generate_docs --check
           .venv/bin/python -m pytest \
+            tests/release/test_binder_example_contracts.py \
             tests/release/test_documentation.py \
             tests/release/test_dependency_contracts.py \
             tests/release/test_flash_source_policy.py \
@@ -158,6 +187,7 @@ jobs:
             tests/release/test_model_card_licenses.py \
             tests/release/test_optimized_mode_contracts.py \
             tests/release/test_production_source_boundary.py \
+            tests/release/test_workflow_declared_inputs.py \
             --junitxml=artifacts/junit/docs-licenses.xml
       - name: Upload documentation report
         if: always()
@@ -235,6 +265,12 @@ jobs:
           - extra: binder
             sentinel: abnumber
             torch_backend: cpu
+          - extra: structure-binder
+            primary_extra: structure
+            secondary_extra: binder
+            sentinel: biotite
+            secondary_sentinel: abnumber
+            torch_backend: cpu
           - extra: cueq
             sentinel: cuequivariance-ops-torch-cu13
             torch_backend: cu130
@@ -249,6 +285,9 @@ jobs:
             torch_backend: cu130
           - extra: train
             sentinel: peft
+            torch_backend: cpu
+          - extra: dev
+            sentinel: pytest
             torch_backend: cpu
           - extra: cpu
             sentinel: torch
@@ -270,8 +309,14 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts/resolution
+          PRIMARY_EXTRA="${{ matrix.primary_extra || matrix.extra }}"
+          SECONDARY_EXTRA="${{ matrix.secondary_extra }}"
+          EXTRA_ARGS=(--extra "$PRIMARY_EXTRA")
+          if [[ -n "$SECONDARY_EXTRA" ]]; then
+            EXTRA_ARGS+=(--extra "$SECONDARY_EXTRA")
+          fi
           uv pip compile pyproject.toml \
-            --extra "${{ matrix.extra }}" \
+            "${EXTRA_ARGS[@]}" \
             --group validation \
             --python-version 3.12 \
             --python-platform x86_64-unknown-linux-gnu \
@@ -283,6 +328,11 @@ jobs:
             "artifacts/resolution/${{ matrix.extra }}.txt"
           grep -Eq '^${{ matrix.sentinel }}==' \
             "artifacts/resolution/${{ matrix.extra }}.txt"
+          SECONDARY_SENTINEL="${{ matrix.secondary_sentinel }}"
+          if [[ -n "$SECONDARY_SENTINEL" ]]; then
+            grep -Eq "^${SECONDARY_SENTINEL}==" \
+              "artifacts/resolution/${{ matrix.extra }}.txt"
+          fi
       - name: Upload dependency-resolution evidence
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:

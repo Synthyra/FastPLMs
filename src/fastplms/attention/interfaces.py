@@ -152,6 +152,11 @@ class FastPLMsAttentionMixin:
         legacy = getattr(config, "attn_backend", None)
         requested = canonical if canonical is not None else legacy
         if requested is not None:
+            if not isinstance(requested, str):
+                raise TypeError(
+                    "The configured attention implementation must be a string or None; "
+                    f"received {type(requested).__name__}."
+                )
             self._validate_attention_name(requested)
             # ``PreTrainedModel.__init__`` resolves a missing Transformers
             # implementation to the family default.  Legacy FastPLMs configs

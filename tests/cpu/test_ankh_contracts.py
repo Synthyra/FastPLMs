@@ -63,6 +63,9 @@ test_encoder_only_view_rejects_decoder_hidden_states = (
 test_encoder_task_heads_produce_finite_loss_and_gradients = (
     contracts.test_encoder_task_heads_produce_finite_loss_and_gradients
 )
+test_offline_auto_tokenizer_flags_and_seq2seq_generation_config = (
+    contracts.test_offline_auto_tokenizer_flags_and_seq2seq_generation_config
+)
 test_ankh_decoder_embedding_inputs_use_tight_sentinel_tokenization = (
     contracts.test_ankh_decoder_embedding_inputs_use_tight_sentinel_tokenization
 )

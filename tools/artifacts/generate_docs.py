@@ -264,19 +264,6 @@ CAPABILITY_EVIDENCE_SELECTORS: dict[str, EvidenceSelector] = {
             "dispatch on the frozen release environment."
         ),
     ),
-    "check:flash-unavailability-schema": EvidenceSelector(
-        tier="check",
-        targets=(
-            "tests/unit/test_esmc_diagnostics.py::"
-            "test_esmc_schema_v3_records_locked_flash_unavailability_without_metrics",
-            "tests/release/test_esmc_report_ingestion.py::"
-            "test_flash_unavailability_records_fail_closed_on_false_execution_claims",
-        ),
-        scope=(
-            "Portable schema, tamper, and fail-closed contracts for structured "
-            "FA2/FA3 unavailability evidence."
-        ),
-    ),
     "compliance:deep-backends": EvidenceSelector(
         tier="compliance",
         targets=("tests/parity/test_native_results.py::test_native_representatives_all_backends",),
@@ -708,17 +695,24 @@ def benchmark_autoclass_evidence_pairs(
 def benchmark_backend_evidence(registry: ModelRegistry) -> frozenset[str]:
     """Return only backends emitted by claim-eligible benchmark cases."""
 
-    backends: set[str] = set()
-    for spec in registry.values():
-        family = spec.family
-        if "benchmark" not in family.test_tiers:
-            continue
-        if not (spec.is_deep_reference or family.id == "esmfold2"):
-            continue
-        if family.tokenizer_mode == "structure" and family.id != "esmfold2":
-            continue
-        backends.update(family.attention)
-    return frozenset(backends)
+    from benchmarks.suite import benchmark_cases
+
+    backends = frozenset(
+        str(case.backend)
+        for case in benchmark_cases(
+            family=None,
+            quick=False,
+            local_files_only=True,
+        )
+        if case.claim_eligible
+    )
+    advertised = {backend for family in registry.families.values() for backend in family.attention}
+    unexpected = sorted(backends.difference(advertised))
+    if unexpected:
+        raise ValueError(
+            "Claim-eligible benchmark cases advertise unknown backends: " + ", ".join(unexpected)
+        )
+    return backends
 
 
 def autoclass_evidence_keys(
@@ -783,10 +777,8 @@ def attention_backend_evidence_keys(
     if backend == "flash_attention_2":
         evidence.append("historical:fa2-focused")
         evidence.append("compliance:flash-unavailable-gh200")
-        evidence.append("check:flash-unavailability-schema")
     elif backend == "flash_attention_3":
         evidence.append("compliance:flash-unavailable-gh200")
-        evidence.append("check:flash-unavailability-schema")
     elif any(
         spec.is_deep_reference
         and spec.family.tokenizer_mode != "structure"
@@ -794,7 +786,7 @@ def attention_backend_evidence_keys(
         for spec in registry.values()
     ):
         evidence.append("compliance:deep-backends")
-    if backend in benchmark_backend_evidence(registry):
+    if backend in ESMC_MEASURED_BACKENDS and backend in benchmark_backend_evidence(registry):
         evidence.append("benchmark:claim-eligible-backends")
     return tuple(evidence)
 
@@ -1018,6 +1010,26 @@ def _esmc_require_finite(value: object, *, context: str) -> float:
     if not math.isfinite(numeric):
         raise EsmcReportError(f"{context} must be a finite number")
     return numeric
+
+
+def _esmc_require_gpu_capability(
+    value: object,
+    *,
+    context: str,
+) -> tuple[int, int]:
+    if not isinstance(value, list) or len(value) != 2:
+        raise EsmcReportError(f"{context} must contain exactly two integers")
+    major, minor = value
+    if (
+        isinstance(major, bool)
+        or not isinstance(major, int)
+        or major < 0
+        or isinstance(minor, bool)
+        or not isinstance(minor, int)
+        or minor < 0
+    ):
+        raise EsmcReportError(f"{context} must contain exactly two non-negative integers")
+    return major, minor
 
 
 def _esmc_report_sha256(payload: Mapping[str, object]) -> str:
@@ -1978,23 +1990,100 @@ def _esmc_reference_source_table(value: object) -> list[str]:
 
 
 def _esmc_number(value: object) -> str:
-    numeric = float(value)
+    numeric = _esmc_require_finite(value, context="Rendered ESMC metric")
     if numeric == 0:
         return "0"
     return f"{numeric:.6g}"
 
 
 def _esmc_range(values: Iterable[object]) -> str:
-    numbers = [float(value) for value in values]
+    numbers = [
+        _esmc_require_finite(value, context="Rendered ESMC range metric")
+        for value in values
+    ]
     return f"{_esmc_number(min(numbers))} to {_esmc_number(max(numbers))}"
 
 
 def _esmc_distribution(values: Iterable[object]) -> str:
-    numbers = [float(value) for value in values]
+    numbers = [
+        _esmc_require_finite(value, context="Rendered ESMC distribution metric")
+        for value in values
+    ]
     return (
         f"{_esmc_number(min(numbers))} / "
         f"{_esmc_number(statistics.median(numbers))} / {_esmc_number(max(numbers))}"
     )
+
+
+def _esmc_pip_check_disclosure(
+    evidence: EsmcReportSet | None,
+    *,
+    heading: str,
+) -> str:
+    if evidence is None:
+        status = "The frozen oracle lock permits"
+        exception: Mapping[str, object] = {
+            "accepted_diagnostic": (
+                "nvidia-cusparselt-cu13 0.8.1 is not supported on this platform"
+            ),
+            "distribution": "nvidia-cusparselt-cu13",
+            "version": "0.8.1",
+            "wheel_filename": ("nvidia_cusparselt_cu13-0.8.1-py3-none-manylinux2014_aarch64.whl"),
+            "wheel_sha256": ("4dca476c50bf4780d46cd0bfbd82e2bc10a08e4fef7950917ce8d7578d22a23f"),
+            "filename_platform_tag": "py3-none-manylinux2014_aarch64",
+            "wheel_metadata_platform_tag": "py3-none-manylinux2014_sbsa",
+            "target_hardware": "NVIDIA GH200 480GB",
+            "target_operating_system": "linux",
+            "target_architecture": "aarch64",
+            "resolution": "validated-vendor-metadata-exception-no-wheel-rewrite",
+        }
+    else:
+        status = "The validated oracle environment recorded"
+        pip_check = _esmc_require_mapping(
+            evidence.reference_environment.get("pip_check"),
+            {
+                "status",
+                "returncode",
+                "diagnostics",
+                "accepted_platform_exceptions",
+            },
+            context="Rendered ESMC pip-check evidence",
+        )
+        diagnostics = _esmc_require_list(
+            pip_check["diagnostics"], context="Rendered ESMC pip-check diagnostics"
+        )
+        exceptions = _esmc_require_list(
+            pip_check["accepted_platform_exceptions"],
+            context="Rendered ESMC pip-check platform exceptions",
+        )
+        if (
+            pip_check["status"] != "accepted-platform-exception"
+            or pip_check["returncode"] != 1
+            or len(diagnostics) != 1
+            or len(exceptions) != 1
+        ):
+            raise EsmcReportError("Rendered ESMC pip-check exception identity is invalid")
+        exception = _esmc_require_object(
+            exceptions[0], context="Rendered ESMC pip-check platform exception"
+        )
+        if diagnostics[0] != exception.get("accepted_diagnostic"):
+            raise EsmcReportError("Rendered ESMC pip-check diagnostic is not attested")
+    return f"""\
+{heading} Locked oracle package compatibility exception
+
+{status} exactly one nonzero `pip check` diagnostic:
+`{exception["accepted_diagnostic"]}`. It applies only to
+`{exception["distribution"]}=={exception["version"]}` on
+`{exception["target_hardware"]}` / `{exception["target_operating_system"]}` /
+`{exception["target_architecture"]}`. The vendor filename tag is
+`{exception["filename_platform_tag"]}`, while the wheel metadata declares
+`{exception["wheel_metadata_platform_tag"]}`. The exact wheel is
+`{exception["wheel_filename"]}` with SHA-256 `{exception["wheel_sha256"]}`.
+FastPLMs accepts this vendor metadata mismatch only after the lock, installed
+inventory, wheel bytes, metadata tag, and target identity all match. The wheel
+is not rewritten (`{exception["resolution"]}`). Any additional diagnostic or
+identity drift fails closed.
+"""
 
 
 def _esmc_diagnostic_table(
@@ -2074,12 +2163,16 @@ def _esmc_diagnostic_table(
         evidence.candidate_environment["gpu"],
         context="Rendered ESMC candidate GPU identity",
     )
+    capability = _esmc_require_gpu_capability(
+        gpu["capability"],
+        context="Rendered ESMC candidate GPU capability",
+    )
     reference = _esmc_require_object(
         model_reports[0]["reference"], context="Rendered ESMC reference identity"
     )
     lines = [
         "The following values come from the complete validated schema-v3 release set.",
-        f"All reports used `{gpu['name']}` (SM{gpu['capability'][0]}{gpu['capability'][1]}, "
+        f"All reports used `{gpu['name']}` (SM{capability[0]}{capability[1]}, "
         f"{gpu['total_memory_bytes']} bytes), BF16, runtime "
         f"`{evidence.runtime_identity.runtime_revision}`, source tree "
         f"`{evidence.runtime_identity.source_tree_sha256}`, and runtime bundle "
@@ -2295,11 +2388,17 @@ def _render_esmc_capability_evidence(evidence: EsmcReportSet | None) -> list[str
                 "",
             )
         )
+        lines.extend(_esmc_pip_check_disclosure(evidence, heading="###").rstrip().splitlines())
+        lines.append("")
         return lines
 
     gpu = _esmc_require_object(
         evidence.candidate_environment["gpu"],
         context="Rendered ESMC candidate GPU identity",
+    )
+    capability = _esmc_require_gpu_capability(
+        gpu["capability"],
+        context="Rendered ESMC candidate GPU capability",
     )
     reference = _esmc_require_object(
         evidence.reports[0]["reference"], context="Rendered ESMC reference identity"
@@ -2310,8 +2409,8 @@ def _render_esmc_capability_evidence(evidence: EsmcReportSet | None) -> list[str
             "The set contains 18 measured eager, SDPA, and Flex records and 12",
             "structured FlashAttention 2/3 locked-platform unavailable records.",
             "",
-            f"Exact device: `{gpu['name']}`; capability: `SM{gpu['capability'][0]}"
-            f"{gpu['capability'][1]}`; memory: `{gpu['total_memory_bytes']}` bytes; "
+            f"Exact device: `{gpu['name']}`; capability: `SM{capability[0]}"
+            f"{capability[1]}`; memory: `{gpu['total_memory_bytes']}` bytes; "
             "dtype: `bfloat16`.",
             f"Runtime revision: `{evidence.runtime_identity.runtime_revision}`; source-tree "
             f"SHA-256: `{evidence.runtime_identity.source_tree_sha256}`; runtime-bundle "
@@ -2320,6 +2419,8 @@ def _render_esmc_capability_evidence(evidence: EsmcReportSet | None) -> list[str
         )
     )
     lines.extend(_esmc_reference_source_table(reference["reference_sources"]))
+    lines.extend(("",))
+    lines.extend(_esmc_pip_check_disclosure(evidence, heading="###").rstrip().splitlines())
     lines.extend(
         (
             "",
@@ -3016,6 +3117,7 @@ head.
             model_id=spec.id,
             evidence=esmc_evidence,
         )
+        pip_check_disclosure = _esmc_pip_check_disclosure(esmc_evidence, heading="##")
         return f"""\
 ## ESMC behavior
 
@@ -3043,6 +3145,8 @@ zero are valid sequence-group IDs; `-1` denotes padding. Omit `sequence_id` to
 use `attention_mask` as the padding contract.
 
 {esmc_table}
+
+{pip_check_disclosure}
 
 No number is inferred from a threshold or copied from a different checkpoint.
 Before release, replace each pending cell only through the strict 30-record
@@ -3362,6 +3466,7 @@ does not contain a trained masked-language-model head for that objective, so
             model_id="esmc_6b",
             evidence=esmc_evidence,
         )
+        pip_check_disclosure = _esmc_pip_check_disclosure(esmc_evidence, heading="##")
         if spec.msa_conditioning:
             msa_contract = """\
 ## Alignment-conditioning contract
@@ -3526,6 +3631,8 @@ Attention is supported and non-experimental but can be numerically divergent;
 ESMFold2 does not advertise FlashAttention for the folding interface.
 
 {esmc_table}
+
+{pip_check_disclosure}
 
 Metrics must be tied to the exact ESMFold2 and ESMC revisions, dtype, current
 GH200/aarch64 device and container images, dependency lock, source attestations,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Lock
 from types import SimpleNamespace
@@ -9,6 +10,8 @@ from typing import ClassVar
 
 import pytest
 import torch
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers, processors
+from transformers import AutoTokenizer, GenerationConfig
 
 import fastplms.models.ankh.modeling_ankh as ankh_module
 from fastplms.models.ankh.modeling_ankh import (
@@ -121,6 +124,95 @@ def test_ankh_tokenization_rejects_empty_inputs_and_real_slow_tokenizers() -> No
         normalize_ankh_decoder_prompt("  ")
     with pytest.raises(TypeError, match="requires a fast tokenizer"):
         configure_ankh_tokenizer(SimpleNamespace(is_fast=False))
+
+
+def test_offline_auto_tokenizer_flags_and_seq2seq_generation_config(tmp_path) -> None:
+    """Transformers 5.13 must resolve both tokenizer flags from local artifact bytes."""
+
+    vocabulary = [
+        ("<pad>", 0.0),
+        ("</s>", 0.0),
+        ("<unk>", 0.0),
+        ("A", -1.0),
+        ("C", -1.0),
+        ("D", -1.0),
+        ("X", -1.0),
+        ("<extra_id_0>", 0.0),
+    ]
+    backend = Tokenizer(models.Unigram(vocabulary, unk_id=2))
+    replacement = "\N{LOWER ONE EIGHTH BLOCK}"
+    backend.pre_tokenizer = pre_tokenizers.Metaspace(
+        replacement=replacement,
+        prepend_scheme="never",
+        split=False,
+    )
+    backend.decoder = decoders.Metaspace(
+        replacement=replacement,
+        prepend_scheme="never",
+        split=False,
+    )
+    backend.post_processor = processors.TemplateProcessing(
+        single="$A </s>",
+        pair="$A </s> $B </s>",
+        special_tokens=[("</s>", 1)],
+    )
+    backend.add_special_tokens(["<pad>", "</s>", "<unk>", "<extra_id_0>"])
+    backend.save(str(tmp_path / "tokenizer.json"))
+    tokenizer_config = {
+        "tokenizer_class": "T5Tokenizer",
+        "extra_ids": 1,
+        "pad_token": "<pad>",
+        "eos_token": "</s>",
+        "unk_token": "<unk>",
+        "additional_special_tokens": ["<extra_id_0>"],
+    }
+    special_tokens = {
+        "pad_token": "<pad>",
+        "eos_token": "</s>",
+        "unk_token": "<unk>",
+        "additional_special_tokens": ["<extra_id_0>"],
+    }
+    generation_config = {
+        "decoder_start_token_id": 0,
+        "pad_token_id": 0,
+        "eos_token_id": 1,
+    }
+    for name, payload in (
+        ("tokenizer_config.json", tokenizer_config),
+        ("special_tokens_map.json", special_tokens),
+        ("generation_config.json", generation_config),
+    ):
+        (tmp_path / name).write_text(
+            json.dumps(payload, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    encoded = []
+    for use_fast in (True, False):
+        tokenizer = AutoTokenizer.from_pretrained(
+            tmp_path,
+            use_fast=use_fast,
+            local_files_only=True,
+        )
+        assert tokenizer.is_fast
+        configure_ankh_tokenizer(tokenizer)
+        encoded.append(
+            tokenizer(
+                ["ACD", "AX"],
+                padding=True,
+                return_tensors="pt",
+            )
+        )
+
+    assert torch.equal(encoded[0]["input_ids"], encoded[1]["input_ids"])
+    assert torch.equal(encoded[0]["attention_mask"], encoded[1]["attention_mask"])
+    loaded_generation = GenerationConfig.from_pretrained(
+        tmp_path,
+        local_files_only=True,
+    )
+    assert loaded_generation.decoder_start_token_id == 0
+    assert loaded_generation.pad_token_id == 0
+    assert loaded_generation.eos_token_id == 1
 
 
 def test_ankh_explicit_and_model_owned_tokenizers_share_the_raw_sequence_contract() -> None:

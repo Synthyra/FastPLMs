@@ -1,10 +1,5 @@
-benchmarks
-examples/binder_design_fastplms.py
-examples/fine_tuning.py
-src/fastplms/attention
-src/fastplms/embeddings
 src/fastplms/registry.py
-tools/artifacts
-tools/conversion
-tools/remote
+tools/artifacts/build.py
+tools/artifacts/publish.py
+tools/conversion/state_transforms.py
 tools/source_provenance.py

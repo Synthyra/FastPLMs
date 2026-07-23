@@ -999,7 +999,7 @@ id = "ankh2_large"
 family = "ankh"
 size_category = "large"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/ankh2_large.json=sha256:4a3662a46b366cb8429f40e2c5a45ffeba5322d3f39fe509e2c8bd35b7cd17cd", tensors = "tests/goldens/ankh2_large.safetensors=sha256:25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d" }
+official_golden = { metadata = "tests/goldens/ankh2_large.json=sha256:e8df38994ca1a1e0c598ace34a0b257b264937e4fdbb01bc41544985116b02a4", tensors = "tests/goldens/ankh2_large.safetensors=sha256:25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 canonical_state_sha256 = "597c4fe2fa8711f11a25317905f1d62fa92905e55fdd5c0a79614cd9c9d2bca3"
@@ -1016,6 +1016,7 @@ official_repo = "ElnaggarLab/ankh2-ext2"
 official_revision = "aa9b9fa72288c47d9f618ce80c011e24b54e17a8"
 official_files = [
   "config.json=git-sha1:9286bed4ecbc4f7113024919d16ec9719b0c0748",
+  "generation_config.json=git-sha1:91f792e452403d46e170e206f9e50be5ddef9b9a",
   "pytorch_model.bin=sha256:2df583f28f111276ee22a7b76007f4297e9a69766d60bccd9c8d7169c06ac606",
   "special_tokens_map.json=git-sha1:55b145827029ae9672e50d4bb368540daacce791",
   "tokenizer.json=git-sha1:212c5ef08819fa2463c6289ba4ef7db30e715c0a",
@@ -1027,7 +1028,7 @@ id = "ankh3_large"
 family = "ankh"
 size_category = "large"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/ankh3_large.json=sha256:3724f6ed840d053b6294806229df7663268ec960ee100991aa1293264f71504e", tensors = "tests/goldens/ankh3_large.safetensors=sha256:e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513" }
+official_golden = { metadata = "tests/goldens/ankh3_large.json=sha256:2e5bb05b3baa5baa78f61fef7d2a2c669b0da5dbfaf6b50b12abd3e17253a961", tensors = "tests/goldens/ankh3_large.safetensors=sha256:e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 canonical_state_sha256 = "60acb7ef86e85dc0c51fc1edf4c8e69a0480049723b6b2c95e6e9faa720c112a"
@@ -1044,8 +1045,10 @@ official_repo = "ElnaggarLab/ankh3-large"
 official_revision = "2be091622e8a393f0ef21735070084123c874b6e"
 official_files = [
   "config.json=git-sha1:f5278f77d158cdd8a173df888e3ed365e84a80a3",
+  "generation_config.json=git-sha1:5767cc0cacebfd06884eb27ae1c796d3ca829fd2",
   "pytorch_model.bin=sha256:26321a345e07a25b21c6c41b651c4db91b420892e52c0dcbc55bd7a8f510f95b",
   "special_tokens_map.json=git-sha1:d596919b7fa2a197edd441ec3ec4685ecacd2de4",
+  "spiece.model=sha256:f2b5e1bbd110b71ca9b2878e1fcd3265610076ecc97bd696e8a745c9bacc54e0",
   "tokenizer.json=git-sha1:90f0c94b43c81496b3ca81e3ec1c092ef2dd7fca",
   "tokenizer_config.json=git-sha1:0e699eebfa778698473b4faf1e66ef363b93fb21",
 ]
@@ -1055,8 +1058,8 @@ id = "ankh3_xl"
 family = "ankh"
 size_category = "xlarge"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/ankh3_xl.json=sha256:58e04dd24ed5a8a33cbd83730c391900449dbc2aebfd33e478c4c17cf8c34161", tensors = "tests/goldens/ankh3_xl.safetensors=sha256:72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae" }
-notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
+official_golden = { metadata = "tests/goldens/ankh3_xl.json=sha256:66bb12e033e4163be225d636108a479393228a4f5061015c8af114e766c3c486", tensors = "tests/goldens/ankh3_xl.safetensors=sha256:72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae" }
+notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head. The official PyTorch shard index is deliberately excluded: the builder verifies every declared source shard directly and writes a new canonical safetensors index."
 artifact_source = "official"
 canonical_state_sha256 = "dd2188e0d2ca65232135714eef6de394239734d843ddae4928c7398685d858e7"
 fast_repo = "Synthyra/ANKH3_xl"
@@ -1074,10 +1077,12 @@ official_repo = "ElnaggarLab/ankh3-xl"
 official_revision = "e00113df5c95ef71df7ea3f5a73d56bd00e473a4"
 official_files = [
   "config.json=git-sha1:f8997040e8913df75fd2eebe71a2a8eb750ed0d0",
+  "generation_config.json=git-sha1:91f792e452403d46e170e206f9e50be5ddef9b9a",
   "pytorch_model-00001-of-00003.bin=sha256:2c9793cbee16697cd4149debe07d3a27143e280f6e970fa46042aae820fea981",
   "pytorch_model-00002-of-00003.bin=sha256:31c5a860e414513c829ae52affb0970d7cef2c0545df2d6e1338b6806ab7174b",
   "pytorch_model-00003-of-00003.bin=sha256:055a853bdd3623db95a637935aa299427e837cd8ea69fc04708b0262508bec75",
   "special_tokens_map.json=git-sha1:d596919b7fa2a197edd441ec3ec4685ecacd2de4",
+  "spiece.model=sha256:f2b5e1bbd110b71ca9b2878e1fcd3265610076ecc97bd696e8a745c9bacc54e0",
   "tokenizer.json=git-sha1:90f0c94b43c81496b3ca81e3ec1c092ef2dd7fca",
   "tokenizer_config.json=git-sha1:0e699eebfa778698473b4faf1e66ef363b93fb21",
 ]

@@ -205,7 +205,6 @@ COPY tests/structure/support/boltz2_bundle.py /opt/oracle/tests/structure/suppor
 COPY tests/structure/support/esmfold_bundle.py /opt/oracle/tests/structure/support/esmfold_bundle.py
 COPY tests/structure/support/esmfold2_bundle.py /opt/oracle/tests/structure/support/esmfold2_bundle.py
 COPY tools/source_provenance.py /opt/oracle/tools/source_provenance.py
-COPY tools/remote/__init__.py /opt/oracle/tools/remote/__init__.py
 COPY tools/remote/biohub_reference_environment.py /opt/oracle/tools/remote/biohub_reference_environment.py
 COPY tools/remote/biohub_reference_lock.py /opt/oracle/tools/remote/biohub_reference_lock.py
 COPY tools/remote/biohub_reference_requirements.py /opt/oracle/tools/remote/biohub_reference_requirements.py
@@ -273,8 +272,8 @@ COPY tools/remote/biohub_reference_lock.py /opt/lock-root/biohub_reference_lock.
 COPY --from=biohub_biotraj_wheel \
     /biohub-reference-lock/biotraj-1.2.2-cp312-cp312-linux_aarch64.whl \
     /opt/wheels/biotraj-1.2.2-cp312-cp312-linux_aarch64.whl
-COPY --from=upstream_biohub_transformers --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/biohub-transformers
-COPY --from=upstream_biohub_esm --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/biohub-esm
+COPY --from=upstream_biohub_transformers --exclude=.git --exclude=.git/** --exclude=**/__pycache__ --exclude=**/__pycache__/** --exclude=**/*.pyc --exclude=**/*.pyo . /opt/oracle/vendor/upstream/biohub-transformers
+COPY --from=upstream_biohub_esm --exclude=.git --exclude=.git/** --exclude=**/__pycache__ --exclude=**/__pycache__/** --exclude=**/*.pyc --exclude=**/*.pyo . /opt/oracle/vendor/upstream/biohub-esm
 RUN --mount=type=cache,target=/root/.cache/pip \
     python /opt/lock-root/biohub_reference_lock.py verify-contract \
         --root /opt/lock-root \
@@ -305,6 +304,9 @@ COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
 COPY LICENSES/biohub-esm /licenses/biohub-esm
 COPY LICENSES/biohub-transformers /licenses/biohub-transformers
+RUN test ! -e /opt/oracle/tools/remote/__init__.py && \
+    PYTHONPATH=/opt/oracle python -c \
+        "import importlib.util; import tools.remote.biohub_reference_environment; import tools.remote.biohub_reference_lock; import tools.remote.reference_source_attestation; missing = importlib.util.find_spec('tools.remote.run') is None; raise SystemExit(0 if missing else 'Unexpected tools.remote.run in oracle image.')"
 RUN PYTHONPATH=/opt/oracle python -m tools.remote.reference_source_attestation create \
         --source-root /opt/oracle/vendor/upstream/biohub-esm \
         --contract /opt/oracle/biohub-esm-source-contract.json \

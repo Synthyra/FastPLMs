@@ -1179,9 +1179,9 @@ def test_sqlite_first_batch_publication_is_atomic_and_hidden_run_resumes(tmp_pat
     assert resumed.metadata["run_fingerprint"] != original_run_id
     assert resumed.metadata["complete"] is True
     assert [record.sequence for record in resumed] == replacement_inputs
-    assert load_sqlite_result(path).metadata["run_fingerprint"] == resumed.metadata[
-        "run_fingerprint"
-    ]
+    assert (
+        load_sqlite_result(path).metadata["run_fingerprint"] == resumed.metadata["run_fingerprint"]
+    )
 
 
 def test_sqlite_same_run_replacement_is_deferred_until_first_batch_commit(tmp_path) -> None:
@@ -1255,16 +1255,15 @@ def test_sqlite_prepublication_schema_remains_readable_and_migrates(tmp_path) ->
         resume=False,
     )
     with sqlite3.connect(path) as connection:
-        columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()
-        }
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
     assert "published_order" in columns
-    assert load_sqlite_result(path).metadata["run_fingerprint"] == replacement.metadata[
-        "run_fingerprint"
+    assert (
+        load_sqlite_result(path).metadata["run_fingerprint"]
+        == replacement.metadata["run_fingerprint"]
+    )
+    assert [record.sequence for record in load_sqlite_result(path, run_id=original_run_id)] == [
+        "AC"
     ]
-    assert [
-        record.sequence for record in load_sqlite_result(path, run_id=original_run_id)
-    ] == ["AC"]
 
 
 def test_safetensors_round_trip_is_lazy(tmp_path) -> None:
@@ -1397,9 +1396,7 @@ def test_persistent_resume_metadata_records_true_commit_granularity(
         format=format,
     )
 
-    assert result.metadata["batching"]["resume_commit_granularity"] == (
-        expected_granularity
-    )
+    assert result.metadata["batching"]["resume_commit_granularity"] == (expected_granularity)
 
 
 def test_safetensors_streaming_packs_batches_into_shards(tmp_path) -> None:
@@ -1749,3 +1746,183 @@ def test_new_api_never_writes_pth(tmp_path) -> None:
             output=tmp_path / "embeddings.pth",
             format="pth",
         )
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("batch_size", True),
+        ("batch_size", 1.5),
+        ("max_length", True),
+        ("max_tokens_per_batch", True),
+        ("batch_window_size", True),
+        ("shard_size", True),
+        ("full_embeddings", 1),
+        ("resume", 1),
+        ("truncate", 1),
+        ("model_state_fingerprint", ""),
+    ],
+)
+def test_strict_embedding_controls_fail_before_consuming_inputs(name, value) -> None:
+    consumed = False
+
+    def source():
+        nonlocal consumed
+        consumed = True
+        yield "AC"
+
+    with pytest.raises((TypeError, ValueError)):
+        embed_dataset(SyntheticEmbeddingModel(), source(), **{name: value})
+    assert consumed is False
+
+
+@pytest.mark.parametrize(
+    "decoder_input_ids",
+    [
+        torch.tensor([1], dtype=torch.int64),
+        torch.empty((1, 0), dtype=torch.int64),
+        torch.tensor([[1]], dtype=torch.int16),
+        torch.tensor([[1.0]], dtype=torch.float32),
+    ],
+)
+def test_decoder_input_ids_require_nonempty_2d_int32_or_int64(decoder_input_ids) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        embed_dataset(
+            SyntheticDecoderEmbeddingModel(),
+            ["AC"],
+            hidden_state_source="decoder",
+            decoder_input_ids=decoder_input_ids,
+        )
+
+
+@pytest.mark.parametrize(
+    "decoder_attention_mask",
+    [
+        torch.tensor([[0, 2]], dtype=torch.int64),
+        torch.tensor([[0.0, float("nan")]]),
+        torch.tensor([[1]], dtype=torch.int64),
+    ],
+)
+def test_decoder_attention_masks_are_exact_finite_binary_shapes(
+    decoder_attention_mask,
+) -> None:
+    with pytest.raises(ValueError):
+        embed_dataset(
+            SyntheticDecoderEmbeddingModel(),
+            ["AC"],
+            hidden_state_source="decoder",
+            decoder_input_ids=torch.tensor([[1, 2]], dtype=torch.int64),
+            decoder_attention_mask=decoder_attention_mask,
+        )
+
+
+class InvalidEmbeddingBatchModel(SyntheticEmbeddingModel):
+    def __init__(self, case: str) -> None:
+        super().__init__()
+        self.case = case
+
+    def _embedding_batch(self, sequences: list[str]) -> EmbeddingBatch:
+        batch = super()._embedding_batch(sequences)
+        if self.case == "x_type":
+            return EmbeddingBatch(X="bad", residue_mask=batch.residue_mask)  # type: ignore[arg-type]
+        if self.case == "mask_type":
+            return EmbeddingBatch(X=batch.X, residue_mask="bad")  # type: ignore[arg-type]
+        if self.case == "x_integer":
+            return EmbeddingBatch(X=batch.X.to(torch.int64), residue_mask=batch.residue_mask)
+        if self.case == "mask_nonbinary":
+            return EmbeddingBatch(X=batch.X, residue_mask=batch.residue_mask.float() * 0.5)
+        if self.case == "wrong_batch":
+            return EmbeddingBatch(X=batch.X[:1], residue_mask=batch.residue_mask[:1])
+        X = batch.X.clone()
+        X[0, 1, 0] = torch.inf
+        return EmbeddingBatch(X=X, residue_mask=batch.residue_mask)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["x_type", "mask_type", "x_integer", "mask_nonbinary", "wrong_batch", "nonfinite"],
+)
+def test_embedding_batch_adapter_outputs_are_validated(case) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        embed_dataset(InvalidEmbeddingBatchModel(case), ["AC", "GG"])
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["loader_type", "dtype", "verify", "record_tensor"],
+)
+def test_embedding_value_types_fail_closed(case) -> None:
+    if case == "record_tensor":
+        with pytest.raises(TypeError):
+            EmbeddingRecord("id", "AC", object())  # type: ignore[arg-type]
+        return
+    reference = LazyTensorReference(
+        source="memory",
+        key="x",
+        dtype="float32",
+        shape=(1,),
+        sha256="0" * 64,
+        _loader=(lambda: object()) if case == "loader_type" else (lambda: torch.ones(1)),
+    )
+    if case == "loader_type":
+        with pytest.raises(TypeError):
+            reference.load(verify=False)
+    elif case == "dtype":
+        wrong_dtype = LazyTensorReference(
+            source="memory",
+            key="x",
+            dtype="float64",
+            shape=(1,),
+            sha256="0" * 64,
+            _loader=lambda: torch.ones(1),
+        )
+        with pytest.raises(ValueError, match="dtype"):
+            wrong_dtype.load(verify=False)
+    else:
+        with pytest.raises(TypeError, match="verify"):
+            reference.load(verify=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"damping": float("nan")},
+        {"tolerance": 0.0},
+        {"max_iterations": True},
+    ],
+)
+def test_pagerank_controls_require_finite_valid_values(kwargs) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        pagerank_weights(torch.ones(2, 2), **kwargs)
+
+
+def test_tensor_sha256_uses_bounded_chunks_and_preserves_legacy_digest(monkeypatch) -> None:
+    from fastplms.embeddings import storage
+
+    X = torch.arange(12, dtype=torch.float32).reshape(3, 4).transpose(0, 1)
+    expected = hashlib.sha256()
+    expected.update(b"float32")
+    expected.update(json.dumps(tuple(X.shape)).encode())
+    expected.update(X.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes())
+
+    monkeypatch.setattr(storage, "_TENSOR_HASH_CHUNK_BYTES", 7)
+    monkeypatch.setattr(
+        storage,
+        "_tensor_bytes",
+        lambda _: (_ for _ in ()).throw(AssertionError("full byte copy used")),
+    )
+    assert storage.tensor_sha256(X) == expected.hexdigest()
+
+
+def test_sqlite_lazy_references_are_absolute_after_cwd_change(tmp_path: Path, monkeypatch) -> None:
+    output = tmp_path / "embeddings.sqlite"
+    saved = save_sqlite_result(
+        EmbeddingResult(
+            [EmbeddingRecord("id", "AC", torch.arange(4, dtype=torch.float32))],
+            {"run_fingerprint": "absolute-path"},
+        ),
+        output,
+    )
+    monkeypatch.chdir(tmp_path.parent)
+    assert Path(saved[0].tensor.source).is_absolute()
+    assert torch.equal(saved[0].load_tensor(), torch.arange(4, dtype=torch.float32))

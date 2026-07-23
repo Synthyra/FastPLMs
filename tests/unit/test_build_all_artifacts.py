@@ -91,6 +91,87 @@ def test_build_all_registry_binds_official_source_artifact_validation(
     ]
 
 
+def test_ankh_build_all_downloads_and_provenances_every_declared_source_asset(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Required tokenizer/generation assets travel with the selected official state."""
+
+    registry = get_model_registry()
+    model_ids = (
+        "ankh_base",
+        "ankh_large",
+        "ankh2_large",
+        "ankh3_large",
+        "ankh3_xl",
+    )
+    downloads: list[tuple[str, str, tuple[str, ...]]] = []
+
+    def fake_snapshot_download(
+        *,
+        repo_id: str,
+        revision: str,
+        allow_patterns: list[str],
+    ) -> str:
+        downloads.append((repo_id, revision, tuple(allow_patterns)))
+        destination = tmp_path / "snapshots" / str(len(downloads))
+        destination.mkdir(parents=True)
+        return str(destination)
+
+    def fake_build_local_artifact(
+        *,
+        model_id: str,
+        checkpoint_dir: Path,
+        output_root: Path,
+        source_root: Path,
+        tokenizer_dir: Path | None,
+        replace: bool,
+    ) -> Path:
+        del checkpoint_dir, source_root
+        assert tokenizer_dir is not None
+        assert not replace
+        destination = output_root / model_id
+        destination.mkdir(parents=True)
+        return destination
+
+    monkeypatch.setattr(build_all_module, "snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(
+        build_all_module,
+        "build_local_artifact",
+        fake_build_local_artifact,
+    )
+    monkeypatch.setattr(build_all_module, "validate_artifact", lambda *_args, **_kwargs: None)
+
+    build_all_module.build_all_artifacts(
+        output_root=tmp_path / "artifacts",
+        source_root=tmp_path / "source",
+        model_ids=model_ids,
+    )
+
+    assert len(downloads) == len(model_ids)
+    for model_id, (repo_id, revision, allow_patterns) in zip(
+        model_ids,
+        downloads,
+        strict=True,
+    ):
+        spec = registry[model_id]
+        assert (repo_id, revision) == (
+            spec.artifact_checkpoint.repo_id,
+            spec.artifact_checkpoint.revision,
+        )
+        assert allow_patterns == tuple(item.path for item in spec.official.files)
+        provenance = build_module._expected_registry_provenance(registry, spec)
+        assert provenance["official_checkpoint"]["files"] == {
+            item.path: item.encoded for item in spec.official.files
+        }
+
+    assert "generation_config.json" in downloads[2][2]
+    assert "spiece.model" in downloads[3][2]
+    assert "generation_config.json" in downloads[4][2]
+    assert "spiece.model" in downloads[4][2]
+    assert "pytorch_model.bin.index.json" not in downloads[4][2]
+
+
 def test_benchmark_artifact_selection_is_manifest_derived_and_includes_nested_backbone() -> None:
     registry = get_model_registry()
     selected = benchmark_artifact_model_ids()

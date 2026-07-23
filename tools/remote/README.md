@@ -44,8 +44,10 @@ pull-request gate. Its required CPU status is `cpu-contracts (3.12)`. The
 workflow runs the separate hermetic CPU contract plus lint, bounded strict
 typing, generated-document, license, model-card, wheel/sdist, runtime-import,
 dependency-resolution, and clean-wheel jobs on Python 3.11 through 3.14. The
-dependency-resolution matrix checks the `structure`,
-`reporting`, `flash`, and Linux CUDA 13 `fp8` extras without importing GPU-only
+dependency-resolution matrix checks every public extra: `cpu`, `dev`, `structure`,
+`binder`, `cueq`, `reporting`, `flash`, `fp8`, and `train`. It separately resolves
+the published `structure` plus `binder` combination. The CUDA-only `cueq` and
+`fp8` cases resolve against Linux CUDA 13 metadata without importing GPU-only
 libraries or downloading and compiling attention kernels.
 
 `gpu-golden-smoke` is the conditional Hopper/SM90 tier. The current release run

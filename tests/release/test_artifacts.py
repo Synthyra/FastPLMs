@@ -36,6 +36,7 @@ from tools.artifacts import (
     verify_checkpoint,
 )
 from tools.artifacts.build import (
+    _RELEASE_TOOL_SCOPE_PATHS,
     _canonical_state_sha256,
     _checkpoint_identity_hash,
     _conversion_equality_attestation,
@@ -43,12 +44,11 @@ from tools.artifacts.build import (
     _copy_official_tokenizer_assets,
     _git_runtime_revision,
     _is_weight_file,
-    _provenance,
-    _RELEASE_TOOL_SCOPE_PATHS,
     _materialize_model_card,
+    _provenance,
     _tokenizer_checkpoint,
-    _validated_release_tool_snapshot,
     _validate_vendor_revisions,
+    _validated_release_tool_snapshot,
     render_model_card,
 )
 
@@ -1932,6 +1932,7 @@ def test_artifact_build_retains_validated_names_when_worktree_file_is_deleted(
         checkpoint,
         tmp_path / "artifact",
         source_root,
+        _allow_untracked_runtime_for_tests=True,
     )
 
     assert (artifact / "fastplms" / "models" / "toy" / "modeling_toy.py").read_bytes() == (

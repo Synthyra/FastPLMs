@@ -130,8 +130,31 @@ def _timeout_test(_signum: int, _frame: object) -> None:
 
 
 def _fail_session(session: pytest.Session, message: str) -> None:
+    failures = getattr(session.config, "_fastplms_gate_failures", None)
+    if failures is None:
+        failures = []
+        session.config._fastplms_gate_failures = failures
+    if message not in failures:
+        failures.append(message)
     session.exitstatus = pytest.ExitCode.TESTS_FAILED
     warnings.warn(pytest.PytestWarning(message), stacklevel=2)
+
+
+def _enforce_concurrent_memory_budget(
+    session: pytest.Session,
+    memory_gate: dict[str, object],
+) -> None:
+    selected_peak = memory_gate.get("peak_bytes")
+    if not isinstance(selected_peak, int) or isinstance(selected_peak, bool):
+        _fail_session(session, "CPU contract concurrent memory peak is unavailable")
+        return
+    if selected_peak > _MAX_SUITE_RSS_BYTES:
+        _fail_session(
+            session,
+            "CPU contract concurrent memory budget exceeded "
+            f"({memory_gate.get('metric', 'unavailable')}): "
+            f"{selected_peak / 1024**3:.2f} GiB > 4 GiB",
+        )
 
 
 def _cache_snapshot() -> dict[str, object]:
@@ -175,6 +198,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     session.config._fastplms_cpu_durations = []  # type: ignore[attr-defined]
     session.config._fastplms_cpu_phase_durations = {}  # type: ignore[attr-defined]
     session.config._fastplms_cpu_outcomes = {}  # type: ignore[attr-defined]
+    session.config._fastplms_gate_failures = []  # type: ignore[attr-defined]
     session.config._fastplms_cache_before = _cache_snapshot()  # type: ignore[attr-defined]
     if not hasattr(session.config, "workerinput"):
         session.config._fastplms_worker_memory = {}  # type: ignore[attr-defined]
@@ -200,6 +224,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
         session.config._fastplms_concurrent_memory_sampler = sampler  # type: ignore[attr-defined]
 
 
+@pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     del exitstatus
     started = session.config._fastplms_cpu_started  # type: ignore[attr-defined]
@@ -207,7 +232,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     is_worker = hasattr(session.config, "workerinput")
     worker_output = getattr(session.config, "workeroutput", None)
     if isinstance(worker_output, dict):
-        worker_id = str(session.config.workerinput.get("workerid", ""))  # type: ignore[attr-defined]
+        worker_input = session.config.workerinput  # type: ignore[attr-defined]
+        worker_id = str(worker_input.get("workerid", ""))
         try:
             worker_output["fastplms_memory_evidence"] = capture_process_memory(
                 worker_id,
@@ -260,7 +286,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
         concurrent_errors: list[str] = []
         try:
-            sampler = session.config._fastplms_concurrent_memory_sampler  # type: ignore[attr-defined]
+            sampler = (  # type: ignore[attr-defined]
+                session.config._fastplms_concurrent_memory_sampler
+            )
             concurrent_memory = sampler.stop()
             memory_gate = select_concurrent_memory_gate(concurrent_memory)
         except (AttributeError, MemoryEvidenceError) as error:
@@ -289,19 +317,14 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         if memory_gate.get("fallback_used") is True:
             warnings.warn(
                 pytest.PytestWarning(
-                    "CPU contract PSS evidence was incomplete; enforcing the 4 GiB "
-                    "budget with conservative concurrent RSS instead: "
+                    "CPU contract PSS evidence was incomplete for one or more "
+                    "processes; enforcing the 4 GiB budget with the per-process "
+                    "PSS/RSS hybrid: "
                     + "; ".join(memory_gate.get("fallback_reasons", []))
                 ),
                 stacklevel=2,
             )
-        if isinstance(selected_peak, int) and selected_peak > _MAX_SUITE_RSS_BYTES:
-            _fail_session(
-                session,
-                "CPU contract concurrent memory budget exceeded "
-                f"({memory_gate.get('metric', 'unavailable')}): "
-                f"{selected_peak / 1024**3:.2f} GiB > 4 GiB",
-            )
+        _enforce_concurrent_memory_budget(session, memory_gate)
         durations = list(
             getattr(session.config, "_fastplms_cpu_durations", [])
         ) + list(getattr(session.config, "_fastplms_worker_durations", []))
@@ -331,6 +354,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
                     "peak_concurrent_rss_bytes": concurrent_memory.get(
                         "peak_concurrent_rss_bytes"
                     ),
+                    "peak_concurrent_hybrid_bytes": concurrent_memory.get(
+                        "peak_concurrent_hybrid_bytes"
+                    ),
                     "peak_concurrent_pss_bytes": concurrent_memory.get(
                         "peak_concurrent_pss_bytes"
                     ),
@@ -345,8 +371,15 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
                     "before_collection": cache_before,
                     "after_session": _cache_snapshot(),
                 },
+                "gate_failures": list(
+                    getattr(session.config, "_fastplms_gate_failures", [])
+                ),
             },
         )
+        if getattr(session.config, "_fastplms_gate_failures", []):
+            # This assignment runs try-last so no normal session-finish hook can
+            # turn a resource-gate failure back into a successful process exit.
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 @pytest.hookimpl(optionalhook=True)

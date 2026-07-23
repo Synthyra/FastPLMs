@@ -24,6 +24,21 @@ dependency lock, installed inventory, and official source attestations.
 A partial, stale, malformed, self-digest-invalid, or cross-device set fails
 closed and cannot replace this status.
 
+### Locked oracle package compatibility exception
+
+The frozen oracle lock permits exactly one nonzero `pip check` diagnostic:
+`nvidia-cusparselt-cu13 0.8.1 is not supported on this platform`. It applies only to
+`nvidia-cusparselt-cu13==0.8.1` on
+`NVIDIA GH200 480GB` / `linux` /
+`aarch64`. The vendor filename tag is
+`py3-none-manylinux2014_aarch64`, while the wheel metadata declares
+`py3-none-manylinux2014_sbsa`. The exact wheel is
+`nvidia_cusparselt_cu13-0.8.1-py3-none-manylinux2014_aarch64.whl` with SHA-256 `4dca476c50bf4780d46cd0bfbd82e2bc10a08e4fef7950917ce8d7578d22a23f`.
+FastPLMs accepts this vendor metadata mismatch only after the lock, installed
+inventory, wheel bytes, metadata tag, and target identity all match. The wheel
+is not rewritten (`validated-vendor-metadata-exception-no-wheel-rewrite`). Any additional diagnostic or
+identity drift fails closed.
+
 ## Executable evidence selectors
 
 Only the selectors below are claimed. Their scopes are intentionally narrower
@@ -42,7 +57,6 @@ automatically apply to the capability in this row.
 | `nightly:sequence-backends` | `nightly` | `tests/integration/test_backend_consistency.py` | Current GH200 eager, SDPA, and Flex forward/backward paths. Flash kernels are not downloaded, built, or executed in the current locked environment. |
 | `historical:fa2-focused` | `historical` | `tools/remote/run.py::_kernel_capability_preflight` | Policy records prior real FlashAttention 2 focused execution, but the immutable execution report is not bundled in this repository and no current GH200 numerical claim is inferred from it. |
 | `compliance:flash-unavailable-gh200` | `compliance` | `tests/parity/test_native_results.py::test_esmc_bf16_calibration_and_biological_holdout` | Complete report-bound FA2/FA3 unavailability records and fail-closed dispatch on the frozen release environment. |
-| `check:flash-unavailability-schema` | `check` | `tests/unit/test_esmc_diagnostics.py::test_esmc_schema_v3_records_locked_flash_unavailability_without_metrics`<br>`tests/release/test_esmc_report_ingestion.py::test_flash_unavailability_records_fail_closed_on_false_execution_claims` | Portable schema, tamper, and fail-closed contracts for structured FA2/FA3 unavailability evidence. |
 | `compliance:deep-backends` | `compliance` | `tests/parity/test_native_results.py::test_native_representatives_all_backends` | Every advertised backend on the pinned deep sequence representative per family. |
 | `benchmark:claim-eligible-backends` | `benchmark` | `benchmarks/suite.py::benchmark_cases[claim_eligible=True]` | Backends emitted by claim-eligible sequence and ESMFold2 benchmark cases. |
 | `cpu:embedding-contracts` | `cpu_contract` | `tests/cpu/test_embedding_contracts.py` | Ordered inputs, biological masking, pooling, streaming, and persistence. |
@@ -134,8 +148,8 @@ These tests run under the required offline `cpu_contract` gate.
 | Backend | Advertising families | Guide | Example | Required evidence |
 | --- | --- | --- | --- | --- |
 | `eager` | `ankh`, `boltz2`, `dplm`, `esm2`, `esm3`, `esm_plusplus`, `esmfold`, `esmfold2` | [guide](../attention_backends.md) | [example](../../examples/attention_switching.py) | `cpu:attention-contracts`, `nightly:sequence-backends`, `compliance:deep-backends`, `benchmark:claim-eligible-backends` |
-| `flash_attention_2` | `esm2`, `esm_plusplus` | [guide](../attention_backends.md) | [example](../../examples/attention_switching.py) | `cpu:attention-contracts`, `historical:fa2-focused`, `compliance:flash-unavailable-gh200`, `check:flash-unavailability-schema`, `benchmark:claim-eligible-backends` |
-| `flash_attention_3` | `dplm`, `esm2`, `esm_plusplus` | [guide](../attention_backends.md) | [example](../../examples/attention_switching.py) | `cpu:attention-contracts`, `compliance:flash-unavailable-gh200`, `check:flash-unavailability-schema`, `benchmark:claim-eligible-backends` |
+| `flash_attention_2` | `esm2`, `esm_plusplus` | [guide](../attention_backends.md) | [example](../../examples/attention_switching.py) | `cpu:attention-contracts`, `historical:fa2-focused`, `compliance:flash-unavailable-gh200` |
+| `flash_attention_3` | `dplm`, `esm2`, `esm_plusplus` | [guide](../attention_backends.md) | [example](../../examples/attention_switching.py) | `cpu:attention-contracts`, `compliance:flash-unavailable-gh200` |
 | `flex_attention` | `dplm`, `e1`, `esm2`, `esm3`, `esm_plusplus`, `esmfold`, `esmfold2` | [guide](../attention_backends.md) | [example](../../examples/attention_switching.py) | `cpu:attention-contracts`, `nightly:sequence-backends`, `compliance:deep-backends`, `benchmark:claim-eligible-backends` |
 | `sdpa` | `ankh`, `dplm`, `dplm2`, `e1`, `esm2`, `esm3`, `esm_plusplus`, `esmfold`, `esmfold2` | [guide](../attention_backends.md) | [example](../../examples/attention_switching.py) | `cpu:attention-contracts`, `nightly:sequence-backends`, `compliance:deep-backends`, `benchmark:claim-eligible-backends` |
 

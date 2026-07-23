@@ -40,12 +40,17 @@ def test_binder_example_uses_project_python_and_dependency_metadata() -> None:
     for fragment in (
         "uv run",
         "--extra structure",
-        "--with abnumber",
-        "--with pandas",
-        "--with pyarrow",
+        "--extra binder",
         "python examples/binder_design_fastplms.py",
     ):
         assert fragment in guide
+    for fragment in (
+        "--with abnumber",
+        "--with anarcii",
+        "--with pandas",
+        "--with pyarrow",
+    ):
+        assert fragment not in guide
 
 
 def test_binder_validation_survives_python_optimized_mode() -> None:

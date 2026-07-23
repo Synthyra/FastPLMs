@@ -2,8 +2,10 @@
   "checkpoint": {
     "files": {
       "config.json": "git-sha1:f5278f77d158cdd8a173df888e3ed365e84a80a3",
+      "generation_config.json": "git-sha1:5767cc0cacebfd06884eb27ae1c796d3ca829fd2",
       "pytorch_model.bin": "sha256:26321a345e07a25b21c6c41b651c4db91b420892e52c0dcbc55bd7a8f510f95b",
       "special_tokens_map.json": "git-sha1:d596919b7fa2a197edd441ec3ec4685ecacd2de4",
+      "spiece.model": "sha256:f2b5e1bbd110b71ca9b2878e1fcd3265610076ecc97bd696e8a745c9bacc54e0",
       "tokenizer.json": "git-sha1:90f0c94b43c81496b3ca81e3ec1c092ef2dd7fca",
       "tokenizer_config.json": "git-sha1:0e699eebfa778698473b4faf1e66ef363b93fb21"
     },

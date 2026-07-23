@@ -923,8 +923,12 @@ def _validated_release_tool_snapshot(
     """
 
     source_root = source_root.resolve()
-    git_metadata = source_root / ".git"
     payloads: dict[str, bytes]
+    if _allow_untracked_for_tests:
+        payloads = {"test-only-release-tool-scope": b"untracked test fixture"}
+        tool_digest = _release_tool_scope_digest(payloads)
+        return f"release-tools-sha256:{tool_digest}", tool_digest, payloads
+    git_metadata = source_root / ".git"
     if git_metadata.exists() or git_metadata.is_symlink():
         command_prefix = ["git", "-c", f"safe.directory={source_root.as_posix()}"]
         try:
@@ -1044,14 +1048,10 @@ def _validated_release_tool_snapshot(
         tool_digest = _release_tool_scope_digest(payloads)
         return f"release-tools-sha256:{tool_digest}", tool_digest, payloads
 
-    if not _allow_untracked_for_tests:
-        raise ArtifactError(
-            "Artifact release tools require either a clean verifiable Git worktree "
-            "or a content-attested tracked remote source archive."
-        )
-    payloads = {"test-only-release-tool-scope": b"untracked test fixture"}
-    tool_digest = _release_tool_scope_digest(payloads)
-    return f"release-tools-sha256:{tool_digest}", tool_digest, payloads
+    raise ArtifactError(
+        "Artifact release tools require either a clean verifiable Git worktree "
+        "or a content-attested tracked remote source archive."
+    )
 
 
 def _runtime_source_entries(
@@ -1950,6 +1950,10 @@ def _validated_model_card_template(
     source_root = source_root.resolve()
     card_relative = f"model_cards/{spec.id}.md"
     card_source = source_root.joinpath(*PurePosixPath(card_relative).parts)
+    if _allow_untracked_for_tests:
+        if card_source.is_file() and not card_source.is_symlink():
+            return card_source.read_text(encoding="utf-8")
+        return render_model_card(spec)
     git_metadata = source_root / ".git"
     if git_metadata.exists() or git_metadata.is_symlink():
         if re.fullmatch(r"[0-9a-f]{40}", release_tool_revision) is None:
@@ -2044,14 +2048,10 @@ def _validated_model_card_template(
         except UnicodeDecodeError as error:
             raise ArtifactError("Attested model-card template is not UTF-8.") from error
 
-    if not _allow_untracked_for_tests:
-        raise ArtifactError(
-            "Artifact model-card templates require either a clean verifiable Git worktree "
-            "or a content-attested tracked remote source archive."
-        )
-    if card_source.is_file() and not card_source.is_symlink():
-        return card_source.read_text(encoding="utf-8")
-    return render_model_card(spec)
+    raise ArtifactError(
+        "Artifact model-card templates require either a clean verifiable Git worktree "
+        "or a content-attested tracked remote source archive."
+    )
 
 
 def _materialize_model_card(

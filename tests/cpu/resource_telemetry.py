@@ -168,6 +168,35 @@ def _read_pss_bytes(proc_root: Path, process_id: int) -> tuple[int | None, str |
     return pss_bytes, None
 
 
+def _read_process_identity(
+    proc_root: Path,
+    process_id: int,
+) -> tuple[int, str] | None:
+    """Return Linux process start time and state for PID-reuse-safe sampling."""
+
+    path = proc_root / str(process_id) / "stat"
+    text = _read_proc_text(path)
+    if text is None:
+        return None
+    closing_parenthesis = text.rfind(")")
+    if closing_parenthesis < 0:
+        raise MemoryEvidenceError(f"invalid process identity record in {path}")
+    raw_pid = text[:closing_parenthesis].partition("(")[0].strip()
+    fields = text[closing_parenthesis + 1 :].split()
+    if raw_pid != str(process_id) or len(fields) < 20:
+        raise MemoryEvidenceError(f"invalid process identity record in {path}")
+    state = fields[0]
+    if len(state) != 1:
+        raise MemoryEvidenceError(f"invalid process state in {path}: {state!r}")
+    try:
+        start_time = int(fields[19])
+    except ValueError as error:
+        raise MemoryEvidenceError(f"invalid process start time in {path}") from error
+    if start_time < 0:
+        raise MemoryEvidenceError(f"negative process start time in {path}")
+    return start_time, state
+
+
 def sample_process_tree_memory(
     *,
     root_pids: Iterable[int],
@@ -180,26 +209,71 @@ def sample_process_tree_memory(
     process_ids = collect_process_tree_pids(proc_root, roots)
     processes: list[dict[str, object]] = []
     fallback_reasons: set[str] = set()
+    transient_process_events: set[str] = set()
     for process_id in process_ids:
+        identity_before = _read_process_identity(proc_root, process_id)
+        if identity_before is None:
+            transient_process_events.add(
+                f"pid {process_id}: disappeared before memory sampling"
+            )
+            continue
+        if identity_before[1] == "Z":
+            processes.append(
+                {
+                    "pid": process_id,
+                    "rss_bytes": 0,
+                    "pss_bytes": 0,
+                    "accounted_bytes": 0,
+                    "accounting_metric": "zero-resident-zombie",
+                    "state": "Z",
+                }
+            )
+            continue
         rss_bytes = _read_rss_bytes(proc_root, process_id)
         if rss_bytes is None:
+            transient_process_events.add(
+                f"pid {process_id}: disappeared before RSS sampling completed"
+            )
             continue
         pss_bytes, pss_error = _read_pss_bytes(proc_root, process_id)
-        process_root = proc_root / str(process_id)
-        if pss_bytes is None and not process_root.exists():
-            # Do not combine RSS from a process that exited before its PSS
-            # could be observed. A subsequent sample accounts its replacement.
-            continue
-        if pss_bytes is None and rss_bytes == 0:
-            pss_bytes = 0
-            pss_error = None
+        identity_after = _read_process_identity(proc_root, process_id)
+        if identity_after is not None and identity_after[0] != identity_before[0]:
+            transient_process_events.add(
+                f"pid {process_id}: PID was reused during memory sampling"
+            )
+            pss_bytes = None
+            pss_error = "PID identity changed during PSS sampling"
+        if pss_bytes is None:
+            if identity_after is None:
+                transient_process_events.add(
+                    f"pid {process_id}: exited before PSS sampling completed"
+                )
+            elif identity_after[1] == "Z":
+                transient_process_events.add(
+                    f"pid {process_id}: became a zombie during PSS sampling"
+                )
+        elif identity_after is None:
+            # Both resident measurements were completed while this PID was live.
+            # Retaining them describes that observed instant without inventing a
+            # fallback; record the subsequent exit explicitly.
+            transient_process_events.add(
+                f"pid {process_id}: exited after complete RSS/PSS sampling"
+            )
         if pss_error is not None:
             fallback_reasons.add(f"pid {process_id}: {pss_error}")
+        accounted_bytes = pss_bytes if pss_bytes is not None else rss_bytes
         processes.append(
             {
                 "pid": process_id,
                 "rss_bytes": rss_bytes,
                 "pss_bytes": pss_bytes,
+                "accounted_bytes": accounted_bytes,
+                "accounting_metric": (
+                    "proportional-set-size"
+                    if pss_bytes is not None
+                    else "resident-set-size-fallback"
+                ),
+                "state": identity_after[1] if identity_after is not None else "exited",
             }
         )
 
@@ -215,6 +289,10 @@ def sample_process_tree_memory(
         if pss_complete
         else None
     )
+    aggregate_hybrid = sum(int(process["accounted_bytes"]) for process in processes)
+    rss_fallback_process_count = sum(
+        process["pss_bytes"] is None for process in processes
+    )
     return {
         "root_pids": list(roots),
         "process_ids": observed_pids,
@@ -222,8 +300,15 @@ def sample_process_tree_memory(
         "pid_accounting": "unique-live-process-id",
         "aggregate_rss_bytes": aggregate_rss,
         "aggregate_pss_bytes": aggregate_pss,
+        "aggregate_hybrid_bytes": aggregate_hybrid,
+        "hybrid_accounting": (
+            "sum each live process PSS when available, otherwise that process RSS"
+        ),
+        "rss_fallback_process_count": rss_fallback_process_count,
         "pss_complete": pss_complete,
         "pss_fallback_reasons": sorted(fallback_reasons),
+        "transient_process_event_count": len(transient_process_events),
+        "transient_process_events": sorted(transient_process_events),
         "processes": processes,
     }
 
@@ -256,12 +341,16 @@ class ConcurrentProcessTreeSampler:
         self._pss_complete_sample_count = 0
         self._pss_complete_for_all_samples = True
         self._pss_fallback_reasons: set[str] = set()
+        self._transient_process_events: set[str] = set()
+        self._transient_process_event_count = 0
         self._observed_process_ids: set[int] = set()
         self._max_process_count = 0
         self._peak_concurrent_rss_bytes = 0
         self._peak_concurrent_pss_bytes = 0
+        self._peak_concurrent_hybrid_bytes = 0
         self._peak_rss_snapshot: dict[str, object] | None = None
         self._peak_pss_snapshot: dict[str, object] | None = None
+        self._peak_hybrid_snapshot: dict[str, object] | None = None
         self._last_sample_started: float | None = None
         self._max_sample_gap_seconds = 0.0
 
@@ -282,10 +371,23 @@ class ConcurrentProcessTreeSampler:
             process_ids = {int(process_id) for process_id in snapshot["process_ids"]}
             self._observed_process_ids.update(process_ids)
             self._max_process_count = max(self._max_process_count, len(process_ids))
+            transient_events = snapshot["transient_process_events"]
+            if not isinstance(transient_events, list):
+                raise MemoryEvidenceError(
+                    "process-tree snapshot has invalid transient lifecycle evidence"
+                )
+            self._transient_process_events.update(str(event) for event in transient_events)
+            self._transient_process_event_count += int(
+                snapshot["transient_process_event_count"]
+            )
             aggregate_rss = int(snapshot["aggregate_rss_bytes"])
             if aggregate_rss > self._peak_concurrent_rss_bytes:
                 self._peak_concurrent_rss_bytes = aggregate_rss
                 self._peak_rss_snapshot = snapshot
+            aggregate_hybrid = int(snapshot["aggregate_hybrid_bytes"])
+            if aggregate_hybrid > self._peak_concurrent_hybrid_bytes:
+                self._peak_concurrent_hybrid_bytes = aggregate_hybrid
+                self._peak_hybrid_snapshot = snapshot
             if snapshot["pss_complete"] is True:
                 self._pss_complete_sample_count += 1
                 aggregate_pss = int(snapshot["aggregate_pss_bytes"])
@@ -356,7 +458,11 @@ class ConcurrentProcessTreeSampler:
                 raise MemoryEvidenceError(
                     "concurrent process-tree sampling failed: " + "; ".join(self._errors)
                 )
-            if self._sample_count <= 0 or self._peak_rss_snapshot is None:
+            if (
+                self._sample_count <= 0
+                or self._peak_rss_snapshot is None
+                or self._peak_hybrid_snapshot is None
+            ):
                 raise MemoryEvidenceError("concurrent process-tree sampler produced no evidence")
             return {
                 "available": True,
@@ -369,6 +475,7 @@ class ConcurrentProcessTreeSampler:
                 "max_concurrent_process_count": self._max_process_count,
                 "pid_accounting": "each live descendant PID is counted once per sample",
                 "peak_concurrent_rss_bytes": self._peak_concurrent_rss_bytes,
+                "peak_concurrent_hybrid_bytes": self._peak_concurrent_hybrid_bytes,
                 "peak_concurrent_pss_bytes": (
                     self._peak_concurrent_pss_bytes
                     if self._pss_complete_sample_count
@@ -377,20 +484,30 @@ class ConcurrentProcessTreeSampler:
                 "pss_complete_sample_count": self._pss_complete_sample_count,
                 "pss_complete_for_all_samples": self._pss_complete_for_all_samples,
                 "pss_fallback_reasons": sorted(self._pss_fallback_reasons),
+                "transient_process_event_count": self._transient_process_event_count,
+                "transient_process_events": sorted(self._transient_process_events),
                 "peak_rss_snapshot": self._peak_rss_snapshot,
                 "peak_pss_snapshot": self._peak_pss_snapshot,
+                "peak_hybrid_snapshot": self._peak_hybrid_snapshot,
             }
 
 
 def select_concurrent_memory_gate(evidence: Mapping[str, Any]) -> dict[str, object]:
-    """Prefer complete concurrent PSS evidence, or conservatively gate on RSS."""
+    """Gate on the peak per-process PSS/RSS hybrid across all samples."""
 
     sample_count = evidence.get("sample_count")
     peak_rss = evidence.get("peak_concurrent_rss_bytes")
+    peak_hybrid = evidence.get("peak_concurrent_hybrid_bytes")
     if not isinstance(sample_count, int) or isinstance(sample_count, bool) or sample_count <= 0:
         raise MemoryEvidenceError("concurrent memory evidence has no samples")
     if not isinstance(peak_rss, int) or isinstance(peak_rss, bool) or peak_rss <= 0:
         raise MemoryEvidenceError("concurrent memory evidence has no positive RSS peak")
+    if (
+        not isinstance(peak_hybrid, int)
+        or isinstance(peak_hybrid, bool)
+        or peak_hybrid <= 0
+    ):
+        raise MemoryEvidenceError("concurrent memory evidence has no positive hybrid peak")
     if evidence.get("pss_complete_for_all_samples") is True:
         peak_pss = evidence.get("peak_concurrent_pss_bytes")
         if not isinstance(peak_pss, int) or isinstance(peak_pss, bool) or peak_pss <= 0:
@@ -400,7 +517,7 @@ def select_concurrent_memory_gate(evidence: Mapping[str, Any]) -> dict[str, obje
         return {
             "metric": "proportional-set-size",
             "source": "/proc/<pid>/smaps_rollup:Pss",
-            "peak_bytes": peak_pss,
+            "peak_bytes": peak_hybrid,
             "fallback_used": False,
             "fallback_is_conservative": False,
             "fallback_reasons": [],
@@ -413,9 +530,12 @@ def select_concurrent_memory_gate(evidence: Mapping[str, Any]) -> dict[str, obje
         else ["one or more concurrent samples lacked complete PSS evidence"]
     )
     return {
-        "metric": "resident-set-size",
-        "source": "/proc/<pid>/status:VmRSS",
-        "peak_bytes": peak_rss,
+        "metric": "per-process-pss-rss-hybrid",
+        "source": (
+            "/proc/<pid>/smaps_rollup:Pss with per-process "
+            "/proc/<pid>/status:VmRSS fallback"
+        ),
+        "peak_bytes": peak_hybrid,
         "fallback_used": True,
         "fallback_is_conservative": True,
         "fallback_reasons": normalized_reasons,

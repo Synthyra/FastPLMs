@@ -91,6 +91,7 @@ def _clean_publication_source(
     ):
         source = original_root / relative_name
         destination = source_root / relative_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
 
     git = ["git", "-c", f"safe.directory={source_root.as_posix()}"]
@@ -199,6 +200,27 @@ def _self_attest_runtime_mutation(artifact: Path, relative_names: tuple[str, ...
     _write_json(runtime_attestation_path, runtime_attestation)
     manifest["runtime-attestation.json"] = f"sha256:{hash_file(runtime_attestation_path)}"
     _write_json(manifest_path, manifest)
+
+
+def _rewrite_materialized_card(artifact: Path, spec: ModelSpec) -> None:
+    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    card_source = ROOT / "model_cards" / f"{spec.id}.md"
+    card_template = (
+        card_source.read_text(encoding="utf-8")
+        if card_source.is_file()
+        else render_model_card(spec)
+    )
+    materialized = _materialize_model_card(
+        card_template,
+        runtime_revision=provenance["runtime_revision"],
+        source_tree_sha256=provenance["source_tree_sha256"],
+        runtime_bundle_sha256=provenance["runtime_bundle_sha256"],
+    )
+    (artifact / "README.md").write_text(
+        materialized,
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def _initialize_release_text_repository(root: Path, spec: ModelSpec) -> Path:
@@ -667,9 +689,11 @@ def test_files_only_plan_rejects_self_attested_substituted_bundle_member(
     runtime_attestation = json.loads(runtime_attestation_path.read_text(encoding="utf-8"))
     runtime_attestation["runtime_bundle_sha256"] = runtime_hash
     _write_json(runtime_attestation_path, runtime_attestation)
+    _write_bootstrap(artifact / "modeling_fastplms.py", spec, runtime_hash)
+    _rewrite_materialized_card(artifact, spec)
     _self_attest_runtime_mutation(
         artifact,
-        ("fastplms_bundle.py", "config.json"),
+        ("README.md", "config.json", "fastplms_bundle.py", "modeling_fastplms.py"),
     )
     manifest_path = artifact / "artifact-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -949,12 +973,11 @@ def test_files_only_plan_rejects_stale_runtime_revision(tmp_path: Path) -> None:
     attestation_path = artifact / "runtime-attestation.json"
     attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
     attestation["runtime_revision"] = stale
-    attestation["files"]["config.json"] = f"sha256:{hash_file(config_path)}"
     _write_json(attestation_path, attestation)
+    _rewrite_materialized_card(artifact, spec)
+    _self_attest_runtime_mutation(artifact, ("README.md", "config.json"))
     manifest = json.loads((artifact / "artifact-manifest.json").read_text(encoding="utf-8"))
-    manifest["config.json"] = f"sha256:{hash_file(config_path)}"
     manifest["provenance.json"] = f"sha256:{hash_file(provenance_path)}"
-    manifest["runtime-attestation.json"] = f"sha256:{hash_file(attestation_path)}"
     _write_json(artifact / "artifact-manifest.json", manifest)
 
     with pytest.raises(ArtifactError, match="current clean source revision"):

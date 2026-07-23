@@ -1,32 +1,35 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path, PurePosixPath
-
 
 ROOT = Path(__file__).resolve().parents[2]
 SCOPE_PATH = ROOT / "tools" / "typing-critical-files.txt"
+DIAGNOSTIC_SCOPE_PATH = ROOT / "tools" / "typing-diagnostic-files.txt"
 EXPECTED_CRITICAL_TYPING_SCOPE = (
-    "benchmarks",
-    "examples/binder_design_fastplms.py",
-    "examples/fine_tuning.py",
-    "src/fastplms/attention",
-    "src/fastplms/embeddings",
     "src/fastplms/registry.py",
-    "tools/artifacts",
-    "tools/conversion",
-    "tools/remote",
+    "tools/artifacts/build.py",
+    "tools/artifacts/publish.py",
+    "tools/conversion/state_transforms.py",
     "tools/source_provenance.py",
+)
+EXPECTED_DIAGNOSTIC_TYPING_SCOPE = (
+    "benchmarks",
+    "examples",
+    "src/fastplms",
+    "tools",
 )
 
 
-def test_critical_typing_scope_is_explicit_complete_and_portable() -> None:
-    entries = tuple(
+def _scope_entries(path: Path) -> tuple[str, ...]:
+    return tuple(
         line.strip()
-        for line in SCOPE_PATH.read_text(encoding="utf-8").splitlines()
+        for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     )
 
-    assert entries == EXPECTED_CRITICAL_TYPING_SCOPE
+
+def _assert_portable_scope(entries: tuple[str, ...]) -> None:
     assert entries == tuple(sorted(set(entries)))
     for entry in entries:
         path = PurePosixPath(entry)
@@ -36,11 +39,76 @@ def test_critical_typing_scope_is_explicit_complete_and_portable() -> None:
         assert ROOT.joinpath(*path.parts).exists()
 
 
+def test_critical_typing_scope_is_explicit_complete_and_portable() -> None:
+    entries = _scope_entries(SCOPE_PATH)
+
+    assert entries == EXPECTED_CRITICAL_TYPING_SCOPE
+    _assert_portable_scope(entries)
+
+
+def test_diagnostic_typing_scope_retains_the_full_migration_surface() -> None:
+    entries = _scope_entries(DIAGNOSTIC_SCOPE_PATH)
+
+    assert entries == EXPECTED_DIAGNOSTIC_TYPING_SCOPE
+    _assert_portable_scope(entries)
+    discovered = {
+        path.relative_to(ROOT).as_posix()
+        for target in entries
+        for path in ROOT.joinpath(*PurePosixPath(target).parts).rglob("*.py")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+    covered = {
+        path.relative_to(ROOT).as_posix()
+        for path in (
+            *ROOT.joinpath("benchmarks").rglob("*.py"),
+            *ROOT.joinpath("examples").rglob("*.py"),
+            *ROOT.joinpath("src", "fastplms").rglob("*.py"),
+            *ROOT.joinpath("tools").rglob("*.py"),
+        )
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+    assert discovered == covered
+    assert not any(
+        path.startswith(("tests/", "vendor/", "build/", "dist/", "artifacts/"))
+        for path in discovered
+    )
+
+
 def test_static_ci_consumes_the_checked_typing_scope_without_inline_shrinkage() -> None:
     workflow = (ROOT / ".github" / "workflows" / "cpu-contracts.yml").read_text(
         encoding="utf-8"
     )
 
     assert "mapfile -t MYPY_TARGETS < tools/typing-critical-files.txt" in workflow
+    assert "--explicit-package-bases" in workflow
+    assert "--follow-imports=silent" in workflow
     assert '"${MYPY_TARGETS[@]}"' in workflow
     assert "src/fastplms/registry.py tools/remote" not in workflow
+    broad_step = workflow.split(
+        "- name: Report broad typing no-regression debt (non-blocking)",
+        maxsplit=1,
+    )[1].split("\n      - name:", maxsplit=1)[0]
+    logical_broad_step = " ".join(
+        line.strip().removesuffix("\\").strip()
+        for line in broad_step.splitlines()
+    )
+    command_match = re.search(
+        r"(\.venv/bin/python -m tools\.typing_gate compare .*?)"
+        r"(?=\s+- name:|\Z)",
+        logical_broad_step,
+    )
+    assert command_match is not None
+    assert command_match.group(1) == (
+        ".venv/bin/python -m tools.typing_gate compare "
+        "--baseline tools/typing-baselines/c240d8a.json "
+        "--raw-output artifacts/typing/broad-mypy.txt "
+        "--scope-manifest tools/typing-diagnostic-files.txt "
+        "--repo-root . --output artifacts/typing/no-regression.json"
+    )
+    assert ".venv/bin/mypy" not in broad_step
+    assert "tools/typing-baselines/c240d8a.json" in workflow
+    assert "artifacts/typing/no-regression.json" in workflow
+    assert "name: broad-typing-report" in workflow
+    assert "continue-on-error: true" in workflow
+    assert "tests/release/test_static_typing_scope.py" in workflow
+    assert "tests/release/test_typing_no_regression_gate.py" in workflow

@@ -91,10 +91,16 @@ Lint, typing, generated docs, licenses, model cards, wheel/sdist inspection, and
 runtime import closure run in parallel. Clean-wheel smoke jobs cover Python
 3.11, 3.12, 3.13, and 3.14, while a clean Python 3.12 source-distribution smoke
 guards the independent build and install path. A separate clean resolution-only
-matrix verifies the declared `cpu`, `structure`, `cueq`, `reporting`, `flash`,
-`fp8`, and `train` extras against the exact Torch 2.13.0 and Transformers 5.13.0
-validation group without importing GPU runtimes; the cuEquivariance and FP8 cases
-use the CUDA 13.0 dependency index.
+matrix verifies every declared public extra: `cpu`, `dev`, `structure`, `binder`,
+`cueq`, `reporting`, `flash`, `fp8`, and `train`. It also resolves the published
+`structure` plus `binder` workflow as one environment. Every case includes the
+exact Torch 2.13.0 and Transformers 5.13.0 validation group without importing GPU
+runtimes; the cuEquivariance and FP8 cases use the CUDA 13.0 dependency index.
+The runtime-import closure separately requires import-time dependencies in core
+source to be core requirements. Manifest-scoped structure modules map to the
+`structure` extra, while deferred function or lambda imports and imports protected
+by an explicit `ImportError` handler must resolve to one unambiguous intended
+extra.
 
 ## Cost-controlled schedule
 

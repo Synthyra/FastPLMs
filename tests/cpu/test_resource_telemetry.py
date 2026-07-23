@@ -25,6 +25,7 @@ def _write_fake_process(
     children: tuple[int, ...],
     rss_kib: int,
     pss_kib: int,
+    state: str = "S",
 ) -> None:
     process_root = proc_root / str(process_id)
     task_root = process_root / "task" / str(process_id)
@@ -35,6 +36,12 @@ def _write_fake_process(
     )
     (process_root / "status").write_text(
         f"Name:\tpython\nVmRSS:\t{rss_kib} kB\n",
+        encoding="utf-8",
+    )
+    # Fields after comm begin at field 3 (state); field 22 is starttime.
+    stat_fields = [state, *(["0"] * 18), str(process_id * 10)]
+    (process_root / "stat").write_text(
+        f"{process_id} (python) {' '.join(stat_fields)}\n",
         encoding="utf-8",
     )
     (process_root / "smaps_rollup").write_text(
@@ -88,6 +95,140 @@ def test_overlapping_worker_and_child_roots_are_deduplicated(tmp_path: Path) -> 
     assert snapshot["aggregate_pss_bytes"] == 500 * 1024
     assert snapshot["pss_complete"] is True
     assert len(snapshot["processes"]) == len(set(snapshot["process_ids"]))
+
+
+def test_process_exit_during_pss_read_uses_only_that_process_rss_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tests.cpu.resource_telemetry as telemetry
+
+    proc_root = tmp_path / "proc"
+    _write_fake_process(
+        proc_root,
+        100,
+        children=(200,),
+        rss_kib=100,
+        pss_kib=50,
+    )
+    _write_fake_process(
+        proc_root,
+        200,
+        children=(),
+        rss_kib=200,
+        pss_kib=100,
+    )
+    original_read_pss = telemetry._read_pss_bytes
+
+    def disappearing_pss(root: Path, process_id: int) -> tuple[int | None, str | None]:
+        if process_id == 200:
+            process_root = root / str(process_id)
+            for path in sorted(process_root.rglob("*"), reverse=True):
+                if path.is_file():
+                    path.unlink()
+                else:
+                    path.rmdir()
+            process_root.rmdir()
+            return None, "smaps_rollup disappeared during sampling"
+        return original_read_pss(root, process_id)
+
+    monkeypatch.setattr(telemetry, "_read_pss_bytes", disappearing_pss)
+    snapshot = sample_process_tree_memory(root_pids=(100,), proc_root=proc_root)
+
+    assert snapshot["process_ids"] == [100, 200]
+    assert snapshot["pss_complete"] is False
+    assert snapshot["aggregate_pss_bytes"] is None
+    assert snapshot["aggregate_hybrid_bytes"] == 250 * 1024
+    child = next(process for process in snapshot["processes"] if process["pid"] == 200)
+    assert child["accounted_bytes"] == 200 * 1024
+    assert child["accounting_metric"] == "resident-set-size-fallback"
+    assert snapshot["transient_process_event_count"] == 1
+    assert "pid 200: exited before PSS sampling completed" in snapshot[
+        "transient_process_events"
+    ]
+    assert snapshot["pss_fallback_reasons"] == [
+        "pid 200: smaps_rollup disappeared during sampling"
+    ]
+
+
+def test_zombie_without_smaps_is_zero_resident_and_keeps_pss_complete(
+    tmp_path: Path,
+) -> None:
+    proc_root = tmp_path / "proc"
+    _write_fake_process(
+        proc_root,
+        100,
+        children=(200,),
+        rss_kib=100,
+        pss_kib=50,
+    )
+    _write_fake_process(
+        proc_root,
+        200,
+        children=(),
+        rss_kib=999,
+        pss_kib=999,
+        state="Z",
+    )
+    (proc_root / "200" / "smaps_rollup").unlink()
+
+    snapshot = sample_process_tree_memory(root_pids=(100,), proc_root=proc_root)
+
+    zombie = next(process for process in snapshot["processes"] if process["pid"] == 200)
+    assert zombie["rss_bytes"] == 0
+    assert zombie["pss_bytes"] == 0
+    assert zombie["accounted_bytes"] == 0
+    assert zombie["state"] == "Z"
+    assert snapshot["pss_complete"] is True
+
+
+def test_persistent_pss_denial_uses_only_denied_process_rss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tests.cpu.resource_telemetry as telemetry
+
+    proc_root = tmp_path / "proc"
+    _write_fake_process(
+        proc_root,
+        100,
+        children=(200,),
+        rss_kib=100,
+        pss_kib=50,
+    )
+    _write_fake_process(
+        proc_root,
+        200,
+        children=(),
+        rss_kib=200,
+        pss_kib=100,
+    )
+    original_read_pss = telemetry._read_pss_bytes
+
+    def denied_pss(root: Path, process_id: int) -> tuple[int | None, str | None]:
+        if process_id == 200:
+            return None, "smaps_rollup permission denied"
+        return original_read_pss(root, process_id)
+
+    monkeypatch.setattr(telemetry, "_read_pss_bytes", denied_pss)
+    snapshot = sample_process_tree_memory(root_pids=(100,), proc_root=proc_root)
+    gate = select_concurrent_memory_gate(
+        {
+            "sample_count": 1,
+            "peak_concurrent_rss_bytes": snapshot["aggregate_rss_bytes"],
+            "peak_concurrent_hybrid_bytes": snapshot["aggregate_hybrid_bytes"],
+            "peak_concurrent_pss_bytes": None,
+            "pss_complete_for_all_samples": False,
+            "pss_fallback_reasons": snapshot["pss_fallback_reasons"],
+        }
+    )
+
+    assert snapshot["aggregate_rss_bytes"] == 300 * 1024
+    assert snapshot["aggregate_hybrid_bytes"] == 250 * 1024
+    assert gate["metric"] == "per-process-pss-rss-hybrid"
+    assert gate["peak_bytes"] == 250 * 1024
+    assert gate["fallback_used"] is True
+    assert gate["fallback_is_conservative"] is True
 
 
 def test_sampler_captures_a_live_child_process() -> None:
@@ -151,16 +292,17 @@ def test_sampler_captures_a_live_child_process() -> None:
     assert gate["peak_bytes"] > 0
     if gate["fallback_used"]:
         assert gate["fallback_is_conservative"] is True
-        assert gate["metric"] == "resident-set-size"
+        assert gate["metric"] == "per-process-pss-rss-hybrid"
     else:
         assert gate["metric"] == "proportional-set-size"
 
 
-def test_pss_is_preferred_and_incomplete_pss_falls_back_to_concurrent_rss() -> None:
+def test_pss_is_preferred_and_incomplete_pss_uses_per_process_hybrid() -> None:
     preferred = select_concurrent_memory_gate(
         {
             "sample_count": 4,
             "peak_concurrent_rss_bytes": 900,
+            "peak_concurrent_hybrid_bytes": 600,
             "peak_concurrent_pss_bytes": 600,
             "pss_complete_for_all_samples": True,
             "pss_fallback_reasons": [],
@@ -179,13 +321,14 @@ def test_pss_is_preferred_and_incomplete_pss_falls_back_to_concurrent_rss() -> N
         {
             "sample_count": 4,
             "peak_concurrent_rss_bytes": 900,
+            "peak_concurrent_hybrid_bytes": 700,
             "peak_concurrent_pss_bytes": 600,
             "pss_complete_for_all_samples": False,
             "pss_fallback_reasons": ["pid 123: smaps_rollup permission denied"],
         }
     )
-    assert fallback["metric"] == "resident-set-size"
-    assert fallback["peak_bytes"] == 900
+    assert fallback["metric"] == "per-process-pss-rss-hybrid"
+    assert fallback["peak_bytes"] == 700
     assert fallback["fallback_used"] is True
     assert fallback["fallback_is_conservative"] is True
     assert fallback["fallback_reasons"] == [
@@ -197,6 +340,55 @@ def test_pss_is_preferred_and_incomplete_pss_falls_back_to_concurrent_rss() -> N
             {
                 "sample_count": 1,
                 "peak_concurrent_rss_bytes": None,
+                "peak_concurrent_hybrid_bytes": None,
                 "pss_complete_for_all_samples": False,
             }
         )
+
+
+def test_memory_over_budget_forces_nonzero_pytest_exit(tmp_path: Path) -> None:
+    test_file = tmp_path / "test_synthetic_gate.py"
+    test_file.write_text("def test_passes():\n    assert True\n", encoding="utf-8")
+    script = textwrap.dedent(
+        f"""
+        import pytest
+
+        from tests.cpu.conftest import _enforce_concurrent_memory_budget
+
+        class SyntheticMemoryGate:
+            @pytest.hookimpl(trylast=True)
+            def pytest_sessionfinish(self, session, exitstatus):
+                del exitstatus
+                _enforce_concurrent_memory_budget(
+                    session,
+                    {{
+                        "metric": "per-process-pss-rss-hybrid",
+                        "peak_bytes": 4 * 1024**3 + 1,
+                    }},
+                )
+
+        raise SystemExit(
+            pytest.main(
+                [{str(test_file)!r}, "-q", "-p", "no:cacheprovider"],
+                plugins=[SyntheticMemoryGate()],
+            )
+        )
+        """
+    )
+    workspace = Path(__file__).resolve().parents[2]
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(workspace), environment.get("PYTHONPATH", ""))
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=workspace,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+
+    assert completed.returncode == int(pytest.ExitCode.TESTS_FAILED)
+    assert "concurrent memory budget exceeded" in completed.stdout + completed.stderr

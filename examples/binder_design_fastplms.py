@@ -1608,9 +1608,9 @@ def _load_fold_model(
 
 
 class FastPLMsBinderDesign:
-    lm_name = "Synthyra/ESMplusplus_6B"
-    inversion_model_names = ("ESMFold2-Experimental-Fast-Cutoff2025",)
-    hero_critic_model_names = (
+    lm_name: str = "Synthyra/ESMplusplus_6B"
+    inversion_model_names: tuple[str, ...] = ("ESMFold2-Experimental-Fast-Cutoff2025",)
+    hero_critic_model_names: tuple[str, ...] = (
         "ESMFold2-Experimental-Fast-Cutoff2025",
         "ESMFold2-Experimental-Cutoff2025",
     )
