@@ -51,3 +51,4 @@ marketing/
 /tmp
 /output
 *.log
+.secrets.env
