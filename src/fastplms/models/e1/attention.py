@@ -23,6 +23,8 @@ from fastplms.attention import (
 
 @torch.compiler.disable
 def create_block_causal_mask_optimized(sequence_ids: torch.Tensor) -> BlockMask:
+    if create_block_mask is None:
+        raise RuntimeError("Flex Attention block-mask creation is unavailable in this environment.")
     # Assumes sequence_ids is sorted in increasing order for each batch item, except for
     # the -1 values, which are used to indicate the padding tokens.
     def document_mask(b, h, q_idx, kv_idx):  # type: ignore[no-untyped-def]
@@ -40,6 +42,8 @@ def create_block_causal_mask_optimized(sequence_ids: torch.Tensor) -> BlockMask:
 
 @torch.compiler.disable
 def create_within_seq_block_mask(sequence_ids: torch.Tensor) -> BlockMask:
+    if create_block_mask is None:
+        raise RuntimeError("Flex Attention block-mask creation is unavailable in this environment.")
     def document_mask(b, h, q_idx, kv_idx):  # type: ignore[no-untyped-def]
         return (
             (sequence_ids[b, q_idx] == sequence_ids[b, kv_idx])
@@ -76,8 +80,10 @@ def flex_attention_func(
     sequence_lengths: tuple[int, ...] | None = None,
     mask_semantics: str = "within_sequence",
 ) -> torch.Tensor:
-    assert flex_attention is not None, "Flex Attention is not available in this environment"
-    assert score_mod is None, "Score mod is not supported yet"
+    if flex_attention is None:
+        raise RuntimeError("Flex Attention is not available in this environment.")
+    if score_mod is not None:
+        raise NotImplementedError("E1 Flex Attention does not support score_mod.")
     query_states = query_states.transpose(1, 2).contiguous()  # (bs, nh, seqlen, hs)
     key_states = key_states.transpose(1, 2).contiguous()  # (bs, nkv, seqlen, hs)
     value_states = value_states.transpose(1, 2).contiguous()  # (bs, nkv, seqlen, hs)
@@ -89,6 +95,8 @@ def flex_attention_func(
         sequence_lengths=sequence_lengths,
         mask_semantics=mask_semantics,
     )
+    if fn is None:
+        raise RuntimeError("Flex Attention is not available in this environment.")
     outputs = fn(
         query_states,
         key_states,
@@ -229,6 +237,8 @@ def direct_block_mask(q_lengths: torch.Tensor, k_lengths: torch.Tensor) -> Block
 
 @torch.compiler.disable
 def doc_id_mask(q_lengths: torch.Tensor, k_lengths: torch.Tensor) -> BlockMask:
+    if create_block_mask is None:
+        raise RuntimeError("Flex Attention block-mask creation is unavailable in this environment.")
     q_document = _document_ids(q_lengths)
     k_document = _document_ids(k_lengths)
 
@@ -258,6 +268,8 @@ def varlen_flex_attention_func(
     q_sequence_ids: torch.Tensor,
     k_sequence_ids: torch.Tensor,
 ) -> torch.Tensor:
+    if flex_attention is None:
+        raise RuntimeError("Flex Attention is not available in this environment.")
     batch_size, q_len = query_states.shape[0], query_states.shape[1]
     (
         query_states,
@@ -288,6 +300,8 @@ def varlen_flex_attention_func(
         sequence_lengths=packed_lengths,
         mask_semantics="packed_document_equality",
     )
+    if fn is None:
+        raise RuntimeError("Flex Attention is not available in this environment.")
     attn_output_unpad = fn(
         query_states,
         key_states,
@@ -345,20 +359,48 @@ def _unpad_input(
     tuple[torch.Tensor, torch.Tensor],
     tuple[int, int],
 ]:
+    for name, layer in (
+        ("query_layer", query_layer),
+        ("key_layer", key_layer),
+        ("value_layer", value_layer),
+    ):
+        if layer.ndim != 4:
+            raise ValueError(
+                f"{name} must have shape (batch, sequence, heads, head_dim); "
+                f"got {tuple(layer.shape)}."
+            )
+    if value_layer.shape != key_layer.shape:
+        raise ValueError(
+            "key_layer and value_layer must have identical shapes; "
+            f"got {tuple(key_layer.shape)} and {tuple(value_layer.shape)}."
+        )
+    if query_layer.shape[0] != key_layer.shape[0]:
+        raise ValueError(
+            "Query and KV batch sizes must match; "
+            f"got {query_layer.shape[0]} and {key_layer.shape[0]}."
+        )
+    if query_layer.shape[-1] != key_layer.shape[-1]:
+        raise ValueError(
+            "Query and KV head dimensions must match; "
+            f"got {query_layer.shape[-1]} and {key_layer.shape[-1]}."
+        )
     batch_size, kv_seq_len, num_heads, head_dim = key_layer.shape
     query_length, num_q_heads = query_layer.shape[1], query_layer.shape[2]
-    assert query_layer.shape[:2] == q_sequence_ids.shape, (
-        "Shape mismatch between query layer and query sequence ids: "
-        f"{query_layer.shape[:2]} != {q_sequence_ids.shape}"
-    )
-    assert key_layer.shape[:2] == k_sequence_ids.shape, (
-        "Shape mismatch between key layer and key sequence ids: "
-        f"{key_layer.shape[:2]} != {k_sequence_ids.shape}"
-    )
-    assert query_length <= kv_seq_len, (
-        "Query length should be less than or equal to KV sequence length: "
-        f"{query_length} <= {kv_seq_len}"
-    )
+    if query_layer.shape[:2] != q_sequence_ids.shape:
+        raise ValueError(
+            "Shape mismatch between query layer and query sequence ids: "
+            f"{query_layer.shape[:2]} != {q_sequence_ids.shape}"
+        )
+    if key_layer.shape[:2] != k_sequence_ids.shape:
+        raise ValueError(
+            "Shape mismatch between key layer and key sequence ids: "
+            f"{key_layer.shape[:2]} != {k_sequence_ids.shape}"
+        )
+    if query_length > kv_seq_len:
+        raise ValueError(
+            "Query length must be less than or equal to KV sequence length: "
+            f"{query_length} > {kv_seq_len}"
+        )
 
     indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(k_sequence_ids)
 
@@ -380,10 +422,11 @@ def _unpad_input(
         query_layer.reshape(batch_size * query_length, num_q_heads, head_dim), indices_q
     )
 
-    assert cu_seqlens_q.shape == cu_seqlens_k.shape, (
-        "Query and KV should have the same number of sequences: "
-        f"{cu_seqlens_q.shape} != {cu_seqlens_k.shape}"
-    )
+    if cu_seqlens_q.shape != cu_seqlens_k.shape:
+        raise ValueError(
+            "Query and KV must have the same number of sequences: "
+            f"{cu_seqlens_q.shape} != {cu_seqlens_k.shape}"
+        )
 
     return (
         query_layer,

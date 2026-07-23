@@ -163,6 +163,175 @@ def test_precompiled_flash_kernels_match_sdpa_for_dense_and_mixed_padding() -> N
 
 
 @pytest.mark.gpu
+@pytest.mark.parametrize("mixed_padding", (False, True), ids=("dense", "mixed-padding"))
+def test_precompiled_flash_attention_2_dense_and_varlen_backward(
+    mixed_padding: bool,
+) -> None:
+    """The pinned FA2 autograd wrappers propagate gradients through Q, K, and V."""
+
+    assert torch.cuda.is_available(), "FlashAttention integration requires CUDA."
+    torch.manual_seed(31)
+    query = torch.randn(
+        (2, 17, 4, 16),
+        device="cuda",
+        dtype=torch.bfloat16,
+        requires_grad=True,
+    )
+    key = torch.randn_like(query, requires_grad=True)
+    value = torch.randn_like(query, requires_grad=True)
+    attention_mask = None
+    if mixed_padding:
+        attention_mask = torch.tensor(
+            (
+                (1,) * 13 + (0,) * 4,
+                (1,) * 9 + (0,) * 8,
+            ),
+            device="cuda",
+            dtype=torch.bool,
+        )
+
+    output = _core.kernels_flash_attention_func(
+        query,
+        key,
+        value,
+        attention_mask_2d=attention_mask,
+        implementation="flash_attention_2",
+    )
+    selected = output if attention_mask is None else output[attention_mask]
+    selected.float().square().mean().backward()
+
+    for tensor in (query, key, value):
+        assert tensor.grad is not None
+        assert torch.isfinite(tensor.grad).all()
+
+
+@pytest.mark.gpu
+def test_flash_attention_2_mixed_padding_lora_step_and_reload(
+    tmp_path: Path,
+) -> None:
+    """A real pinned FA2 kernel preserves a complete PEFT training graph."""
+
+    peft = pytest.importorskip("peft")
+    assert torch.cuda.is_available(), "FlashAttention PEFT integration requires CUDA."
+
+    def make_base() -> FastEsmForMaskedLM:
+        config = FastEsmConfig(
+            vocab_size=33,
+            hidden_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            intermediate_size=128,
+            hidden_dropout_prob=0.0,
+            attention_probs_dropout_prob=0.0,
+            max_position_embeddings=64,
+            pad_token_id=1,
+            mask_token_id=32,
+            position_embedding_type="rotary",
+            token_dropout=False,
+            attn_backend="flash_attention_2",
+        )
+        return FastEsmForMaskedLM(config)
+
+    torch.manual_seed(41)
+    base = make_base()
+    base_state = {
+        name: tensor.detach().clone()
+        for name, tensor in base.state_dict().items()
+    }
+    model = peft.get_peft_model(
+        base,
+        peft.LoraConfig(
+            task_type=peft.TaskType.TOKEN_CLS,
+            r=2,
+            lora_alpha=4,
+            lora_dropout=0.0,
+            target_modules=["query", "value"],
+        ),
+    ).to("cuda").train()
+    model.base_model.model.set_attn_implementation("flash_attention_2")
+
+    input_ids = torch.tensor(
+        (
+            (0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 2, 1, 1, 1, 1),
+            (0, 20, 19, 18, 17, 16, 15, 14, 2, 1, 1, 1, 1, 1, 1, 1, 1),
+        ),
+        device="cuda",
+    )
+    attention_mask = input_ids.ne(1)
+    labels = input_ids.masked_fill(~attention_mask, -100)
+    before = {
+        name: parameter.detach().clone()
+        for name, parameter in model.named_parameters()
+    }
+    optimizer = torch.optim.AdamW(
+        (parameter for parameter in model.parameters() if parameter.requires_grad),
+        lr=1e-2,
+    )
+
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        loss = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+        ).loss
+    assert loss.is_cuda
+    assert torch.isfinite(loss)
+    loss.backward()
+
+    trainable_gradients = {
+        name: parameter.grad
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
+    assert trainable_gradients
+    assert all(gradient is not None for gradient in trainable_gradients.values())
+    assert all(
+        torch.isfinite(gradient).all()
+        for gradient in trainable_gradients.values()
+        if gradient is not None
+    )
+    optimizer.step()
+
+    changed = {
+        name
+        for name, parameter in model.named_parameters()
+        if not torch.equal(parameter.detach(), before[name])
+    }
+    trainable = {
+        name
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
+    assert changed
+    assert changed <= trainable
+    assert any("lora_" in name for name in changed)
+    assert all(
+        torch.equal(parameter.detach(), before[name])
+        for name, parameter in model.named_parameters()
+        if not parameter.requires_grad
+    )
+
+    model.eval()
+    with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        expected = model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        ).logits
+    model.save_pretrained(tmp_path)
+
+    restored_base = make_base()
+    restored_base.load_state_dict(base_state)
+    restored = peft.PeftModel.from_pretrained(restored_base, tmp_path).to("cuda").eval()
+    restored.base_model.model.set_attn_implementation("flash_attention_2")
+    with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        observed = restored(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        ).logits
+    torch.testing.assert_close(observed, expected, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.gpu
 @pytest.mark.parametrize("backend", _FLASH_BACKENDS)
 def test_precompiled_flash_accepts_fp32_storage_only_under_cuda_bf16_autocast(
     backend: str,

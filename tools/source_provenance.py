@@ -2,9 +2,11 @@
 
 The portable remote runner intentionally excludes every ``.git`` entry because
 Git configuration can contain credentials or workstation-specific paths. This
-module defines the small, non-secret attestation that replaces those entries:
-the parent Git-link revision, the checked-out submodule revision, and a
-digest over the exact tracked tree copied into the archive.
+module defines the small, non-secret attestations that replace those entries:
+exact root tracked paths, modes, sizes, symlink targets, and content digests,
+plus parent Git-link and checked-out submodule revisions. Root archive metadata
+is a content attestation, not proof of a Git commit; Git-free builders therefore
+use a content-addressed runtime revision.
 """
 
 from __future__ import annotations
@@ -18,10 +20,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 ARCHIVE_PROVENANCE_NAME = ".fastplms-source-provenance.json"
-ARCHIVE_PROVENANCE_SCHEMA = 1
+ARCHIVE_PROVENANCE_SCHEMA = 2
 _HEX_DIGEST_LENGTH = 64
 _HEX_REVISION_LENGTH = 40
 _TREE_DOMAIN = b"fastplms-tracked-submodule-tree-v1\0"
+_ROOT_TREE_DOMAIN = b"fastplms-tracked-root-tree-v1\0"
 
 
 class SourceProvenanceError(RuntimeError):
@@ -43,7 +46,14 @@ def _normalized_paths(values: Sequence[str]) -> tuple[str, ...]:
         if not isinstance(value, str) or not value:
             raise SourceProvenanceError("tracked_files contains an invalid path")
         path = PurePosixPath(value)
-        if path.is_absolute() or ".." in path.parts or path.as_posix() != value:
+        if (
+            not path.parts
+            or path.is_absolute()
+            or ".." in path.parts
+            or path.as_posix() != value
+            or "\\" in value
+            or any(":" in part for part in path.parts)
+        ):
             raise SourceProvenanceError(f"Non-portable tracked path: {value!r}")
         if any(part.lower() == ".git" for part in path.parts):
             raise SourceProvenanceError(f"Git metadata is forbidden in source archives: {value!r}")
@@ -56,6 +66,8 @@ def _normalized_paths(values: Sequence[str]) -> tuple[str, ...]:
 
 def _safe_symlink_target(root: Path, path: Path) -> str:
     target = os.readlink(path)
+    if "\\" in target or any(":" in part for part in PurePosixPath(target).parts):
+        raise SourceProvenanceError(f"Non-portable symlink target is forbidden: {path}")
     target_path = Path(target)
     if target_path.is_absolute():
         raise SourceProvenanceError(f"Absolute symlink is forbidden: {path}")
@@ -68,6 +80,20 @@ def _safe_symlink_target(root: Path, path: Path) -> str:
     return target
 
 
+def _tracked_path(root: Path, relative_name: str) -> Path:
+    """Join one portable path while rejecting traversal through parent links."""
+
+    candidate = root
+    parts = PurePosixPath(relative_name).parts
+    for part in parts[:-1]:
+        candidate /= part
+        if candidate.is_symlink():
+            raise SourceProvenanceError(
+                f"Tracked path traverses a symlink: {relative_name!r}"
+            )
+    return candidate / parts[-1]
+
+
 def tracked_tree_digest(root: Path, tracked_files: Sequence[str]) -> str:
     """Hash exact tracked files, including portable in-tree symlink targets."""
 
@@ -78,7 +104,7 @@ def tracked_tree_digest(root: Path, tracked_files: Sequence[str]) -> str:
     digest = hashlib.sha256()
     digest.update(_TREE_DOMAIN)
     for relative_name in paths:
-        path = root.joinpath(*PurePosixPath(relative_name).parts)
+        path = _tracked_path(root, relative_name)
         try:
             mode = path.lstat().st_mode
         except OSError as error:
@@ -103,6 +129,107 @@ def tracked_tree_digest(root: Path, tracked_files: Sequence[str]) -> str:
     return digest.hexdigest()
 
 
+def tracked_root_inventory(
+    root: Path,
+    tracked_files: Sequence[str],
+) -> dict[str, dict[str, object]]:
+    """Describe exact root tracked bytes, portable modes, and symlink targets."""
+
+    root = root.resolve()
+    if not root.is_dir():
+        raise SourceProvenanceError(f"Tracked root does not exist: {root}")
+    result: dict[str, dict[str, object]] = {}
+    for relative_name in _normalized_paths(tracked_files):
+        path = _tracked_path(root, relative_name)
+        try:
+            mode = path.lstat().st_mode
+        except OSError as error:
+            raise SourceProvenanceError(f"Tracked root path is missing: {path}") from error
+        if stat.S_ISLNK(mode):
+            result[relative_name] = {
+                "mode": "120000",
+                "target": _safe_symlink_target(root, path),
+            }
+            continue
+        if not stat.S_ISREG(mode):
+            raise SourceProvenanceError(f"Tracked root path is not a regular file: {path}")
+        content = hashlib.sha256()
+        size = 0
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                content.update(chunk)
+                size += len(chunk)
+        result[relative_name] = {
+            "mode": "100755" if mode & stat.S_IXUSR else "100644",
+            "size": size,
+            "sha256": content.hexdigest(),
+        }
+    return result
+
+
+def root_inventory_digest(inventory: Mapping[str, Mapping[str, object]]) -> str:
+    """Hash a strict, path-ordered root inventory without trusting JSON rendering."""
+
+    paths = _normalized_paths(tuple(inventory))
+    digest = hashlib.sha256()
+    digest.update(_ROOT_TREE_DOMAIN)
+    for relative_name in paths:
+        record = inventory[relative_name]
+        _frame(digest, b"path", relative_name.encode("utf-8"))
+        mode = record.get("mode")
+        if mode == "120000" and set(record) == {"mode", "target"}:
+            target = record.get("target")
+            if not isinstance(target, str):
+                raise SourceProvenanceError(
+                    f"Tracked root symlink has invalid target: {relative_name!r}"
+                )
+            _frame(digest, b"mode", b"120000")
+            _frame(digest, b"target", target.encode("utf-8"))
+            continue
+        if mode not in {"100644", "100755"} or set(record) != {
+            "mode",
+            "size",
+            "sha256",
+        }:
+            raise SourceProvenanceError(
+                f"Tracked root file has invalid metadata: {relative_name!r}"
+            )
+        size = record.get("size")
+        sha256 = record.get("sha256")
+        if (
+            isinstance(size, bool)
+            or not isinstance(size, int)
+            or size < 0
+            or not _valid_hex(sha256, _HEX_DIGEST_LENGTH)
+        ):
+            raise SourceProvenanceError(
+                f"Tracked root file has invalid size or digest: {relative_name!r}"
+            )
+        _frame(digest, b"mode", str(mode).encode("ascii"))
+        _frame(digest, b"size", size.to_bytes(8, "big"))
+        _frame(digest, b"content_sha256", bytes.fromhex(str(sha256)))
+    return digest.hexdigest()
+
+
+def archive_root_record(
+    root: Path,
+    tracked_files: Sequence[str],
+    *,
+    head_revision: str,
+) -> dict[str, object]:
+    """Create the content attestation embedded in one Git-free source archive."""
+
+    if not _valid_hex(head_revision, _HEX_REVISION_LENGTH):
+        raise SourceProvenanceError(f"Invalid root revision: {head_revision!r}")
+    inventory = tracked_root_inventory(root, tracked_files)
+    return {
+        "head_revision": head_revision,
+        "file_count": len(inventory),
+        "files": inventory,
+        "tree_sha256": root_inventory_digest(inventory),
+    }
+
+
 def actual_tree_paths(root: Path) -> tuple[str, ...]:
     """Return every file or symlink present in an extracted submodule tree."""
 
@@ -119,11 +246,16 @@ def actual_tree_paths(root: Path) -> tuple[str, ...]:
     return tuple(sorted(result))
 
 
-def render_archive_provenance(submodules: Mapping[str, Mapping[str, object]]) -> bytes:
+def render_archive_provenance(
+    submodules: Mapping[str, Mapping[str, object]],
+    *,
+    root: Mapping[str, object],
+) -> bytes:
     """Render a deterministic, credential-free archive provenance record."""
 
     value = {
         "schema_version": ARCHIVE_PROVENANCE_SCHEMA,
+        "root": dict(root),
         "submodules": {path: dict(record) for path, record in sorted(submodules.items())},
     }
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
@@ -145,12 +277,18 @@ def _load_record(source_root: Path) -> dict[str, Any]:
         raise SourceProvenanceError(
             f"Git-free source tree is missing valid archive provenance: {path}"
         ) from error
-    if not isinstance(value, dict) or set(value) != {"schema_version", "submodules"}:
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "root",
+        "submodules",
+    }:
         raise SourceProvenanceError("Archive provenance has an invalid top-level schema")
     if value["schema_version"] != ARCHIVE_PROVENANCE_SCHEMA:
         raise SourceProvenanceError("Archive provenance schema version is unsupported")
     if not isinstance(value["submodules"], dict):
         raise SourceProvenanceError("Archive provenance submodules must be a table")
+    if not isinstance(value["root"], dict):
+        raise SourceProvenanceError("Archive provenance root must be a table")
     return value
 
 
@@ -160,6 +298,69 @@ def _valid_hex(value: object, length: int) -> bool:
         and len(value) == length
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def validate_archived_root(
+    source_root: Path,
+) -> tuple[str, dict[str, dict[str, object]]]:
+    """Validate all attested root tracked bytes and return their content inventory.
+
+    The recorded Git revision is diagnostic transport metadata. Callers must not
+    treat it as commit authentication because the extracted tree contains no Git
+    objects. Content-addressed callers should derive identity from validated
+    payload bytes instead.
+    """
+
+    if source_root.is_symlink():
+        raise SourceProvenanceError("Archived source root may not be a symlink")
+    source_root = source_root.resolve()
+    provenance = _load_record(source_root)
+    raw_root = provenance["root"]
+    expected_fields = {"head_revision", "file_count", "files", "tree_sha256"}
+    if not isinstance(raw_root, dict) or set(raw_root) != expected_fields:
+        raise SourceProvenanceError("Archive provenance has an invalid root record")
+    head_revision = raw_root["head_revision"]
+    if not _valid_hex(head_revision, _HEX_REVISION_LENGTH):
+        raise SourceProvenanceError("Archive provenance has an invalid root revision")
+    raw_files = raw_root["files"]
+    if not isinstance(raw_files, dict):
+        raise SourceProvenanceError("Archive provenance root files must be a table")
+    normalized = _normalized_paths(tuple(raw_files))
+    if set(normalized) != set(raw_files):
+        raise SourceProvenanceError("Archive provenance root file paths are invalid")
+    inventory: dict[str, dict[str, object]] = {}
+    for relative_name in normalized:
+        raw_record = raw_files[relative_name]
+        if not isinstance(raw_record, dict):
+            raise SourceProvenanceError(
+                f"Archive provenance root file record is invalid: {relative_name!r}"
+            )
+        inventory[relative_name] = dict(raw_record)
+    file_count = raw_root["file_count"]
+    if (
+        isinstance(file_count, bool)
+        or not isinstance(file_count, int)
+        or file_count != len(inventory)
+    ):
+        raise SourceProvenanceError("Archive provenance root file_count differs")
+    expected_tree = raw_root["tree_sha256"]
+    if not _valid_hex(expected_tree, _HEX_DIGEST_LENGTH):
+        raise SourceProvenanceError("Archive provenance root digest is invalid")
+    encoded_tree = root_inventory_digest(inventory)
+    if encoded_tree != expected_tree:
+        raise SourceProvenanceError("Archive provenance root inventory digest differs")
+    actual_inventory = tracked_root_inventory(source_root, normalized)
+    if actual_inventory != inventory:
+        differing = sorted(
+            name for name in normalized if actual_inventory.get(name) != inventory.get(name)
+        )
+        raise SourceProvenanceError(
+            "Archived root tracked bytes or modes differ: " + ", ".join(differing[:10])
+        )
+    actual_tree = root_inventory_digest(actual_inventory)
+    if actual_tree != expected_tree:
+        raise SourceProvenanceError("Archived root tracked-tree digest differs")
+    return str(head_revision), inventory
 
 
 def validate_archived_submodule(
@@ -172,9 +373,12 @@ def validate_archived_submodule(
 
     normalized = PurePosixPath(relative_path)
     if (
-        normalized.is_absolute()
+        not normalized.parts
+        or normalized.is_absolute()
         or ".." in normalized.parts
         or normalized.as_posix() != relative_path
+        or "\\" in relative_path
+        or any(":" in part for part in normalized.parts)
     ):
         raise SourceProvenanceError(f"Invalid archived submodule path: {relative_path!r}")
     if not _valid_hex(expected_revision, _HEX_REVISION_LENGTH):
@@ -247,7 +451,11 @@ __all__ = [
     "ARCHIVE_PROVENANCE_SCHEMA",
     "SourceProvenanceError",
     "actual_tree_paths",
+    "archive_root_record",
     "render_archive_provenance",
+    "root_inventory_digest",
+    "tracked_root_inventory",
     "tracked_tree_digest",
+    "validate_archived_root",
     "validate_archived_submodule",
 ]

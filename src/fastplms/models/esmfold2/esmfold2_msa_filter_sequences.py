@@ -30,8 +30,20 @@ def greedy_select_indices(array: np.ndarray, num_seqs: int, mode: str = "max") -
     ``mode="min"``. Returned indices follow source order.
     """
 
+    if not isinstance(array, np.ndarray):
+        raise TypeError("array must be a NumPy array")
+    if array.ndim != 2 or array.shape[0] == 0 or array.shape[1] == 0:
+        raise ValueError(
+            f"array must have non-empty shape (depth, length), got {array.shape}"
+        )
+    if isinstance(num_seqs, bool) or not isinstance(num_seqs, int):
+        raise TypeError("num_seqs must be an integer")
+    if num_seqs <= 0:
+        raise ValueError("num_seqs must be greater than zero")
+    if not isinstance(mode, str):
+        raise TypeError("mode must be a string")
     if mode not in {"max", "min"}:
-        raise AssertionError(f"unsupported selection mode: {mode}")
+        raise ValueError(f"unsupported selection mode: {mode}")
     depth = array.shape[0]
     if depth <= num_seqs:
         return list(range(depth))

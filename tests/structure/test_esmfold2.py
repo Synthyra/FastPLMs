@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from transformers.modeling_utils import PreTrainedModel
+
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
     ESMplusplusForMaskedLM,
@@ -27,7 +29,6 @@ from fastplms.models.esmfold2.modeling_esmfold2_common import (
     maybe_subsample_msa,
 )
 from fastplms.registry import ModelSpec, get_model_registry
-from transformers.modeling_utils import PreTrainedModel
 
 REGISTRY = get_model_registry()
 ESMFOLD2_MODEL_KEYS = tuple(spec.id for spec in REGISTRY.by_family("esmfold2"))
@@ -603,7 +604,7 @@ def test_esmfold2_fold_protein_rejects_msa_query_mismatch(tmp_path, monkeypatch)
     msa_path.write_text(">query\nAAAA\n", encoding="utf-8")
     model = object.__new__(ESMFold2Model)
 
-    with pytest.raises(AssertionError, match="MSA query does not match sequence"):
+    with pytest.raises(ValueError, match="MSA query does not match sequence"):
         ESMFold2Model.fold_protein(model, "MSTN", msa_path=msa_path)
 
 

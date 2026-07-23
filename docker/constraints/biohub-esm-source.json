@@ -1,0 +1,8 @@
+{
+  "import_name": "esm",
+  "import_root": "esm",
+  "package_version": "3.3.0",
+  "schema_version": 1,
+  "source_revision": "82ee35553d39169d678f784c8d3f8712ffd7d2c4",
+  "tree_sha256": "c5489f1fc58de200978803de2c38e1a78f769cb183a2ee90be833f0f4a0212e8"
+}

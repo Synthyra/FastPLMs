@@ -13,8 +13,25 @@ import torch
 import torch.nn.functional as F
 
 from fastplms.registry import ModelSpec, get_model_registry
+from tests.parity.support.reference_adapters.biohub_source import (
+    BIOHUB_ESM_REVISION,
+    BIOHUB_ESM_TREE_SHA256,
+    BIOHUB_REFERENCE_SOURCE_NAMES,
+    BIOHUB_TRANSFORMERS_REVISION,
+    BIOHUB_TRANSFORMERS_TREE_SHA256,
+)
 from tests.structure.support import esmfold2_bundle
 from tests.structure.support.esmfold2_bundle import load_bundle, load_request
+from tests.structure.support.hardware import (
+    assert_same_hopper_sm90_device,
+    hopper_sm90_fingerprint,
+)
+from tools.remote.biohub_reference_environment import (
+    validate_biohub_reference_environment_evidence,
+)
+from tools.remote.reference_source_attestation import validate_reference_sources_evidence
+
+ROOT = Path(__file__).resolve().parents[2]
 
 bf16_targets = {
     "ca_rmsd": 0.10,
@@ -32,6 +49,8 @@ bf16_hard_limits = {
     "ptm_error": 0.005,
     "iptm_error": 0.005,
 }
+
+
 def _exchange_root() -> Path:
     return Path(os.environ.get("FASTPLMS_REFERENCE_EXCHANGE", "artifacts/reference"))
 
@@ -102,11 +121,32 @@ def _assert_bundle_identity(
     assert status["resolved"] == precision
     environment = metadata["environment"]
     assert isinstance(environment, Mapping)
-    assert "H100" in str(environment["cuda_device"])
+    hopper_sm90_fingerprint(environment)
     if producer == "candidate":
         assert str(environment["torch"]).split("+", maxsplit=1)[0] == "2.13.0"
         assert environment["transformers"] == "5.13.0"
         assert str(environment["cuda_runtime"]).startswith("13.0")
+    else:
+        locked_environment = validate_biohub_reference_environment_evidence(
+            metadata.get("reference_environment"),
+            repository_root=ROOT,
+            contract_path=ROOT / "docker/constraints/biohub-reference-lock.json",
+        )
+        assert locked_environment["reference_container_target"] == "reference-esmfold2"
+        sources = validate_reference_sources_evidence(
+            metadata.get("reference_sources"),
+            required_sources=BIOHUB_REFERENCE_SOURCE_NAMES,
+        )
+        esm_source = sources["biohub-esm"]
+        assert esm_source["source_revision"] == BIOHUB_ESM_REVISION
+        assert esm_source["tree_sha256"] == BIOHUB_ESM_TREE_SHA256
+        assert esm_source["package_version"] == "3.3.0"
+        assert esm_source["import_file"] == "esm/__init__.py"
+        transformers_source = sources["biohub-transformers"]
+        assert transformers_source["source_revision"] == BIOHUB_TRANSFORMERS_REVISION
+        assert transformers_source["tree_sha256"] == BIOHUB_TRANSFORMERS_TREE_SHA256
+        assert transformers_source["package_version"] == "4.57.6"
+        assert transformers_source["import_file"] == "src/transformers/__init__.py"
     if precision == "fp8":
         assert status["transformer_engine_version"]
         assert environment["transformer_engine"]
@@ -476,6 +516,11 @@ def test_esmfold2_isolated_bf16_folding_compliance(
         producer="candidate",
         precision="bf16",
     )
+    reference_environment = reference_metadata["environment"]
+    candidate_environment = bf16_metadata["environment"]
+    assert isinstance(reference_environment, Mapping)
+    assert isinstance(candidate_environment, Mapping)
+    assert_same_hopper_sm90_device(candidate_environment, reference_environment)
     assert bf16_metadata["semantic_config"] == reference_metadata["semantic_config"]
     assert bf16_metadata["state"] == reference_metadata["state"]
     _assert_exact_inputs(

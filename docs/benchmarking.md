@@ -1,12 +1,20 @@
 # Benchmarking
 
-Performance measurements run outside pytest on the validated H100 workstation.
+Performance measurements run outside pytest on the current validated NVIDIA
+GH200 workstation in the exact containerized Linux aarch64 environment. H100
+and H200 remain supported Hopper-class devices, but are not interchangeable
+with or accepted as the current release benchmark evidence.
 Pytest contains only a short CUDA-event smoke test for the harness. Correctness,
 parity, and structure compliance remain separate release gates.
 
 Every report records the exact Python, PyTorch, CUDA, Transformers, FastPLMs,
 Hugging Face `kernels`, Transformer Engine, driver, and accelerator environment.
-Performance claims apply only to a matching H100 environment fingerprint.
+Performance claims apply only when the current report exactly matches its
+baseline's accelerator name, compute capability, total GPU memory, driver, and
+software environment. Results are not transferable between GH200, H100, and
+H200, or between aarch64 and x86-64 environments. Remote orchestration resolves
+Bake to native `linux/arm64` on the GH200 and verifies every loaded image's
+architecture and content digest; Docker does not erase ABI differences.
 
 ## Fixed release matrix
 
@@ -49,17 +57,59 @@ Run the fixed matrix with:
 
 ```bash
 python -m benchmarks.suite \
+  --backends eager sdpa flex_attention \
+  --junit-output artifacts/junit/benchmark.xml \
   --output artifacts/benchmarks/h100.json
 ```
 
+The `h100.json` filename is retained as a legacy automation identifier. The
+report's hardware fingerprint, not its filename, determines the device on which
+it is valid.
+
+### Pre-publication local artifacts
+
+Capture a baseline from the final locally built Hub artifacts before publishing
+them by building the exact benchmark subset in the same clean, frozen source
+checkout and passing its root to the suite:
+
+```bash
+python -m tools.artifacts.build_all \
+  --benchmark-suite \
+  --source-root . \
+  --output-root dist/hub
+python -m benchmarks.suite \
+  --artifact-root dist/hub \
+  --local-files-only \
+  --backends eager sdpa flex_attention \
+  --junit-output artifacts/junit/benchmark-capture.xml \
+  --output artifacts/benchmarks/h100-baseline-candidate.json
+```
+
+The build step resolves only manifest-pinned snapshots. The benchmark step sets
+both Hugging Face offline variables, validates every selected artifact before
+CUDA or model work, and loads models and tokenizers from the local directories.
+ESMFold2 also requires and validates its separately packaged ESMC-6B backbone.
+Missing, linked, corrupt, swapped, unresolved, or stale artifacts fail closed.
+
+Local paths are load-only implementation details. Case keys remain the
+registry-owned Synthyra repository and immutable revision, including for ANKH
+and DPLM2 artifacts constructed from official-source weights. Each case and the
+top-level report instead record path-free manifest, selected checkpoint,
+weights, canonical state, runtime revision, runtime bundle, and source-tree
+digests. The regression gate rejects a missing or different artifact inventory.
+Published-artifact comparisons should materialize the same immutable snapshot
+under an artifact root so they retain that inventory without turning a
+workstation path into benchmark identity.
+
 ## FlashAttention source policy
 
-FastPLMs accepts only immutable, precompiled artifacts loaded by the Hugging
-Face `kernels` package. The benchmark workflow never compiles FlashAttention,
-installs the source `flash-attn` distribution, or substitutes another
-implementation. FlashAttention benchmark rows are included only for the
-family-specific revision-pinned artifacts that pass dense, mixed-padding, and
-checkpoint parity on the locked PyTorch 2.13 and CUDA 13 H100 stack.
+FastPLMs accepts only immutable, precompiled Flash artifacts loaded by the
+Hugging Face `kernels` package. The current GH200/aarch64 release benchmark
+explicitly measures eager, SDPA, and Flex only. It never downloads, builds, or
+executes FA2/FA3, installs the source `flash-attn` distribution, or substitutes
+another implementation. The report records FA2 as prior revision-pinned focused
+evidence and FA3 as unavailable in the current linux/arm64 lock. A request to
+include either Flash backend fails the remote capability preflight.
 
 ## ESMFold2 representation modes
 
@@ -119,6 +169,10 @@ python -m benchmarks.suite \
   --output artifacts/benchmarks/h100-exhaustive.json
 ```
 
+This legacy output name does not imply H100 execution. Current release reports
+must identify the exact GH200/aarch64 target, and no H100 or H200 report is
+GH200-equivalent.
+
 Exhaustive records use `matrix_kind="exhaustive"`,
 `claim_scope="descriptive_only"`, and `claim_eligible=false`. The command rejects
 a regression baseline. Its output can diagnose scaling behavior, but it cannot
@@ -169,6 +223,24 @@ python -m benchmarks.regression \
 
 The command never updates a baseline. A baseline change is a separate,
 reviewable file change supported by raw results and a matching environment.
+The `benchmarks/baselines/h100.json` path is retained for compatibility, but the
+current release baseline must identify the exact GH200 device and Linux aarch64
+environment that produced it.
+The regression gate rejects missing or different machine architecture, GPU
+name, compute capability, total memory, NVIDIA driver, Python/Torch/CUDA/cuDNN,
+Transformers, optional runtime versions, and artifact identities. A capture
+report includes a mechanical promotion contract plus separate `compile_ms`,
+`first_forward_ms`, warmup samples, and steady-state blocks; compilation is
+never amortized into warm throughput.
+The suite writes an initial incomplete JUnit sentinel before model work and
+atomically replaces it with the capture or regression result only after the
+report is complete. Remote phase timeouts use TERM followed by a bounded
+kill-after interval, and the remote run report retains the failing phase if a
+timeout or cancellation interrupts the benchmark.
+This repository does not yet contain the required release baseline. Create it
+only from the frozen exact release head and attach the raw immutable report;
+until then, regression and speed claims are blocked. Never fabricate or copy a
+baseline from a different runtime, checkpoint revision, or accelerator model.
 
 ## Interpreting results
 

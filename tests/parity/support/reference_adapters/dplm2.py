@@ -8,10 +8,10 @@ from __future__ import annotations
 
 import inspect
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Protocol, cast
 
 import torch
 import torch.nn as nn
@@ -88,6 +88,31 @@ _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _DPLM_SOURCE = _REPOSITORY_ROOT / "vendor" / "upstream" / "dplm" / "src"
 
 
+class _DPLM2Encoder(Protocol):
+    """Static shape of the encoder fields used by the parity adapter."""
+
+    layer: Sequence[nn.Module]
+
+
+class _DPLM2Esm(Protocol):
+    """Static shape of the ESM fields used by the parity adapter."""
+
+    embeddings: nn.Module
+    encoder: _DPLM2Encoder
+
+
+class _DPLM2Generative(Protocol):
+    """Static shape of the public sampler used by the parity adapter."""
+
+    def generate(self, **kwargs: Any) -> Any: ...
+
+
+class _DPLM2ModelWithEsm(Protocol):
+    """Static shape of the checkpoint-selected model wrapper."""
+
+    esm: _DPLM2Esm
+
+
 def _install_source_path() -> None:
     if not _DPLM_SOURCE.is_dir():
         raise FileNotFoundError(
@@ -151,9 +176,10 @@ def _call_checkpoint_generate(
     Other DPLM2 checkpoints retain the multimodal wrapper's public sampler.
     """
 
+    oracle_generate = cast(_DPLM2Generative, oracle).generate
     generate = getattr(network, "generate", None)
     if _accepts_type_ids(network) or not callable(generate):
-        return oracle.generate(input_tokens=input_tokens, **kwargs)
+        return oracle_generate(input_tokens=input_tokens, **kwargs)
 
     parameters = inspect.signature(generate).parameters
     supported_kwargs = {
@@ -189,7 +215,7 @@ class _OfficialDPLM2ForwardWrapper(nn.Module):
     def __init__(self, oracle: nn.Module) -> None:
         super().__init__()
         self.oracle = oracle
-        self.model = oracle.net
+        self.model = cast(nn.Module, oracle.net)
         self.tokenizer = oracle.tokenizer
 
     def forward(
@@ -206,10 +232,11 @@ class _OfficialDPLM2ForwardWrapper(nn.Module):
             if torch.is_tensor(value):
                 captured.append(value)
 
-        handles = [self.model.esm.embeddings.register_forward_hook(capture)]
+        esm = cast(_DPLM2ModelWithEsm, self.model).esm
+        handles = [esm.embeddings.register_forward_hook(capture)]
         handles.extend(
             layer.register_forward_hook(capture)
-            for layer in self.model.esm.encoder.layer[:-1]
+            for layer in esm.encoder.layer[:-1]
         )
         try:
             output = _call_checkpoint_forward(
@@ -273,7 +300,7 @@ def load_official_model(
     # This checkpoint stores the official class name in tokenizer_config.json.
     # Registering that unmodified upstream class restores the public
     # AutoTokenizer lookup expected by the pinned DPLM loader.
-    AutoTokenizer.register(
+    AutoTokenizer.register(  # type: ignore[no-untyped-call]
         EsmConfig,
         slow_tokenizer_class=DPLM2Tokenizer,
         exist_ok=True,

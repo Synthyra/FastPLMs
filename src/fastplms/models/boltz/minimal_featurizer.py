@@ -48,10 +48,14 @@ _CHIRAL_ATOMS = {
 
 
 def _normalize_sequence(sequence: str) -> str:
+    if not isinstance(sequence, str):
+        raise TypeError("Amino acid sequence must be a string.")
     seq = sequence.strip().upper()
-    assert len(seq) > 0, "Amino acid sequence must be non-empty."
+    if not seq:
+        raise ValueError("Amino acid sequence must be non-empty.")
     for aa in seq:
-        assert aa in const.prot_letter_to_token, f"Unsupported residue code '{aa}'."
+        if aa not in const.prot_letter_to_token:
+            raise ValueError(f"Unsupported residue code '{aa}'.")
     return seq
 
 
@@ -72,9 +76,8 @@ def _atom_name_to_codes(atom_name: str) -> torch.Tensor:
     while len(vals) < 4:
         vals.append(0)
     out = torch.tensor(vals, dtype=torch.long)
-    assert torch.all(out >= 0) and torch.all(out < 64), (
-        f"Invalid atom-name encoding for '{atom_name}'."
-    )
+    if not (torch.all(out >= 0) and torch.all(out < 64)):
+        raise ValueError(f"Invalid atom-name encoding for '{atom_name}'.")
     return out
 
 
@@ -349,7 +352,8 @@ def _build_template(
         residue_token_ids.append(const.token_ids[token_name])
 
         residue_atoms = const.ref_atoms[token_name]
-        assert len(residue_atoms) > 0, f"No reference atoms for residue {token_name}."
+        if not residue_atoms:
+            raise RuntimeError(f"No reference atoms for residue {token_name}.")
         center_atom_name = const.res_to_center_atom[token_name]
         disto_atom_name = const.res_to_disto_atom[token_name]
 
@@ -457,7 +461,8 @@ def _center_and_augment_atoms_per_residue(
     residue_index_tensor = torch.tensor(atom_residue_index, dtype=torch.long)
     for residue_idx in range(max(num_residues - 1, 0)):
         residue_mask = residue_index_tensor == residue_idx
-        assert torch.any(residue_mask), f"Residue index {residue_idx} has no atoms."
+        if not torch.any(residue_mask):
+            raise RuntimeError(f"Residue index {residue_idx} has no atoms.")
         residue_coords = result[residue_mask][None]
         resolved_mask = torch.ones(
             residue_coords.shape[:2], dtype=torch.bool, device=residue_coords.device
@@ -491,7 +496,8 @@ def build_boltz2_features(
 
     num_tokens = len(residue_names)
     num_atoms = len(atom_positions_np)
-    assert num_tokens > 0 and num_atoms > 0
+    if num_tokens <= 0 or num_atoms <= 0:
+        raise RuntimeError("Boltz2 feature construction produced an empty protein template.")
 
     atom_positions = torch.tensor(np.asarray(atom_positions_np), dtype=torch.float32)
     atom_positions = _center_and_augment_atoms_per_residue(
@@ -540,7 +546,8 @@ def build_boltz2_features(
     ).unsqueeze(0)
     contact_threshold = torch.zeros((1, num_tokens, num_tokens), dtype=torch.float32)
 
-    assert "x-ray diffraction" in const.method_types_ids
+    if "x-ray diffraction" not in const.method_types_ids:
+        raise RuntimeError("Boltz2 method metadata omits x-ray diffraction.")
     method_feature = torch.full(
         (1, num_tokens),
         fill_value=const.method_types_ids["x-ray diffraction"],
@@ -563,7 +570,10 @@ def build_boltz2_features(
     atomic_numbers = []
     for element in template.atom_elements:
         z_value = _ELEMENT_TO_Z[element] if element in _ELEMENT_TO_Z else _ELEMENT_TO_Z["C"]
-        assert z_value < const.num_elements
+        if z_value >= const.num_elements:
+            raise RuntimeError(
+                f"Atomic number {z_value} exceeds the Boltz2 element vocabulary."
+            )
         atomic_numbers.append(z_value)
     ref_element = one_hot(
         torch.tensor(atomic_numbers, dtype=torch.long),
@@ -624,7 +634,8 @@ def build_boltz2_features(
     bfactor = torch.zeros((1, num_atoms), dtype=torch.float32)
     atom_plddt = torch.ones((1, num_atoms), dtype=torch.float32)
 
-    assert atoms_per_window_queries > 0
+    if atoms_per_window_queries <= 0:
+        raise ValueError("atoms_per_window_queries must be positive.")
     pad_atoms = (
         (num_atoms - 1) // atoms_per_window_queries + 1
     ) * atoms_per_window_queries - num_atoms

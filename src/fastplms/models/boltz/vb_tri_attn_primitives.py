@@ -13,9 +13,9 @@ from __future__ import annotations
 import importlib
 import math
 from collections.abc import Callable, Sequence
+from importlib.util import find_spec
 
 import torch
-from einops import rearrange
 from torch import nn
 
 from . import vb_layers_initialize as initialize
@@ -144,8 +144,16 @@ def kernel_triangular_attn(
 ) -> torch.Tensor:
     """Call the optional cuEquivariance triangle-attention primitive."""
 
-    triangle = importlib.import_module("cuequivariance_torch.primitives.triangle")
-    return triangle.triangle_attention(q, k, v, tri_bias, mask=mask, scale=scale)
+    if (
+        find_spec("cuequivariance_torch") is None
+        or find_spec("cuequivariance_ops_torch") is None
+    ):
+        raise RuntimeError(
+            "Boltz2 use_kernels=True requires cuequivariance_torch and the CUDA 13 "
+            "cuequivariance_ops_torch runtime from the 'structure,cueq' extras."
+        )
+    cueq = importlib.import_module("cuequivariance_torch")
+    return cueq.triangle_attention(q, k, v, tri_bias, mask=mask, scale=scale)
 
 
 class Attention(nn.Module):
@@ -227,35 +235,3 @@ class Attention(nn.Module):
         else:
             output = _attention(q, k, v, (mask_bias, tri_bias))
         return self._wrap_up(output.transpose(-2, -3), q_x)
-
-
-def _trifast_attn(
-    q: torch.Tensor,
-    k: torch.Tensor,
-    v: torch.Tensor,
-    biases: Sequence[torch.Tensor],
-) -> torch.Tensor:
-    """Adapt local pair tensors to the optional TriFast kernel contract."""
-
-    original_ndim = q.ndim
-    if len(biases) != 2:
-        raise ValueError(f"TriFast requires two bias tensors, got {len(biases)}")
-    mask, triangle_bias = biases
-    if triangle_bias.ndim == 5:
-        triangle_bias = triangle_bias.squeeze(1)
-    if original_ndim == 4:
-        q, k, v = (tensor.unsqueeze(0) for tensor in (q, k, v))
-        mask = mask.unsqueeze(0)
-    if q.ndim != 5:
-        raise ValueError(f"TriFast requires five-dimensional Q, K, and V, got {q.ndim}")
-
-    q = rearrange(q, "b i h j d -> b h i j d")
-    k = rearrange(k, "b i h j d -> b h i j d")
-    v = rearrange(v, "b i h j d -> b h i j d")
-    kernel_mask = rearrange(mask, "b i () () j -> b i j").bool()
-
-    from trifast import triangle_attention
-
-    output = triangle_attention(q, k, v, triangle_bias, kernel_mask)
-    output = rearrange(output, "b h i j d -> b i j h d")
-    return output.squeeze(0) if original_ndim == 4 else output

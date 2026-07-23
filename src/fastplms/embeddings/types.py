@@ -78,7 +78,11 @@ class EmbeddingResult(Sequence[EmbeddingRecord]):
         records: Sequence[EmbeddingRecord],
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        self.records = tuple(records)
+        self.records: Sequence[EmbeddingRecord] = (
+            records
+            if getattr(records, "_fastplms_immutable_sequence", False)
+            else tuple(records)
+        )
         self.metadata = dict(metadata or {})
 
     def __len__(self) -> int:
@@ -87,7 +91,9 @@ class EmbeddingResult(Sequence[EmbeddingRecord]):
     def __iter__(self) -> Iterator[EmbeddingRecord]:
         return iter(self.records)
 
-    def __getitem__(self, index: int | slice) -> EmbeddingRecord | tuple[EmbeddingRecord, ...]:
+    def __getitem__(
+        self, index: int | slice
+    ) -> EmbeddingRecord | Sequence[EmbeddingRecord]:
         return self.records[index]
 
     def as_dict(

@@ -44,12 +44,22 @@ class PiecewiseStepFunction(ParameterSchedule):
         thresholds: Sequence[float],
         values: Sequence[float],
     ) -> None:
-        self.thresholds = thresholds
-        self.values = values
+        self.thresholds = tuple(thresholds)
+        self.values = tuple(values)
+        if not self.thresholds:
+            raise ValueError("PiecewiseStepFunction requires at least one threshold.")
+        if len(self.values) != len(self.thresholds) + 1:
+            raise ValueError(
+                "PiecewiseStepFunction requires exactly one more value than threshold; "
+                f"received {len(self.values)} values and {len(self.thresholds)} thresholds."
+            )
+        if any(
+            current >= following
+            for current, following in zip(self.thresholds, self.thresholds[1:], strict=False)
+        ):
+            raise ValueError("PiecewiseStepFunction thresholds must be strictly increasing.")
 
     def compute(self, t: float) -> float:
-        assert self.thresholds
-        assert len(self.values) == len(self.thresholds) + 1
         interval = next(
             (index for index, threshold in enumerate(self.thresholds) if t <= threshold),
             len(self.thresholds),

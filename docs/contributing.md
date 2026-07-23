@@ -6,11 +6,24 @@ audit trail. Do not commit or upload model weights as part of a source change.
 ## Setup
 
 ```bash
-git submodule update --init --recursive
-uv sync --extra dev
+uv lock --check
+uv sync --frozen --no-default-groups \
+  --group validation --extra cpu --extra dev --extra structure --extra train
+python -m pytest tests/cpu -m cpu_contract -n auto --dist=loadscope
 ```
 
-Run verification on the configured H100 host through `tools/remote/run.py`.
+The explicit `cpu` extra selects the locked PyTorch CPU index for this uv
+development environment. Do not use `--all-extras`: CUDA-only extras are
+intentionally incompatible with the CPU environment. Select only the feature
+extras needed by the validation lane.
+
+Official submodules are not required for routine CPU work. Initialize them only
+for a live compliance run with `git submodule update --init --recursive`. Run
+release GPU verification on the configured Linux aarch64 GH200 host through
+`tools/remote/run.py`. H100 and H200 are supported Hopper-class devices, but do
+not substitute for the current exact-device release evidence. The runner binds
+Bake to native `linux/arm64` and records the GPU UUID; never use emulated images
+for CUDA evidence.
 Candidate PyTorch containers must use `ipc: host`.
 
 ## Code rules
@@ -54,7 +67,9 @@ licenses. Then:
    backend cases;
 5. build and validate its offline local artifact;
 6. regenerate support data and model cards;
-7. run the required remote tiers.
+7. verify the generated capability-to-evidence row points to a guide, runnable
+   offline/local example, and every required test tier;
+8. run the required remote tiers.
 
 Never create a family-specific tolerance to make a failing comparison pass. Fix
 the implementation or remove the unsupported capability from the manifest and

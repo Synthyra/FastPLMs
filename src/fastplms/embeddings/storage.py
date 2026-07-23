@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import sqlite3
-from collections.abc import Iterable
+import struct
+from bisect import bisect_right
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import torch
@@ -33,6 +37,7 @@ _DTYPE_NAMES: dict[torch.dtype, str] = {
 }
 _NAME_DTYPES = {name: dtype for dtype, name in _DTYPE_NAMES.items()}
 DEFAULT_SHARD_SIZE = 2 * 1024**3
+_MAX_RECORDS_PER_DESCRIPTOR_SHARD = 1_024
 
 
 def _jsonable(value: Any) -> Any:
@@ -49,6 +54,23 @@ def _jsonable(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     return repr(value)
+
+
+def _persistent_metadata(
+    metadata: dict[str, Any],
+    *,
+    descriptor_index: str,
+    record_count: int | None = None,
+) -> dict[str, Any]:
+    """Remove per-record copies from metadata and identify the authoritative index."""
+
+    cleaned = _jsonable(metadata)
+    cleaned.pop("outputs", None)
+    cleaned.pop("tensor_hashes", None)
+    cleaned["descriptor_index"] = descriptor_index
+    if record_count is not None:
+        cleaned["record_count"] = record_count
+    return cleaned
 
 
 def _tensor_bytes(X: Tensor) -> bytes:
@@ -109,10 +131,88 @@ def _run_manifest_path(path: str | Path) -> Path:
     return path / "run.json"
 
 
-def safetensors_result_exists(path: str | Path) -> bool:
-    """Return whether both transactional safetensors metadata files exist."""
+def _resolve_index_child(root: Path, relative: str, *, label: str) -> Path:
+    relative_path = Path(relative)
+    candidate = (root / relative_path).resolve()
+    if relative_path.is_absolute() or candidate.parent != root.resolve():
+        raise ValueError(f"Safetensors {label} references a file outside its output directory.")
+    return candidate
 
-    return _index_path(path).is_file() and _run_manifest_path(path).is_file()
+
+def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
+    return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _load_authoritative_index(
+    path: str | Path,
+) -> tuple[dict[str, Any], Path, dict[str, Any]]:
+    """Load the index selected by the atomic run-manifest commit record."""
+
+    stable_index_path = _index_path(path)
+    run_manifest_path = _run_manifest_path(path)
+    if not run_manifest_path.is_file():
+        raise ValueError(f"Missing safetensors run manifest: {run_manifest_path}.")
+    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
+    if run_manifest.get("format") != "fastplms-embedding-run":
+        raise ValueError(f"Not a FastPLMs embedding run manifest: {run_manifest_path}.")
+    version = run_manifest.get("version")
+    index_reference = run_manifest.get("index")
+    if not isinstance(index_reference, dict):
+        raise ValueError("Safetensors run manifest contains an invalid index reference.")
+    if version == 1:
+        snapshot = run_manifest.get("index_payload")
+        if isinstance(snapshot, dict):
+            payload = snapshot
+            index_bytes = _canonical_json_bytes(payload)
+        elif snapshot is None:
+            index_bytes = stable_index_path.read_bytes()
+            payload = json.loads(index_bytes.decode("utf-8"))
+        else:
+            raise ValueError("Safetensors run manifest contains an invalid index snapshot.")
+        expected = {
+            "file": stable_index_path.name,
+            "sha256": hashlib.sha256(index_bytes).hexdigest(),
+        }
+        index_path = stable_index_path
+    elif version == 2:
+        relative = index_reference.get("file")
+        if not isinstance(relative, str):
+            raise ValueError("Safetensors run manifest index file is invalid.")
+        index_path = _resolve_index_child(
+            stable_index_path.parent, relative, label="run manifest"
+        )
+        index_bytes = index_path.read_bytes()
+        payload = json.loads(index_bytes.decode("utf-8"))
+        if payload.get("version") != 2:
+            raise ValueError("Safetensors v2 run manifest must reference a v2 generation index.")
+        expected = {
+            "file": relative,
+            "sha256": hashlib.sha256(index_bytes).hexdigest(),
+        }
+    else:
+        raise ValueError(f"Unsupported safetensors run manifest version {version!r}.")
+    if index_reference != expected:
+        raise ValueError("Safetensors run manifest does not match its index.")
+    if payload.get("format") != "fastplms-embedding-safetensors":
+        raise ValueError(f"Not a FastPLMs embedding index: {index_path}.")
+    record_count = payload.get("record_count")
+    if record_count is None:
+        record_count = len(payload.get("records", ()))
+    if run_manifest.get("record_count") != record_count:
+        raise ValueError("Safetensors run manifest record count does not match its index.")
+    if version == 1 and run_manifest.get("metadata") != payload.get("metadata"):
+        raise ValueError("Safetensors run manifest metadata does not match its index.")
+    return payload, index_path, run_manifest
+
+
+def safetensors_result_exists(path: str | Path) -> bool:
+    """Return whether an authoritative committed safetensors run exists."""
+
+    try:
+        _load_authoritative_index(path)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return True
 
 
 def _load_safetensor(path: Path, key: str) -> Tensor:
@@ -132,26 +232,13 @@ def _safetensors_shard_prefix(path: str | Path) -> str:
 
 
 def _authoritative_index_payload(path: str | Path) -> dict[str, Any] | None:
-    """Return the last atomically committed index snapshot when available."""
+    """Return the last atomically committed generation index when available."""
 
-    run_manifest_path = _run_manifest_path(path)
-    if run_manifest_path.is_file():
-        try:
-            run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            run_manifest = None
-        if isinstance(run_manifest, dict):
-            snapshot = run_manifest.get("index_payload")
-            if isinstance(snapshot, dict):
-                return snapshot
-    index_path = _index_path(path)
-    if not index_path.is_file():
-        return None
     try:
-        payload = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        payload, _, _ = _load_authoritative_index(path)
+    except (OSError, ValueError, json.JSONDecodeError):
         return None
-    return payload if isinstance(payload, dict) else None
+    return payload
 
 
 def _referenced_shards(
@@ -163,6 +250,13 @@ def _referenced_shards(
     if payload is None:
         return set()
     shards: set[Path] = set()
+    for descriptor_shard in payload.get("descriptor_shards", ()):
+        tensor_file = descriptor_shard.get("tensor_file")
+        if isinstance(tensor_file, str):
+            candidate = _resolve_index_child(
+                index_path.parent, tensor_file, label="descriptor index"
+            )
+            shards.add(candidate)
     for item in payload.get("records", ()):
         relative = item.get("tensor", {}).get("file")
         if not isinstance(relative, str):
@@ -173,8 +267,122 @@ def _referenced_shards(
     return shards
 
 
+def _record_from_safetensors_descriptor(root: Path, item: dict[str, Any]) -> EmbeddingRecord:
+    tensor = item.get("tensor")
+    if not isinstance(tensor, dict):
+        raise ValueError("Safetensors descriptor is missing tensor metadata.")
+    relative = tensor.get("file")
+    if not isinstance(relative, str):
+        raise ValueError("Safetensors descriptor tensor file is invalid.")
+    tensor_path = _resolve_index_child(root, relative, label="descriptor")
+    reference = LazyTensorReference(
+        source=str(tensor_path),
+        key=str(tensor["key"]),
+        dtype=str(tensor["dtype"]),
+        shape=tuple(tensor["shape"]),
+        sha256=str(tensor["sha256"]),
+        _loader=lambda p=tensor_path, k=str(tensor["key"]): _load_safetensor(p, k),
+    )
+    return EmbeddingRecord(str(item["id"]), str(item["sequence"]), reference)
+
+
+class _SafetensorsRecordSequence(Sequence[EmbeddingRecord]):
+    """Lazy immutable view over bounded descriptor JSONL shards."""
+
+    _fastplms_immutable_sequence = True
+
+    def __init__(self, root: Path, descriptor_shards: Sequence[dict[str, Any]]) -> None:
+        if not isinstance(descriptor_shards, (list, tuple)):
+            raise ValueError("Safetensors generation index has invalid descriptor shards.")
+        self.root = root
+        self.shards = tuple(descriptor_shards)
+        cumulative: list[int] = []
+        total = 0
+        for shard in self.shards:
+            if not isinstance(shard, dict):
+                raise ValueError("Safetensors descriptor shard entry is invalid.")
+            relative = shard.get("file")
+            if not isinstance(relative, str):
+                raise ValueError("Safetensors descriptor index file is invalid.")
+            descriptor_path = _resolve_index_child(root, relative, label="index")
+            tensor_file = shard.get("tensor_file")
+            if not isinstance(tensor_file, str):
+                raise ValueError("Safetensors descriptor tensor file is invalid.")
+            tensor_path = _resolve_index_child(root, tensor_file, label="index")
+            if not tensor_path.is_file():
+                raise ValueError(f"Safetensors tensor shard is missing: {tensor_file}.")
+            digest = hashlib.sha256()
+            count = 0
+            with descriptor_path.open("rb") as handle:
+                for line in handle:
+                    digest.update(line)
+                    if line.strip():
+                        item = json.loads(line)
+                        item_tensor = item.get("tensor")
+                        if not isinstance(item_tensor, dict):
+                            raise ValueError(
+                                "Safetensors descriptor is missing tensor metadata."
+                            )
+                        item_tensor_file = item_tensor.get("file")
+                        if not isinstance(item_tensor_file, str):
+                            raise ValueError(
+                                "Safetensors descriptor tensor file is invalid."
+                            )
+                        _resolve_index_child(
+                            root, item_tensor_file, label="descriptor"
+                        )
+                        if item_tensor_file != tensor_file:
+                            raise ValueError(
+                                "Safetensors descriptor tensor file does not match its shard."
+                            )
+                        count += 1
+            if digest.hexdigest() != shard.get("sha256") or count != shard.get("count"):
+                raise ValueError(
+                    f"Safetensors descriptor shard failed integrity validation: {relative}."
+                )
+            total += count
+            cumulative.append(total)
+        self._cumulative = tuple(cumulative)
+        self._count = total
+
+    def __len__(self) -> int:
+        return self._count
+
+    def _iter_shard(self, shard_index: int) -> Iterator[EmbeddingRecord]:
+        descriptor_path = _resolve_index_child(
+            self.root, str(self.shards[shard_index]["file"]), label="index"
+        )
+        with descriptor_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if line.strip():
+                    yield _record_from_safetensors_descriptor(
+                        self.root, json.loads(line)
+                    )
+
+    def __iter__(self) -> Iterator[EmbeddingRecord]:
+        for shard_index in range(len(self.shards)):
+            yield from self._iter_shard(shard_index)
+
+    def __getitem__(
+        self, index: int | slice
+    ) -> EmbeddingRecord | Sequence[EmbeddingRecord]:
+        if isinstance(index, slice):
+            start, stop, step = index.indices(self._count)
+            return [self[position] for position in range(start, stop, step)]
+        position = index + self._count if index < 0 else index
+        if position < 0 or position >= self._count:
+            raise IndexError(index)
+        shard_index = bisect_right(self._cumulative, position)
+        previous = self._cumulative[shard_index - 1] if shard_index else 0
+        local_position = position - previous
+        for offset, record in enumerate(self._iter_shard(shard_index)):
+            if offset == local_position:
+                return record
+        raise IndexError(index)
+
+
 class SafetensorsStreamWriter:
-    """Bounded-memory, resumable safetensors publisher."""
+    """Bounded-memory, resumable publisher with immutable retained generations."""
 
     def __init__(
         self,
@@ -198,67 +406,131 @@ class SafetensorsStreamWriter:
         self.index_path = _index_path(path)
         self.run_manifest_path = _run_manifest_path(path)
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        self.metadata = _jsonable(metadata)
+        self.metadata = _persistent_metadata(
+            metadata,
+            descriptor_index="safetensors-generation-index",
+            record_count=0,
+        )
         self.shard_size = shard_size
         self.publish_incremental = publish_incremental
         self._save_file = save_file
         authoritative_payload = _authoritative_index_payload(path)
-        self._old_shards = _referenced_shards(self.index_path, authoritative_payload)
-        self._records_json: list[dict[str, Any]] = []
+        prefix = _safetensors_shard_prefix(path)
+        # A random generation identity prevents a new writer from reusing a
+        # previously published or interrupted generation name. Published files
+        # are immutable and remain available to lazy readers until explicit GC.
+        self._generation = uuid4().hex
+        self._prefix = prefix
+        self._shard_index = 0
+        self._seed_index = 0
+        self._commit_index = 0
+        self._descriptor_shards: list[dict[str, Any]] = []
+        self._record_count = 0
+        self._current: dict[str, Tensor] = {}
+        self._pending: list[tuple[EmbeddingRecord, str, str, tuple[int, ...], str]] = []
+        self._current_size = 0
         if reuse_existing:
             if authoritative_payload is None:
                 raise ValueError("Cannot resume without an authoritative safetensors index.")
-            self._records_json = list(authoritative_payload.get("records", ()))
-            expected_prefix_length = sum(1 for _ in existing)
-            if expected_prefix_length != len(self._records_json):
+            expected_prefix_length = len(existing) if isinstance(existing, Sequence) else sum(
+                1 for _ in existing
+            )
+            if authoritative_payload.get("version") == 2:
+                self._descriptor_shards = list(
+                    authoritative_payload.get("descriptor_shards", ())
+                )
+                self._record_count = int(authoritative_payload.get("record_count", 0))
+            else:
+                legacy_records = list(authoritative_payload.get("records", ()))
+                self._record_count = len(legacy_records)
+                if legacy_records:
+                    self._descriptor_shards.extend(
+                        self._write_descriptor_seed(legacy_records)
+                    )
+            if expected_prefix_length != self._record_count:
                 raise ValueError(
                     "The resumable safetensors prefix does not match the validated "
                     "embedding records."
                 )
-        prefix = _safetensors_shard_prefix(path)
-        generations = []
-        for candidate in self.index_path.parent.glob(f"{prefix}-run-*-*.safetensors"):
-            parts = candidate.stem.split("-")
-            try:
-                generations.append(int(parts[-2]))
-            except (IndexError, ValueError):
-                continue
-        self._generation = max(generations, default=0) + 1
-        self._prefix = prefix
-        self._shard_index = 0
-        self._current: dict[str, Tensor] = {}
-        self._pending: list[
-            tuple[EmbeddingRecord, str, str, tuple[int, ...], str]
-        ] = []
-        self._current_size = 0
 
-        for temporary in self.index_path.parent.glob(f".{prefix}-run-*-*.safetensors.tmp"):
-            temporary.unlink(missing_ok=True)
-        for temporary in (
-            self.index_path.with_name(f".{self.index_path.name}.tmp"),
-            self.run_manifest_path.with_name(f".{self.run_manifest_path.name}.tmp"),
-        ):
-            temporary.unlink(missing_ok=True)
-        for orphan in self.index_path.parent.glob(f"{prefix}-run-*-*.safetensors"):
-            if orphan.resolve() not in self._old_shards:
-                orphan.unlink(missing_ok=True)
         if publish_initial:
             self._publish_metadata(complete=False)
+
+    def _write_descriptor_file(
+        self,
+        name: str,
+        descriptors: Sequence[dict[str, Any]],
+        *,
+        tensor_file: str,
+    ) -> dict[str, Any]:
+        temporary = self.index_path.parent / f".{name}.tmp"
+        destination = self.index_path.parent / name
+        if temporary.exists() or destination.exists():
+            raise FileExistsError(
+                f"Refusing to reuse immutable safetensors generation path {destination}."
+            )
+        digest = hashlib.sha256()
+        with temporary.open("wb") as handle:
+            for item in descriptors:
+                encoded = (
+                    json.dumps(item, sort_keys=True, separators=(",", ":")).encode(
+                        "utf-8"
+                    )
+                    + b"\n"
+                )
+                handle.write(encoded)
+                digest.update(encoded)
+        temporary.replace(destination)
+        return {
+            "file": name,
+            "sha256": digest.hexdigest(),
+            "count": len(descriptors),
+            "tensor_file": tensor_file,
+        }
+
+    def _write_descriptor_seed(
+        self, records: Sequence[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        groups: list[tuple[str, list[dict[str, Any]]]] = []
+        for record in records:
+            tensor_file = str(record["tensor"]["file"])
+            if (
+                not groups
+                or groups[-1][0] != tensor_file
+                or len(groups[-1][1]) == _MAX_RECORDS_PER_DESCRIPTOR_SHARD
+            ):
+                groups.append((tensor_file, []))
+            groups[-1][1].append(record)
+        descriptor_shards: list[dict[str, Any]] = []
+        for tensor_file, descriptors in groups:
+            self._seed_index += 1
+            name = (
+                f"{self._prefix}-records-run-{self._generation}-"
+                f"seed-{self._seed_index:05d}.jsonl"
+            )
+            descriptor_shards.append(
+                self._write_descriptor_file(
+                    name, descriptors, tensor_file=tensor_file
+                )
+            )
+        return descriptor_shards
 
     def _write_shard(self) -> None:
         if not self._current:
             return
         self._shard_index += 1
-        name = (
-            f"{self._prefix}-run-{self._generation:05d}-"
-            f"{self._shard_index:05d}.safetensors"
-        )
+        name = f"{self._prefix}-run-{self._generation}-{self._shard_index:05d}.safetensors"
         temporary = self.index_path.parent / f".{name}.tmp"
         destination = self.index_path.parent / name
+        if temporary.exists() or destination.exists():
+            raise FileExistsError(
+                f"Refusing to reuse immutable safetensors generation path {destination}."
+            )
         self._save_file(self._current, temporary)
         temporary.replace(destination)
+        descriptors: list[dict[str, Any]] = []
         for record, key, dtype_name, shape, digest in self._pending:
-            self._records_json.append(
+            descriptors.append(
                 {
                     "id": record.id,
                     "sequence": record.sequence,
@@ -271,6 +543,16 @@ class SafetensorsStreamWriter:
                     },
                 }
             )
+        descriptor_name = (
+            f"{self._prefix}-records-run-{self._generation}-"
+            f"{self._shard_index:05d}.jsonl"
+        )
+        self._descriptor_shards.append(
+            self._write_descriptor_file(
+                descriptor_name, descriptors, tensor_file=name
+            )
+        )
+        self._record_count += len(descriptors)
         self._current = {}
         self._pending = []
         self._current_size = 0
@@ -284,7 +566,7 @@ class SafetensorsStreamWriter:
         """Persist records while retaining at most one shard of tensors."""
 
         for record in records:
-            position = len(self._records_json) + len(self._pending)
+            position = self._record_count + len(self._pending)
             tensor = record.load_tensor().detach().cpu().contiguous()
             if tensor.dtype not in _DTYPE_NAMES:
                 raise TypeError(f"Unsupported tensor dtype {tensor.dtype}.")
@@ -294,11 +576,14 @@ class SafetensorsStreamWriter:
                     f"Embedding {position} requires {nbytes} bytes and cannot fit in a "
                     f"{self.shard_size}-byte safetensors shard."
                 )
-            if self._current and self._current_size + nbytes > self.shard_size:
+            if self._current and (
+                self._current_size + nbytes > self.shard_size
+                or len(self._pending) == _MAX_RECORDS_PER_DESCRIPTOR_SHARD
+            ):
                 self._write_shard()
                 if self.publish_incremental:
                     self._publish_metadata(complete=False)
-                position = len(self._records_json)
+                position = self._record_count
             key = f"embedding_{position:08d}"
             self._current[key] = tensor
             self._current_size += nbytes
@@ -323,51 +608,64 @@ class SafetensorsStreamWriter:
         """Atomically expose one self-consistent metadata generation."""
 
         if metadata is not None:
-            self.metadata = _jsonable(metadata)
+            self.metadata = _persistent_metadata(
+                metadata,
+                descriptor_index="safetensors-generation-index",
+            )
         self.metadata["complete"] = complete
+        self.metadata["record_count"] = self._record_count
+        self._commit_index += 1
         payload = {
-            "version": 1,
+            "version": 2,
             "format": "fastplms-embedding-safetensors",
             "metadata": self.metadata,
-            "records": self._records_json,
+            "record_count": self._record_count,
+            "descriptor_shards": self._descriptor_shards,
         }
-        temporary_index = self.index_path.with_name(f".{self.index_path.name}.tmp")
-        temporary_index.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
+        generation_index_name = (
+            f"{self._prefix}-index-run-{self._generation}-"
+            f"{self._commit_index:05d}.json"
         )
-        temporary_index.replace(self.index_path)
+        generation_index_path = self.index_path.parent / generation_index_name
+        temporary_generation_index = generation_index_path.with_name(
+            f".{generation_index_path.name}.tmp"
+        )
+        if temporary_generation_index.exists() or generation_index_path.exists():
+            raise FileExistsError(
+                "Refusing to reuse immutable safetensors generation index "
+                f"{generation_index_path}."
+            )
+        encoded_index = _canonical_json_bytes(payload)
+        temporary_generation_index.write_bytes(encoded_index)
+        temporary_generation_index.replace(generation_index_path)
 
-        index_sha256 = hashlib.sha256(self.index_path.read_bytes()).hexdigest()
-        run_manifest = {
-            "version": 1,
-            "format": "fastplms-embedding-run",
-            "index": {"file": self.index_path.name, "sha256": index_sha256},
-            "index_payload": payload,
-            "metadata": self.metadata,
-            "record_count": len(self._records_json),
+        index_sha256 = hashlib.sha256(encoded_index).hexdigest()
+        index_reference = {
+            "file": generation_index_name,
+            "sha256": index_sha256,
         }
-        temporary_manifest = self.run_manifest_path.with_name(
-            f".{self.run_manifest_path.name}.tmp"
-        )
-        temporary_manifest.write_text(
-            json.dumps(run_manifest, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        run_manifest = {
+            "version": 2,
+            "format": "fastplms-embedding-run",
+            "index": index_reference,
+            "record_count": self._record_count,
+        }
+        temporary_manifest = self.run_manifest_path.with_name(f".{self.run_manifest_path.name}.tmp")
+        temporary_manifest.write_bytes(_canonical_json_bytes(run_manifest))
         temporary_manifest.replace(self.run_manifest_path)
 
-        referenced = {
-            (self.index_path.parent / item["tensor"]["file"]).resolve()
-            for item in self._records_json
+        # ``index.json`` is a non-authoritative convenience pointer. The run
+        # manifest is committed first, so interruption here cannot invalidate
+        # the newly committed generation.
+        stable_pointer = {
+            "version": 2,
+            "format": "fastplms-embedding-index-pointer",
+            "index": index_reference,
         }
-        for obsolete in self._old_shards.difference(referenced):
-            obsolete.unlink(missing_ok=True)
-        for orphan in self.index_path.parent.glob(
-            f"{self._prefix}-run-*-*.safetensors"
-        ):
-            if orphan.resolve() not in referenced:
-                orphan.unlink(missing_ok=True)
-        self._old_shards = referenced
+        temporary_index = self.index_path.with_name(f".{self.index_path.name}.tmp")
+        temporary_index.write_bytes(_canonical_json_bytes(stable_pointer))
+        temporary_index.replace(self.index_path)
+
         return load_safetensors_result(self.index_path)
 
     def publish(
@@ -395,6 +693,7 @@ def save_safetensors_result(
         result.metadata,
         shard_size=shard_size,
         publish_initial=False,
+        publish_incremental=False,
     )
     writer.append(result, publish=False)
     return writer.publish(complete=bool(result.metadata.get("complete", True)))
@@ -403,55 +702,98 @@ def save_safetensors_result(
 def load_safetensors_result(path: str | Path) -> EmbeddingResult:
     """Load an indexed safetensors result without loading tensor payloads."""
 
-    index_path = _index_path(path)
-    run_manifest_path = _run_manifest_path(path)
-    if not run_manifest_path.is_file():
-        raise ValueError(f"Missing safetensors run manifest: {run_manifest_path}.")
-    run_manifest = json.loads(run_manifest_path.read_text(encoding="utf-8"))
-    snapshot = run_manifest.get("index_payload")
-    if snapshot is None:
-        index_bytes = index_path.read_bytes()
-        payload = json.loads(index_bytes.decode("utf-8"))
-    elif isinstance(snapshot, dict):
-        payload = snapshot
-        index_bytes = (
-            json.dumps(payload, indent=2, sort_keys=True) + "\n"
-        ).encode("utf-8")
-    else:
-        raise ValueError("Safetensors run manifest contains an invalid index snapshot.")
-    if payload.get("format") != "fastplms-embedding-safetensors":
-        raise ValueError(f"Not a FastPLMs embedding index: {index_path}.")
-    expected_index = {
-        "file": index_path.name,
-        "sha256": hashlib.sha256(index_bytes).hexdigest(),
-    }
-    if run_manifest.get("format") != "fastplms-embedding-run":
-        raise ValueError(f"Not a FastPLMs embedding run manifest: {run_manifest_path}.")
-    if run_manifest.get("version") != 1 or run_manifest.get("index") != expected_index:
-        raise ValueError("Safetensors run manifest does not match its index.")
-    if run_manifest.get("metadata") != payload.get("metadata"):
-        raise ValueError("Safetensors run manifest metadata does not match its index.")
-    if run_manifest.get("record_count") != len(payload.get("records", ())):
-        raise ValueError("Safetensors run manifest record count does not match its index.")
+    payload, index_path, _ = _load_authoritative_index(path)
+    if payload.get("version") == 2:
+        records = _SafetensorsRecordSequence(
+            index_path.parent, payload.get("descriptor_shards", ())
+        )
+        if len(records) != payload.get("record_count"):
+            raise ValueError(
+                "Safetensors descriptor count does not match its generation index."
+            )
+        return EmbeddingResult(records, payload.get("metadata", {}))
+
     records: list[EmbeddingRecord] = []
     for item in payload["records"]:
-        tensor = item["tensor"]
-        relative_path = Path(tensor["file"])
-        tensor_path = (index_path.parent / relative_path).resolve()
-        if relative_path.is_absolute() or tensor_path.parent != index_path.parent.resolve():
-            raise ValueError(
-                "Safetensors index references a tensor shard outside its output directory."
-            )
-        reference = LazyTensorReference(
-            source=str(tensor_path),
-            key=tensor["key"],
-            dtype=tensor["dtype"],
-            shape=tuple(tensor["shape"]),
-            sha256=tensor["sha256"],
-            _loader=lambda p=tensor_path, k=tensor["key"]: _load_safetensor(p, k),
-        )
-        records.append(EmbeddingRecord(item["id"], item["sequence"], reference))
+        records.append(_record_from_safetensors_descriptor(index_path.parent, item))
     return EmbeddingResult(records, payload.get("metadata", {}))
+
+
+def garbage_collect_safetensors_generations(
+    path: str | Path,
+    *,
+    dry_run: bool = True,
+    confirm_no_active_readers_or_writers: bool = False,
+) -> tuple[Path, ...]:
+    """Remove non-authoritative generations after an explicit exclusivity check.
+
+    Safetensors results retain immutable historical generations because an
+    already-open :class:`EmbeddingResult` resolves tensors through those exact
+    descriptor and shard paths. Destructive collection is therefore safe only
+    when the caller guarantees that no reader or writer for ``path`` remains
+    active. ``dry_run=True`` is the default and returns the paths that would be
+    removed without changing the output directory.
+    """
+
+    if not isinstance(dry_run, bool):
+        raise TypeError("dry_run must be a bool.")
+    if not isinstance(confirm_no_active_readers_or_writers, bool):
+        raise TypeError("confirm_no_active_readers_or_writers must be a bool.")
+    if not dry_run and not confirm_no_active_readers_or_writers:
+        raise ValueError(
+            "Destructive safetensors generation collection requires "
+            "confirm_no_active_readers_or_writers=True."
+        )
+
+    # Validate the full descriptor graph before identifying anything as stale.
+    load_safetensors_result(path)
+    payload, authoritative_index_path, _ = _load_authoritative_index(path)
+    stable_index_path = _index_path(path)
+    run_manifest_path = _run_manifest_path(path)
+    root = stable_index_path.parent
+    prefix = _safetensors_shard_prefix(path)
+    protected = {
+        stable_index_path.resolve(),
+        run_manifest_path.resolve(),
+        authoritative_index_path.resolve(),
+        *_referenced_shards(stable_index_path, payload),
+    }
+    for descriptor_shard in payload.get("descriptor_shards", ()):
+        relative = descriptor_shard.get("file")
+        if isinstance(relative, str):
+            protected.add(
+                _resolve_index_child(root, relative, label="index").resolve()
+            )
+
+    candidates: set[Path] = set()
+    for pattern in (
+        f"{prefix}-run-*-*.safetensors",
+        f"{prefix}-records-run-*.jsonl",
+        f"{prefix}-index-run-*.json",
+        f".{prefix}-*.tmp",
+    ):
+        candidates.update(root.glob(pattern))
+    for temporary in (
+        stable_index_path.with_name(f".{stable_index_path.name}.tmp"),
+        run_manifest_path.with_name(f".{run_manifest_path.name}.tmp"),
+    ):
+        if temporary.exists():
+            candidates.add(temporary)
+
+    stale = tuple(
+        sorted(
+            (
+                candidate
+                for candidate in candidates
+                if candidate.resolve() not in protected
+            ),
+            key=lambda candidate: candidate.name,
+        )
+    )
+    if not dry_run:
+        for candidate in stale:
+            candidate.unlink(missing_ok=True)
+    return stale
 
 
 def _ensure_sqlite_schema(connection: sqlite3.Connection) -> None:
@@ -461,7 +803,8 @@ def _ensure_sqlite_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS runs (
             run_id TEXT PRIMARY KEY,
             metadata_json TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            published_order INTEGER
         );
         CREATE TABLE IF NOT EXISTS tensors (
             run_id TEXT NOT NULL,
@@ -484,6 +827,27 @@ def _ensure_sqlite_schema(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    run_columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()
+    }
+    if "published_order" not in run_columns:
+        connection.execute("ALTER TABLE runs ADD COLUMN published_order INTEGER")
+        # Databases created before staged publication exposed every stored run.
+        # Preserve that view for historical runs containing committed records.
+        connection.execute(
+            "UPDATE runs SET published_order = rowid "
+            "WHERE published_order IS NULL AND EXISTS ("
+            "SELECT 1 FROM records WHERE records.run_id = runs.run_id)"
+        )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS runs_published_order_idx "
+        "ON runs(published_order)"
+    )
+    if "published_order" not in run_columns:
+        # Schema upgrades run before callers open their data transaction.
+        # End the migration transaction explicitly so BEGIN IMMEDIATE below
+        # remains valid on existing databases.
+        connection.commit()
 
 
 def save_sqlite_result(result: EmbeddingResult, path: str | Path) -> EmbeddingResult:
@@ -494,14 +858,22 @@ def save_sqlite_result(result: EmbeddingResult, path: str | Path) -> EmbeddingRe
     run_id = str(result.metadata.get("run_fingerprint", ""))
     if not run_id:
         raise ValueError("SQLite results require metadata['run_fingerprint'].")
-    metadata_json = json.dumps(_jsonable(result.metadata), sort_keys=True)
+    metadata_json = json.dumps(
+        _persistent_metadata(
+            result.metadata,
+            descriptor_index="sqlite-records",
+            record_count=len(result),
+        ),
+        sort_keys=True,
+    )
     with sqlite3.connect(path, timeout=30) as connection:
         _ensure_sqlite_schema(connection)
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("BEGIN IMMEDIATE")
         connection.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
         connection.execute(
-            "INSERT INTO runs(run_id, metadata_json) VALUES (?, ?)",
+            "INSERT INTO runs(run_id, metadata_json, published_order) "
+            "SELECT ?, ?, COALESCE(MAX(published_order), 0) + 1 FROM runs",
             (run_id, metadata_json),
         )
         for position, record in enumerate(result):
@@ -542,9 +914,14 @@ def initialize_sqlite_run(
             connection.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
             exists = None
         if exists is None:
+            initial_metadata = _persistent_metadata(
+                metadata,
+                descriptor_index="sqlite-records",
+                record_count=0,
+            )
             connection.execute(
                 "INSERT INTO runs(run_id, metadata_json) VALUES (?, ?)",
-                (run_id, json.dumps(_jsonable(metadata), sort_keys=True)),
+                (run_id, json.dumps(initial_metadata, sort_keys=True)),
             )
         connection.commit()
     return run_id
@@ -555,6 +932,8 @@ def append_sqlite_records(
     run_id: str,
     start_position: int,
     records: list[EmbeddingRecord],
+    *,
+    replace_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Commit one ordered embedding batch so an interrupted run can resume."""
 
@@ -562,6 +941,20 @@ def append_sqlite_records(
         _ensure_sqlite_schema(connection)
         connection.execute("PRAGMA journal_mode = WAL")
         connection.execute("BEGIN IMMEDIATE")
+        if replace_metadata is not None:
+            replacement_run_id = str(replace_metadata.get("run_fingerprint", ""))
+            if replacement_run_id != run_id:
+                raise ValueError("Replacement metadata must match the SQLite run ID.")
+            initial_metadata = _persistent_metadata(
+                replace_metadata,
+                descriptor_index="sqlite-records",
+                record_count=0,
+            )
+            connection.execute("DELETE FROM runs WHERE run_id = ?", (run_id,))
+            connection.execute(
+                "INSERT INTO runs(run_id, metadata_json) VALUES (?, ?)",
+                (run_id, json.dumps(initial_metadata, sort_keys=True)),
+            )
         for offset, record in enumerate(records):
             position = start_position + offset
             X = record.load_tensor().detach().cpu().contiguous()
@@ -579,6 +972,25 @@ def append_sqlite_records(
                 "INSERT INTO records VALUES (?, ?, ?, ?)",
                 (run_id, position, record.id, record.sequence),
             )
+        row = connection.execute(
+            "SELECT metadata_json FROM runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            raise KeyError(f"Missing SQLite embedding run {run_id}.")
+        metadata = json.loads(row[0])
+        metadata["record_count"] = start_position + len(records)
+        metadata["descriptor_index"] = "sqlite-records"
+        connection.execute(
+            "UPDATE runs SET metadata_json = ? WHERE run_id = ?",
+            (json.dumps(metadata, sort_keys=True), run_id),
+        )
+        if records:
+            connection.execute(
+                "UPDATE runs SET published_order = ("
+                "SELECT COALESCE(MAX(published_order), 0) + 1 FROM runs"
+                ") WHERE run_id = ? AND published_order IS NULL",
+                (run_id,),
+            )
         connection.commit()
 
 
@@ -586,17 +998,47 @@ def update_sqlite_run_metadata(path: str | Path, run_id: str, metadata: dict[str
     """Finalize reproducibility metadata after the last streamed batch."""
 
     with sqlite3.connect(Path(path), timeout=30) as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) FROM records WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        record_count = int(row[0]) if row is not None else 0
+        cleaned_metadata = _persistent_metadata(
+            metadata,
+            descriptor_index="sqlite-records",
+            record_count=record_count,
+        )
         updated = connection.execute(
             "UPDATE runs SET metadata_json = ? WHERE run_id = ?",
-            (json.dumps(_jsonable(metadata), sort_keys=True), run_id),
+            (json.dumps(cleaned_metadata, sort_keys=True), run_id),
         ).rowcount
         if updated != 1:
             raise KeyError(f"Missing SQLite embedding run {run_id}.")
         connection.commit()
 
 
+def _connect_sqlite_read_only(path: Path) -> sqlite3.Connection:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=30)
+
+
+def _validate_sqlite_result_schema(connection: sqlite3.Connection, path: Path) -> None:
+    tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    required = {"runs", "records", "tensors"}
+    if not required.issubset(tables):
+        raise ValueError(
+            f"Not a FastPLMs embedding SQLite database: {path}. "
+            "Use convert_legacy_sqlite() for a legacy embeddings table."
+        )
+
+
 def _load_sqlite_tensor(path: Path, run_id: str, position: int) -> Tensor:
-    with sqlite3.connect(path, timeout=30) as connection:
+    with _connect_sqlite_read_only(path) as connection:
         row = connection.execute(
             "SELECT dtype, shape_json, data FROM tensors WHERE run_id = ? AND position = ?",
             (run_id, position),
@@ -606,17 +1048,122 @@ def _load_sqlite_tensor(path: Path, run_id: str, position: int) -> Tensor:
     return _decode_tensor(*row)
 
 
-def load_sqlite_result(path: str | Path, *, run_id: str | None = None) -> EmbeddingResult:
-    """Load one SQLite run with lazy, lossless tensor references."""
+def _sqlite_record_from_row(path: Path, run_id: str, row: Sequence[Any]) -> EmbeddingRecord:
+    position, record_id, sequence, dtype_name, shape_json, digest = row
+    reference = LazyTensorReference(
+        source=str(path),
+        key=f"{run_id}:{position}",
+        dtype=dtype_name,
+        shape=tuple(json.loads(shape_json)),
+        sha256=digest,
+        _loader=lambda p=path, r=run_id, i=position: _load_sqlite_tensor(p, r, i),
+    )
+    return EmbeddingRecord(record_id, sequence, reference)
+
+
+class _SQLiteRecordSequence(Sequence[EmbeddingRecord]):
+    """Lazy immutable descriptor view over one SQLite embedding run."""
+
+    _fastplms_immutable_sequence = True
+
+    def __init__(self, path: Path, run_id: str, count: int) -> None:
+        self.path = path
+        self.run_id = run_id
+        self._count = count
+
+    @staticmethod
+    def _row_query() -> str:
+        return (
+            "SELECT r.position, r.record_id, r.sequence, t.dtype, t.shape_json, t.sha256 "
+            "FROM records r JOIN tensors t USING (run_id, position) "
+            "WHERE r.run_id = ?"
+        )
+
+    def __len__(self) -> int:
+        return self._count
+
+    def __iter__(self) -> Iterator[EmbeddingRecord]:
+        with _connect_sqlite_read_only(self.path) as connection:
+            cursor = connection.execute(
+                f"{self._row_query()} ORDER BY r.position", (self.run_id,)
+            )
+            while rows := cursor.fetchmany(1_024):
+                for row in rows:
+                    yield _sqlite_record_from_row(self.path, self.run_id, row)
+
+    def __getitem__(
+        self, index: int | slice
+    ) -> EmbeddingRecord | Sequence[EmbeddingRecord]:
+        if isinstance(index, slice):
+            start, stop, step = index.indices(self._count)
+            return [self[position] for position in range(start, stop, step)]
+        position = index + self._count if index < 0 else index
+        if position < 0 or position >= self._count:
+            raise IndexError(index)
+        with _connect_sqlite_read_only(self.path) as connection:
+            row = connection.execute(
+                f"{self._row_query()} AND r.position = ?",
+                (self.run_id, position),
+            ).fetchone()
+        if row is None:
+            raise IndexError(index)
+        return _sqlite_record_from_row(self.path, self.run_id, row)
+
+
+def load_sqlite_result(
+    path: str | Path,
+    *,
+    run_id: str | None = None,
+    positions: Iterable[int] | None = None,
+    record_ids: Iterable[str] | None = None,
+    sequences: Iterable[str] | None = None,
+) -> EmbeddingResult:
+    """Load one SQLite run read-only, optionally in explicit selector order.
+
+    Exactly one selector may be supplied. Repeated selectors are retained. An
+    ID or sequence selector that matches multiple stored rows returns those
+    rows in their original order for every occurrence of that selector.
+    """
 
     path = Path(path)
-    with sqlite3.connect(path, timeout=30) as connection:
-        _ensure_sqlite_schema(connection)
+    supplied_selectors = sum(
+        selector is not None for selector in (positions, record_ids, sequences)
+    )
+    if supplied_selectors > 1:
+        raise ValueError("Choose at most one of positions, record_ids, or sequences.")
+    normalized_positions = tuple(positions) if positions is not None else None
+    normalized_ids = tuple(record_ids) if record_ids is not None else None
+    normalized_sequences = tuple(sequences) if sequences is not None else None
+    if normalized_positions is not None and not all(
+        isinstance(position, int) and not isinstance(position, bool) and position >= 0
+        for position in normalized_positions
+    ):
+        raise ValueError("positions must contain non-negative integers.")
+    for name, values in (
+        ("record_ids", normalized_ids),
+        ("sequences", normalized_sequences),
+    ):
+        if values is not None and not all(isinstance(value, str) for value in values):
+            raise TypeError(f"{name} must contain strings.")
+
+    with _connect_sqlite_read_only(path) as connection:
+        _validate_sqlite_result_schema(connection, path)
         if run_id is None:
-            row = connection.execute(
-                "SELECT run_id, metadata_json FROM runs "
-                "ORDER BY created_at DESC, rowid DESC LIMIT 1"
-            ).fetchone()
+            run_columns = {
+                str(info[1])
+                for info in connection.execute("PRAGMA table_info(runs)").fetchall()
+            }
+            if "published_order" in run_columns:
+                row = connection.execute(
+                    "SELECT run_id, metadata_json FROM runs "
+                    "WHERE published_order IS NOT NULL "
+                    "ORDER BY published_order DESC, rowid DESC LIMIT 1"
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT run_id, metadata_json FROM runs "
+                    "ORDER BY created_at DESC, rowid DESC LIMIT 1"
+                ).fetchone()
         else:
             row = connection.execute(
                 "SELECT run_id, metadata_json FROM runs WHERE run_id = ?", (run_id,)
@@ -624,25 +1171,81 @@ def load_sqlite_result(path: str | Path, *, run_id: str | None = None) -> Embedd
         if row is None:
             raise KeyError(f"No embedding run found in {path}.")
         selected_run, metadata_json = row
-        rows = connection.execute(
+        row_prefix = (
             "SELECT r.position, r.record_id, r.sequence, t.dtype, t.shape_json, t.sha256 "
             "FROM records r JOIN tensors t USING (run_id, position) "
-            "WHERE r.run_id = ? ORDER BY r.position",
-            (selected_run,),
-        ).fetchall()
-
-    records: list[EmbeddingRecord] = []
-    for position, record_id, sequence, dtype_name, shape_json, digest in rows:
-        reference = LazyTensorReference(
-            source=str(path),
-            key=f"{selected_run}:{position}",
-            dtype=dtype_name,
-            shape=tuple(json.loads(shape_json)),
-            sha256=digest,
-            _loader=lambda p=path, r=selected_run, i=position: _load_sqlite_tensor(p, r, i),
+            "WHERE r.run_id = ?"
         )
-        records.append(EmbeddingRecord(record_id, sequence, reference))
-    return EmbeddingResult(records, json.loads(metadata_json))
+        if supplied_selectors == 0:
+            (record_count,) = connection.execute(
+                "SELECT COUNT(*) FROM records WHERE run_id = ?", (selected_run,)
+            ).fetchone()
+            rows: list[tuple[Any, ...]] | None = None
+        else:
+            selector_values: tuple[Any, ...]
+            selector_column: str
+            if normalized_positions is not None:
+                selector_values = normalized_positions
+                selector_column = "r.position"
+            elif normalized_ids is not None:
+                selector_values = normalized_ids
+                selector_column = "r.record_id"
+            else:
+                if normalized_sequences is None:
+                    raise RuntimeError(
+                        "Filtered SQLite retrieval resolved no selector values."
+                    )
+                selector_values = normalized_sequences
+                selector_column = "r.sequence"
+            fetched: list[tuple[Any, ...]] = []
+            unique_values = tuple(dict.fromkeys(selector_values))
+            for start in range(0, len(unique_values), 900):
+                chunk = unique_values[start : start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                fetched.extend(
+                    connection.execute(
+                        f"{row_prefix} AND {selector_column} IN ({placeholders}) "
+                        "ORDER BY r.position",
+                        (selected_run, *chunk),
+                    ).fetchall()
+                )
+            value_index = (
+                0 if normalized_positions is not None else (1 if normalized_ids is not None else 2)
+            )
+            matched: dict[Any, list[tuple[Any, ...]]] = {}
+            for fetched_row in sorted(fetched, key=lambda item: int(item[0])):
+                matched.setdefault(fetched_row[value_index], []).append(fetched_row)
+            missing = [value for value in selector_values if value not in matched]
+            if missing:
+                raise KeyError(f"SQLite embedding selectors were not found: {missing!r}.")
+            rows = [
+                fetched_row for value in selector_values for fetched_row in matched.get(value, ())
+            ]
+
+    metadata = json.loads(metadata_json)
+    if rows is None:
+        return EmbeddingResult(
+            _SQLiteRecordSequence(path, selected_run, int(record_count)),
+            metadata,
+        )
+    records = [
+        _sqlite_record_from_row(path, selected_run, selected_row)
+        for selected_row in rows
+    ]
+    if supplied_selectors:
+        metadata = dict(metadata)
+        metadata["selection"] = {
+            "kind": (
+                "positions"
+                if normalized_positions is not None
+                else "record_ids"
+                if normalized_ids is not None
+                else "sequences"
+            ),
+            "count": len(rows),
+            "duplicate_policy": "preserve-request-order",
+        }
+    return EmbeddingResult(records, metadata)
 
 
 def load_legacy_pth(path: str | Path, *, allow_unsafe_pickle: bool = False) -> EmbeddingResult:
@@ -662,6 +1265,136 @@ def load_legacy_pth(path: str | Path, *, allow_unsafe_pickle: bool = False) -> E
             raise ValueError("Legacy embedding mappings must use str keys and Tensor values.")
         records.append(EmbeddingRecord(str(position), sequence, X.detach().cpu()))
     return EmbeddingResult(records, {"format": "legacy-pth", "unsafe_pickle": True})
+
+
+_LEGACY_COMPACT_VERSION = 0x01
+_LEGACY_CODE_DTYPES: dict[int, tuple[np.dtype[Any], torch.dtype]] = {
+    0: (np.dtype(np.float16), torch.float16),
+    # Legacy BF16 blobs stored FP16 payload bytes and converted back to BF16.
+    1: (np.dtype(np.float16), torch.bfloat16),
+    2: (np.dtype(np.float32), torch.float32),
+}
+
+
+def _decode_legacy_sqlite_blob(
+    data: bytes,
+    *,
+    fallback_shape: tuple[int, ...] | None,
+    allow_unsafe_pickle: bool,
+) -> Tensor:
+    if len(data) >= 6 and data[0] == _LEGACY_COMPACT_VERSION:
+        dtype_code = int(data[1])
+        if dtype_code not in _LEGACY_CODE_DTYPES:
+            raise ValueError(f"Unsupported legacy compact dtype code {dtype_code}.")
+        (ndim,) = struct.unpack_from("<i", data, 2)
+        if ndim < 0 or ndim > 16 or len(data) < 6 + 4 * ndim:
+            raise ValueError("Malformed legacy compact embedding header.")
+        shape = tuple(int(value) for value in struct.unpack_from(f"<{ndim}i", data, 6))
+        if any(size < 0 for size in shape):
+            raise ValueError("Malformed negative legacy embedding dimension.")
+        numpy_dtype, target_dtype = _LEGACY_CODE_DTYPES[dtype_code]
+        offset = 6 + 4 * ndim
+        expected = int(np.prod(shape, dtype=np.int64)) * numpy_dtype.itemsize
+        if len(data) - offset != expected:
+            raise ValueError("Legacy compact embedding payload length does not match shape.")
+        array = np.frombuffer(data, dtype=numpy_dtype, offset=offset).copy().reshape(shape)
+        return torch.from_numpy(array).to(dtype=target_dtype)
+
+    try:
+        loaded = torch.load(io.BytesIO(data), map_location="cpu", weights_only=True)
+    except Exception as safe_error:
+        if allow_unsafe_pickle:
+            loaded = torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
+        elif fallback_shape is None:
+            raise ValueError(
+                "Legacy embedding blob is neither compact nor safely loadable. "
+                "Provide fallback_shape for raw FP32 bytes, or set "
+                "allow_unsafe_pickle=True only for a trusted database."
+            ) from safe_error
+        else:
+            expected = int(np.prod(fallback_shape, dtype=np.int64)) * 4
+            if len(data) != expected:
+                raise ValueError(
+                    "Legacy raw FP32 payload length does not match fallback_shape."
+                ) from safe_error
+            array = np.frombuffer(data, dtype=np.float32).copy().reshape(fallback_shape)
+            return torch.from_numpy(array)
+    if not isinstance(loaded, Tensor):
+        raise ValueError("Legacy serialized embedding payload must contain one tensor.")
+    return loaded.detach().cpu()
+
+
+def convert_legacy_sqlite(
+    source: str | Path,
+    output: str | Path,
+    *,
+    fallback_shape: tuple[int, ...] | None = None,
+    allow_unsafe_pickle: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> EmbeddingResult:
+    """Convert the v0 ``embeddings(sequence, embedding)`` database safely.
+
+    The source is opened read-only. Compact blobs and ``weights_only`` Torch
+    tensors are accepted by default. Unsafe general pickle deserialization
+    remains an explicit opt-in.
+    """
+
+    source_path = Path(source)
+    output_path = Path(output)
+    if source_path.resolve() == output_path.resolve():
+        raise ValueError("Legacy SQLite conversion requires a different output path.")
+    if fallback_shape is not None and (
+        not fallback_shape or any(not isinstance(size, int) or size < 0 for size in fallback_shape)
+    ):
+        raise ValueError("fallback_shape must contain non-negative integer dimensions.")
+    with _connect_sqlite_read_only(source_path) as connection:
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(embeddings)").fetchall()
+        }
+        if not {"sequence", "embedding"}.issubset(columns):
+            raise ValueError("Legacy SQLite database must contain embeddings(sequence, embedding).")
+        rows = connection.execute(
+            "SELECT sequence, embedding FROM embeddings ORDER BY rowid"
+        ).fetchall()
+    if not rows:
+        raise ValueError("Legacy SQLite database contains no embeddings.")
+
+    records: list[EmbeddingRecord] = []
+    content_digest = hashlib.sha256()
+    for position, (sequence, data) in enumerate(rows):
+        if not isinstance(sequence, str) or not sequence:
+            raise ValueError("Legacy embedding sequences must be non-empty strings.")
+        if not isinstance(data, bytes):
+            data = bytes(data)
+        tensor = _decode_legacy_sqlite_blob(
+            data,
+            fallback_shape=fallback_shape,
+            allow_unsafe_pickle=allow_unsafe_pickle,
+        )
+        tensor_digest = tensor_sha256(tensor)
+        for value in (sequence.encode("utf-8"), tensor_digest.encode("ascii")):
+            content_digest.update(len(value).to_bytes(8, "big"))
+            content_digest.update(value)
+        records.append(EmbeddingRecord(str(position), sequence, tensor))
+
+    content_sha256 = content_digest.hexdigest()
+    run_fingerprint = hashlib.sha256(
+        f"fastplms-legacy-sqlite-v1:{content_sha256}".encode("ascii")
+    ).hexdigest()
+    converted_metadata: dict[str, Any] = {
+        "format_version": 1,
+        "run_fingerprint": run_fingerprint,
+        "source_format": "legacy-fastplms-sqlite-v0",
+        "source_content_sha256": content_sha256,
+        "unsafe_pickle": allow_unsafe_pickle,
+        "complete": True,
+    }
+    if metadata:
+        converted_metadata["conversion_metadata"] = _jsonable(metadata)
+    return save_sqlite_result(
+        EmbeddingResult(records, converted_metadata),
+        output_path,
+    )
 
 
 def save_result(
@@ -692,6 +1425,8 @@ __all__ = [
     "DEFAULT_SHARD_SIZE",
     "SafetensorsStreamWriter",
     "append_sqlite_records",
+    "convert_legacy_sqlite",
+    "garbage_collect_safetensors_generations",
     "initialize_sqlite_run",
     "load_legacy_pth",
     "load_result",

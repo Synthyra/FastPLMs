@@ -1,4 +1,4 @@
-"""Exact, low-cost validation-stack checks for the H100 release workstation."""
+"""Exact, low-cost validation-stack checks for Hopper/SM90 release hardware."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 import torch
+
+from tests.structure.support.hardware import hopper_sm90_fingerprint
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -50,11 +52,16 @@ def test_gpu_validation_stack_is_exactly_pinned() -> None:
 
 
 @pytest.mark.gpu
-def test_release_gpu_is_available_without_running_a_model() -> None:
+def test_release_hopper_sm90_gpu_is_available_without_running_a_model() -> None:
     assert torch.cuda.is_available()
     assert torch.cuda.device_count() >= 1
     properties = torch.cuda.get_device_properties(0)
-    assert "H100" in properties.name
-    assert torch.cuda.get_device_capability(0) == (9, 0)
+    hopper_sm90_fingerprint(
+        {
+            "cuda_device": properties.name,
+            "cuda_device_capability": list(torch.cuda.get_device_capability(0)),
+            "cuda_total_memory": int(properties.total_memory),
+        }
+    )
     probe = torch.ones(1, device="cuda")
     assert probe.item() == 1.0

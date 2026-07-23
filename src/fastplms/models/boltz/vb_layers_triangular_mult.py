@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from importlib.util import find_spec
 from typing import Literal
 
 import torch
@@ -30,8 +31,16 @@ def kernel_triangular_mult(
 ) -> Tensor:
     """Dispatch the optional cuEquivariance triangle primitive lazily."""
 
-    triangle = importlib.import_module("cuequivariance_torch.primitives.triangle")
-    return triangle.triangle_multiplicative_update(
+    if (
+        find_spec("cuequivariance_torch") is None
+        or find_spec("cuequivariance_ops_torch") is None
+    ):
+        raise RuntimeError(
+            "Boltz2 use_kernels=True requires cuequivariance_torch and the CUDA 13 "
+            "cuequivariance_ops_torch runtime from the 'structure,cueq' extras."
+        )
+    cueq = importlib.import_module("cuequivariance_torch")
+    return cueq.triangle_multiplicative_update(
         x,
         direction=direction,
         mask=mask,

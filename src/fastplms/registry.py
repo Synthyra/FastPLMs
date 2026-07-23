@@ -13,13 +13,19 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
 from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_WINDOWS_INVALID_PATH_CHARACTERS = frozenset('<>:"|?*')
+_WINDOWS_RESERVED_PATH_NAMES = frozenset(
+    {"AUX", "CON", "NUL", "PRN"}
+    | {f"COM{index}" for index in range(1, 10)}
+    | {f"LPT{index}" for index in range(1, 10)}
+)
 _REPOSITORY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _REFERENCE_CONTAINER_RE = re.compile(r"^reference-[a-z0-9]+(?:-[a-z0-9]+)*$")
 _REFERENCE_ADAPTER_RE = re.compile(
@@ -49,6 +55,7 @@ _ALLOWED_TEST_TIERS = frozenset(
 _ALLOWED_VRAM_TIERS = frozenset({"sequence", "large-sequence", "structure", "structure-6b"})
 _ALLOWED_GENERATION_CONTRACTS = frozenset({"not_applicable", "required", "official_unavailable"})
 _ALLOWED_RUNTIME_ASSET_TRUST_KINDS = frozenset({"hash_pinned_pickle"})
+_ALLOWED_RUNTIME_ASSET_OFFLINE_BEHAVIORS = frozenset({"requires_cached_verified_file"})
 _ALLOWED_AUTO_CLASSES = frozenset(
     {
         "AutoConfig",
@@ -111,6 +118,8 @@ _FAMILY_FIELDS = frozenset(
         "documentation",
         "test_tiers",
         "runtime_paths",
+        "requires_complete_weight_publication",
+        "weights_publication_allowed",
         "auto_map",
         "tokenizer_class",
         "backbone_model",
@@ -133,9 +142,11 @@ _MODEL_FIELDS = frozenset(
         "oracle_assets",
         "official_golden",
         "artifact_source",
+        "canonical_state_sha256",
         "tokenizer_source",
         "auto_map",
         "notes",
+        "msa_conditioning",
     }
 )
 _RUNTIME_ASSET_FIELDS = frozenset(
@@ -148,12 +159,49 @@ _RUNTIME_ASSET_FIELDS = frozenset(
         "size",
         "consumer_family",
         "trust_kind",
+        "license",
+        "offline_behavior",
     }
 )
 
 
 class RegistryError(ValueError):
     """Raised when the model manifest is incomplete or internally inconsistent."""
+
+
+def _portable_relative_path(value: str, context: str) -> PurePosixPath:
+    """Return one normalized cross-platform relative path or fail closed."""
+
+    posix = PurePosixPath(value)
+    windows = PureWindowsPath(value)
+    unsafe_windows_part = any(
+        part.rstrip(" .") != part
+        or part.split(".", maxsplit=1)[0].upper() in _WINDOWS_RESERVED_PATH_NAMES
+        or any(
+            ord(character) < 32 or character in _WINDOWS_INVALID_PATH_CHARACTERS
+            for character in part
+        )
+        for part in posix.parts
+    )
+    if (
+        not value
+        or not posix.parts
+        or posix == PurePosixPath(".")
+        or posix.is_absolute()
+        or windows.is_absolute()
+        or windows.drive
+        or "\\" in value
+        or "." in posix.parts
+        or ".." in posix.parts
+        or value != posix.as_posix()
+        or any(
+            part.lower() in {".git", ".cache", "__pycache__"}
+            for part in posix.parts
+        )
+        or unsafe_windows_part
+    ):
+        raise RegistryError(f"{context} is not portable: {value!r}")
+    return posix
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,14 +220,7 @@ class FileDigest:
         except ValueError as error:
             raise RegistryError("File digests must use '<path>=<algorithm>:<digest>'.") from error
 
-        normalized_path = PurePosixPath(path)
-        if (
-            not path
-            or normalized_path.is_absolute()
-            or ".." in normalized_path.parts
-            or path != normalized_path.as_posix()
-        ):
-            raise RegistryError(f"Checkpoint file path is not portable: {path!r}")
+        _portable_relative_path(path, "Checkpoint file path")
 
         expected_length = {"git-sha1": 40, "sha256": 64}.get(algorithm)
         if expected_length is None:
@@ -230,6 +271,8 @@ class RuntimeAsset:
     size: int
     consumer_family: str
     trust_kind: RuntimeAssetTrustKind
+    license_expression: str
+    offline_behavior: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -291,6 +334,8 @@ class ModelFamily:
     test_tiers: tuple[TestTier, ...]
     runtime_paths: tuple[str, ...]
     auto_map_items: tuple[tuple[str, str], ...]
+    requires_complete_weight_publication: bool = False
+    weights_publication_allowed: bool = False
     experimental_precisions: tuple[str, ...] = ()
     tokenizer_class: str | None = None
     hub_license_name: str | None = None
@@ -334,9 +379,11 @@ class ModelSpec:
     oracle_assets: tuple[OracleAsset, ...] = ()
     official_golden: OfficialGolden | None = None
     artifact_source: str = "fast"
+    canonical_state_sha256: str | None = None
     tokenizer_source_id: str | None = None
     auto_map_items: tuple[tuple[str, str], ...] = ()
     notes: str = ""
+    msa_conditioning: bool | None = None
 
     @property
     def is_deep_reference(self) -> bool:
@@ -559,6 +606,7 @@ def _parse_hub_license(
         ("Apache-2.0", "apache-2.0"),
         ("CC-BY-NC-SA-4.0", "cc-by-nc-sa-4.0"),
         ("Profluent-E1-Agreement", "other"),
+        ("Unresolved", "other"),
     ):
         if checkpoint_license.startswith(prefix):
             expected_identifier = candidate
@@ -629,14 +677,7 @@ def _parse_checkpoint(table: Mapping[str, Any], prefix: str, context: str) -> Ch
         raise RegistryError(f"{context}.{prefix}_files does not identify a weight file.")
     unresolved_files = _optional_str_list(table, f"{prefix}_unresolved_files", context)
     for unresolved_path in unresolved_files:
-        path = PurePosixPath(unresolved_path)
-        if (
-            not unresolved_path
-            or path.is_absolute()
-            or ".." in path.parts
-            or unresolved_path != path.as_posix()
-        ):
-            raise RegistryError(f"Unresolved checkpoint path is not portable: {unresolved_path!r}")
+        _portable_relative_path(unresolved_path, "Unresolved checkpoint path")
         if unresolved_path in paths:
             raise RegistryError(
                 f"{context}.{prefix} marks {unresolved_path!r} both resolved and unresolved."
@@ -665,13 +706,11 @@ def _parse_oracle_assets(table: Mapping[str, Any], context: str) -> tuple[Oracle
         if role not in _ALLOWED_ORACLE_ASSET_ROLES:
             raise RegistryError(f"Unsupported oracle asset role: {role!r}.")
         path = _require_str(value, "path", asset_context)
-        normalized_path = PurePosixPath(path)
-        if (
-            normalized_path.is_absolute()
-            or ".." in normalized_path.parts
-            or normalized_path.as_posix() != path
-            or normalized_path.suffix != ".pt"
-        ):
+        try:
+            normalized_path = _portable_relative_path(path, "Oracle asset path")
+        except RegistryError as error:
+            raise RegistryError(f"Invalid oracle asset path: {path!r}.") from error
+        if normalized_path.suffix != ".pt":
             raise RegistryError(f"Invalid oracle asset path: {path!r}.")
         url = _require_str(value, "url", asset_context)
         parsed_url = urlparse(url)
@@ -819,12 +858,16 @@ def _parse_upstreams(raw: object) -> dict[str, UpstreamSource]:
         revision = _require_str(value, "revision", context)
         _validate_revision(revision, f"{context}.revision")
         path = _require_str(value, "path", context)
-        normalized_path = PurePosixPath(path)
+        try:
+            normalized_path = _portable_relative_path(path, f"{context}.path")
+        except RegistryError as error:
+            raise RegistryError(
+                f"{context}.path must be a normalized directory directly under "
+                "'vendor/upstream/'."
+            ) from error
         if (
-            normalized_path.is_absolute()
-            or normalized_path.parts[:2] != ("vendor", "upstream")
+            normalized_path.parts[:2] != ("vendor", "upstream")
             or len(normalized_path.parts) != 3
-            or path != normalized_path.as_posix()
         ):
             raise RegistryError(
                 f"{context}.path must be a normalized directory directly under "
@@ -949,10 +992,32 @@ def _parse_families(
         reference_adapter = _parse_reference_adapter(value, context)
         documentation = _parse_documentation_path(value, context)
         runtime_paths = _require_str_list(value, "runtime_paths", context)
+        if len(runtime_paths) != len(set(runtime_paths)):
+            raise RegistryError(f"{context}.runtime_paths must not contain duplicates.")
         for runtime_path in runtime_paths:
-            path = PurePosixPath(runtime_path)
-            if path.is_absolute() or ".." in path.parts or runtime_path.startswith("vendor/"):
+            try:
+                _portable_relative_path(runtime_path, f"{context}.runtime_paths entry")
+            except RegistryError as error:
+                raise RegistryError(
+                    f"Unsafe runtime path in {context}: {runtime_path!r}"
+                ) from error
+            if runtime_path.startswith("vendor/"):
                 raise RegistryError(f"Unsafe runtime path in {context}: {runtime_path!r}")
+        requires_complete_weight_publication = value.get(
+            "requires_complete_weight_publication",
+            False,
+        )
+        if not isinstance(requires_complete_weight_publication, bool):
+            raise RegistryError(
+                f"{context}.requires_complete_weight_publication must be a boolean."
+            )
+        if "weights_publication_allowed" not in value:
+            raise RegistryError(
+                f"{context}.weights_publication_allowed must be declared explicitly."
+            )
+        weights_publication_allowed = value["weights_publication_allowed"]
+        if not isinstance(weights_publication_allowed, bool):
+            raise RegistryError(f"{context}.weights_publication_allowed must be a boolean.")
         raw_auto_map = value.get("auto_map")
         if not isinstance(raw_auto_map, dict) or not raw_auto_map:
             raise RegistryError(f"{context}.auto_map must be a non-empty table.")
@@ -1019,6 +1084,8 @@ def _parse_families(
             test_tiers=test_tiers,
             runtime_paths=runtime_paths,
             auto_map_items=tuple(auto_map),
+            requires_complete_weight_publication=requires_complete_weight_publication,
+            weights_publication_allowed=weights_publication_allowed,
             tokenizer_class=tokenizer_class,
             hub_license_name=hub_license_name,
             hub_license_link=hub_license_link,
@@ -1052,13 +1119,10 @@ def _parse_runtime_assets(
         revision = _require_str(value, "revision", context)
         _validate_revision(revision, f"{context}.revision")
         path = _require_str(value, "path", context)
-        normalized_path = PurePosixPath(path)
-        if (
-            normalized_path.is_absolute()
-            or ".." in normalized_path.parts
-            or path != normalized_path.as_posix()
-        ):
-            raise RegistryError(f"Runtime asset path is not portable: {path!r}")
+        try:
+            normalized_path = _portable_relative_path(path, "Runtime asset path")
+        except RegistryError as error:
+            raise RegistryError(f"Runtime asset path is not portable: {path!r}") from error
         sha256 = _require_str(value, "sha256", context)
         if len(sha256) != 64 or _HEX_RE.fullmatch(sha256) is None:
             raise RegistryError(f"Invalid runtime asset SHA-256 for {path!r}.")
@@ -1079,6 +1143,12 @@ def _parse_runtime_assets(
                 _ALLOWED_RUNTIME_ASSET_TRUST_KINDS,
             ),
         )
+        license_expression = _require_str(value, "license", context)
+        offline_behavior = _require_str(value, "offline_behavior", context)
+        if offline_behavior not in _ALLOWED_RUNTIME_ASSET_OFFLINE_BEHAVIORS:
+            raise RegistryError(
+                f"{context}.offline_behavior is unsupported: {offline_behavior!r}."
+            )
         if trust_kind == "hash_pinned_pickle" and normalized_path.suffix != ".pkl":
             raise RegistryError(
                 f"{context}.path must end in '.pkl' for trust_kind='hash_pinned_pickle'."
@@ -1096,6 +1166,8 @@ def _parse_runtime_assets(
             size=size,
             consumer_family=consumer_family,
             trust_kind=trust_kind,
+            license_expression=license_expression,
+            offline_behavior=offline_behavior,
         )
     return result
 
@@ -1148,6 +1220,21 @@ def _parse_models(
         artifact_source = value.get("artifact_source", "fast")
         if artifact_source not in {"fast", "official"}:
             raise RegistryError(f"{context}.artifact_source must be 'fast' or 'official'.")
+        canonical_state_sha256 = value.get("canonical_state_sha256")
+        if artifact_source == "official":
+            if (
+                not isinstance(canonical_state_sha256, str)
+                or len(canonical_state_sha256) != 64
+                or _HEX_RE.fullmatch(canonical_state_sha256) is None
+            ):
+                raise RegistryError(
+                    f"{context}.canonical_state_sha256 must be a SHA-256 commitment "
+                    "for an official-source artifact."
+                )
+        elif canonical_state_sha256 is not None:
+            raise RegistryError(
+                f"{context}.canonical_state_sha256 is restricted to official-source artifacts."
+            )
         if family.tokenizer_mode == "tokenizer" and not any(
             "tokenizer" in item.path or "vocab" in item.path for item in fast.files
         ):
@@ -1162,6 +1249,17 @@ def _parse_models(
         notes = value.get("notes", "")
         if not isinstance(notes, str):
             raise RegistryError(f"{context}.notes must be a string.")
+        msa_conditioning = value.get("msa_conditioning")
+        if family_id == "esmfold2":
+            if not isinstance(msa_conditioning, bool):
+                raise RegistryError(
+                    f"{context}.msa_conditioning must be an explicit boolean for "
+                    "ESMFold2 checkpoints."
+                )
+        elif "msa_conditioning" in value:
+            raise RegistryError(
+                f"{context}.msa_conditioning is only valid for ESMFold2 checkpoints."
+            )
         raw_auto_map = value.get("auto_map")
         auto_map: list[tuple[str, str]] = []
         if raw_auto_map is not None:
@@ -1183,9 +1281,11 @@ def _parse_models(
             oracle_assets=oracle_assets,
             official_golden=official_golden,
             artifact_source=artifact_source,
+            canonical_state_sha256=canonical_state_sha256,
             tokenizer_source_id=tokenizer_source_id,
             auto_map_items=tuple(auto_map),
             notes=notes,
+            msa_conditioning=msa_conditioning,
         )
     return result
 

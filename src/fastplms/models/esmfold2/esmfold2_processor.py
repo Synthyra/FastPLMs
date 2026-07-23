@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import random
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -18,57 +16,13 @@ from .esmfold2_molecular_complex import MolecularComplexResult
 from .esmfold2_output import build_molecular_complex_from_features
 from .esmfold2_prepare_input import ChainInfo, prepare_esmfold2_input
 from .esmfold2_types import MSA, Modification, ProteinInput, StructurePredictionInput
+from .modeling_esmfold2_common import MSA_CONDITIONING_INPUT_NAMES
+from .reproducibility import seed_context
 
-
-@dataclass(frozen=True)
-class _RandomState:
-    python: object
-    numpy: tuple[Any, ...]
-    torch_cpu: Tensor
-    torch_cuda: list[Tensor] | None
-
-
-def _capture_random_state() -> _RandomState:
-    cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
-    return _RandomState(
-        python=random.getstate(),
-        numpy=np.random.get_state(),
-        torch_cpu=torch.random.get_rng_state(),
-        torch_cuda=cuda_state,
-    )
-
-
-def _restore_random_state(state: _RandomState) -> None:
-    random.setstate(state.python)
-    np.random.set_state(state.numpy)
-    torch.random.set_rng_state(state.torch_cpu)
-    if state.torch_cuda is not None:
-        torch.cuda.set_rng_state_all(state.torch_cuda)
-
-
-@contextmanager
-def _seed_context(seed: int | None) -> Iterator[None]:
-    """Seed Python, NumPy, and Torch temporarily, then restore every stream."""
-
-    if seed is None:
-        yield
-        return
-    state = _capture_random_state()
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    try:
-        yield
-    finally:
-        _restore_random_state(state)
-
-
-@dataclass(frozen=True)
-class _PendingProtein:
-    source: ProteinInput
-    sequence: str
+# Backward-compatible private alias for the pinned parity helpers. New callers
+# should import ``seed_context`` from the public ``fastplms.models.esmfold2``
+# package instead of reaching into implementation modules.
+_seed_context = seed_context
 
 
 @dataclass(frozen=True)
@@ -76,6 +30,13 @@ class _SplitProteinState:
     ids: dict[str, list[str]]
     modifications: dict[str, list[Modification]]
     msas: dict[str, MSA | None]
+
+
+@dataclass(frozen=True)
+class _PendingProtein:
+    source: ProteinInput
+    sequence: str
+    state: _SplitProteinState
 
 
 def _chain_starts(chains: list[str]) -> list[int]:
@@ -125,23 +86,26 @@ def _split_protein(item: ProteinInput) -> tuple[list[_PendingProtein], _SplitPro
     starts = _chain_starts(chains)
     base_id = item.id[0] if isinstance(item.id, list) else item.id
     ids: dict[str, list[str]] = {}
-    pending: list[_PendingProtein] = []
     for index, chain in enumerate(chains):
         chain_ids = ids.setdefault(chain, [])
         chain_ids.append(f"{base_id}_{index}")
-        if len(chain_ids) == 1:
-            pending.append(_PendingProtein(item, chain))
     state = _SplitProteinState(
         ids=ids,
         modifications=_split_modifications(item, chains, starts),
         msas=_split_msas(item, chains, starts),
     )
+    pending = [
+        _PendingProtein(item, chain, state)
+        for chain, chain_ids in ids.items()
+        if chain_ids
+    ]
     return pending, state
 
 
-def _resolve_pending(pending: _PendingProtein, state: _SplitProteinState) -> ProteinInput:
+def _resolve_pending(pending: _PendingProtein) -> ProteinInput:
     item = pending.source
     sequence = pending.sequence
+    state = pending.state
     return ProteinInput(
         id=state.ids[sequence],
         sequence=sequence,
@@ -153,8 +117,14 @@ def _resolve_pending(pending: _PendingProtein, state: _SplitProteinState) -> Pro
 def clean_esmfold2_input(input: StructurePredictionInput) -> StructurePredictionInput:
     """Expand chain delimiters and group repeated protein sequences by entity."""
 
+    if input.pocket is not None:
+        raise NotImplementedError(
+            "ESMFold2 pocket conditioning is present in the upstream input schema but "
+            "the published ESMFold2 feature pipeline drops it. FastPLMs refuses this "
+            "input instead of silently emitting an all-zero pocket feature."
+        )
+
     cleaned: list[Any] = []
-    latest_state = _SplitProteinState({}, {}, {})
     for item in input.sequences:
         if not isinstance(item, ProteinInput):
             cleaned.append(item)
@@ -168,15 +138,16 @@ def clean_esmfold2_input(input: StructurePredictionInput) -> StructurePrediction
                 "Covalent bonds are not supported when using chainbreaks. "
                 "Chains must be separated into multiple ProteinInput objects."
             )
-        pending, latest_state = _split_protein(item)
+        pending, _state = _split_protein(item)
         cleaned.extend(pending)
 
     resolved = [
-        _resolve_pending(item, latest_state) if isinstance(item, _PendingProtein) else item
+        _resolve_pending(item) if isinstance(item, _PendingProtein) else item
         for item in cleaned
     ]
     return StructurePredictionInput(
         sequences=resolved,
+        pocket=input.pocket,
         distogram_conditioning=input.distogram_conditioning,
         covalent_bonds=input.covalent_bonds,
     )
@@ -220,9 +191,38 @@ class ESMFold2InputBuilder:
         device: torch.device | str | None = None,
     ) -> tuple[dict[str, Any], list[ChainInfo]]:
         cleaned = clean_esmfold2_input(input)
-        with _seed_context(seed):
+        with seed_context(seed):
             features, chain_infos = prepare_esmfold2_input(cleaned, seed=seed)
             return _batch_features(features, device), chain_infos
+
+    def prepare_model_input(
+        self,
+        model: Any,
+        input: StructurePredictionInput,
+        seed: int | None = None,
+        device: torch.device | str | None = None,
+    ) -> tuple[dict[str, Any], list[ChainInfo]]:
+        """Prepare features while enforcing the checkpoint's MSA contract."""
+
+        msa_conditioning = getattr(model.config, "msa_conditioning", None)
+        if not isinstance(msa_conditioning, bool):
+            raise RuntimeError("The ESMFold2 config has no Boolean msa_conditioning contract.")
+        if not msa_conditioning:
+            explicit_msa_ids = [
+                item.id
+                for item in input.sequences
+                if isinstance(item, ProteinInput) and item.msa is not None
+            ]
+            if explicit_msa_ids:
+                raise ValueError(
+                    "This ESMFold2 checkpoint was trained without MSA conditioning and "
+                    f"rejects explicit MSAs for protein inputs {explicit_msa_ids!r}."
+                )
+        features, chain_infos = self.prepare_input(input, seed=seed, device=device)
+        if not msa_conditioning:
+            for name in MSA_CONDITIONING_INPUT_NAMES:
+                features.pop(name, None)
+        return features, chain_infos
 
     def __call__(
         self,
@@ -234,7 +234,7 @@ class ESMFold2InputBuilder:
 
     def _decode_sample(
         self,
-        output: dict[str, Tensor],
+        output: Mapping[str, Tensor],
         features: dict[str, Tensor],
         chain_infos: list[ChainInfo],
         sample: int,
@@ -275,7 +275,7 @@ class ESMFold2InputBuilder:
 
     def decode(
         self,
-        output: dict[str, Tensor],
+        output: Mapping[str, Tensor],
         features: dict[str, Tensor],
         chain_infos: list[ChainInfo],
         *,
@@ -303,15 +303,21 @@ class ESMFold2InputBuilder:
         early_exit: bool = False,
         complex_id: str = "pred",
     ) -> MolecularComplexResult | list[MolecularComplexResult]:
-        features, chain_infos = self.prepare_input(input, seed=seed, device=model.device)
+        features, chain_infos = self.prepare_model_input(
+            model,
+            input,
+            seed=seed,
+            device=model.device,
+        )
         overrides = _sampler_overrides(noise_scale, step_scale, max_inference_sigma)
-        with torch.no_grad(), _seed_context(seed):
+        with torch.no_grad(), seed_context(seed):
             output = model(
                 **features,
                 num_loops=num_loops,
                 num_sampling_steps=num_sampling_steps,
                 num_diffusion_samples=num_diffusion_samples,
                 early_exit=early_exit,
+                return_dict=True,
                 **overrides,
             )
         return self.decode(
@@ -323,4 +329,4 @@ class ESMFold2InputBuilder:
         )
 
 
-__all__ = ["ESMFold2InputBuilder", "clean_esmfold2_input"]
+__all__ = ["ESMFold2InputBuilder", "clean_esmfold2_input", "seed_context"]

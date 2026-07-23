@@ -56,6 +56,7 @@ SOURCE_COUNTERPARTS = {
         f"{BIOHUB_TRANSFORMERS}/modeling_esmfold2_experimental.py"
     ),
     "protein_utils.py": f"{BIOHUB_TRANSFORMERS}/protein_utils.py",
+    "reproducibility.py": f"{BIOHUB_ESM}/models/esmfold2/processor.py",
 }
 ORIGINAL_RUNTIME_MODULES = frozenset({"attention.py", "embedding.py"})
 

@@ -511,13 +511,12 @@ def test_native_requests_carry_manifest_checkpoint_file_identities(tmp_path: Pat
         assert request["reference_repo_id"] == spec.official.repo_id
         assert request["reference_revision"] == spec.official.revision
         assert request["reference_files"] == _official_files(spec)
+        assert request["generation_policy"] == spec.generation_contract
         if spec.generation_contract == "official_unavailable":
-            assert request["generation_policy"] == spec.generation_contract
             assert request["official_generation_limitation"] == (
                 DPLM2_3B_GENERATION_LIMITATION
             )
         else:
-            assert "generation_policy" not in request
             assert "official_generation_limitation" not in request
         assert tuple(map(len, request["sequences"])) == MIXED_LENGTHS
 

@@ -223,6 +223,33 @@ def _e1(
     return _cast_floating(state, expected_keys, torch.bfloat16)
 
 
+def _ankh_t5(
+    state: Mapping[str, torch.Tensor],
+    expected_keys: frozenset[str] | None,
+) -> StateDict:
+    """Preserve ANKH's complete official encoder-decoder T5 state exactly."""
+
+    keys = frozenset(state)
+    required_exact = {
+        "shared.weight",
+        "encoder.embed_tokens.weight",
+        "decoder.embed_tokens.weight",
+        "lm_head.weight",
+    }
+    missing = sorted(required_exact - keys)
+    has_encoder_block = any(key.startswith("encoder.block.") for key in keys)
+    has_decoder_block = any(key.startswith("decoder.block.") for key in keys)
+    has_cross_attention = any(".EncDecAttention." in key for key in keys)
+    if missing or not has_encoder_block or not has_decoder_block or not has_cross_attention:
+        raise StateTransformError(
+            "ANKH publication requires the complete official T5 state, including shared, "
+            "encoder, decoder, cross-attention, and language-model-head parameters. "
+            f"Missing required keys: {missing}; encoder blocks: {has_encoder_block}; "
+            f"decoder blocks: {has_decoder_block}; cross-attention: {has_cross_attention}."
+        )
+    return _identity(state, expected_keys)
+
+
 def _boltz2(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
@@ -331,8 +358,7 @@ _TRANSFORMS: dict[str, Transform] = {
     "e1_to_fastplms_v1": _e1,
     "dplm_to_fastplms_v1": _drop_unused_rotary_position_table,
     "dplm2_to_fastplms_v1": _drop_unused_rotary_position_table,
-    # FastAnkh's official encoder-decoder class retains the complete T5 state.
-    "ankh_t5_to_fastplms_v1": _identity,
+    "ankh_t5_to_fastplms_v1": _ankh_t5,
     "boltz2_inference_core_v1": _boltz2,
     "esmfold_meta_to_fastplms_v1": _esmfold,
 }

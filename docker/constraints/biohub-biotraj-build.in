@@ -1,0 +1,9 @@
+# Exact PEP 517 build inputs for the BioTraj 1.2.2 source distribution used by
+# the GH200 Biohub reference. These versions satisfy the sdist's build-system
+# requirements and are deliberately isolated from the runtime environment.
+pip==26.1.1
+setuptools==83.0.0
+setuptools-scm==9.2.2
+wheel==0.47.0
+numpy==2.4.4
+cython==3.2.4

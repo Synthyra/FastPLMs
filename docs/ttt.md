@@ -33,6 +33,12 @@ model.ttt_reset()
 Seeded tests compare mask sampling, losses, updated parameter scope, reset, and
 checkpoint state.
 
+Adapter initialization uses the TTT seed without advancing the caller's Python,
+NumPy, CPU Torch, or CUDA RNG streams. Random BERT-style replacements are drawn
+only from the 20 canonical biological amino acids supported by the family, not
+from arbitrary vocabulary entries, boundary tokens, or structure modalities.
+Uneven final sample batches remain finite and use their actual valid count.
+
 ## Main controls
 
 `TTTConfig` controls learning rate, optimization steps, gradient accumulation,
@@ -40,8 +46,37 @@ sample batch size, mask ratio, crop size, BERT-style leave and replacement
 probabilities, optimizer, seed, low-rank width and scale, target modules, reset,
 optional step evaluation, and gradient clipping.
 
+`lora_alpha` is a direct multiplier on the low-rank adapter output. It is not
+divided by `lora_rank`. This intentionally matches the pinned ProteinTTT call
+`inject_trainable_lora(..., scale=lora_alpha)` and differs from the common PEFT
+LoRA `alpha / rank` convention. The direct scale is serialized with the TTT
+configuration, so changing this interpretation would alter reloaded adapters.
+
 Changing low-rank width, scale, or target modules after adapter initialization
 is rejected because it would change the parameter schema.
+
+## Save and reload
+
+Initialized adapter tensors, their reset baseline, and normalized TTT
+configuration are part of `save_pretrained`:
+
+```python
+from transformers import AutoModelForMaskedLM
+
+model.ttt(seq="MSTNPKPQRKTKRNT", ttt_config={"steps": 3, "seed": 7})
+model.save_pretrained("adapted", safe_serialization=True)
+reloaded = AutoModelForMaskedLM.from_pretrained(
+    "adapted",
+    trust_remote_code=True,
+    local_files_only=True,
+)
+reloaded.ttt_reset()
+```
+
+Reload preserves both the adapted state and the deterministic reset state.
+Models whose adapters attach to transient modules excluded from checkpoint
+state fail closed and require a model-specific export rather than silently
+dropping adaptation.
 
 ## Folding
 

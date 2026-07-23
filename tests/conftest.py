@@ -1,10 +1,48 @@
+import builtins
 import contextlib
+import importlib.util
 import random
+import sys
+from pathlib import Path
 
-import pytest
-import torch
 
-from fastplms.registry import ModelSpec, get_model_registry
+def _cpu_contract_requested() -> bool:
+    cpu_root = (Path(__file__).resolve().parent / "cpu").resolve()
+    for raw_argument in sys.argv[1:]:
+        if raw_argument.startswith("-"):
+            continue
+        candidate_text = raw_argument.split("::", maxsplit=1)[0]
+        try:
+            candidate = Path(candidate_text).resolve()
+        except (OSError, ValueError):
+            continue
+        if candidate == cpu_root or cpu_root in candidate.parents:
+            return True
+    return False
+
+
+def _bootstrap_cpu_contract() -> None:
+    if not _cpu_contract_requested() or getattr(
+        builtins,
+        "_fastplms_cpu_process_bootstrapped",
+        False,
+    ):
+        return
+    bootstrap = Path(__file__).resolve().parent / "cpu" / "bootstrap" / "sitecustomize.py"
+    spec = importlib.util.spec_from_file_location("_fastplms_cpu_sitecustomize", bootstrap)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load CPU contract bootstrap: {bootstrap}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+
+_bootstrap_cpu_contract()
+
+# The hermetic CPU bootstrap must run before these import-time initializers.
+import pytest  # noqa: E402
+import torch  # noqa: E402
+
+from fastplms.registry import ModelSpec, get_model_registry  # noqa: E402
 
 
 def pytest_configure(config):

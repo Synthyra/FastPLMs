@@ -8,7 +8,12 @@ import torch.nn as nn
 from einops import rearrange
 from torch.nn import functional as F
 from transformers import EsmTokenizer, PretrainedConfig, PreTrainedModel
-from transformers.modeling_outputs import ModelOutput
+from transformers.modeling_outputs import (
+    MaskedLMOutput,
+    ModelOutput,
+    SequenceClassifierOutput,
+    TokenClassifierOutput,
+)
 from transformers.models.esm.modeling_esm import (
     EsmClassificationHead,
     EsmContactPredictionHead,
@@ -24,7 +29,6 @@ from fastplms.models._esm_rotary import RotaryEmbedding
 
 try:
     from fastplms.attention import (
-        VALID_ATTENTION_BACKENDS,
         AttentionBackend,
         BlockMask,
         FastPLMsAttentionMixin,
@@ -33,12 +37,30 @@ try:
         get_attention_mask,
         kernels_flash_attention_func,
         resolve_attention_backend,
-        warn_attention_backend_fallback,
+        resolve_attention_backend_for_call,
     )
     from fastplms.embeddings import EmbeddingMixin, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
-except ImportError:
-    pass  # Running as HF Hub composite; shared definitions are above
+except ModuleNotFoundError as error:
+    _COMPOSITE_REQUIRED_NAMES = (
+        "AttentionBackend",
+        "BlockMask",
+        "EmbeddingMixin",
+        "FastPLMsAttentionMixin",
+        "FastPLMTestTimeTrainingMixin",
+        "_get_flex_attention_fn",
+        "flex_attention",
+        "get_attention_mask",
+        "kernels_flash_attention_func",
+        "resolve_attention_backend",
+        "resolve_attention_backend_for_call",
+        "select_hidden_state_embeddings",
+    )
+    if error.name != "fastplms" or any(
+        name not in globals() for name in _COMPOSITE_REQUIRED_NAMES
+    ):
+        raise
+    # Legacy flat Hub composites define every shared symbol above this block.
 
 
 @dataclass
@@ -51,12 +73,24 @@ class FastEsmEncoderOutput(ModelOutput):
 
 
 @dataclass
-class EsmMaskedLMOutput(ModelOutput):
-    loss: torch.Tensor | None = None
-    logits: torch.Tensor | None = None
+class EsmMaskedLMOutput(MaskedLMOutput):
+    """Masked-LM output with FastPLMs diagnostics after the HF fields."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
     last_hidden_state: torch.Tensor | None = None
-    hidden_states: tuple[torch.Tensor, ...] | None = None
-    attentions: tuple[torch.Tensor, ...] | None = None
+
+
+@dataclass
+class EsmSequenceClassifierOutput(SequenceClassifierOutput):
+    """Sequence-classification output with optional attention diagnostics."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+
+
+@dataclass
+class EsmTokenClassifierOutput(TokenClassifierOutput):
+    """Token-classification output with optional attention diagnostics."""
+
     s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
@@ -118,6 +152,18 @@ class FastEsmConfig(PretrainedConfig):
         return super().to_dict()
 
 
+_TOKENIZER_LOAD_CONTEXT_KEYS = (
+    "cache_dir",
+    "force_download",
+    "local_files_only",
+    "proxies",
+    "revision",
+    "subfolder",
+    "token",
+    "trust_remote_code",
+)
+
+
 class FastEsmTokenizer(EsmTokenizer):
     """Retain fair-esm's strict handling of residues outside its alphabet."""
 
@@ -155,10 +201,11 @@ class FastEsmTokenizer(EsmTokenizer):
 class EsmSelfAttention(nn.Module):
     def __init__(self, config, position_embedding_type: str | None = None):
         super().__init__()
-        assert config.hidden_size % config.num_attention_heads == 0, (
-            f"The hidden size ({config.hidden_size}) is not a multiple of the number of attention "
-            f"heads ({config.num_attention_heads})"
-        )
+        if config.hidden_size % config.num_attention_heads != 0:
+            raise ValueError(
+                f"The hidden size ({config.hidden_size}) is not a multiple of the number of "
+                f"attention heads ({config.num_attention_heads})"
+            )
 
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
@@ -221,14 +268,6 @@ class EsmSelfAttention(nn.Module):
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if output_attentions:
-            warn_attention_backend_fallback(
-                self.attn_backend,
-                effective_backend=AttentionBackend.EAGER,
-                reason=(
-                    "output_attentions=True requires the full materialized attention "
-                    "probability matrix, which optimized PyTorch attention APIs do not return."
-                ),
-            )
             return self._manual_attn(
                 query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
             )
@@ -236,10 +275,7 @@ class EsmSelfAttention(nn.Module):
         if (
             self.training
             and self.dropout_prob > 0
-            and (
-                self.attn_backend.is_flash
-                or self.attn_backend == AttentionBackend.FLEX_ATTENTION
-            )
+            and (self.attn_backend.is_flash or self.attn_backend == AttentionBackend.FLEX_ATTENTION)
         ):
             raise RuntimeError(
                 f"ESM2 {self.attn_backend.value} attention is inference-only when attention "
@@ -334,17 +370,12 @@ class EsmSelfAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         attention_mask_2d: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, None]:
-        assert flex_attention is not None, "Flex attention is not available in this environment."
-        sequence_lengths = (
-            tuple(int(length) for length in attention_mask_2d.sum(dim=-1).tolist())
-            if attention_mask_2d is not None
-            else (query_heads.shape[-2],) * query_heads.shape[0]
-        )
+        if flex_attention is None:
+            raise RuntimeError("Flex attention is not available in this environment.")
         fn = _get_flex_attention_fn(
             device=query_heads.device,
             dtype=query_heads.dtype,
             shape=tuple(query_heads.shape),
-            sequence_lengths=sequence_lengths,
             mask_semantics="padding",
         )
         context_heads = fn(
@@ -457,8 +488,12 @@ class EsmEncoder(nn.Module):
         all_attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
 
+        effective_backend = resolve_attention_backend_for_call(
+            self.attention_backend,
+            output_attentions=output_attentions,
+        )
         attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
-            effective_backend=self.attention_backend,
+            effective_backend=effective_backend,
             batch_size=hidden_states.shape[0],
             seq_len=hidden_states.shape[1],
             device=hidden_states.device,
@@ -514,7 +549,10 @@ class FastEsmPreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
     """Initialize weights and provide the shared pretrained-model interface."""
 
     config_class = FastEsmConfig
-    base_model_prefix = "fastesm"
+    # Every advertised task wrapper stores the shared encoder at ``self.esm``.
+    # Transformers uses this name for ``base_model`` and for loading an
+    # unprefixed base checkpoint into a prefixed task wrapper.
+    base_model_prefix = "esm"
     supports_gradient_checkpointing = True
     all_tied_weights_keys: ClassVar[dict[str, str]] = {}
     _supports_flash_attn = True
@@ -528,22 +566,42 @@ class FastEsmPreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
         "flash_attention_3",
     )
 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        load_context = {key: kwargs[key] for key in _TOKENIZER_LOAD_CONTEXT_KEYS if key in kwargs}
+        if "token" not in load_context and "use_auth_token" in kwargs:
+            load_context["token"] = kwargs["use_auth_token"]
+        load_context["source"] = pretrained_model_name_or_path
+
+        loaded = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        model = loaded[0] if isinstance(loaded, tuple) else loaded
+        model.__dict__["_fastplms_tokenizer_load_context"] = load_context
+        model.__dict__["_fastplms_tokenizer"] = None
+        return loaded
+
     @property
     def tokenizer(self):
         tokenizer = self.__dict__.get("_fastplms_tokenizer")
         if tokenizer is None:
-            source = str(getattr(self.config, "_name_or_path", "")).strip()
+            load_context = dict(self.__dict__.get("_fastplms_tokenizer_load_context") or {})
+            source = load_context.pop("source", None)
+            if source is None:
+                source = str(getattr(self.config, "_name_or_path", "")).strip()
             if not source:
                 raise RuntimeError(
                     "ESM2 tokenizer loading requires a model loaded with from_pretrained "
                     "so checkpoint provenance is available."
                 )
-            revision = getattr(self.config, "_commit_hash", None)
-            tokenizer_kwargs = {"revision": revision} if revision else {}
+            tokenizer_kwargs = {
+                key: value
+                for key, value in load_context.items()
+                if key in _TOKENIZER_LOAD_CONTEXT_KEYS and value is not None
+            }
+            resolved_revision = getattr(self.config, "_commit_hash", None)
+            if resolved_revision:
+                tokenizer_kwargs["revision"] = resolved_revision
             tokenizer = FastEsmTokenizer.from_pretrained(source, **tokenizer_kwargs)
-            if getattr(tokenizer, "bos_token_id", None) is None and hasattr(
-                tokenizer, "cls_token"
-            ):
+            if getattr(tokenizer, "bos_token_id", None) is None and hasattr(tokenizer, "cls_token"):
                 tokenizer.bos_token = tokenizer.cls_token
             self.__dict__["_fastplms_tokenizer"] = tokenizer
         return tokenizer
@@ -551,11 +609,6 @@ class FastEsmPreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
     @tokenizer.setter
     def tokenizer(self, value) -> None:
         self.__dict__["_fastplms_tokenizer"] = value
-
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        # Prevent post-load reinitialization of tensors already loaded from checkpoints.
-        return True
 
     @torch.no_grad()
     def _init_weights(self, module: nn.Module) -> None:
@@ -583,9 +636,11 @@ class FastEsmPreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
 
     @attn_backend.setter
     def attn_backend(self, backend: str) -> None:
-        assert backend in VALID_ATTENTION_BACKENDS, (
-            f"Unsupported attn_backend: {backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
-        )
+        if backend not in self._fastplms_attention_implementations:
+            raise ValueError(
+                f"{type(self).__name__} does not support {backend!r}; expected one of "
+                f"{self._fastplms_attention_implementations}."
+            )
         self.config.attn_backend = backend
         resolved = resolve_attention_backend(backend)
         for module in self.modules():
@@ -638,7 +693,12 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
     def predict_contacts(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor
     ) -> torch.Tensor:
-        attns = self(input_ids, attention_mask=attention_mask, output_attentions=True).attentions
+        attns = self(
+            input_ids,
+            attention_mask=attention_mask,
+            output_attentions=True,
+            return_dict=True,
+        ).attentions
         attns = torch.stack(attns, dim=1)
         attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
         attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(4)
@@ -654,7 +714,7 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
-    ) -> FastEsmEncoderOutput:
+    ) -> FastEsmEncoderOutput | tuple[torch.Tensor, ...]:
         output_attentions = (
             output_attentions if output_attentions is not None else self.config.output_attentions
         )
@@ -663,6 +723,7 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
             if output_hidden_states is not None
             else self.config.output_hidden_states
         )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
@@ -685,12 +746,13 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
             output_s_max=output_s_max,
         )
 
-        return FastEsmEncoderOutput(
+        result = FastEsmEncoderOutput(
             last_hidden_state=encoder_outputs.last_hidden_state,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
             s_max=encoder_outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
@@ -739,8 +801,7 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
-        **kwargs,
-    ) -> FastEsmEncoderOutput:
+    ) -> FastEsmEncoderOutput | tuple[torch.Tensor, ...]:
         output_attentions = (
             output_attentions if output_attentions is not None else self.config.output_attentions
         )
@@ -749,6 +810,7 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
             if output_hidden_states is not None
             else self.config.output_hidden_states
         )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         outputs = self.esm(
             input_ids,
@@ -758,17 +820,19 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            return_dict=True,
         )
         sequence_output = outputs.last_hidden_state
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
-        return FastEsmEncoderOutput(
+        result = FastEsmEncoderOutput(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class FastEsmForMaskedLM(FastPLMTestTimeTrainingMixin, FastEsmPreTrainedModel, EmbeddingMixin):
@@ -783,10 +847,25 @@ class FastEsmForMaskedLM(FastPLMTestTimeTrainingMixin, FastEsmPreTrainedModel, E
     def get_input_embeddings(self):
         return self.esm.embeddings.word_embeddings
 
+    def set_input_embeddings(self, value):
+        self.esm.set_input_embeddings(value)
+
     def get_output_embeddings(self):
         return self.lm_head.decoder
 
     def set_output_embeddings(self, new_embeddings):
+        old_bias = self.lm_head.bias
+        new_vocab_size = int(new_embeddings.out_features)
+        if old_bias.shape[0] != new_vocab_size:
+            resized_bias = old_bias.new_zeros(new_vocab_size)
+            copy_length = min(old_bias.shape[0], new_vocab_size)
+            with torch.no_grad():
+                resized_bias[:copy_length].copy_(old_bias[:copy_length])
+            self.lm_head.bias = nn.Parameter(resized_bias)
+        # EsmLMHead.forward adds this standalone bias after the decoder. HF's
+        # generic LM-head resizer may create a biased Linear, which would apply
+        # the bias twice and introduce an undeclared shared tensor on save.
+        new_embeddings.bias = None
         self.lm_head.decoder = new_embeddings
 
     def _embed(
@@ -822,8 +901,8 @@ class FastEsmForMaskedLM(FastPLMTestTimeTrainingMixin, FastEsmPreTrainedModel, E
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
-        **kwargs,
-    ) -> EsmMaskedLMOutput:
+    ) -> EsmMaskedLMOutput | tuple[torch.Tensor, ...]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs = self.esm(
             input_ids,
             attention_mask=attention_mask,
@@ -832,6 +911,7 @@ class FastEsmForMaskedLM(FastPLMTestTimeTrainingMixin, FastEsmPreTrainedModel, E
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            return_dict=True,
         )
         sequence_output = outputs.last_hidden_state
         prediction_scores = self.lm_head(sequence_output)
@@ -843,14 +923,15 @@ class FastEsmForMaskedLM(FastPLMTestTimeTrainingMixin, FastEsmPreTrainedModel, E
                 prediction_scores.view(-1, self.config.vocab_size), labels.view(-1)
             )
 
-        return EsmMaskedLMOutput(
+        result = EsmMaskedLMOutput(
             loss=loss,
             logits=prediction_scores,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
+            last_hidden_state=sequence_output,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
@@ -867,6 +948,9 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
 
     def get_input_embeddings(self):
         return self.esm.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.esm.set_input_embeddings(value)
 
     def _embed(
         self,
@@ -898,8 +982,8 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
-        **kwargs,
-    ) -> EsmMaskedLMOutput:
+    ) -> EsmSequenceClassifierOutput | tuple[torch.Tensor, ...]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs = self.esm(
             input_ids,
             attention_mask=attention_mask,
@@ -908,6 +992,7 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
         )
         sequence_output = outputs.last_hidden_state
         logits = self.classifier(sequence_output)
@@ -935,14 +1020,14 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
             elif self.config.problem_type == "multi_label_classification":
                 loss = self.bce(logits, labels)
 
-        return EsmMaskedLMOutput(
+        result = EsmSequenceClassifierOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
@@ -957,6 +1042,9 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
 
     def get_input_embeddings(self):
         return self.esm.embeddings.word_embeddings
+
+    def set_input_embeddings(self, value):
+        self.esm.set_input_embeddings(value)
 
     def _embed(
         self,
@@ -988,8 +1076,8 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
-        **kwargs,
-    ) -> EsmMaskedLMOutput:
+    ) -> EsmTokenClassifierOutput | tuple[torch.Tensor, ...]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs = self.esm(
             input_ids,
             attention_mask=attention_mask,
@@ -998,6 +1086,7 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
         )
         sequence_output = outputs.last_hidden_state
         sequence_output = self.dropout(sequence_output)
@@ -1008,11 +1097,11 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
             labels = labels.to(logits.device)
             loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
-        return EsmMaskedLMOutput(
+        result = EsmTokenClassifierOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()

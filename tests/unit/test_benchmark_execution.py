@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 import torch
+import transformers
 
 from benchmarks.run import (
+    _load_model,
     _prepare_esmfold2_inputs,
     _run_esmfold2_esmc_projection,
     cuda_sample_ms,
@@ -13,6 +18,7 @@ from benchmarks.run import (
     prepare_inputs,
     warm_until_stable,
 )
+from fastplms.registry import get_model_registry
 
 
 def test_prepare_inputs_counts_residues_not_special_tokens() -> None:
@@ -65,6 +71,163 @@ def test_prepare_inputs_counts_residues_not_special_tokens() -> None:
     assert model_inputs["attention_mask"].sum().item() == 13
     assert logical_tokens == 9
     assert padded_tokens == 16
+
+
+def test_local_artifact_model_load_omits_hub_revision_and_keeps_registry_policy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = get_model_registry()["esm2_8m"]
+    artifact = tmp_path / "ESM2-8M"
+    artifact.mkdir()
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    class FakeModel:
+        def eval(self) -> FakeModel:
+            return self
+
+    class FakeAutoModel:
+        @classmethod
+        def from_pretrained(cls, source: object, **kwargs: object) -> FakeModel:
+            calls.append((source, kwargs))
+            return FakeModel()
+
+    monkeypatch.setattr(transformers, "AutoModelForMaskedLM", FakeAutoModel)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    arguments = SimpleNamespace(
+        model=spec.fast.repo_id,
+        revision=spec.fast.revision,
+        load_model=artifact,
+        load_revision=None,
+        auto_class="AutoModelForMaskedLM",
+        backend="sdpa",
+        precision="bf16",
+        bf16_execution=spec.family.bf16_execution,
+        mode="steady",
+        local_files_only=True,
+        esmc_load_model=None,
+    )
+
+    _load_model(arguments, torch)
+
+    assert calls[0][0] == artifact
+    assert "revision" not in calls[0][1]
+    assert calls[0][1]["local_files_only"] is True
+    expected_dtype = (
+        torch.float32
+        if spec.family.bf16_execution == "fp32_parameters_autocast"
+        else torch.bfloat16
+    )
+    assert calls[0][1]["dtype"] == expected_dtype
+
+
+def test_local_artifact_tokenizer_load_omits_hub_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact = tmp_path / "ESM2-8M"
+    artifact.mkdir()
+    calls: list[tuple[object, dict[str, object]]] = []
+
+    class FakeTokenizer:
+        def __call__(self, sequences: list[str], **kwargs: object) -> dict[str, torch.Tensor]:
+            del sequences, kwargs
+            return {
+                "input_ids": torch.zeros((1, 4), dtype=torch.long),
+                "attention_mask": torch.ones((1, 4), dtype=torch.long),
+            }
+
+    class FakeAutoTokenizer:
+        @classmethod
+        def from_pretrained(cls, source: object, **kwargs: object) -> FakeTokenizer:
+            calls.append((source, kwargs))
+            return FakeTokenizer()
+
+    class FakeModel:
+        tokenizer = None
+
+        def forward(
+            self,
+            input_ids: torch.Tensor,
+            attention_mask: torch.Tensor,
+        ) -> torch.Tensor:
+            del attention_mask
+            return input_ids
+
+    monkeypatch.setattr(transformers, "AutoTokenizer", FakeAutoTokenizer)
+    prepare_inputs(
+        FakeModel(),
+        artifact,
+        (4,),
+        torch.device("cpu"),
+        revision=None,
+        local_files_only=True,
+    )
+
+    assert calls == [
+        (
+            artifact,
+            {"trust_remote_code": True, "local_files_only": True},
+        )
+    ]
+
+
+def test_local_esmfold2_load_uses_validated_local_esmc_dependency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = get_model_registry()["esmfold2"]
+    artifact = tmp_path / "ESMFold2"
+    esmc_artifact = tmp_path / "ESMC-6B"
+    artifact.mkdir()
+    esmc_artifact.mkdir()
+    top_level_calls: list[tuple[object, dict[str, object]]] = []
+    esmc_calls: list[tuple[str, dict[str, object]]] = []
+
+    class FakeModel:
+        def eval(self) -> FakeModel:
+            return self
+
+        def load_esmc(self, source: str, **kwargs: object) -> None:
+            esmc_calls.append((source, kwargs))
+
+    class FakeAutoModel:
+        @classmethod
+        def from_pretrained(cls, source: object, **kwargs: object) -> FakeModel:
+            top_level_calls.append((source, kwargs))
+            return FakeModel()
+
+    monkeypatch.setattr(transformers, "AutoModel", FakeAutoModel)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    arguments = SimpleNamespace(
+        model=spec.fast.repo_id,
+        revision=spec.fast.revision,
+        load_model=artifact,
+        load_revision=None,
+        auto_class="AutoModel",
+        backend="sdpa",
+        precision="bf16",
+        bf16_execution=spec.family.bf16_execution,
+        mode="esmfold2_embed",
+        local_files_only=True,
+        esmc_load_model=esmc_artifact,
+    )
+
+    _load_model(arguments, torch)
+
+    assert top_level_calls[0][0] == artifact
+    assert top_level_calls[0][1]["load_esmc"] is False
+    assert "revision" not in top_level_calls[0][1]
+    assert esmc_calls == [
+        (
+            str(esmc_artifact),
+            {
+                "precision": "bf16",
+                "device": torch.device("cuda"),
+                "local_files_only": True,
+            },
+        )
+    ]
 
 
 @pytest.mark.benchmark

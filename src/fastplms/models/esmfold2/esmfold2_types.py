@@ -12,6 +12,7 @@ RNAInput = _input_schema.RNAInput
 DNAInput = _input_schema.DNAInput
 LigandInput = _input_schema.LigandInput
 DistogramConditioning = _input_schema.DistogramConditioning
+PocketConditioning = _input_schema.PocketConditioning
 CovalentBond = _input_schema.CovalentBond
 StructurePredictionInput = _input_schema.StructurePredictionInput
 
@@ -23,6 +24,7 @@ __all__ = [
     "FastaEntry",
     "LigandInput",
     "Modification",
+    "PocketConditioning",
     "ProteinInput",
     "RNAInput",
     "StructurePredictionInput",

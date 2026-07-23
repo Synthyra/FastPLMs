@@ -80,7 +80,8 @@ class DynamicCache:
 
     def crop(self, max_length: int) -> None:
         """Crop every cached K and V tensor to ``max_length`` tokens."""
-        assert max_length > 0, "max_length must be positive"
+        if max_length <= 0:
+            raise ValueError("max_length must be positive")
 
         if self.get_seq_length() <= max_length:
             return
@@ -119,7 +120,15 @@ class KVCache:
             "sequence_ids",
             "labels",
         ]
-        self.tensor_output_field_names = ["logits", "embeddings"]
+        # Upstream E1 called the encoder output ``embeddings``. FastPLMs uses
+        # the standard Transformers ``last_hidden_state`` name, while keeping
+        # the aliases here makes the cache safe for either output contract.
+        self.tensor_output_field_names = [
+            "logits",
+            "last_hidden_state",
+            "embeddings",
+            "token_embeddings",
+        ]
         self.cache_dict: dict[str, DynamicCache] = {}
         self.cache_queue: list[str] = []
 
@@ -178,7 +187,8 @@ class KVCache:
         ):
             return
 
-        assert batch["use_cache"]
+        if not batch.get("use_cache", False):
+            raise ValueError("E1 retrieval cache updates require use_cache=True.")
         unique_context = contexts[0]
         unique_context_len = context_lens[0]
 
@@ -209,9 +219,11 @@ class KVCache:
                 if field_name in outputs and outputs[field_name] is not None:
                     outputs[field_name] = outputs[field_name][:, unique_context_len:]
             if "hidden_states" in outputs and outputs["hidden_states"] is not None:
-                outputs["hidden_states"] = [
-                    h[:, unique_context_len:] for h in outputs["hidden_states"]
-                ]
+                hidden_states = outputs["hidden_states"]
+                sliced_hidden_states = tuple(
+                    hidden_state[:, unique_context_len:] for hidden_state in hidden_states
+                )
+                outputs["hidden_states"] = sliced_hidden_states
 
         self.cache_dict[unique_context].crop(unique_context_len)
         self.cache_dict[unique_context].batch_select_indices([0])

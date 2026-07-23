@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModelForSeq2SeqLM
 
+from fastplms.models.ankh.modeling_ankh import tokenize_ankh_sequences
 from fastplms.registry import ModelSpec, get_model_registry
 from tests.parity.support.reference_adapters.ankh import load_official_seq2seq
 
@@ -66,8 +67,9 @@ def test_ankh_official_seq2seq_state_aliases_and_seeded_inference(
         f"{spec.id}: sequence-to-sequence tied-weight contract differs"
     )
 
-    encoded = tokenizer(
-        ["M S T N P K", "A C D E"],
+    encoded = tokenize_ankh_sequences(
+        tokenizer,
+        ["MSTNPK", "ACDE"],
         return_tensors="pt",
         padding=True,
     )

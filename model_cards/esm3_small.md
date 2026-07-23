@@ -16,6 +16,19 @@ Accepted inputs are sequence, structure, and function tracks prepared through
 the multimodal helpers.
 Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
+## Install and platform requirements
+
+Install FastPLMs from the exact source revision paired with this model card:
+
+```bash
+python -m pip install \
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The declared CPU gate covers tiny offline contracts; published checkpoint throughput and parity require the documented device tier. The Hub quick start below requires network
+access on first download. For an air-gapped run, first build the manifest-pinned
+local artifact and use the offline form shown in the example.
+
 ## Quick start
 
 ```python
@@ -35,6 +48,11 @@ the manifest-pinned artifact and replace `model_id` with its local
 Leave attention unspecified for the Transformers default. Supported explicit
 choices are `eager`, `sdpa`, `flex_attention`.
 Pass the selected name through `attn_implementation`.
+When an optimized backend cannot return full attention tensors,
+`output_attentions=True` emits one explicit runtime warning and uses a correctly
+masked eager implementation for that call only. The warning identifies the
+configured backend, effective backend, and reason. Configuration and later
+calls are unchanged.
 For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Dataset embeddings
@@ -93,10 +111,16 @@ batch = model.tokenize_sequences(
 with torch.inference_mode():
     output = model(**batch)
 
+print(output.last_hidden_state.shape)
 print(output.logits.shape)
 print(output.structure_logits.shape)
 print(output.function_logits.shape)
 ```
+
+When `return_dict=False`, ESM3 follows the standard base-model tuple prefix:
+`last_hidden_state`, then requested `hidden_states` and `attentions`. Multimodal
+logits and extensions follow that prefix. Prefer named fields for individual
+tracks.
 
 Generate masked sequence positions with an explicit seed:
 
@@ -119,15 +143,23 @@ tracks, not experimental measurements of structure or function.
 
 - Public input: Sequence, structure, and function tracks prepared through the multimodal helpers
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`
+- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`
 - Precision policies: `default`
 - BF16 execution: `fp32_parameters_autocast`
 - Generation contract: `not_applicable`
 - Optional dependency group: `core`
+- Weight publication allowed: `true`
+- Weight license status: `resolved`
+- Redistributable: `true`
+- Complete weight publication required: `false`
 
 ## Provenance
 
-- FastPLMs checkpoint: `Synthyra/ESM3_small@7ddb5a740f9e5f93933eb6410c0ee8684bc63ec1`
+- FastPLMs weights: `Synthyra/ESM3_small@7ddb5a740f9e5f93933eb6410c0ee8684bc63ec1`
+- Runtime revision: recorded separately in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 - Official checkpoint: `biohub/esm3-sm-open-v1@47f0545b2b6daf26a93439a3cd610f4f7f3d5478`
 - Artifact source: `fast`
 - State transform: `esm3_to_fastplms_v1`

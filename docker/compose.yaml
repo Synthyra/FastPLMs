@@ -43,6 +43,13 @@ x-reference: &reference
     - xdg-cache:/cache/xdg
 
 services:
+  biohub-biotraj-wheel:
+    image: local/fastplms-biohub-biotraj-wheel:dev
+    build:
+      context: ..
+      dockerfile: docker/biohub-reference-lock.Dockerfile
+      target: biotraj-wheel-artifact
+
   candidate:
     <<: *common
     image: local/fastplms-candidate:dev
@@ -134,6 +141,7 @@ services:
       dockerfile: docker/Dockerfile
       target: reference-biohub-esm
       additional_contexts:
+        biohub_biotraj_wheel: service:biohub-biotraj-wheel
         upstream_biohub_esm: ../vendor/upstream/biohub-esm
         upstream_biohub_transformers: ../vendor/upstream/biohub-transformers
 
@@ -196,6 +204,7 @@ services:
       dockerfile: docker/Dockerfile
       target: reference-esmfold2
       additional_contexts:
+        biohub_biotraj_wheel: service:biohub-biotraj-wheel
         upstream_biohub_esm: ../vendor/upstream/biohub-esm
         upstream_biohub_transformers: ../vendor/upstream/biohub-transformers
 

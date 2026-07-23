@@ -14,6 +14,9 @@ from tests.parity.support.reference_adapters import (
     pinned_biohub_snapshot,
     use_esm_submodule,
 )
+from tests.parity.support.reference_adapters.biohub_source import (
+    reference_sources,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -37,11 +40,10 @@ def _load_with_normal_construction(
 ) -> torch.nn.Module:
     """Construct ESMC normally, then apply the pinned official loader exactly."""
 
-    from huggingface_hub import load_torch_model
-    from safetensors import safe_open
-
     from esm.models.esmc import ESMC
     from esm.tokenization import get_esmc_model_tokenizers
+    from huggingface_hub import load_torch_model
+    from safetensors import safe_open
 
     configurations = {
         "esmc_300m": (960, 15, 30),
@@ -87,6 +89,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Invoke only the pinned public loader and fail if parameters remain meta."""
 
     arguments = _parser().parse_args(argv)
+    sources = reference_sources()
     use_esm_submodule()
     from esm.models.esmc import ESMC
 
@@ -95,6 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "huggingface_hub": importlib.metadata.version("huggingface-hub"),
         "safetensors": importlib.metadata.version("safetensors"),
         "torch": torch.__version__,
+        "reference_sources": sources,
     }
     print(json.dumps(environment, sort_keys=True), flush=True)
     if arguments.construction == "normal":

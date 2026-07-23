@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import hashlib
 import json
 import os
 import shutil
@@ -10,13 +12,13 @@ import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 CANONICAL_GPU_PYTHON = "3.12"
 PYTHON_SUPPORT_VERSIONS = ("3.11", "3.13", "3.14")
-UV_SYNC_ARGUMENTS = ("sync", "--frozen", "--no-dev", "--no-editable")
+LOCKED_RUNTIME_REQUIREMENTS = ("torch==2.13.0", "transformers==5.13.0")
 OFFLINE_SMOKE_ENVIRONMENT = {
     "CUDA_VISIBLE_DEVICES": "",
     "HF_DATASETS_OFFLINE": "1",
@@ -24,6 +26,7 @@ OFFLINE_SMOKE_ENVIRONMENT = {
     "TRANSFORMERS_OFFLINE": "1",
     "PYTHONNOUSERSITE": "1",
     "PYTHONPATH": "",
+    "UV_TORCH_BACKEND": "cpu",
 }
 
 
@@ -36,16 +39,22 @@ class MatrixCommandError(RuntimeError):
         self.completed = completed
 
 
-def build_sync_command(uv: str, project_root: Path, python: str) -> tuple[str, ...]:
-    """Build a frozen, core-only, non-editable uv synchronization command."""
+def build_wheel_install_command(
+    uv: str,
+    python: Path,
+    wheel: Path,
+) -> tuple[str, ...]:
+    """Build the exact clean-environment CPU wheel installation command."""
 
     return (
         uv,
-        *UV_SYNC_ARGUMENTS,
-        "--project",
-        str(project_root),
+        "pip",
+        "install",
         "--python",
-        python,
+        str(python),
+        "--torch-backend=cpu",
+        *LOCKED_RUNTIME_REQUIREMENTS,
+        str(wheel),
     )
 
 
@@ -77,8 +86,15 @@ def _run(
     return completed
 
 
-def _tail(text: str, limit: int = 8_000) -> str:
-    return text[-limit:]
+def _output_fingerprint(text: str) -> dict[str, object]:
+    """Describe subprocess output without persisting URLs, tokens, or host paths."""
+
+    encoded = text.encode("utf-8", errors="replace")
+    return {
+        "bytes": len(encoded),
+        "lines": len(text.splitlines()),
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
 
 
 def _run_member(
@@ -87,13 +103,13 @@ def _run_member(
     project_root: Path,
     temporary_root: Path,
     target: str,
+    wheel: Path,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     environment_root = temporary_root / f"python-{target.replace('.', '')}"
     environment = dict(os.environ)
     environment.update(
         {
-            "UV_PROJECT_ENVIRONMENT": str(environment_root),
             "UV_PYTHON_PREFERENCE": "only-managed",
         }
     )
@@ -106,11 +122,11 @@ def _run_member(
             cwd=project_root,
             environment=environment,
         )
-        stage = "locked-core-install"
-        print(f"[{target}] installing the locked core project non-editably", flush=True)
+        stage = "environment-create"
+        print(f"[{target}] creating an isolated environment", flush=True)
         _run(
             stage,
-            build_sync_command(uv, project_root, target),
+            (uv, "venv", "--python", target, str(environment_root)),
             cwd=project_root,
             environment=environment,
         )
@@ -118,12 +134,22 @@ def _run_member(
         if not python.is_file():
             raise RuntimeError(f"uv did not create the expected interpreter: {python}")
 
+        stage = "clean-wheel-install"
+        print(f"[{target}] installing the built wheel with locked CPU runtime", flush=True)
+        _run(
+            stage,
+            build_wheel_install_command(uv, python, wheel),
+            cwd=temporary_root,
+            environment=environment,
+        )
+
         stage = "offline-cpu-smoke"
         print(f"[{target}] running the isolated offline CPU smoke", flush=True)
         completed = _run(
             stage,
             (
                 str(python),
+                "-I",
                 str(project_root / "tools/remote/python_support_smoke.py"),
                 "--expected-python",
                 target,
@@ -145,7 +171,7 @@ def _run_member(
             "status": "passed",
             "elapsed_seconds": round(elapsed, 3),
             "evidence": evidence,
-            "stderr": _tail(completed.stderr),
+            "stderr": _output_fingerprint(completed.stderr),
         }
     except MatrixCommandError as error:
         elapsed = time.perf_counter() - started
@@ -155,8 +181,8 @@ def _run_member(
             "stage": error.stage,
             "elapsed_seconds": round(elapsed, 3),
             "returncode": error.completed.returncode,
-            "stdout": _tail(error.completed.stdout),
-            "stderr": _tail(error.completed.stderr),
+            "stdout": _output_fingerprint(error.completed.stdout),
+            "stderr": _output_fingerprint(error.completed.stderr),
         }
     except Exception as error:
         elapsed = time.perf_counter() - started
@@ -165,7 +191,7 @@ def _run_member(
             "status": "failed",
             "stage": stage,
             "elapsed_seconds": round(elapsed, 3),
-            "error": f"{type(error).__name__}: {error}",
+            "error_type": type(error).__name__,
         }
 
 
@@ -239,19 +265,78 @@ def run_matrix(
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv is required for the Python support matrix.")
+    if not versions or len(versions) != len(set(versions)):
+        raise ValueError("Python support versions must be a non-empty unique sequence.")
 
     started = time.perf_counter()
+    results: list[dict[str, Any]]
     with tempfile.TemporaryDirectory(prefix="fastplms-python-support-") as temporary:
         temporary_root = Path(temporary)
-        results = [
-            _run_member(
-                uv=uv,
-                project_root=project_root,
-                temporary_root=temporary_root,
-                target=target,
+        wheel_root = temporary_root / "wheel"
+        wheel_root.mkdir()
+        shared_stage = "wheel-build"
+        try:
+            _run(
+                shared_stage,
+                (
+                    uv,
+                    "build",
+                    "--wheel",
+                    "--out-dir",
+                    str(wheel_root),
+                    str(project_root),
+                ),
+                cwd=project_root,
+                environment=dict(os.environ),
             )
-            for target in versions
-        ]
+            shared_stage = "wheel-inventory"
+            wheels = tuple(wheel_root.glob("fastplms-1.0.0-*.whl"))
+            if len(wheels) != 1:
+                raise RuntimeError(f"Expected one FastPLMs wheel, found {len(wheels)}.")
+            wheel = wheels[0]
+        except MatrixCommandError as error:
+            elapsed = round(time.perf_counter() - started, 3)
+            results = [
+                {
+                    "target": target,
+                    "status": "failed",
+                    "stage": error.stage,
+                    "elapsed_seconds": elapsed,
+                    "returncode": error.completed.returncode,
+                    "stdout": _output_fingerprint(error.completed.stdout),
+                    "stderr": _output_fingerprint(error.completed.stderr),
+                }
+                for target in versions
+            ]
+        except Exception as error:
+            elapsed = round(time.perf_counter() - started, 3)
+            results = [
+                {
+                    "target": target,
+                    "status": "failed",
+                    "stage": shared_stage,
+                    "elapsed_seconds": elapsed,
+                    "error_type": type(error).__name__,
+                }
+                for target in versions
+            ]
+        else:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(4, len(versions)),
+                thread_name_prefix="fastplms-python-support",
+            ) as executor:
+                futures = {
+                    target: executor.submit(
+                        _run_member,
+                        uv=uv,
+                        project_root=project_root,
+                        temporary_root=temporary_root,
+                        target=target,
+                        wheel=wheel,
+                    )
+                    for target in versions
+                }
+                results = [futures[target].result() for target in versions]
     elapsed = time.perf_counter() - started
     payload = {
         "schema_version": 1,
@@ -281,7 +366,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Iterable[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     return run_matrix(
         project_root=arguments.project_root,

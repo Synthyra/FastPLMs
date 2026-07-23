@@ -15,26 +15,50 @@ from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
 from transformers import PretrainedConfig, PreTrainedModel, PreTrainedTokenizerFast
-from transformers.modeling_outputs import ModelOutput
+from transformers.modeling_outputs import (
+    MaskedLMOutput,
+    ModelOutput,
+    SequenceClassifierOutput,
+    TokenClassifierOutput,
+)
 
 try:
     from fastplms.attention import (
-        VALID_ATTENTION_BACKENDS,
         AttentionBackend,
         BlockMask,
         FastPLMsAttentionMixin,
         _get_flex_attention_fn,
-        create_block_mask,
+        _get_flex_block_mask,
         flex_attention,
         get_attention_mask,
         kernels_flash_attention_func,
         resolve_attention_backend,
-        warn_attention_backend_fallback,
+        resolve_attention_backend_for_call,
     )
     from fastplms.embeddings import EmbeddingMixin, Pooler, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
-except ImportError:
-    pass  # Running as HF Hub composite; shared definitions are above
+except ModuleNotFoundError as error:
+    _COMPOSITE_REQUIRED_NAMES = (
+        "AttentionBackend",
+        "BlockMask",
+        "EmbeddingMixin",
+        "FastPLMsAttentionMixin",
+        "FastPLMTestTimeTrainingMixin",
+        "Pooler",
+        "_get_flex_attention_fn",
+        "_get_flex_block_mask",
+        "flex_attention",
+        "get_attention_mask",
+        "kernels_flash_attention_func",
+        "resolve_attention_backend",
+        "resolve_attention_backend_for_call",
+        "select_hidden_state_embeddings",
+    )
+    if error.name != "fastplms" or any(
+        name not in globals() for name in _COMPOSITE_REQUIRED_NAMES
+    ):
+        raise
+    # Legacy flat Hub composites define every shared symbol above this block.
 
 
 class ESMplusplusConfig(PretrainedConfig):
@@ -86,9 +110,7 @@ class ESMplusplusConfig(PretrainedConfig):
         self.initializer_range = initializer_range
         self.classifier_dropout = classifier_dropout
         self.classifier_pooling_types = (
-            list(classifier_pooling_types)
-            if classifier_pooling_types is not None
-            else None
+            list(classifier_pooling_types) if classifier_pooling_types is not None else None
         )
         self.tie_word_embeddings = False
         self.attn_backend = attn_backend
@@ -174,9 +196,7 @@ class RotaryEmbedding(torch.nn.Module):
         """Rebuild the non-persistent frequency buffers on ``device``."""
         if device is not None:
             buffer_device = torch.device(device)
-        elif "inv_freq" in self._buffers and isinstance(
-            self._buffers["inv_freq"], torch.Tensor
-        ):
+        elif "inv_freq" in self._buffers and isinstance(self._buffers["inv_freq"], torch.Tensor):
             buffer_device = self._buffers["inv_freq"].device
         else:
             buffer_device = self.device
@@ -193,10 +213,7 @@ class RotaryEmbedding(torch.nn.Module):
         """Compute inverse frequency bands on their execution device."""
         return 1 / (
             self.base
-            ** (
-                torch.arange(0, self.dim, 2, device=device, dtype=torch.float32)
-                / self.dim
-            )
+            ** (torch.arange(0, self.dim, 2, device=device, dtype=torch.float32) / self.dim)
         )
 
     def _apply(self, fn, recurse: bool = True):
@@ -282,8 +299,10 @@ class RotaryEmbedding(torch.nn.Module):
         # some bands, which is immaterial in BF16 but accumulates measurably in
         # deep FP32 execution.
         self._update_cos_sin_cache(q.shape[1], device=q.device, dtype=q.dtype)
-        assert self._cos_cached is not None
-        assert self._sin_cached is not None
+        if self._cos_cached is None or self._sin_cached is None:
+            raise RuntimeError(
+                "Rotary cache initialization did not produce cosine and sine values."
+            )
         if self.scale is not None:
             raise AssertionError("Scaled rotary embeddings are unsupported for ESMC.")
 
@@ -407,14 +426,6 @@ class MultiHeadAttention(nn.Module):
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if output_attentions:
-            warn_attention_backend_fallback(
-                self.attn_backend,
-                effective_backend=AttentionBackend.EAGER,
-                reason=(
-                    "output_attentions=True requires the full materialized attention "
-                    "probability matrix, which optimized PyTorch attention APIs do not return."
-                ),
-            )
             return self._manual_attn(
                 query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
             )
@@ -502,17 +513,12 @@ class MultiHeadAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         attention_mask_2d: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, None]:
-        assert flex_attention is not None, "Flex attention is not available in this environment."
-        sequence_lengths = (
-            tuple(int(length) for length in attention_mask_2d.sum(dim=-1).tolist())
-            if attention_mask_2d is not None
-            else (query_heads.shape[-2],) * query_heads.shape[0]
-        )
+        if flex_attention is None:
+            raise RuntimeError("Flex attention is not available in this environment.")
         fn = _get_flex_attention_fn(
             device=query_heads.device,
             dtype=query_heads.dtype,
             shape=tuple(query_heads.shape),
-            sequence_lengths=sequence_lengths,
             mask_semantics="padding",
         )
         context_heads = fn(
@@ -613,14 +619,24 @@ class TransformerOutput(ModelOutput):
 
 
 @dataclass
-class ESMplusplusOutput(ModelOutput):
-    """Output type for ESM++ models."""
+class ESMplusplusOutput(MaskedLMOutput):
+    """Masked-LM output with FastPLMs fields after the HF contract."""
 
-    loss: torch.Tensor | None = None
-    logits: torch.Tensor | None = None
+    s_max: tuple[list[torch.Tensor], ...] | None = None
     last_hidden_state: torch.Tensor | None = None
-    hidden_states: tuple[torch.Tensor] | None = None
-    attentions: tuple[torch.Tensor] | None = None
+
+
+@dataclass
+class ESMplusplusSequenceClassifierOutput(SequenceClassifierOutput):
+    """Sequence-classification output with optional attention diagnostics."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+
+
+@dataclass
+class ESMplusplusTokenClassifierOutput(TokenClassifierOutput):
+    """Token-classification output with optional attention diagnostics."""
+
     s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
@@ -677,6 +693,23 @@ class TransformerStack(nn.Module):
         hidden_states = () if output_hidden_states else None
         attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
+        # Match the pinned Biohub Transformers contract: a supplied sequence_id
+        # is authoritative and must encode padding as -1.  attention_mask is
+        # ignored in that mode rather than intersected with the chain mask.
+        if sequence_id is None and attention_mask is not None:
+            expected_shape = (x.shape[0], x.shape[1])
+            if attention_mask.ndim != 2 or tuple(attention_mask.shape) != expected_shape:
+                raise ValueError(
+                    f"attention_mask must have shape {expected_shape}; "
+                    f"received {tuple(attention_mask.shape)}."
+                )
+            attention_mask = attention_mask.to(device=x.device, dtype=torch.bool)
+            if not bool(attention_mask.any(dim=1).all()):
+                raise ValueError("attention_mask must keep at least one valid key per batch row.")
+        effective_backend = resolve_attention_backend_for_call(
+            self.attention_backend,
+            output_attentions=bool(output_attentions),
+        )
 
         if sequence_id is None and attention_mask is not None:
             attention_mask_2d, attention_mask_4d, flex_block_mask = (
@@ -685,11 +718,13 @@ class TransformerStack(nn.Module):
                     batch_size=x.shape[0],
                     seq_len=x.shape[1],
                     device=x.device,
+                    dtype=x.dtype,
+                    effective_backend=effective_backend,
                 )
             )
         elif sequence_id is None:
             attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
-                effective_backend=self.attention_backend,
+                effective_backend=effective_backend,
                 batch_size=x.shape[0],
                 seq_len=x.shape[1],
                 device=x.device,
@@ -704,12 +739,17 @@ class TransformerStack(nn.Module):
                     batch_size=x.shape[0],
                     seq_len=x.shape[1],
                     device=x.device,
+                    dtype=x.dtype,
+                    effective_backend=effective_backend,
                 )
             )
 
         for block in self.blocks:
             if output_hidden_states:
-                assert hidden_states is not None
+                if hidden_states is None:
+                    raise RuntimeError(
+                        "Hidden-state collection was not initialized for an enabled request."
+                    )
                 # Biohub Transformers records the input to each block followed
                 # by the final normalized state. This gives n_layers + 1 states
                 # and, for ESMC-6B, the 81-state order consumed by ESMFold2.
@@ -756,44 +796,51 @@ class TransformerStack(nn.Module):
         batch_size: int,
         seq_len: int,
         device: torch.device,
+        dtype: torch.dtype | None = None,
+        effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, BlockMask | None]:
-        assert sequence_id.shape == (batch_size, seq_len), (
-            f"sequence_id shape must be {(batch_size, seq_len)}, got {tuple(sequence_id.shape)}"
+        expected_shape = (batch_size, seq_len)
+        if sequence_id.ndim != 2 or tuple(sequence_id.shape) != expected_shape:
+            raise ValueError(
+                f"sequence_id must have shape {expected_shape}; "
+                f"received {tuple(sequence_id.shape)}."
+            )
+        if sequence_id.device != device:
+            sequence_id = sequence_id.to(device=device)
+        backend = (
+            self.attention_backend
+            if effective_backend is None
+            else resolve_attention_backend(effective_backend)
         )
         if sequence_id.dtype == torch.bool:
             attention_mask_2d = sequence_id
             # Biohub's boolean single-chain form groups biological positions
             # together and padding positions together. Padding queries remain
             # finite without allowing their states to enter residue attention.
-            attention_mask_4d = (
-                sequence_id[:, None, :, None] == sequence_id[:, None, None, :]
-            )
+            attention_mask_4d = sequence_id[:, None, :, None] == sequence_id[:, None, None, :]
         else:
             attention_mask_2d = sequence_id != -1
-            attention_mask_4d = (
-                sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)
-            ).unsqueeze(1)
-
-        if self.attention_backend.is_flash:
-            assert sequence_id.dtype == torch.bool, (
-                "ESM++ FlashAttention only supports boolean sequence_id padding masks. "
-                "Use eager, sdpa, or flex_attention for chain-aware integer sequence_id masks."
+            attention_mask_4d = (sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)).unsqueeze(
+                1
             )
+        if not bool(attention_mask_2d.any(dim=1).all()):
+            raise ValueError("attention_mask must keep at least one valid key per batch row.")
+
+        if backend.is_flash:
+            if sequence_id.dtype != torch.bool:
+                raise ValueError(
+                    "ESM++ FlashAttention only supports boolean sequence_id padding masks. "
+                    "Use eager, sdpa, or flex_attention for chain-aware integer sequence_id "
+                    "masks."
+                )
             return attention_mask_2d, attention_mask_4d, None
 
-        if self.attention_backend == AttentionBackend.FLEX:
-            assert create_block_mask is not None, (
-                "Flex attention backend requested but torch.create_block_mask is unavailable."
-            )
-
+        if backend == AttentionBackend.FLEX:
             if sequence_id.dtype == torch.bool:
 
                 def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
                     del head_idx
-                    return (
-                        sequence_id[batch_idx, q_idx]
-                        == sequence_id[batch_idx, kv_idx]
-                    )
+                    return sequence_id[batch_idx, q_idx] == sequence_id[batch_idx, kv_idx]
 
             else:
 
@@ -803,13 +850,19 @@ class TransformerStack(nn.Module):
                     kv_id = sequence_id[batch_idx, kv_idx]
                     return q_id == kv_id
 
-            flex_block_mask = create_block_mask(
-                mask_mod,
-                batch_size,
-                1,
-                seq_len,
-                seq_len,
+            flex_block_mask = _get_flex_block_mask(
+                mask_pattern=sequence_id,
+                batch_size=batch_size,
+                query_length=seq_len,
+                key_value_length=seq_len,
                 device=device,
+                dtype=dtype,
+                mask_semantics=(
+                    "boolean_sequence_id"
+                    if sequence_id.dtype == torch.bool
+                    else "integer_sequence_id"
+                ),
+                mask_mod=mask_mod,
             )
             return attention_mask_2d, attention_mask_4d, flex_block_mask
 
@@ -835,11 +888,6 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
         "flash_attention_2",
         "flash_attention_3",
     )
-
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        # Prevent post-load reinitialization of tensors already loaded from checkpoints.
-        return True
 
     @property
     def tokenizer(self) -> EsmSequenceTokenizer:
@@ -883,13 +931,12 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
 
     @attn_backend.setter
     def attn_backend(self, backend: str) -> None:
-        assert backend in VALID_ATTENTION_BACKENDS, (
-            f"Unsupported attn_backend: {backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
-        )
-        self.config.attn_backend = backend
-        for module in self.modules():
-            if isinstance(module, TransformerStack):
-                module.attn_backend = backend
+        if backend not in self._fastplms_attention_implementations:
+            raise ValueError(
+                f"{type(self).__name__} does not support {backend!r}; expected one of "
+                f"{self._fastplms_attention_implementations}."
+            )
+        self.set_attn_implementation(backend)
 
     def _reset_rotary_embeddings(self):
         """Refresh non-persistent rotary buffers after checkpoint loading."""
@@ -945,6 +992,12 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
     def set_input_embeddings(self, value):
         self.embed = value
 
+    def get_output_embeddings(self):
+        return self.sequence_head[-1]
+
+    def set_output_embeddings(self, new_embeddings):
+        self.sequence_head[-1] = new_embeddings
+
     def _embed(
         self,
         input_ids: torch.Tensor,
@@ -980,14 +1033,28 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         output_s_max: bool | None = False,
         esmfold2_hidden_states: bool = False,
         return_dict: bool | None = None,
-        **kwargs,
-    ) -> ESMplusplusOutput:
-        assert input_ids is not None or inputs_embeds is not None, (
-            "You have to specify either input_ids or inputs_embeds"
+    ) -> TransformerOutput | tuple[torch.Tensor, ...]:
+        """Run ESMC inference with the pinned Biohub mask precedence.
+
+        ``sequence_id`` is authoritative when supplied: non-negative integers
+        identify chains and ``-1`` identifies padding.  In that mode
+        ``attention_mask`` is ignored, matching the official implementation.
+        Without ``sequence_id``, ``attention_mask`` is the ordinary padding
+        mask and defaults to ``input_ids != pad_token_id``.
+        """
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
         )
-        assert not (input_ids is not None and inputs_embeds is not None), (
-            "You cannot specify both input_ids and inputs_embeds at the same time"
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if attention_mask is None and sequence_id is None and input_ids is not None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
@@ -1003,12 +1070,13 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
             output_s_max=output_s_max,
             esmfold2_hidden_states=esmfold2_hidden_states,
         )
-        return ESMplusplusOutput(
+        result = TransformerOutput(
             last_hidden_state=transformer_output.last_hidden_state,
             hidden_states=transformer_output.hidden_states,
             attentions=transformer_output.attentions,
             s_max=transformer_output.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class ESMplusplusForMaskedLM(
@@ -1090,14 +1158,22 @@ class ESMplusplusForMaskedLM(
         esmfold2_hidden_states: bool = False,
         return_dict: bool | None = None,
         compute_logits: bool = True,
-        **kwargs,
-    ) -> ESMplusplusOutput:
-        assert input_ids is not None or inputs_embeds is not None, (
-            "You have to specify either input_ids or inputs_embeds"
+    ) -> ESMplusplusOutput | tuple[torch.Tensor, ...]:
+        if input_ids is None and inputs_embeds is None:
+            raise ValueError("You have to specify either input_ids or inputs_embeds")
+        if input_ids is not None and inputs_embeds is not None:
+            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
+        if labels is not None and not compute_logits:
+            raise ValueError("labels require compute_logits=True.")
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
         )
-        assert not (input_ids is not None and inputs_embeds is not None), (
-            "You cannot specify both input_ids and inputs_embeds at the same time"
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
         )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         if attention_mask is None and sequence_id is None and input_ids is not None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
 
@@ -1117,17 +1193,20 @@ class ESMplusplusForMaskedLM(
         logits = self.sequence_head(last_hidden_state) if compute_logits else None
         loss = None
         if labels is not None:
-            assert logits is not None, "labels require compute_logits=True."
+            if logits is None:
+                raise ValueError("labels require compute_logits=True.")
+            labels = labels.to(logits.device)
             loss = self.ce_loss(logits.view(-1, self.vocab_size), labels.view(-1))
 
-        return ESMplusplusOutput(
+        result = ESMplusplusOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
             s_max=output.s_max,
+            last_hidden_state=last_hidden_state,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
@@ -1201,20 +1280,19 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
-        **kwargs,
-    ) -> ESMplusplusOutput:
+    ) -> ESMplusplusSequenceClassifierOutput | tuple[torch.Tensor, ...]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         pooling_mask = attention_mask
         if pooling_mask is None:
             if sequence_id is not None:
                 pooling_mask = (
-                    sequence_id
-                    if sequence_id.dtype == torch.bool
-                    else sequence_id.ne(-1)
+                    sequence_id if sequence_id.dtype == torch.bool else sequence_id.ne(-1)
                 )
             elif input_ids is not None:
                 pooling_mask = input_ids.ne(self.config.pad_token_id)
             else:
-                assert inputs_embeds is not None
+                if inputs_embeds is None:
+                    raise ValueError("You have to specify either input_ids or inputs_embeds")
                 pooling_mask = torch.ones(
                     inputs_embeds.shape[:2],
                     dtype=torch.bool,
@@ -1230,6 +1308,8 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
+            compute_logits=False,
         )
 
         last_hidden_state = output.last_hidden_state
@@ -1259,14 +1339,14 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
             elif self.config.problem_type == "multi_label_classification":
                 loss = self.bce(logits, labels)
 
-        return ESMplusplusOutput(
+        result = ESMplusplusSequenceClassifierOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
             s_max=output.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
@@ -1319,8 +1399,8 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
-        **kwargs,
-    ) -> ESMplusplusOutput:
+    ) -> ESMplusplusTokenClassifierOutput | tuple[torch.Tensor, ...]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         output = super().forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1330,22 +1410,25 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
+            compute_logits=False,
         )
 
         last_hidden_state = output.last_hidden_state
         logits = self.classifier(last_hidden_state)
         loss = None
         if labels is not None:
+            labels = labels.to(logits.device)
             loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
-        return ESMplusplusOutput(
+        result = ESMplusplusTokenClassifierOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=last_hidden_state,
             hidden_states=output.hidden_states,
             attentions=output.attentions,
             s_max=output.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 ### Tokenization

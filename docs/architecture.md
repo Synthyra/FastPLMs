@@ -9,7 +9,7 @@ convention.
 ```text
 src/fastplms/       installable package
 tests/              unit, integration, parity, structure, and release tests
-benchmarks/         standalone H100 performance harness
+benchmarks/         standalone, exact-device Hopper/SM90 performance harness
 docker/             candidate, runtime, and reference container definitions
 examples/           runnable training and protein-design workflows
 tools/              artifact, conversion, remote, and debugging commands
@@ -80,8 +80,11 @@ dispatch. Models use Transformers' `attn_implementation` and
 `set_attn_implementation()` contract. Mask builders produce the 4D masks used
 by eager and SDPA, the packed 2D token masks used by declared precompiled
 Hugging Face kernels, and Flex `BlockMask` objects. Flex functions and masks are
-cached only after explicit use, keyed by device, dtype, tensor shape, sequence
-lengths, and mask semantics.
+cached only after explicit use, keyed by device, dtype, execution shape, and
+mask semantics rather than the exact row-length tuple. FastPLMs exposes bounded
+cache cleanup without clearing process-global Torch compiler state. Original
+padding masks must have exact `(batch, sequence)` shape before any backend
+branch.
 
 `fastplms.embeddings` owns ordered records, biological-residue masks, pooling,
 persistence, and resume. Model-specific adapters only prepare the representation
@@ -110,6 +113,13 @@ An artifact is valid only if it loads in a fresh offline environment with
 FastPLMs absent from `sys.path`, `HF_HUB_OFFLINE=1`, `local_files_only=True`, and
 `trust_remote_code=True`. Every advertised AutoClass must load, run, save,
 reload, and match the package-source implementation.
+
+Runtime packaging uses tracked, clean regular files selected by path,
+extension, and size allowlists. It rejects untracked inputs, symlinks,
+credentials, unknown binaries, and path escapes. Provenance separates weight
+and runtime revisions, records source-tree and embedded-bundle digests plus
+generator/schema version, and provides distinct complete-artifact and
+runtime-only attestations. Publication rehashes validated bytes at preflight.
 
 ## Container boundary
 

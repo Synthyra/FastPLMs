@@ -4,6 +4,7 @@ import hashlib
 import os
 import sys
 from collections import defaultdict
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, ClassVar, TypedDict
@@ -19,19 +20,41 @@ from transformers.utils import logging
 
 try:
     from fastplms.attention import (
-        VALID_ATTENTION_BACKENDS,
         AttentionBackend,
         BlockMask,
         FastPLMsAttentionMixin,
         resolve_attention_backend,
-        warn_attention_backend_fallback,
+        resolve_attention_backend_for_call,
     )
-    from fastplms.embeddings import EmbeddingMixin, Pooler, select_hidden_state_embeddings
+    from fastplms.embeddings import (
+        EmbeddingBatch,
+        EmbeddingMixin,
+        EmbeddingResult,
+        Pooler,
+        embed_dataset,
+        select_hidden_state_embeddings,
+    )
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
 except ModuleNotFoundError as error:
-    if error.name != "fastplms":
+    _COMPOSITE_REQUIRED_NAMES = (
+        "AttentionBackend",
+        "BlockMask",
+        "EmbeddingBatch",
+        "EmbeddingMixin",
+        "EmbeddingResult",
+        "FastPLMsAttentionMixin",
+        "FastPLMTestTimeTrainingMixin",
+        "Pooler",
+        "embed_dataset",
+        "resolve_attention_backend",
+        "resolve_attention_backend_for_call",
+        "select_hidden_state_embeddings",
+    )
+    if error.name != "fastplms" or any(
+        name not in globals() for name in _COMPOSITE_REQUIRED_NAMES
+    ):
         raise
-    # Running as an HF Hub composite; shared definitions are above.
+    # Legacy flat Hub composites define every shared symbol above this block.
 
 from .attention import (  # noqa: F401
     _document_ids,
@@ -112,6 +135,12 @@ def _get_logger():
     return logging.get_logger(__name__)
 
 
+_TOKENIZER_LOAD_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
+    "fastplms_e1_tokenizer_load_context",
+    default=None,
+)
+
+
 class E1Config(PretrainedConfig):
     model_type = "E1"
     keys_to_ignore_at_inference: ClassVar[list[str]] = ["past_key_values"]
@@ -132,6 +161,7 @@ class E1Config(PretrainedConfig):
         dtype="bfloat16",
         gradient_checkpointing=False,
         no_ffn_gradient_checkpointing=False,
+        use_cache=False,
         # Tokenization
         pad_token_id=None,
         bos_token_id=None,
@@ -178,13 +208,17 @@ class E1Config(PretrainedConfig):
         self.rope_theta_within_seq = rope_theta_within_seq
         self.rope_theta_global = rope_theta_global
         self.max_num_sequences = max_num_sequences
-        assert clip_qkv is None or clip_qkv > 0
+        if clip_qkv is not None and clip_qkv <= 0:
+            raise ValueError(f"clip_qkv must be positive when provided, got {clip_qkv}.")
         self.clip_qkv = clip_qkv
         self.global_attention_every_n_layers = global_attention_every_n_layers
 
         self.vocab_size = E1_VOCAB_SIZE
         self.gradient_checkpointing = gradient_checkpointing
         self.no_ffn_gradient_checkpointing = no_ffn_gradient_checkpointing
+        if not isinstance(use_cache, bool):
+            raise TypeError("use_cache must be a boolean.")
+        self.use_cache = use_cache
         self.attn_backend = attn_backend
 
         if vocab_size is not None:
@@ -420,6 +454,7 @@ class Attention(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
         use_cache: bool = False,
+        effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
         is_cache_prefilled = (
             use_cache
@@ -445,6 +480,7 @@ class Attention(nn.Module):
             output_attentions=output_attentions,
             output_s_max=output_s_max,
             is_cache_prefilled=is_cache_prefilled,
+            effective_backend=effective_backend,
         )
 
         attn_output = self.o_proj(attn_output)
@@ -460,20 +496,20 @@ class Attention(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
         is_cache_prefilled: bool = False,
+        effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+        # A filled cache changes the implementation shape, not the layer's
+        # biological attention contract. Global layers must retain the cached
+        # context, while within-sequence layers consume only the newly appended
+        # sequence. This matches the pinned E1 inference implementation.
         effective_layer_type = self.layer_type
-        if is_cache_prefilled and self.layer_type == AttentionLayerType.GLOBAL:
-            effective_layer_type = AttentionLayerType.WITHIN_SEQ
 
-        if output_attentions:
-            warn_attention_backend_fallback(
+        if effective_backend is None:
+            effective_backend = resolve_attention_backend_for_call(
                 self.attn_backend,
-                effective_backend=AttentionBackend.EAGER,
-                reason=(
-                    "output_attentions=True requires the full materialized attention "
-                    "probability matrix, which optimized PyTorch attention APIs do not return."
-                ),
+                output_attentions=output_attentions,
             )
+        if output_attentions:
             return self._manual_attn(
                 query_states,
                 key_states,
@@ -485,7 +521,7 @@ class Attention(nn.Module):
                 is_cache_prefilled=is_cache_prefilled,
             )
 
-        if self.attn_backend == AttentionBackend.EAGER:
+        if effective_backend == AttentionBackend.EAGER:
             attn_output, _, s_max = self._manual_attn(
                 query_states,
                 key_states,
@@ -497,7 +533,7 @@ class Attention(nn.Module):
                 is_cache_prefilled=is_cache_prefilled,
             )
             return attn_output, None, s_max
-        if self.attn_backend.is_flash:
+        if effective_backend.is_flash:
             if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
                 attn_output, attn_weights = self._kernels_flash_attn(
                     query_states,
@@ -511,7 +547,7 @@ class Attention(nn.Module):
                     "E1 global attention does not support a kernels Flash backend; "
                     "use eager, sdpa, or flex_attention."
                 )
-        elif self.attn_backend == AttentionBackend.FLEX:
+        elif effective_backend == AttentionBackend.FLEX:
             attn_output, attn_weights = self._flex_attn(
                 query_states,
                 key_states,
@@ -519,8 +555,9 @@ class Attention(nn.Module):
                 sequence_ids=sequence_ids,
                 attention_args=attention_args,
                 effective_layer_type=effective_layer_type,
+                is_cache_prefilled=is_cache_prefilled,
             )
-        elif self.attn_backend == AttentionBackend.SDPA:
+        elif effective_backend == AttentionBackend.SDPA:
             attn_output, attn_weights = self._sdpa_attn(
                 query_states,
                 key_states,
@@ -531,9 +568,16 @@ class Attention(nn.Module):
                 is_cache_prefilled=is_cache_prefilled,
             )
         else:
-            raise AssertionError(f"Unsupported resolved backend: {self.attn_backend}")
+            raise AssertionError(f"Unsupported resolved backend: {effective_backend}")
 
-        s_max = self._compute_s_max(query_states, key_states) if output_s_max else None
+        s_max_key_states = key_states
+        if (
+            is_cache_prefilled
+            and effective_layer_type == AttentionLayerType.WITHIN_SEQ
+            and query_states.shape[1] < key_states.shape[1]
+        ):
+            s_max_key_states = key_states[:, -query_states.shape[1] :]
+        s_max = self._compute_s_max(query_states, s_max_key_states) if output_s_max else None
         return attn_output, attn_weights, s_max
 
     @torch.no_grad()
@@ -564,7 +608,7 @@ class Attention(nn.Module):
         bsz, q_len = query_states.shape[0], query_states.shape[1]
         _, kv_len = key_states.shape[0], key_states.shape[1]
 
-        if self.layer_type == AttentionLayerType.GLOBAL and not is_cache_prefilled:
+        if self.layer_type == AttentionLayerType.GLOBAL:
             q_sequence_ids = sequence_ids
             if q_len < kv_len:
                 first_token_id = sequence_ids[:, 0].unsqueeze(1)
@@ -599,8 +643,37 @@ class Attention(nn.Module):
         sequence_ids: torch.Tensor,
         attention_args: AttentionArgs | None = None,
         effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
+        is_cache_prefilled: bool = False,
     ) -> tuple[torch.Tensor, None]:
         bsz, q_len = query_states.shape[0], query_states.shape[1]
+        kv_len = key_states.shape[1]
+        if is_cache_prefilled and q_len < kv_len:
+            if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
+                key_states = key_states[:, -q_len:]
+                val_states = val_states[:, -q_len:]
+                block_mask = create_within_seq_block_mask(sequence_ids)
+                outputs = flex_attention_func(
+                    query_states,
+                    key_states,
+                    val_states,
+                    block_mask=block_mask,
+                    mask_semantics=effective_layer_type.value,
+                )
+            else:
+                q_sequence_ids, k_sequence_ids = self._cached_global_sequence_ids(
+                    sequence_ids,
+                    kv_len,
+                )
+                outputs = varlen_flex_attention_func(
+                    query_states,
+                    key_states,
+                    val_states,
+                    q_sequence_ids=q_sequence_ids,
+                    k_sequence_ids=k_sequence_ids,
+                )
+            outputs = outputs.reshape(bsz, q_len, self.hidden_size).contiguous()
+            return outputs, None
+
         if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
             block_mask = (
                 attention_args["within_seq_block_mask"] if attention_args is not None else None
@@ -609,17 +682,56 @@ class Attention(nn.Module):
             block_mask = (
                 attention_args["block_causal_block_mask"] if attention_args is not None else None
             )
-        sequence_lengths = tuple(int(length) for length in sequence_ids.ne(-1).sum(dim=-1).tolist())
         outputs = flex_attention_func(
             query_states,
             key_states,
             val_states,
             block_mask=block_mask,
-            sequence_lengths=sequence_lengths,
             mask_semantics=effective_layer_type.value,
         )
         outputs = outputs.reshape(bsz, q_len, self.hidden_size).contiguous()
         return outputs, None
+
+    @staticmethod
+    def _cached_global_sequence_ids(
+        query_sequence_ids: torch.Tensor,
+        kv_len: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Assign cached context to the incoming query sequence.
+
+        E1 retrieval cache hits contain one incoming sequence. The pinned
+        implementation relabels the cached prefix with that sequence ID so its
+        valid query tokens attend the complete cached context, while padding is
+        excluded by the equality mask or packed Flex path.
+        """
+
+        q_len = query_sequence_ids.shape[1]
+        cached_len = kv_len - q_len
+        if cached_len < 0:
+            raise ValueError(f"E1 cached KV length {kv_len} is shorter than query length {q_len}.")
+        first_sequence_id = query_sequence_ids[:, :1]
+        if bool(first_sequence_id.eq(-1).any()):
+            raise ValueError("E1 cached queries must start with a non-padding sequence token.")
+        cached_sequence_ids = first_sequence_id.expand(-1, cached_len)
+        key_sequence_ids = torch.cat((cached_sequence_ids, query_sequence_ids), dim=-1)
+        return query_sequence_ids, key_sequence_ids
+
+    def _cached_attention_mask_4d(
+        self,
+        sequence_ids: torch.Tensor,
+        kv_len: int,
+        effective_layer_type: AttentionLayerType,
+    ) -> torch.Tensor:
+        if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
+            return build_within_seq_mask_4d(sequence_ids)
+        query_sequence_ids, key_sequence_ids = self._cached_global_sequence_ids(
+            sequence_ids,
+            kv_len,
+        )
+        query_valid = query_sequence_ids.ne(-1)
+        key_valid = key_sequence_ids.ne(-1)
+        same_sequence = query_sequence_ids.unsqueeze(-1).eq(key_sequence_ids.unsqueeze(-2))
+        return (same_sequence & query_valid.unsqueeze(-1) & key_valid.unsqueeze(-2)).unsqueeze(1)
 
     def _sdpa_attn(
         self,
@@ -638,10 +750,10 @@ class Attention(nn.Module):
             if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
                 key_states = key_states[:, -q_len:]
                 val_states = val_states[:, -q_len:]
-            attention_mask_4d = (
-                build_within_seq_mask_4d(sequence_ids)
-                if effective_layer_type == AttentionLayerType.WITHIN_SEQ
-                else None
+            attention_mask_4d = self._cached_attention_mask_4d(
+                sequence_ids,
+                kv_len,
+                effective_layer_type,
             )
         elif attention_args is not None:
             if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
@@ -682,10 +794,10 @@ class Attention(nn.Module):
             if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
                 key_states = key_states[:, -q_len:]
                 val_states = val_states[:, -q_len:]
-            attention_mask_4d = (
-                build_within_seq_mask_4d(sequence_ids)
-                if effective_layer_type == AttentionLayerType.WITHIN_SEQ
-                else None
+            attention_mask_4d = self._cached_attention_mask_4d(
+                sequence_ids,
+                kv_len,
+                effective_layer_type,
             )
         elif attention_args is not None:
             if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
@@ -703,8 +815,14 @@ class Attention(nn.Module):
         scale = 1.0 / (self.head_dim**0.5)
         attn_weights = torch.matmul(query_heads, key_heads.transpose(-2, -1)) * scale
         if attention_mask_4d is not None:
-            attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
+            attention_mask_4d = attention_mask_4d.to(dtype=torch.bool)
+            attn_weights = attn_weights.masked_fill(
+                attention_mask_4d.logical_not(),
+                torch.finfo(attn_weights.dtype).min,
+            )
         attn_weights = F.softmax(attn_weights, dim=-1)
+        if attention_mask_4d is not None:
+            attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), 0.0)
         context_heads = torch.matmul(attn_weights, value_heads)
         attn_output = (
             context_heads.transpose(1, 2).reshape(bsz, q_len, self.hidden_size).contiguous()
@@ -770,24 +888,41 @@ class E1ModelOutputWithPast(ModelOutput):
 
 @dataclass
 class E1MaskedLMOutputWithPast(ModelOutput):
+    """Masked-LM output with the standard HF fields first, then E1 diagnostics."""
+
     loss: torch.FloatTensor | None = None
-    mlm_loss: torch.FloatTensor | None = None
     logits: torch.FloatTensor | None = None
-    last_hidden_state: torch.FloatTensor | None = None
-    past_key_values: DynamicCache | None = None
     hidden_states: tuple[torch.FloatTensor, ...] | None = None
     attentions: tuple[torch.FloatTensor, ...] | None = None
+    mlm_loss: torch.FloatTensor | None = None
+    last_hidden_state: torch.FloatTensor | None = None
+    past_key_values: DynamicCache | None = None
     s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
 @dataclass
 class E1ClassificationOutputWithPast(ModelOutput):
+    """Sequence-classifier output matching HF ``SequenceClassifierOutputWithPast``."""
+
     loss: torch.FloatTensor | None = None
     logits: torch.FloatTensor | None = None
-    last_hidden_state: torch.FloatTensor | None = None
     past_key_values: DynamicCache | None = None
     hidden_states: tuple[torch.FloatTensor, ...] | None = None
     attentions: tuple[torch.FloatTensor, ...] | None = None
+    last_hidden_state: torch.FloatTensor | None = None
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+
+
+@dataclass
+class E1TokenClassificationOutputWithPast(ModelOutput):
+    """Token-classifier output with the standard HF fields before E1 extensions."""
+
+    loss: torch.FloatTensor | None = None
+    logits: torch.FloatTensor | None = None
+    hidden_states: tuple[torch.FloatTensor, ...] | None = None
+    attentions: tuple[torch.FloatTensor, ...] | None = None
+    last_hidden_state: torch.FloatTensor | None = None
+    past_key_values: DynamicCache | None = None
     s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
@@ -823,6 +958,7 @@ class NormAttentionNorm(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
         use_cache: bool = False,
+        effective_backend: AttentionBackend | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -842,6 +978,7 @@ class NormAttentionNorm(nn.Module):
             output_attentions=output_attentions,
             output_s_max=output_s_max,
             use_cache=use_cache,
+            effective_backend=effective_backend,
         )
         hidden_states = residual + hidden_states
 
@@ -869,6 +1006,7 @@ class DecoderLayer(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
         use_cache: bool = False,
+        effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
         hidden_states, residual, self_attn_weights, present_key_value, s_max = self.norm_attn_norm(
             hidden_states=hidden_states,
@@ -880,6 +1018,7 @@ class DecoderLayer(nn.Module):
             output_attentions=output_attentions,
             output_s_max=output_s_max,
             use_cache=use_cache,
+            effective_backend=effective_backend,
         )
 
         # Fully Connected
@@ -903,11 +1042,6 @@ class E1PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
     _supports_flash_attn_3 = False
     _fastplms_attention_implementations = ("sdpa", "flex_attention")
     _is_internal_encoder = False
-    _tokenizer_source: str | os.PathLike | None = None
-    _tokenizer_local_files_only = False
-    _tokenizer_cache_dir: str | os.PathLike | None = None
-    _tokenizer_revision: str | None = None
-    _tokenizer_token: str | bool | None = None
 
     def __init__(self, config: E1Config, *args: Any, **kwargs: Any) -> None:
         super().__init__(config, *args, **kwargs)
@@ -924,47 +1058,46 @@ class E1PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
         *model_args: Any,
         **kwargs: Any,
     ) -> E1PreTrainedModel:
-        previous_source = E1PreTrainedModel._tokenizer_source
-        previous_local_files_only = E1PreTrainedModel._tokenizer_local_files_only
-        previous_cache_dir = E1PreTrainedModel._tokenizer_cache_dir
-        previous_revision = E1PreTrainedModel._tokenizer_revision
-        previous_token = E1PreTrainedModel._tokenizer_token
-        E1PreTrainedModel._tokenizer_source = pretrained_model_name_or_path
-        E1PreTrainedModel._tokenizer_local_files_only = (
-            bool(kwargs["local_files_only"]) if "local_files_only" in kwargs else False
-        )
-        E1PreTrainedModel._tokenizer_cache_dir = kwargs.get("cache_dir")
-        E1PreTrainedModel._tokenizer_revision = kwargs.get("revision")
+        tokenizer_token = None
         if "token" in kwargs:
-            E1PreTrainedModel._tokenizer_token = kwargs["token"]
+            tokenizer_token = kwargs["token"]
         elif "use_auth_token" in kwargs:
-            E1PreTrainedModel._tokenizer_token = kwargs["use_auth_token"]
-        else:
-            E1PreTrainedModel._tokenizer_token = None
+            tokenizer_token = kwargs["use_auth_token"]
+        load_context_token = _TOKENIZER_LOAD_CONTEXT.set(
+            {
+                "tokenizer_source": pretrained_model_name_or_path,
+                "local_files_only": bool(kwargs.get("local_files_only", False)),
+                "cache_dir": kwargs.get("cache_dir"),
+                "revision": kwargs.get("revision"),
+                "token": tokenizer_token,
+            }
+        )
         try:
             return super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
         finally:
-            E1PreTrainedModel._tokenizer_source = previous_source
-            E1PreTrainedModel._tokenizer_local_files_only = previous_local_files_only
-            E1PreTrainedModel._tokenizer_cache_dir = previous_cache_dir
-            E1PreTrainedModel._tokenizer_revision = previous_revision
-            E1PreTrainedModel._tokenizer_token = previous_token
+            _TOKENIZER_LOAD_CONTEXT.reset(load_context_token)
 
     @staticmethod
     def _tokenizer_kwargs_from_config(config: E1Config) -> dict[str, Any]:
-        tokenizer_source = E1PreTrainedModel._tokenizer_source
-        if (
-            tokenizer_source is None
-            and isinstance(config._name_or_path, str)
-            and len(config._name_or_path) > 0
-        ):
+        load_context = _TOKENIZER_LOAD_CONTEXT.get()
+        resolved_revision = getattr(config, "_commit_hash", None)
+        if not isinstance(resolved_revision, str) or not resolved_revision.strip():
+            resolved_revision = None
+        if load_context is not None:
+            tokenizer_kwargs = dict(load_context)
+            if resolved_revision is not None:
+                tokenizer_kwargs["revision"] = resolved_revision
+            return tokenizer_kwargs
+
+        tokenizer_source = None
+        if isinstance(config._name_or_path, str) and len(config._name_or_path) > 0:
             tokenizer_source = config._name_or_path
         return {
             "tokenizer_source": tokenizer_source,
-            "local_files_only": E1PreTrainedModel._tokenizer_local_files_only,
-            "cache_dir": E1PreTrainedModel._tokenizer_cache_dir,
-            "revision": E1PreTrainedModel._tokenizer_revision,
-            "token": E1PreTrainedModel._tokenizer_token,
+            "local_files_only": False,
+            "cache_dir": None,
+            "revision": resolved_revision,
+            "token": None,
         }
 
     @property
@@ -1027,9 +1160,11 @@ class E1PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
 
     @attn_backend.setter
     def attn_backend(self, backend: str) -> None:
-        assert backend in VALID_ATTENTION_BACKENDS, (
-            f"Unsupported attn_backend: {backend}. Expected one of {VALID_ATTENTION_BACKENDS}."
-        )
+        if backend not in self._fastplms_attention_implementations:
+            raise ValueError(
+                f"E1 does not support {backend!r}; expected one of "
+                f"{self._fastplms_attention_implementations}."
+            )
         self.config.attn_backend = backend
         resolved = resolve_attention_backend(backend)
         for module in self.modules():
@@ -1077,11 +1212,25 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         **kwargs,
     ) -> torch.Tensor:
         batch = self.prep_tokens.get_batch_kwargs(sequences, device=self._device)
+        # The native preparer also returns training labels plus retrieval
+        # descriptors. The encoder accepts only its aligned model inputs.
+        encoder_batch: dict[str, torch.Tensor] = {}
+        for name in (
+            "input_ids",
+            "within_seq_position_ids",
+            "global_position_ids",
+            "sequence_ids",
+        ):
+            value = batch[name]
+            if not isinstance(value, torch.Tensor):
+                raise TypeError(f"Prepared E1 field {name!r} must be a tensor.")
+            encoder_batch[name] = value
         output_hidden_states = store_all_hidden_states or hidden_state_index != -1
         output = self.forward(
-            **batch,
+            **encoder_batch,
             output_hidden_states=output_hidden_states,
             output_attentions=False,
+            return_dict=True,
         )
         embeddings = select_hidden_state_embeddings(
             output.last_hidden_state,
@@ -1090,7 +1239,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             store_all_hidden_states=store_all_hidden_states,
         )
         if return_attention_mask:
-            attention_mask = (batch["sequence_ids"] != -1).long()
+            attention_mask = (encoder_batch["sequence_ids"] != -1).long()
             return embeddings, attention_mask
         else:
             return embeddings
@@ -1109,11 +1258,25 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                 if input_ids is None
                 else "Cannot specify both input_ids and inputs_embeds"
             )
-            raise AssertionError(message)
+            raise ValueError(message)
 
         source = input_ids if input_ids is not None else inputs_embeds
-        assert source is not None
+        if source is None:
+            raise RuntimeError("E1 input validation did not resolve an input tensor.")
+        expected_rank = 2 if input_ids is not None else 3
+        if source.ndim != expected_rank:
+            source_name = "input_ids" if input_ids is not None else "inputs_embeds"
+            raise ValueError(
+                f"{source_name} must have rank {expected_rank}; got shape {tuple(source.shape)}."
+            )
         batch_size, sequence_length = source.shape[:2]
+        if sequence_length == 0:
+            raise ValueError("E1 inputs must contain at least one token.")
+        if inputs_embeds is not None and inputs_embeds.shape[-1] != self.config.hidden_size:
+            raise ValueError(
+                "inputs_embeds hidden dimension must match config.hidden_size; "
+                f"got {inputs_embeds.shape[-1]} and {self.config.hidden_size}."
+            )
         if inputs_embeds is not None:
             default_positions = torch.arange(sequence_length, device=source.device).expand(
                 batch_size,
@@ -1127,25 +1290,52 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                 sequence_ids = torch.zeros_like(default_positions)
 
         if within_seq_position_ids is None or global_position_ids is None or sequence_ids is None:
-            raise AssertionError(
-                "Position and sequence IDs are required when input_ids are provided."
-            )
-        within_positions = within_seq_position_ids.reshape(-1, sequence_length).long()
-        global_positions = global_position_ids.reshape(-1, sequence_length).long()
-        sequence_numbers = sequence_ids.reshape(-1, sequence_length).long()
+            raise ValueError("Position and sequence IDs are required when input_ids are provided.")
+        expected_shape = (batch_size, sequence_length)
+        aligned_inputs = {
+            "within_seq_position_ids": within_seq_position_ids,
+            "global_position_ids": global_position_ids,
+            "sequence_ids": sequence_ids,
+        }
+        for name, value in aligned_inputs.items():
+            if tuple(value.shape) != expected_shape:
+                raise ValueError(
+                    f"{name} must have shape {expected_shape}; got {tuple(value.shape)}."
+                )
+        within_positions = within_seq_position_ids.long()
+        global_positions = global_position_ids.long()
+        sequence_numbers = sequence_ids.long()
         lowest_position, highest_position = torch.aminmax(within_positions)
         if (
             lowest_position.item() < -1
             or highest_position.item() >= self.config.max_num_positions_within_seq
         ):
-            raise AssertionError(
+            raise ValueError(
                 "Position ids must be in the range "
                 f"[-1, {self.config.max_num_positions_within_seq}); got max "
                 f"{highest_position.item()} and min {lowest_position.item()}"
             )
+        lowest_global, highest_global = torch.aminmax(global_positions)
+        if (
+            lowest_global.item() < -1
+            or highest_global.item() >= self.config.max_num_positions_global
+        ):
+            raise ValueError(
+                "Global position ids must be in the range "
+                f"[-1, {self.config.max_num_positions_global}); got max "
+                f"{highest_global.item()} and min {lowest_global.item()}"
+            )
+        lowest_sequence, highest_sequence = torch.aminmax(sequence_numbers)
+        if lowest_sequence.item() < -1 or highest_sequence.item() >= self.config.max_num_sequences:
+            raise ValueError(
+                "Sequence ids must be in the range "
+                f"[-1, {self.config.max_num_sequences}); got max "
+                f"{highest_sequence.item()} and min {lowest_sequence.item()}"
+            )
 
         if inputs_embeds is None:
-            assert input_ids is not None
+            if input_ids is None:
+                raise RuntimeError("E1 input validation lost the token ID tensor.")
             token_embeddings = self.embed_tokens(input_ids)
             inputs_embeds = token_embeddings + self.embed_seq_id(sequence_numbers.clamp_min(0))
         layer_dtype = self.layers[0].norm_attn_norm.self_attn.q_proj.weight.dtype
@@ -1179,20 +1369,16 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         self,
         sequence_ids: torch.LongTensor,
         past_key_values: DynamicCache | None,
-        output_attentions: bool,
+        effective_backend: AttentionBackend,
     ) -> AttentionArgs | None:
         if past_key_values is not None and past_key_values.get_seq_length() != 0:
             return None
 
-        use_flex = self._attn_backend == AttentionBackend.FLEX
-        use_dense_mask = (
-            self._attn_backend
-            in {
-                AttentionBackend.EAGER,
-                AttentionBackend.SDPA,
-            }
-            or output_attentions
-        )
+        use_flex = effective_backend == AttentionBackend.FLEX
+        use_dense_mask = effective_backend in {
+            AttentionBackend.EAGER,
+            AttentionBackend.SDPA,
+        }
         return AttentionArgs(
             block_causal_block_mask=(
                 create_block_causal_mask_optimized(sequence_ids)
@@ -1220,6 +1406,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         output_attentions: bool,
         output_hidden_states: bool,
         output_s_max: bool,
+        effective_backend: AttentionBackend,
     ) -> E1ModelOutputWithPast:
         hidden_history: list[torch.Tensor] | None = [] if output_hidden_states else None
         attention_history: list[torch.Tensor] | None = [] if output_attentions else None
@@ -1241,6 +1428,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                     output_attentions,
                     output_s_max,
                     use_cache,
+                    effective_backend,
                 )
             else:
                 layer_output = layer(
@@ -1253,16 +1441,23 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                     output_attentions=output_attentions,
                     output_s_max=output_s_max,
                     use_cache=use_cache,
+                    effective_backend=effective_backend,
                 )
             hidden_states, attention, layer_cache, s_max = layer_output
             if use_cache:
                 past_key_values = layer_cache
                 next_cache = layer_cache
             if attention_history is not None:
-                assert attention is not None
+                if attention is None:
+                    raise RuntimeError(
+                        "An E1 layer did not return attention tensors when requested."
+                    )
                 attention_history.append(attention)
             if s_max_history is not None:
-                assert s_max is not None
+                if s_max is None:
+                    raise RuntimeError(
+                        "An E1 layer did not return s_max diagnostics when requested."
+                    )
                 s_max_history.append(s_max)
 
         hidden_states = self.norm(hidden_states)
@@ -1284,15 +1479,26 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         sequence_ids: torch.LongTensor | None = None,
         inputs_embeds: torch.FloatTensor | None = None,
         past_key_values: DynamicCache | None = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
         output_s_max: bool = False,
-        **kwargs: Any,
-    ) -> E1ModelOutputWithPast:
+        return_dict: bool | None = None,
+    ) -> E1ModelOutputWithPast | tuple[Any, ...]:
         """Transform token or soft embeddings H with shape (b, l, d)."""
 
-        del kwargs
+        use_cache = (
+            use_cache if use_cache is not None else bool(getattr(self.config, "use_cache", False))
+        )
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         hidden_states, within_positions, global_positions, sequence_numbers = (
             self._prepare_hidden_states(
                 input_ids,
@@ -1303,12 +1509,16 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             )
         )
         cache, use_cache = self._resolve_forward_cache(past_key_values, use_cache)
+        effective_backend = resolve_attention_backend_for_call(
+            self._attn_backend,
+            output_attentions=bool(output_attentions),
+        )
         attention_args = self._build_forward_attention_args(
             sequence_numbers,
             cache,
-            output_attentions,
+            effective_backend,
         )
-        return self._run_decoder_layers(
+        result = self._run_decoder_layers(
             hidden_states,
             within_positions,
             global_positions,
@@ -1319,7 +1529,11 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             output_attentions,
             output_hidden_states,
             output_s_max,
+            effective_backend,
         )
+        if not return_dict:
+            return result.to_tuple()
+        return result
 
 
 class E1Model(E1PreTrainedModel, EmbeddingMixin):
@@ -1350,12 +1564,12 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
         sequence_ids: torch.LongTensor | None = None,
         inputs_embeds: torch.FloatTensor | None = None,
         past_key_values: DynamicCache | None = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
         output_s_max: bool = False,
-        **kwargs,
-    ) -> E1ModelOutputWithPast:
+        return_dict: bool | None = None,
+    ) -> E1ModelOutputWithPast | tuple[Any, ...]:
         return self.model(
             input_ids=input_ids,
             within_seq_position_ids=within_seq_position_ids,
@@ -1367,7 +1581,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
-            **kwargs,
+            return_dict=return_dict,
         )
 
 
@@ -1393,10 +1607,22 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
         return self.model.device_mesh
 
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.model.get_input_embeddings()
+
+    def set_input_embeddings(self, value: nn.Embedding) -> None:
+        self.model.set_input_embeddings(value)
+
     def _embed(
         self, sequences: list[str], return_attention_mask: bool = False, **kwargs
     ) -> torch.Tensor:
         return self.model._embed(sequences, return_attention_mask=return_attention_mask, **kwargs)
+
+    def get_output_embeddings(self) -> nn.Linear:
+        return self.mlm_head[-1]
+
+    def set_output_embeddings(self, value: nn.Linear) -> None:
+        self.mlm_head[-1] = value
 
     def _ttt_get_trainable_modules(self) -> list[nn.Module]:
         return [self.model]
@@ -1414,7 +1640,8 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
                 "global_position_ids": kwargs["global_position_ids"],
                 "sequence_ids": kwargs["sequence_ids"],
             }
-        assert seq is not None, "Pass either seq or E1 token tensors for TTT."
+        if seq is None:
+            raise ValueError("Pass either seq or E1 token tensors for TTT.")
         sequences = [seq] if isinstance(seq, str) else seq
         batch = self.prep_tokens.get_batch_kwargs(sequences, device=torch.device("cpu"))
         return {
@@ -1444,12 +1671,14 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
         **kwargs,
     ) -> torch.Tensor:
         del kwargs
-        assert isinstance(batch, dict), "E1 TTT expects a tensor dictionary."
+        if not isinstance(batch, dict):
+            raise TypeError("E1 TTT expects a tensor dictionary.")
         output = self(
             input_ids=batch["input_ids"],
             within_seq_position_ids=batch["within_seq_position_ids"],
             global_position_ids=batch["global_position_ids"],
             sequence_ids=batch["sequence_ids"],
+            return_dict=True,
         )
         return output.logits
 
@@ -1540,7 +1769,8 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
             min_query_similarity=min_query_similarity,
             context_cache_dir=context_cache_dir,
         )
-        assert len(contexts) > 0, "At least one sampled MSA context is required for PPLL scoring"
+        if not contexts:
+            raise ValueError("At least one sampled MSA context is required for PPLL scoring.")
 
         predictor = _E1ContextPredictor(
             model=self,
@@ -1572,9 +1802,8 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
             )
             for prediction in predictions:
                 seq_idx = prediction["id"]
-                assert isinstance(seq_idx, int), (
-                    "Expected integer sequence ids for score aggregation"
-                )
+                if not isinstance(seq_idx, int):
+                    raise TypeError("Expected integer sequence ids for score aggregation.")
                 all_scores[seq_idx, ctx_idx] = compute_ppll(
                     prediction["logits"], seq_token_ids[seq_idx]
                 )
@@ -1651,7 +1880,29 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
         min_query_similarity: float = 0.3,
         seed: int = 42,
         progress: bool = True,
-    ) -> dict[str, torch.Tensor]:
+        max_batch_tokens: int = 131072,
+        batch_window_size: int | None = None,
+        max_tokens_per_batch: int | None = None,
+        output: str | os.PathLike[str] | None = None,
+        format: str = "safetensors",
+        resume: bool = True,
+        shard_size: int = 2 * 1024**3,
+        model_state_fingerprint: str | None = None,
+    ) -> EmbeddingResult:
+        """Embed an ordered sequence dataset with optional sampled MSA context.
+
+        Unlike the legacy dictionary return, the result preserves duplicate
+        sequences and input order. ``output`` uses the same transactional,
+        resumable SQLite or safetensors persistence as :meth:`embed_dataset`.
+        ``max_len`` counts biological residues.
+        """
+
+        if not sequences:
+            raise ValueError("sequences must contain at least one protein sequence.")
+        if any(not isinstance(sequence, str) or not sequence for sequence in sequences):
+            raise ValueError("sequences must contain non-empty strings.")
+        if max_len <= 0:
+            raise ValueError("max_len must be positive.")
         if msa_lookup is None:
             if msa_dir is not None:
                 msa_lookup = load_msa_dir(msa_dir)
@@ -1660,8 +1911,8 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
             else:
                 msa_lookup = {}
 
-        truncated_map = {seq: seq[:max_len] for seq in sequences}
-        unique_seqs = sorted(set(truncated_map.values()), key=len, reverse=True)
+        truncated_sequences = [sequence[:max_len] for sequence in sequences]
+        unique_seqs = sorted(set(truncated_sequences), key=lambda value: (-len(value), value))
         context_map: dict[str, str | None] = {}
         spec = ContextSpecification(
             max_num_samples=511,
@@ -1681,47 +1932,80 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
             )
             context_map[seq] = contexts[0] if contexts else None
 
-        context_groups: dict[str | None, list[str]] = defaultdict(list)
-        for seq in unique_seqs:
-            context_groups[context_map[seq]].append(seq)
+        context_digest = hashlib.sha256()
+        for sequence in unique_seqs:
+            for value in (sequence, context_map[sequence] or ""):
+                encoded = value.encode("utf-8")
+                context_digest.update(len(encoded).to_bytes(8, "big"))
+                context_digest.update(encoded)
 
-        embeddings_dict: dict[str, torch.Tensor] = {}
-        total_batches = sum(
-            (len(seqs) + batch_size - 1) // batch_size for seqs in context_groups.values()
-        )
-        pbar = tqdm(total=total_batches, desc="Embedding with MSA", disable=not progress)
-        for ctx, ctx_seqs in context_groups.items():
-            for i in range(0, len(ctx_seqs), batch_size):
-                batch_seqs = ctx_seqs[i : i + batch_size]
-                batch_embeddings = self.embed_with_msa(
-                    sequences=batch_seqs,
-                    context=ctx,
-                    pooling_types=pooling_types,
-                    pooling=pooling,
-                    matrix_embed=matrix_embed,
-                    seed=seed,
-                    embed_max_tokens=embed_max_tokens,
-                    embed_similarity=embed_similarity,
-                    min_query_similarity=min_query_similarity,
-                    progress=False,
+        def embed_msa_batch(batch_sequences: list[str]) -> EmbeddingBatch:
+            grouped_positions: dict[str | None, list[int]] = defaultdict(list)
+            for position, sequence in enumerate(batch_sequences):
+                grouped_positions[context_map[sequence]].append(position)
+            hidden_by_position: list[torch.Tensor | None] = [None] * len(batch_sequences)
+            for context, positions in grouped_positions.items():
+                context_sequences = [batch_sequences[position] for position in positions]
+                hidden_states = _forward_for_embedding(
+                    model=self,
+                    sequences=context_sequences,
+                    context=context,
+                    max_batch_tokens=max_batch_tokens,
+                    progress=progress,
                 )
-                if matrix_embed:
-                    assert isinstance(batch_embeddings, list)
-                    for seq, hidden in zip(batch_seqs, batch_embeddings, strict=True):
-                        embeddings_dict[seq] = hidden.to(embed_dtype).cpu()
-                else:
-                    assert isinstance(batch_embeddings, torch.Tensor)
-                    for j, seq in enumerate(batch_seqs):
-                        embeddings_dict[seq] = batch_embeddings[j].to(embed_dtype).cpu()
-                pbar.update(1)
-        pbar.close()
+                for position, hidden in zip(positions, hidden_states, strict=True):
+                    hidden_by_position[position] = hidden
+            resolved = [hidden for hidden in hidden_by_position if hidden is not None]
+            if len(resolved) != len(batch_sequences):
+                raise RuntimeError("E1 MSA embedding did not return every requested sequence.")
+            max_residues = max(hidden.shape[0] for hidden in resolved)
+            hidden_size = resolved[0].shape[-1]
+            X = resolved[0].new_zeros((len(resolved), max_residues, hidden_size))
+            residue_mask = torch.zeros(
+                (len(resolved), max_residues),
+                dtype=torch.bool,
+                device=X.device,
+            )
+            for position, hidden in enumerate(resolved):
+                residue_count = hidden.shape[0]
+                X[position, :residue_count] = hidden
+                residue_mask[position, :residue_count] = True
+            return EmbeddingBatch(X=X, residue_mask=residue_mask)
 
-        result: dict[str, torch.Tensor] = {}
-        for seq in sequences:
-            trunc = truncated_map[seq]
-            if trunc in embeddings_dict:
-                result[seq] = embeddings_dict[trunc]
-        return result
+        resolved_pooling: str | list[str] | None = (
+            None if matrix_embed else pooling_types if pooling_types is not None else pooling
+        )
+        adapter_identity = {
+            "kind": "e1-msa-v1",
+            "sampling_source_revision": E1_MSA_SAMPLING_SOURCE_REVISION,
+            "context_sha256": context_digest.hexdigest(),
+            "context_count": sum(context is not None for context in context_map.values()),
+            "seed": seed,
+            "embed_max_tokens": embed_max_tokens,
+            "embed_similarity": embed_similarity,
+            "min_query_similarity": min_query_similarity,
+            "max_batch_tokens": max_batch_tokens,
+        }
+        return embed_dataset(
+            self,
+            [(str(position), sequence) for position, sequence in enumerate(sequences)],
+            batch_size=batch_size,
+            pooling=resolved_pooling,
+            full_embeddings=matrix_embed,
+            output=output,
+            format=format,
+            resume=resume,
+            max_length=max_len,
+            truncate=True,
+            dtype=embed_dtype,
+            shard_size=shard_size,
+            model_state_fingerprint=model_state_fingerprint,
+            batch_window_size=batch_window_size,
+            max_tokens_per_batch=max_tokens_per_batch,
+            _embedding_batch_fn=embed_msa_batch,
+            _embedding_batch_identity=adapter_identity,
+            _allowed_unsupported_pooling=("cls",),
+        )
 
     def forward(
         self,
@@ -1732,17 +2016,29 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
         inputs_embeds: torch.FloatTensor | None = None,
         labels: torch.LongTensor | None = None,
         past_key_values: DynamicCache | None = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
         output_s_max: bool = False,
-        **kwargs,
-    ) -> E1MaskedLMOutputWithPast:
+        return_dict: bool | None = None,
+    ) -> E1MaskedLMOutputWithPast | tuple[Any, ...]:
         """Return hidden states and masked-token logits for E1 inputs.
 
         Token, position, sequence, and label tensors have shape (b, l).
         Callers may instead provide precomputed H with shape (b, l, d).
         """
+        use_cache = (
+            use_cache if use_cache is not None else bool(getattr(self.config, "use_cache", False))
+        )
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs: E1ModelOutputWithPast = self.model(
             input_ids=input_ids,
             within_seq_position_ids=within_seq_position_ids,
@@ -1754,33 +2050,42 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
         )
 
         last_hidden_state = outputs.last_hidden_state
         loss = None
 
         mlm_logits = self.mlm_head(last_hidden_state).float()
-        mlm_loss = 0.0
+        mlm_loss = None
         if labels is not None:
             mlm_logits_flat = mlm_logits.contiguous().view(-1, self.config.vocab_size)
             mlm_labels_flat = labels.to(mlm_logits_flat.device).contiguous().view(-1)
-            mlm_loss = F.cross_entropy(mlm_logits_flat, mlm_labels_flat, reduction="none")
-            mask = mlm_labels_flat != self.model.padding_idx
-            n_mlm = mask.sum()
-            mlm_loss = (mlm_loss * mask.to(mlm_loss)).sum() / (1 if n_mlm == 0 else n_mlm)
+            mlm_loss = F.cross_entropy(
+                mlm_logits_flat,
+                mlm_labels_flat,
+                ignore_index=-100,
+                reduction="none",
+            )
+            mask = mlm_labels_flat.ne(-100) & mlm_labels_flat.ne(self.model.padding_idx)
+            n_mlm = mask.sum().clamp_min(1)
+            mlm_loss = (mlm_loss * mask.to(mlm_loss)).sum() / n_mlm
             loss = 0.0
             loss += mlm_loss
 
-        return E1MaskedLMOutputWithPast(
+        result = E1MaskedLMOutputWithPast(
             loss=loss,
-            mlm_loss=mlm_loss,
             logits=mlm_logits,
-            last_hidden_state=last_hidden_state,
-            past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            mlm_loss=mlm_loss,
+            last_hidden_state=last_hidden_state,
+            past_key_values=outputs.past_key_values,
             s_max=outputs.s_max,
         )
+        if not return_dict:
+            return result.to_tuple()
+        return result
 
 
 class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
@@ -1817,6 +2122,12 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
         return self.model.device_mesh
 
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.model.get_input_embeddings()
+
+    def set_input_embeddings(self, value: nn.Embedding) -> None:
+        self.model.set_input_embeddings(value)
+
     def _embed(
         self, sequences: list[str], return_attention_mask: bool = False, **kwargs
     ) -> torch.Tensor:
@@ -1831,12 +2142,24 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
         inputs_embeds: torch.FloatTensor | None = None,
         labels: torch.LongTensor | None = None,
         past_key_values: DynamicCache | None = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
         output_s_max: bool = False,
-        **kwargs,
-    ) -> E1ClassificationOutputWithPast:
+        return_dict: bool | None = None,
+    ) -> E1ClassificationOutputWithPast | tuple[Any, ...]:
+        use_cache = (
+            use_cache if use_cache is not None else bool(getattr(self.config, "use_cache", False))
+        )
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs: E1ModelOutputWithPast = self.model(
             input_ids=input_ids,
             within_seq_position_ids=within_seq_position_ids,
@@ -1848,6 +2171,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
         )
 
         attention_mask = (
@@ -1885,15 +2209,18 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
             elif self.config.problem_type == "multi_label_classification":
                 loss = self.bce(logits, labels)
 
-        return E1ClassificationOutputWithPast(
+        result = E1ClassificationOutputWithPast(
             loss=loss,
             logits=logits,
-            last_hidden_state=x,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            last_hidden_state=x,
             s_max=outputs.s_max,
         )
+        if not return_dict:
+            return result.to_tuple()
+        return result
 
 
 class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
@@ -1919,6 +2246,12 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
     def device_mesh(self) -> torch.distributed.device_mesh.DeviceMesh:
         return self.model.device_mesh
 
+    def get_input_embeddings(self) -> nn.Embedding:
+        return self.model.get_input_embeddings()
+
+    def set_input_embeddings(self, value: nn.Embedding) -> None:
+        self.model.set_input_embeddings(value)
+
     def _embed(
         self, sequences: list[str], return_attention_mask: bool = False, **kwargs
     ) -> torch.Tensor:
@@ -1933,12 +2266,24 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
         inputs_embeds: torch.FloatTensor | None = None,
         labels: torch.LongTensor | None = None,
         past_key_values: DynamicCache | None = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-        output_hidden_states: bool = False,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
         output_s_max: bool = False,
-        **kwargs,
-    ) -> E1ClassificationOutputWithPast:
+        return_dict: bool | None = None,
+    ) -> E1TokenClassificationOutputWithPast | tuple[Any, ...]:
+        use_cache = (
+            use_cache if use_cache is not None else bool(getattr(self.config, "use_cache", False))
+        )
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs: E1ModelOutputWithPast = self.model(
             input_ids=input_ids,
             within_seq_position_ids=within_seq_position_ids,
@@ -1950,20 +2295,25 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
         )
 
         x = outputs.last_hidden_state
         logits = self.classifier(x)
         loss = None
         if labels is not None:
+            labels = labels.to(logits.device)
             loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
-        return E1ClassificationOutputWithPast(
+        result = E1TokenClassificationOutputWithPast(
             loss=loss,
             logits=logits,
-            last_hidden_state=x,
-            past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            last_hidden_state=x,
+            past_key_values=outputs.past_key_values,
             s_max=outputs.s_max,
         )
+        if not return_dict:
+            return result.to_tuple()
+        return result

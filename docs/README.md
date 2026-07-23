@@ -11,6 +11,7 @@ disagree.
 | --- | --- |
 | Understand repository boundaries and loading flow | [Architecture](architecture.md) |
 | Find a supported checkpoint or AutoClass | [Models](models.md) and the [generated support matrix](generated/support.md) |
+| Trace every capability to docs, examples, and tests | [Capability-to-evidence manifest](generated/capability_evidence.md) |
 | Embed sequences or FASTA datasets | [Embedding API](embedding_api.md) |
 | Select SDPA, Flex Attention, or a pinned FlashAttention kernel | [Attention backends](attention_backends.md) |
 | Build and validate an offline Hub artifact | [Artifacts](artifacts.md) |
@@ -19,8 +20,8 @@ disagree.
 
 ## Model and research workflows
 
-- [ESMFold2](esmfold2.md): folding, learned representations, BF16, and
-  experimental FP8.
+- [ESMFold2](esmfold2.md): folding, learned representations, the distinct full
+  and Fast MSA contracts, BF16, and experimental FP8.
 - [Test-time training](ttt.md): opt-in low-rank adaptation and its evidence
   boundary.
 - [Binder design](binder_design.md): differentiable ESMFold2 and ESM++ research
@@ -28,6 +29,8 @@ disagree.
 - [Fine-tuning](finetuning.md): Trainer, PEFT, data splits, and reproducibility.
 - [Vector benchmark embeddings](vector_embeddings/README.md): reusable
   embedding artifacts for Protify evaluation.
+- [Runnable examples](../examples/README.md): local-only, offline-safe commands
+  for embeddings, attention, generation, RAG, TTT, and structure preparation.
 
 ## Maintenance
 

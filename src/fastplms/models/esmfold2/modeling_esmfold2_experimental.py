@@ -24,15 +24,19 @@ from .embedding import ESMFold2EmbeddingMixin
 from .modeling_esmfold2 import (
     ESMCPrecision,
     ESMCPrecisionStatus,
+    ESMFold2Output,
     _drop_transient_esmc_state,
+    _finalize_structure_output,
     _install_esmc_backbone,
     _lm_precision_context,
     _reload_esmc_bf16_for_gradients,
+    _resolve_structure_output_controls,
     _transformer_engine_version,
 )
 from .modeling_esmfold2_common import (
     CHAR_VOCAB_SIZE,
     MAX_ATOMIC_NUMBER,
+    MSA_CONDITIONING_INPUT_NAMES,
     NUM_RES_TYPES,
     DiffusionModule,
     DiffusionStructureHead,
@@ -53,6 +57,8 @@ from .modeling_esmfold2_common import (
     compute_lm_hidden_states,
     gather_rep_atom_coords,
     gather_token_to_atom,
+    validate_kernel_backend,
+    validate_msa_conditioning_inputs,
 )
 
 _EPS = 1e-5
@@ -98,6 +104,7 @@ class ConfidenceHead(nn.Module):
         self.pae_head = nn.Linear(d_pair, ch.num_pae_bins, bias=False)
 
     def set_kernel_backend(self, backend: str | None) -> None:
+        validate_kernel_backend(backend)
         self.folding_trunk.set_kernel_backend(backend)
 
     def set_chunk_size(self, chunk_size: int | None) -> None:
@@ -447,6 +454,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         self._esmc_source: str = config.esmc_id
         self._esmc_source_revision: str | None = None
         self._esmc_source_files: dict[str, str] = {}
+        self._esmc_local_files_only = False
         self._esmc_precision_policy: str = str(getattr(config, "esmc_precision", "auto"))
         self._esmc_precision_status = ESMCPrecisionStatus(
             requested=self._esmc_precision_policy,
@@ -457,6 +465,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         )
         self._ttt_lm_head: nn.Module | None = None
         self._esmfold2_input_builder: Any | None = None
+        self._kernel_backend: str | None = None
 
         pf = config.folding_trunk
         self.folding_trunk = FoldingTrunk(n_layers=pf.n_layers, d_pair=d_pair, expansion_ratio=4)
@@ -492,10 +501,12 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         return next(self.parameters()).device
 
     def set_kernel_backend(self, backend: str | None) -> None:
+        validate_kernel_backend(backend)
         self.folding_trunk.set_kernel_backend(backend)
         if self.confidence_head is not None:
             self.confidence_head.set_kernel_backend(backend)
         self.structure_head.set_kernel_backend(backend)
+        self._kernel_backend = backend
 
     def set_chunk_size(self, chunk_size: int | None) -> None:
         self.folding_trunk.set_chunk_size(chunk_size)
@@ -522,15 +533,23 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         esmc_model_path: str,
         precision: ESMCPrecision = "auto",
         device: str | torch.device | None = None,
+        local_files_only: bool = False,
     ) -> None:
         """Load ESMC with the same precision policy as released checkpoints."""
 
-        _install_esmc_backbone(self, esmc_model_path, precision=precision, device=device)
+        _install_esmc_backbone(
+            self,
+            esmc_model_path,
+            precision=precision,
+            device=device,
+            local_files_only=local_files_only,
+        )
 
     def reload_esmc(
         self,
         precision: ESMCPrecision = "auto",
         device: str | torch.device | None = None,
+        local_files_only: bool | None = None,
     ) -> None:
         """Reload canonical ESMC weights and discard runtime quantization."""
 
@@ -544,7 +563,16 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        self.load_esmc(source, precision=precision, device=device)
+        self.load_esmc(
+            source,
+            precision=precision,
+            device=device,
+            local_files_only=(
+                self._esmc_local_files_only
+                if local_files_only is None
+                else local_files_only
+            ),
+        )
 
     @classmethod
     def from_pretrained(
@@ -559,6 +587,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 pretrained_model_name_or_path, **kwargs
             )
         esmc_precision = kwargs.pop("esmc_precision", None)
+        local_files_only = bool(kwargs.get("local_files_only", False))
         output_loading_info = bool(kwargs.get("output_loading_info", False))
         loaded = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
         if output_loading_info:
@@ -569,6 +598,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             model.load_esmc(
                 model.config.esmc_id,
                 precision=esmc_precision or model.config.esmc_precision,
+                local_files_only=local_files_only,
             )
         return (model, loading_info) if output_loading_info else model
 
@@ -605,7 +635,8 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                     "serving policy is unchanged."
                 ),
             )
-        assert self._esmc is not None
+        if self._esmc is None:
+            raise RuntimeError("ESMFold2 language-model features require load_esmc=True.")
         pad_to = 16 if self._esmc_fp8 else None
         with _lm_precision_context(self._esmc_precision_status.resolved, self.device):
             return compute_lm_hidden_states(
@@ -654,9 +685,25 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         provide_soft_sequence_to_msa_and_profile: bool = True,
         noise_scale: float | None = None,
         step_scale: float | None = None,
-        max_inference_sigma: int | None = None,
-    ) -> dict[str, Tensor]:
-        del noise_scale, step_scale, max_inference_sigma
+        max_inference_sigma: float | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> ESMFold2Output | tuple[Any, ...]:
+        output_hidden_states, return_dict = _resolve_structure_output_controls(
+            self.config,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        validate_msa_conditioning_inputs(
+            self.config,
+            msa=msa,
+            msa_attention_mask=msa_attention_mask,
+            has_deletion=has_deletion,
+            deletion_value=deletion_value,
+            deletion_mean=deletion_mean,
+        )
         tok_mask = token_attention_mask
         atm_mask = atom_attention_mask
         n_loops = num_loops if num_loops is not None else self.config.num_loops
@@ -709,10 +756,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         atom_to_token = atom_to_token * atm_mask.long()
 
         use_amp = ref_pos.device.type == "cuda"
-        with (
-            torch.set_grad_enabled(res_type_soft is not None),
-            torch.amp.autocast("cuda", enabled=use_amp, dtype=torch.bfloat16),
-        ):
+        with torch.amp.autocast("cuda", enabled=use_amp, dtype=torch.bfloat16):
             x_inputs = self.inputs_embedder(
                 aatype=res_type_oh,
                 profile=profile.float(),
@@ -837,11 +881,15 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 token_attention_mask=tok_mask,
                 num_diffusion_samples=n_samples,
                 num_sampling_steps=num_sampling_steps,
+                max_inference_sigma=max_inference_sigma,
+                noise_scale=noise_scale,
+                step_scale=step_scale,
                 return_atom_repr=False,
                 denoising_early_exit_rmsd=(0.10 if early_exit else None),
             )
         sample_coords = structure_output["sample_atom_coords"]
-        assert sample_coords is not None
+        if sample_coords is None:
+            raise RuntimeError("ESMFold2 structure sampling did not return coordinates.")
         if sample_coords.ndim == 4:
             batch, sample_count, atom_count, coord_dim = sample_coords.shape
             sample_coords_for_gather = sample_coords.reshape(
@@ -882,7 +930,13 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         output["atom_pad_mask"] = atm_mask.unsqueeze(0) if atm_mask.dim() == 1 else atm_mask
         output["residue_index"] = residue_index
         output["entity_id"] = entity_id
-        return output
+        return _finalize_structure_output(
+            output,
+            token_input_state=x_inputs,
+            pair_state=z,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
 
     @property
     def input_builder(self):
@@ -899,15 +953,27 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         return esmfold2_types
 
     def prepare_structure_input(self, input, seed: int | None = None):
-        return self.input_builder.prepare_input(input, seed=seed, device=self.device)
+        return self.input_builder.prepare_model_input(
+            self,
+            input,
+            seed=seed,
+            device=self.device,
+        )
 
     @torch.no_grad()
-    def infer_protein(self, seq: str, **forward_kwargs) -> dict[str, Tensor]:
+    def infer_protein(self, seq: str, **forward_kwargs) -> ESMFold2Output:
         from .protein_utils import prepare_protein_features
 
+        if forward_kwargs.pop("return_dict", True) is not True:
+            raise ValueError(
+                "infer_protein always returns a mapping; return_dict=False is invalid."
+            )
         features = prepare_protein_features(seq)
+        if not self.config.msa_conditioning:
+            for name in MSA_CONDITIONING_INPUT_NAMES:
+                features.pop(name, None)
         features = {name: tensor.to(self.device) for name, tensor in features.items()}
-        output = self(**features, **forward_kwargs)
+        output = self(**features, **forward_kwargs, return_dict=True)
         for name in (
             "res_type",
             "atom_to_token",
@@ -972,12 +1038,14 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
 
     @staticmethod
     def result_to_cif(result) -> str:
-        assert not isinstance(result, list), "Pass one MolecularComplexResult at a time."
+        if isinstance(result, list):
+            raise TypeError("Pass one MolecularComplexResult at a time.")
         return result.complex.to_mmcif()
 
     @staticmethod
     def result_to_pdb(result) -> str:
-        assert not isinstance(result, list), "Pass one MolecularComplexResult at a time."
+        if isinstance(result, list):
+            raise TypeError("Pass one MolecularComplexResult at a time.")
         return result.complex.to_protein_complex().to_pdb_string()
 
     def save_as_cif(self, result, output_path: str | Path) -> None:
@@ -996,6 +1064,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
 __all__ = [
     "ConfidenceHead",
     "ESMFold2ExperimentalModel",
+    "ESMFold2Output",
     "MSAEncoder",
     "MSAEncoderBlock",
 ]

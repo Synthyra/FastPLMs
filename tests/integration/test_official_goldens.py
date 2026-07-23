@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import gc
 import importlib
+import json
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from tests.parity.test_model_parity import (
     _last_hidden,
     _numeric_contract,
 )
+from tests.structure.support.hardware import assert_recorded_hopper_device_matches
 from tools.goldens import validate_golden_bundle
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -65,6 +67,18 @@ def test_declared_sequence_golden_matches_candidate(spec: ModelSpec) -> None:
         metadata_path=metadata_path,
         tensors_path=tensors_path,
         declaration=declaration,
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    recorded_environment = metadata["environment"]["details"]
+    assert isinstance(recorded_environment, dict)
+    properties = torch.cuda.get_device_properties(0)
+    assert_recorded_hopper_device_matches(
+        {
+            "cuda_device": properties.name,
+            "cuda_device_capability": list(torch.cuda.get_device_capability(0)),
+            "cuda_total_memory": int(properties.total_memory),
+        },
+        recorded_environment,
     )
     tensors = load_file(tensors_path, device="cpu")
     device = torch.device("cuda")

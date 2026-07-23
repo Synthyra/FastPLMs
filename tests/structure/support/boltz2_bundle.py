@@ -738,11 +738,18 @@ def _environment_metadata() -> dict[str, Any]:
             versions[package] = None
         else:
             versions[package] = str(getattr(module, "__version__", "unknown"))
+    cuda_properties = torch.cuda.get_device_properties(0) if torch.cuda.is_available() else None
     return {
         "python": platform.python_version(),
         "torch": torch.__version__,
         "cuda_runtime": torch.version.cuda,
-        "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "cuda_device": cuda_properties.name if cuda_properties is not None else None,
+        "cuda_device_capability": (
+            list(torch.cuda.get_device_capability(0)) if cuda_properties is not None else None
+        ),
+        "cuda_total_memory": (
+            int(cuda_properties.total_memory) if cuda_properties is not None else None
+        ),
         "packages": versions,
     }
 

@@ -231,10 +231,21 @@ def get_indexing_matrix(
 ) -> torch.Tensor:
     """Build the atom-window gather matrix used for local attention keys."""
 
-    assert w % 2 == 0
-    assert h % (w // 2) == 0
-    key_blocks = h // (w // 2)
-    assert key_blocks % 2 == 0
+    for name, value in (("k", k), ("w", w), ("h", h)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"{name} must be an int, got {type(value).__name__}.")
+        if value <= 0:
+            raise ValueError(f"{name} must be positive, got {value}.")
+    if w % 2 != 0:
+        raise ValueError(f"w must be even, got {w}.")
+    half_window = w // 2
+    if h % half_window != 0:
+        raise ValueError(f"h must be divisible by w // 2 ({half_window}), got {h}.")
+    key_blocks = h // half_window
+    if key_blocks % 2 != 0:
+        raise ValueError(
+            f"h must contain an even number of half-window key blocks; received {key_blocks}."
+        )
 
     positions = torch.arange(2 * k, device=device)
     relative_blocks = ((positions.unsqueeze(0) - positions.unsqueeze(1)) + key_blocks // 2).clamp(

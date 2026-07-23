@@ -121,12 +121,20 @@ def _smooth_lddt_for_example(
     other_cutoff: float,
 ) -> torch.Tensor:
     true_distances = torch.cdist(true_coords, true_coords)
-    nucleotide_rows = is_nucleotide.unsqueeze(-1).expand(-1, is_nucleotide.shape[-1])
-    pair_mask = nucleotide_rows * (true_distances < nucleic_acid_cutoff).float()
-    pair_mask += (1 - nucleotide_rows) * (true_distances < other_cutoff).float()
-    pair_mask *= 1 - torch.eye(pred_coords.shape[0], device=pred_coords.device)
-    pair_mask *= coords_mask.unsqueeze(-1)
-    pair_mask *= coords_mask.unsqueeze(-2)
+    nucleotide_rows = is_nucleotide.bool().unsqueeze(-1).expand_as(true_distances)
+    pair_mask = torch.where(
+        nucleotide_rows,
+        true_distances < nucleic_acid_cutoff,
+        true_distances < other_cutoff,
+    )
+    pair_mask &= ~torch.eye(
+        pred_coords.shape[0],
+        dtype=torch.bool,
+        device=pred_coords.device,
+    )
+    coordinate_rows = coords_mask.bool()
+    pair_mask &= coordinate_rows.unsqueeze(-1)
+    pair_mask &= coordinate_rows.unsqueeze(-2)
 
     pair_indices = pair_mask.nonzero()
     true_pair_distances = true_distances[pair_indices[:, 0], pair_indices[:, 1]]

@@ -22,6 +22,7 @@ SEQUENCE_SPECS = tuple(
 )
 NUM_SEQUENCES = 4
 SEQUENCE_LENGTH = 64
+GH200_MEASURED_BACKENDS = ("eager", "sdpa", "flex_attention")
 
 
 def _parameter(spec: ModelSpec) -> Any:
@@ -179,8 +180,8 @@ def _assert_global_bf16_contract(
 
 
 @pytest.mark.parametrize("spec", [_parameter(spec) for spec in SEQUENCE_SPECS])
-def test_advertised_backends_meet_global_bf16_contract(spec: ModelSpec) -> None:
-    """Every declared backend meets one fixed engineering target versus SDPA."""
+def test_gh200_backends_meet_global_bf16_contract(spec: ModelSpec) -> None:
+    """Measure only the no-download GH200 eager, SDPA, and Flex matrix."""
 
     device = torch.device("cuda")
     model_class = _model_class(spec)
@@ -195,7 +196,11 @@ def test_advertised_backends_meet_global_bf16_contract(spec: ModelSpec) -> None:
     inputs, residue_mask = _prepare_inputs(spec, model, _sequences(), device)
 
     outputs: dict[str, tuple[torch.Tensor, bool]] = {}
-    for backend in spec.family.attention:
+    measured_backends = tuple(
+        backend for backend in spec.family.attention if backend in GH200_MEASURED_BACKENDS
+    )
+    assert measured_backends, f"{spec.id}: no GH200 backend is declared"
+    for backend in measured_backends:
         assert hasattr(model, "set_attn_implementation")
         model.set_attn_implementation(backend)
         resolved = getattr(model.config, "_attn_implementation", None)

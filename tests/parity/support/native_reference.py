@@ -14,8 +14,10 @@ import hashlib
 import importlib
 import importlib.metadata
 import json
+import os
 import platform
 import shutil
+import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -35,9 +37,17 @@ from tests.parity.support.state_transforms import (
     transform_preserves_aliases,
     transform_state,
 )
+from tools.remote.biohub_reference_environment import (
+    validate_biohub_reference_environment_evidence,
+)
+from tools.remote.reference_source_attestation import (
+    validate_reference_sources_evidence,
+)
 
 SCHEMA_VERSION = 1
 _ADAPTER_PREFIX = "tests.parity.support.reference_adapters."
+_BIOHUB_REFERENCE_FAMILIES = frozenset({"esm_plusplus", "esm3", "esmfold2"})
+_BIOHUB_REFERENCE_SOURCE_NAMES = ("biohub-esm", "biohub-transformers")
 _SPECIAL_TOKEN_FIELDS = (
     "pad_token_id",
     "bos_token_id",
@@ -51,6 +61,8 @@ _TOKENIZER_SETTINGS = (
     {"padding": "max_length", "truncation": True, "max_length": 12},
     {"padding": True, "truncation": True, "max_length": 5},
 )
+
+
 def _tensor_digest(tensor: torch.Tensor) -> dict[str, Any]:
     value = tensor.detach().cpu().contiguous()
     raw = value.view(torch.uint8).numpy().tobytes()
@@ -61,7 +73,34 @@ def _tensor_digest(tensor: torch.Tensor) -> dict[str, Any]:
     }
 
 
-def _environment_metadata() -> dict[str, str]:
+def _cuda_driver_version() -> str:
+    """Read the exact host driver exposed to the reference container."""
+
+    try:
+        completed = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=driver_version",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError) as error:
+        raise RuntimeError("Native compliance requires the exact NVIDIA driver version.") from error
+    versions = {
+        line.strip() for line in completed.stdout.splitlines() if line.strip()
+    }
+    if len(versions) != 1:
+        raise RuntimeError(
+            "Native compliance requires one unambiguous NVIDIA driver version."
+        )
+    return versions.pop()
+
+
+def _environment_metadata() -> dict[str, object]:
     """Describe the isolated native environment without host-specific paths."""
 
     distributions: dict[str, str] = {}
@@ -69,15 +108,79 @@ def _environment_metadata() -> dict[str, str]:
         name = distribution.metadata.get("Name")
         if isinstance(name, str) and name:
             distributions[name.lower()] = distribution.version
+    cuda_properties = torch.cuda.get_device_properties(0) if torch.cuda.is_available() else None
+    uname = platform.uname()
     return {
-        "cuda_device": (
-            torch.cuda.get_device_name(0) if torch.cuda.is_available() else "unavailable"
+        "cuda_device": cuda_properties.name if cuda_properties is not None else "unavailable",
+        "cuda_device_capability": (
+            list(torch.cuda.get_device_capability(0)) if cuda_properties is not None else None
+        ),
+        "cuda_total_memory": (
+            int(cuda_properties.total_memory) if cuda_properties is not None else None
         ),
         "cuda_runtime": str(torch.version.cuda or "unavailable"),
+        "cuda_driver": _cuda_driver_version(),
         "packages": json.dumps(distributions, separators=(",", ":"), sort_keys=True),
+        "platform_machine": platform.machine(),
         "python": platform.python_version(),
         "torch": torch.__version__,
+        "uname": {
+            "system": uname.system,
+            "release": uname.release,
+            "version": uname.version,
+            "machine": uname.machine,
+        },
     }
+
+
+def _adapter_reference_sources(
+    adapter: Any,
+    request: Mapping[str, Any],
+) -> dict[str, dict[str, object]] | None:
+    """Read and validate an optional named official-source provenance hook."""
+
+    hook = getattr(adapter, "reference_sources", None)
+    required = request.get("family") in _BIOHUB_REFERENCE_FAMILIES
+    if hook is None:
+        if required:
+            raise RuntimeError(
+                f"{request.get('model_id')}: Biohub adapter omits source attestations."
+            )
+        return None
+    if not callable(hook):
+        raise RuntimeError("Official adapter reference-sources hook is not callable.")
+    return validate_reference_sources_evidence(
+        hook(),
+        required_sources=_BIOHUB_REFERENCE_SOURCE_NAMES,
+    )
+
+
+def _adapter_reference_environment(
+    adapter: Any,
+    request: Mapping[str, Any],
+) -> dict[str, object] | None:
+    """Read and validate the locked runtime/image evidence for Biohub adapters."""
+
+    hook = getattr(adapter, "reference_environment", None)
+    required = request.get("family") in _BIOHUB_REFERENCE_FAMILIES
+    if hook is None:
+        if required:
+            raise RuntimeError(
+                f"{request.get('model_id')}: Biohub adapter omits reference environment."
+            )
+        return None
+    if not callable(hook):
+        raise RuntimeError("Official adapter reference-environment hook is not callable.")
+    try:
+        lock_root = Path(os.environ["FASTPLMS_BIOHUB_LOCK_ROOT"])
+        contract = Path(os.environ["FASTPLMS_BIOHUB_LOCK_CONTRACT"])
+    except KeyError as error:
+        raise RuntimeError("Biohub lock validation environment is incomplete.") from error
+    return validate_biohub_reference_environment_evidence(
+        hook(),
+        repository_root=lock_root,
+        contract_path=contract,
+    )
 
 
 def _tokenizer_asset_contract(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -147,8 +250,7 @@ def _token_result(tokenizer: object, sequences: Sequence[str], options: Mapping[
             _normalize_tokenizer_error(str(error)),
         ]
     normalized = {
-        key: value.tolist() if torch.is_tensor(value) else value
-        for key, value in encoded.items()
+        key: value.tolist() if torch.is_tensor(value) else value for key, value in encoded.items()
     }
     return ["ok", normalized]
 
@@ -162,9 +264,7 @@ def _tokenizer_contract(
         return None
     return {
         "vocab": tokenizer.get_vocab(),
-        "special_ids": {
-            name: getattr(tokenizer, name, None) for name in _SPECIAL_TOKEN_FIELDS
-        },
+        "special_ids": {name: getattr(tokenizer, name, None) for name in _SPECIAL_TOKEN_FIELDS},
         "behavior": [
             {"options": options, "result": _token_result(tokenizer, edge_sequences, options)}
             for options in _TOKENIZER_SETTINGS
@@ -271,9 +371,7 @@ def _prepare_inputs(
     for token_id in getattr(tokenizer, "all_special_ids", ()):
         residue_mask &= input_ids.ne(token_id)
     inputs = {
-        name: value
-        for name, value in encoded.items()
-        if name in {"input_ids", "attention_mask"}
+        name: value for name, value in encoded.items() if name in {"input_ids", "attention_mask"}
     }
     if request["architecture"] == "ESMC":
         inputs["sequence_id"] = encoded["attention_mask"].bool()
@@ -339,8 +437,7 @@ def _inference_tensors(
     dtype: torch.dtype,
 ) -> dict[str, torch.Tensor]:
     use_native_autocast = (
-        request["family"] in {"dplm", "dplm2", "esm2", "esm3"}
-        and dtype == torch.bfloat16
+        request["family"] in {"dplm", "dplm2", "esm2", "esm3"} and dtype == torch.bfloat16
     )
     if use_native_autocast:
         # These pinned implementations use AMP for native mixed precision.
@@ -369,17 +466,128 @@ def _inference_tensors(
     return tensors
 
 
+def _ankh_generation_contract(
+    adapter: Any,
+    request: Mapping[str, Any],
+    device: torch.device,
+) -> dict[str, Any]:
+    """Run official ANKH generation from an explicit task prompt.
+
+    ANKH is a T5 checkpoint. Its decoder input is task-specific, so this
+    contract deliberately supplies a short decoder prompt instead of shifting
+    or otherwise reusing the encoder source tokens.
+    """
+
+    load_seq2seq = getattr(adapter, "load_official_seq2seq", None)
+    if not callable(load_seq2seq):
+        raise RuntimeError("The ANKH reference adapter omits load_official_seq2seq().")
+    generation_model, generation_tokenizer = load_seq2seq(
+        reference_repo_id=request["reference_repo_id"],
+        reference_revision=request["reference_revision"],
+        device=device,
+        dtype=torch.float32,
+    )
+    source_text = "M S T N P K"
+    decoder_prompt_text = "A C"
+    try:
+        encoded = _to_device(
+            generation_tokenizer(source_text, return_tensors="pt"),
+            device,
+        )
+        prompt = _to_device(
+            generation_tokenizer(
+                decoder_prompt_text,
+                return_tensors="pt",
+                add_special_tokens=False,
+            ),
+            device,
+        )
+        prompt_ids = prompt.get("input_ids")
+        if not torch.is_tensor(prompt_ids) or prompt_ids.ndim != 2:
+            raise RuntimeError("Official ANKH tokenizer returned invalid decoder prompt IDs.")
+        decoder_start_token_id = getattr(
+            generation_model.config,
+            "decoder_start_token_id",
+            None,
+        )
+        if not isinstance(decoder_start_token_id, int):
+            raise RuntimeError("Official ANKH config omits decoder_start_token_id.")
+        decoder_input_ids = torch.cat(
+            (
+                prompt_ids.new_full((prompt_ids.shape[0], 1), decoder_start_token_id),
+                prompt_ids,
+            ),
+            dim=1,
+        )
+        decoder_attention_mask = torch.ones_like(decoder_input_ids)
+        kwargs = {
+            "do_sample": False,
+            "max_new_tokens": 4,
+            "num_beams": 1,
+            "use_cache": True,
+        }
+        torch.manual_seed(int(request["seed"]))
+        torch.cuda.manual_seed_all(int(request["seed"]))
+        with torch.inference_mode(), _strict_fp32_matmul():
+            generated = generation_model.generate(
+                input_ids=encoded["input_ids"],
+                attention_mask=encoded["attention_mask"],
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+                **kwargs,
+            )
+        if not torch.is_tensor(generated):
+            raise RuntimeError("Official ANKH generation did not return output tokens.")
+        decoder_fingerprint = _tensor_digest(decoder_input_ids)["sha256"]
+        return {
+            "interface": "T5ForConditionalGeneration.generate",
+            "source_text": source_text,
+            "input_ids": encoded["input_ids"].detach().cpu().tolist(),
+            "attention_mask": encoded["attention_mask"].detach().cpu().tolist(),
+            "decoder_prompt_text": decoder_prompt_text,
+            "decoder_prompt_contract": "explicit-task-prompt",
+            "decoder_input_ids": decoder_input_ids.detach().cpu().tolist(),
+            "decoder_attention_mask": decoder_attention_mask.detach().cpu().tolist(),
+            "decoder_input_fingerprint": decoder_fingerprint,
+            "kwargs": kwargs,
+            "output_tokens": generated.detach().cpu().tolist(),
+            "seed": int(request["seed"]),
+        }
+    finally:
+        del generation_model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
 def _generation_contract(
-    model: nn.Module,
+    model: nn.Module | None,
     tokenizer: object,
     request: Mapping[str, Any],
     device: torch.device,
+    *,
+    adapter: Any | None = None,
 ) -> dict[str, Any] | None:
-    """Run a deterministic official DPLM-family public generation call."""
+    """Run a deterministic official generation call required by the manifest."""
 
     family = request["family"]
-    if family not in {"dplm", "dplm2"}:
+    generation_policy = request.get("generation_policy", "required")
+    if generation_policy == "not_applicable":
         return None
+    if generation_policy not in {"required", "official_unavailable"}:
+        raise RuntimeError(
+            f"{request['model_id']}: unknown generation policy {generation_policy!r}."
+        )
+    if family == "ankh":
+        if adapter is None:
+            raise RuntimeError("ANKH generation requires the pinned official adapter.")
+        return _ankh_generation_contract(adapter, request, device)
+    if family not in {"dplm", "dplm2"}:
+        raise RuntimeError(
+            f"{request['model_id']}: generation is {generation_policy} but the "
+            f"{family!r} adapter has no generation contract."
+        )
+    if model is None:
+        raise RuntimeError(f"{request['model_id']}: official generation model is missing.")
     max_iter = 4
     if family == "dplm":
         encoded = tokenizer("ACDEFG", return_tensors="pt")
@@ -427,6 +635,54 @@ def _generation_contract(
     }
 
 
+def _record_generation_contract(
+    metadata: dict[str, Any],
+    model: nn.Module | None,
+    tokenizer: object,
+    request: Mapping[str, Any],
+    device: torch.device,
+    *,
+    adapter: Any,
+) -> None:
+    """Apply the manifest generation policy and fail closed on missing evidence."""
+
+    policy = request.get("generation_policy", "required")
+    try:
+        generation = _generation_contract(
+            model,
+            tokenizer,
+            request,
+            device,
+            adapter=adapter,
+        )
+    except OfficialGenerationUnavailable as error:
+        metadata["generation_limitation"] = _validated_generation_limitation(
+            request,
+            error,
+        )
+        return
+
+    if policy == "official_unavailable":
+        raise RuntimeError(
+            f"{request['model_id']}: official sampler executed despite an "
+            "official_unavailable request."
+        )
+    if policy == "required":
+        if not isinstance(generation, dict):
+            raise RuntimeError(
+                f"{request['model_id']}: required official generation evidence is missing."
+            )
+        metadata["generation"] = generation
+        return
+    if policy == "not_applicable":
+        if generation is not None:
+            raise RuntimeError(
+                f"{request['model_id']}: not_applicable generation produced evidence."
+            )
+        return
+    raise RuntimeError(f"{request['model_id']}: unknown generation policy {policy!r}.")
+
+
 def _validated_generation_limitation(
     request: Mapping[str, Any],
     error: OfficialGenerationUnavailable,
@@ -471,8 +727,10 @@ def run_request(request_path: Path, output_root: Path) -> Path:
         dtype=None,
         **load_kwargs,
     )
+    reference_sources = _adapter_reference_sources(adapter, request)
+    reference_environment = _adapter_reference_environment(adapter, request)
     core = getattr(model, "model", model)
-    metadata = {
+    metadata: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "model_id": request["model_id"],
         "family": request["family"],
@@ -490,23 +748,27 @@ def run_request(request_path: Path, output_root: Path) -> Path:
         ),
         "tokenizer_assets": _tokenizer_asset_contract(request),
     }
+    if reference_sources is not None:
+        metadata["reference_sources"] = reference_sources
+    if reference_environment is not None:
+        metadata["reference_environment"] = reference_environment
 
     device = torch.device("cuda")
-    try:
-        generation = _generation_contract(model, tokenizer, request, device)
-    except OfficialGenerationUnavailable as error:
-        metadata["generation_limitation"] = _validated_generation_limitation(
+    # ANKH's native encoder wrapper intentionally has no decoder. Defer its
+    # generation contract until encoder inference is complete, then release the
+    # encoder before loading the complete official T5 checkpoint.
+    defer_generation = (
+        request["family"] == "ankh" and request.get("generation_policy", "required") == "required"
+    )
+    if not defer_generation:
+        _record_generation_contract(
+            metadata,
+            model,
+            tokenizer,
             request,
-            error,
+            device,
+            adapter=adapter,
         )
-    else:
-        if request.get("generation_policy") == "official_unavailable":
-            raise RuntimeError(
-                f"{request['model_id']}: official sampler executed despite an "
-                "official_unavailable request."
-            )
-        if generation is not None:
-            metadata["generation"] = generation
     precision_tensors: dict[str, dict[str, torch.Tensor]] = {}
     if request["deep_reference"]:
         precision_tensors["fp32"] = _inference_tensors(
@@ -516,8 +778,7 @@ def run_request(request_path: Path, output_root: Path) -> Path:
         model, tokenizer, request, device, torch.bfloat16
     )
     metadata["precision_tensor_keys"] = {
-        precision: sorted(tensors)
-        for precision, tensors in precision_tensors.items()
+        precision: sorted(tensors) for precision, tensors in precision_tensors.items()
     }
     calibration_tensors: dict[str, dict[str, torch.Tensor]] = {}
     calibration_batches = request.get("calibration_batches", [])
@@ -543,6 +804,21 @@ def run_request(request_path: Path, output_root: Path) -> Path:
             kind: sorted(tensors) for kind, tensors in calibration_tensors.items()
         }
 
+    if defer_generation:
+        del model, core
+        model = None
+        core = None
+        gc.collect()
+        torch.cuda.empty_cache()
+        _record_generation_contract(
+            metadata,
+            None,
+            tokenizer,
+            request,
+            device,
+            adapter=adapter,
+        )
+
     output_root.mkdir(parents=True, exist_ok=True)
     destination = output_root / request["model_id"]
     if destination.exists():
@@ -563,7 +839,11 @@ def run_request(request_path: Path, output_root: Path) -> Path:
     except BaseException:
         shutil.rmtree(temporary_path, ignore_errors=True)
         raise
-    del model, core, precision_tensors, calibration_tensors
+    if model is not None:
+        del model
+    if core is not None:
+        del core
+    del precision_tensors, calibration_tensors
     gc.collect()
     torch.cuda.empty_cache()
     return destination
@@ -596,9 +876,7 @@ def _select_requests(
     for path in candidates:
         request = json.loads(path.read_text(encoding="utf-8"))
         if request.get("model_id") != path.stem:
-            raise ValueError(
-                f"Native reference request filename and model ID differ: {path}"
-            )
+            raise ValueError(f"Native reference request filename and model ID differ: {path}")
         if deep_only and request.get("deep_reference") is not True:
             continue
         selected.append(path)

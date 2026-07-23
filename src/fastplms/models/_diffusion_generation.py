@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from typing import Any, Protocol
 
 import torch
@@ -21,6 +22,8 @@ class _MaskedLanguageModel(Protocol):
     config: Any
 
     def eval(self) -> Any: ...
+
+    def modules(self) -> Iterable[torch.nn.Module]: ...
 
     def __call__(self, **kwargs: Any) -> Any: ...
 
@@ -39,6 +42,18 @@ _DPLM2_AA_MASK = 32
 _DPLM2_STRUCT_BOS = 33
 _DPLM2_STRUCT_EOS = 34
 _DPLM2_STRUCT_UNK = 35
+
+
+@contextmanager
+def _temporary_eval(model: _MaskedLanguageModel):
+    """Run one generation forward in eval mode and restore every module flag."""
+    training_states = tuple((module, module.training) for module in model.modules())
+    model.eval()
+    try:
+        yield
+    finally:
+        for module, training in training_states:
+            module.training = training
 
 
 def _resolve_max_iter(model: _MaskedLanguageModel, max_iter: int | None) -> int:
@@ -228,7 +243,7 @@ def _dplm_resample_repeats(
     X = torch.stack(resample_tokens)
     S = torch.stack(resample_scores)
     M = torch.stack(resample_masks)
-    with torch.no_grad():
+    with _temporary_eval(model), torch.no_grad():
         logits = _logits(model(input_ids=X, return_dict=True))
     if logits.dtype != S.dtype:
         logits = logits.to(S.dtype)
@@ -284,10 +299,8 @@ def generate_dplm(
     S = torch.zeros_like(X, dtype=torch.float32)
     active = mutable.clone()
     invalid_ids = (mask_id, x_id, pad_id, bos_id, eos_id)
-    model.eval()
-
     for step in _steps(max_iter, show_progress=show_progress):
-        with torch.no_grad():
+        with _temporary_eval(model), torch.no_grad():
             logits = _logits(model(input_ids=X, return_dict=True))
         if logits.dtype != S.dtype:
             logits = logits.to(S.dtype)
@@ -410,6 +423,8 @@ def generate_dplm2(
     unmasking_temperature = _dplm2_unmasking_temperature(unmasking_strategy)
     if sampling_strategy.startswith("annealing"):
         _annealing_temperature(sampling_strategy, 0, max_iter)
+    elif sampling_strategy not in {"argmax", "gumbel_argmax"}:
+        raise ValueError(f"Unsupported DPLM2 sampling strategy: {sampling_strategy!r}")
     vocabulary_size = int(model.config.vocab_size)
     if vocabulary_size <= _DPLM2_STRUCT_UNK + 1:
         raise ValueError("DPLM2 generation requires the multimodal vocabulary")
@@ -440,12 +455,10 @@ def generate_dplm2(
         _DPLM2_AA_Z,
         _DPLM2_AA_O,
     )
-    model.eval()
-
     for step in _steps(max_iter, show_progress=show_progress):
         eligible = _dplm2_mutable(X, partial_masks)
         types = _dplm2_types(X)
-        with torch.no_grad():
+        with _temporary_eval(model), torch.no_grad():
             logits = _logits(model(input_ids=X, return_dict=True)).log_softmax(dim=-1)
         if logits.dtype != S.dtype:
             logits = logits.to(S.dtype)

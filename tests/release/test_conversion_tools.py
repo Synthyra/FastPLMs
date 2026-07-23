@@ -87,16 +87,8 @@ def test_esmfold2_geometry_extractor_is_literal_only_and_reproducible(
         extract_geometry(dynamic_source)
 
 
-@pytest.mark.parametrize(
-    "transform_id",
-    [
-        "identity",
-        "ankh_t5_to_fastplms_v1",
-    ],
-)
-def test_identity_key_transforms_are_value_exact_and_non_aliasing(
-    transform_id: str,
-) -> None:
+def test_identity_key_transform_is_value_exact_and_non_aliasing() -> None:
+    transform_id = "identity"
     source = {
         "decoder.block.0.weight": torch.arange(6, dtype=torch.float32).reshape(2, 3),
         "encoder.embed_tokens.weight": torch.arange(8, dtype=torch.bfloat16).reshape(2, 4),
@@ -112,6 +104,43 @@ def test_identity_key_transforms_are_value_exact_and_non_aliasing(
     assert list(transformed) == sorted(source)
     for key in source:
         assert transformed[key].data_ptr() != source[key].data_ptr()
+
+
+def _tiny_complete_ankh_state() -> dict[str, torch.Tensor]:
+    return {
+        "shared.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
+        "encoder.embed_tokens.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
+        "encoder.block.0.layer.0.SelfAttention.q.weight": torch.ones(4, 4),
+        "decoder.embed_tokens.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
+        "decoder.block.0.layer.0.SelfAttention.q.weight": torch.ones(4, 4),
+        "decoder.block.0.layer.1.EncDecAttention.q.weight": torch.ones(4, 4),
+        "lm_head.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
+    }
+
+
+def test_ankh_transform_requires_and_preserves_complete_t5_state() -> None:
+    source = _tiny_complete_ankh_state()
+    transformed = apply_state_transform(
+        "ankh_t5_to_fastplms_v1",
+        source,
+        expected_keys=source,
+    )
+
+    assert_state_dict_equal(source, transformed, context="ankh_t5_to_fastplms_v1")
+    assert list(transformed) == sorted(source)
+    assert all(transformed[key].data_ptr() != source[key].data_ptr() for key in source)
+
+
+def test_ankh_transform_rejects_encoder_only_publication_state() -> None:
+    with pytest.raises(StateTransformError, match="complete official T5 state"):
+        apply_state_transform(
+            "ankh_t5_to_fastplms_v1",
+            {
+                "shared.weight": torch.ones(2, 4),
+                "encoder.embed_tokens.weight": torch.ones(2, 4),
+                "encoder.block.0.layer.0.SelfAttention.q.weight": torch.ones(4, 4),
+            },
+        )
 
 
 def test_precision_and_rotary_table_transforms_match_published_artifacts() -> None:

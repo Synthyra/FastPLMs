@@ -40,10 +40,14 @@ specified pharmaceutical and target-related outputs, can require the separate
 
 ## DPLM
 
-The pinned DPLM source is Apache-2.0. FastPLMs records Apache-2.0 for DPLM1
-checkpoint weights as a project assumption because the older checkpoint cards
-do not independently state a checkpoint license. That assumption is not an
-upstream representation and must remain visible in generated provenance.
+The pinned ByteDance DPLM repository is Apache-2.0. Its
+[README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+explicitly defines the repository release as including pretrained DPLM1 and
+DPLM2 weights, and the same revision carries the complete
+[Apache-2.0 license](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE).
+FastPLMs records both checkpoint families as Apache-2.0 and distributes the
+verbatim license plus `LICENSES/dplm/PROVENANCE.md`. Converted weights retain
+those terms and remain subject to the ordinary artifact and publication gates.
 
 ## Biohub
 

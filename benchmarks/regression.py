@@ -20,7 +20,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class GateThresholds:
-    """Scalar thresholds used by the H100 regression gate."""
+    """Scalar thresholds used by the exact-device Hopper/SM90 regression gate."""
 
     confidence: float = 0.95
     soft_throughput_ratio: float = 0.95
@@ -60,6 +60,8 @@ class GateResult:
     unmatched_current: tuple[str, ...]
     unmatched_baseline: tuple[str, ...]
     environment_mismatches: tuple[str, ...]
+    artifact_mismatches: tuple[str, ...]
+    report_mismatches: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -68,12 +70,15 @@ class GateResult:
             "unmatched_current": list(self.unmatched_current),
             "unmatched_baseline": list(self.unmatched_baseline),
             "environment_mismatches": list(self.environment_mismatches),
+            "artifact_mismatches": list(self.artifact_mismatches),
+            "report_mismatches": list(self.report_mismatches),
         }
 
 
 ENVIRONMENT_FIELDS = (
     "python",
     "platform",
+    "machine",
     "torch",
     "cuda_runtime",
     "cudnn",
@@ -86,6 +91,14 @@ ENVIRONMENT_FIELDS = (
     "gpu_capability",
 )
 NVIDIA_SMI_IDENTITY_FIELDS = ("name", "driver_version", "memory.total")
+REPORT_SCHEMA_VERSION = 3
+REPORT_IDENTITY_FIELDS = (
+    "matrix_kind",
+    "claim_scope",
+    "backend_policy",
+    "timing_contract",
+    "baseline_promotion_contract",
+)
 
 
 def percentile(values: Sequence[float], probability: float) -> float:
@@ -119,8 +132,12 @@ def bootstrap_ratio_interval(
         raise ValueError("Current and baseline reports must have equally many blocks")
     if not current:
         raise ValueError("At least one paired block is required")
-    if any(value <= 0.0 for value in baseline):
-        raise ValueError("Baseline throughput must be positive")
+    if any(not math.isfinite(value) or value <= 0.0 for value in baseline):
+        raise ValueError("Baseline throughput must be finite and positive")
+    if any(not math.isfinite(value) or value <= 0.0 for value in current):
+        raise ValueError("Current throughput must be finite and positive")
+    if not 0.0 < confidence < 1.0:
+        raise ValueError("confidence must be strictly between zero and one")
     if samples < 1:
         raise ValueError("samples must be positive")
 
@@ -157,7 +174,21 @@ def _throughputs(record: Mapping[str, Any]) -> list[float]:
     blocks = record.get("blocks")
     if not isinstance(blocks, list) or not blocks:
         raise ValueError(f"Benchmark case {_case_key(record)} has no measurement blocks")
-    return [float(block["logical_tokens_per_second"]) for block in blocks]
+    if len(blocks) != 7:
+        raise ValueError(
+            f"Benchmark case {_case_key(record)} must contain exactly seven blocks"
+        )
+    values: list[float] = []
+    for block in blocks:
+        if not isinstance(block, Mapping) or "logical_tokens_per_second" not in block:
+            raise ValueError(f"Benchmark case {_case_key(record)} has a malformed block")
+        value = float(block["logical_tokens_per_second"])
+        if not math.isfinite(value) or value <= 0.0:
+            raise ValueError(
+                f"Benchmark case {_case_key(record)} has non-positive/non-finite throughput"
+            )
+        values.append(value)
+    return values
 
 
 def _throughput_records(report: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -167,17 +198,71 @@ def _throughput_records(report: Mapping[str, Any]) -> dict[str, Mapping[str, Any
     descriptive. They are retained in reports but are not throughput ratios.
     """
 
+    raw_results = report.get("results")
+    if not isinstance(raw_results, list):
+        raise ValueError("Benchmark report results must be a list")
     result: dict[str, Mapping[str, Any]] = {}
-    for record in report.get("results", []):
+    for record in raw_results:
+        if not isinstance(record, Mapping):
+            raise ValueError("Benchmark report contains a non-object result")
         blocks = record.get("blocks")
         if isinstance(blocks, list) and blocks:
-            result[_case_key(record)] = record
+            key = _case_key(record)
+            if key in result:
+                raise ValueError(f"Benchmark report contains duplicate case: {key}")
+            result[key] = record
     return result
 
 
 def _peak_memory(record: Mapping[str, Any]) -> int:
-    memory = record.get("memory", {})
-    return int(memory.get("peak_allocated_bytes", 0))
+    memory = record.get("memory")
+    if not isinstance(memory, Mapping):
+        raise ValueError(f"Benchmark case {_case_key(record)} has no memory record")
+    value = memory.get("peak_allocated_bytes")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Benchmark case {_case_key(record)} has invalid peak memory")
+    return value
+
+
+def _report_mismatches(
+    current: Mapping[str, Any], baseline: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """Require two complete, promotion-ready reports with the same contract."""
+
+    mismatches: list[str] = []
+    for label, report in (("current", current), ("baseline", baseline)):
+        if report.get("schema_version") != REPORT_SCHEMA_VERSION:
+            mismatches.append(
+                f"{label} report schema_version must be {REPORT_SCHEMA_VERSION}"
+            )
+        if report.get("status") != "complete":
+            mismatches.append(f"{label} report status is not complete")
+        results = report.get("results")
+        expected = report.get("expected_case_count")
+        completed = report.get("completed_case_count")
+        if (
+            not isinstance(results, list)
+            or isinstance(expected, bool)
+            or not isinstance(expected, int)
+            or expected <= 0
+            or isinstance(completed, bool)
+            or not isinstance(completed, int)
+            or completed != expected
+            or len(results) != expected
+        ):
+            mismatches.append(f"{label} report case inventory is incomplete")
+    for field in REPORT_IDENTITY_FIELDS:
+        if field not in current:
+            mismatches.append(f"current report is missing {field}")
+            continue
+        if field not in baseline:
+            mismatches.append(f"baseline report is missing {field}")
+            continue
+        if current[field] != baseline[field]:
+            mismatches.append(
+                f"{field}: current={current[field]!r}, baseline={baseline[field]!r}"
+            )
+    return tuple(mismatches)
 
 
 def _environment_mismatches(
@@ -194,6 +279,12 @@ def _environment_mismatches(
 
     mismatches: list[str] = []
     for field in ENVIRONMENT_FIELDS:
+        if field not in current_environment:
+            mismatches.append(f"environment.{field}: current report is missing the field")
+            continue
+        if field not in baseline_environment:
+            mismatches.append(f"environment.{field}: baseline report is missing the field")
+            continue
         current_value = current_environment.get(field)
         baseline_value = baseline_environment.get(field)
         if current_value != baseline_value:
@@ -209,12 +300,58 @@ def _environment_mismatches(
         mismatches.append("environment.nvidia_smi: baseline report has no mapping")
     if isinstance(current_smi, Mapping) and isinstance(baseline_smi, Mapping):
         for field in NVIDIA_SMI_IDENTITY_FIELDS:
+            if field not in current_smi:
+                mismatches.append(
+                    f"environment.nvidia_smi.{field}: current report is missing the field"
+                )
+                continue
+            if field not in baseline_smi:
+                mismatches.append(
+                    f"environment.nvidia_smi.{field}: baseline report is missing the field"
+                )
+                continue
             current_value = current_smi.get(field)
             baseline_value = baseline_smi.get(field)
             if current_value != baseline_value:
                 mismatches.append(
                     f"environment.nvidia_smi.{field}: current={current_value!r}, "
                     f"baseline={baseline_value!r}"
+                )
+    return tuple(mismatches)
+
+
+def _artifact_mismatches(
+    current: Mapping[str, Any], baseline: Mapping[str, Any]
+) -> tuple[str, ...]:
+    """Reject comparisons across missing or different local artifact inventories."""
+
+    current_has_inventory = "artifacts" in current or "artifact_load_mode" in current
+    baseline_has_inventory = "artifacts" in baseline or "artifact_load_mode" in baseline
+    if not current_has_inventory and not baseline_has_inventory:
+        return ()
+
+    mismatches: list[str] = []
+    current_mode = current.get("artifact_load_mode")
+    baseline_mode = baseline.get("artifact_load_mode")
+    if current_mode != baseline_mode:
+        mismatches.append(
+            f"artifact_load_mode: current={current_mode!r}, baseline={baseline_mode!r}"
+        )
+
+    current_artifacts = current.get("artifacts")
+    baseline_artifacts = baseline.get("artifacts")
+    if not isinstance(current_artifacts, Mapping):
+        mismatches.append("current report has no artifact inventory mapping")
+    if not isinstance(baseline_artifacts, Mapping):
+        mismatches.append("baseline report has no artifact inventory mapping")
+    if isinstance(current_artifacts, Mapping) and isinstance(baseline_artifacts, Mapping):
+        for model_id in sorted(set(current_artifacts) | set(baseline_artifacts), key=str):
+            current_identity = current_artifacts.get(model_id)
+            baseline_identity = baseline_artifacts.get(model_id)
+            if current_identity != baseline_identity:
+                mismatches.append(
+                    f"artifacts.{model_id}: current={current_identity!r}, "
+                    f"baseline={baseline_identity!r}"
                 )
     return tuple(mismatches)
 
@@ -229,6 +366,8 @@ def compare_reports(
     current_cases = _throughput_records(current)
     baseline_cases = _throughput_records(baseline)
     environment_mismatches = _environment_mismatches(current, baseline)
+    artifact_mismatches = _artifact_mismatches(current, baseline)
+    report_mismatches = _report_mismatches(current, baseline)
     shared = sorted(current_cases.keys() & baseline_cases.keys())
     case_results: list[CaseGateResult] = []
 
@@ -291,6 +430,8 @@ def compare_reports(
         and not unmatched_current
         and not unmatched_baseline
         and not environment_mismatches
+        and not artifact_mismatches
+        and not report_mismatches
         and all(case.passed for case in case_results)
     )
     return GateResult(
@@ -299,6 +440,8 @@ def compare_reports(
         unmatched_current=unmatched_current,
         unmatched_baseline=unmatched_baseline,
         environment_mismatches=environment_mismatches,
+        artifact_mismatches=artifact_mismatches,
+        report_mismatches=report_mismatches,
     )
 
 

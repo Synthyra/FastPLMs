@@ -10,6 +10,7 @@ from __future__ import annotations
 import warnings
 from collections import OrderedDict
 from enum import Enum
+from threading import RLock
 
 import torch
 from einops import rearrange
@@ -27,6 +28,7 @@ except ImportError:
 _MAX_FLEX_CACHE_ENTRIES = 128
 _compiled_flex_attention: OrderedDict[tuple, object] = OrderedDict()
 _flex_block_masks: OrderedDict[tuple, BlockMask] = OrderedDict()
+_flex_cache_lock = RLock()
 
 
 def _remember(cache: OrderedDict, key: tuple, value):
@@ -36,6 +38,19 @@ def _remember(cache: OrderedDict, key: tuple, value):
     while len(cache) > _MAX_FLEX_CACHE_ENTRIES:
         cache.popitem(last=False)
     return value
+
+
+def clear_flex_attention_caches() -> None:
+    """Drop FastPLMs-owned compiled Flex callables and block masks.
+
+    This deliberately does not call :func:`torch.compiler.reset`, which would
+    clear process-global Torch compilation state owned by unrelated models.
+    Active forwards retain their local references and can complete safely.
+    """
+
+    with _flex_cache_lock:
+        _compiled_flex_attention.clear()
+        _flex_block_masks.clear()
 
 
 def _get_flex_attention_fn(
@@ -48,12 +63,15 @@ def _get_flex_attention_fn(
 ):
     """Return a compiled Flex callable for an explicit execution signature.
 
-    The signature contains the device, dtype, tensor shape, per-sequence
-    lengths, and mask semantics. This keeps compiled graphs from being reused
-    across incompatible padding or masking contracts.
+    Compilation depends on execution shape, device, dtype, and mask semantics.
+    Per-example padding lengths are represented by the ``BlockMask`` argument
+    and must not create a new compiled graph for every batch composition.
     """
     if flex_attention is None:
         return None
+    # Retain the keyword for compatibility with remote-code artifacts while
+    # deliberately excluding data-dependent lengths from the compile key.
+    del sequence_lengths
     flex_mod = torch.nn.attention.flex_attention
     if getattr(flex_mod, "_FLEX_ATTENTION_DISABLE_COMPILE_DEBUG", False):
         return flex_attention
@@ -61,16 +79,69 @@ def _get_flex_attention_fn(
         None if device is None else str(device),
         None if dtype is None else str(dtype),
         shape,
-        sequence_lengths,
         mask_semantics,
     )
-    compiled = _compiled_flex_attention.get(key)
-    if compiled is None:
-        compiled = torch.compile(flex_attention, dynamic=False)
-        _remember(_compiled_flex_attention, key, compiled)
-    else:
-        _compiled_flex_attention.move_to_end(key)
+    with _flex_cache_lock:
+        compiled = _compiled_flex_attention.get(key)
+        if compiled is None:
+            compiled = torch.compile(flex_attention, dynamic=False)
+            _remember(_compiled_flex_attention, key, compiled)
+        else:
+            _compiled_flex_attention.move_to_end(key)
     return compiled
+
+
+def _get_flex_block_mask(
+    *,
+    mask_pattern: torch.Tensor,
+    batch_size: int,
+    query_length: int,
+    key_value_length: int,
+    device: torch.device,
+    dtype: torch.dtype | None,
+    mask_semantics: str,
+    mask_mod,
+) -> BlockMask:
+    """Return a bounded, exact-pattern cached Flex ``BlockMask``.
+
+    The complete pattern is transferred to the host once to avoid a CUDA
+    synchronization per batch row. Execution dtype remains part of the key
+    because compiled Flex plans can specialize on it even though the pattern
+    tensor itself is boolean or integer.
+    """
+    if create_block_mask is None:
+        raise RuntimeError(
+            "'flex_attention' was requested, but torch.create_block_mask is unavailable."
+        )
+    pattern = mask_pattern.detach().to(device=device).contiguous()
+    # One device-to-host transfer is required for an exact cache identity. Use
+    # the contiguous buffer directly instead of materializing one Python int
+    # per byte, which is prohibitively expensive for long batched sequences.
+    host_pattern = pattern.to(device="cpu").contiguous()
+    pattern_bytes = host_pattern.view(torch.uint8).numpy().tobytes(order="C")
+    cache_key = (
+        str(device),
+        None if dtype is None else str(dtype),
+        (batch_size, query_length, key_value_length),
+        str(pattern.dtype),
+        pattern_bytes,
+        mask_semantics,
+    )
+    with _flex_cache_lock:
+        flex_block_mask = _flex_block_masks.get(cache_key)
+        if flex_block_mask is None:
+            flex_block_mask = create_block_mask(
+                mask_mod,
+                batch_size,
+                1,
+                query_length,
+                key_value_length,
+                device=device,
+            )
+            _remember(_flex_block_masks, cache_key, flex_block_mask)
+        else:
+            _flex_block_masks.move_to_end(cache_key)
+    return flex_block_mask
 
 
 # Hugging Face `kernels` exposes slightly different APIs for FlashAttention 2
@@ -106,6 +177,14 @@ def _load_kernels_flash(implementation: str) -> tuple[object, str]:
             f"{repository}@{kernel_spec.revision} exposed {flash_kernel_variant!r}; "
             f"expected {kernel_spec.expected_variant!r}."
         )
+    if not all(
+        callable(getattr(flash_kernel, name, None))
+        for name in ("flash_attn_func", "flash_attn_varlen_func")
+    ):
+        raise RuntimeError(
+            f"{repository}@{kernel_spec.revision} does not expose the "
+            "autograd-enabled flash_attn_func and flash_attn_varlen_func APIs."
+        )
     return flash_kernel, flash_kernel_variant
 
 
@@ -124,8 +203,7 @@ def _validate_kernels_flash_dtype(
     if len(tensor_dtypes) != 1:
         observed = ", ".join(sorted(str(dtype) for dtype in tensor_dtypes))
         raise RuntimeError(
-            f"{implementation!r} requires Q, K, and V to share one dtype; "
-            f"received {observed}."
+            f"{implementation!r} requires Q, K, and V to share one dtype; received {observed}."
         )
     runtime_dtype = query_states.dtype
     if (
@@ -204,31 +282,23 @@ def _kernels_flash_forward(
     """
     flash_kernel, flash_kernel_variant = _ensure_flash_kernels_loaded(implementation)
     if flash_kernel_variant == "flash_attn2":
-        return flash_kernel.fwd(
+        output = flash_kernel.flash_attn_func(
+            q=query_states,
+            k=key_states,
+            v=value_states,
+            dropout_p=0.0,
+            softmax_scale=softmax_scale,
+            causal=causal,
+        )
+        return output[0] if isinstance(output, tuple) else output
+    if flash_kernel_variant == "flash_attn3":
+        output = flash_kernel.flash_attn_func(
             q=query_states,
             k=key_states,
             v=value_states,
             softmax_scale=softmax_scale,
-            is_causal=causal,
-        )[0]
-    if flash_kernel_variant == "flash_attn3":
-        try:
-            output = flash_kernel.flash_attn_func(
-                q=query_states,
-                k=key_states,
-                v=value_states,
-                softmax_scale=softmax_scale,
-                causal=causal,
-            )
-        except TypeError:
-            output = flash_kernel.flash_attn_func(
-                query_states,
-                key_states,
-                value_states,
-                0.0,
-                softmax_scale,
-                causal,
-            )
+            causal=causal,
+        )
         if isinstance(output, tuple):
             return output[0]
         return output
@@ -254,7 +324,21 @@ def _kernels_flash_varlen_forward(
     """
     flash_kernel, flash_kernel_variant = _ensure_flash_kernels_loaded(implementation)
     if flash_kernel_variant == "flash_attn2":
-        return flash_kernel.varlen_fwd(
+        output = flash_kernel.flash_attn_varlen_func(
+            q=query_states,
+            k=key_states,
+            v=value_states,
+            cu_seqlens_q=cu_seqlens_q,
+            cu_seqlens_k=cu_seqlens_k,
+            max_seqlen_q=max_seqlen_in_batch_q,
+            max_seqlen_k=max_seqlen_in_batch_k,
+            dropout_p=0.0,
+            softmax_scale=softmax_scale,
+            causal=causal,
+        )
+        return output[0] if isinstance(output, tuple) else output
+    if flash_kernel_variant == "flash_attn3":
+        output = flash_kernel.flash_attn_varlen_func(
             q=query_states,
             k=key_states,
             v=value_states,
@@ -263,34 +347,8 @@ def _kernels_flash_varlen_forward(
             max_seqlen_q=max_seqlen_in_batch_q,
             max_seqlen_k=max_seqlen_in_batch_k,
             softmax_scale=softmax_scale,
-            is_causal=causal,
-        )[0]
-    if flash_kernel_variant == "flash_attn3":
-        try:
-            output = flash_kernel.flash_attn_varlen_func(
-                q=query_states,
-                k=key_states,
-                v=value_states,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_k=cu_seqlens_k,
-                max_seqlen_q=max_seqlen_in_batch_q,
-                max_seqlen_k=max_seqlen_in_batch_k,
-                softmax_scale=softmax_scale,
-                causal=causal,
-            )
-        except TypeError:
-            output = flash_kernel.flash_attn_varlen_func(
-                query_states,
-                key_states,
-                value_states,
-                cu_seqlens_q,
-                cu_seqlens_k,
-                max_seqlen_in_batch_q,
-                max_seqlen_in_batch_k,
-                0.0,
-                softmax_scale,
-                causal,
-            )
+            causal=causal,
+        )
         if isinstance(output, tuple):
             return output[0]
         return output
@@ -303,7 +361,16 @@ class IndexFirstAxis(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, indices) -> torch.Tensor:
         ctx.save_for_backward(indices)
-        assert input.ndim >= 2
+        if input.ndim < 2:
+            raise ValueError(
+                "index_first_axis input must have at least two dimensions; "
+                f"received shape {tuple(input.shape)}."
+            )
+        if indices.ndim != 1:
+            raise ValueError(
+                "index_first_axis indices must be one-dimensional; "
+                f"received shape {tuple(indices.shape)}."
+            )
         ctx.first_axis_dim, other_shape = input.shape[0], input.shape[1:]
         second_dim = other_shape.numel()
         return torch.gather(
@@ -313,7 +380,11 @@ class IndexFirstAxis(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output) -> tuple[torch.Tensor, None]:
         (indices,) = ctx.saved_tensors
-        assert grad_output.ndim >= 2
+        if grad_output.ndim < 2:
+            raise RuntimeError(
+                "index_first_axis received an invalid gradient with fewer than "
+                "two dimensions."
+            )
         other_shape = grad_output.shape[1:]
         grad_output = rearrange(grad_output, "b ... -> b (...)")
         grad_input = torch.zeros(
@@ -329,8 +400,16 @@ class IndexPutFirstAxis(torch.autograd.Function):
     @staticmethod
     def forward(ctx, values, indices, first_axis_dim) -> torch.Tensor:
         ctx.save_for_backward(indices)
-        assert indices.ndim == 1
-        assert values.ndim >= 2
+        if indices.ndim != 1:
+            raise ValueError(
+                "index_put_first_axis indices must be one-dimensional; "
+                f"received shape {tuple(indices.shape)}."
+            )
+        if values.ndim < 2:
+            raise ValueError(
+                "index_put_first_axis values must have at least two dimensions; "
+                f"received shape {tuple(values.shape)}."
+            )
         output = torch.zeros(
             first_axis_dim, *values.shape[1:], device=values.device, dtype=values.dtype
         )
@@ -400,9 +479,7 @@ def _validate_flash_padding_mask(
     """Validate the self-attention padding mask used by the varlen kernels."""
 
     if attention_mask_2d.ndim != 2:
-        raise ValueError(
-            "FlashAttention padding masks must have shape (batch, sequence_length)."
-        )
+        raise ValueError("FlashAttention padding masks must have shape (batch, sequence_length).")
     expected_shape = query_states.shape[:2]
     if tuple(attention_mask_2d.shape) != tuple(expected_shape):
         raise ValueError(
@@ -412,13 +489,10 @@ def _validate_flash_padding_mask(
         )
     if key_states.shape[:2] != expected_shape or value_states.shape[:2] != expected_shape:
         raise ValueError(
-            "Masked FlashAttention requires Q, K, and V to share batch and "
-            "sequence dimensions."
+            "Masked FlashAttention requires Q, K, and V to share batch and sequence dimensions."
         )
     if attention_mask_2d.device != query_states.device:
-        raise ValueError(
-            "FlashAttention padding mask and Q, K, and V must be on the same device."
-        )
+        raise ValueError("FlashAttention padding mask and Q, K, and V must be on the same device.")
     return attention_mask_2d.to(dtype=torch.bool)
 
 
@@ -549,6 +623,27 @@ def warn_attention_backend_fallback(
     )
 
 
+def resolve_attention_backend_for_call(
+    requested_backend: str | AttentionBackend,
+    *,
+    output_attentions: bool,
+) -> AttentionBackend:
+    """Resolve the effective backend for one call and report substitutions once."""
+
+    requested = resolve_attention_backend(requested_backend)
+    if not output_attentions or requested == AttentionBackend.EAGER:
+        return requested
+    warn_attention_backend_fallback(
+        requested,
+        effective_backend=AttentionBackend.EAGER,
+        reason=(
+            "output_attentions=True requires the full materialized attention probability "
+            "matrix, which optimized PyTorch attention APIs do not return."
+        ),
+    )
+    return AttentionBackend.EAGER
+
+
 def resolve_attention_backend(
     requested_backend: str | AttentionBackend | None,
 ) -> AttentionBackend:
@@ -610,8 +705,22 @@ def get_attention_mask(
     if attention_mask is None:
         return None, None, None
 
-    effective_backend = resolve_attention_backend(effective_backend)
+    if attention_mask.ndim != 2:
+        raise ValueError(
+            "attention_mask must have shape (batch, sequence_length); "
+            f"received rank {attention_mask.ndim} with shape {tuple(attention_mask.shape)}."
+        )
+    expected_shape = (batch_size, seq_len)
+    if tuple(attention_mask.shape) != expected_shape:
+        raise ValueError(
+            "attention_mask shape must match the input batch and sequence dimensions; "
+            f"expected {expected_shape}, received {tuple(attention_mask.shape)}."
+        )
     attention_mask_2d = attention_mask.to(device=device, dtype=torch.bool)
+    if not bool(attention_mask_2d.any(dim=1).all()):
+        raise ValueError("attention_mask must keep at least one valid key per batch row.")
+
+    effective_backend = resolve_attention_backend(effective_backend)
 
     if effective_backend.is_flash:
         return attention_mask_2d, None, None
@@ -621,28 +730,6 @@ def get_attention_mask(
             raise RuntimeError(
                 "'flex_attention' was requested, but torch.create_block_mask is unavailable."
             )
-        valid_lengths = attention_mask_2d.sum(dim=-1)
-        sequence_lengths = tuple(int(length) for length in valid_lengths.tolist())
-        # Packed multimodal batches can contain more than one valid span. Cache
-        # the exact key-validity pattern, not just row lengths, so masks with
-        # equal token counts can never reuse an incompatible BlockMask.
-        valid_positions = tuple(
-            tuple(int(index) for index in row.nonzero(as_tuple=False).flatten().tolist())
-            for row in attention_mask_2d
-        )
-        cache_key = (
-            str(device),
-            None if dtype is None else str(dtype),
-            (batch_size, seq_len, seq_len),
-            sequence_lengths,
-            valid_positions,
-            mask_semantics,
-        )
-        flex_block_mask = _flex_block_masks.get(cache_key)
-        if flex_block_mask is not None:
-            _flex_block_masks.move_to_end(cache_key)
-            return attention_mask_2d, None, flex_block_mask
-
         def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
             del head_idx, q_idx
             # Match eager and SDPA: padding masks suppress invalid keys only.
@@ -650,10 +737,16 @@ def get_attention_mask(
             # finite; downstream residue masks exclude their outputs.
             return attention_mask_2d[batch_idx, kv_idx]
 
-        flex_block_mask = create_block_mask(
-            mask_mod, batch_size, 1, seq_len, seq_len, device=device
+        flex_block_mask = _get_flex_block_mask(
+            mask_pattern=attention_mask_2d,
+            batch_size=batch_size,
+            query_length=seq_len,
+            key_value_length=seq_len,
+            device=device,
+            dtype=dtype,
+            mask_semantics=mask_semantics,
+            mask_mod=mask_mod,
         )
-        _remember(_flex_block_masks, cache_key, flex_block_mask)
         return attention_mask_2d, None, flex_block_mask
 
     # SDPA/manual masks only keys. Padding queries still attend to real keys, so
@@ -673,9 +766,10 @@ def bool_to_additive_mask(
     That silently drops the mask. Always allocate a float tensor first, then fill it.
     This helper is the sanctioned way to build an SDPA additive mask from a bool validity mask.
     """
-    assert bool_mask.dtype == torch.bool, (
-        f"bool_to_additive_mask requires a bool tensor, got dtype={bool_mask.dtype}"
-    )
+    if bool_mask.dtype != torch.bool:
+        raise TypeError(
+            f"bool_to_additive_mask requires a bool tensor, got dtype={bool_mask.dtype}"
+        )
     additive = torch.zeros_like(bool_mask, dtype=dtype)
     additive.masked_fill_(bool_mask.logical_not(), float("-inf"))
     return additive

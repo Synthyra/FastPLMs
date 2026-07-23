@@ -86,12 +86,63 @@ def test_package_manifest_is_complete_and_typed() -> None:
     for model in registry.by_family("ankh"):
         assert model.artifact_source == "official"
         assert model.artifact_checkpoint is model.official
+        assert re.fullmatch(r"[0-9a-f]{64}", model.canonical_state_sha256 or "")
+        assert model.family.requires_complete_weight_publication
+    assert all(
+        not model.family.requires_complete_weight_publication
+        for model in registry.values()
+        if model.family.id != "ankh"
+    )
     for model in registry.by_family("dplm2"):
         assert model.artifact_source == "official"
         assert model.artifact_checkpoint is model.official
+        assert re.fullmatch(r"[0-9a-f]{64}", model.canonical_state_sha256 or "")
+    assert all(
+        model.canonical_state_sha256 is None
+        for model in registry.values()
+        if model.artifact_source == "fast"
+    )
+    assert registry.families["dplm"].hub_license == "apache-2.0"
+    assert all(family.weights_publication_allowed for family in registry.families.values())
+    dplm_source = registry.upstreams["dplm"]
+    assert {item.path for item in dplm_source.distribution_files} == {
+        "LICENSE",
+        "PROVENANCE.md",
+    }
     for source in registry.upstreams.values():
         assert tuple(item.path for item in source.license_digests) == source.license_files
         assert source.distribution_files
+
+
+def test_weight_publication_permission_must_be_explicit(tmp_path: Path) -> None:
+    manifest_path = ROOT / "src" / "fastplms" / "models.toml"
+    manifest = manifest_path.read_text(encoding="utf-8")
+    assert manifest.count("weights_publication_allowed = true") == 10
+    missing_decision = manifest.replace("weights_publication_allowed = true\n", "", 1)
+    candidate = tmp_path / "models.toml"
+    candidate.write_text(missing_decision, encoding="utf-8")
+
+    with pytest.raises(
+        RegistryError,
+        match=r"weights_publication_allowed must be declared explicitly",
+    ):
+        load_model_registry(candidate)
+
+
+def test_official_artifact_canonical_state_commitment_is_required(tmp_path: Path) -> None:
+    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
+    missing_commitment = re.sub(
+        r'^canonical_state_sha256 = "[0-9a-f]{64}"\n',
+        "",
+        manifest,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    candidate = tmp_path / "models.toml"
+    candidate.write_text(missing_commitment, encoding="utf-8")
+
+    with pytest.raises(RegistryError, match="canonical_state_sha256 must be a SHA-256"):
+        load_model_registry(candidate)
 
 
 def test_bf16_calibrations_are_scoped_to_models_and_backends() -> None:
@@ -137,7 +188,18 @@ def test_bf16_calibrations_are_scoped_to_models_and_backends() -> None:
 
 def test_generation_contracts_are_explicit_and_exact() -> None:
     registry = load_model_registry()
-    required = {"dplm_150m", "dplm_650m", "dplm_3b", "dplm2_150m", "dplm2_650m"}
+    required = {
+        "ankh_base",
+        "ankh_large",
+        "ankh2_large",
+        "ankh3_large",
+        "ankh3_xl",
+        "dplm_150m",
+        "dplm_650m",
+        "dplm_3b",
+        "dplm2_150m",
+        "dplm2_650m",
+    }
     unavailable = {"dplm2_3b"}
 
     assert {model.id for model in registry.values() if model.generation_contract == "required"} == (
@@ -164,6 +226,8 @@ def test_esmfold2_ccd_runtime_asset_is_typed_and_immutable() -> None:
     assert asset.size == 417306584
     assert asset.consumer_family == "esmfold2"
     assert asset.trust_kind == "hash_pinned_pickle"
+    assert asset.license_expression == "MIT"
+    assert asset.offline_behavior == "requires_cached_verified_file"
 
 
 def test_attention_kernel_revisions_are_typed_and_immutable() -> None:
@@ -392,6 +456,11 @@ def test_manifest_rejects_unknown_backbone_model(tmp_path: Path) -> None:
             'path = "ccd.bin"',
             r"runtime_assets\[0\]\.path must end in '.pkl'",
         ),
+        (
+            'offline_behavior = "requires_cached_verified_file"',
+            'offline_behavior = "download_if_missing"',
+            r"runtime_assets\[0\]\.offline_behavior is unsupported",
+        ),
     ),
 )
 def test_manifest_rejects_invalid_runtime_asset_fields(
@@ -481,6 +550,22 @@ def test_hub_license_metadata_is_typed_and_complete() -> None:
     for family_id, family in registry.families.items():
         if family_id != "e1":
             assert dict(family.hub_license_metadata) == {"license": family.hub_license}
+
+
+def test_dplm_checkpoint_license_evidence_is_immutable_and_complete() -> None:
+    registry = load_model_registry()
+    revision = registry.upstreams["dplm"].revision
+    evidence = (ROOT / "LICENSES" / "dplm" / "PROVENANCE.md").read_text(encoding="utf-8")
+
+    assert revision == "8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d"
+    assert f"https://github.com/bytedance/dplm/blob/{revision}/LICENSE" in evidence
+    assert f"https://github.com/bytedance/dplm/blob/{revision}/README.md#overview" in evidence
+    for family_id in ("dplm", "dplm2"):
+        family = registry.families[family_id]
+        assert family.checkpoint_license == "Apache-2.0"
+        assert family.hub_license == "apache-2.0"
+        assert family.weights_publication_allowed
+        assert "LICENSES/dplm/PROVENANCE.md" in family.conversion_provenance
 
 
 @pytest.mark.parametrize(
@@ -668,7 +753,7 @@ def test_manifest_rejects_a_fifth_esmfold2_checkpoint(tmp_path: Path) -> None:
     manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
     invalid = manifest.replace(
         'id = "esmfold"\nfamily = "esmfold"',
-        'id = "esmfold_legacy_fifth"\nfamily = "esmfold2"',
+        'id = "esmfold_legacy_fifth"\nfamily = "esmfold2"\nmsa_conditioning = false',
         1,
     )
     invalid = invalid.replace(
@@ -719,6 +804,54 @@ def test_manifest_rejects_missing_conversion_record(tmp_path: Path) -> None:
     path.write_text(invalid, encoding="utf-8")
 
     with pytest.raises(RegistryError, match="conversion_provenance"):
+        load_model_registry(path)
+
+
+@pytest.mark.parametrize(
+    "runtime_paths",
+    [
+        '["../secret.py"]',
+        '["C:/secret.py"]',
+        '["./__init__.py"]',
+        r"['models\unsafe.py']",
+        '["__init__.py", "__init__.py"]',
+        '["models/__pycache__"]',
+        '["NUL"]',
+        '["models/con.py"]',
+        '["models/bad:name.py"]',
+        '["models/trailing."]',
+    ],
+)
+def test_manifest_rejects_nonportable_runtime_paths(
+    tmp_path: Path,
+    runtime_paths: str,
+) -> None:
+    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
+    invalid = re.sub(
+        r"^runtime_paths = .*?$",
+        lambda _: f"runtime_paths = {runtime_paths}",
+        manifest,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    path = tmp_path / "models.toml"
+    path.write_text(invalid, encoding="utf-8")
+
+    with pytest.raises(RegistryError, match=r"runtime_paths|Unsafe runtime path"):
+        load_model_registry(path)
+
+
+def test_manifest_rejects_non_boolean_complete_publication_policy(tmp_path: Path) -> None:
+    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
+    invalid = manifest.replace(
+        "requires_complete_weight_publication = true",
+        'requires_complete_weight_publication = "yes"',
+        1,
+    )
+    path = tmp_path / "models.toml"
+    path.write_text(invalid, encoding="utf-8")
+
+    with pytest.raises(RegistryError, match="must be a boolean"):
         load_model_registry(path)
 
 

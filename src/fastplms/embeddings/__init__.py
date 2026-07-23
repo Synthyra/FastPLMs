@@ -1,10 +1,18 @@
 """Ordered, residue-aware protein embedding utilities."""
 
 from .pooling import POOLING_NAMES, Pooler, pagerank_weights
-from .runner import EmbeddingMixin, embed_dataset, parse_fasta, select_hidden_state_embeddings
+from .runner import (
+    EmbeddingMixin,
+    embed_dataset,
+    iter_fasta,
+    parse_fasta,
+    select_hidden_state_embeddings,
+)
 from .storage import (
     DEFAULT_SHARD_SIZE,
     append_sqlite_records,
+    convert_legacy_sqlite,
+    garbage_collect_safetensors_generations,
     initialize_sqlite_run,
     load_legacy_pth,
     load_result,
@@ -37,8 +45,11 @@ __all__ = [
     "Pooler",
     "TensorValue",
     "append_sqlite_records",
+    "convert_legacy_sqlite",
     "embed_dataset",
+    "garbage_collect_safetensors_generations",
     "initialize_sqlite_run",
+    "iter_fasta",
     "load_legacy_pth",
     "load_result",
     "load_safetensors_result",

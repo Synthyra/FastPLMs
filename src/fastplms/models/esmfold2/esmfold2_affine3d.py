@@ -146,7 +146,14 @@ class RotationQuat(Rotation):
     """A rotation represented by a real-first quaternion."""
 
     def __init__(self, quats: torch.Tensor, normalized: bool = False):
-        assert quats.shape[-1] == 4
+        if not isinstance(quats, torch.Tensor):
+            raise TypeError("quats must be a Torch tensor.")
+        if quats.ndim == 0 or quats.shape[-1] != 4:
+            raise ValueError(
+                f"quats must have trailing dimension 4, got shape {tuple(quats.shape)}."
+            )
+        if not isinstance(normalized, bool):
+            raise TypeError("normalized must be a boolean.")
         self._normalized = normalized
         if normalized:
             quats = F.normalize(quats.to(torch.float32), dim=-1)
@@ -222,9 +229,15 @@ class RotationMatrix(Rotation):
     """A rotation represented by a dense FP32 matrix."""
 
     def __init__(self, rots: torch.Tensor):
-        if rots.shape[-1] == 9:
+        if not isinstance(rots, torch.Tensor):
+            raise TypeError("rots must be a Torch tensor.")
+        if rots.ndim > 0 and rots.shape[-1] == 9:
             rots = rots.unflatten(-1, (3, 3))
-        assert rots.shape[-2:] == (3, 3)
+        if rots.ndim < 2 or rots.shape[-2:] != (3, 3):
+            raise ValueError(
+                "rots must have trailing shape (3, 3) or flattened width 9, got "
+                f"shape {tuple(rots.shape)}."
+            )
         self._rots = rots.to(torch.float32)
 
     @property
@@ -332,7 +345,20 @@ class Affine3D:
     rot: Rotation
 
     def __post_init__(self) -> None:
-        assert self.trans.shape[:-1] == self.rot.shape
+        if not isinstance(self.trans, torch.Tensor):
+            raise TypeError("trans must be a Torch tensor.")
+        if not isinstance(self.rot, Rotation):
+            raise TypeError("rot must implement the ESMFold2 Rotation interface.")
+        if self.trans.ndim == 0 or self.trans.shape[-1] != 3:
+            raise ValueError(
+                "trans must have trailing dimension 3, got "
+                f"shape {tuple(self.trans.shape)}."
+            )
+        if self.trans.shape[:-1] != self.rot.shape:
+            raise ValueError(
+                "translation and rotation batch shapes must match, got "
+                f"{tuple(self.trans.shape[:-1])} and {tuple(self.rot.shape)}."
+            )
 
     @property
     def shape(self) -> torch.Size:
@@ -389,8 +415,17 @@ class Affine3D:
 
     @staticmethod
     def from_tensor(tensor: torch.Tensor) -> Affine3D:
+        if not isinstance(tensor, torch.Tensor):
+            raise TypeError("tensor must be a Torch tensor.")
+        if tensor.ndim == 0:
+            raise ValueError("tensor must have at least one dimension.")
         width = tensor.shape[-1]
         if width == 4:
+            if tensor.ndim < 2 or tensor.shape[-2] not in (3, 4):
+                raise ValueError(
+                    "matrix-form affine tensors must have trailing shape (3, 4) or "
+                    f"(4, 4), got {tuple(tensor.shape)}."
+                )
             translation = tensor[..., :3, 3]
             rotation: Rotation = RotationMatrix(tensor[..., :3, :3])
         elif width == 6:
@@ -404,7 +439,7 @@ class Affine3D:
             rotation = RotationMatrix(tensor[..., :-3].unflatten(-1, (3, 3)))
         else:
             raise RuntimeError(
-                f"Cannot detect rotation fromat from {tensor.shape[-1] - 3}-d flat vector"
+                f"Cannot detect rotation format from {tensor.shape[-1] - 3}-d flat vector"
             )
         return Affine3D(translation, rotation)
 
@@ -433,6 +468,10 @@ class Affine3D:
 
     @staticmethod
     def cat(affines: list[Affine3D], dim: int = 0) -> Affine3D:
+        if not affines:
+            raise ValueError("affines must contain at least one transform.")
+        if any(not isinstance(affine, Affine3D) for affine in affines):
+            raise TypeError("affines must contain only Affine3D instances.")
         if dim < 0:
             dim = len(affines[0].shape) + dim
         return Affine3D.from_tensor(torch.cat([affine.tensor for affine in affines], dim=dim))
@@ -513,6 +552,14 @@ def build_affine3d_from_coordinates(
 ) -> tuple[Affine3D, torch.Tensor]:
     """Build residue frames from X with shape (b, l, 3, 3)."""
 
+    if not isinstance(coords, torch.Tensor):
+        raise TypeError("coords must be a Torch tensor.")
+    if coords.ndim != 4 or coords.shape[-2:] != (3, 3):
+        raise ValueError(
+            "coords must have shape (batch, length, 3, 3), got "
+            f"{tuple(coords.shape)}."
+        )
+
     maximum_distance = 1e6
     coord_mask = torch.all(
         torch.all(
@@ -534,8 +581,6 @@ def build_affine3d_from_coordinates(
     average_affine = backbone_affine(average.float()).as_matrix()
 
     b, length, _, _ = coords.shape
-    assert isinstance(b, int)
-    assert isinstance(length, int)
     rotation = average_affine.rot.tensor[..., None, :].expand(b, length, 9)
     translation = average_affine.trans[..., None, :].expand(b, length, 3)
     identity = RotationMatrix.identity(

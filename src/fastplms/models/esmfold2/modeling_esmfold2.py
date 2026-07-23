@@ -26,13 +26,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from transformers.modeling_outputs import ModelOutput
 from transformers.modeling_utils import PreTrainedModel
 
 from ...attention import get_attn_implementation, set_config_attn_implementation
 
 try:
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin, TTTConfig
-except ImportError:
+except ModuleNotFoundError as error:
+    if error.name != "fastplms":
+        raise
     from ..ttt import FastPLMTestTimeTrainingMixin, TTTConfig
 
 from .attention import ESMFold2AttentionMixin
@@ -50,6 +53,7 @@ from .esmfold2_constants_esm3 import (
 from .modeling_esmfold2_common import (
     CHAR_VOCAB_SIZE,
     MAX_ATOMIC_NUMBER,
+    MSA_CONDITIONING_INPUT_NAMES,
     NUM_RES_TYPES,
     DiffusionStructureHead,
     FoldingTrunk,
@@ -68,6 +72,8 @@ from .modeling_esmfold2_common import (
     gather_token_to_atom,
     maybe_apply_msa_column_masking,
     maybe_subsample_msa,
+    validate_kernel_backend,
+    validate_msa_conditioning_inputs,
 )
 
 _ESMC_FP8_LINEAR_SUFFIX = ".attn.out_proj"
@@ -82,6 +88,82 @@ _NONPOLYMER_ID = 4
 # ``model.set_chunk_size(...)``; pass None to disable chunking (faster for
 # short l but OOM-prone past approximately 600).
 _DEFAULT_CHUNK_SIZE = 64
+
+
+@dataclass
+class ESMFold2Output(ModelOutput):
+    """Transformers-compatible output shared by released and experimental folds.
+
+    ``last_hidden_state`` is the final pair representation. When requested,
+    ``hidden_states`` contains the token-input representation followed by the
+    final pair representation. The structure trunks do not expose normalized
+    post-softmax attention tensors, so ``output_attentions=True`` fails
+    explicitly instead of returning incomplete data.
+    """
+
+    last_hidden_state: Tensor | None = None
+    hidden_states: tuple[Tensor, ...] | None = None
+    attentions: tuple[Tensor, ...] | None = None
+    distogram_logits: Tensor | None = None
+    sample_atom_coords: Tensor | None = None
+    representative_atom_coords: Tensor | None = None
+    atom_pad_mask: Tensor | None = None
+    residue_index: Tensor | None = None
+    entity_id: Tensor | None = None
+    plddt_logits: Tensor | None = None
+    plddt: Tensor | None = None
+    plddt_per_atom: Tensor | None = None
+    plddt_ca: Tensor | None = None
+    complex_plddt: Tensor | None = None
+    complex_iplddt: Tensor | None = None
+    pae_logits: Tensor | None = None
+    pae: Tensor | None = None
+    pde_logits: Tensor | None = None
+    pde: Tensor | None = None
+    resolved_logits: Tensor | None = None
+    ptm: Tensor | None = None
+    iptm: Tensor | None = None
+    pair_chains_iptm: Tensor | None = None
+
+
+def _resolve_structure_output_controls(
+    config: ESMFold2Config,
+    *,
+    output_attentions: bool | None,
+    output_hidden_states: bool | None,
+    return_dict: bool | None,
+) -> tuple[bool, bool]:
+    resolved_attentions = (
+        config.output_attentions if output_attentions is None else output_attentions
+    )
+    if resolved_attentions:
+        raise NotImplementedError(
+            "ESMFold2 does not expose normalized attention tensors from its structure "
+            "trunk. output_attentions=True is unsupported."
+        )
+    resolved_hidden_states = (
+        config.output_hidden_states
+        if output_hidden_states is None
+        else output_hidden_states
+    )
+    resolved_return_dict = config.use_return_dict if return_dict is None else return_dict
+    return bool(resolved_hidden_states), bool(resolved_return_dict)
+
+
+def _finalize_structure_output(
+    output: dict[str, Tensor],
+    *,
+    token_input_state: Tensor,
+    pair_state: Tensor,
+    output_hidden_states: bool,
+    return_dict: bool,
+) -> ESMFold2Output | tuple[Any, ...]:
+    model_output = ESMFold2Output(
+        last_hidden_state=pair_state,
+        hidden_states=(token_input_state, pair_state) if output_hidden_states else None,
+        **output,
+    )
+    return model_output if return_dict else model_output.to_tuple()
 
 
 class _ESMFold2ESMplusplusAdapter(nn.Module):
@@ -121,7 +203,8 @@ class _ESMFold2ESMplusplusAdapter(nn.Module):
         )
         if output_hidden_states:
             hidden_states = output.hidden_states
-            assert hidden_states is not None, "ESM++ did not return hidden states."
+            if hidden_states is None:
+                raise RuntimeError("ESM++ did not return requested hidden states.")
             if isinstance(hidden_states, torch.Tensor):
                 output.hidden_states = hidden_states
             else:
@@ -134,6 +217,7 @@ def _load_fastplms_esmplusplus_for_esmfold2(
     attn_backend: str,
     device: torch.device,
     dtype: torch.dtype,
+    local_files_only: bool = False,
 ) -> _ESMFold2ESMplusplusAdapter:
     from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
         ESMplusplusConfig,
@@ -142,7 +226,11 @@ def _load_fastplms_esmplusplus_for_esmfold2(
 
     normalized_path = normalize_esmc_id(esmc_model_path)
     source_revision, _ = _manifest_esmc_checkpoint_contract(normalized_path)
-    revision_kwargs = {"revision": source_revision} if source_revision is not None else {}
+    revision_kwargs: dict[str, Any] = {
+        "local_files_only": local_files_only,
+    }
+    if source_revision is not None:
+        revision_kwargs["revision"] = source_revision
     esmc_config = ESMplusplusConfig.from_pretrained(normalized_path, **revision_kwargs)
     set_config_attn_implementation(esmc_config, attn_backend)
     load_kwargs: dict[str, Any] = {
@@ -328,6 +416,7 @@ def _install_esmc_backbone(
     *,
     precision: str,
     device: str | torch.device | None = None,
+    local_files_only: bool = False,
 ) -> None:
     target_device = torch.device(device) if device is not None else model.device
     if target_device.type == "cuda" and target_device.index is None and torch.cuda.is_available():
@@ -351,6 +440,7 @@ def _install_esmc_backbone(
         attn_backend=attention_implementation,
         device=target_device,
         dtype=dtype,
+        local_files_only=local_files_only,
     )
     if esmc.config.hidden_size != model.config.lm_d_model:
         raise ValueError(
@@ -379,6 +469,7 @@ def _install_esmc_backbone(
     model._esmc_source = normalized_source
     model._esmc_source_revision = source_revision
     model._esmc_source_files = source_files
+    model._esmc_local_files_only = local_files_only
     model._esmc_precision_policy = precision
     model._esmc_precision_status = status
     model._esmc_fp8 = status.resolved == "fp8"
@@ -816,6 +907,7 @@ class ESMFold2Model(
         self._esmc_source: str = config.esmc_id
         self._esmc_source_revision: str | None = None
         self._esmc_source_files: dict[str, str] = {}
+        self._esmc_local_files_only = False
         self._esmc_precision_policy: str = str(getattr(config, "esmc_precision", "auto"))
         self._esmc_precision_status = ESMCPrecisionStatus(
             requested=self._esmc_precision_policy,
@@ -826,6 +918,7 @@ class ESMFold2Model(
         )
         self._ttt_lm_head: nn.Module | None = None
         self._esmfold2_input_builder: Any | None = None
+        self._kernel_backend: str | None = None
 
         pf = config.folding_trunk
         self.folding_trunk = FoldingTrunk(n_layers=pf.n_layers, d_pair=d_pair, expansion_ratio=4)
@@ -881,15 +974,23 @@ class ESMFold2Model(
         esmc_model_path: str,
         precision: ESMCPrecision = "auto",
         device: str | torch.device | None = None,
+        local_files_only: bool = False,
     ) -> None:
         """Load canonical ESMC weights and resolve the inference precision."""
 
-        _install_esmc_backbone(self, esmc_model_path, precision=precision, device=device)
+        _install_esmc_backbone(
+            self,
+            esmc_model_path,
+            precision=precision,
+            device=device,
+            local_files_only=local_files_only,
+        )
 
     def reload_esmc(
         self,
         precision: ESMCPrecision = "auto",
         device: str | torch.device | None = None,
+        local_files_only: bool | None = None,
     ) -> None:
         """Reload canonical weights with the requested precision policy."""
 
@@ -904,7 +1005,16 @@ class ESMFold2Model(
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-        self.load_esmc(source, precision=precision, device=device)
+        self.load_esmc(
+            source,
+            precision=precision,
+            device=device,
+            local_files_only=(
+                self._esmc_local_files_only
+                if local_files_only is None
+                else local_files_only
+            ),
+        )
 
     def _ensure_ttt_bf16(self) -> None:
         if self._esmc_fp8:
@@ -915,7 +1025,8 @@ class ESMFold2Model(
 
     def _ensure_ttt_lm_head(self) -> None:
         self._ensure_ttt_bf16()
-        assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._esmc is None:
+            raise RuntimeError("ESMFold2 TTT requires load_esmc=True.")
         if self._ttt_lm_head is not None:
             return
         from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
@@ -927,7 +1038,11 @@ class ESMFold2Model(
         source_revision = self._esmc_source_revision
         if source_revision is None:
             source_revision, _ = _manifest_esmc_checkpoint_contract(source)
-        revision_kwargs = {"revision": source_revision} if source_revision is not None else {}
+        revision_kwargs: dict[str, Any] = {
+            "local_files_only": self._esmc_local_files_only,
+        }
+        if source_revision is not None:
+            revision_kwargs["revision"] = source_revision
         esmc_config = ESMplusplusConfig.from_pretrained(
             source,
             **revision_kwargs,
@@ -942,10 +1057,11 @@ class ESMFold2Model(
         missing_head_keys = [
             key for key in loading_info["missing_keys"] if key.startswith("sequence_head")
         ]
-        assert len(missing_head_keys) == 0, (
-            f"ESMFold2 TTT could not load a pretrained ESM++ MLM head from "
-            f"{source}: missing {missing_head_keys}"
-        )
+        if missing_head_keys:
+            raise RuntimeError(
+                "ESMFold2 TTT could not load a pretrained ESM++ MLM head from "
+                f"{source}: missing {missing_head_keys}"
+            )
         dtype = next(self._esmc.parameters()).dtype
         mlm = mlm.to(device=self.device, dtype=dtype).eval()
         self._ttt_lm_head = mlm.sequence_head
@@ -954,7 +1070,8 @@ class ESMFold2Model(
 
     def _ttt_get_trainable_modules(self) -> list[nn.Module]:
         self._ensure_ttt_bf16()
-        assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._esmc is None:
+            raise RuntimeError("ESMFold2 TTT requires load_esmc=True.")
         return [self._esmc]
 
     def _ttt_tokenize(
@@ -966,8 +1083,11 @@ class ESMFold2Model(
         del kwargs
         if input_ids is not None:
             return input_ids
-        assert seq is not None, "Pass either seq or input_ids for ESMFold2 TTT."
+        if seq is None:
+            raise ValueError("Pass either seq or input_ids for ESMFold2 TTT.")
         sequences = [seq] if isinstance(seq, str) else seq
+        if not sequences:
+            raise ValueError("ESMFold2 TTT requires at least one protein sequence.")
         token_to_id = {token: idx for idx, token in enumerate(SEQUENCE_VOCAB)}
         encoded = []
         for sequence in sequences:
@@ -1014,11 +1134,14 @@ class ESMFold2Model(
         **kwargs,
     ) -> torch.Tensor:
         del kwargs
-        assert isinstance(batch, torch.Tensor), "ESMFold2 TTT expects input_ids tensors."
+        if not isinstance(batch, torch.Tensor):
+            raise TypeError("ESMFold2 TTT expects input_ids tensors.")
         self._ensure_ttt_bf16()
-        assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._esmc is None:
+            raise RuntimeError("ESMFold2 TTT requires load_esmc=True.")
         self._ensure_ttt_lm_head()
-        assert self._ttt_lm_head is not None
+        if self._ttt_lm_head is None:
+            raise RuntimeError("ESMFold2 TTT MLM head initialization failed.")
         attention_mask = batch.ne(SEQUENCE_PAD_TOKEN)
         output = self._esmc(
             input_ids=batch,
@@ -1043,6 +1166,7 @@ class ESMFold2Model(
             kwargs["config"] = config
         # Pop the precision knob before forwarding to the HF loader.
         esmc_precision = kwargs.pop("esmc_precision", None)
+        local_files_only = bool(kwargs.get("local_files_only", False))
         output_loading_info = bool(kwargs.get("output_loading_info", False))
         loaded = super().from_pretrained(pretrained_model_name_or_path, *args, **kwargs)
         if output_loading_info:
@@ -1053,6 +1177,7 @@ class ESMFold2Model(
             model.load_esmc(
                 model.config.esmc_id,
                 precision=esmc_precision or model.config.esmc_precision,
+                local_files_only=local_files_only,
             )
         return (model, loading_info) if output_loading_info else model
 
@@ -1060,16 +1185,19 @@ class ESMFold2Model(
         """Select kernel backend.
 
         Args:
-            backend: ``None`` (reference path), ``"fused"`` (vendored Triton
-                kernels), or ``"cuequivariance"`` (cuequivariance kernels
-                where applicable; vanilla python fallback otherwise).
+            backend: ``None`` (reference path), ``"fused"`` (requires the
+                unavailable source-built Triton bundle), or
+                ``"cuequivariance"`` (requires the ``structure,cueq`` extras
+                on a supported Linux CUDA 13 host).
         """
+        validate_kernel_backend(backend)
         self.folding_trunk.set_kernel_backend(backend)
         if self.lm_encoder is not None:
             self.lm_encoder.set_kernel_backend(backend)
         self.parcae_coda.set_kernel_backend(backend)
         self.confidence_head.set_kernel_backend(backend)
         self.structure_head.set_kernel_backend(backend)
+        self._kernel_backend = backend
 
     def apply_torch_compile(self, mode: str = "fixed_seqlen", dynamic: bool | None = None) -> None:
         """Compile l^2-heavy blocks.
@@ -1129,7 +1257,8 @@ class ESMFold2Model(
                     "serving policy is unchanged."
                 ),
             )
-        assert self._esmc is not None
+        if self._esmc is None:
+            raise RuntimeError("ESMFold2 requires load_esmc=True for LM feature extraction.")
         # Transformer Engine FP8 kernels require l to be a multiple of 16.
         pad_to = 16 if self._esmc_fp8 else None
         with _lm_precision_context(self._esmc_precision_status.resolved, self.device):
@@ -1183,7 +1312,8 @@ class ESMFold2Model(
 
         for _ in range(total_steps):
             if _per_loop_lm_dropout:
-                assert lm_z is not None  # narrowed by _per_loop_lm_dropout
+                if lm_z is None:
+                    raise RuntimeError("Per-loop LM dropout requires LM pair features.")
                 lm_z_i: Tensor | None = F.dropout(lm_z, p=_lm_dropout_p, training=True)
             else:
                 lm_z_i = lm_z
@@ -1247,7 +1377,6 @@ class ESMFold2Model(
 
         return z
 
-    @torch.inference_mode()
     def forward(
         self,
         token_index: Tensor,
@@ -1281,8 +1410,28 @@ class ESMFold2Model(
         msa_max_depth: int = 1024,
         msa_column_mask_rate: float = 0.1,
         msa_subsample_at_inference: bool = True,
-        **kwargs,
-    ) -> dict[str, Tensor]:
+        early_exit: bool = False,
+        noise_scale: float | None = None,
+        step_scale: float | None = None,
+        max_inference_sigma: float | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> ESMFold2Output | tuple[Any, ...]:
+        output_hidden_states, return_dict = _resolve_structure_output_controls(
+            self.config,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        validate_msa_conditioning_inputs(
+            self.config,
+            msa=msa,
+            msa_attention_mask=msa_attention_mask,
+            has_deletion=has_deletion,
+            deletion_value=deletion_value,
+            deletion_mean=deletion_mean,
+        )
         tok_mask = token_attention_mask
         atm_mask = atom_attention_mask
         disto_idx = distogram_atom_idx
@@ -1433,12 +1582,16 @@ class ESMFold2Model(
             token_attention_mask=tok_mask,
             num_diffusion_samples=n_samples,
             num_sampling_steps=num_sampling_steps,
+            max_inference_sigma=max_inference_sigma,
+            noise_scale=noise_scale,
+            step_scale=step_scale,
             return_atom_repr=False,
-            denoising_early_exit_rmsd=None,
+            denoising_early_exit_rmsd=(0.10 if early_exit else None),
         )
 
         sample_coords = structure_output["sample_atom_coords"]
-        assert sample_coords is not None
+        if sample_coords is None:
+            raise RuntimeError("ESMFold2 structure sampling did not return coordinates.")
         output: dict[str, Tensor] = {"distogram_logits": distogram_logits}
         output["sample_atom_coords"] = sample_coords
 
@@ -1460,15 +1613,28 @@ class ESMFold2Model(
         output["atom_pad_mask"] = atm_mask.unsqueeze(0) if atm_mask.dim() == 1 else atm_mask
         output["residue_index"] = residue_index
         output["entity_id"] = entity_id
-        return output
+        return _finalize_structure_output(
+            output,
+            token_input_state=x_inputs,
+            pair_state=z,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
 
     @torch.no_grad()
-    def infer_protein(self, seq: str, **forward_kwargs) -> dict:
+    def infer_protein(self, seq: str, **forward_kwargs) -> ESMFold2Output:
         from .protein_utils import prepare_protein_features
 
+        if forward_kwargs.pop("return_dict", True) is not True:
+            raise ValueError(
+                "infer_protein always returns a mapping; return_dict=False is invalid."
+            )
         features = prepare_protein_features(seq)
+        if not self.config.msa_conditioning:
+            for name in MSA_CONDITIONING_INPUT_NAMES:
+                features.pop(name, None)
         features = {k: v.to(self.device) for k, v in features.items()}
-        return self(**features, **forward_kwargs)
+        return self(**features, **forward_kwargs, return_dict=True)
 
     @property
     def input_builder(self):
@@ -1485,7 +1651,12 @@ class ESMFold2Model(
         return esmfold2_types
 
     def prepare_structure_input(self, input, seed: int | None = None):
-        return self.input_builder.prepare_input(input, seed=seed, device=self.device)
+        return self.input_builder.prepare_model_input(
+            self,
+            input,
+            seed=seed,
+            device=self.device,
+        )
 
     def fold(
         self,
@@ -1531,16 +1702,17 @@ class ESMFold2Model(
     ):
         from .esmfold2_types import MSA, ProteinInput, StructurePredictionInput
 
-        assert not (msa is not None and msa_path is not None), (
-            "Pass at most one of msa or msa_path."
-        )
+        if msa is not None and msa_path is not None:
+            raise ValueError("Pass at most one of msa or msa_path.")
         if msa_path is not None:
             msa = MSA.from_a3m(msa_path, max_sequences=msa_max_sequences)
         if msa is not None:
             query = str(msa.query).replace("-", "").upper()
-            assert query == sequence.upper(), (
-                f"MSA query does not match sequence: expected {sequence.upper()!r}, got {query!r}"
-            )
+            if query != sequence.upper():
+                raise ValueError(
+                    "MSA query does not match sequence: "
+                    f"expected {sequence.upper()!r}, got {query!r}"
+                )
 
         input = StructurePredictionInput(
             sequences=[ProteinInput(id=chain_id, sequence=sequence, msa=msa)]
@@ -1556,12 +1728,14 @@ class ESMFold2Model(
 
     @staticmethod
     def _ttt_mean_plddt(result) -> float:
-        assert result.plddt is not None, "ESMFold2 result has no pLDDT tensor."
+        if result.plddt is None:
+            raise RuntimeError("ESMFold2 result has no pLDDT tensor.")
         return float(result.plddt.float().mean().item())
 
     def _ttt_select_result(self, result):
         if isinstance(result, list):
-            assert len(result) > 0, "ESMFold2 fold returned an empty result list."
+            if not result:
+                raise RuntimeError("ESMFold2 fold returned an empty result list.")
             return max(result, key=self._ttt_mean_plddt)
         return result
 
@@ -1574,7 +1748,8 @@ class ESMFold2Model(
         **kwargs,
     ) -> tuple[dict[str, Any], float | None]:
         del input_ids
-        assert isinstance(seq, str), "ESMFold2 fold TTT is protein-only and sequence-string only."
+        if not isinstance(seq, str):
+            raise TypeError("ESMFold2 fold TTT is protein-only and sequence-string only.")
         fold_kwargs = kwargs["fold_kwargs"]
         was_training = self.training
         self.eval()
@@ -1650,7 +1825,8 @@ class ESMFold2Model(
         ttt_config: TTTConfig | dict[str, Any] | None = None,
     ):
         self._ensure_ttt_bf16()
-        assert self._esmc is not None, "ESMFold2 TTT requires load_esmc=True."
+        if self._esmc is None:
+            raise RuntimeError("ESMFold2 TTT requires load_esmc=True.")
         fold_kwargs = {
             "chain_id": chain_id,
             "msa": msa,
@@ -1699,12 +1875,14 @@ class ESMFold2Model(
 
     @staticmethod
     def result_to_cif(result) -> str:
-        assert not isinstance(result, list), "Pass one MolecularComplexResult at a time."
+        if isinstance(result, list):
+            raise TypeError("Pass one MolecularComplexResult at a time.")
         return result.complex.to_mmcif()
 
     @staticmethod
     def result_to_pdb(result) -> str:
-        assert not isinstance(result, list), "Pass one MolecularComplexResult at a time."
+        if isinstance(result, list):
+            raise TypeError("Pass one MolecularComplexResult at a time.")
         return result.complex.to_protein_complex().to_pdb_string()
 
     def save_as_cif(self, result, output_path: str | Path) -> None:

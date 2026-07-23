@@ -5,19 +5,20 @@ FastPLMs-compatible DPLM2 implementation.
 from __future__ import annotations
 
 import contextlib
+import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, List, Optional, Sequence, Tuple, Union
+from typing import Any, ClassVar
 
 import torch
 import torch.nn as nn
 from einops import rearrange
 from torch.nn import functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
-
 from transformers import AutoTokenizer
 from transformers.modeling_outputs import (
-    BaseModelOutputWithPastAndCrossAttentions,
     BaseModelOutputWithPoolingAndCrossAttentions,
+    MaskedLMOutput,
     ModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
@@ -39,8 +40,8 @@ from transformers.models.esm.modeling_esm import (
     EsmSelfOutput,
 )
 
-from fastplms.models._esm_rotary import RotaryEmbedding, apply_rotary_pos_emb
 from fastplms.models._diffusion_generation import generate_dplm2
+from fastplms.models._esm_rotary import RotaryEmbedding, apply_rotary_pos_emb
 from fastplms.models.dplm2.tokenization_dplm2 import DPLM2Tokenizer
 
 try:
@@ -49,12 +50,26 @@ try:
         FastPLMsAttentionMixin,
         get_attention_mask,
         resolve_attention_backend,
-        warn_attention_backend_fallback,
+        resolve_attention_backend_for_call,
     )
     from fastplms.embeddings import EmbeddingMixin, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
-except ImportError:
-    pass  # Running as HF Hub composite; shared definitions are above
+except ModuleNotFoundError as error:
+    _COMPOSITE_REQUIRED_NAMES = (
+        "AttentionBackend",
+        "EmbeddingMixin",
+        "FastPLMsAttentionMixin",
+        "FastPLMTestTimeTrainingMixin",
+        "get_attention_mask",
+        "resolve_attention_backend",
+        "resolve_attention_backend_for_call",
+        "select_hidden_state_embeddings",
+    )
+    if error.name != "fastplms" or any(
+        name not in globals() for name in _COMPOSITE_REQUIRED_NAMES
+    ):
+        raise
+    # Legacy flat Hub composites define every shared symbol above this block.
 
 
 def _infer_modality_type(input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
@@ -81,24 +96,65 @@ def _normalize_dplm2_input_ids(input_ids: torch.Tensor, vocab_size: int) -> torc
     valid_token_mask = normalized_input_ids.ge(0)
     if valid_token_mask.any():
         max_token_id = int(normalized_input_ids[valid_token_mask].max().item())
-        assert max_token_id < vocab_size, (
-            f"Found token id {max_token_id} outside the DPLM2 embedding table (vocab_size={vocab_size}). "
-            "Tokenizer special tokens must be normalized before embedding."
-        )
+        if max_token_id >= vocab_size:
+            raise ValueError(
+                f"Found token id {max_token_id} outside the DPLM2 embedding table "
+                f"(vocab_size={vocab_size}). Tokenizer special tokens must be normalized "
+                "before embedding."
+            )
     return normalized_input_ids
 
 
+def _validate_dplm2_model_inputs(
+    *,
+    input_ids: torch.Tensor | None,
+    inputs_embeds: torch.Tensor | None,
+    attention_mask: torch.Tensor | None,
+    type_ids: torch.Tensor | None,
+    hidden_size: int,
+) -> tuple[int, int]:
+    if (input_ids is None) == (inputs_embeds is None):
+        raise ValueError("Specify exactly one of input_ids or inputs_embeds.")
+
+    if input_ids is not None:
+        if input_ids.ndim != 2:
+            raise ValueError(
+                f"input_ids must have shape (batch, seq_len), got {tuple(input_ids.shape)}."
+            )
+        batch_size, seq_len = input_ids.shape
+    else:
+        if inputs_embeds is None:  # Defensive guard for static narrowing.
+            raise RuntimeError("inputs_embeds validation reached an invalid state.")
+        if inputs_embeds.ndim != 3:
+            raise ValueError(
+                "inputs_embeds must have shape (batch, seq_len, hidden_size), "
+                f"got {tuple(inputs_embeds.shape)}."
+            )
+        if inputs_embeds.shape[-1] != hidden_size:
+            raise ValueError(
+                f"inputs_embeds hidden size must be {hidden_size}, got {inputs_embeds.shape[-1]}."
+            )
+        batch_size, seq_len = inputs_embeds.shape[:2]
+
+    expected_shape = (batch_size, seq_len)
+    for name, value in (("attention_mask", attention_mask), ("type_ids", type_ids)):
+        if value is not None and tuple(value.shape) != expected_shape:
+            raise ValueError(f"{name} must have shape {expected_shape}, got {tuple(value.shape)}.")
+    return expected_shape
+
+
 def _has_packed_multimodal_layout(
-    type_ids: Optional[torch.Tensor],
+    type_ids: torch.Tensor | None,
     aa_type: int,
     struct_type: int,
     pad_type: int,
 ) -> bool:
     if type_ids is None:
         return False
-    assert type_ids.ndim == 2, (
-        f"Expected type_ids to have shape (batch, seq_len), got {tuple(type_ids.shape)}"
-    )
+    if type_ids.ndim != 2:
+        raise ValueError(
+            f"Expected type_ids to have shape (batch, seq_len), got {tuple(type_ids.shape)}"
+        )
     seq_len = type_ids.shape[-1]
     if seq_len % 2 != 0:
         return False
@@ -119,21 +175,40 @@ def _has_packed_multimodal_layout(
 
 
 @dataclass
-class DPLM2MaskedLMOutput(ModelOutput):
-    loss: Optional[torch.Tensor] = None
-    logits: Optional[torch.Tensor] = None
-    last_hidden_state: Optional[torch.Tensor] = None
-    hidden_states: Optional[Tuple[torch.Tensor, ...]] = None
-    attentions: Optional[Tuple[torch.Tensor, ...]] = None
-    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
+class DPLM2MaskedLMOutput(MaskedLMOutput):
+    """Masked-LM output with DPLM2 extensions after the HF fields."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+    last_hidden_state: torch.Tensor | None = None
+
+
+@dataclass
+class DPLM2ModelOutput(BaseModelOutputWithPoolingAndCrossAttentions):
+    """Base-model output with optional attention diagnostics."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+
+
+@dataclass
+class DPLM2SequenceClassifierOutput(SequenceClassifierOutput):
+    """Sequence-classification output with optional attention diagnostics."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+
+
+@dataclass
+class DPLM2TokenClassifierOutput(TokenClassifierOutput):
+    """Token-classification output with optional attention diagnostics."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
 @dataclass
 class DPLM2EncoderOutput(ModelOutput):
-    last_hidden_state: Optional[torch.Tensor] = None
-    hidden_states: Optional[Tuple[torch.Tensor, ...]] = None
-    attentions: Optional[Tuple[torch.Tensor, ...]] = None
-    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
+    last_hidden_state: torch.Tensor | None = None
+    hidden_states: tuple[torch.Tensor, ...] | None = None
+    attentions: tuple[torch.Tensor, ...] | None = None
+    s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
 class DPLM2Config(EsmConfig):
@@ -141,15 +216,38 @@ class DPLM2Config(EsmConfig):
 
     def __init__(
         self,
-        attn_backend: Optional[str] = None,
+        attn_backend: str | None = "sdpa",
         add_pooling_layer: bool = False,
         aa_type: int = 1,
         struct_type: int = 0,
         pad_type: int = 2,
         **kwargs,
     ):
+        if kwargs.get("is_decoder", False) or kwargs.get("add_cross_attention", False):
+            raise ValueError(
+                "DPLM2 is encoder-only; is_decoder and add_cross_attention must be false."
+            )
+
+        # Published DPLM2 checkpoint configs inherited ``use_cache=true`` from
+        # EsmConfig even though the FastPLMs encoder has never implemented a KV
+        # cache.  Keep those legacy artifacts loadable, but make the effective
+        # and newly serialized contract explicit and fail closed.
+        if kwargs.get("use_cache") is True:
+            warnings.warn(
+                "Legacy DPLM2 config requested use_cache=True, but DPLM2 is encoder-only "
+                "and does not implement KV caching; normalizing use_cache to False.",
+                UserWarning,
+                stacklevel=2,
+            )
+        kwargs["is_decoder"] = False
+        kwargs["add_cross_attention"] = False
+        kwargs["use_cache"] = False
         super().__init__(**kwargs)
-        self.attn_backend = attn_backend
+        # DPLM2's published implementation and manifest expose SDPA only. An
+        # older checkpoint may omit this FastPLMs field (or serialize it as
+        # null), so normalize that legacy representation to the same explicit
+        # backend before Transformers chooses its own generic eager default.
+        self.attn_backend = "sdpa" if attn_backend is None else attn_backend
         self.add_pooling_layer = add_pooling_layer
         self.aa_type = aa_type
         self.struct_type = struct_type
@@ -157,29 +255,65 @@ class DPLM2Config(EsmConfig):
         self.tie_word_embeddings = False
 
 
+_TOKENIZER_LOAD_CONTEXT_KEYS = (
+    "cache_dir",
+    "force_download",
+    "local_files_only",
+    "proxies",
+    "revision",
+    "subfolder",
+    "token",
+    "trust_remote_code",
+)
+
+
 class DPLM2PreTrainedModel(FastPLMsAttentionMixin, EsmPreTrainedModel):
     config_class = DPLM2Config
-    base_model_prefix = "dplm2"
+    # All advertised wrappers install the encoder at ``self.esm``.  Transformers
+    # uses this name both for ``base_model`` and checkpoint prefix reconciliation.
+    base_model_prefix = "esm"
     supports_gradient_checkpointing = True
-    all_tied_weights_keys = {}
+    all_tied_weights_keys: ClassVar[dict[str, str]] = {}
     _supports_flex_attn = False
     _supports_flash_attn = False
     _supports_flash_attn_2 = False
     _supports_flash_attn_3 = False
     _fastplms_attention_implementations = ("sdpa",)
 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        load_context = {key: kwargs[key] for key in _TOKENIZER_LOAD_CONTEXT_KEYS if key in kwargs}
+        if "token" not in load_context and "use_auth_token" in kwargs:
+            load_context["token"] = kwargs["use_auth_token"]
+        load_context["source"] = pretrained_model_name_or_path
+
+        loaded = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        model = loaded[0] if isinstance(loaded, tuple) else loaded
+        model.__dict__["_fastplms_tokenizer_load_context"] = load_context
+        model.__dict__["_fastplms_tokenizer"] = None
+        return loaded
+
     @property
     def tokenizer(self):
         tokenizer = self.__dict__.get("_fastplms_tokenizer")
         if tokenizer is None:
-            source = str(getattr(self.config, "_name_or_path", "")).strip()
+            load_context = dict(self.__dict__.get("_fastplms_tokenizer_load_context") or {})
+            source = load_context.pop("source", None)
+            if source is None:
+                source = str(getattr(self.config, "_name_or_path", "")).strip()
             if not source:
                 raise RuntimeError(
                     "DPLM2 tokenizer loading requires a model loaded with from_pretrained "
                     "so checkpoint provenance is available."
                 )
-            revision = getattr(self.config, "_commit_hash", None)
-            tokenizer_kwargs = {"revision": revision} if revision else {}
+            tokenizer_kwargs = {
+                key: value
+                for key, value in load_context.items()
+                if key in _TOKENIZER_LOAD_CONTEXT_KEYS and value is not None
+            }
+            resolved_revision = getattr(self.config, "_commit_hash", None)
+            if resolved_revision:
+                tokenizer_kwargs["revision"] = resolved_revision
             tokenizer = DPLM2Tokenizer.from_pretrained(source, **tokenizer_kwargs)
             self.__dict__["_fastplms_tokenizer"] = tokenizer
         return tokenizer
@@ -204,11 +338,6 @@ class DPLM2PreTrainedModel(FastPLMsAttentionMixin, EsmPreTrainedModel):
             for sequence in sequence_list
         ]
         return resolved(formatted, add_special_tokens=False, **kwargs)
-
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        # Prevent post-load reinitialization of tensors already loaded from checkpoints.
-        return True
 
     @property
     def attn_backend(self) -> str:
@@ -237,7 +366,7 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
         self.struct_type = struct_type
         self.pad_type = pad_type
 
-    def _has_multimodal_tokens(self, type_ids: Optional[torch.Tensor]) -> bool:
+    def _has_multimodal_tokens(self, type_ids: torch.Tensor | None) -> bool:
         # The split rotary path only works when the sequence tensor is already packed
         # as two equal-length, modality-specific halves. Either track may come first.
         # Plain protein batches can still contain high-ID special tokens, so mere
@@ -274,9 +403,9 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
     def _update_cos_sin_tables(
         self,
         x: torch.Tensor,
-        type_ids: Optional[torch.Tensor],
+        type_ids: torch.Tensor | None,
         seq_dimension: int = 2,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         seq_len = x.shape[seq_dimension]
         if self._has_multimodal_tokens(type_ids):
             seq_len = seq_len // 2
@@ -306,8 +435,8 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
         self,
         q: torch.Tensor,
         k: torch.Tensor,
-        type_ids: Optional[torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        type_ids: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         self._cos_cached, self._sin_cached = self._update_cos_sin_tables(
             k,
             type_ids=type_ids,
@@ -346,11 +475,12 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_4d: Optional[torch.Tensor] = None,
+        attention_mask_4d: torch.Tensor | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-        type_ids: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
+        type_ids: torch.Tensor | None = None,
+        effective_backend: AttentionBackend | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         batch_size, seq_length = hidden_states.shape[:-1]
         hidden_shape = (batch_size, seq_length, -1, self.attention_head_size)
         query_heads = self.query(hidden_states).view(hidden_shape).transpose(1, 2)
@@ -373,6 +503,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
             attention_mask_4d=attention_mask_4d,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            effective_backend=effective_backend,
         )
         return attn_output, attn_weights, s_max
 
@@ -381,25 +512,30 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_heads: torch.Tensor,
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
-        attention_mask_4d: Optional[torch.Tensor] = None,
+        attention_mask_4d: torch.Tensor | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
-        if output_attentions:
-            warn_attention_backend_fallback(
+        effective_backend: AttentionBackend | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+        if effective_backend is None:
+            effective_backend = resolve_attention_backend_for_call(
                 self.attn_backend,
-                effective_backend=AttentionBackend.EAGER,
-                reason=(
-                    "output_attentions=True requires the full materialized attention "
-                    "probability matrix, which optimized PyTorch attention APIs do not return."
-                ),
-            )
-            return self._manual_attn(
-                query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
+                output_attentions=output_attentions,
             )
 
-        if self.attn_backend != AttentionBackend.SDPA:
-            raise AssertionError(f"Unsupported resolved backend: {self.attn_backend}")
+        if effective_backend == AttentionBackend.EAGER:
+            attn_output, attn_weights, s_max = self._manual_attn(
+                query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
+            )
+            return attn_output, attn_weights if output_attentions else None, s_max
+
+        if output_attentions:
+            raise AssertionError(
+                "DPLM2 output_attentions=True must resolve to eager attention for this call."
+            )
+
+        if effective_backend != AttentionBackend.SDPA:
+            raise AssertionError(f"Unsupported resolved backend: {effective_backend}")
         attn_output, attn_weights = self._sdpa_attn(
             query_heads,
             key_heads,
@@ -413,7 +549,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
     @torch.no_grad()
     def _compute_s_max(
         self, query_heads: torch.Tensor, key_heads: torch.Tensor
-    ) -> List[torch.Tensor]:
+    ) -> list[torch.Tensor]:
         q_norm = torch.linalg.vector_norm(query_heads, dim=-1)
         k_norm = torch.linalg.vector_norm(key_heads, dim=-1)
         s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(dim=0).values
@@ -424,9 +560,9 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_heads: torch.Tensor,
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
-        attention_mask_4d: Optional[torch.Tensor] = None,
+        attention_mask_4d: torch.Tensor | None = None,
         output_s_max: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[List[torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
         attn_weights = torch.matmul(query_heads, key_heads.transpose(-1, -2))
         if attention_mask_4d is not None:
             attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
@@ -443,8 +579,8 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_heads: torch.Tensor,
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
-        attention_mask_4d: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, None]:
+        attention_mask_4d: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, None]:
         # Pinned DPLM2 uses PyTorch's efficient SDPA kernel for its non-null
         # padding mask. Newer PyTorch releases otherwise select cuDNN on H100,
         # which exceeds the fixed deep-BF16 parity target. This is still the
@@ -476,11 +612,12 @@ class ModifiedEsmAttention(EsmAttention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_4d: Optional[torch.Tensor] = None,
+        attention_mask_4d: torch.Tensor | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-        type_ids: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
+        type_ids: torch.Tensor | None = None,
+        effective_backend: AttentionBackend | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         hidden_states_ln = self.LayerNorm(hidden_states)
         attn_output, attn_weights, s_max = self.self(
             hidden_states_ln,
@@ -488,6 +625,7 @@ class ModifiedEsmAttention(EsmAttention):
             output_attentions=output_attentions,
             output_s_max=output_s_max,
             type_ids=type_ids,
+            effective_backend=effective_backend,
         )
         attention_output = self.output(attn_output, hidden_states)
         return attention_output, attn_weights, s_max
@@ -506,17 +644,19 @@ class ModifiedEsmLayer(EsmLayer):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_4d: Optional[torch.Tensor] = None,
+        attention_mask_4d: torch.Tensor | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-        type_ids: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
+        type_ids: torch.Tensor | None = None,
+        effective_backend: AttentionBackend | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         attention_output, attn_weights, s_max = self.attention(
             hidden_states,
             attention_mask_4d=attention_mask_4d,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
             type_ids=type_ids,
+            effective_backend=effective_backend,
         )
         layer_output = self.feed_forward_chunk(attention_output)
         return layer_output, attn_weights, s_max
@@ -536,11 +676,11 @@ class ModifiedEsmEncoder(EsmEncoder):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         output_hidden_states: bool = False,
         output_attentions: bool = False,
         output_s_max: bool = False,
-        type_ids: Optional[torch.Tensor] = None,
+        type_ids: torch.Tensor | None = None,
     ) -> DPLM2EncoderOutput:
         first_parameter = next(self.parameters(), None)
         if (
@@ -557,8 +697,12 @@ class ModifiedEsmEncoder(EsmEncoder):
         all_attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
 
+        effective_backend = resolve_attention_backend_for_call(
+            self.attention_backend,
+            output_attentions=output_attentions,
+        )
         _, attention_mask_4d, _ = get_attention_mask(
-            effective_backend=self.attention_backend,
+            effective_backend=effective_backend,
             batch_size=hidden_states.shape[0],
             seq_len=hidden_states.shape[1],
             device=hidden_states.device,
@@ -569,7 +713,7 @@ class ModifiedEsmEncoder(EsmEncoder):
 
         for layer_module in self.layer:
             if output_hidden_states:
-                all_hidden_states = all_hidden_states + (hidden_states,)
+                all_hidden_states = (*all_hidden_states, hidden_states)
 
             if self.gradient_checkpointing and self.training:
                 hidden_states, attn_weights, s_max = self._gradient_checkpointing_func(
@@ -579,6 +723,7 @@ class ModifiedEsmEncoder(EsmEncoder):
                     output_attentions,
                     output_s_max,
                     type_ids,
+                    effective_backend,
                 )
             else:
                 hidden_states, attn_weights, s_max = layer_module(
@@ -587,18 +732,19 @@ class ModifiedEsmEncoder(EsmEncoder):
                     output_attentions=output_attentions,
                     output_s_max=output_s_max,
                     type_ids=type_ids,
+                    effective_backend=effective_backend,
                 )
 
             if all_attentions is not None:
-                all_attentions = all_attentions + (attn_weights,)
+                all_attentions = (*all_attentions, attn_weights)
             if full_s_max is not None:
-                full_s_max = full_s_max + (s_max,)
+                full_s_max = (*full_s_max, s_max)
 
         if self.emb_layer_norm_after:
             hidden_states = self.emb_layer_norm_after(hidden_states)
 
         if output_hidden_states:
-            all_hidden_states = all_hidden_states + (hidden_states,)
+            all_hidden_states = (*all_hidden_states, hidden_states)
 
         return DPLM2EncoderOutput(
             last_hidden_state=hidden_states,
@@ -633,7 +779,7 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
     def predict_contacts(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Predict residue contacts with the checkpoint's tied contact head."""
         input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
@@ -666,7 +812,7 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -692,16 +838,23 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-        type_ids: Optional[torch.Tensor] = None,
-    ) -> DPLM2EncoderOutput:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+        type_ids: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, ...] | DPLM2EncoderOutput:
+        _validate_dplm2_model_inputs(
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            type_ids=type_ids,
+            hidden_size=self.config.hidden_size,
+        )
         output_attentions = (
             output_attentions if output_attentions is not None else self.config.output_attentions
         )
@@ -710,12 +863,10 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
             if output_hidden_states is not None
             else self.config.output_hidden_states
         )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         if input_ids is not None:
             input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
-        if input_ids is None and inputs_embeds is None:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
-
         token_embedding_output = self.embeddings(
             input_ids=input_ids,
             position_ids=position_ids,
@@ -731,12 +882,15 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
             type_ids=type_ids,
         )
 
-        return DPLM2EncoderOutput(
+        result = DPLM2EncoderOutput(
             last_hidden_state=encoder_outputs.last_hidden_state,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
             s_max=encoder_outputs.s_max,
         )
+        if not return_dict:
+            return result.to_tuple()
+        return result
 
 
 class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
@@ -761,14 +915,14 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
     def predict_contacts(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         return self.esm.predict_contacts(input_ids, attention_mask)
 
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -781,22 +935,31 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-        type_ids: Optional[torch.Tensor] = None,
-    ) -> Union[Tuple[torch.Tensor, ...], BaseModelOutputWithPoolingAndCrossAttentions]:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+        type_ids: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, ...] | DPLM2ModelOutput:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         direct_dplm_esm = getattr(self.config, "dplm_type", None) == "dplm_esm"
-        if input_ids is not None:
-            normalized_input_ids = _normalize_dplm2_input_ids(
-                input_ids, self.config.vocab_size
+        _validate_dplm2_model_inputs(
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            type_ids=type_ids,
+            hidden_size=self.config.hidden_size,
+        )
+        if inputs_embeds is not None and type_ids is None and not direct_dplm_esm:
+            raise ValueError(
+                "type_ids is required for multimodal DPLM2 calls that use inputs_embeds."
             )
+        if input_ids is not None:
+            normalized_input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
             if attention_mask is None:
                 attention_mask = normalized_input_ids.ne(self.config.pad_token_id)
             if type_ids is None and not direct_dplm_esm:
@@ -811,31 +974,33 @@ class DPLM2Model(DPLM2PreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
             type_ids=type_ids,
         )
         sequence_output = outputs.last_hidden_state
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
-        if not return_dict:
-            return (sequence_output, pooled_output) + tuple(
-                value
-                for value in (outputs.hidden_states, outputs.attentions, outputs.s_max)
-                if value is not None
-            )
-
-        return BaseModelOutputWithPoolingAndCrossAttentions(
+        result = DPLM2ModelOutput(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, EmbeddingMixin):
     config_class = DPLM2Config
 
-    def __init__(self, config, dropout: float = 0.1, vocab_size: Optional[int] = None):
-        config.hidden_dropout_prob = dropout
+    def __init__(
+        self,
+        config,
+        dropout: float | None = None,
+        vocab_size: int | None = None,
+    ):
+        if dropout is not None:
+            config.hidden_dropout_prob = dropout
         config.tie_word_embeddings = False
         if vocab_size is not None:
             config.vocab_size = vocab_size
@@ -851,10 +1016,25 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
 
+    def set_input_embeddings(self, value: nn.Module) -> None:
+        self.esm.set_input_embeddings(value)
+
     def get_output_embeddings(self):
         return self.lm_head.decoder
 
     def set_output_embeddings(self, new_embeddings):
+        old_bias = self.lm_head.bias
+        new_vocab_size = int(new_embeddings.out_features)
+        if old_bias.shape[0] != new_vocab_size:
+            resized_bias = old_bias.new_zeros(new_vocab_size)
+            copy_length = min(old_bias.shape[0], new_vocab_size)
+            with torch.no_grad():
+                resized_bias[:copy_length].copy_(old_bias[:copy_length])
+            self.lm_head.bias = nn.Parameter(resized_bias)
+        # EsmLMHead.forward adds this standalone bias after the decoder. HF's
+        # generic LM-head resizer may create a biased Linear, which would apply
+        # the bias twice and introduce an undeclared shared tensor on save.
+        new_embeddings.bias = None
         self.lm_head.decoder = new_embeddings
 
     def generate(
@@ -892,7 +1072,7 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
     def predict_contacts(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Return the official ESM contact head output from the encoder."""
         return self.esm.predict_contacts(input_ids, attention_mask)
@@ -906,7 +1086,7 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -920,6 +1100,7 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
             type_ids=type_ids,
             output_attentions=False,
             output_hidden_states=output_hidden_states,
+            return_dict=True,
         )
         return select_hidden_state_embeddings(
             outputs.last_hidden_state,
@@ -940,7 +1121,8 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
         del kwargs
         if input_ids is not None:
             return input_ids
-        assert seq is not None, "Pass either seq or input_ids for TTT."
+        if seq is None:
+            raise ValueError("Pass either seq or input_ids for TTT.")
         sequences = [seq] if isinstance(seq, str) else seq
         tokenized = self._tokenize_sequence_batch(
             sequences,
@@ -956,53 +1138,83 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
         tokenizer = self.tokenizer
         special_ids = set(tokenizer.all_special_ids)
         struct_boundary = int(tokenizer._token_to_id[tokenizer.struct_cls_token])
-        residue_ids = [
-            token_id for token_id in range(struct_boundary) if token_id not in special_ids
-        ]
-        assert residue_ids, "DPLM2 TTT amino-acid replacement set is empty."
+        residue_ids = []
+        for residue in "ACDEFGHIKLMNPQRSTVWY":
+            token_id = tokenizer._token_to_id.get(residue)
+            if (
+                isinstance(token_id, int)
+                and 0 <= token_id < struct_boundary
+                and token_id not in special_ids
+                and token_id not in residue_ids
+            ):
+                residue_ids.append(token_id)
+        if not residue_ids:
+            raise RuntimeError("DPLM2 TTT amino-acid replacement set is empty.")
+        if len(residue_ids) != 20:
+            raise RuntimeError(
+                "DPLM2 TTT requires all 20 canonical amino-acid replacement tokens; "
+                f"resolved {len(residue_ids)}."
+            )
         return torch.tensor(residue_ids, device=input_ids.device, dtype=input_ids.dtype)
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        type_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor], DPLM2MaskedLMOutput]:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        type_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+    ) -> tuple[torch.Tensor] | DPLM2MaskedLMOutput:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         direct_dplm_esm = getattr(self.config, "dplm_type", None) == "dplm_esm"
+        _validate_dplm2_model_inputs(
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            type_ids=type_ids,
+            hidden_size=self.config.hidden_size,
+        )
 
         if attention_mask is None:
-            assert input_ids is not None
+            if input_ids is None:
+                raise ValueError(
+                    "attention_mask is required when DPLM2 is called with inputs_embeds."
+                )
             attention_mask = input_ids.ne(self.pad_id)
 
-        if type_ids is None and not direct_dplm_esm:
-            assert input_ids is not None
-            type_ids = self._get_modality_type(input_ids, attention_mask)
-
+        encoder_input_ids = input_ids
         if input_ids is not None:
             input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
-            if inputs_embeds is None and not direct_dplm_esm:
-                # The official multimodal wrapper applies the embedding block
-                # once before entering EsmForDPLM2. The inner ESM model then
-                # applies it a second time using these intermediate embeddings.
-                inputs_embeds = self.esm.embeddings(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
+            encoder_input_ids = input_ids
+        if type_ids is None and not direct_dplm_esm:
+            if input_ids is None:
+                raise ValueError(
+                    "type_ids is required for multimodal DPLM2 calls that use inputs_embeds."
                 )
+            type_ids = self._get_modality_type(input_ids, attention_mask)
+
+        if input_ids is not None and inputs_embeds is None and not direct_dplm_esm:
+            # The official multimodal wrapper applies the embedding block
+            # once before entering EsmForDPLM2. The inner ESM model then
+            # applies it a second time using these intermediate embeddings.
+            inputs_embeds = self.esm.embeddings(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+            encoder_input_ids = None
 
         outputs = self.esm(
-            input_ids=input_ids,
+            input_ids=encoder_input_ids,
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
             type_ids=type_ids,
         )
 
@@ -1014,20 +1226,15 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
             labels = labels.to(logits.device)
             loss = self.loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
-        if return_dict is False:
-            output = (logits, sequence_output, outputs.hidden_states, outputs.attentions)
-            if loss is not None:
-                return (loss,) + output
-            return output
-
-        return DPLM2MaskedLMOutput(
+        result = DPLM2MaskedLMOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
+            last_hidden_state=sequence_output,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
@@ -1046,10 +1253,13 @@ class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
 
+    def set_input_embeddings(self, value: nn.Module) -> None:
+        self.esm.set_input_embeddings(value)
+
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -1062,21 +1272,34 @@ class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        type_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-        **kwargs,
-    ) -> DPLM2MaskedLMOutput:
-        if type_ids is None and input_ids is not None:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        type_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+    ) -> tuple[torch.Tensor, ...] | DPLM2SequenceClassifierOutput:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        direct_dplm_esm = getattr(self.config, "dplm_type", None) == "dplm_esm"
+        _validate_dplm2_model_inputs(
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            type_ids=type_ids,
+            hidden_size=self.config.hidden_size,
+        )
+        if inputs_embeds is not None and type_ids is None and not direct_dplm_esm:
+            raise ValueError(
+                "type_ids is required for multimodal DPLM2 calls that use inputs_embeds."
+            )
+        if input_ids is not None:
+            input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
             if attention_mask is None:
                 attention_mask = input_ids.ne(self.config.pad_token_id)
-            input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
+        if type_ids is None and input_ids is not None and not direct_dplm_esm:
             type_ids = _infer_modality_type(input_ids, attention_mask)
 
         outputs = self.esm(
@@ -1087,6 +1310,7 @@ class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
         )
         sequence_output = outputs.last_hidden_state
         logits = self.classifier(sequence_output)
@@ -1114,14 +1338,14 @@ class DPLM2ForSequenceClassification(DPLM2PreTrainedModel, EmbeddingMixin):
             elif self.config.problem_type == "multi_label_classification":
                 loss = self.bce(logits, labels)
 
-        return DPLM2MaskedLMOutput(
+        result = DPLM2SequenceClassifierOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
@@ -1139,10 +1363,13 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
 
+    def set_input_embeddings(self, value: nn.Module) -> None:
+        self.esm.set_input_embeddings(value)
+
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -1155,21 +1382,34 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        type_ids: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-        **kwargs,
-    ) -> DPLM2MaskedLMOutput:
-        if type_ids is None and input_ids is not None:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        type_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+    ) -> tuple[torch.Tensor, ...] | DPLM2TokenClassifierOutput:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        direct_dplm_esm = getattr(self.config, "dplm_type", None) == "dplm_esm"
+        _validate_dplm2_model_inputs(
+            input_ids=input_ids,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            type_ids=type_ids,
+            hidden_size=self.config.hidden_size,
+        )
+        if inputs_embeds is not None and type_ids is None and not direct_dplm_esm:
+            raise ValueError(
+                "type_ids is required for multimodal DPLM2 calls that use inputs_embeds."
+            )
+        if input_ids is not None:
+            input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
             if attention_mask is None:
                 attention_mask = input_ids.ne(self.config.pad_token_id)
-            input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
+        if type_ids is None and input_ids is not None and not direct_dplm_esm:
             type_ids = _infer_modality_type(input_ids, attention_mask)
 
         outputs = self.esm(
@@ -1180,6 +1420,7 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
+            return_dict=True,
         )
         sequence_output = self.dropout(outputs.last_hidden_state)
         logits = self.classifier(sequence_output)
@@ -1189,14 +1430,14 @@ class DPLM2ForTokenClassification(DPLM2PreTrainedModel, EmbeddingMixin):
             labels = labels.to(logits.device)
             loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
-        return DPLM2MaskedLMOutput(
+        result = DPLM2TokenClassifierOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 # Importing the DPLM2 model implementation makes its paired tokenizer visible

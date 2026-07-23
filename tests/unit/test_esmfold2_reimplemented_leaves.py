@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -21,8 +22,13 @@ from fastplms.models.esmfold2.esmfold2_predicted_aligned_error import (
     compute_predicted_aligned_error,
     compute_tm,
 )
+from fastplms.models.esmfold2.esmfold2_protein_chain import ProteinChain
 from fastplms.models.esmfold2.esmfold2_system import run_subprocess_with_errorcheck
-from fastplms.models.esmfold2.esmfold2_types import ProteinInput, StructurePredictionInput
+from fastplms.models.esmfold2.esmfold2_types import (
+    PocketConditioning,
+    ProteinInput,
+    StructurePredictionInput,
+)
 
 pytestmark = pytest.mark.structure
 
@@ -35,8 +41,31 @@ def test_greedy_msa_selection_preserves_official_tie_order() -> None:
     assert greedy_select_indices(sequences, 3, mode="max") == [0, 1, 3]
     assert greedy_select_indices(sequences, 3, mode="min") == [0, 1, 2]
     assert greedy_select_indices(sequences, 10) == [0, 1, 2, 3, 4]
-    with pytest.raises(AssertionError, match="unsupported selection mode"):
+    with pytest.raises(ValueError, match="unsupported selection mode"):
         greedy_select_indices(sequences, 2, mode="median")
+    with pytest.raises(ValueError, match="greater than zero"):
+        greedy_select_indices(sequences, 0)
+    with pytest.raises(ValueError, match="non-empty shape"):
+        greedy_select_indices(np.empty((0, 4), dtype="S1"), 1)
+
+
+def test_fast_msa_stack_preserves_headerless_and_mixed_inputs() -> None:
+    from fastplms.models.esmfold2.esmfold2_msa import FastMSA
+
+    first = FastMSA(np.asarray([list("AAA"), list("AAT")], dtype="S1"))
+    second = FastMSA(np.asarray([list("AAA"), list("ATT")], dtype="S1"))
+    headerless = FastMSA.stack([first, second])
+
+    assert headerless.depth == 3
+    assert headerless.headers is None
+
+    with_headers = FastMSA(
+        np.asarray([list("AAA"), list("ATA")], dtype="S1"),
+        ["query", "named"],
+    )
+    mixed = FastMSA.stack([first, with_headers])
+    assert mixed.depth == 3
+    assert mixed.headers == ["", "", "named"]
 
 
 def test_hhfilter_passes_paths_as_distinct_arguments(tmp_path) -> None:
@@ -66,7 +95,130 @@ def test_subprocess_failure_includes_standard_error() -> None:
 
 def test_schema_namespace_preserves_type_identity() -> None:
     assert ProteinInput is esmfold2_input_builder.ProteinInput
+    assert PocketConditioning is esmfold2_input_builder.PocketConditioning
     assert StructurePredictionInput is esmfold2_input_builder.StructurePredictionInput
+
+
+def test_msa_rejects_unequal_biological_rows() -> None:
+    from fastplms.models.esmfold2.esmfold2_types import MSA
+
+    with pytest.raises(ValueError, match="MSA row length mismatch"):
+        MSA.from_sequences(["ACDE", "ACD"])
+
+
+def test_a3m_dot_insertions_and_raw_rows_have_consistent_metadata() -> None:
+    import io
+
+    from fastplms.models.esmfold2.esmfold2_msa import MSA
+
+    source = ">query\nA.CD\n>hit\nAaCD\n"
+    match_columns = MSA.from_a3m(io.StringIO(source))
+    assert match_columns.sequences == ["ACD", "ACD"]
+    assert match_columns.deletions is not None
+    assert match_columns.deletions.shape == (2, 3)
+
+    raw_rows = MSA.from_a3m(io.StringIO(source), remove_insertions=False)
+    assert raw_rows.sequences == ["A.CD", "AaCD"]
+    assert raw_rows.deletions is None
+
+
+def test_protein_chain_rejects_misaligned_atom37_tables() -> None:
+    with pytest.raises(ValueError, match=r"shape \(length, 37, 3\)"):
+        ProteinChain.from_atom37(np.zeros((2, 36, 3), dtype=np.float32))
+
+
+def test_protein_chain_contacts_require_retained_mmcif_source() -> None:
+    chain = ProteinChain.from_atom37(
+        np.zeros((2, 37, 3), dtype=np.float32),
+        sequence="AC",
+    )
+    with pytest.raises(ValueError, match="keep_source=True"):
+        chain.find_nonpolymer_contacts()
+
+
+def test_unavailable_structure_kernel_backend_fails_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastplms.models.esmfold2 import modeling_esmfold2_common as common
+
+    with pytest.raises(RuntimeError, match="does not bundle"):
+        common.validate_kernel_backend("fused")
+    monkeypatch.setattr(common, "CUE_AVAILABLE", False)
+    with pytest.raises(
+        RuntimeError,
+        match=r"requires cuequivariance_torch.*cuequivariance_ops_torch",
+    ):
+        common.validate_kernel_backend("cuequivariance")
+    with pytest.raises(ValueError, match="backend must be one of"):
+        common.validate_kernel_backend("silent-fallback")
+
+
+def test_experimental_top_level_kernel_backend_validates_before_zero_layer_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastplms.models.esmfold2 import modeling_esmfold2_common as common
+    from fastplms.models.esmfold2.modeling_esmfold2_experimental import (
+        ESMFold2ExperimentalModel,
+    )
+
+    class ZeroLayerRecorder:
+        def __init__(self) -> None:
+            self.calls: list[str | None] = []
+
+        def set_kernel_backend(self, backend: str | None) -> None:
+            self.calls.append(backend)
+
+    folding_trunk = ZeroLayerRecorder()
+    structure_head = ZeroLayerRecorder()
+    model = SimpleNamespace(
+        folding_trunk=folding_trunk,
+        confidence_head=None,
+        structure_head=structure_head,
+        _kernel_backend=None,
+    )
+    monkeypatch.setattr(common, "CUE_AVAILABLE", False)
+
+    with pytest.raises(RuntimeError, match="requires cuequivariance_torch"):
+        ESMFold2ExperimentalModel.set_kernel_backend(model, "cuequivariance")
+    assert folding_trunk.calls == []
+    assert structure_head.calls == []
+    assert model._kernel_backend is None
+
+    ESMFold2ExperimentalModel.set_kernel_backend(model, None)
+    assert folding_trunk.calls == [None]
+    assert structure_head.calls == [None]
+    assert model._kernel_backend is None
+
+
+def test_pocket_conditioning_is_rejected_instead_of_silently_dropped() -> None:
+    from fastplms.models.esmfold2.esmfold2_processor import clean_esmfold2_input
+
+    request = StructurePredictionInput(
+        sequences=[ProteinInput(id="A", sequence="ACD")],
+        pocket=PocketConditioning(binder_chain_id="A", contacts=[("A", 0)]),
+    )
+    with pytest.raises(NotImplementedError, match="refuses this input"):
+        clean_esmfold2_input(request)
+
+
+def test_multiple_delimited_proteins_keep_their_own_split_identity() -> None:
+    from fastplms.models.esmfold2.esmfold2_processor import clean_esmfold2_input
+
+    request = StructurePredictionInput(
+        sequences=[
+            ProteinInput(id="first", sequence="AA:CC"),
+            ProteinInput(id="second", sequence="GG:TT"),
+        ]
+    )
+    cleaned = clean_esmfold2_input(request)
+
+    assert [protein.sequence for protein in cleaned.sequences] == ["AA", "CC", "GG", "TT"]
+    assert [protein.id for protein in cleaned.sequences] == [
+        ["first_0"],
+        ["first_1"],
+        ["second_0"],
+        ["second_1"],
+    ]
 
 
 @dataclasses.dataclass

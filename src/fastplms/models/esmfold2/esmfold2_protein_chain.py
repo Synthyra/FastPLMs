@@ -61,7 +61,14 @@ def _num_non_null_residues(seqres_to_structure_chain: Mapping[int, Residue]) -> 
     return sum(residue.residue_number is not None for residue in seqres_to_structure_chain.values())
 
 
-def infer_cb(C, N, Ca, l: float = 1.522, a: float = 1.927, d: float = -2.143):
+def infer_cb(
+    C,
+    N,
+    Ca,
+    bond_length: float = 1.522,
+    bond_angle: float = 1.927,
+    dihedral: float = -2.143,
+):
     """Infer C-beta coordinates from C, N, and C-alpha coordinates."""
 
     def normalize(X: np.ndarray) -> np.ndarray:
@@ -74,9 +81,9 @@ def infer_cb(C, N, Ca, l: float = 1.522, a: float = 1.927, d: float = -2.143):
     normal = normalize(np.cross(n_to_c, axis))
     basis = (axis, np.cross(normal, axis), normal)
     offsets = (
-        l * np.cos(a),
-        l * np.sin(a) * np.cos(d),
-        -l * np.sin(a) * np.sin(d),
+        bond_length * np.cos(bond_angle),
+        bond_length * np.sin(bond_angle) * np.cos(dihedral),
+        -bond_length * np.sin(bond_angle) * np.sin(dihedral),
     )
     return Ca + sum(vector * offset for vector, offset in zip(basis, offsets, strict=False))
 
@@ -84,6 +91,14 @@ def infer_cb(C, N, Ca, l: float = 1.522, a: float = 1.927, d: float = -2.143):
 def chain_to_ndarray(
     atom_array: bs.AtomArray, mmcif: MmcifWrapper, chain_id: str, is_predicted=False
 ):
+    if not isinstance(atom_array, bs.AtomArray):
+        raise TypeError("atom_array must be a biotite AtomArray.")
+    if not isinstance(mmcif, MmcifWrapper):
+        raise TypeError("mmcif must be an MmcifWrapper.")
+    if not isinstance(chain_id, str) or not chain_id:
+        raise ValueError("chain_id must be a non-empty string.")
+    if chain_id not in mmcif.chain_to_seqres or chain_id not in mmcif.seqres_to_structure:
+        raise ValueError(f"mmCIF data does not contain sequence mappings for chain {chain_id!r}.")
     entity_id = None
     for entity, chains in mmcif.entities.items():
         if chain_id in chains:
@@ -98,9 +113,10 @@ def chain_to_ndarray(
 
     confidence = np.ones([num_res], dtype=np.float32)
 
+    chain = atom_array[atom_array.chain_id == chain_id]
+    if not isinstance(chain, bs.AtomArray):
+        raise RuntimeError("Biotite selection did not return an AtomArray.")
     for res_index in range(num_res):
-        chain = atom_array[atom_array.chain_id == chain_id]
-        assert isinstance(chain, bs.AtomArray)
         res_at_position = mmcif.seqres_to_structure[chain_id][res_index]
 
         if res_at_position.residue_number is None:
@@ -113,7 +129,8 @@ def chain_to_ndarray(
             & (chain.ins_code == res_at_position.insertion_code)
             & (chain.hetero == res_at_position.hetflag)
         ]
-        assert isinstance(res, bs.AtomArray)
+        if not isinstance(res, bs.AtomArray):
+            raise RuntimeError("Biotite residue selection did not return an AtomArray.")
 
         # Atom level features
         for atom in res:
@@ -128,7 +145,8 @@ def chain_to_ndarray(
                 if is_predicted and atom_name == "CA":
                     confidence[res_index] = atom.b_factor / PLDDT_B_FACTOR_SCALE
 
-    assert all(sequence), "Some residue name was not specified correctly"
+    if not sequence or not all(sequence):
+        raise ValueError("Some residue name was not specified correctly.")
     return (
         sequence,
         atom_positions,
@@ -176,7 +194,10 @@ class ProteinChain:
             for entity, chains in mmcif.entities.items():
                 if chain_id in chains:
                     entity_id = entity
-            assert entity_id is not None
+            if entity_id is None:
+                raise ValueError(
+                    f"Failed to resolve entity identity for mmCIF chain {chain_id!r}."
+                )
             (
                 sequence,
                 atom_positions,
@@ -186,7 +207,8 @@ class ProteinChain:
                 confidence,
                 _,
             ) = chain_to_ndarray(chain, mmcif, chain_id, is_predicted)
-            assert all(sequence), "Some residue name was not specified correctly"
+            if not all(sequence):
+                raise ValueError("Some residue name was not specified correctly.")
 
             yield cls(
                 id=mmcif.id,
@@ -224,6 +246,9 @@ class ProteinChain:
         """
         mmcif = path if isinstance(path, MmcifWrapper) else MmcifWrapper.read(path, id)
 
+        if chain_id is not None and entity_id is not None:
+            raise ValueError("Pass at most one of chain_id or entity_id.")
+
         # If neither chain_id nor entity_id is specified, default to the first entity
         if chain_id is None and entity_id is None:
             if not mmcif.entities:
@@ -231,7 +256,6 @@ class ProteinChain:
             entity_id = min(mmcif.entities.keys())  # Pick the first entity by ID
 
         if entity_id is not None:
-            assert chain_id is None
             if entity_id not in mmcif.entities:
                 raise ValueError(
                     f"Structure does not contain entity `{entity_id}`. "
@@ -245,7 +269,8 @@ class ProteinChain:
                 key=lambda chain: _num_non_null_residues(mmcif.seqres_to_structure[chain]),
             )
         else:
-            assert chain_id is not None
+            if chain_id is None:
+                raise RuntimeError("Failed to resolve an mmCIF chain selection.")
             for entity, chains in mmcif.entities.items():
                 if chain_id in chains:
                     entity_id = entity
@@ -265,7 +290,8 @@ class ProteinChain:
             confidence,
             _,
         ) = chain_to_ndarray(atom_array, mmcif, chain_id, is_predicted)
-        assert all(sequence), "Some residue name was not specified correctly"
+        if not all(sequence):
+            raise ValueError("Some residue name was not specified correctly.")
 
         return cls(
             id=mmcif.id,
@@ -303,7 +329,13 @@ class ProteinChain:
                     )
                 atom37_positions = atom37_positions[0]
 
-        assert isinstance(atom37_positions, np.ndarray)
+        if not isinstance(atom37_positions, np.ndarray):
+            raise TypeError("atom37_positions must be a NumPy array or Torch tensor.")
+        if atom37_positions.ndim != 3 or atom37_positions.shape[1:] != (37, 3):
+            raise ValueError(
+                "atom37_positions must have shape (length, 37, 3), got "
+                f"{atom37_positions.shape}."
+            )
         seqlen = atom37_positions.shape[0]
 
         atom_mask = np.isfinite(atom37_positions).all(-1)
@@ -321,7 +353,6 @@ class ProteinChain:
             residue_index = np.arange(1, seqlen + 1)
         elif isinstance(residue_index, torch.Tensor):
             residue_index = residue_index.cpu().numpy()
-            assert isinstance(residue_index, np.ndarray)
             if residue_index.ndim == 2:
                 if residue_index.shape[0] != 1:
                     raise ValueError(
@@ -329,7 +360,8 @@ class ProteinChain:
                         f"{residue_index.shape}"
                     )
                 residue_index = residue_index[0]
-        assert isinstance(residue_index, np.ndarray)
+        if not isinstance(residue_index, np.ndarray):
+            raise TypeError("residue_index must be a NumPy array or Torch tensor.")
 
         if insertion_code is None:
             insertion_code = np.array(["" for _ in range(seqlen)])
@@ -338,14 +370,14 @@ class ProteinChain:
             confidence = np.ones(seqlen, dtype=np.float32)
         elif isinstance(confidence, torch.Tensor):
             confidence = confidence.cpu().numpy()
-            assert isinstance(confidence, np.ndarray)
             if confidence.ndim == 2:
                 if confidence.shape[0] != 1:
                     raise ValueError(
                         f"Cannot handle batched inputs, confidence has shape {confidence.shape}"
                     )
                 confidence = confidence[0]
-        assert isinstance(confidence, np.ndarray)
+        if not isinstance(confidence, np.ndarray):
+            raise TypeError("confidence must be a NumPy array or Torch tensor.")
 
         return cls(
             id=id,
@@ -382,10 +414,18 @@ class ProteinChain:
                     )
                 backbone_atom_coordinates = backbone_atom_coordinates[0]
 
-        assert isinstance(backbone_atom_coordinates, np.ndarray)
-        assert backbone_atom_coordinates.ndim == 3
-        assert backbone_atom_coordinates.shape[-2] == 3
-        assert backbone_atom_coordinates.shape[-1] == 3
+        if not isinstance(backbone_atom_coordinates, np.ndarray):
+            raise TypeError(
+                "backbone_atom_coordinates must be a NumPy array or Torch tensor."
+            )
+        if backbone_atom_coordinates.ndim != 3 or backbone_atom_coordinates.shape[-2:] != (
+            3,
+            3,
+        ):
+            raise ValueError(
+                "backbone_atom_coordinates must have shape (length, 3, 3), got "
+                f"{backbone_atom_coordinates.shape}."
+            )
 
         atom37_positions = np.full(
             (backbone_atom_coordinates.shape[0], 37, 3),
@@ -425,6 +465,8 @@ class ProteinChain:
                     file_id = "null"
 
         atom_array = PDBFile.read(path).get_structure(model=1, extra_fields=["b_factor"])
+        if len(atom_array) == 0:
+            raise ValueError("PDB contains no atoms.")
         if chain_id == "detect":
             chain_id = atom_array.chain_id[0]
         atom_array = atom_array[
@@ -432,6 +474,8 @@ class ProteinChain:
             & ~atom_array.hetero
             & (atom_array.chain_id == chain_id)
         ]
+        if len(atom_array) == 0:
+            raise ValueError(f"PDB contains no amino-acid atoms for chain {chain_id!r}.")
 
         entity_id = 1  # Not supplied in PDBfiles
 
@@ -451,9 +495,6 @@ class ProteinChain:
         confidence = np.ones([num_res], dtype=np.float32)
 
         for i, res in enumerate(bs.residue_iter(atom_array)):
-            chain = atom_array[atom_array.chain_id == chain_id]
-            assert isinstance(chain, bs.AtomArray)
-
             res_index = res[0].res_id
             residue_index[i] = res_index
             insertion_code[i] = res[0].ins_code
@@ -471,7 +512,8 @@ class ProteinChain:
                     if is_predicted and atom_name == "CA":
                         confidence[i] = atom.b_factor / PLDDT_B_FACTOR_SCALE
 
-        assert all(sequence), "Some residue name was not specified correctly"
+        if not sequence or not all(sequence):
+            raise ValueError("Some residue name was not specified correctly.")
 
         return cls(
             id=file_id,
@@ -537,32 +579,78 @@ class ProteinChain:
 
     # Object invariants and atom views
     def __post_init__(self):
-        assert self.atom37_mask.dtype == bool, self.atom37_mask.dtype
-        assert self.atom37_positions.shape[0] == len(self.sequence), (
-            self.atom37_positions.shape,
-            len(self.sequence),
-        )
-        assert self.atom37_mask.shape[0] == len(self.sequence), (
-            self.atom37_mask.shape,
-            len(self.sequence),
-        )
-        assert self.residue_index.shape[0] == len(self.sequence), (
-            self.residue_index.shape,
-            len(self.sequence),
-        )
-        assert self.insertion_code.shape[0] == len(self.sequence), (
-            self.insertion_code.shape,
-            len(self.sequence),
-        )
-        assert self.confidence.shape[0] == len(self.sequence), (
-            self.confidence.shape,
-            len(self.sequence),
-        )
-        if self.atom37_confidence is not None:
-            assert self.atom37_confidence.shape == self.atom37_mask.shape, (
-                self.atom37_confidence.shape,
-                self.atom37_mask.shape,
+        if not isinstance(self.id, str):
+            raise TypeError("id must be a string.")
+        if not isinstance(self.sequence, str):
+            raise TypeError("sequence must be a string.")
+        if not isinstance(self.chain_id, str) or not self.chain_id:
+            raise ValueError("chain_id must be a non-empty string.")
+        if self.entity_id is not None and (
+            not isinstance(self.entity_id, int) or isinstance(self.entity_id, bool)
+        ):
+            raise TypeError("entity_id must be an integer or None.")
+        sequence_length = len(self.sequence)
+        aligned = {
+            "atom37_positions": self.atom37_positions,
+            "atom37_mask": self.atom37_mask,
+            "residue_index": self.residue_index,
+            "insertion_code": self.insertion_code,
+            "confidence": self.confidence,
+        }
+        for name, values in aligned.items():
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f"{name} must be a NumPy array, got {type(values).__name__}.")
+            if values.ndim == 0 or values.shape[0] != sequence_length:
+                raise ValueError(
+                    f"{name} shape {values.shape} does not align with "
+                    f"sequence length {sequence_length}."
+                )
+        if self.atom37_positions.shape != (sequence_length, 37, 3):
+            raise ValueError(
+                "atom37_positions must have shape "
+                f"({sequence_length}, 37, 3), got {self.atom37_positions.shape}."
             )
+        if self.atom37_mask.shape != (sequence_length, 37):
+            raise ValueError(
+                "atom37_mask must have shape "
+                f"({sequence_length}, 37), got {self.atom37_mask.shape}."
+            )
+        if self.atom37_mask.dtype != bool:
+            raise TypeError(f"atom37_mask must have Boolean dtype, got {self.atom37_mask.dtype}.")
+        if not np.issubdtype(self.atom37_positions.dtype, np.number):
+            raise TypeError("atom37_positions must use a numeric dtype.")
+        if not np.issubdtype(self.residue_index.dtype, np.integer):
+            raise TypeError("residue_index must use an integer dtype.")
+        if self.insertion_code.dtype.kind not in {"U", "S", "O"}:
+            raise TypeError("insertion_code must use a string-compatible dtype.")
+        if any(not isinstance(value, str) for value in self.insertion_code.tolist()):
+            raise TypeError("insertion_code must contain only strings.")
+        for name, values in (
+            ("residue_index", self.residue_index),
+            ("insertion_code", self.insertion_code),
+            ("confidence", self.confidence),
+        ):
+            if values.shape != (sequence_length,):
+                raise ValueError(
+                    f"{name} must have shape ({sequence_length},), got {values.shape}."
+                )
+        if not np.issubdtype(self.confidence.dtype, np.number):
+            raise TypeError("confidence must use a numeric dtype.")
+        atom37_confidence = self.atom37_confidence
+        if atom37_confidence is not None and not isinstance(atom37_confidence, np.ndarray):
+            raise TypeError("atom37_confidence must be a NumPy array when provided.")
+        if (
+            isinstance(atom37_confidence, np.ndarray)
+            and atom37_confidence.shape != self.atom37_mask.shape
+        ):
+            raise ValueError(
+                "atom37_confidence shape must match atom37_mask: "
+                f"{atom37_confidence.shape} != {self.atom37_mask.shape}."
+            )
+        if isinstance(atom37_confidence, np.ndarray) and not np.issubdtype(
+            atom37_confidence.dtype, np.number
+        ):
+            raise TypeError("atom37_confidence must use a numeric dtype.")
 
     @cached_property
     def atoms(self) -> AtomIndexer:
@@ -726,6 +814,10 @@ class ProteinChain:
 
     @classmethod
     def concat(cls, chains: Sequence[ProteinChain], use_chainbreak: bool = True):
+        if not chains:
+            raise ValueError("chains must contain at least one ProteinChain.")
+        if any(not isinstance(chain, ProteinChain) for chain in chains):
+            raise TypeError("chains must contain only ProteinChain instances.")
         sep_tokens = {
             "residue_index": np.array([-1]),
             "insertion_code": np.array([""]),
@@ -761,7 +853,10 @@ class ProteinChain:
         )
 
     def find_nonpolymer_contacts(self):
-        assert self.mmcif is not None
+        if self.mmcif is None:
+            raise ValueError(
+                "find_nonpolymer_contacts requires a chain loaded with keep_source=True."
+            )
         nonpolymer_and_chain_id_to_array = self.mmcif.non_polymer_coords
 
         results = []
@@ -769,7 +864,10 @@ class ProteinChain:
             nonpolymer,
             _,
         ), nonpolymer_array in nonpolymer_and_chain_id_to_array.items():
-            assert nonpolymer_array.coord is not None
+            if nonpolymer_array.coord is None:
+                raise ValueError(
+                    f"Non-polymer {nonpolymer.comp_id!r} has no coordinate table."
+                )
             chain_coords = self.atom37_positions[self.atom37_mask]
             distance = cdist(nonpolymer_array.coord, chain_coords)
 
@@ -1014,10 +1112,13 @@ class ProteinChain:
     # Surface and structural comparison metrics
     def sasa(self, by_residue: bool = True):
         arr = self.atom_array_no_insertions
+        if len(arr) == 0:
+            raise ValueError("SASA requires at least one resolved atom.")
         sasa_per_atom = bs.sasa(arr)  # type: ignore
         if by_residue:
             # Sum per-atom SASA into residue "bins", with np.bincount.
-            assert arr.res_id is not None
+            if arr.res_id is None:
+                raise RuntimeError("Biotite AtomArray is missing residue identifiers.")
             # Residue IDs are one-indexed, so discard the unused zero bin.
             # NOTE(aderry): We compute only for residues with coordinates, return NaN otherwise.
             num_trailing_residues = len(self) - arr.res_id.max()
@@ -1028,7 +1129,8 @@ class ProteinChain:
                 ]
             )
             sasa_per_residue[~self.atom37_mask.any(-1)] = np.nan
-            assert len(sasa_per_residue) == len(self)
+            if len(sasa_per_residue) != len(self):
+                raise RuntimeError("Residue SASA output does not align with the protein chain.")
             return sasa_per_residue
         return sasa_per_atom
 
@@ -1040,12 +1142,12 @@ class ProteinChain:
         """
         sap_radius = 5.0
         arr = self.atom_array_no_insertions
+        if len(arr) == 0:
+            raise ValueError("SAP requires at least one resolved atom.")
 
-        # asserts to avoid type errors
-        assert arr.res_id is not None
-        assert arr.res_name is not None
-        assert arr.atom_name is not None
-        assert arr.coord is not None
+        for name in ("res_id", "res_name", "atom_name", "coord"):
+            if getattr(arr, name) is None:
+                raise RuntimeError(f"Biotite AtomArray is missing required {name!r} data.")
 
         # compute SASA and residue-specific properties
         sasa_per_atom = self.sasa(by_residue=False)
@@ -1062,8 +1164,6 @@ class ProteinChain:
         res_hydrophobicity[resolved_res_mask] = np.array(
             [residue_constants.hydrophobicity[resid_to_resname[i]] for i in np.unique(arr.res_id)]
         )
-        assert len(max_side_chain_asa) == len(self)
-        assert len(res_hydrophobicity) == len(self)
 
         # compute SAP score
         is_side_chain = ~bs.filter_peptide_backbone(arr)
@@ -1097,7 +1197,8 @@ class ProteinChain:
                     + 1e-8
                 )
                 sap_by_residue[~resolved_res_mask] = np.nan
-                assert len(sap_by_residue) == len(self)
+                if len(sap_by_residue) != len(self):
+                    raise RuntimeError("Residue SAP output does not align with the protein chain.")
                 return sap_by_residue
             case "protein":
                 return sum(sap_by_atom[sap_by_atom > 0])  # pyright: ignore[reportReturnType]

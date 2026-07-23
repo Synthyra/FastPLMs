@@ -98,7 +98,7 @@ def test_feature_output_groups_modified_residues_and_ligand_atoms() -> None:
 
 
 @pytest.mark.gpu
-def test_learned_sequence_projection_matches_explicit_h100_operation() -> None:
+def test_learned_sequence_projection_matches_explicit_cuda_operation() -> None:
     assert torch.cuda.is_available()
     torch.manual_seed(7)
     device = torch.device("cuda")

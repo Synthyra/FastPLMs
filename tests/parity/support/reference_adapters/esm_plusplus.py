@@ -7,6 +7,14 @@ from tests.parity.support.reference_adapters import (
     move_model,
     snapshot_path,
 )
+from tests.parity.support.reference_adapters.biohub_source import (
+    reference_environment as _reference_environment,
+)
+from tests.parity.support.reference_adapters.biohub_source import (
+    reference_sources,
+)
+
+reference_environment = _reference_environment
 
 
 def load_official_model(
@@ -24,6 +32,7 @@ def load_official_model(
 
     Returns (wrapped_model, tokenizer).
     """
+    reference_sources()
     from transformers import AutoTokenizer
     from transformers.models.esmc.modeling_esmc import ESMCForMaskedLM
 

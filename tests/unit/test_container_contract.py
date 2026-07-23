@@ -26,11 +26,30 @@ def _stages(text: str) -> dict[str, str]:
     }
 
 
+def _stage_section(text: str, stage: str) -> str:
+    marker = re.compile(
+        rf"^FROM\s+\S+\s+AS\s+{re.escape(stage)}\s*$",
+        flags=re.MULTILINE | re.IGNORECASE,
+    )
+    match = marker.search(text)
+    assert match is not None, f"Missing Docker stage {stage!r}"
+    next_stage = re.search(r"^FROM\s+", text[match.end() :], flags=re.MULTILINE)
+    end = match.end() + next_stage.start() if next_stage is not None else len(text)
+    return text[match.start() : end]
+
+
 def test_manifest_reference_containers_are_build_targets() -> None:
     bake = BAKE_FILE.read_text(encoding="utf-8")
     targets = set(re.findall(r'^target\s+"([^"]+)"', bake, flags=re.MULTILINE))
     expected = {spec.family.reference_container for spec in get_model_registry().values()}
     assert expected.issubset(targets), f"Missing reference targets: {sorted(expected - targets)}"
+
+
+def test_bake_defaults_to_native_host_platform_without_an_amd64_override() -> None:
+    bake = BAKE_FILE.read_text(encoding="utf-8")
+    common = bake.split('target "common" {', maxsplit=1)[1].split("\n}", maxsplit=1)[0]
+    assert "platforms" not in common
+    assert "linux/amd64" not in bake
 
 
 def test_reference_stages_do_not_inherit_candidate_or_runtime_layers() -> None:
@@ -203,22 +222,66 @@ def test_reference_protocol_contains_the_isolated_esmfold2_bundle_producer() -> 
         maxsplit=1,
     )[0]
     assert "tests/structure/support/esmfold2_bundle.py" in protocol
+
+
+def test_reference_protocol_only_copies_existing_repository_paths() -> None:
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    protocol = _stage_section(dockerfile, "reference-protocol")
+    copied_sources = re.findall(r"^COPY\s+(\S+)\s+\S+\s*$", protocol, flags=re.MULTILINE)
+    assert copied_sources
+    missing = [source for source in copied_sources if not (ROOT / source).exists()]
+    assert missing == []
     assert "tests/parity/support/semantic_config.py" in protocol
     assert "src/fastplms" not in protocol
 
 
-def test_derived_candidate_stages_sync_from_the_project_directory() -> None:
+def test_candidate_dependencies_are_cached_before_project_source() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    for stage, next_stage in (
-        ("candidate-structure", "candidate-fp8"),
-        ("candidate-fp8", "candidate-artifact"),
+    metadata = _stage_section(dockerfile, "project-metadata")
+    assert "COPY pyproject.toml uv.lock kernels.lock ./" in metadata
+    assert "COPY src" not in metadata
+    assert "COPY tests" not in metadata
+
+    for dependencies, final in (
+        ("source-dependencies", "source"),
+        ("runtime-dependencies", "runtime"),
+        ("candidate-dependencies", "candidate"),
+        ("candidate-structure-dependencies", "candidate-structure"),
+        ("candidate-fp8-dependencies", "candidate-fp8"),
     ):
-        section = dockerfile.split(f"AS {stage}", maxsplit=1)[1].split(
-            f" AS {next_stage}",
-            maxsplit=1,
-        )[0]
-        assert section.index("WORKDIR /opt/fastplms") < section.index("uv sync --frozen")
-        assert section.rindex("WORKDIR /workspace") > section.index("uv sync --frozen")
+        dependency_section = _stage_section(dockerfile, dependencies)
+        assert "uv sync --frozen" in dependency_section
+        assert "--no-install-project" in dependency_section
+        assert "COPY src" not in dependency_section
+        assert "COPY tests" not in dependency_section
+
+        final_section = _stage_section(dockerfile, final)
+        source_copy = final_section.index("COPY src ./src")
+        project_sync = final_section.index("uv sync --frozen", source_copy)
+        assert "--no-install-project" not in final_section[project_sync:]
+
+
+def test_reference_protocol_and_legal_text_do_not_invalidate_dependency_layers() -> None:
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    for stage in _stages(dockerfile):
+        if not stage.startswith("reference-") or stage in {
+            "reference-protocol",
+            "reference-esmfold2",
+        }:
+            continue
+        section = _stage_section(dockerfile, stage)
+        last_install = section.rfind("pip install")
+        if last_install < 0:
+            continue
+        for late_copy in (
+            "COPY --from=reference-protocol",
+            "COPY THIRD_PARTY_NOTICES.md",
+            "COPY LICENSES/",
+        ):
+            if late_copy in section:
+                assert section.index(late_copy) > last_install, (
+                    f"{stage} copies {late_copy!r} before its dependency layer"
+                )
 
 
 def test_runtime_is_one_fail_closed_parameterized_stage() -> None:
@@ -231,14 +294,20 @@ def test_runtime_is_one_fail_closed_parameterized_stage() -> None:
             flags=re.MULTILINE | re.IGNORECASE,
         )
     }
-    assert set(name for name in sections if name.startswith("runtime")) == {"runtime"}
-    runtime = sections["runtime"]
-    assert "ARG FASTPLMS_RUNTIME_PROFILE=core" in runtime
-    assert "core)" in runtime
-    assert "esmfold2-fp8)" in runtime
-    assert "--extra structure --extra fp8" in runtime
-    assert "Unsupported FastPLMs runtime profile" in runtime
-    assert "exit 64" in runtime
+    assert set(name for name in sections if name.startswith("runtime")) == {
+        "runtime-dependencies",
+        "runtime",
+    }
+    for stage in ("runtime-dependencies", "runtime"):
+        runtime = sections[stage]
+        assert "ARG FASTPLMS_RUNTIME_PROFILE=core" in runtime
+        assert "core)" in runtime
+        assert "esmfold2-fp8)" in runtime
+        assert "--extra structure --extra fp8" in runtime
+        assert "Unsupported FastPLMs runtime profile" in runtime
+        assert "exit 64" in runtime
+    assert "--no-install-project" in sections["runtime-dependencies"]
+    assert "--no-install-project" not in sections["runtime"]
 
     bake = BAKE_FILE.read_text(encoding="utf-8")
     runtime_targets = {
@@ -275,9 +344,30 @@ def test_fp8_dependency_is_confined_to_fp8_container_targets() -> None:
         assert "--extra fp8" not in sections[stage]
 
 
+def test_cueq_dependency_is_confined_to_structure_validation_targets() -> None:
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    sections = {
+        name: section
+        for name, section in re.findall(
+            r"^FROM\s+\S+\s+AS\s+(\S+)\s*$([\s\S]*?)(?=^FROM\s+|\Z)",
+            dockerfile,
+            flags=re.MULTILINE | re.IGNORECASE,
+        )
+    }
+    for stage in ("candidate-structure", "candidate-fp8"):
+        assert "--extra cueq" in sections[stage]
+    for stage in ("runtime", "candidate", "candidate-artifact"):
+        assert "--extra cueq" not in sections[stage]
+
+
 def test_kernel_lock_is_available_to_source_and_artifact_images() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    assert dockerfile.count("COPY pyproject.toml uv.lock kernels.lock README.md LICENSE ./") == 2
+    assert "COPY pyproject.toml uv.lock kernels.lock ./" in _stage_section(
+        dockerfile, "project-metadata"
+    )
+    assert "COPY pyproject.toml uv.lock kernels.lock README.md LICENSE ./" in _stage_section(
+        dockerfile, "candidate-artifact"
+    )
     assert "!kernels.lock" in DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
 
 
@@ -287,8 +377,5 @@ def test_candidate_validation_extra_supports_transformers_device_map() -> None:
     assert "accelerate>=1.10,<2" in dev
 
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    candidate = dockerfile.split("FROM source AS candidate", maxsplit=1)[1].split(
-        "FROM candidate AS candidate-structure",
-        maxsplit=1,
-    )[0]
-    assert "--extra dev" in candidate
+    assert "--extra dev" in _stage_section(dockerfile, "candidate-dependencies")
+    assert "--extra dev" in _stage_section(dockerfile, "candidate")

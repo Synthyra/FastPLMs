@@ -5,6 +5,20 @@ artifacts under `dist/hub/<model>/`. It operates only on an already downloaded,
 manifest-pinned checkpoint snapshot. It never authenticates, downloads, creates
 a Hub repository, uploads, deletes, commits, pushes, or opens a pull request.
 
+## Install
+
+Artifact tooling uses the FastPLMs 1.0 development environment: Python
+3.11-3.14, PyTorch 2.13, and Transformers 5.13. From a normal checkout, without
+official parity submodules, install the locked tooling before building:
+
+```bash
+uv sync --frozen --extra dev
+```
+
+Building an artifact is offline and does not require a GPU. Live compliance is
+a separate workflow and is the only stage that requires the official reference
+submodules.
+
 ## Build
 
 ```bash
@@ -29,6 +43,10 @@ Before writing output, the builder validates:
 - every required upstream submodule is initialized at its pinned commit;
 - canonical and distributable license files match their declared hashes;
 - the family has a complete mechanism-first conversion record.
+- every scoped runtime source is a tracked, clean regular file selected by an
+  extension, path, and size allowlist;
+- no scoped input is an untracked file, symlink, credential-shaped path,
+  unknown binary, or Windows path escape.
 
 An unresolved file or hash mismatch stops the build. The builder does not infer
 an identity from a similarly named checkpoint.
@@ -58,18 +76,25 @@ inside `fastplms_bundle.py`. This flat bundle is required because Transformers'
 remote-module loader follows flat relative Python imports; it does not import
 the copied package tree directly.
 
-`modeling_fastplms.py` imports the flat bundle, verifies its SHA-256 identity,
-and extracts it into a hash-named directory in the Transformers module cache.
-It then installs that bundled package and exposes the manifest-advertised
-classes. This step performs no network access or compilation. The first load
-does require a writable module cache for local extraction. Release validation
-runs each artifact in a fresh interpreter. Complementary family bundles from
-the same FastPLMs release can extend the loaded package in one interpreter,
-including after importing the installed wheel. Runtime files shared by two
-bundles must have identical hashes; an overlapping source conflict fails
-explicitly and leaves the first runtime intact. Isolate incompatible releases
-in separate Python processes. Production code never imports a submodule
-checkout.
+`modeling_fastplms.py` imports the flat bundle and verifies its SHA-256 identity
+and canonical embedded file inventory. It rejects unsafe or repeated paths,
+non-regular archive entries, bytecode, encryption, unexpected compression, and
+non-canonical modes before extraction. The bridge extracts with exclusive file
+creation into a loader-owned private `TemporaryDirectory`. It then
+re-hashes the exact extracted inventory. It
+rejects symlinks, bytecode, non-file entries, or any missing, added, or changed
+file. Imports run with bytecode writing disabled.
+Nothing is extracted into or trusted from the Transformers module cache; only
+an ordinary writable temporary directory is required. This step performs no
+network access or compilation.
+
+Release validation runs each artifact in a fresh interpreter. Complementary
+family bundles from the same FastPLMs release can extend the loaded package in
+one interpreter, including after importing the installed wheel. Runtime files
+shared by two bundles must have identical hashes; an overlapping source
+conflict fails explicitly and leaves the first runtime intact. Isolate
+incompatible releases in separate Python processes. Production code never
+imports a submodule checkout.
 
 The release artifact tier selects the checkpoint source declared by the
 manifest. This matters for ANKH, where the artifact uses the official
@@ -79,12 +104,18 @@ Weights are written as explicit safetensors shards no larger than 5 GiB with a
 sorted index. Trusted legacy `.bin` input is loaded with `weights_only=True` and
 is never copied into the output.
 
-`provenance.json` records both FastPLMs and official checkpoint identities, the
-selected artifact source, conversion record, BF16 execution policy, upstream
-revisions, legal files, and FastPLMs version. The model card states the same
-BF16 policy; artifact validation rejects a disagreement. `artifact-manifest.json`
-contains a SHA-256 identity for every artifact file. Identical inputs produce
-identical bytes and hashes.
+`provenance.json` separates `weights_revision` from `runtime_revision` and
+records source-tree and runtime-bundle SHA-256 digests, generator/schema
+version, scope-specific complete and runtime-only attestations, both checkpoint
+identities, conversion record, BF16 execution policy, upstream revisions,
+runtime assets, legal files, `weights_license_status`, and `redistributable`.
+The runtime attestation repeats the two license fields. Every currently
+publishable family, including DPLM1 and DPLM2, uses `"resolved"` and `true`.
+Synthetic unresolved-license tests retain the fail-closed `"unresolved"` and
+`false` path. The model card states the same policy; artifact validation rejects
+a disagreement. `artifact-manifest.json` contains a SHA-256 identity for every
+artifact file. Upload preflight rehashes selected bytes so a post-validation
+mutation cannot cross the time-of-check/time-of-use boundary.
 
 The generated `config.json` also records packaging-only FastPLMs model ID,
 selected checkpoint repository and immutable revision, and a deterministic hash
@@ -144,7 +175,8 @@ artifact:
 PYTHONPATH=src python -m tools.artifacts.publish \
   --files-only \
   --artifact-root dist/hub \
-  --dry-run
+  --dry-run \
+  esm2_8m
 ```
 
 `--artifact-root` points to the local parent directory that contains each
@@ -157,12 +189,13 @@ Review the complete file plan, then repeat without `--dry-run`:
 ```bash
 PYTHONPATH=src python -m tools.artifacts.publish \
   --files-only \
-  --artifact-root dist/hub
+  --artifact-root dist/hub \
+  esm2_8m
 ```
 
-With no positional model IDs, the command selects every model declared in
-`models.toml`. Pass one or more manifest model IDs to publish only that subset.
-`--all` remains an explicit alias for the default all-model selection.
+Files-only publication rejects every ANKH model because the 1.0 ANKH migration
+requires complete weight replacement. Since an implicit all-model selection
+includes ANKH, callers must pass one or more explicit non-ANKH model IDs.
 Authentication comes from `HF_TOKEN` or the cached Hugging Face login; tokens
 are not accepted as command-line arguments.
 
@@ -195,6 +228,63 @@ The completed command prints each new Hub commit. Before declaring those
 commits as a new FastPLMs release baseline, update the corresponding
 `fast_revision` values and the digests of any changed manifest-pinned
 non-weight `fast_files`, such as `config.json` or tokenizer assets.
+
+## Publish a complete checkpoint atomically
+
+The currently published immutable revisions in the existing Synthyra ANKH
+repositories are legacy encoder-only checkpoints. Do not advertise them as
+full 1.0 or use them for `AutoModelForSeq2SeqLM`; the first valid full revision
+is the new commit produced only after this complete-mode workflow and its live
+validation succeed.
+
+ANKH 1.0 must publish the full encoder-decoder state together with runtime code,
+configuration, tokenizer, card, legal files, provenance, and scoped
+attestations:
+
+```bash
+PYTHONPATH=src python -m tools.artifacts.publish \
+  --complete \
+  --artifact-root dist/hub \
+  --dry-run \
+  ankh_base
+```
+
+`--complete` requires explicit model IDs and never accepts implicit selection or
+`--all`. After reviewing every path, remove `--dry-run`. The publisher makes one
+parent-guarded atomic commit per selected repository, preserving atomicity and
+failing if remote head changes after preflight. Complete mode may delete only
+an obsolete path that is pinned in the current registry `spec.fast.files`, is
+absent from the validated new inventory, and still matches the preflight remote
+digest and parent. This permits a monolithic ANKH weight file to be replaced by
+indexed shards without granting general remote deletion authority. It
+validates that `AutoModel` can load the encoder/shared view without decoder allocation and that
+`AutoModelForSeq2SeqLM` consumes the complete encoder, decoder, cross-attention,
+and LM-head state from the same artifact.
+
+DPLM1 and DPLM2 complete publication is permitted under Apache-2.0 after every
+normal preflight passes. At the pinned ByteDance revision, the
+[LICENSE](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE)
+is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+defines the repository release as including pretrained DPLM1 and DPLM2 weights.
+Built artifacts therefore carry Hub license `apache-2.0`,
+`weights_license_status="resolved"`, and `redistributable=true`, plus the
+verbatim license and `LICENSES/dplm/PROVENANCE.md`. Synthetic unresolved-license
+fixtures still prove that complete publication fails before any Hub API call or
+mutation when either license field is unresolved.
+
+## ESMFold2 runtime asset
+
+ESMFold2 provenance includes `ccd.pkl` from
+`biohub/ESMFold2@1ebf0e3481a5184eb6171d40615c79e384b48796`: 417,306,584 bytes,
+SHA-256 `9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5`,
+MIT license, and trust kind `hash_pinned_pickle`. Deserialization occurs only
+from a private loader-owned temporary snapshot after verifying that snapshot's
+size and SHA-256. User-supplied asset and `cache_dir` symlinks are rejected. The
+exact manifest repository/revision Hugging Face snapshot link is the sole
+exception and must resolve within that repository's contained blob directory.
+This prevents path replacement and in-place source mutation across the trust
+boundary. Offline execution requires the exact verified cache object and does
+not fetch a substitute.
 
 ## Generated cards and support data
 

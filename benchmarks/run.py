@@ -14,6 +14,7 @@ import inspect
 import json
 import platform
 import random
+import re
 import statistics
 import subprocess
 import sys
@@ -25,6 +26,8 @@ from pathlib import Path
 from typing import Any
 
 CANONICAL_AAS = "ACDEFGHIKLMNPQRSTVWY"
+HOPPER_SM90_CAPABILITY = (9, 0)
+_HOPPER_PRODUCT_PATTERN = re.compile(r"(?<![A-Z0-9])(GH200|H200|H100)(?![A-Z0-9])")
 
 
 @dataclass(frozen=True)
@@ -106,6 +109,7 @@ def environment_fingerprint(torch: Any) -> dict[str, Any]:
     return {
         "python": sys.version.split()[0],
         "platform": platform.platform(),
+        "machine": platform.machine(),
         "torch": str(torch.__version__),
         "cuda_runtime": str(torch.version.cuda),
         "cudnn": int(torch.backends.cudnn.version() or 0),
@@ -118,6 +122,21 @@ def environment_fingerprint(torch: Any) -> dict[str, Any]:
         "gpu_capability": list(torch.cuda.get_device_capability()),
         "nvidia_smi": _nvidia_smi(),
     }
+
+
+def validate_hopper_sm90_environment(environment: Mapping[str, Any]) -> None:
+    """Require an allowed Hopper product for a release-claim benchmark matrix."""
+
+    gpu = environment.get("gpu")
+    if not isinstance(gpu, str) or _HOPPER_PRODUCT_PATTERN.search(gpu.upper()) is None:
+        raise RuntimeError(
+            f"Release-claim benchmarks require an NVIDIA H100, H200, or GH200 GPU; got {gpu!r}."
+        )
+    capability = environment.get("gpu_capability")
+    if capability != list(HOPPER_SM90_CAPABILITY):
+        raise RuntimeError(
+            f"Release-claim benchmarks require compute capability 9.0; got {capability!r}."
+        )
 
 
 def _sequence(length: int, seed: int) -> str:
@@ -198,7 +217,7 @@ def _numeric_context(arguments: argparse.Namespace, torch: Any) -> Any:
 
 def prepare_inputs(
     model: Any,
-    model_id: str,
+    model_id: str | Path,
     lengths: Sequence[int],
     device: Any,
     *,
@@ -224,12 +243,13 @@ def prepare_inputs(
         if tokenizer is None:
             from transformers import AutoTokenizer
 
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_id,
-                revision=revision,
-                trust_remote_code=True,
-                local_files_only=local_files_only,
-            )
+            tokenizer_kwargs: dict[str, Any] = {
+                "trust_remote_code": True,
+                "local_files_only": local_files_only,
+            }
+            if revision is not None:
+                tokenizer_kwargs["revision"] = revision
+            tokenizer = AutoTokenizer.from_pretrained(model_id, **tokenizer_kwargs)
         max_length = max(lengths)
         model_inputs = dict(
             tokenizer(
@@ -347,6 +367,15 @@ def measure_blocks(
     return output
 
 
+def _model_load_source(arguments: argparse.Namespace) -> tuple[str | Path, str | None]:
+    """Return physical load coordinates without changing logical report identity."""
+
+    return (
+        getattr(arguments, "load_model", arguments.model),
+        getattr(arguments, "load_revision", arguments.revision),
+    )
+
+
 def _load_model(arguments: argparse.Namespace, torch: Any) -> tuple[Any, float]:
     import transformers
 
@@ -355,14 +384,16 @@ def _load_model(arguments: argparse.Namespace, torch: Any) -> tuple[Any, float]:
         auto_class = getattr(transformers, arguments.auto_class)
     except AttributeError as error:
         raise ValueError(f"Unknown Transformers AutoClass {arguments.auto_class!r}") from error
+    load_model, load_revision = _model_load_source(arguments)
     load_kwargs: dict[str, Any] = {
-        "revision": arguments.revision,
         "trust_remote_code": True,
         "local_files_only": arguments.local_files_only,
         "dtype": _benchmark_load_dtype(arguments, torch),
         "device_map": torch.device("cuda"),
         "attn_implementation": arguments.backend,
     }
+    if load_revision is not None:
+        load_kwargs["revision"] = load_revision
     if arguments.mode == "projection" and arguments.precision != "bf16":
         raise ValueError(
             "Learned projection consumes precomputed BF16 H; use "
@@ -370,14 +401,25 @@ def _load_model(arguments: argparse.Namespace, torch: Any) -> tuple[Any, float]:
         )
     if arguments.mode == "esmfold2_embed" or arguments.precision != "bf16":
         load_kwargs["esmc_precision"] = arguments.precision
-    if arguments.mode in {"projection", "esmc_projection"}:
+    esmc_load_model = getattr(arguments, "esmc_load_model", None)
+    if arguments.mode in {"projection", "esmc_projection"} or esmc_load_model is not None:
         # Representation cases record the folding-core load and ESMC reload
         # separately. Only the end-to-end case reloads ESMC before measurement.
         load_kwargs["load_esmc"] = False
 
     torch.cuda.synchronize()
     start = time.perf_counter()
-    model = auto_class.from_pretrained(arguments.model, **load_kwargs).eval()
+    model = auto_class.from_pretrained(load_model, **load_kwargs).eval()
+    if arguments.mode == "esmfold2_embed" and esmc_load_model is not None:
+        load_esmc = getattr(model, "load_esmc", None)
+        if load_esmc is None:
+            raise RuntimeError("Local ESMFold2 artifact loading requires model.load_esmc")
+        load_esmc(
+            str(esmc_load_model),
+            precision=arguments.precision,
+            device=torch.device("cuda"),
+            local_files_only=True,
+        )
     torch.cuda.synchronize()
     elapsed_ms = (time.perf_counter() - start) * 1000.0
     return model, elapsed_ms
@@ -584,7 +626,23 @@ def run_case(
         if getattr(model, "_esmc", None) is None or resolved != arguments.precision:
             torch.cuda.synchronize()
             reload_start = time.perf_counter()
-            reload_esmc(precision=arguments.precision, device=torch.device("cuda"))
+            esmc_load_model = getattr(arguments, "esmc_load_model", None)
+            if esmc_load_model is not None and getattr(model, "_esmc", None) is None:
+                load_esmc = getattr(model, "load_esmc", None)
+                if load_esmc is None:
+                    raise RuntimeError("Local ESMFold2 artifact loading requires model.load_esmc")
+                load_esmc(
+                    str(esmc_load_model),
+                    precision=arguments.precision,
+                    device=torch.device("cuda"),
+                    local_files_only=True,
+                )
+            else:
+                reload_esmc(
+                    precision=arguments.precision,
+                    device=torch.device("cuda"),
+                    local_files_only=arguments.local_files_only,
+                )
             torch.cuda.synchronize()
             esmc_reload_ms = (time.perf_counter() - reload_start) * 1000.0
             status = getattr(model, "esmc_precision_status", None)
@@ -640,12 +698,13 @@ def run_case(
             torch, model, sequences, arguments.batch_size, arguments
         )
     else:
+        load_model, load_revision = _model_load_source(arguments)
         model_inputs, logical_tokens, padded_tokens, sequences = prepare_inputs(
             model,
-            arguments.model,
+            load_model,
             lengths,
             torch.device("cuda"),
-            revision=arguments.revision,
+            revision=load_revision,
             local_files_only=arguments.local_files_only,
         )
 

@@ -7,7 +7,9 @@ import itertools
 import json
 import math
 import os
+import platform
 import random
+import re
 import shutil
 import subprocess
 import tarfile
@@ -45,7 +47,18 @@ def _get_logger():
     return logging.get_logger(__name__)
 
 
-DOCKER_IMAGE = "ghcr.io/soedinglab/mmseqs2"
+MMSEQS2_IMAGE_REPOSITORY = "ghcr.io/soedinglab/mmseqs2"
+MMSEQS2_VERSION = "18-8cc5c"
+MMSEQS2_CPU_MANIFEST_DIGEST = (
+    "sha256:41b12b0d5f41432fa1b9976123da6e2e06e7fab49a34964f3b54ec038e5845d9"
+)
+MMSEQS2_CPU_ARM64_CHILD_DIGEST = (
+    "sha256:8bec048845f8f20749c2e2ad067a27d67eef839d2bb068e9d6e957113e9a7fba"
+)
+DOCKER_IMAGE = (
+    f"{MMSEQS2_IMAGE_REPOSITORY}:{MMSEQS2_VERSION}@{MMSEQS2_CPU_MANIFEST_DIGEST}"
+)
+DEFAULT_MMSEQS2_PHASE_TIMEOUT = 1800.0
 COLABFOLD_HOST = "https://api.colabfold.com"
 LOWERCASE_CHARS = b"abcdefghijklmnopqrstuvwxyz"
 DEFAULT_MAX_CONTEXT_TOKENS = [6144, 12288, 24576]
@@ -56,6 +69,91 @@ E1_MSA_SAMPLING_SOURCE_REVISION = "bfd2620a602248499f3d2583d85a7ecddf0b6e02"
 
 IdSequence = namedtuple("IdSequence", ["id", "sequence"])
 IndexedSequence = tuple[int, str]
+
+_SHA256_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_IMAGE_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+@dataclass(frozen=True, slots=True)
+class _PinnedImageReference:
+    repository: str
+    version: str
+    digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DockerImageIdentity:
+    reference: str
+    repository: str
+    version: str
+    manifest_digest: str
+    image_id: str
+    os: str
+    architecture: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "reference": self.reference,
+            "repository": self.repository,
+            "version": self.version,
+            "manifest_digest": self.manifest_digest,
+            "image_id": self.image_id,
+            "os": self.os,
+            "architecture": self.architecture,
+        }
+
+
+def _parse_pinned_image_reference(reference: str) -> _PinnedImageReference:
+    """Parse ``repository:version@sha256:digest`` and reject mutable images."""
+
+    if not isinstance(reference, str) or not reference or any(char.isspace() for char in reference):
+        raise ValueError(
+            "docker_image must be an immutable repository:version@sha256:digest reference"
+        )
+    try:
+        name_and_version, digest = reference.rsplit("@", maxsplit=1)
+    except ValueError as error:
+        raise ValueError(
+            "docker_image must include an immutable @sha256 digest; mutable tags are rejected"
+        ) from error
+    last_slash = name_and_version.rfind("/")
+    last_colon = name_and_version.rfind(":")
+    if last_colon <= last_slash:
+        raise ValueError("docker_image must include an explicit version tag before its digest")
+    repository = name_and_version[:last_colon]
+    version = name_and_version[last_colon + 1 :]
+    if not repository or _IMAGE_VERSION_RE.fullmatch(version) is None:
+        raise ValueError("docker_image contains an invalid repository or version tag")
+    if _SHA256_DIGEST_RE.fullmatch(digest) is None:
+        raise ValueError("docker_image must include a lowercase sha256 digest")
+    return _PinnedImageReference(repository=repository, version=version, digest=digest)
+
+
+def _docker_architecture() -> str:
+    machine = platform.machine().lower()
+    aliases = {
+        "aarch64": "arm64",
+        "arm64": "arm64",
+        "amd64": "amd64",
+        "x86_64": "amd64",
+    }
+    try:
+        return aliases[machine]
+    except KeyError as error:
+        raise RuntimeError(f"Unsupported Docker host architecture: {machine!r}") from error
+
+
+def _json_sha256(payload: Any) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _file_sha256(path: str) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
 
 
 def _sequence_output_dir(output_dir: str, seq_id: str) -> str:
@@ -111,7 +209,8 @@ def read_fasta_sequences(path: str) -> dict[str, str]:
                 header = line[1:].strip()
                 parts = []
             else:
-                assert header is not None, f"FASTA sequence found before header in {path}"
+                if header is None:
+                    raise ValueError(f"FASTA sequence found before header in {path}")
                 parts.append(line)
     if header is not None:
         sequences[header] = "".join(parts)
@@ -131,7 +230,8 @@ def parse_msa(path: str) -> list[IdSequence]:
     for record_id, record_seq in records.items():
         sequence = str(record_seq).replace("\x00", "").replace(".", "-")
         sequences.append(IdSequence(record_id, sequence))
-    assert len(sequences) > 0, f"No sequences found in MSA file: {path}"
+    if not sequences:
+        raise ValueError(f"No sequences found in MSA file: {path}")
     return sequences
 
 
@@ -144,9 +244,11 @@ def convert_to_tensor(
         sequence.sequence.encode("ascii").translate(None, LOWERCASE_CHARS) for sequence in sequences
     ]
     lengths = {len(byte_sequence) for byte_sequence in byte_sequences}
-    assert len(lengths) == 1, (
-        f"MSA rows must have equal aligned lengths after removing insertions: {sorted(lengths)}"
-    )
+    if len(lengths) != 1:
+        raise ValueError(
+            "MSA rows must have equal aligned lengths after removing insertions: "
+            f"{sorted(lengths)}"
+        )
     array = np.vstack(
         [np.frombuffer(byte_sequence, dtype=np.uint8) for byte_sequence in byte_sequences]
     )
@@ -199,10 +301,11 @@ def sample_context(
     filtered_mask = (query_similarity <= max_query_similarity) & (
         query_similarity >= min_query_similarity
     )
-    assert filtered_mask.sum() >= 1, (
-        f"No sequences found with similarity to query within range "
-        f"{min_query_similarity} <= query_similarity <= {max_query_similarity}."
-    )
+    if int(filtered_mask.sum()) < 1:
+        raise ValueError(
+            "No sequences found with similarity to query within range "
+            f"{min_query_similarity} <= query_similarity <= {max_query_similarity}."
+        )
 
     filtered_weights = np.where(filtered_mask.cpu().numpy(), sampling_weights, 0.0)
     sampled_indices = np.random.default_rng(seed).choice(
@@ -214,18 +317,20 @@ def sample_context(
     )
 
     if use_full_sequences_in_context:
-        assert full_sequences_path is not None, (
-            "full_sequences_path is required when use_full_sequences_in_context=True"
-        )
-        full_sequences = parse_msa(full_sequences_path)
-        assert len(full_sequences) == len(msa_sequences), (
-            "Number of full sequences must match number of MSA sequences"
-        )
-        for i, (full_seq, msa_seq) in enumerate(zip(full_sequences, msa_sequences, strict=True)):
-            assert full_seq.id == msa_seq.id, (
-                "Full sequences and MSA sequences must be in the same order and have the same ids. "
-                f"Found differing id for sample {i}: {full_seq.id} != {msa_seq.id}"
+        if full_sequences_path is None:
+            raise ValueError(
+                "full_sequences_path is required when use_full_sequences_in_context=True"
             )
+        full_sequences = parse_msa(full_sequences_path)
+        if len(full_sequences) != len(msa_sequences):
+            raise ValueError("Number of full sequences must match number of MSA sequences")
+        for i, (full_seq, msa_seq) in enumerate(zip(full_sequences, msa_sequences, strict=True)):
+            if full_seq.id != msa_seq.id:
+                raise ValueError(
+                    "Full sequences and MSA sequences must be in the same order and have the "
+                    f"same ids. Found differing id for sample {i}: "
+                    f"{full_seq.id} != {msa_seq.id}"
+                )
         sampled_sequences = [full_sequences[int(i)] for i in sampled_indices]
     else:
         sampled_sequences = [msa_sequences[int(i)] for i in sampled_indices]
@@ -340,7 +445,8 @@ def get_query_from_a3m(path: str) -> str:
                 continue
             if header_found:
                 seq_parts.append(line)
-    assert header_found, f"No FASTA header found in A3M file: {path}"
+    if not header_found:
+        raise ValueError(f"No FASTA header found in A3M file: {path}")
     return _strip_a3m_insertions("".join(seq_parts))
 
 
@@ -517,7 +623,8 @@ class ContextCache:
 
 
 def compute_ppll(logits: torch.Tensor, token_ids: torch.Tensor) -> float:
-    assert token_ids.numel() > 0, "Cannot score an empty token sequence"
+    if token_ids.numel() == 0:
+        raise ValueError("Cannot score an empty token sequence")
     if token_ids.device != logits.device:
         token_ids = token_ids.to(logits.device)
     if logits.shape[0] != token_ids.shape[0]:
@@ -590,9 +697,8 @@ class _E1ContextPredictor:
         )
         batches = [[item[0] for item in batch] for batch in indexed_batches]
         flattened_indices = list(itertools.chain.from_iterable(batches))
-        assert sorted(flattened_indices) == list(range(len(sequences))), (
-            "Batches must contain all indices with no repetition"
-        )
+        if sorted(flattened_indices) != list(range(len(sequences))):
+            raise RuntimeError("Batches must contain all indices with no repetition")
         return batches
 
     @torch.no_grad()
@@ -744,6 +850,17 @@ def _forward_for_embedding(
 
 
 class HomologueSearcher:
+    """Run local MMseqs2 searches through one verified, digest-pinned image.
+
+    The default CPU image is multi-architecture and immutable. Pulling and
+    container networking are separate explicit opt-ins. GPU execution requires
+    a caller-supplied digest-pinned GPU image because the official CUDA image is
+    not portable to every supported host architecture.
+    """
+
+    _PROVENANCE_SCHEMA_VERSION = 1
+    _PROVENANCE_FILENAME = "search-provenance.json"
+
     def __init__(
         self,
         target_db: str,
@@ -753,61 +870,349 @@ class HomologueSearcher:
         min_seq_id: float = 0.0,
         coverage: float = 0.8,
         split_memory_limit: str | None = None,
-        use_gpu: bool = True,
+        use_gpu: bool = False,
+        allow_pull: bool = False,
+        allow_network: bool = False,
+        phase_timeout: float = DEFAULT_MMSEQS2_PHASE_TIMEOUT,
+        target_db_identity: str | None = None,
     ) -> None:
+        image_reference = _parse_pinned_image_reference(docker_image)
+        if type(use_gpu) is not bool:
+            raise TypeError("use_gpu must be a boolean")
+        if type(allow_pull) is not bool:
+            raise TypeError("allow_pull must be a boolean")
+        if type(allow_network) is not bool:
+            raise TypeError("allow_network must be a boolean")
+        if (
+            isinstance(phase_timeout, bool)
+            or not isinstance(phase_timeout, (int, float))
+            or not math.isfinite(float(phase_timeout))
+            or phase_timeout <= 0
+        ):
+            raise ValueError("phase_timeout must be a finite positive number")
+        if target_db_identity is not None and (
+            not isinstance(target_db_identity, str) or not target_db_identity.strip()
+        ):
+            raise ValueError("target_db_identity must be None or a non-empty string")
+        if use_gpu and docker_image == DOCKER_IMAGE:
+            raise ValueError(
+                "The default MMseqs2 image is CPU-only. GPU search requires an explicit "
+                "digest-pinned image compatible with the host architecture."
+            )
         self.target_db = target_db
         self.docker_image = docker_image
+        self._image_reference = image_reference
         self.sensitivity = sensitivity
         self.max_seqs = max_seqs
         self.min_seq_id = min_seq_id
         self.coverage = coverage
         self.split_memory_limit = split_memory_limit
         self.use_gpu = use_gpu
+        self.allow_pull = allow_pull
+        self.allow_network = allow_network
+        self.phase_timeout = float(phase_timeout)
+        self.target_db_identity = target_db_identity
+        self._verified_image_identity: _DockerImageIdentity | None = None
 
     @staticmethod
     def _seq_hash(sequence: str) -> str:
         return hashlib.md5(sequence.encode()).hexdigest()[:12]
 
-    def _run_docker_command(self, cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-        return subprocess.run(cmd, **kwargs)
+    def _run_docker_command(
+        self,
+        cmd: list[str],
+        *,
+        phase: str = "docker command",
+        **kwargs,
+    ) -> subprocess.CompletedProcess:
+        kwargs.setdefault("timeout", self.phase_timeout)
+        try:
+            return subprocess.run(cmd, **kwargs)
+        except subprocess.TimeoutExpired as error:
+            raise TimeoutError(
+                f"MMseqs2 phase {phase!r} exceeded {self.phase_timeout:g} seconds"
+            ) from error
+
+    @staticmethod
+    def _working_root() -> Path:
+        return Path.cwd().resolve(strict=True)
+
+    def _resolve_path_under_cwd(self, path: str, *, must_exist: bool = False) -> Path:
+        root = self._working_root()
+        candidate = Path(path)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            resolved = candidate.resolve(strict=must_exist)
+        except OSError as error:
+            raise ValueError(f"Path cannot be resolved safely: {path!r}") from error
+        if resolved != root and root not in resolved.parents:
+            raise ValueError(
+                "Path must resolve under the current working directory for the Docker mount. "
+                f"cwd={os.fspath(root)!r}, path={os.fspath(resolved)!r}"
+            )
+        return resolved
 
     def _validate_paths_under_cwd(self, *paths: str) -> None:
-        cwd = os.path.abspath(os.getcwd())
         for path in paths:
-            absolute_path = os.path.abspath(path)
-            if not (absolute_path == cwd or absolute_path.startswith(cwd + os.sep)):
-                raise ValueError(
-                    "Path must be under the current working directory for docker volume mount. "
-                    f"cwd={cwd!r}, path={absolute_path!r}"
-                )
+            self._resolve_path_under_cwd(path)
 
     def _path_in_container(self, local_path: str) -> str:
-        self._validate_paths_under_cwd(local_path)
-        rel = os.path.relpath(os.path.abspath(local_path), start=os.path.abspath(os.getcwd()))
-        return rel.replace(os.sep, "/")
+        resolved = self._resolve_path_under_cwd(local_path)
+        relative = resolved.relative_to(self._working_root())
+        return relative.as_posix() or "."
 
     def _docker_base_cmd(self) -> list[str]:
-        cmd = ["docker", "run", "--rm", "-v", f"{os.getcwd()}:/app", "-w", "/app"]
-        if self.use_gpu and torch.cuda.is_available():
+        root = self._working_root()
+        cmd = ["docker", "run", "--rm"]
+        if not self.allow_network:
+            cmd.extend(["--network", "none"])
+        cmd.extend(["-v", f"{os.fspath(root)}:/app", "-w", "/app"])
+        if self.use_gpu:
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "use_gpu=True requires CUDA to be available in the FastPLMs host process"
+                )
             cmd.extend(["--gpus", "all"])
         cmd.append(self.docker_image)
         return cmd
 
-    def _ensure_docker_image(self) -> None:
-        subprocess.run(["docker", "version"], capture_output=True, text=True, check=True)
-        inspect = subprocess.run(
-            ["docker", "image", "inspect", self.docker_image], capture_output=True, text=True
+    def _inspect_docker_image(self, *, check: bool) -> _DockerImageIdentity | None:
+        inspect = self._run_docker_command(
+            ["docker", "image", "inspect", self.docker_image],
+            phase="image inspection",
+            capture_output=True,
+            text=True,
+            check=check,
         )
-        if inspect.returncode == 0:
-            return
-        self._run_docker_command(["docker", "pull", self.docker_image], check=True, text=True)
+        if inspect.returncode != 0:
+            return None
+        try:
+            payload = json.loads(inspect.stdout)
+            if (
+                not isinstance(payload, list)
+                or len(payload) != 1
+                or not isinstance(payload[0], dict)
+            ):
+                raise ValueError("Docker inspect must return exactly one image object")
+            image = payload[0]
+            repo_digests = image.get("RepoDigests")
+            image_id = image.get("Id")
+            image_os = image.get("Os")
+            architecture = image.get("Architecture")
+            if not isinstance(repo_digests, list) or not all(
+                isinstance(value, str) for value in repo_digests
+            ):
+                raise ValueError("Docker inspect did not return RepoDigests")
+            expected_repo_digest = (
+                f"{self._image_reference.repository}@{self._image_reference.digest}"
+            )
+            if expected_repo_digest not in repo_digests:
+                raise ValueError(
+                    "Docker image RepoDigests do not contain the requested repository "
+                    "and manifest digest"
+                )
+            if not isinstance(image_id, str) or _SHA256_DIGEST_RE.fullmatch(image_id) is None:
+                raise ValueError("Docker inspect returned an invalid image ID")
+            if image_os != "linux":
+                raise ValueError(f"MMseqs2 image OS must be 'linux', got {image_os!r}")
+            expected_architecture = _docker_architecture()
+            if architecture != expected_architecture:
+                raise ValueError(
+                    "MMseqs2 image architecture does not match the host: "
+                    f"expected {expected_architecture!r}, got {architecture!r}"
+                )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"Docker image identity verification failed for {self.docker_image!r}"
+            ) from error
+        return _DockerImageIdentity(
+            reference=self.docker_image,
+            repository=self._image_reference.repository,
+            version=self._image_reference.version,
+            manifest_digest=self._image_reference.digest,
+            image_id=image_id,
+            os=image_os,
+            architecture=architecture,
+        )
+
+    def _ensure_docker_image(self) -> _DockerImageIdentity:
+        if self._verified_image_identity is not None:
+            return self._verified_image_identity
+        self._run_docker_command(
+            ["docker", "version"],
+            phase="Docker availability check",
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        identity = self._inspect_docker_image(check=False)
+        if identity is None:
+            if not self.allow_pull:
+                raise RuntimeError(
+                    "The pinned MMseqs2 image is not present locally and allow_pull=False. "
+                    "Preload the exact image out of band or opt in with allow_pull=True."
+                )
+            self._run_docker_command(
+                ["docker", "pull", self.docker_image],
+                phase="image pull",
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            identity = self._inspect_docker_image(check=True)
+        if identity is None:
+            raise RuntimeError("Docker image inspection succeeded without a verified identity")
+        self._verified_image_identity = identity
+        return identity
+
+    def _target_db_descriptor(self) -> dict[str, Any]:
+        prefix = self._resolve_path_under_cwd(self.target_db)
+        files: list[dict[str, Any]] = []
+        for candidate in sorted(prefix.parent.glob(f"{prefix.name}*")):
+            resolved = self._resolve_path_under_cwd(os.fspath(candidate), must_exist=True)
+            if not resolved.is_file():
+                continue
+            stat_result = resolved.stat()
+            files.append(
+                {
+                    "path": resolved.relative_to(self._working_root()).as_posix(),
+                    "size": stat_result.st_size,
+                    "mtime_ns": stat_result.st_mtime_ns,
+                }
+            )
+        if not files:
+            raise FileNotFoundError(
+                f"No MMseqs2 database files found for target_db prefix {self.target_db!r}"
+            )
+        derived_identity = _json_sha256(files)
+        return {
+            "prefix": prefix.relative_to(self._working_root()).as_posix(),
+            "identity": self.target_db_identity or derived_identity,
+            "identity_kind": "explicit" if self.target_db_identity is not None else "file-metadata",
+            "files": files,
+        }
+
+    def _request_provenance(self, sequence: str) -> dict[str, Any]:
+        return {
+            "provider": "mmseqs2",
+            "sequence_sha256": hashlib.sha256(sequence.encode("utf-8")).hexdigest(),
+            "image": {
+                "reference": self.docker_image,
+                "repository": self._image_reference.repository,
+                "version": self._image_reference.version,
+                "manifest_digest": self._image_reference.digest,
+            },
+            "platform": {"os": "linux", "architecture": _docker_architecture()},
+            "target_db": self._target_db_descriptor(),
+            "parameters": {
+                "sensitivity": self.sensitivity,
+                "max_seqs": self.max_seqs,
+                "min_seq_id": self.min_seq_id,
+                "coverage": self.coverage,
+                "split_memory_limit": self.split_memory_limit,
+                "use_gpu": self.use_gpu,
+                "allow_network": self.allow_network,
+            },
+        }
+
+    def _load_cached_result(
+        self,
+        a3m_output: str,
+        provenance_path: str,
+        request_provenance: dict[str, Any],
+    ) -> bool:
+        if not Path(a3m_output).is_file() or not Path(provenance_path).is_file():
+            return False
+        try:
+            with open(provenance_path, encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if not isinstance(payload, dict):
+                return False
+            if payload.get("schema_version") != self._PROVENANCE_SCHEMA_VERSION:
+                return False
+            if payload.get("request") != request_provenance:
+                return False
+            request_identity = _json_sha256(request_provenance)
+            if payload.get("request_identity_sha256") != request_identity:
+                return False
+            runtime = payload.get("runtime")
+            if not isinstance(runtime, dict):
+                return False
+            if runtime.get("reference") != self.docker_image:
+                return False
+            if runtime.get("manifest_digest") != self._image_reference.digest:
+                return False
+            image_id = runtime.get("image_id")
+            if not isinstance(image_id, str) or _SHA256_DIGEST_RE.fullmatch(image_id) is None:
+                return False
+            cache_identity = _json_sha256(
+                {"request_identity_sha256": request_identity, "runtime": runtime}
+            )
+            if payload.get("cache_identity_sha256") != cache_identity:
+                return False
+            result = payload.get("result")
+            if not isinstance(result, dict):
+                return False
+            if result.get("path") != Path(a3m_output).name:
+                return False
+            if result.get("size") != Path(a3m_output).stat().st_size:
+                return False
+            return result.get("sha256") == _file_sha256(a3m_output)
+        except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+            return False
+
+    def _store_result_provenance(
+        self,
+        provenance_path: str,
+        a3m_output: str,
+        request_provenance: dict[str, Any],
+        identity: _DockerImageIdentity,
+    ) -> None:
+        request_identity = _json_sha256(request_provenance)
+        runtime = identity.to_dict()
+        payload = {
+            "schema_version": self._PROVENANCE_SCHEMA_VERSION,
+            "request": request_provenance,
+            "request_identity_sha256": request_identity,
+            "runtime": runtime,
+            "cache_identity_sha256": _json_sha256(
+                {"request_identity_sha256": request_identity, "runtime": runtime}
+            ),
+            "result": {
+                "path": Path(a3m_output).name,
+                "size": Path(a3m_output).stat().st_size,
+                "sha256": _file_sha256(a3m_output),
+            },
+        }
+        output_dir = os.path.dirname(provenance_path) or "."
+        temporary_path: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=output_dir,
+                prefix=".mmseqs2-provenance-",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary_path = handle.name
+                json.dump(payload, handle, indent=2, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, provenance_path)
+            temporary_path = None
+        finally:
+            if temporary_path is not None:
+                Path(temporary_path).unlink(missing_ok=True)
 
     def create_db(self, fasta_path: str, db_path: str) -> str:
+        self._validate_paths_under_cwd(fasta_path, db_path)
         os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
         if os.path.exists(f"{db_path}.dbtype"):
             return db_path
         self._ensure_docker_image()
-        self._validate_paths_under_cwd(fasta_path, db_path)
         self._run_docker_command(
             [
                 *self._docker_base_cmd(),
@@ -815,6 +1220,7 @@ class HomologueSearcher:
                 self._path_in_container(fasta_path),
                 self._path_in_container(db_path),
             ],
+            phase="createdb",
             check=True,
             capture_output=True,
             text=True,
@@ -824,9 +1230,9 @@ class HomologueSearcher:
     def create_index(self, db_path: str, tmp_dir: str | None = None) -> None:
         if tmp_dir is None:
             tmp_dir = os.path.join(os.path.dirname(db_path), "tmp_index")
+        self._validate_paths_under_cwd(db_path, tmp_dir)
         os.makedirs(tmp_dir, exist_ok=True)
         self._ensure_docker_image()
-        self._validate_paths_under_cwd(db_path, tmp_dir)
         self._run_docker_command(
             [
                 *self._docker_base_cmd(),
@@ -834,6 +1240,7 @@ class HomologueSearcher:
                 self._path_in_container(db_path),
                 self._path_in_container(tmp_dir),
             ],
+            phase="createindex",
             check=True,
             capture_output=True,
             text=True,
@@ -844,11 +1251,16 @@ class HomologueSearcher:
             seq_id = self._seq_hash(sequence)
         seq_output_dir = _sequence_output_dir(output_dir, seq_id)
         a3m_output = os.path.join(seq_output_dir, f"{seq_id}.a3m")
-        if os.path.exists(a3m_output):
+        provenance_path = os.path.join(seq_output_dir, self._PROVENANCE_FILENAME)
+        self._validate_paths_under_cwd(seq_output_dir, self.target_db)
+        request_provenance = self._request_provenance(sequence)
+        if self._load_cached_result(a3m_output, provenance_path, request_provenance):
             return a3m_output
 
-        self._ensure_docker_image()
+        identity = self._ensure_docker_image()
         os.makedirs(seq_output_dir, exist_ok=True)
+        Path(a3m_output).unlink(missing_ok=True)
+        Path(provenance_path).unlink(missing_ok=True)
         query_fasta = os.path.join(seq_output_dir, "query.fasta")
         write_fasta_sequences(query_fasta, {seq_id: sequence})
         query_db = os.path.join(seq_output_dir, "queryDB")
@@ -867,6 +1279,7 @@ class HomologueSearcher:
                 self._path_in_container(query_fasta),
                 self._path_in_container(query_db),
             ],
+            phase="query createdb",
             check=True,
             capture_output=True,
             text=True,
@@ -891,7 +1304,13 @@ class HomologueSearcher:
             search_cmd.extend(["--split-memory-limit", self.split_memory_limit])
         if self.use_gpu and torch.cuda.is_available():
             search_cmd.extend(["--gpu", "1"])
-        self._run_docker_command(search_cmd, check=True, capture_output=True, text=True)
+        self._run_docker_command(
+            search_cmd,
+            phase="search",
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         self._run_docker_command(
             [
                 *docker_base,
@@ -903,9 +1322,21 @@ class HomologueSearcher:
                 "--msa-format-mode",
                 "6",
             ],
+            phase="result2msa",
             check=True,
             capture_output=True,
             text=True,
+        )
+        if not Path(a3m_output).is_file():
+            raise RuntimeError("MMseqs2 result2msa did not create a regular A3M file")
+        resolved_a3m = self._resolve_path_under_cwd(a3m_output, must_exist=True)
+        if not resolved_a3m.is_file():
+            raise RuntimeError("MMseqs2 result2msa did not create a regular A3M file")
+        self._store_result_provenance(
+            provenance_path,
+            a3m_output,
+            request_provenance,
+            identity,
         )
         for pattern in ["queryDB*", "resultDB*"]:
             for path in Path(seq_output_dir).glob(pattern):
@@ -924,6 +1355,7 @@ class HomologueSearcher:
     ) -> dict[str, str]:
         if seq_ids is None:
             seq_ids = [self._seq_hash(seq) for seq in sequences]
+        self._validate_paths_under_cwd(output_dir)
         os.makedirs(output_dir, exist_ok=True)
         results: dict[str, str] = {}
         for seq, sid in tqdm(
@@ -932,9 +1364,15 @@ class HomologueSearcher:
         ):
             try:
                 results[seq] = self.search(seq, output_dir, sid)
-            except Exception:
+            except Exception as error:
                 if not continue_on_error:
                     raise
+                _get_logger().warning(
+                    "Homologue search failed and was skipped: "
+                    "provider=mmseqs2 seq_id=%s error_type=%s",
+                    sid,
+                    type(error).__name__,
+                )
         return results
 
 
@@ -1248,9 +1686,15 @@ class ColabFoldSearcher:
         for i, (seq, sid) in enumerate(tqdm(pairs, desc="ColabFold search")):
             try:
                 results[seq] = self.search(seq, output_dir, sid)
-            except Exception:
+            except Exception as error:
                 if not continue_on_error:
                     raise
+                _get_logger().warning(
+                    "Homologue search failed and was skipped: "
+                    "provider=colabfold seq_id=%s error_type=%s",
+                    sid,
+                    type(error).__name__,
+                )
             if i < len(pairs) - 1:
                 time.sleep(random.uniform(*self.inter_request_delay))
         return results
@@ -1260,7 +1704,8 @@ def _make_homologue_searcher(
     provider: str, target_db: str | None, **kwargs
 ) -> HomologueSearcher | ColabFoldSearcher:
     if provider == "mmseqs2":
-        assert target_db is not None, "target_db is required for MMseqs2 homologue search"
+        if target_db is None:
+            raise ValueError("target_db is required for MMseqs2 homologue search")
         return HomologueSearcher(target_db=target_db, **kwargs)
     if provider == "colabfold":
         return ColabFoldSearcher(**kwargs)

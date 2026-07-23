@@ -118,9 +118,14 @@ def test_model_card_renderers_surface_typed_limitations(
         assert "Input mode:" not in card
         assert "Internal preparation mode:" not in card
         assert f"Generation contract: `{spec.generation_contract}`" in card
-        if spec.notes:
+        if spec.notes and spec.family.id != "esm_plusplus":
             assert "## Notes and limitations" in card
             assert " ".join(spec.notes.split()) in " ".join(card.split())
+        elif spec.family.id == "esm_plusplus":
+            # ESMC measurements are report-derived per checkpoint. The shared
+            # manifest note contains a historical ESMC-6B-only observation
+            # and must never be copied into the small or large checkpoint cards.
+            assert "ESMC-6B Flex Attention exceeds" not in card
 
 
 def test_support_table_exposes_generation_contracts() -> None:

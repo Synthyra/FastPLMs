@@ -6,6 +6,14 @@ import torch
 import torch.nn as nn
 
 from tests.parity.support.reference_adapters import move_model, snapshot_path
+from tests.parity.support.reference_adapters.biohub_source import (
+    reference_environment as _reference_environment,
+)
+from tests.parity.support.reference_adapters.biohub_source import (
+    reference_sources,
+)
+
+reference_environment = _reference_environment
 
 
 class _OfficialESMFold2Wrapper(nn.Module):
@@ -59,6 +67,7 @@ def load_official_model(
 ) -> tuple[nn.Module, None]:
     """Load one of the four supported ESMFold2 snapshots exactly."""
 
+    reference_sources()
     from transformers.models.esmfold2.configuration_esmfold2 import ESMFold2Config
     from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
     from transformers.models.esmfold2.modeling_esmfold2_experimental import (

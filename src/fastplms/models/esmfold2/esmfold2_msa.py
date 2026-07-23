@@ -20,7 +20,9 @@ from .esmfold2_parsing import FastaEntry, read_sequences, write_sequences
 from .esmfold2_sequential_dataclass import SequentialDataclass
 from .esmfold2_system import PathOrBuffer
 
-_A3M_INSERTION_DELETE_TABLE = str.maketrans(dict.fromkeys(string.ascii_lowercase))
+_A3M_INSERTION_DELETE_TABLE = str.maketrans(
+    dict.fromkeys(string.ascii_lowercase + ".")
+)
 _SERIALIZATION_VERSION = 1
 _UINT32_BYTES = 4
 
@@ -32,7 +34,7 @@ def is_a3m_insertion(character: str) -> bool:
 
 
 def remove_insertions_from_sequence(sequence: str) -> str:
-    """Remove lowercase A3M insertion residues from a sequence."""
+    """Remove lowercase residues and dot insertion markers from an A3M row."""
 
     return sequence.translate(_A3M_INSERTION_DELETE_TABLE)
 
@@ -97,8 +99,14 @@ class FastMSA(SequentialDataclass):
     headers: list[str] | None = None
 
     def __post_init__(self) -> None:
-        if self.headers is not None:
-            assert len(self.headers) == self.depth, "Number of headers must match depth."
+        if not isinstance(self.array, np.ndarray):
+            raise TypeError("FastMSA array must be a NumPy array.")
+        if self.array.ndim != 2 or self.array.shape[0] == 0 or self.array.shape[1] == 0:
+            raise ValueError(
+                f"FastMSA array must have non-empty shape (depth, length), got {self.array.shape}."
+            )
+        if self.headers is not None and len(self.headers) != self.depth:
+            raise ValueError("Number of headers must match depth.")
 
     @property
     def depth(self) -> int:
@@ -194,13 +202,16 @@ class FastMSA(SequentialDataclass):
         msas: Sequence[FastMSA],
         remove_query_from_later_msas: bool = True,
     ) -> FastMSA:
-        arrays = []
-        headers = []
+        if not msas:
+            raise ValueError("Cannot stack an empty list of MSAs")
+        arrays: list[np.ndarray] = []
+        headers: list[str] | None = [] if any(msa.headers is not None for msa in msas) else None
         for index, msa in enumerate(msas):
             start = 1 if index > 0 and remove_query_from_later_msas else 0
             arrays.append(msa.array[start:])
-            if msa.headers is not None:
-                headers.extend(msa.headers[start:])
+            if headers is not None:
+                source_headers = msa.headers or [""] * msa.depth
+                headers.extend(source_headers[start:])
         return cls(np.concatenate(arrays, axis=0), headers)
 
     def to_msa(self) -> MSA:
@@ -220,6 +231,35 @@ class MSA(SequentialDataclass):
 
     entries: list[FastaEntry]
     deletions: np.ndarray | None = dataclasses.field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.entries, list):
+            raise TypeError("MSA entries must be a list of FastaEntry rows.")
+        if not self.entries:
+            raise ValueError("MSA requires at least one aligned sequence.")
+        if any(not isinstance(entry, FastaEntry) for entry in self.entries):
+            raise TypeError("Every MSA entry must be a FastaEntry.")
+        expected_length = len(self.entries[0].sequence)
+        if expected_length == 0:
+            raise ValueError("MSA sequences must be non-empty.")
+        for row, entry in enumerate(self.entries[1:], start=1):
+            if len(entry.sequence) != expected_length:
+                raise ValueError(
+                    "MSA row length mismatch: "
+                    f"row 0 has {expected_length} columns, row {row} has "
+                    f"{len(entry.sequence)}."
+                )
+        deletions = self.deletions
+        if deletions is not None and not isinstance(deletions, np.ndarray):
+            raise TypeError("MSA deletions must be a NumPy array when provided.")
+        if isinstance(deletions, np.ndarray) and deletions.shape != (
+            len(self.entries),
+            expected_length,
+        ):
+            raise ValueError(
+                "MSA deletion matrix must have shape "
+                f"({len(self.entries)}, {expected_length}), got {deletions.shape}."
+            )
 
     @cached_property
     def sequences(self) -> list[str]:
@@ -266,19 +306,21 @@ class MSA(SequentialDataclass):
         entries = []
         deletion_rows = []
         for header, raw_sequence in islice(read_sequences(path), max_sequences):
-            deletion_rows.append(a3m_deletion_counts(raw_sequence))
+            if remove_insertions:
+                deletion_rows.append(a3m_deletion_counts(raw_sequence))
             sequence = (
                 remove_insertions_from_sequence(raw_sequence) if remove_insertions else raw_sequence
             )
             if entries:
                 expected_length = len(entries[0].sequence)
-                assert len(sequence) == expected_length, (
-                    "Sequence length mismatch. "
-                    f"Expected: {expected_length}, Received: {len(sequence)}"
-                )
+                if len(sequence) != expected_length:
+                    raise ValueError(
+                        "Sequence length mismatch. "
+                        f"Expected: {expected_length}, Received: {len(sequence)}"
+                    )
             entries.append(FastaEntry(header, sequence))
         deletions = None
-        if deletion_rows:
+        if remove_insertions and deletion_rows:
             deletions = np.stack(deletion_rows).astype(np.float32)
         return cls(entries, deletions=deletions)
 
@@ -294,10 +336,11 @@ class MSA(SequentialDataclass):
             sequence = str(record.seq)
             if entries:
                 expected_length = len(entries[0].sequence)
-                assert len(sequence) == expected_length, (
-                    "Sequence length mismatch. "
-                    f"Expected: {expected_length}, Received: {len(sequence)}"
-                )
+                if len(sequence) != expected_length:
+                    raise ValueError(
+                        "Sequence length mismatch. "
+                        f"Expected: {expected_length}, Received: {len(sequence)}"
+                    )
             entries.append(FastaEntry(f"{record.id} {record.description}", sequence))
         msa = cls(entries)
         if remove_insertions:
@@ -419,7 +462,8 @@ class MSA(SequentialDataclass):
         )
 
     def greedy_select(self, num_seqs: int, mode: str = "max") -> MSA:
-        assert mode in ("max", "min")
+        if mode not in ("max", "min"):
+            raise ValueError(f"Unsupported MSA selection mode: {mode!r}.")
         if self.depth <= num_seqs:
             return self
         return self.select_sequences(greedy_select_indices(self.array, num_seqs, mode))

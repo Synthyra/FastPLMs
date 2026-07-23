@@ -4,13 +4,29 @@ from __future__ import annotations
 
 import pytest
 import torch
+from transformers.modeling_outputs import SequenceClassifierOutput, TokenClassifierOutput
 
-from fastplms.models.dplm.modeling_dplm import DPLMConfig, DPLMForMaskedLM
+from fastplms.models.dplm.modeling_dplm import (
+    DPLMConfig,
+    DPLMForMaskedLM,
+    DPLMForSequenceClassification,
+    DPLMForTokenClassification,
+    DPLMModel,
+    DPLMSequenceClassifierOutput,
+    DPLMTokenClassifierOutput,
+)
 from fastplms.models.dplm2.modeling_dplm2 import (
+    FAST_DPLM2_ENCODER,
     DPLM2Config,
     DPLM2EncoderOutput,
     DPLM2ForMaskedLM,
+    DPLM2ForSequenceClassification,
+    DPLM2ForTokenClassification,
+    DPLM2MaskedLMOutput,
     DPLM2Model,
+    DPLM2ModelOutput,
+    DPLM2SequenceClassifierOutput,
+    DPLM2TokenClassifierOutput,
     ModifiedRotaryEmbedding,
 )
 
@@ -34,6 +50,20 @@ def _common_config(vocab_size: int) -> dict[str, object]:
         "position_embedding_type": "rotary",
         "attn_backend": "sdpa",
     }
+
+
+def _assert_nested_close(actual, expected) -> None:
+    if torch.is_tensor(expected):
+        assert torch.is_tensor(actual)
+        torch.testing.assert_close(actual, expected)
+        return
+    if isinstance(expected, (tuple, list)):
+        assert isinstance(actual, type(expected))
+        assert len(actual) == len(expected)
+        for actual_value, expected_value in zip(actual, expected, strict=True):
+            _assert_nested_close(actual_value, expected_value)
+        return
+    assert actual == expected
 
 
 def test_dplm_argmax_generation_preserves_fixed_positions() -> None:
@@ -104,6 +134,317 @@ def test_dplm_families_reject_static_bf16_inference(
 
     with pytest.raises(RuntimeError, match="FP32-resident parameters"):
         model(input_ids=X, attention_mask=torch.ones_like(X))
+
+
+@pytest.mark.parametrize(
+    ("model_class", "config_class", "vocab_size"),
+    (
+        (DPLMForMaskedLM, DPLMConfig, 33),
+        (DPLM2ForMaskedLM, DPLM2Config, 64),
+    ),
+)
+def test_masked_lm_dropout_round_trips_through_config_and_weights(
+    model_class: type[torch.nn.Module],
+    config_class: type,
+    vocab_size: int,
+    tmp_path,
+) -> None:
+    config = config_class(**_common_config(vocab_size))
+    config.hidden_dropout_prob = 0.37
+    model = model_class(config).eval()
+    model.save_pretrained(tmp_path)
+
+    reloaded = model_class.from_pretrained(tmp_path, local_files_only=True).eval()
+
+    assert model.config.hidden_dropout_prob == pytest.approx(0.37)
+    assert reloaded.config.hidden_dropout_prob == pytest.approx(0.37)
+
+
+@pytest.mark.parametrize(
+    ("model_class", "config_class", "vocab_size"),
+    (
+        (DPLMForMaskedLM, DPLMConfig, 33),
+        (DPLM2ForMaskedLM, DPLM2Config, 64),
+    ),
+)
+def test_masked_lm_resize_updates_input_and_output_projections(
+    model_class: type[torch.nn.Module],
+    config_class: type,
+    vocab_size: int,
+    tmp_path,
+) -> None:
+    model = model_class(config_class(**_common_config(vocab_size))).eval()
+    resized_vocab_size = vocab_size + 5
+    input_ids = torch.tensor([[0, 6, 7, 2]])
+    with torch.inference_mode():
+        original_logits = model(input_ids=input_ids).logits
+
+    model.resize_token_embeddings(resized_vocab_size)
+
+    assert model.get_input_embeddings().num_embeddings == resized_vocab_size
+    assert model.get_output_embeddings().out_features == resized_vocab_size
+    assert model.lm_head.bias.shape == (resized_vocab_size,)
+    assert model.config.vocab_size == resized_vocab_size
+    assert model.get_output_embeddings().bias is None
+
+    with torch.inference_mode():
+        output = model(input_ids=input_ids)
+    assert output.logits.shape == (*input_ids.shape, resized_vocab_size)
+    torch.testing.assert_close(output.logits[..., :vocab_size], original_logits)
+
+    save_path = tmp_path / model_class.__name__
+    model.save_pretrained(save_path, safe_serialization=True)
+    reloaded = model_class.from_pretrained(save_path, local_files_only=True).eval()
+    assert reloaded.get_input_embeddings().num_embeddings == resized_vocab_size
+    assert reloaded.get_output_embeddings().out_features == resized_vocab_size
+    assert reloaded.get_output_embeddings().bias is None
+    assert reloaded.lm_head.bias.shape == (resized_vocab_size,)
+
+
+@pytest.mark.parametrize(
+    ("model_class", "config_class", "vocab_size", "output_class", "labels"),
+    (
+        (
+            DPLMForSequenceClassification,
+            DPLMConfig,
+            33,
+            DPLMSequenceClassifierOutput,
+            [1],
+        ),
+        (
+            DPLMForTokenClassification,
+            DPLMConfig,
+            33,
+            DPLMTokenClassifierOutput,
+            [[1, 1, 1, 1]],
+        ),
+        (
+            DPLM2ForSequenceClassification,
+            DPLM2Config,
+            64,
+            DPLM2SequenceClassifierOutput,
+            [1],
+        ),
+        (
+            DPLM2ForTokenClassification,
+            DPLM2Config,
+            64,
+            DPLM2TokenClassifierOutput,
+            [[1, 1, 1, 1]],
+        ),
+    ),
+)
+def test_dplm_task_heads_honor_config_and_explicit_return_dict(
+    model_class: type[torch.nn.Module],
+    config_class: type,
+    vocab_size: int,
+    output_class: type,
+    labels: list[int] | list[list[int]],
+) -> None:
+    config = config_class(**_common_config(vocab_size), num_labels=3, return_dict=False)
+    model = model_class(config).eval()
+    input_ids = torch.tensor([[0, 6, 7, 2]])
+    label_tensor = torch.tensor(labels)
+
+    with torch.inference_mode():
+        unlabeled_tuple = model(input_ids=input_ids)
+        unlabeled_output = model(input_ids=input_ids, return_dict=True)
+        labeled_tuple = model(
+            input_ids=input_ids,
+            labels=label_tensor,
+            output_attentions=True,
+            output_hidden_states=True,
+            output_s_max=True,
+        )
+        labeled_output = model(
+            input_ids=input_ids,
+            labels=label_tensor,
+            output_attentions=True,
+            output_hidden_states=True,
+            output_s_max=True,
+            return_dict=True,
+        )
+
+    assert type(unlabeled_output) is output_class
+    assert tuple(unlabeled_output.keys()) == ("logits",)
+    assert isinstance(unlabeled_tuple, tuple)
+    assert len(unlabeled_tuple) == 1
+    torch.testing.assert_close(unlabeled_tuple[0], unlabeled_output.logits)
+
+    assert type(labeled_output) is output_class
+    assert isinstance(labeled_output, (SequenceClassifierOutput, TokenClassifierOutput))
+    assert tuple(labeled_output.keys()) == (
+        "loss",
+        "logits",
+        "hidden_states",
+        "attentions",
+        "s_max",
+    )
+    assert isinstance(labeled_tuple, tuple)
+    _assert_nested_close(labeled_tuple, labeled_output.to_tuple())
+
+
+@pytest.mark.parametrize(
+    ("model_class", "output_class", "expected_keys"),
+    (
+        (
+            DPLM2Model,
+            DPLM2ModelOutput,
+            ("last_hidden_state", "hidden_states", "attentions", "s_max"),
+        ),
+        (
+            DPLM2ForMaskedLM,
+            DPLM2MaskedLMOutput,
+            (
+                "loss",
+                "logits",
+                "hidden_states",
+                "attentions",
+                "s_max",
+                "last_hidden_state",
+            ),
+        ),
+    ),
+)
+def test_dplm2_base_and_mlm_preserve_full_structured_tuple_contract(
+    model_class: type[torch.nn.Module],
+    output_class: type,
+    expected_keys: tuple[str, ...],
+) -> None:
+    model = model_class(DPLM2Config(**_common_config(64))).eval()
+    input_ids = torch.tensor([[0, 6, 7, 2]])
+    call_kwargs = {
+        "input_ids": input_ids,
+        "attention_mask": torch.ones_like(input_ids),
+        "output_attentions": True,
+        "output_hidden_states": True,
+        "output_s_max": True,
+    }
+    if model_class is DPLM2ForMaskedLM:
+        call_kwargs["labels"] = input_ids
+
+    with torch.inference_mode():
+        structured = model(**call_kwargs, return_dict=True)
+        tuple_output = model(**call_kwargs, return_dict=False)
+
+    assert type(structured) is output_class
+    assert tuple(structured.keys()) == expected_keys
+    assert structured.s_max is not None
+    assert all(value is not None for value in tuple_output)
+    _assert_nested_close(tuple_output, structured.to_tuple())
+
+
+@pytest.mark.parametrize(
+    "model_class",
+    (
+        DPLMForSequenceClassification,
+        DPLMForTokenClassification,
+        DPLM2ForSequenceClassification,
+        DPLM2ForTokenClassification,
+    ),
+)
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    (
+        ("use_cache", True),
+        ("past_key_values", ((torch.zeros(1), torch.zeros(1)),)),
+        ("encoder_hidden_states", torch.zeros(1, 2, 32)),
+        ("unexpected_option", "typo"),
+    ),
+)
+def test_dplm_task_heads_reject_every_unexpected_argument(
+    model_class: type[torch.nn.Module],
+    argument: str,
+    value: object,
+) -> None:
+    config_class = DPLM2Config if model_class.__name__.startswith("DPLM2") else DPLMConfig
+    vocab_size = 64 if config_class is DPLM2Config else 33
+    model = model_class(config_class(**_common_config(vocab_size), num_labels=3)).eval()
+
+    with pytest.raises(TypeError, match=argument):
+        model(input_ids=torch.tensor([[0, 6, 7, 2]]), **{argument: value})
+
+
+_DPLM2_INPUT_CONTRACT_MODELS = (
+    FAST_DPLM2_ENCODER,
+    DPLM2Model,
+    DPLM2ForMaskedLM,
+    DPLM2ForSequenceClassification,
+    DPLM2ForTokenClassification,
+)
+
+
+@pytest.mark.parametrize("model_class", _DPLM2_INPUT_CONTRACT_MODELS)
+def test_dplm2_public_models_require_exactly_one_input_representation(
+    model_class: type[torch.nn.Module],
+) -> None:
+    model = model_class(DPLM2Config(**_common_config(64))).eval()
+    input_ids = torch.tensor([[0, 6, 7, 2]])
+    inputs_embeds = model.get_input_embeddings()(input_ids)
+
+    with pytest.raises(ValueError, match="exactly one of input_ids or inputs_embeds"):
+        model()
+    with pytest.raises(ValueError, match="exactly one of input_ids or inputs_embeds"):
+        model(input_ids=input_ids, inputs_embeds=inputs_embeds)
+
+
+@pytest.mark.parametrize("model_class", _DPLM2_INPUT_CONTRACT_MODELS)
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    (
+        ("attention_mask", torch.ones(1, 3, dtype=torch.long)),
+        ("type_ids", torch.ones(2, 4, dtype=torch.long)),
+    ),
+)
+def test_dplm2_public_models_validate_mask_and_type_shapes_before_forward(
+    model_class: type[torch.nn.Module],
+    argument: str,
+    value: torch.Tensor,
+) -> None:
+    model = model_class(DPLM2Config(**_common_config(64))).eval()
+
+    with pytest.raises(ValueError, match=rf"{argument} must have shape \(1, 4\)"):
+        model(input_ids=torch.tensor([[0, 6, 7, 2]]), **{argument: value})
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    (
+        ("decoder_input_ids", torch.ones(1, 2, dtype=torch.long)),
+        ("decoder_attention_mask", torch.ones(1, 2, dtype=torch.long)),
+        ("decoder_inputs_embeds", torch.ones(1, 2, 32)),
+        ("encoder_hidden_states", torch.ones(1, 2, 32)),
+        ("encoder_attention_mask", torch.ones(1, 2, dtype=torch.long)),
+    ),
+)
+def test_dplm_masked_lm_rejects_decoder_and_cross_attention_arguments(
+    argument: str,
+    value: torch.Tensor,
+) -> None:
+    model = DPLMForMaskedLM(DPLMConfig(**_common_config(33)), dropout=0.0).eval()
+    input_ids = torch.tensor([[0, 6, 2]])
+
+    with pytest.raises(ValueError, match=argument):
+        model(input_ids=input_ids, **{argument: value})
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    (
+        ("past_key_values", ((torch.zeros(1), torch.zeros(1)),)),
+        ("use_cache", True),
+        ("encoder_hidden_states", torch.ones(1, 2, 32)),
+    ),
+)
+def test_dplm_automodel_rejects_decoder_cache_contracts(
+    argument: str,
+    value: object,
+) -> None:
+    model = DPLMModel(DPLMConfig(**_common_config(33))).eval()
+    input_ids = torch.tensor([[0, 6, 2]])
+
+    with pytest.raises(ValueError, match=argument):
+        model(input_ids=input_ids, **{argument: value})
 
 
 def test_dplm2_rotary_cache_follows_frequency_buffer_dtype() -> None:
@@ -267,6 +608,7 @@ def test_seeded_stochastic_generation_is_repeatable(family: str) -> None:
         ("dplm", {"max_iter": 0}, "max_iter"),
         ("dplm", {"max_iter": 1, "sampling_strategy": "unknown"}, "sampling strategy"),
         ("dplm2", {"max_iter": 1, "unmasking_strategy": "unknown"}, "unmasking strategy"),
+        ("dplm2", {"max_iter": 1, "sampling_strategy": "unknown"}, "sampling strategy"),
         ("dplm2", {"max_iter": 1, "sampling_strategy": "annealing@bad"}, "Annealing"),
     ),
 )

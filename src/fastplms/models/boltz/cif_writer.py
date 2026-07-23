@@ -18,8 +18,10 @@ def _confidence_per_atom(
     values = plddt.detach().cpu()
     if values.ndim == 1:
         values = values.unsqueeze(0)
-    assert values.ndim == 2, "Expected pLDDT tensor S with shape (n_samples, n_items)."
-    assert sample_index < values.shape[0], "sample_index out of range for pLDDT."
+    if values.ndim != 2:
+        raise ValueError("Expected pLDDT tensor S with shape (n_samples, n_items).")
+    if not 0 <= sample_index < values.shape[0]:
+        raise IndexError("sample_index out of range for pLDDT.")
 
     selected = values[sample_index]
     if selected.shape[0] == num_atoms:
@@ -33,7 +35,11 @@ def _confidence_per_atom(
             expanded[atom_idx] = selected_np[residue_idx] * 100.0
         return expanded
 
-    return np.ones((num_atoms,), dtype=np.float32) * 100.0
+    raise ValueError(
+        "pLDDT item count must match either atoms or residues: "
+        f"received {selected.shape[0]}, expected {num_atoms} atoms or "
+        f"{num_residues} residues."
+    )
 
 
 def write_cif(
@@ -47,27 +53,36 @@ def write_cif(
     coords = atom_coords.detach().cpu()
     if coords.ndim == 2:
         coords = coords.unsqueeze(0)
-    assert coords.ndim == 3, "Expected coordinate tensor X with shape (n_samples, n_atoms, 3)."
-    assert sample_index < coords.shape[0], "sample_index out of range."
+    if coords.ndim != 3 or coords.shape[-1] != 3:
+        raise ValueError(
+            "Expected coordinate tensor X with shape (n_samples, n_atoms, 3)."
+        )
+    if not 0 <= sample_index < coords.shape[0]:
+        raise IndexError("sample_index out of range.")
     selected_coords_tensor = coords[sample_index]
     all_non_finite = torch.logical_not(torch.isfinite(selected_coords_tensor))
-    assert not torch.any(all_non_finite), (
-        "CIF export received non-finite coordinates. "
-        f"Non-finite count: {int(all_non_finite.sum().item())}"
-    )
+    if torch.any(all_non_finite):
+        raise ValueError(
+            "CIF export received non-finite coordinates. "
+            f"Non-finite count: {int(all_non_finite.sum().item())}"
+        )
     selected_coords = selected_coords_tensor.numpy()
 
     mask = atom_mask.detach().cpu()
     if mask.ndim == 2:
         mask = mask[0]
-    assert mask.ndim == 1, "Expected atom mask M with shape (n_atoms,)."
-    assert mask.shape[0] == selected_coords.shape[0], "Atom mask/coord size mismatch."
-    assert torch.any(mask > 0), "Atom mask has no valid atoms for CIF export."
+    if mask.ndim != 1:
+        raise ValueError("Expected atom mask M with shape (n_atoms,).")
+    if mask.shape[0] != selected_coords.shape[0]:
+        raise ValueError("Atom mask/coord size mismatch.")
+    if not torch.any(mask > 0):
+        raise ValueError("Atom mask has no valid atoms for CIF export.")
     valid_non_finite = torch.logical_not(torch.isfinite(selected_coords_tensor[mask > 0]))
-    assert not torch.any(valid_non_finite), (
-        "CIF export has non-finite coordinates in unmasked atoms. "
-        f"Non-finite count: {int(valid_non_finite.sum().item())}"
-    )
+    if torch.any(valid_non_finite):
+        raise ValueError(
+            "CIF export has non-finite coordinates in unmasked atoms. "
+            f"Non-finite count: {int(valid_non_finite.sum().item())}"
+        )
 
     b_iso = _confidence_per_atom(
         plddt=plddt,
@@ -75,7 +90,8 @@ def write_cif(
         num_atoms=structure_template.num_atoms,
         sample_index=sample_index,
     )
-    assert b_iso.shape[0] == structure_template.num_atoms
+    if b_iso.shape[0] != structure_template.num_atoms:
+        raise RuntimeError("CIF confidence values do not match the structure atom count.")
 
     lines = [
         "data_boltz2_prediction",

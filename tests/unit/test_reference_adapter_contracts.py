@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 import torch.nn as nn
 
-from tests.parity.support.native_reference import _validated_generation_limitation
+from tests.parity.support.native_reference import (
+    _adapter_reference_sources,
+    _generation_contract,
+    _record_generation_contract,
+    _validated_generation_limitation,
+)
 from tests.parity.support.reference_adapters import OfficialGenerationUnavailable
 from tests.parity.support.reference_adapters.dplm2 import (
     DPLM2_3B_GENERATION_LIMITATION,
@@ -14,6 +21,7 @@ from tests.parity.support.reference_adapters.dplm2 import (
     _call_checkpoint_forward,
     _call_checkpoint_generate,
 )
+from tools.remote.reference_source_attestation import ReferenceSourceAttestationError
 
 
 class _AcceptsTypeIds(nn.Module):
@@ -86,6 +94,115 @@ class EsmForDPLM(_RejectsTypeIds):
         tokens = batch["input_ids"]
         tokens.ne(self.bos_id)
         raise AssertionError("unreachable")
+
+
+class _AnkhGenerationTokenizer:
+    def __call__(
+        self,
+        text: str,
+        *,
+        return_tensors: str,
+        add_special_tokens: bool = True,
+    ) -> dict[str, torch.Tensor]:
+        assert return_tensors == "pt"
+        if add_special_tokens:
+            assert text == "M S T N P K"
+            input_ids = torch.tensor([[4, 5, 1]])
+        else:
+            assert text == "A C"
+            input_ids = torch.tensor([[2, 3]])
+        return {
+            "input_ids": input_ids,
+            "attention_mask": torch.ones_like(input_ids),
+        }
+
+
+class _AnkhGenerationModel(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = SimpleNamespace(decoder_start_token_id=0)
+        self.generation_calls: list[dict[str, object]] = []
+
+    def generate(self, **kwargs: object) -> torch.Tensor:
+        self.generation_calls.append(kwargs)
+        decoder_input_ids = kwargs["decoder_input_ids"]
+        assert torch.is_tensor(decoder_input_ids)
+        return torch.cat((decoder_input_ids, decoder_input_ids.new_tensor([[9]])), dim=1)
+
+
+class _AnkhGenerationAdapter:
+    def __init__(self) -> None:
+        self.model = _AnkhGenerationModel()
+        self.loads: list[dict[str, object]] = []
+
+    def load_official_seq2seq(self, **kwargs: object):
+        self.loads.append(kwargs)
+        return self.model, _AnkhGenerationTokenizer()
+
+
+_VALID_SOURCE_ATTESTATION: dict[str, object] = {
+    "attestation_sha256": "b" * 64,
+    "file_count": 5218,
+    "import_file": "src/transformers/__init__.py",
+    "import_name": "transformers",
+    "import_root": "src/transformers",
+    "package_version": "4.57.6",
+    "schema_version": 1,
+    "source_revision": "a" * 40,
+    "tree_sha256": "c" * 64,
+}
+_VALID_REFERENCE_SOURCES = {
+    "biohub-esm": {
+        **_VALID_SOURCE_ATTESTATION,
+        "file_count": 157,
+        "import_file": "esm/__init__.py",
+        "import_name": "esm",
+        "import_root": "esm",
+        "package_version": "3.3.0",
+        "source_revision": "d" * 40,
+        "tree_sha256": "e" * 64,
+    },
+    "biohub-transformers": _VALID_SOURCE_ATTESTATION,
+}
+
+
+@pytest.mark.parametrize("family", ("esm_plusplus", "esm3", "esmfold2"))
+def test_biohub_native_adapter_requires_both_stable_source_attestations(family: str) -> None:
+    adapter = SimpleNamespace(
+        reference_sources=lambda: {
+            name: dict(evidence) for name, evidence in _VALID_REFERENCE_SOURCES.items()
+        }
+    )
+    request = {"model_id": "biohub-probe", "family": family}
+
+    assert _adapter_reference_sources(adapter, request) == _VALID_REFERENCE_SOURCES
+    with pytest.raises(RuntimeError, match="omits source attestations"):
+        _adapter_reference_sources(object(), request)
+
+    incomplete = SimpleNamespace(
+        reference_sources=lambda: {"biohub-transformers": _VALID_SOURCE_ATTESTATION}
+    )
+    with pytest.raises(ReferenceSourceAttestationError, match="names differ"):
+        _adapter_reference_sources(incomplete, request)
+
+
+def test_native_adapter_rejects_malformed_source_attestation() -> None:
+    malformed = {
+        **_VALID_SOURCE_ATTESTATION,
+        "import_file": "/tmp/untrusted/transformers/__init__.py",
+    }
+    adapter = SimpleNamespace(
+        reference_sources=lambda: {
+            **_VALID_REFERENCE_SOURCES,
+            "biohub-transformers": malformed,
+        }
+    )
+
+    with pytest.raises(ReferenceSourceAttestationError, match="portable relative"):
+        _adapter_reference_sources(
+            adapter,
+            {"model_id": "esmc_small", "family": "esm_plusplus"},
+        )
 
 
 def test_dplm2_checkpoint_forward_selection_is_signature_gated() -> None:
@@ -205,3 +322,73 @@ def test_native_generation_limitation_policy_is_fail_closed() -> None:
     }
     with pytest.raises(RuntimeError, match="differs from the manifest-derived request"):
         _validated_generation_limitation(mutated, error)
+
+
+def test_native_ankh_generation_uses_an_explicit_decoder_prompt() -> None:
+    adapter = _AnkhGenerationAdapter()
+    request = {
+        "model_id": "ankh_base",
+        "family": "ankh",
+        "generation_policy": "required",
+        "reference_repo_id": "ElnaggarLab/ankh-base",
+        "reference_revision": "immutable-revision",
+        "seed": 42,
+    }
+
+    contract = _generation_contract(
+        None,
+        object(),
+        request,
+        torch.device("cpu"),
+        adapter=adapter,
+    )
+
+    assert contract is not None
+    assert contract["decoder_prompt_contract"] == "explicit-task-prompt"
+    assert contract["decoder_input_ids"] == [[0, 2, 3]]
+    assert contract["decoder_attention_mask"] == [[1, 1, 1]]
+    assert contract["output_tokens"] == [[0, 2, 3, 9]]
+    assert len(contract["decoder_input_fingerprint"]) == 64
+    assert adapter.loads == [
+        {
+            "reference_repo_id": "ElnaggarLab/ankh-base",
+            "reference_revision": "immutable-revision",
+            "device": torch.device("cpu"),
+            "dtype": torch.float32,
+        }
+    ]
+    call = adapter.model.generation_calls[0]
+    assert torch.equal(call["input_ids"], torch.tensor([[4, 5, 1]]))
+    assert torch.equal(call["decoder_input_ids"], torch.tensor([[0, 2, 3]]))
+    assert call["do_sample"] is False
+
+
+def test_native_generation_policy_rejects_missing_required_evidence() -> None:
+    with pytest.raises(RuntimeError, match="has no generation contract"):
+        _record_generation_contract(
+            {},
+            None,
+            object(),
+            {
+                "model_id": "unsupported",
+                "family": "esm2",
+                "generation_policy": "required",
+            },
+            torch.device("cpu"),
+            adapter=object(),
+        )
+
+    metadata: dict[str, object] = {}
+    _record_generation_contract(
+        metadata,
+        None,
+        object(),
+        {
+            "model_id": "esm2_8m",
+            "family": "esm2",
+            "generation_policy": "not_applicable",
+        },
+        torch.device("cpu"),
+        adapter=object(),
+    )
+    assert metadata == {}

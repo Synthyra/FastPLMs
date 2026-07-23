@@ -10,12 +10,10 @@
 from __future__ import annotations
 
 import importlib
-import random
-from contextlib import contextmanager
 from functools import partial
+from importlib.util import find_spec
 from typing import ClassVar, cast
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -23,15 +21,19 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from .configuration_esmfold2 import ESMFold2Config
+from .reproducibility import seed_context
+
+_seed_context = seed_context
 
 try:
+    if find_spec("cuequivariance_ops_torch") is None:
+        raise ImportError("cuequivariance_ops_torch is unavailable")
     cue_module = importlib.import_module("cuequivariance_torch")
-    cue_triangle = importlib.import_module("cuequivariance_torch.primitives.triangle")
     _cue_attn_pair_bias = cue_module.attention_pair_bias
-    _cue_tri_mul = cue_triangle.triangle_multiplicative_update
+    _cue_tri_mul = cue_module.triangle_multiplicative_update
 
     CUE_AVAILABLE = True
-except ImportError:
+except (AttributeError, ImportError):
     _cue_attn_pair_bias = None  # type: ignore[assignment]
     _cue_tri_mul = None  # type: ignore[assignment]
     CUE_AVAILABLE = False
@@ -48,6 +50,59 @@ TRITON_KERNELS_AVAILABLE = False
 BACKEND_FUSED = "fused"
 BACKEND_CUEQ = "cuequivariance"
 _VALID_BACKENDS = (None, BACKEND_FUSED, BACKEND_CUEQ)
+MSA_CONDITIONING_INPUT_NAMES = (
+    "msa",
+    "msa_attention_mask",
+    "has_deletion",
+    "deletion_value",
+    "deletion_mean",
+)
+
+
+def validate_kernel_backend(backend: str | None) -> None:
+    """Fail before mutating modules when a named kernel cannot execute."""
+
+    if backend not in _VALID_BACKENDS:
+        raise ValueError(f"backend must be one of {_VALID_BACKENDS}, got {backend!r}")
+    if backend == BACKEND_FUSED and not TRITON_KERNELS_AVAILABLE:
+        raise RuntimeError(
+            "backend='fused' is unavailable because FastPLMs does not bundle the "
+            "source-built ESMFold2 Triton kernels."
+        )
+    if backend == BACKEND_CUEQ and not CUE_AVAILABLE:
+        raise RuntimeError(
+            "backend='cuequivariance' requires cuequivariance_torch and the CUDA 13 "
+            "cuequivariance_ops_torch runtime. Install FastPLMs with the "
+            "'structure,cueq' extras on a supported Linux CUDA 13 host."
+        )
+
+
+def validate_msa_conditioning_inputs(
+    config: ESMFold2Config,
+    *,
+    msa: Tensor | None,
+    msa_attention_mask: Tensor | None,
+    has_deletion: Tensor | None,
+    deletion_value: Tensor | None,
+    deletion_mean: Tensor | None,
+) -> None:
+    """Reject MSA-derived tensors for checkpoints trained without MSA conditioning."""
+
+    if config.msa_conditioning:
+        return
+    values = {
+        "msa": msa,
+        "msa_attention_mask": msa_attention_mask,
+        "has_deletion": has_deletion,
+        "deletion_value": deletion_value,
+        "deletion_mean": deletion_mean,
+    }
+    provided = sorted(name for name, value in values.items() if value is not None)
+    if provided:
+        raise ValueError(
+            "This ESMFold2 checkpoint was trained without MSA conditioning and rejects "
+            f"MSA-derived inputs: {', '.join(provided)}."
+        )
 
 
 def _fused_active(module: nn.Module, tensor: Tensor) -> bool:
@@ -74,7 +129,8 @@ class DropoutResidual(nn.Module):
 
     def __init__(self, r: float, batch_dim: int, use_fused_kernels: bool = False) -> None:
         super().__init__()
-        assert batch_dim in (1, 2), f"batch_dim must be 1 or 2, got {batch_dim}"
+        if isinstance(batch_dim, bool) or batch_dim not in (1, 2):
+            raise ValueError(f"batch_dim must be 1 or 2, got {batch_dim}")
         self._use_fused_kernels = (
             use_fused_kernels and batch_dim == 1 and _FusedDropoutResidual is not None
         )
@@ -567,37 +623,6 @@ class LanguageModelShim(nn.Module):
 
 
 # ===========================================================================
-# Reproducibility helper (mirrors evolutionaryscale.utils.reproducibility)
-# ===========================================================================
-
-
-@contextmanager
-def _seed_context(seed: int | None, *, cuda: bool = True):
-    """Temporarily seed Python, NumPy, and PyTorch RNGs."""
-    if seed is None:
-        yield
-        return
-    py_state = random.getstate()
-    np_state = np.random.get_state()
-    torch_state = torch.get_rng_state()
-    cuda_states = torch.cuda.get_rng_state_all() if cuda and torch.cuda.is_available() else None
-    seed = int(seed) % (2**32)
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if cuda and torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    try:
-        yield
-    finally:
-        random.setstate(py_state)
-        np.random.set_state(np_state)
-        torch.set_rng_state(torch_state)
-        if cuda_states is not None:
-            torch.cuda.set_rng_state_all(cuda_states)
-
-
-# ===========================================================================
 # ESMFold2ExperimentalModel: the top-level PreTrainedModel
 # ===========================================================================
 
@@ -790,34 +815,20 @@ class TriangleMultiplicativeBlock(nn.Module):
 
         if self._use_kernels:
             p_in_weight, g_in_weight = self.split_kernel_weights()
-
-            try:
-                return _cue_tri_mul(  # type: ignore[misc]
-                    pair_grid,
-                    direction=self._kernel_flow_direction(),
-                    mask=visibility,
-                    norm_in_weight=self.norm_start.weight,
-                    norm_in_bias=self.norm_start.bias,
-                    p_in_weight=p_in_weight,
-                    g_in_weight=g_in_weight,
-                    norm_out_weight=self.norm_mix.weight,
-                    norm_out_bias=self.norm_mix.bias,
-                    p_out_weight=self.proj_emit.weight,
-                    g_out_weight=self.proj_gate.weight,
-                    eps=_EPS,
-                )
-            except Exception as e:
-                import logging as _logging
-
-                _logging.getLogger(__name__).warning(
-                    "cuequivariance triangle_multiplicative_update kernel failed "
-                    "(flow=%s, shape=%s, dtype=%s); falling back to chunked einsum. "
-                    "Error: %s",
-                    self.flow,
-                    tuple(pair_grid.shape),
-                    pair_grid.dtype,
-                    e,
-                )
+            return _cue_tri_mul(  # type: ignore[misc]
+                pair_grid,
+                direction=self._kernel_flow_direction(),
+                mask=visibility,
+                norm_in_weight=self.norm_start.weight,
+                norm_in_bias=self.norm_start.bias,
+                p_in_weight=p_in_weight,
+                g_in_weight=g_in_weight,
+                norm_out_weight=self.norm_mix.weight,
+                norm_out_bias=self.norm_mix.bias,
+                p_out_weight=self.proj_emit.weight,
+                g_out_weight=self.proj_gate.weight,
+                eps=_EPS,
+            )
 
         normalized_grid = self.norm_start(pair_grid)
         bundled = self.proj_bundle(normalized_grid)
@@ -850,11 +861,8 @@ class TriangleMultiplicativeUpdate(nn.Module):
     def set_kernel_backend(self, backend: str | None) -> None:
         # Engine uses cueq when backend=="cuequivariance"; the "fused" backend
         # routes through the parent PairUpdateBlock's fused path (bypassing this).
+        validate_kernel_backend(backend)
         self._engine._use_kernels = backend == BACKEND_CUEQ
-        if backend == BACKEND_CUEQ and not CUE_AVAILABLE:
-            raise RuntimeError(
-                "backend='cuequivariance' but cuequivariance_torch is not installed."
-            )
 
     def set_chunk_size(self, chunk_size: int | None) -> None:
         self._engine.set_chunk_size(chunk_size)
@@ -885,8 +893,7 @@ class Transition(nn.Module):
 
     def set_kernel_backend(self, backend: str | None) -> None:
         """Install / uninstall FusedLNLinearSwiGLU (no cueq equivalent)."""
-        if backend not in _VALID_BACKENDS:
-            raise ValueError(f"backend must be one of {_VALID_BACKENDS}, got {backend!r}")
+        validate_kernel_backend(backend)
         self._kernel_backend = backend
         if backend == BACKEND_FUSED and TRITON_KERNELS_AVAILABLE:
             assert _FusedLNLinearSwiGLU is not None

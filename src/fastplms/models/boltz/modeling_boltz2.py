@@ -1,9 +1,12 @@
 import copy
 import inspect
-from collections.abc import Mapping, Sequence
+import random
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -94,18 +97,18 @@ def _boltz2_reference_diffusion_overrides() -> dict[str, Any]:
 
 
 def _enforce_pairformer_v2(pairformer_args: Mapping[str, Any], context: str) -> dict[str, Any]:
-    assert isinstance(pairformer_args, Mapping), (
-        f"Expected {context} pairformer_args to be a dictionary."
-    )
+    if not isinstance(pairformer_args, Mapping):
+        raise TypeError(f"Expected {context} pairformer_args to be a dictionary.")
     out = _to_plain_python(copy.deepcopy(pairformer_args))
-    if "v2" in out:
-        assert out["v2"], f"{context} pairformer_args['v2'] must be True for Boltz2."
+    if "v2" in out and not out["v2"]:
+        raise ValueError(f"{context} pairformer_args['v2'] must be True for Boltz2.")
     out["v2"] = True
     return out
 
 
 def _require_key(mapping: dict[str, Any], key: str) -> Any:
-    assert key in mapping, f"Missing required key '{key}' in checkpoint hyperparameters."
+    if key not in mapping:
+        raise KeyError(f"Missing required key '{key}' in checkpoint hyperparameters.")
     return mapping[key]
 
 
@@ -138,6 +141,47 @@ def _to_cpu_detached(value: Any) -> Any:
     return value
 
 
+@dataclass(frozen=True)
+class _RandomState:
+    python: object
+    numpy: tuple[Any, ...]
+    torch_cpu: Tensor
+    torch_cuda: list[Tensor] | None
+
+
+@contextmanager
+def _seed_context(seed: int | None) -> Iterator[None]:
+    """Temporarily seed every RNG used by Boltz2 and restore caller state."""
+
+    if seed is None:
+        yield
+        return
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise TypeError(
+            "Boltz2 seed must be an int or None; bool and coerced values are not accepted."
+        )
+    state = _RandomState(
+        python=random.getstate(),
+        numpy=np.random.get_state(),
+        torch_cpu=torch.random.get_rng_state(),
+        torch_cuda=torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    )
+    normalized_seed = seed % (2**32)
+    random.seed(normalized_seed)
+    np.random.seed(normalized_seed)
+    torch.manual_seed(normalized_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(normalized_seed)
+    try:
+        yield
+    finally:
+        random.setstate(state.python)
+        np.random.set_state(state.numpy)
+        torch.random.set_rng_state(state.torch_cpu)
+        if state.torch_cuda is not None:
+            torch.cuda.set_rng_state_all(state.torch_cuda)
+
+
 def _to_plain_python(value: Any) -> Any:
     if isinstance(value, Mapping):
         out: dict[Any, Any] = {}
@@ -165,6 +209,38 @@ def _filtered_kwargs(target: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
 
 
 @dataclass
+class Boltz2ModelOutput(ModelOutput):
+    """Raw Boltz2 inference output with standard AutoModel controls."""
+
+    last_hidden_state: torch.Tensor | None = None
+    hidden_states: tuple[torch.Tensor, ...] | None = None
+    attentions: tuple[torch.Tensor, ...] | None = None
+    pdistogram: torch.Tensor | None = None
+    s: torch.Tensor | None = None
+    z: torch.Tensor | None = None
+    sample_atom_coords: torch.Tensor | None = None
+    diff_token_repr: torch.Tensor | None = None
+    s_conf: torch.Tensor | None = None
+    z_conf: torch.Tensor | None = None
+    pde_logits: torch.Tensor | None = None
+    plddt_logits: torch.Tensor | None = None
+    resolved_logits: torch.Tensor | None = None
+    pde: torch.Tensor | None = None
+    plddt: torch.Tensor | None = None
+    complex_plddt: torch.Tensor | None = None
+    complex_iplddt: torch.Tensor | None = None
+    complex_pde: torch.Tensor | None = None
+    complex_ipde: torch.Tensor | None = None
+    pae_logits: torch.Tensor | None = None
+    pae: torch.Tensor | None = None
+    ptm: torch.Tensor | None = None
+    iptm: torch.Tensor | None = None
+    ligand_iptm: torch.Tensor | None = None
+    protein_iptm: torch.Tensor | None = None
+    pair_chains_iptm: Any = None
+
+
+@dataclass
 class Boltz2StructureOutput(ModelOutput):
     sample_atom_coords: torch.Tensor | None = None
     atom_pad_mask: torch.Tensor | None = None
@@ -176,6 +252,7 @@ class Boltz2StructureOutput(ModelOutput):
     sequence: str | None = None
     structure_template: ProteinStructureTemplate | None = None
     raw_output: dict[str, torch.Tensor] | None = None
+    seed: int | None = None
 
 
 class Boltz2Config(PretrainedConfig):
@@ -208,7 +285,8 @@ class Boltz2Config(PretrainedConfig):
         default_sampling_steps: int | None = None,
         default_diffusion_samples: int | None = None,
     ) -> "Boltz2Config":
-        assert isinstance(hparams, dict), "Expected checkpoint hyperparameters as a dictionary."
+        if not isinstance(hparams, dict):
+            raise TypeError("Expected checkpoint hyperparameters as a dictionary.")
         required = [
             "atom_s",
             "atom_z",
@@ -284,9 +362,10 @@ class Boltz2Config(PretrainedConfig):
 
         if "validation_args" in hparams:
             validation_args = hparams["validation_args"]
-            assert isinstance(validation_args, Mapping), (
-                "Expected 'validation_args' in checkpoint hyperparameters to be a mapping."
-            )
+            if not isinstance(validation_args, Mapping):
+                raise TypeError(
+                    "Expected 'validation_args' in checkpoint hyperparameters to be a mapping."
+                )
             if default_recycling_steps is None and "recycling_steps" in validation_args:
                 default_recycling_steps = validation_args["recycling_steps"]
             if default_sampling_steps is None and "sampling_steps" in validation_args:
@@ -354,8 +433,10 @@ class Boltz2InferenceCore(nn.Module):
         self.steering_args = (
             steering_args if steering_args is not None else _default_steering_args()
         )
-        assert "v2" in pairformer_args, "Boltz2 requires pairformer_args['v2']."
-        assert pairformer_args["v2"], "Boltz2 requires pairformer_args['v2']=True."
+        if "v2" not in pairformer_args:
+            raise ValueError("Boltz2 requires pairformer_args['v2'].")
+        if not pairformer_args["v2"]:
+            raise ValueError("Boltz2 requires pairformer_args['v2']=True.")
 
         full_embedder_args = {
             "atom_s": atom_s,
@@ -408,7 +489,8 @@ class Boltz2InferenceCore(nn.Module):
             PairformerModule,
             {"token_s": token_s, "token_z": token_z, **pairformer_args},
         )
-        assert "token_s" in pairformer_kwargs and "token_z" in pairformer_kwargs
+        if "token_s" not in pairformer_kwargs or "token_z" not in pairformer_kwargs:
+            raise RuntimeError("Boltz2 pairformer construction lost its token dimensions.")
         pairformer_token_s = pairformer_kwargs.pop("token_s")
         pairformer_token_z = pairformer_kwargs.pop("token_z")
         self.pairformer_module = PairformerModule(
@@ -463,9 +545,10 @@ class Boltz2InferenceCore(nn.Module):
         self.distogram_module = DistogramModule(token_z, num_bins)
 
         if self.confidence_prediction:
-            assert confidence_model_args is not None, (
-                "confidence_prediction=True requires confidence_model_args in config."
-            )
+            if confidence_model_args is None:
+                raise ValueError(
+                    "confidence_prediction=True requires confidence_model_args in config."
+                )
             confidence_kwargs = {
                 "token_s": token_s,
                 "token_z": token_z,
@@ -566,9 +649,8 @@ class Boltz2InferenceCore(nn.Module):
             if self.skip_run_structure:
                 x_pred = feats["coords"].repeat_interleave(diffusion_samples, 0)
             else:
-                assert "sample_atom_coords" in output, (
-                    "Structure sampling did not produce sample_atom_coords."
-                )
+                if "sample_atom_coords" not in output:
+                    raise RuntimeError("Structure sampling did not produce sample_atom_coords.")
                 x_pred = output["sample_atom_coords"]
 
             if detach_confidence:
@@ -608,7 +690,8 @@ class Boltz2Model(PreTrainedModel):
 
     def __init__(self, config: Boltz2Config) -> None:
         super().__init__(config)
-        assert isinstance(config.core_kwargs, dict), "config.core_kwargs must be a dictionary."
+        if not isinstance(config.core_kwargs, dict):
+            raise TypeError("config.core_kwargs must be a dictionary.")
         self.core = Boltz2InferenceCore(**config.core_kwargs)
 
     def _init_weights(self, module: nn.Module) -> None:
@@ -675,14 +758,17 @@ class Boltz2Model(PreTrainedModel):
             map_location=map_location,
             weights_only=False,
         )
-        assert isinstance(checkpoint, dict), "Checkpoint must deserialize to a dictionary."
+        if not isinstance(checkpoint, dict):
+            raise TypeError("Checkpoint must deserialize to a dictionary.")
         _require_key(checkpoint, "hyper_parameters")
         _require_key(checkpoint, "state_dict")
 
         hparams = checkpoint["hyper_parameters"]
-        assert isinstance(hparams, dict), "Checkpoint hyper_parameters must be a dictionary."
+        if not isinstance(hparams, dict):
+            raise TypeError("Checkpoint hyper_parameters must be a dictionary.")
         state_dict = checkpoint["state_dict"]
-        assert isinstance(state_dict, dict), "Checkpoint state_dict must be a dictionary."
+        if not isinstance(state_dict, dict):
+            raise TypeError("Checkpoint state_dict must be a dictionary.")
 
         config = Boltz2Config.from_hyperparameters(
             hparams,
@@ -695,28 +781,35 @@ class Boltz2Model(PreTrainedModel):
         cleaned = _state_dict_without_wrappers(state_dict)
         target_keys = set(model.core.state_dict().keys())
         for key in target_keys:
-            assert ".attention.norm_s." not in key, (
-                "Boltz2 inference core unexpectedly uses v1 attention parameters. "
-                "Expected pairformer v2 architecture."
-            )
+            if ".attention.norm_s." in key:
+                raise RuntimeError(
+                    "Boltz2 inference core unexpectedly uses v1 attention parameters. "
+                    "Expected pairformer v2 architecture."
+                )
         filtered: dict[str, Tensor] = {}
         for key, value in cleaned.items():
             if key in target_keys:
                 filtered[key] = value
 
         missing = sorted(target_keys.difference(filtered.keys()))
-        assert len(missing) == 0, (
-            "Checkpoint is missing required parameters for Boltz2 inference core. "
-            f"Missing keys (first 20): {missing[:20]}"
-        )
+        if missing:
+            raise RuntimeError(
+                "Checkpoint is missing required parameters for Boltz2 inference core. "
+                f"Missing keys (first 20): {missing[:20]}"
+            )
 
         load_result = model.core.load_state_dict(filtered, strict=False)
         loaded_missing = sorted(load_result.missing_keys)
-        assert len(loaded_missing) == 0, (
-            "Model has unexpected missing keys after load_state_dict. "
-            f"Missing keys (first 20): {loaded_missing[:20]}"
-        )
-        assert len(load_result.unexpected_keys) == 0
+        if loaded_missing:
+            raise RuntimeError(
+                "Model has unexpected missing keys after load_state_dict. "
+                f"Missing keys (first 20): {loaded_missing[:20]}"
+            )
+        if load_result.unexpected_keys:
+            raise RuntimeError(
+                "Model has unexpected checkpoint keys after load_state_dict: "
+                f"{sorted(load_result.unexpected_keys)[:20]}"
+            )
         model.eval()
         return model
 
@@ -729,14 +822,31 @@ class Boltz2Model(PreTrainedModel):
         max_parallel_samples: int | None = None,
         run_confidence_sequentially: bool = True,
         detach_confidence: bool = True,
-    ) -> dict[str, Tensor]:
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> Boltz2ModelOutput | tuple[Any, ...]:
+        output_attentions = (
+            self.config.output_attentions if output_attentions is None else output_attentions
+        )
+        if output_attentions:
+            raise NotImplementedError(
+                "Boltz2 does not expose normalized attention tensors from its structure "
+                "modules. output_attentions=True is unsupported."
+            )
+        output_hidden_states = (
+            self.config.output_hidden_states
+            if output_hidden_states is None
+            else output_hidden_states
+        )
+        return_dict = self.config.use_return_dict if return_dict is None else return_dict
         if recycling_steps is None:
             recycling_steps = self.config.default_recycling_steps
         if num_sampling_steps is None:
             num_sampling_steps = self.config.default_sampling_steps
         if diffusion_samples is None:
             diffusion_samples = self.config.default_diffusion_samples
-        return self.core(
+        raw_output = self.core(
             feats=feats,
             recycling_steps=recycling_steps,
             num_sampling_steps=num_sampling_steps,
@@ -745,6 +855,16 @@ class Boltz2Model(PreTrainedModel):
             run_confidence_sequentially=run_confidence_sequentially,
             detach_confidence=detach_confidence,
         )
+        token_state = raw_output.get("s")
+        pair_state = raw_output.get("z")
+        model_output = Boltz2ModelOutput(
+            last_hidden_state=token_state,
+            hidden_states=(token_state, pair_state)
+            if output_hidden_states and token_state is not None and pair_state is not None
+            else None,
+            **raw_output,
+        )
+        return model_output if return_dict else model_output.to_tuple()
 
     def _to_model_device(
         self,
@@ -771,30 +891,57 @@ class Boltz2Model(PreTrainedModel):
         max_parallel_samples: int | None = None,
         run_confidence_sequentially: bool = True,
         float_dtype: torch.dtype = torch.float32,
+        seed: int | None = None,
     ) -> Boltz2StructureOutput:
-        feats, template = build_boltz2_features(
-            amino_acid_sequence=amino_acid_sequence,
-            num_bins=self.config.num_bins,
-            atoms_per_window_queries=self.core.input_embedder.atom_encoder.atoms_per_window_queries,
-        )
-        feats = self._to_model_device(feats, float_dtype=float_dtype)
-
-        with torch.no_grad():
-            output = self.forward(
-                feats=feats,
-                recycling_steps=recycling_steps,
-                num_sampling_steps=num_sampling_steps,
-                diffusion_samples=diffusion_samples,
-                max_parallel_samples=max_parallel_samples,
-                run_confidence_sequentially=run_confidence_sequentially,
+        if float_dtype != torch.float32:
+            raise ValueError(
+                "Boltz2 predict_structure requires FP32 features and parameter storage; "
+                "CUDA compute runs under the declared BF16 autocast policy."
+            )
+        parameter_dtypes = {
+            parameter.dtype for parameter in self.parameters() if parameter.is_floating_point()
+        }
+        if parameter_dtypes and parameter_dtypes != {torch.float32}:
+            raise ValueError(
+                "Boltz2 predict_structure requires FP32 parameter storage before CUDA "
+                f"BF16 autocast; found {sorted(map(str, parameter_dtypes))}."
             )
 
-        sample_atom_coords = output["sample_atom_coords"].detach().cpu()
+        with _seed_context(seed):
+            feats, template = build_boltz2_features(
+                amino_acid_sequence=amino_acid_sequence,
+                num_bins=self.config.num_bins,
+                atoms_per_window_queries=(
+                    self.core.input_embedder.atom_encoder.atoms_per_window_queries
+                ),
+            )
+            feats = self._to_model_device(feats, float_dtype=torch.float32)
+            autocast_context = (
+                torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+                if self.device.type == "cuda"
+                else nullcontext()
+            )
+            with torch.no_grad(), autocast_context:
+                output = self.forward(
+                    feats=feats,
+                    recycling_steps=recycling_steps,
+                    num_sampling_steps=num_sampling_steps,
+                    diffusion_samples=diffusion_samples,
+                    max_parallel_samples=max_parallel_samples,
+                    run_confidence_sequentially=run_confidence_sequentially,
+                    return_dict=True,
+                )
+
+        sample_atom_coords_value = output.get("sample_atom_coords")
+        if not isinstance(sample_atom_coords_value, torch.Tensor):
+            raise RuntimeError("Boltz2 structure sampling did not return coordinate tensors.")
+        sample_atom_coords = sample_atom_coords_value.detach().cpu()
         non_finite_mask = torch.logical_not(torch.isfinite(sample_atom_coords))
-        assert not torch.any(non_finite_mask), (
-            "sample_atom_coords contains non-finite values. "
-            f"Non-finite count: {int(non_finite_mask.sum().item())}"
-        )
+        if torch.any(non_finite_mask):
+            raise RuntimeError(
+                "sample_atom_coords contains non-finite values. "
+                f"Non-finite count: {int(non_finite_mask.sum().item())}"
+            )
         atom_pad_mask = feats["atom_pad_mask"][0].detach().cpu()
         plddt = output["plddt"].detach().cpu() if "plddt" in output else None
         complex_plddt = (
@@ -821,6 +968,7 @@ class Boltz2Model(PreTrainedModel):
             sequence=template.sequence,
             structure_template=template,
             raw_output={key: _to_cpu_detached(val) for key, val in output.items()},
+            seed=seed,
         )
 
     def save_as_cif(
@@ -829,15 +977,12 @@ class Boltz2Model(PreTrainedModel):
         output_path: str,
         sample_index: int = 0,
     ) -> str:
-        assert structure_output.structure_template is not None, (
-            "structure_output.structure_template is required for CIF export."
-        )
-        assert structure_output.sample_atom_coords is not None, (
-            "structure_output.sample_atom_coords is required for CIF export."
-        )
-        assert structure_output.atom_pad_mask is not None, (
-            "structure_output.atom_pad_mask is required for CIF export."
-        )
+        if structure_output.structure_template is None:
+            raise ValueError("structure_output.structure_template is required for CIF export.")
+        if structure_output.sample_atom_coords is None:
+            raise ValueError("structure_output.sample_atom_coords is required for CIF export.")
+        if structure_output.atom_pad_mask is None:
+            raise ValueError("structure_output.atom_pad_mask is required for CIF export.")
         return write_cif(
             structure_template=structure_output.structure_template,
             atom_coords=structure_output.sample_atom_coords,

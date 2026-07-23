@@ -87,7 +87,7 @@ def _apply_transformations_fast(chains, transformation_dict, operations):
 
 @dataclass
 class ProteinComplexMetadata:
-    entity_lookup: dict[int, int]
+    entity_lookup: dict[int, int | str]
     chain_lookup: dict[int, str]
     mmcif: MmcifWrapper | None = None
     # This is a dictionary that maps assembly ids to the list of unique chains
@@ -210,10 +210,10 @@ class ProteinComplex:
         )
 
     def _sanity_check_complexes_are_comparable(self, other: ProteinComplex):
-        assert len(self) == len(other), "Protein complexes must have the same length"
-        assert len(list(self.chain_iter())) == len(list(other.chain_iter())), (
-            "Protein complexes must have the same number of chains"
-        )
+        if len(self) != len(other):
+            raise ValueError("Protein complexes must have the same length")
+        if len(list(self.chain_iter())) != len(list(other.chain_iter())):
+            raise ValueError("Protein complexes must have the same number of chains")
 
     def rmsd(
         self,
@@ -440,43 +440,65 @@ class ProteinComplex:
 
     # Object invariants, slicing, and chain views
     def __post_init__(self):
+        if not isinstance(self.sequence, str):
+            raise TypeError("sequence must be a string.")
         sequence_length = len(self.sequence)
-        assert self.atom37_positions.shape[0] == sequence_length, (
-            self.atom37_positions.shape,
-            sequence_length,
-        )
-        assert self.atom37_mask.shape[0] == sequence_length, (
-            self.atom37_mask.shape,
-            sequence_length,
-        )
-        assert self.residue_index.shape[0] == sequence_length, (
-            self.residue_index.shape,
-            sequence_length,
-        )
-        assert self.insertion_code.shape[0] == sequence_length, (
-            self.insertion_code.shape,
-            sequence_length,
-        )
-        assert self.confidence.shape[0] == sequence_length, (
-            self.confidence.shape,
-            sequence_length,
-        )
-        assert self.entity_id.shape[0] == sequence_length, (
-            self.entity_id.shape,
-            sequence_length,
-        )
-        assert self.chain_id.shape[0] == sequence_length, (
-            self.chain_id.shape,
-            sequence_length,
-        )
-        assert self.sym_id.shape[0] == sequence_length, (
-            self.sym_id.shape,
-            sequence_length,
-        )
-        if self.atom37_confidence is not None:
-            assert self.atom37_confidence.shape == self.atom37_mask.shape, (
-                self.atom37_confidence.shape,
-                self.atom37_mask.shape,
+        aligned = {
+            "atom37_positions": self.atom37_positions,
+            "atom37_mask": self.atom37_mask,
+            "residue_index": self.residue_index,
+            "insertion_code": self.insertion_code,
+            "confidence": self.confidence,
+            "entity_id": self.entity_id,
+            "chain_id": self.chain_id,
+            "sym_id": self.sym_id,
+        }
+        for name, values in aligned.items():
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f"{name} must be a NumPy array, got {type(values).__name__}.")
+            if values.ndim == 0 or values.shape[0] != sequence_length:
+                raise ValueError(
+                    f"{name} shape {values.shape} does not align with "
+                    f"sequence length {sequence_length}."
+                )
+        if self.atom37_positions.shape != (sequence_length, 37, 3):
+            raise ValueError(
+                "atom37_positions must have shape "
+                f"({sequence_length}, 37, 3), got {self.atom37_positions.shape}."
+            )
+        if self.atom37_mask.shape != (sequence_length, 37):
+            raise ValueError(
+                "atom37_mask must have shape "
+                f"({sequence_length}, 37), got {self.atom37_mask.shape}."
+            )
+        if self.atom37_mask.dtype != bool:
+            raise TypeError(f"atom37_mask must have Boolean dtype, got {self.atom37_mask.dtype}.")
+        if not np.issubdtype(self.atom37_positions.dtype, np.number):
+            raise TypeError("atom37_positions must use a numeric dtype.")
+        for name, values in (
+            ("residue_index", self.residue_index),
+            ("insertion_code", self.insertion_code),
+            ("confidence", self.confidence),
+            ("entity_id", self.entity_id),
+            ("chain_id", self.chain_id),
+            ("sym_id", self.sym_id),
+        ):
+            if values.shape != (sequence_length,):
+                raise ValueError(
+                    f"{name} must have shape ({sequence_length},), got {values.shape}."
+                )
+        if not np.issubdtype(self.confidence.dtype, np.number):
+            raise TypeError("confidence must use a numeric dtype.")
+        atom37_confidence = self.atom37_confidence
+        if atom37_confidence is not None and not isinstance(atom37_confidence, np.ndarray):
+            raise TypeError("atom37_confidence must be a NumPy array when provided.")
+        if (
+            isinstance(atom37_confidence, np.ndarray)
+            and atom37_confidence.shape != self.atom37_mask.shape
+        ):
+            raise ValueError(
+                "atom37_confidence shape must match atom37_mask: "
+                f"{atom37_confidence.shape} != {self.atom37_mask.shape}."
             )
 
     def __getitem__(self, idx: int | list[int] | slice | np.ndarray):
@@ -596,8 +618,16 @@ class ProteinComplex:
 
         """
         if not force_conversion:
-            assert len(np.unique(self.chain_id)) == 1, f"{self.id}"
-            assert len(np.unique(self.entity_id)) == 1, f"{self.id}"
+            if len(np.unique(self.chain_id)) != 1:
+                raise ValueError(
+                    f"Protein complex {self.id!r} has multiple chains; "
+                    "pass force_conversion=True to flatten it."
+                )
+            if len(np.unique(self.entity_id)) != 1:
+                raise ValueError(
+                    f"Protein complex {self.id!r} has multiple entities; "
+                    "pass force_conversion=True to flatten it."
+                )
             if self.chain_id[0] not in self.metadata.chain_lookup:
                 warnings.warn(
                     "Chain ID not found in metadata, using 'A' as default",
@@ -864,7 +894,10 @@ class ProteinComplex:
         return good_chains
 
     def switch_assembly(self, id: str):
-        assert self.metadata.mmcif is not None
+        if self.metadata.mmcif is None:
+            raise ValueError(
+                "Cannot switch assemblies without retained mmCIF source metadata."
+            )
         return get_assembly_fast(self.metadata.mmcif, assembly_id=id)
 
     def state_dict(self, backbone_only=False, json_serializable=False):
@@ -873,7 +906,12 @@ class ProteinComplex:
         need more than 2**32 residues..."""
         dct = {k: v for k, v in vars(self).items()}
         if backbone_only:
-            dct["atom37_mask"][:, 3:] = False
+            # Frozen dataclasses do not make their NumPy members immutable.  Work on a
+            # private mask so requesting a compact backbone payload cannot clear the
+            # caller's side-chain atoms in-place.
+            atom37_mask = dct["atom37_mask"].copy()
+            atom37_mask[:, 3:] = False
+            dct["atom37_mask"] = atom37_mask
         dct["atom37_positions"] = dct["atom37_positions"][dct["atom37_mask"]]
         if dct.get("atom37_confidence") is not None:
             dct["atom37_confidence"] = dct["atom37_confidence"][dct["atom37_mask"]]

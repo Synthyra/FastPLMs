@@ -14,12 +14,16 @@ in this directory rather than beside runtime modules under
 
 Each card combines:
 
+- installation and platform requirements before the Hub quick start;
 - direct Hub and offline artifact loading;
 - family-appropriate preparation, inference, embedding, generation, or folding
   examples;
 - declared AutoClasses, backends, precision, and generation behavior;
 - immutable checkpoint and upstream provenance;
 - validation boundaries, limitations, and checkpoint terms.
+- explicit AutoClass weight status and weight-publication policy;
+- ESMC backend diagnostic tables whose missing frozen-head measurements remain
+  labeled pending rather than inferred.
 
 Examples must follow the current public API. Do not restore legacy backend
 names, pickle embedding output, unsupported TTT paths, or capabilities from

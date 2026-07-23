@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
+
 import pytest
 import torch
 
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
     ESMplusplusForMaskedLM,
-    ESMplusplusModel,
     ESMplusplusForSequenceClassification,
+    ESMplusplusForTokenClassification,
+    ESMplusplusModel,
     TransformerStack,
 )
 
@@ -128,6 +133,60 @@ def test_esmplusplus_sequence_classifier_pooling_round_trips(tmp_path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("model_class", "pooling_types", "labels", "expected_shape"),
+    (
+        (
+            ESMplusplusForSequenceClassification,
+            ["mean", "var"],
+            torch.tensor([1, 2]),
+            (2, 3),
+        ),
+        (
+            ESMplusplusForTokenClassification,
+            None,
+            torch.tensor(((0, 1, 2, 1), (2, 1, 0, 1))),
+            (2, 4, 3),
+        ),
+    ),
+)
+def test_esmplusplus_wide_classifier_forward_backward_and_reload(
+    model_class,
+    pooling_types,
+    labels,
+    expected_shape,
+    tmp_path,
+) -> None:
+    config = _sequence_classifier_config()
+    kwargs = {} if pooling_types is None else {"pooling_types": pooling_types}
+    model = model_class(config, **kwargs).train()
+    assert model.classifier[0].out_features == config.hidden_size * 4
+    assert model.classifier[3].in_features == config.hidden_size * 4
+    input_ids = torch.tensor(((0, 3, 4, 2), (0, 5, 6, 2)))
+
+    output = model(input_ids=input_ids, labels=labels)
+    assert output.logits.shape == expected_shape
+    assert output.loss is not None
+    assert torch.isfinite(output.loss)
+    output.loss.backward()
+    classifier_gradients = [
+        parameter.grad for parameter in model.classifier.parameters() if parameter.requires_grad
+    ]
+    assert classifier_gradients
+    assert all(gradient is not None for gradient in classifier_gradients)
+    assert all(torch.isfinite(gradient).all() for gradient in classifier_gradients)
+
+    model.eval()
+    with torch.inference_mode():
+        expected_logits = model(input_ids=input_ids).logits
+    save_path = tmp_path / model_class.__name__
+    model.save_pretrained(save_path, safe_serialization=True)
+    reloaded = model_class.from_pretrained(save_path, local_files_only=True).eval()
+    with torch.inference_mode():
+        actual_logits = reloaded(input_ids=input_ids).logits
+    torch.testing.assert_close(actual_logits, expected_logits, rtol=0.0, atol=0.0)
+
+
+@pytest.mark.parametrize(
     ("pooling_types", "exception"),
     [
         ([], ValueError),
@@ -159,3 +218,55 @@ def test_esmplusplus_sequence_classifier_is_right_padding_invariant_without_mask
     assert unpadded_logits is not None
     assert padded_logits is not None
     torch.testing.assert_close(padded_logits, unpadded_logits, rtol=1e-5, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "model_class",
+    (ESMplusplusModel, ESMplusplusForMaskedLM, ESMplusplusForSequenceClassification),
+)
+def test_esmplusplus_public_models_require_exactly_one_input_form(model_class: type) -> None:
+    model = model_class(
+        ESMplusplusConfig(
+            vocab_size=16,
+            hidden_size=16,
+            num_attention_heads=4,
+            num_hidden_layers=1,
+            attn_backend="eager",
+        )
+    )
+    input_ids = torch.ones(1, 2, dtype=torch.long)
+    inputs_embeds = torch.zeros(1, 2, 16)
+
+    with pytest.raises(ValueError, match="either input_ids or inputs_embeds"):
+        model()
+    with pytest.raises(ValueError, match="both input_ids and inputs_embeds"):
+        model(input_ids=input_ids, inputs_embeds=inputs_embeds)
+
+
+def test_esmplusplus_masked_lm_labels_require_logits() -> None:
+    model = ESMplusplusForMaskedLM(
+        ESMplusplusConfig(
+            vocab_size=16,
+            hidden_size=16,
+            num_attention_heads=4,
+            num_hidden_layers=1,
+            attn_backend="eager",
+        )
+    )
+    input_ids = torch.ones(1, 2, dtype=torch.long)
+
+    with pytest.raises(ValueError, match="labels require compute_logits=True"):
+        model(input_ids=input_ids, labels=input_ids, compute_logits=False)
+
+
+@pytest.mark.parametrize(
+    "model_class",
+    (ESMplusplusModel, ESMplusplusForMaskedLM, ESMplusplusForSequenceClassification),
+)
+def test_esmplusplus_public_input_validation_survives_python_optimization(
+    model_class: type,
+) -> None:
+    forward_source = textwrap.dedent(inspect.getsource(model_class.forward))
+    forward_tree = ast.parse(forward_source)
+
+    assert not any(isinstance(node, ast.Assert) for node in ast.walk(forward_tree))

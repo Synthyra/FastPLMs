@@ -114,6 +114,31 @@ def test_lightning_checkpoint_load_requires_and_honors_explicit_opt_in(
     assert not model.training
 
 
+def test_lightning_checkpoint_missing_state_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_tiny_core(monkeypatch)
+    monkeypatch.setattr(
+        torch,
+        "load",
+        lambda *_args, **_kwargs: {
+            "hyper_parameters": {},
+            "state_dict": {},
+        },
+    )
+    monkeypatch.setattr(
+        Boltz2Config,
+        "from_hyperparameters",
+        classmethod(lambda cls, _hparams, **_kwargs: cls(core_kwargs={"width": 2})),
+    )
+
+    with pytest.raises(RuntimeError, match="missing required parameters"):
+        Boltz2Model.from_boltz_checkpoint(
+            "trusted-but-incomplete.ckpt",
+            allow_unsafe_pickle=True,
+        )
+
+
 def test_save_pretrained_defaults_to_safetensors_and_round_trips(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

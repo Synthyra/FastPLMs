@@ -3,6 +3,7 @@ from __future__ import annotations
 import configparser
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -35,10 +36,20 @@ from tools.artifacts import (
     verify_checkpoint,
 )
 from tools.artifacts.build import (
+    _canonical_state_sha256,
     _checkpoint_identity_hash,
+    _conversion_equality_attestation,
     _copy_attention_kernel_lock,
+    _copy_official_tokenizer_assets,
+    _git_runtime_revision,
+    _is_weight_file,
+    _provenance,
+    _RELEASE_TOOL_SCOPE_PATHS,
+    _materialize_model_card,
     _tokenizer_checkpoint,
+    _validated_release_tool_snapshot,
     _validate_vendor_revisions,
+    render_model_card,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -48,6 +59,81 @@ def _canonical_text_sha256(path: Path) -> str:
     raw = path.read_bytes()
     canonical = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def _initialize_release_tool_repository(root: Path) -> None:
+    for relative_name in _RELEASE_TOOL_SCOPE_PATHS:
+        path = root.joinpath(*relative_name.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"# release tool {relative_name}\n", encoding="utf-8")
+    git = ["git", "-c", f"safe.directory={root.as_posix()}"]
+    subprocess.run(
+        [*git, "init", "--initial-branch=main"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run([*git, "config", "user.email", "tests@example.invalid"], cwd=root, check=True)
+    subprocess.run([*git, "config", "user.name", "FastPLMs Tests"], cwd=root, check=True)
+    subprocess.run([*git, "add", "."], cwd=root, check=True)
+    subprocess.run(
+        [*git, "commit", "-m", "immutable release tools"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_name",
+    (
+        "tools/artifacts/build.py",
+        "tools/artifacts/publish.py",
+        "tools/artifacts/offline_probe.py",
+        "tools/conversion/state_transforms.py",
+    ),
+)
+def test_release_tool_snapshot_rejects_dirty_critical_tool(
+    tmp_path: Path,
+    relative_name: str,
+) -> None:
+    _initialize_release_tool_repository(tmp_path)
+    path = tmp_path.joinpath(*relative_name.split("/"))
+    path.write_text(path.read_text(encoding="utf-8") + "# dirty\n", encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match="release tools must be tracked and clean"):
+        _validated_release_tool_snapshot(tmp_path)
+
+
+def test_release_tool_snapshot_rejects_untracked_scope_growth(tmp_path: Path) -> None:
+    _initialize_release_tool_repository(tmp_path)
+    (tmp_path / "tools" / "artifacts" / "new_validator.py").write_text(
+        "# untracked validation bypass\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ArtifactError, match="release tools must be tracked and clean"):
+        _validated_release_tool_snapshot(tmp_path)
+
+
+def test_materialized_model_card_binds_exact_runtime_identity() -> None:
+    template = render_model_card(get_model_registry()["esm2_8m"])
+    runtime_revision = "a" * 40
+    source_tree_sha256 = "b" * 64
+    runtime_bundle_sha256 = "c" * 64
+
+    card = _materialize_model_card(
+        template,
+        runtime_revision=runtime_revision,
+        source_tree_sha256=source_tree_sha256,
+        runtime_bundle_sha256=runtime_bundle_sha256,
+    )
+
+    assert "<runtime-revision>" not in card
+    assert f"FastPLMs.git@{runtime_revision}" in card
+    assert f"- Runtime revision: `{runtime_revision}`" in card
+    assert f"- Runtime source-tree SHA-256: `{source_tree_sha256}`" in card
+    assert f"- Runtime bundle SHA-256: `{runtime_bundle_sha256}`" in card
 
 
 def test_shared_sources_are_in_runtime_artifacts() -> None:
@@ -67,6 +153,41 @@ def test_shared_sources_are_in_runtime_artifacts() -> None:
         assert paths.issubset(family.runtime_paths)
         for relative_path in paths:
             assert (package_root / relative_path).exists()
+
+
+def test_esmfold2_runtime_asset_provenance_records_trust_and_offline_boundary() -> None:
+    registry = get_model_registry()
+    provenance = _provenance(
+        registry,
+        registry["esmfold2"],
+        {},
+        runtime_revision="a" * 40,
+        source_tree_sha256="b" * 64,
+        runtime_bundle_sha256="c" * 64,
+        release_tool_revision="d" * 40,
+        release_tool_sha256="e" * 64,
+    )
+
+    assert provenance["runtime_assets"] == [
+        {
+            "id": "esmfold2_ccd",
+            "repository": "biohub/ESMFold2",
+            "revision": "1ebf0e3481a5184eb6171d40615c79e384b48796",
+            "path": "ccd.pkl",
+            "sha256": "9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5",
+            "size": 417306584,
+            "license": "MIT",
+            "consumer_family": "esmfold2",
+            "trust_kind": "hash_pinned_pickle",
+            "offline_behavior": "requires_cached_verified_file",
+            "cache_identity": hashlib.sha256(
+                b"biohub/ESMFold2@1ebf0e3481a5184eb6171d40615c79e384b48796:"
+                b"ccd.pkl:9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5:"
+                b"417306584"
+            ).hexdigest(),
+        }
+    ]
+    assert len(provenance["runtime_assets"][0]["cache_identity"]) == 64
 
 
 def test_e1_runtime_artifact_closes_over_split_modules() -> None:
@@ -185,6 +306,7 @@ def _synthetic_registry(source_root: Path, checkpoint: Path) -> tuple[ModelRegis
             ("AutoConfig", "fastplms.models.toy.modeling_toy.ToyConfig"),
             ("AutoModel", "fastplms.models.toy.modeling_toy.ToyModel"),
         ),
+        weights_publication_allowed=True,
         conversion_provenance=(
             "Input: synthetic official state. Transformation: identity. "
             "Output: synthetic FastPLMs state. Validation: exact hash equality. "
@@ -215,14 +337,470 @@ def _synthetic_registry(source_root: Path, checkpoint: Path) -> tuple[ModelRegis
     return registry, spec
 
 
+def _inject_checkpoint_race(
+    monkeypatch: pytest.MonkeyPatch,
+    target: Path,
+    *,
+    replacement: bytes,
+    in_place: bool = False,
+) -> None:
+    """Mutate a pinned source after selection but before the builder copies it."""
+
+    from tools.artifacts import build as build_module
+
+    original_copy = build_module._copy_file
+    fired = False
+
+    def racing_copy(source: Path, destination: Path) -> None:
+        nonlocal fired
+        if not fired and source.resolve() == target.resolve():
+            fired = True
+            if in_place:
+                target.write_bytes(replacement)
+            else:
+                staged = target.with_name(target.name + ".concurrent-replacement")
+                staged.write_bytes(replacement)
+                staged.replace(target)
+        original_copy(source, destination)
+
+    monkeypatch.setattr(build_module, "_copy_file", racing_copy)
+
+
+def test_artifact_build_rejects_concurrent_config_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    _inject_checkpoint_race(
+        monkeypatch,
+        checkpoint / "config.json",
+        replacement=b'{"model_type":"forged"}\n',
+        in_place=True,
+    )
+
+    with pytest.raises(ArtifactError, match="Preserved checkpoint bytes differ"):
+        build_artifact(
+            spec,
+            registry,
+            checkpoint,
+            tmp_path / "artifact",
+            source_root,
+            _allow_untracked_runtime_for_tests=True,
+        )
+
+
+def test_official_tokenizer_copy_rejects_concurrent_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = tmp_path / "snapshot"
+    destination = tmp_path / "artifact"
+    snapshot.mkdir()
+    tokenizer = snapshot / "tokenizer_config.json"
+    tokenizer.write_bytes(b'{"tokenizer_class":"Pinned"}\n')
+    source = CheckpointSource(
+        repo_id="upstream/tokenizer",
+        revision="a" * 40,
+        files=(
+            FileDigest(
+                tokenizer.name,
+                "git-sha1",
+                hash_file(tokenizer, "git-sha1"),
+            ),
+        ),
+    )
+    _inject_checkpoint_race(
+        monkeypatch,
+        tokenizer,
+        replacement=b'{"tokenizer_class":"Forged"}\n',
+    )
+
+    with pytest.raises(ArtifactError, match="Preserved checkpoint bytes differ"):
+        _copy_official_tokenizer_assets(snapshot, destination, source)
+
+
+def test_weight_snapshot_rejects_concurrent_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    weights = snapshot / "model.safetensors"
+    save_file({"weight": torch.arange(8, dtype=torch.float32)}, weights)
+    source = CheckpointSource(
+        repo_id="upstream/weights",
+        revision="b" * 40,
+        files=(FileDigest(weights.name, "sha256", hash_file(weights)),),
+    )
+    _inject_checkpoint_race(
+        monkeypatch,
+        weights,
+        replacement=b"not-the-pinned-safetensors-bytes",
+    )
+
+    with pytest.raises(ArtifactError, match="Preserved checkpoint bytes differ"):
+        canonicalize_checkpoint_weights(snapshot, source, tmp_path / "artifact")
+
+
+def _build_synthetic_for_replacement(
+    spec: ModelSpec,
+    registry: ModelRegistry,
+    checkpoint: Path,
+    output_root: Path,
+    source_root: Path,
+    *,
+    replace_existing: bool = False,
+) -> Path:
+    return build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        output_root,
+        source_root,
+        replace=replace_existing,
+        _allow_untracked_runtime_for_tests=True,
+    )
+
+
+def _change_synthetic_runtime(source_root: Path, marker: str) -> None:
+    runtime = source_root / "src" / "fastplms" / "models" / "toy" / "modeling_toy.py"
+    runtime.write_text(
+        runtime.read_text(encoding="utf-8") + f"\n# {marker}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def test_artifact_replace_restores_prior_version_after_backup_rename_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    output_root = tmp_path / "artifacts"
+    artifact = _build_synthetic_for_replacement(
+        spec,
+        registry,
+        checkpoint,
+        output_root,
+        source_root,
+    )
+    original_manifest = (artifact / "artifact-manifest.json").read_bytes()
+    _change_synthetic_runtime(source_root, "replacement generation")
+
+    from tools.artifacts import build as build_module
+
+    original_rename = build_module._atomic_artifact_rename
+    backup = output_root / ".ToyModel.backup"
+    fired = False
+
+    def fail_after_backup_rename(source: Path, destination: Path, root: Path) -> None:
+        nonlocal fired
+        original_rename(source, destination, root)
+        if destination == backup and not fired:
+            fired = True
+            raise OSError("injected failure after old-to-backup rename")
+
+    monkeypatch.setattr(build_module, "_atomic_artifact_rename", fail_after_backup_rename)
+    with pytest.raises(ArtifactError, match="prior artifact was restored"):
+        _build_synthetic_for_replacement(
+            spec,
+            registry,
+            checkpoint,
+            output_root,
+            source_root,
+            replace_existing=True,
+        )
+
+    assert fired
+    assert (artifact / "artifact-manifest.json").read_bytes() == original_manifest
+    validate_artifact(artifact, spec=spec, registry=registry)
+    assert not (output_root / ".ToyModel.tmp").exists()
+    assert not backup.exists()
+
+
+def test_artifact_replace_restores_prior_version_when_new_install_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    output_root = tmp_path / "artifacts"
+    artifact = _build_synthetic_for_replacement(
+        spec,
+        registry,
+        checkpoint,
+        output_root,
+        source_root,
+    )
+    original_manifest = (artifact / "artifact-manifest.json").read_bytes()
+    _change_synthetic_runtime(source_root, "replacement generation")
+
+    from tools.artifacts import build as build_module
+
+    original_rename = build_module._atomic_artifact_rename
+    temporary = output_root / ".ToyModel.tmp"
+    fired = False
+
+    def fail_new_install(source: Path, destination: Path, root: Path) -> None:
+        nonlocal fired
+        if source == temporary and destination == artifact and not fired:
+            fired = True
+            raise OSError("injected failure during temporary-to-destination rename")
+        original_rename(source, destination, root)
+
+    monkeypatch.setattr(build_module, "_atomic_artifact_rename", fail_new_install)
+    with pytest.raises(ArtifactError, match="prior validated artifact was restored"):
+        _build_synthetic_for_replacement(
+            spec,
+            registry,
+            checkpoint,
+            output_root,
+            source_root,
+            replace_existing=True,
+        )
+
+    assert fired
+    assert (artifact / "artifact-manifest.json").read_bytes() == original_manifest
+    validate_artifact(artifact, spec=spec, registry=registry)
+    assert not temporary.exists()
+    assert not (output_root / ".ToyModel.backup").exists()
+
+
+def test_artifact_replace_recovers_backup_on_next_invocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    output_root = tmp_path / "artifacts"
+    artifact = _build_synthetic_for_replacement(
+        spec,
+        registry,
+        checkpoint,
+        output_root,
+        source_root,
+    )
+    original_manifest = (artifact / "artifact-manifest.json").read_bytes()
+    backup = output_root / ".ToyModel.backup"
+    temporary = output_root / ".ToyModel.tmp"
+    artifact.rename(backup)
+    temporary.mkdir()
+    (temporary / "partial-write").write_text("incomplete", encoding="utf-8")
+
+    from tools.artifacts import build as build_module
+
+    def stop_after_recovery(*args: object, **kwargs: object) -> None:
+        raise ArtifactError("injected build stop after transaction recovery")
+
+    monkeypatch.setattr(build_module, "_copy_checkpoint_assets", stop_after_recovery)
+    with pytest.raises(ArtifactError, match="injected build stop after transaction recovery"):
+        _build_synthetic_for_replacement(
+            spec,
+            registry,
+            checkpoint,
+            output_root,
+            source_root,
+            replace_existing=True,
+        )
+
+    assert artifact.is_dir()
+    assert (artifact / "artifact-manifest.json").read_bytes() == original_manifest
+    validate_artifact(artifact, spec=spec, registry=registry)
+    assert not temporary.exists()
+    assert not backup.exists()
+
+
+def test_artifact_replace_success_cleans_transaction_slots(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    output_root = tmp_path / "artifacts"
+    artifact = _build_synthetic_for_replacement(
+        spec,
+        registry,
+        checkpoint,
+        output_root,
+        source_root,
+    )
+    original_manifest = (artifact / "artifact-manifest.json").read_bytes()
+    _change_synthetic_runtime(source_root, "successful replacement")
+
+    replaced = _build_synthetic_for_replacement(
+        spec,
+        registry,
+        checkpoint,
+        output_root,
+        source_root,
+        replace_existing=True,
+    )
+
+    assert replaced == artifact
+    assert (artifact / "artifact-manifest.json").read_bytes() != original_manifest
+    assert "successful replacement" in (
+        artifact / "fastplms" / "models" / "toy" / "modeling_toy.py"
+    ).read_text(encoding="utf-8")
+    validate_artifact(artifact, spec=spec, registry=registry)
+    assert not (output_root / ".ToyModel.tmp").exists()
+    assert not (output_root / ".ToyModel.backup").exists()
+
+
+def test_repeated_artifact_replace_does_not_retain_stale_files(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    output_root = tmp_path / "artifacts"
+    artifact = _build_synthetic_for_replacement(
+        spec,
+        registry,
+        checkpoint,
+        output_root,
+        source_root,
+    )
+
+    for generation in range(2):
+        stale = artifact / f"stale-generation-{generation}.bin"
+        stale.write_bytes(b"must not survive replacement")
+        _change_synthetic_runtime(source_root, f"replacement {generation}")
+        artifact = _build_synthetic_for_replacement(
+            spec,
+            registry,
+            checkpoint,
+            output_root,
+            source_root,
+            replace_existing=True,
+        )
+        assert not stale.exists()
+        assert not any(artifact.glob("stale-generation-*.bin"))
+        validate_artifact(artifact, spec=spec, registry=registry)
+
+    assert not (output_root / ".ToyModel.tmp").exists()
+    assert not (output_root / ".ToyModel.backup").exists()
+
+
+@pytest.mark.parametrize("slot_suffix", (".tmp", ".backup"))
+def test_artifact_replace_rejects_symlink_transaction_slots(
+    tmp_path: Path,
+    slot_suffix: str,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    output_root = tmp_path / "artifacts"
+    artifact = _build_synthetic_for_replacement(
+        spec,
+        registry,
+        checkpoint,
+        output_root,
+        source_root,
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_text("preserve", encoding="utf-8")
+    os.symlink(outside, output_root / f".ToyModel{slot_suffix}", target_is_directory=True)
+
+    with pytest.raises(ArtifactError, match="must not be a symlink"):
+        _build_synthetic_for_replacement(
+            spec,
+            registry,
+            checkpoint,
+            output_root,
+            source_root,
+            replace_existing=True,
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert artifact.is_dir()
+
+
+def test_artifact_build_rejects_symlink_output_root(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    outside = tmp_path / "outside-output"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_text("preserve", encoding="utf-8")
+    output_root = tmp_path / "artifact-link"
+    os.symlink(outside, output_root, target_is_directory=True)
+
+    with pytest.raises(ArtifactError, match="output root must not be a symlink"):
+        _build_synthetic_for_replacement(
+            spec,
+            registry,
+            checkpoint,
+            output_root,
+            source_root,
+        )
+    assert sentinel.read_text(encoding="utf-8") == "preserve"
+    assert not (outside / "ToyModel").exists()
+
+
+def test_artifact_build_rejects_repository_name_path_escape(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    escaped_fast = replace(spec.fast, repo_id="Synthyra/../../escaped-artifact")
+    escaped_spec = replace(spec, fast=escaped_fast)
+    escaped_registry = ModelRegistry(
+        schema_version=registry.schema_version,
+        upstreams=registry.upstreams,
+        families=registry.families,
+        models={spec.id: escaped_spec},
+        runtime_assets=registry.runtime_assets,
+        attention_kernels=registry.attention_kernels,
+        legal_files=registry.legal_files,
+    )
+    output_root = tmp_path / "artifacts"
+
+    with pytest.raises(ArtifactError, match="Invalid artifact repository name"):
+        _build_synthetic_for_replacement(
+            escaped_spec,
+            escaped_registry,
+            checkpoint,
+            output_root,
+            source_root,
+        )
+    assert not (tmp_path / "escaped-artifact").exists()
+
+
 def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
     registry, spec = _synthetic_registry(source_root, checkpoint)
 
-    first = build_artifact(spec, registry, checkpoint, tmp_path / "first", source_root)
-    second = build_artifact(spec, registry, checkpoint, tmp_path / "second", source_root)
+    first = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "first",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+    second = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "second",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
     validate_artifact(first)
     validate_artifact(second)
 
@@ -237,6 +815,10 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
     assert config["fastplms_model_id"] == spec.id
     assert config["fastplms_checkpoint_repo_id"] == spec.artifact_checkpoint.repo_id
     assert config["fastplms_checkpoint_revision"] == spec.artifact_checkpoint.revision
+    assert config["fastplms_weights_revision"] == spec.artifact_checkpoint.revision
+    assert config["fastplms_runtime_revision"].startswith("source-tree-sha256:")
+    assert len(config["fastplms_source_tree_sha256"]) == 64
+    assert len(config["fastplms_runtime_bundle_sha256"]) == 64
     assert config["fastplms_checkpoint_hash"] == _checkpoint_identity_hash(
         spec.artifact_checkpoint
     )
@@ -252,6 +834,35 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
     assert not (first / "model.safetensors").exists()
     assert len(list(first.glob("model-*.safetensors"))) == 1
     provenance = json.loads((first / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["schema_version"] == 4
+    assert provenance["generator"] == {
+        "name": "tools.artifacts.build",
+        "version": 3,
+    }
+    assert provenance["weights_license_status"] == "resolved"
+    assert provenance["redistributable"] is True
+    assert provenance["weights_revision"] == spec.artifact_checkpoint.revision
+    assert provenance["runtime_revision"] == config["fastplms_runtime_revision"]
+    assert provenance["source_tree_sha256"] == config["fastplms_source_tree_sha256"]
+    assert provenance["runtime_bundle_sha256"] == config["fastplms_runtime_bundle_sha256"]
+    assert provenance["release_tool_revision"] == config[
+        "fastplms_release_tool_revision"
+    ]
+    assert provenance["release_tool_sha256"] == config["fastplms_release_tool_sha256"]
+    assert "<runtime-revision>" not in (first / "README.md").read_text(encoding="utf-8")
+    assert provenance["attestations"]["complete_artifact"]["scope"] == "weights+runtime"
+    runtime_attestation = json.loads(
+        (first / "runtime-attestation.json").read_text(encoding="utf-8")
+    )
+    assert runtime_attestation["scope"] == "runtime-only"
+    assert runtime_attestation["weights_license_status"] == "resolved"
+    assert runtime_attestation["redistributable"] is True
+    assert runtime_attestation["weights"] == {
+        "repo_id": spec.fast.repo_id,
+        "revision": spec.fast.revision,
+    }
+    assert "provenance.json" not in runtime_attestation["files"]
+    assert not any(_is_weight_file(path) for path in runtime_attestation["files"])
     assert provenance["bf16_execution"] == "static_parameters"
     assert provenance["canonical_weights"]["source_schema"] == "canonical"
     assert provenance["canonical_weights"]["state_transform"] == "identity"
@@ -301,6 +912,172 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
         validate_artifact(first)
 
 
+def test_complete_artifact_rejects_self_attested_card_runtime_placeholder(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    artifact = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    readme = artifact / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            provenance["runtime_revision"],
+            "<runtime-revision>",
+            1,
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    runtime_attestation_path = artifact / "runtime-attestation.json"
+    runtime_attestation = json.loads(runtime_attestation_path.read_text(encoding="utf-8"))
+    runtime_attestation["files"]["README.md"] = f"sha256:{hash_file(readme)}"
+    runtime_attestation_path.write_text(
+        json.dumps(runtime_attestation, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    manifest_path = artifact / "artifact-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["README.md"] = f"sha256:{hash_file(readme)}"
+    manifest["runtime-attestation.json"] = (
+        f"sha256:{hash_file(runtime_attestation_path)}"
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    with pytest.raises(ArtifactError, match="unresolved runtime-revision placeholder"):
+        validate_artifact(artifact, spec=spec, registry=registry)
+
+
+def test_generated_bridge_uses_private_verified_runtime(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    artifact = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+    config = json.loads((artifact / "config.json").read_text(encoding="utf-8"))
+    runtime_hash = config["fastplms_runtime_bundle_sha256"]
+    poisoned_cache = tmp_path / f"_fastplms_runtime_{runtime_hash}" / "fastplms"
+    poisoned_cache.mkdir(parents=True)
+    (poisoned_cache / "__init__.py").write_text(
+        "raise RuntimeError('shared cache was trusted')\n",
+        encoding="utf-8",
+    )
+    probe = tmp_path / "private_runtime_probe.py"
+    probe.write_text(
+        textwrap.dedent(
+            """\
+            import importlib.util
+            import sys
+            import types
+            from pathlib import Path
+
+
+            artifact = Path(sys.argv[1])
+            poisoned_cache = Path(sys.argv[2]).resolve()
+            package = types.ModuleType("artifact_private")
+            package.__package__ = "artifact_private"
+            package.__path__ = [str(artifact)]
+            sys.modules["artifact_private"] = package
+            module_name = "artifact_private.modeling_fastplms"
+            spec = importlib.util.spec_from_file_location(
+                module_name,
+                artifact / "modeling_fastplms.py",
+            )
+            if spec is None or spec.loader is None:
+                raise RuntimeError("Unable to load generated bridge")
+            bridge = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = bridge
+            spec.loader.exec_module(bridge)
+
+            assert len(bridge._RUNTIME_TEMPORARIES) == 1
+            private_root = Path(bridge._RUNTIME_TEMPORARIES[0].name).resolve()
+            package_root = private_root / "fastplms"
+            runtime = sys.modules["fastplms"]
+            assert runtime.__fastplms_artifact_runtime_temporaries__ == tuple(
+                bridge._RUNTIME_TEMPORARIES
+            )
+            assert private_root.name.startswith("fastplms-artifact-runtime-")
+            assert poisoned_cache != package_root
+            assert poisoned_cache not in package_root.parents
+            assert not any(path.name == "__pycache__" for path in package_root.rglob("*"))
+
+            before = bridge._runtime_file_hashes(package_root)
+            source = next(path for path in package_root.rglob("*.py") if path.is_file())
+            relative = source.relative_to(package_root).as_posix()
+            original = source.read_bytes()
+            source.write_bytes(original + b"\\n# in-place mutation\\n")
+            after = bridge._runtime_file_hashes(package_root)
+            assert after[relative] != before[relative]
+            source.write_bytes(original)
+
+            bytecode = package_root / "injected.pyc"
+            bytecode.write_bytes(b"not trusted bytecode")
+            try:
+                bridge._runtime_file_hashes(package_root)
+            except RuntimeError as error:
+                assert "contains bytecode" in str(error)
+            else:
+                raise AssertionError("Private runtime bytecode was accepted")
+            bytecode.unlink()
+
+            link_probe = package_root / "pretend_symlink.py"
+            link_probe.write_text("# symlink stand-in\\n", encoding="utf-8")
+            original_is_symlink = Path.is_symlink
+            Path.is_symlink = lambda path: path == link_probe or original_is_symlink(path)
+            try:
+                try:
+                    bridge._runtime_file_hashes(package_root)
+                except RuntimeError as error:
+                    assert "contains a symlink" in str(error)
+                else:
+                    raise AssertionError("Private runtime symlink was accepted")
+            finally:
+                Path.is_symlink = original_is_symlink
+            """
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "TMPDIR": str(tmp_path),
+            "TMP": str(tmp_path),
+            "TEMP": str(tmp_path),
+        }
+    )
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", str(probe), str(artifact), str(poisoned_cache)],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
 @pytest.mark.parametrize(
     "relative_name",
     (
@@ -309,6 +1086,10 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
         "C:/absolute.txt",
         "nested//non-normalized.txt",
         r"nested\windows-path.txt",
+        "NUL",
+        "nested/con.py",
+        "nested/bad:name.py",
+        "nested/trailing.",
     ),
 )
 def test_artifact_validation_rejects_unsafe_manifest_paths(
@@ -319,7 +1100,14 @@ def test_artifact_validation_rejects_unsafe_manifest_paths(
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
     registry, spec = _synthetic_registry(source_root, checkpoint)
-    artifact = build_artifact(spec, registry, checkpoint, tmp_path / "artifact", source_root)
+    artifact = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
     manifest_path = artifact / "artifact-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest[relative_name] = "sha256:" + "0" * 64
@@ -341,14 +1129,28 @@ def test_different_runtime_bundles_fail_without_replacing_loaded_runtime(
     checkpoint.mkdir()
     registry, spec = _synthetic_registry(source_root, checkpoint)
 
-    first = build_artifact(spec, registry, checkpoint, tmp_path / "first", source_root)
+    first = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "first",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
     runtime_source = source_root / "src" / "fastplms" / "models" / "toy" / "modeling_toy.py"
     runtime_source.write_text(
         runtime_source.read_text(encoding="utf-8") + "\n# Distinct runtime identity.\n",
         encoding="utf-8",
         newline="\n",
     )
-    second = build_artifact(spec, registry, checkpoint, tmp_path / "second", source_root)
+    second = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "second",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
 
     probe = tmp_path / "mixed_runtime_probe.py"
     probe.write_text(
@@ -460,6 +1262,7 @@ def test_complementary_fastplms_artifacts_load_in_one_process(tmp_path: Path) ->
         checkpoint,
         tmp_path / "first",
         source_root,
+        _allow_untracked_runtime_for_tests=True,
     )
     second = build_artifact(
         second_spec,
@@ -467,6 +1270,7 @@ def test_complementary_fastplms_artifacts_load_in_one_process(tmp_path: Path) ->
         checkpoint,
         tmp_path / "second",
         source_root,
+        _allow_untracked_runtime_for_tests=True,
     )
 
     probe = tmp_path / "compatible_runtime_probe.py"
@@ -531,6 +1335,7 @@ def test_matching_installed_fastplms_runtime_is_reused(tmp_path: Path) -> None:
         checkpoint,
         tmp_path / "artifact",
         source_root,
+        _allow_untracked_runtime_for_tests=True,
     )
     kernel_lock.unlink()
     distribution_root = tmp_path / "installed-distribution"
@@ -632,6 +1437,7 @@ def test_legal_texts_use_canonical_lf_across_checkouts(tmp_path: Path) -> None:
         checkpoint,
         tmp_path / "artifact",
         source_root,
+        _allow_untracked_runtime_for_tests=True,
     )
     distributed = (
         artifact / "LICENSES" / "toy" / "LICENSE",
@@ -654,6 +1460,7 @@ def test_manifest_distributes_required_modified_file_notices() -> None:
         for source_id, source in registry.upstreams.items()
     }
     assert {"Apache-2.0.txt", "BSD-3-Clause.txt", "MODIFICATIONS.md"}.issubset(distribution["e1"])
+    assert {"LICENSE", "PROVENANCE.md"}.issubset(distribution["dplm"])
     assert {"LICENSE", "MODIFICATIONS.md", "PROVENANCE.md"}.issubset(distribution["openfold"])
 
 
@@ -670,7 +1477,14 @@ def test_artifact_rejects_stale_checked_in_hub_license_metadata(tmp_path: Path) 
     )
 
     with pytest.raises(ArtifactError, match=r"license metadata differs from models\.toml"):
-        build_artifact(spec, registry, checkpoint, tmp_path / "artifact", source_root)
+        build_artifact(
+            spec,
+            registry,
+            checkpoint,
+            tmp_path / "artifact",
+            source_root,
+            _allow_untracked_runtime_for_tests=True,
+        )
 
 
 def test_artifact_copies_official_tokenizer_bytes_exactly(tmp_path: Path) -> None:
@@ -730,6 +1544,7 @@ def test_artifact_copies_official_tokenizer_bytes_exactly(tmp_path: Path) -> Non
         tmp_path / "artifact",
         source_root,
         tokenizer_dir=official_snapshot,
+        _allow_untracked_runtime_for_tests=True,
     )
     assert (artifact / "tokenizer.json").read_bytes() == official_tokenizer.read_bytes()
     assert (
@@ -820,6 +1635,7 @@ def test_artifact_rewrites_custom_tokenizer_auto_map_to_local_bridge(tmp_path: P
         tmp_path / "artifact",
         source_root,
         tokenizer_dir=official_snapshot,
+        _allow_untracked_runtime_for_tests=True,
     )
 
     tokenizer_config = json.loads(
@@ -969,6 +1785,377 @@ def test_artifact_build_rejects_missing_conversion_record(tmp_path: Path) -> Non
         )
 
 
+def test_artifact_build_stamps_unresolved_checkpoint_as_nonredistributable(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    family = replace(spec.family, weights_publication_allowed=False)
+    invalid_spec = replace(spec, family=family)
+    invalid_registry = ModelRegistry(
+        schema_version=registry.schema_version,
+        upstreams=registry.upstreams,
+        families={family.id: family},
+        models={invalid_spec.id: invalid_spec},
+        legal_files=registry.legal_files,
+    )
+
+    artifact = build_artifact(
+        invalid_spec,
+        invalid_registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+
+    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    attestation = json.loads(
+        (artifact / "runtime-attestation.json").read_text(encoding="utf-8")
+    )
+    assert provenance["weights_license_status"] == "unresolved"
+    assert provenance["redistributable"] is False
+    assert attestation["weights_license_status"] == "unresolved"
+    assert attestation["redistributable"] is False
+
+
+@pytest.mark.parametrize("relative_name", ("credentials.pem", "secrets.py"))
+def test_artifact_build_rejects_unknown_runtime_source_extension(
+    tmp_path: Path,
+    relative_name: str,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    secret = source_root / "src" / "fastplms" / "models" / "toy" / relative_name
+    secret.write_text("private material", encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match="sensitive path"):
+        build_artifact(
+            spec,
+            registry,
+            checkpoint,
+            tmp_path / "artifact",
+            source_root,
+        )
+
+
+def test_artifact_build_rejects_untracked_runtime_source(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    subprocess.run(["git", "init", "--initial-branch=main"], cwd=source_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tests@example.invalid"],
+        cwd=source_root,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "FastPLMs Tests"], cwd=source_root, check=True)
+    subprocess.run(["git", "add", "src/fastplms"], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "runtime fixture"], cwd=source_root, check=True)
+    untracked = source_root / "src" / "fastplms" / "models" / "toy" / "injected.py"
+    untracked.write_text("TOKEN = 'unsafe'\n", encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match="tracked and clean"):
+        build_artifact(
+            spec,
+            registry,
+            checkpoint,
+            tmp_path / "artifact",
+            source_root,
+        )
+
+
+def test_artifact_build_rejects_runtime_source_without_git_provenance(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    injected = source_root / "src" / "fastplms" / "models" / "toy" / "injected.py"
+    injected.write_text("APPROVED_EXTENSION_BUT_UNTRACKED = True\n", encoding="utf-8")
+
+    with pytest.raises(ArtifactError, match="verifiable Git worktree"):
+        build_artifact(
+            spec,
+            registry,
+            checkpoint,
+            tmp_path / "artifact",
+            source_root,
+        )
+
+
+def test_artifact_build_retains_validated_names_when_worktree_file_is_deleted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    subprocess.run(["git", "init", "--initial-branch=main"], cwd=source_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tests@example.invalid"],
+        cwd=source_root,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "FastPLMs Tests"],
+        cwd=source_root,
+        check=True,
+    )
+    subprocess.run(["git", "add", "src/fastplms"], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "runtime fixture"], cwd=source_root, check=True)
+    runtime_source = (
+        source_root / "src" / "fastplms" / "models" / "toy" / "modeling_toy.py"
+    )
+    committed = runtime_source.read_bytes()
+
+    def delete_after_validation(*args: object, **kwargs: object) -> str | None:
+        revision = _git_runtime_revision(*args, **kwargs)  # type: ignore[arg-type]
+        runtime_source.unlink()
+        return revision
+
+    monkeypatch.setattr(
+        "tools.artifacts.build._git_runtime_revision",
+        delete_after_validation,
+    )
+
+    artifact = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+    )
+
+    assert (artifact / "fastplms" / "models" / "toy" / "modeling_toy.py").read_bytes() == (
+        committed
+    )
+
+
+def test_artifact_build_uses_validated_git_blobs_after_worktree_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    subprocess.run(["git", "init", "--initial-branch=main"], cwd=source_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tests@example.invalid"],
+        cwd=source_root,
+        check=True,
+    )
+    subprocess.run(["git", "config", "user.name", "FastPLMs Tests"], cwd=source_root, check=True)
+    subprocess.run(["git", "add", "src/fastplms"], cwd=source_root, check=True)
+    subprocess.run(["git", "commit", "-m", "runtime fixture"], cwd=source_root, check=True)
+    runtime_source = (
+        source_root / "src" / "fastplms" / "models" / "toy" / "modeling_toy.py"
+    )
+    committed = runtime_source.read_bytes()
+
+    def mutate_during_checkpoint_build(*args: object, **kwargs: object) -> object:
+        runtime_source.write_bytes(b"MUTATED_DURING_BUILD = True\n")
+        try:
+            return canonicalize_checkpoint_weights(*args, **kwargs)
+        finally:
+            runtime_source.write_bytes(committed)
+
+    monkeypatch.setattr(
+        "tools.artifacts.build.canonicalize_checkpoint_weights",
+        mutate_during_checkpoint_build,
+    )
+
+    artifact = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+
+    assert (artifact / "fastplms" / "models" / "toy" / "modeling_toy.py").read_bytes() == (
+        committed
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "forged"),
+    (
+        ("checkpoint_license", "Forged-License"),
+        ("legal_files", {}),
+        ("upstreams", []),
+    ),
+)
+def test_artifact_validation_rejects_self_attested_forged_legal_provenance(
+    tmp_path: Path,
+    field: str,
+    forged: object,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    artifact = build_artifact(
+        spec,
+        registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+    provenance_path = artifact / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance[field] = forged
+    provenance_path.write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    manifest_path = artifact / "artifact-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["provenance.json"] = f"sha256:{hash_file(provenance_path)}"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    with pytest.raises(ArtifactError, match="differs from the current registry"):
+        validate_artifact(artifact, spec=spec, registry=registry)
+
+
+def test_dplm2_artifact_materializes_non_decoder_cache_config(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    source_config_path = checkpoint / "config.json"
+    source_config_path.write_text(
+        json.dumps(
+            {
+                "model_type": "toy",
+                "is_decoder": True,
+                "add_cross_attention": True,
+                "use_cache": True,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    source_files = tuple(
+        FileDigest(item.path, item.algorithm, hash_file(source_config_path, item.algorithm))
+        if item.path == "config.json"
+        else item
+        for item in spec.fast.files
+    )
+    source_config_digest = next(item for item in source_files if item.path == "config.json")
+    official = replace(
+        spec.official,
+        files=source_files,
+        repo_id="upstream/DPLM2Official",
+        revision="5" * 40,
+    )
+    dplm2_family = replace(spec.family, id="dplm2", architecture="DPLM2")
+    selected_spec = replace(
+        spec,
+        family=dplm2_family,
+        official=official,
+        artifact_source="official",
+        canonical_state_sha256=_canonical_state_sha256(
+            load_file(checkpoint / "model.safetensors")
+        ),
+    )
+    selected_registry = ModelRegistry(
+        schema_version=registry.schema_version,
+        upstreams=registry.upstreams,
+        families={dplm2_family.id: dplm2_family},
+        models={selected_spec.id: selected_spec},
+        legal_files=registry.legal_files,
+    )
+
+    artifact = build_artifact(
+        selected_spec,
+        selected_registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+
+    raw_config = json.loads((artifact / "config.json").read_text(encoding="utf-8"))
+    assert raw_config["is_decoder"] is False
+    assert raw_config["add_cross_attention"] is False
+    assert raw_config["use_cache"] is False
+    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["artifact_checkpoint"]["files"]["config.json"] == (
+        source_config_digest.encoded
+    )
+    assert provenance["official_checkpoint"]["files"]["config.json"] == (
+        source_config_digest.encoded
+    )
+    assert hash_file(artifact / "config.json", source_config_digest.algorithm) != (
+        source_config_digest.digest
+    )
+
+
+def test_non_dplm2_artifact_preserves_source_cache_fields(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    source_config_path = checkpoint / "config.json"
+    source_values = {
+        "model_type": "toy",
+        "is_decoder": True,
+        "add_cross_attention": True,
+        "use_cache": True,
+    }
+    source_config_path.write_text(
+        json.dumps(source_values) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    fast = replace(
+        spec.fast,
+        files=tuple(
+            FileDigest(item.path, item.algorithm, hash_file(source_config_path, item.algorithm))
+            if item.path == "config.json"
+            else item
+            for item in spec.fast.files
+        ),
+    )
+    selected_spec = replace(spec, fast=fast)
+    selected_registry = ModelRegistry(
+        schema_version=registry.schema_version,
+        upstreams=registry.upstreams,
+        families=registry.families,
+        models={selected_spec.id: selected_spec},
+        legal_files=registry.legal_files,
+    )
+
+    artifact = build_artifact(
+        selected_spec,
+        selected_registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+
+    raw_config = json.loads((artifact / "config.json").read_text(encoding="utf-8"))
+    assert {key: raw_config[key] for key in source_values} == source_values
+
+
 def test_artifact_uses_manifest_selected_official_checkpoint(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     checkpoint = tmp_path / "checkpoint"
@@ -984,6 +2171,9 @@ def test_artifact_uses_manifest_selected_official_checkpoint(tmp_path: Path) -> 
         spec,
         official=official,
         artifact_source="official",
+        canonical_state_sha256=_canonical_state_sha256(
+            load_file(checkpoint / "model.safetensors")
+        ),
     )
     selected_registry = ModelRegistry(
         schema_version=registry.schema_version,
@@ -999,12 +2189,94 @@ def test_artifact_uses_manifest_selected_official_checkpoint(tmp_path: Path) -> 
         checkpoint,
         tmp_path / "artifact",
         source_root,
+        _allow_untracked_runtime_for_tests=True,
     )
     provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
     assert provenance["artifact_source"] == "official"
     assert provenance["artifact_checkpoint"]["repo_id"] == "upstream/ToyOfficial"
     assert provenance["artifact_checkpoint"]["revision"] == "5" * 40
     assert provenance["canonical_weights"]["source_schema"] == "official"
+    assert provenance["canonical_weights"]["state_digest"] == (
+        provenance["conversion_equality_attestation"]["canonical_state"]
+    )
+
+
+def test_artifact_rejects_self_attested_forged_canonical_weight(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, spec = _synthetic_registry(source_root, checkpoint)
+    official = replace(
+        spec.official,
+        files=spec.fast.files,
+        repo_id="upstream/ToyOfficial",
+        revision="5" * 40,
+    )
+    selected_spec = replace(
+        spec,
+        official=official,
+        artifact_source="official",
+        canonical_state_sha256=_canonical_state_sha256(
+            load_file(checkpoint / "model.safetensors")
+        ),
+    )
+    selected_registry = ModelRegistry(
+        schema_version=registry.schema_version,
+        upstreams=registry.upstreams,
+        families=registry.families,
+        models={selected_spec.id: selected_spec},
+        legal_files=registry.legal_files,
+    )
+    artifact = build_artifact(
+        selected_spec,
+        selected_registry,
+        checkpoint,
+        tmp_path / "artifact",
+        source_root,
+        _allow_untracked_runtime_for_tests=True,
+    )
+
+    shard = next(artifact.glob("model-*.safetensors"))
+    forged_state = load_file(shard)
+    forged_state["linear.bias"] = forged_state["linear.bias"].clone()
+    forged_state["linear.bias"][0] += 1
+    save_file(forged_state, shard, metadata={"format": "pt"})
+    forged_state_sha256 = _canonical_state_sha256(forged_state)
+
+    provenance_path = artifact / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    provenance["canonical_weights"]["shards"][shard.name] = (
+        f"sha256:{hash_file(shard)}"
+    )
+    provenance["canonical_weights"]["state_digest"]["sha256"] = forged_state_sha256
+    forged_spec = replace(selected_spec, canonical_state_sha256=forged_state_sha256)
+    provenance["conversion_equality_attestation"] = _conversion_equality_attestation(
+        forged_spec
+    )
+    provenance_path.write_text(
+        json.dumps(provenance, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    manifest_path = artifact / "artifact-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[shard.name] = f"sha256:{hash_file(shard)}"
+    manifest["provenance.json"] = f"sha256:{hash_file(provenance_path)}"
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ArtifactError,
+        match="conversion equality attestation differs from the current registry",
+    ):
+        validate_artifact(
+            artifact,
+            spec=selected_spec,
+            registry=selected_registry,
+        )
 
 
 def test_hash_pinned_bin_is_canonicalized_with_safe_loading(tmp_path: Path) -> None:
@@ -1044,6 +2316,7 @@ def test_hash_pinned_bin_is_canonicalized_with_safe_loading(tmp_path: Path) -> N
         checkpoint,
         tmp_path / "artifact",
         source_root,
+        _allow_untracked_runtime_for_tests=True,
     )
     validate_weight_artifact(artifact)
     assert not (artifact / "pytorch_model.bin").exists()

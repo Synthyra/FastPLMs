@@ -1,13 +1,3 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = [
-#     "abnumber",
-#     "biopython",
-#     "pandas",
-#     "pyarrow",
-#     "tqdm",
-# ]
-# ///
 """Local FastPLMs binder-design research example.
 
 This is a FastPLMs-only variant of the Biohub ESMFold2 binder design workflow.
@@ -18,13 +8,22 @@ ESM++ checkpoints for the masked-LM regularizer.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import inspect
 import json
 import logging
 import math
+import os
+import platform
 import random
+import re
+import secrets
+import sys
+from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import cache
+from importlib import metadata
 from pathlib import Path
 from typing import Any
 
@@ -35,13 +34,13 @@ from tqdm.auto import tqdm
 from transformers import AutoModel, AutoModelForMaskedLM
 
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import EsmSequenceTokenizer
+from fastplms.models.esmfold2 import seed_context
 from fastplms.models.esmfold2.esmfold2_constants import (
     ELEMENT_NUMBER_TO_SYMBOL,
     PROTEIN_1TO3,
     PROTEIN_3TO1,
     RES_TYPE_TO_CCD,
 )
-from fastplms.models.esmfold2.modeling_esmfold2_common import _seed_context as seed_context
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +75,9 @@ class PromptFactory:
     is_antibody: bool
 
     def sample(self, seed: int) -> BinderPromptStr:
-        random.seed(seed)
+        rng = random.Random(seed)
         sampled_lengths = {
-            key: MUTABLE_TOKEN * random.randint(low, high)
+            key: MUTABLE_TOKEN * rng.randint(low, high)
             for key, (low, high) in self.length_ranges.items()
         }
         return self.template.format(**sampled_lengths)
@@ -180,6 +179,103 @@ def _repo_name(name: str) -> str:
     return f"Synthyra/{name}"
 
 
+_IMMUTABLE_HUB_REVISION = re.compile(r"[0-9a-fA-F]{40}\Z")
+
+
+@cache
+def _registered_fast_revisions() -> dict[str, str]:
+    from fastplms.registry import get_model_registry
+
+    return {model.fast.repo_id: model.fast.revision for model in get_model_registry().values()}
+
+
+def _normalize_model_revisions(
+    revisions: Mapping[str, str] | None,
+) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for raw_name, raw_revision in (revisions or {}).items():
+        repo_id = _repo_name(str(raw_name).strip())
+        revision = str(raw_revision).strip().lower()
+        namespace, separator, repository = repo_id.partition("/")
+        if (
+            not separator
+            or not namespace
+            or not repository
+            or "/" in repository
+            or _IMMUTABLE_HUB_REVISION.fullmatch(revision) is None
+        ):
+            raise ValueError(
+                "Model revisions must map a repository to an immutable 40-character "
+                f"Git commit; got {raw_name!r}={raw_revision!r}."
+            )
+        previous = normalized.get(repo_id)
+        if previous is not None and previous != revision:
+            raise ValueError(
+                f"Conflicting revisions were supplied for {repo_id!r}: "
+                f"{previous!r} and {revision!r}."
+            )
+        normalized[repo_id] = revision
+    return normalized
+
+
+def _parse_model_revision_args(values: list[str] | None) -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values or ():
+        repo_id, separator, revision = value.partition("=")
+        if not separator or not repo_id.strip() or not revision.strip():
+            raise ValueError(
+                f"--model-revision must use REPO=40_CHARACTER_COMMIT syntax; got {value!r}."
+            )
+        normalized = _normalize_model_revisions({repo_id: revision})
+        normalized_repo, normalized_revision = next(iter(normalized.items()))
+        previous = parsed.get(normalized_repo)
+        if previous is not None and previous != normalized_revision:
+            raise ValueError(
+                f"Conflicting revisions were supplied for {normalized_repo!r}: "
+                f"{previous!r} and {normalized_revision!r}."
+            )
+        parsed[normalized_repo] = normalized_revision
+    return parsed
+
+
+def _resolve_model_source(
+    model_name: str,
+    revisions: Mapping[str, str],
+) -> tuple[str, str]:
+    repo_id = _repo_name(model_name)
+    revision = revisions.get(repo_id) or _registered_fast_revisions().get(repo_id)
+    if revision is None:
+        raise ValueError(
+            f"Custom model repository {repo_id!r} requires an immutable revision. "
+            f"Pass --model-revision {repo_id}=<40-character-commit>."
+        )
+    if _IMMUTABLE_HUB_REVISION.fullmatch(revision) is None:
+        raise ValueError(
+            f"Resolved revision for {repo_id!r} is not an immutable Git commit: {revision!r}."
+        )
+    return repo_id, revision.lower()
+
+
+def _configure_offline_mode(local_files_only: bool) -> None:
+    if local_files_only:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+
+def _record_model_load_identity(
+    model: Any,
+    *,
+    repo_id: str,
+    revision: str,
+    local_files_only: bool,
+) -> None:
+    model.__dict__["_fastplms_binder_load_identity"] = {
+        "repo_id": repo_id,
+        "requested_revision": revision,
+        "local_files_only": local_files_only,
+    }
+
+
 def build_initial_soft_sequence_logits(sequence: str, batch_size: int) -> torch.Tensor:
     if all(aa == MUTABLE_TOKEN for aa in sequence):
         logits = 0.01 * torch.randn([batch_size, len(sequence), AA_DIMS])
@@ -191,7 +287,11 @@ def build_initial_soft_sequence_logits(sequence: str, batch_size: int) -> torch.
                 logits[:, i, :] = 0.01 * torch.randn(batch_size, AA_DIMS)
                 logits[:, i, CYS_IDX] = -1e6
             else:
-                assert aa in PROTEIN_1TO3, aa
+                if aa not in PROTEIN_1TO3:
+                    raise ValueError(
+                        f"Unsupported fixed binder residue {aa!r} at position {i}; "
+                        "use an uppercase canonical amino acid or '#'."
+                    )
                 token_id = TOKEN_IDS[PROTEIN_1TO3[aa]]
                 logits[:, i, token_id - 2] = 10.0
     return logits.requires_grad_(True)
@@ -345,18 +445,36 @@ def _entropy_to_confidence(mean_entropy: float) -> float:
 
 def _cdr_indices(binder_sequence: str) -> list[int]:
     from abnumber import Chain
-    from abnumber.common import _anarci_align
 
-    result = _anarci_align(sequences=[binder_sequence], scheme="chothia", allowed_species=None)[0]
-    chains = [Chain("".join(result[i][0].values()), scheme="chothia") for i in range(len(result))]
-    if len(chains) == 2 and not chains[0].is_heavy_chain():
-        chains.reverse()
+    chains = list(
+        Chain.multiple_domains(
+            binder_sequence,
+            scheme="chothia",
+            allowed_species=None,
+            use_anarcii=True,
+        )
+    )
+    if not chains:
+        raise ValueError("AbNumber did not identify an antibody domain in the binder sequence.")
+
     indices: list[int] = []
+    search_start = 0
     for chain in chains:
-        for cdr in (chain.cdr1_seq, chain.cdr2_seq, chain.cdr3_seq):
-            start = binder_sequence.find(cdr)
-            assert start >= 0
-            indices.extend(range(start, start + len(cdr)))
+        domain_sequence = str(chain.seq)
+        domain_start = binder_sequence.find(domain_sequence, search_start)
+        if domain_start < 0:
+            raise RuntimeError(
+                "AbNumber returned an antibody domain that cannot be aligned back to "
+                "the supplied binder sequence."
+            )
+        indices.extend(
+            domain_start + offset
+            for offset, (position, _residue) in enumerate(chain)
+            if position.is_in_cdr()
+        )
+        search_start = domain_start + len(domain_sequence)
+    if not indices:
+        raise ValueError("AbNumber identified antibody domains but no Chothia CDR residues.")
     return indices
 
 
@@ -370,7 +488,16 @@ def compute_distogram_iptm_proxy(
     if distogram_logits.ndim == 4:
         distogram_logits = distogram_logits[0]
     binder_length = len(binder_sequence)
-    assert distogram_logits.shape[0] == target_length + binder_length
+    expected_length = target_length + binder_length
+    if distogram_logits.ndim != 3 or distogram_logits.shape[:2] != (
+        expected_length,
+        expected_length,
+    ):
+        raise ValueError(
+            "Distogram logits must have shape "
+            f"({expected_length}, {expected_length}, bins); got "
+            f"{tuple(distogram_logits.shape)}."
+        )
 
     bin_distance = get_mid_points().to(distogram_logits.device)
     binder_start = target_length
@@ -420,12 +547,45 @@ _ATOM_FEATURE_DIMS = {
 
 def _resize_tensor(tensor: torch.Tensor, *, dim: int, size: int) -> torch.Tensor:
     current = tensor.shape[dim]
-    if current >= size:
-        return tensor.narrow(dim, 0, size)
+    if current > size:
+        raise ValueError(
+            f"Refusing to truncate atom features from {current} to {size}; "
+            "batch padding must preserve every prepared atom."
+        )
+    if current == size:
+        return tensor
     pad_shape = list(tensor.shape)
     pad_shape[dim] = size - current
     pad = torch.zeros(pad_shape, dtype=tensor.dtype, device=tensor.device)
     return torch.cat((tensor, pad), dim=dim)
+
+
+def _prepared_atom_count(features: dict[str, torch.Tensor]) -> int:
+    sizes = {features[key].shape[dim] for key, dim in _ATOM_FEATURE_DIMS.items() if key in features}
+    if not sizes:
+        raise ValueError("Prepared ESMFold2 features contain no atom-axis tensors.")
+    if len(sizes) != 1:
+        raise ValueError(f"Prepared ESMFold2 atom axes disagree: {sorted(sizes)}")
+    return sizes.pop()
+
+
+def _pad_prepared_atom_features(
+    prepared: list[tuple[dict[str, torch.Tensor], list[Any]]],
+) -> list[tuple[dict[str, torch.Tensor], list[Any]]]:
+    """Pad a prepared batch to its largest atom table without truncation."""
+
+    if not prepared:
+        raise ValueError("At least one prepared ESMFold2 input is required.")
+    largest = max(_prepared_atom_count(features) for features, _ in prepared)
+    max_atoms = ((largest + 31) // 32) * 32
+    padded: list[tuple[dict[str, torch.Tensor], list[Any]]] = []
+    for features, chain_infos in prepared:
+        resized = dict(features)
+        for key, dim in _ATOM_FEATURE_DIMS.items():
+            if key in resized:
+                resized[key] = _resize_tensor(resized[key], dim=dim, size=max_atoms)
+        padded.append((resized, chain_infos))
+    return padded
 
 
 def prepare_esmfold2_tensors(
@@ -473,10 +633,7 @@ def fold_and_get_distogram(
         [PROTEIN_3TO1[TOKENS[int(tkn.item())]] for tkn in token_list] for token_list in token_lists
     ]
     seq_list = [target_seq + "|" + "".join(seq) for seq in designed_seq]
-    max_atoms = None if len(seq_list) == 1 else ((len(seq_list[0]) - 1) * 14) // 32 * 32
-
-    inputs_list = []
-    chain_info_list = []
+    prepared_inputs: list[tuple[dict[str, torch.Tensor], list[Any]]] = []
     for seq in seq_list:
         target, binder = seq.split("|")
         input_types = model.input_types
@@ -486,11 +643,11 @@ def fold_and_get_distogram(
                 input_types.ProteinInput(id="B", sequence=binder, msa=None),
             ]
         )
-        features, chain_infos = prepare_esmfold2_tensors(
-            model, inputs_raw, max_atoms=max_atoms, seed=seed
-        )
-        inputs_list.append(features)
-        chain_info_list.append(chain_infos)
+        prepared_inputs.append(prepare_esmfold2_tensors(model, inputs_raw, seed=seed))
+
+    prepared_inputs = _pad_prepared_atom_features(prepared_inputs)
+    inputs_list = [features for features, _ in prepared_inputs]
+    chain_info_list = [chain_infos for _, chain_infos in prepared_inputs]
 
     inputs = {
         key: torch.cat([inp[key] for inp in inputs_list], dim=0).to(design.device)
@@ -653,6 +810,48 @@ def _metric_float(output: dict[str, Any], key: str) -> float | None:
     return float(value)
 
 
+def _require_fresh_output_directory(output_dir: str | Path | None) -> Path | None:
+    if output_dir is None:
+        return None
+    result_dir = Path(output_dir)
+    if result_dir.exists() or result_dir.is_symlink():
+        raise FileExistsError(
+            f"Binder output directory {result_dir} already exists. Choose a new path; "
+            "existing, partial, and empty run directories are never reused."
+        )
+    return result_dir
+
+
+def _reserve_output_directory(output_dir: str | Path | None) -> Path | None:
+    result_dir = _require_fresh_output_directory(output_dir)
+    if result_dir is None:
+        return None
+    result_dir.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result_dir.mkdir()
+    except FileExistsError as error:
+        raise FileExistsError(
+            f"Binder output directory {result_dir} was created by another run. Choose a new path."
+        ) from error
+    return result_dir
+
+
+def _validate_design_sequence(name: str, sequence: str, *, allow_mutable: bool) -> None:
+    if not sequence:
+        raise ValueError(f"{name} must not be empty.")
+    allowed = set(PROTEIN_1TO3)
+    if allow_mutable:
+        allowed.add(MUTABLE_TOKEN)
+    invalid = [(index, residue) for index, residue in enumerate(sequence) if residue not in allowed]
+    if invalid:
+        index, residue = invalid[0]
+        mutable_note = " or '#'" if allow_mutable else ""
+        raise ValueError(
+            f"{name} contains unsupported residue {residue!r} at position {index}; "
+            f"use uppercase canonical amino acids{mutable_note}."
+        )
+
+
 def design_binder(
     inversion_models: dict[str, Any],
     critic_models: dict[str, Any],
@@ -671,38 +870,65 @@ def design_binder(
     output_dir: str | Path | None = None,
     device: torch.device | str = "cuda",
 ) -> tuple[list[str], dict[int, dict[str, torch.Tensor]], list[dict[str, Any]]]:
-    assert (target_name is None) ^ (target_sequence is None), (
-        "Provide either target name or target sequence."
-    )
-    assert (binder_name is None) ^ (binder_sequence is None), (
-        "Provide either binder name or binder sequence."
-    )
+    if (target_name is None) == (target_sequence is None):
+        raise ValueError("Provide exactly one of target_name or target_sequence.")
+    if (binder_name is None) == (binder_sequence is None):
+        raise ValueError("Provide exactly one of binder_name or binder_sequence.")
+    if not inversion_models:
+        raise ValueError("At least one inversion model is required.")
+    if not critic_models:
+        raise ValueError("At least one critic model is required.")
+    if batch_size <= 0:
+        raise ValueError(f"batch_size must be positive; got {batch_size}.")
+    if steps <= 0:
+        raise ValueError(f"steps must be positive; got {steps}.")
+    if log_interval <= 0:
+        raise ValueError(f"log_interval must be positive; got {log_interval}.")
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError(f"learning_rate must be finite and positive; got {learning_rate}.")
+    if not math.isfinite(temperature_min) or not 0 < temperature_min <= 1:
+        raise ValueError(
+            f"temperature_min must be finite and in the interval (0, 1]; got {temperature_min}."
+        )
 
     device = torch.device(device)
     if target_name is not None:
-        assert target_name in TARGET_SEQUENCES, target_name
+        if target_name not in TARGET_SEQUENCES:
+            raise ValueError(
+                f"Unknown target_name {target_name!r}; choose one of "
+                f"{sorted(TARGET_SEQUENCES)} or pass target_sequence."
+            )
         target_sequence = TARGET_SEQUENCES[target_name]
-    else:
-        assert target_sequence is not None
-    target_one_hot = sequence_to_one_hot(target_sequence, device=device)
+    if target_sequence is None:
+        raise RuntimeError("Target sequence resolution failed.")
 
     if binder_name is None:
-        assert binder_sequence is not None
+        if binder_sequence is None:
+            raise RuntimeError("Binder sequence resolution failed.")
         if is_antibody is None:
             is_antibody = False
     else:
-        assert binder_name in BINDER_PROMPT_FACTORIES, binder_name
+        if binder_name not in BINDER_PROMPT_FACTORIES:
+            raise ValueError(
+                f"Unknown binder_name {binder_name!r}; choose one of "
+                f"{sorted(BINDER_PROMPT_FACTORIES)} or pass binder_sequence."
+            )
         binder_prompt_factory = BINDER_PROMPT_FACTORIES[binder_name]
-        if is_antibody is not None:
-            assert binder_prompt_factory.is_antibody == is_antibody
+        if is_antibody is not None and binder_prompt_factory.is_antibody != is_antibody:
+            raise ValueError(
+                f"Binder prompt {binder_name!r} has is_antibody="
+                f"{binder_prompt_factory.is_antibody}, not {is_antibody}."
+            )
         is_antibody = binder_prompt_factory.is_antibody
         binder_sequence = binder_prompt_factory.sample(seed=seed)
-    assert binder_sequence is not None
-    assert is_antibody is not None
+    if binder_sequence is None or is_antibody is None:
+        raise RuntimeError("Binder prompt resolution failed.")
+    _validate_design_sequence("target_sequence", target_sequence, allow_mutable=False)
+    _validate_design_sequence("binder_sequence", binder_sequence, allow_mutable=True)
     mutable_binder_indices = [i for i, aa in enumerate(binder_sequence) if aa == MUTABLE_TOKEN]
     binder_length = len(binder_sequence)
-    assert "|" not in target_sequence
-    assert "|" not in binder_sequence
+    result_dir = _reserve_output_directory(output_dir)
+    target_one_hot = sequence_to_one_hot(target_sequence, device=device)
 
     with seed_context(seed), torch.device(device):
         logits = build_initial_soft_sequence_logits(binder_sequence, batch_size=batch_size)
@@ -726,8 +952,7 @@ def design_binder(
         remaining = 0.5 * (1 + math.cos(math.pi * t))
         temperature = temperature_min + (1 - temperature_min) * remaining
 
-        random.seed(seed + step)
-        replicate_choice = random.randint(0, len(model_names) - 1)
+        replicate_choice = random.Random(seed + step).randint(0, len(model_names) - 1)
         inversion_model = inversion_models[model_names[replicate_choice]]
         design = F.softmax(logits / temperature, dim=-1)
         calculate_confidence = temperature < 0.05
@@ -799,12 +1024,13 @@ def design_binder(
             temp=f"{temperature:.3f}",
         )
 
-    assert all(seq != "" for seq in best_sequences)
-    assert all(value is not None for value in best_logits)
-    assert all(value is not None for value in best_steps)
-    result_dir = Path(output_dir) if output_dir is not None else None
+    if any(not sequence for sequence in best_sequences):
+        raise RuntimeError("Optimization completed without selecting every binder sequence.")
+    if any(value is None for value in best_logits):
+        raise RuntimeError("Optimization completed without retaining every selected logit tensor.")
+    if any(value is None for value in best_steps):
+        raise RuntimeError("Optimization completed without retaining every selected step.")
     if result_dir is not None:
-        result_dir.mkdir(parents=True, exist_ok=True)
         _write_trajectory(result_dir / "trajectory.jsonl", trajectory)
         _write_fasta(result_dir / "best_sequences.fasta", best_sequences)
 
@@ -887,6 +1113,22 @@ def design_binder(
             critic_results,
             required_hero_critics=tuple(critic_models),
         )
+        _write_run_manifest(
+            result_dir / "run_manifest.json",
+            seed=seed,
+            batch_size=batch_size,
+            steps=steps,
+            log_interval=log_interval,
+            learning_rate=learning_rate,
+            temperature_min=temperature_min,
+            target_sequence=target_sequence,
+            binder_sequence=binder_sequence,
+            is_antibody=is_antibody,
+            inversion_models=inversion_models,
+            critic_models=critic_models,
+            lm_model=lm_model,
+            device=device,
+        )
     return best_sequences, trajectory, critic_results
 
 
@@ -897,6 +1139,223 @@ def _write_trajectory(path: Path, trajectory: dict[int, dict[str, torch.Tensor]]
             for key, value in losses.items():
                 row[key] = [float(x) for x in value.reshape(-1).tolist()]
             handle.write(json.dumps(row) + "\n")
+
+
+def _package_version(package: str) -> str | None:
+    try:
+        return metadata.version(package)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def _configuration_digest(config: Any) -> str | None:
+    if config is None or not hasattr(config, "to_dict"):
+        return None
+    payload = json.dumps(config.to_dict(), sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _model_load_identity(model: Any) -> dict[str, Any]:
+    identity = getattr(model, "__dict__", {}).get(
+        "_fastplms_binder_load_identity",
+        {},
+    )
+    return dict(identity) if isinstance(identity, dict) else {}
+
+
+def _tokenizer_identity(
+    tokenizer: Any,
+    *,
+    model: Any | None = None,
+) -> dict[str, Any] | None:
+    if tokenizer is None:
+        return None
+    config = getattr(model, "config", None)
+    load_identity = _model_load_identity(model)
+    get_vocab = getattr(tokenizer, "get_vocab", None)
+    vocab = get_vocab() if callable(get_vocab) else getattr(tokenizer, "vocab", None)
+    vocab_digest = None
+    if isinstance(vocab, dict):
+        payload = json.dumps(
+            sorted((str(token), int(index)) for token, index in vocab.items()),
+            separators=(",", ":"),
+        )
+        vocab_digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    init_kwargs = getattr(tokenizer, "init_kwargs", {})
+    tokenizer_revision = (
+        init_kwargs.get("revision") or getattr(tokenizer, "_commit_hash", None)
+        if isinstance(init_kwargs, dict)
+        else getattr(tokenizer, "_commit_hash", None)
+    )
+    return {
+        "class": type(tokenizer).__name__,
+        "name_or_path": getattr(tokenizer, "name_or_path", None),
+        "repo_id": load_identity.get("repo_id") or getattr(config, "_name_or_path", None),
+        "requested_revision": (
+            load_identity.get("requested_revision") or getattr(config, "_commit_hash", None)
+        ),
+        "hub_revision": getattr(config, "_commit_hash", None),
+        "weights_revision": getattr(config, "fastplms_weights_revision", None),
+        "runtime_revision": getattr(config, "fastplms_runtime_revision", None),
+        "revision": tokenizer_revision or load_identity.get("requested_revision"),
+        "local_files_only": load_identity.get("local_files_only"),
+        "vocab_size": len(vocab) if isinstance(vocab, dict) else None,
+        "vocab_sha256": vocab_digest,
+        "special_token_ids": {
+            name: getattr(tokenizer, f"{name}_token_id", None)
+            for name in ("bos", "cls", "eos", "mask", "pad", "sep", "unk")
+        },
+    }
+
+
+def _parameter_dtype_identity(model: Any) -> tuple[str | None, list[str], dict[str, int]]:
+    named_parameters = getattr(model, "named_parameters", None)
+    if callable(named_parameters):
+        parameters = (parameter for _name, parameter in named_parameters())
+    else:
+        raw_parameters = getattr(model, "parameters", None)
+        parameters = iter(raw_parameters()) if callable(raw_parameters) else iter(())
+
+    dtype_numel: dict[str, int] = {}
+    for parameter in parameters:
+        dtype = str(parameter.dtype)
+        dtype_numel[dtype] = dtype_numel.get(dtype, 0) + int(parameter.numel())
+    dtypes = sorted(dtype_numel)
+    if not dtypes:
+        summary = None
+    elif len(dtypes) == 1:
+        summary = dtypes[0]
+    else:
+        summary = f"mixed[{','.join(dtypes)}]"
+    return summary, dtypes, {dtype: dtype_numel[dtype] for dtype in dtypes}
+
+
+def _effective_precision_identity(model: Any) -> dict[str, Any] | None:
+    status = getattr(model, "esmc_precision_status", None)
+    as_dict = getattr(status, "as_dict", None)
+    if callable(as_dict):
+        return dict(as_dict())
+    return None
+
+
+def _model_identity(name: str, model: Any) -> dict[str, Any]:
+    config = getattr(model, "config", None)
+    load_identity = _model_load_identity(model)
+    parameter_dtype, parameter_dtypes, parameter_dtype_numel = _parameter_dtype_identity(model)
+    attention_backend = next(
+        (
+            getattr(config, field)
+            for field in (
+                "esmc_attn_backend",
+                "attn_backend",
+                "attention_backend",
+                "_attn_implementation",
+            )
+            if config is not None and getattr(config, field, None) is not None
+        ),
+        None,
+    )
+    return {
+        "name": name,
+        "requested": name,
+        "resolved": getattr(config, "_name_or_path", None),
+        "repo_id": load_identity.get("repo_id") or getattr(config, "_name_or_path", None),
+        "requested_revision": (
+            load_identity.get("requested_revision") or getattr(config, "_commit_hash", None)
+        ),
+        "hub_revision": getattr(config, "_commit_hash", None),
+        "weights_revision": getattr(config, "fastplms_weights_revision", None),
+        "runtime_revision": getattr(config, "fastplms_runtime_revision", None),
+        "revision": (
+            getattr(config, "_commit_hash", None) or load_identity.get("requested_revision")
+        ),
+        "local_files_only": load_identity.get("local_files_only"),
+        "attention_backend": attention_backend,
+        "kernel_backend": getattr(model, "_kernel_backend", None),
+        "parameter_dtype": parameter_dtype,
+        "parameter_dtypes": parameter_dtypes,
+        "parameter_dtype_numel": parameter_dtype_numel,
+        "effective_precision": _effective_precision_identity(model),
+        "configuration_sha256": _configuration_digest(config),
+    }
+
+
+def _write_run_manifest(
+    path: Path,
+    *,
+    seed: int,
+    batch_size: int,
+    steps: int,
+    log_interval: int,
+    learning_rate: float,
+    temperature_min: float,
+    target_sequence: str,
+    binder_sequence: str,
+    is_antibody: bool,
+    inversion_models: dict[str, Any],
+    critic_models: dict[str, Any],
+    lm_model: Any,
+    device: torch.device,
+) -> None:
+    def sequence_hash(sequence: str) -> str:
+        return hashlib.sha256(sequence.encode("ascii")).hexdigest()
+
+    manifest = {
+        "schema_version": 2,
+        "seed": seed,
+        "batch_size": batch_size,
+        "steps": steps,
+        "learning_rate": learning_rate,
+        "temperature_min": temperature_min,
+        "target_sequence_sha256": sequence_hash(target_sequence),
+        "binder_prompt_sha256": sequence_hash(binder_sequence),
+        "device": str(device),
+        "configuration": {
+            "batch_size": batch_size,
+            "steps": steps,
+            "log_interval": log_interval,
+            "optimizer": {
+                "class": "torch.optim.SGD",
+                "learning_rate": learning_rate,
+            },
+            "temperature_min": temperature_min,
+            "is_antibody": is_antibody,
+            "loss_weights": LOSS_WEIGHTS,
+            "plm_batch_size": 4,
+            "plm_passes": 4,
+            "compute_dtype": ("torch.bfloat16" if device.type == "cuda" else "torch.float32"),
+        },
+        "command": list(sys.argv),
+        "environment": {
+            "python": platform.python_version(),
+            "torch": torch.__version__,
+            "transformers": _package_version("transformers"),
+            "fastplms": _package_version("fastplms"),
+            "cuda": torch.version.cuda,
+            "hf_hub_offline": os.environ.get("HF_HUB_OFFLINE") == "1",
+            "transformers_offline": os.environ.get("TRANSFORMERS_OFFLINE") == "1",
+        },
+        "models": {
+            "inversion": [_model_identity(name, model) for name, model in inversion_models.items()],
+            "critics": [_model_identity(name, model) for name, model in critic_models.items()],
+            "language_model": _model_identity(
+                getattr(getattr(lm_model, "config", None), "_name_or_path", "language_model"),
+                lm_model,
+            ),
+        },
+        "tokenizer": _tokenizer_identity(
+            getattr(lm_model, "tokenizer", None),
+            model=lm_model,
+        ),
+    }
+    payload = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
+    try:
+        temporary.write_text(payload, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        with suppress(FileNotFoundError):
+            temporary.unlink()
 
 
 def _write_fasta(path: Path, sequences: list[str]) -> None:
@@ -913,7 +1372,11 @@ def _write_results_table(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def _binder_sequence_from_designed_sequence(designed_sequence: str) -> str:
     parts = designed_sequence.split("|")
-    assert len(parts) == 2, designed_sequence
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(
+            "designed_sequence must contain nonempty target and binder chains "
+            f"separated by one '|'; got {designed_sequence!r}."
+        )
     return parts[1]
 
 
@@ -938,9 +1401,13 @@ def annotate_official_selection_scores(result_df: Any) -> Any:
         "designed_sequence",
         "is_antibody",
         "iptm",
+        "distogram_iptm_proxy",
     ]
     missing_columns = [column for column in required_columns if column not in df.columns]
-    assert not missing_columns, f"Missing selection columns: {missing_columns}"
+    if missing_columns:
+        raise ValueError(f"Missing selection columns: {missing_columns}")
+    if df["distogram_iptm_proxy"].isna().any():
+        raise ValueError("distogram_iptm_proxy must be present for every selection row")
 
     binder_sequences = [
         _binder_sequence_from_designed_sequence(sequence)
@@ -968,6 +1435,7 @@ def select_official_designs(
         *available_group_columns,
         "designed_sequence",
         "iptm_score",
+        "iptm_proxy_score",
         "hero_iptm_min",
         "hero_iptm_median",
         "hero_iptm_max",
@@ -1015,6 +1483,7 @@ def select_official_designs(
     }
     scores = df.groupby(key_columns, as_index=False).agg(
         iptm_score=("hero_iptm_score_component", "mean"),
+        iptm_proxy_score=("distogram_iptm_proxy", "mean"),
         hero_iptm_min=("hero_iptm_score_component", "min"),
         hero_iptm_median=("hero_iptm_score_component", "median"),
         hero_iptm_max=("hero_iptm_score_component", "max"),
@@ -1072,35 +1541,70 @@ def _log_official_selection_summary(rows: list[dict[str, Any]]) -> None:
 
 
 _ESMC_CACHE: Any | None = None
+_ESMC_CACHE_KEY: tuple[str, str] | None = None
+_ESMC_CACHE_CONTEXT: dict[str, Any] = {}
+
+
+_ESMC_CONTEXT_FIELDS = (
+    "_esmc_fp8",
+    "_esmc_fp8_module_paths",
+    "_esmc_source",
+    "_esmc_source_revision",
+    "_esmc_source_files",
+    "_esmc_local_files_only",
+    "_esmc_precision_policy",
+    "_esmc_precision_status",
+)
 
 
 def _load_fold_model(
     model_name: str,
+    revision: str,
     lm_dropout: float,
     cache_esmc: bool,
     device: torch.device | str,
     kernel_backend: str | None,
     compile_model: bool,
+    local_files_only: bool,
 ) -> Any:
-    global _ESMC_CACHE
+    global _ESMC_CACHE, _ESMC_CACHE_CONTEXT, _ESMC_CACHE_KEY
+    repo_id = _repo_name(model_name)
     model = AutoModel.from_pretrained(
-        _repo_name(model_name),
+        repo_id,
+        revision=revision,
+        local_files_only=local_files_only,
         trust_remote_code=True,
         load_esmc=not cache_esmc,
         dtype=torch.float32,
     )
+    _record_model_load_identity(
+        model,
+        repo_id=repo_id,
+        revision=revision,
+        local_files_only=local_files_only,
+    )
+    model = model.to(device=device)
     if cache_esmc:
-        if _ESMC_CACHE is None:
-            model.load_esmc(model.config.esmc_id)
+        esmc_cache_key = (str(model.config.esmc_id), str(torch.device(device)))
+        if _ESMC_CACHE is None or esmc_cache_key != _ESMC_CACHE_KEY:
+            model.load_esmc(
+                model.config.esmc_id,
+                device=device,
+                local_files_only=local_files_only,
+            )
             _ESMC_CACHE = model._esmc
+            _ESMC_CACHE_KEY = esmc_cache_key
+            _ESMC_CACHE_CONTEXT = {field: getattr(model, field) for field in _ESMC_CONTEXT_FIELDS}
         else:
             model._esmc = _ESMC_CACHE
+            for field, value in _ESMC_CACHE_CONTEXT.items():
+                setattr(model, field, value.copy() if isinstance(value, dict) else value)
     model.configure_lm_dropout(lm_dropout, force_lm_dropout_during_inference=True)
     if kernel_backend is not None:
         model.set_kernel_backend(kernel_backend)
     if compile_model:
         model.apply_torch_compile()
-    return model.to(device=device).eval().requires_grad_(False)
+    return model.eval().requires_grad_(False)
 
 
 class FastPLMsBinderDesign:
@@ -1116,38 +1620,93 @@ class FastPLMsBinderDesign:
         device: str = "cuda",
         kernel_backend: str | None = None,
         compile_model: bool = False,
+        inversion_model_names: tuple[str, ...] | None = None,
+        critic_model_names: tuple[str, ...] | None = None,
+        lm_name: str | None = None,
+        model_revisions: Mapping[str, str] | None = None,
+        local_files_only: bool = False,
     ) -> None:
+        _configure_offline_mode(local_files_only)
+        revisions = _normalize_model_revisions(model_revisions)
+        selected_inversion_models = inversion_model_names or self.inversion_model_names
+        selected_critic_models = critic_model_names or self.hero_critic_model_names
+        selected_lm = lm_name or self.lm_name
+        if len(set(selected_inversion_models)) != len(selected_inversion_models):
+            raise ValueError("Inversion model names must be unique.")
+        if len(set(selected_critic_models)) != len(selected_critic_models):
+            raise ValueError("Critic model names must be unique.")
+        inversion_sources = {
+            model_name: _resolve_model_source(model_name, revisions)
+            for model_name in selected_inversion_models
+        }
+        critic_sources = {
+            model_name: _resolve_model_source(model_name, revisions)
+            for model_name in selected_critic_models
+        }
+        lm_repo_id, lm_revision = _resolve_model_source(selected_lm, revisions)
+        selected_repositories = {
+            repo_id
+            for repo_id, _revision in (
+                *inversion_sources.values(),
+                *critic_sources.values(),
+                (lm_repo_id, lm_revision),
+            )
+        }
+        unused_revisions = sorted(set(revisions) - selected_repositories)
+        if unused_revisions:
+            raise ValueError(
+                "Model revisions were supplied for repositories that are not loaded: "
+                f"{unused_revisions}."
+            )
+
         self.device = torch.device(device)
         self.inversion_models = {
             model_name: _load_fold_model(
                 model_name,
+                revision=inversion_sources[model_name][1],
                 lm_dropout=0.5,
                 cache_esmc=True,
                 device=device,
                 kernel_backend=kernel_backend,
                 compile_model=compile_model,
+                local_files_only=local_files_only,
             )
-            for model_name in self.inversion_model_names
+            for model_name in selected_inversion_models
         }
         self.critic_models = {
             model_name: _load_fold_model(
                 model_name,
+                revision=critic_sources[model_name][1],
                 lm_dropout=0.25,
                 cache_esmc=True,
                 device=device,
                 kernel_backend=kernel_backend,
                 compile_model=compile_model,
+                local_files_only=local_files_only,
             )
-            for model_name in self.hero_critic_model_names
+            for model_name in selected_critic_models
         }
         self.lm_model = (
             AutoModelForMaskedLM.from_pretrained(
-                self.lm_name, trust_remote_code=True, dtype=torch.float32
+                lm_repo_id,
+                revision=lm_revision,
+                local_files_only=local_files_only,
+                trust_remote_code=True,
+                dtype=torch.float32,
             )
             .to(device=device)
             .eval()
             .requires_grad_(False)
         )
+        _record_model_load_identity(
+            self.lm_model,
+            repo_id=lm_repo_id,
+            revision=lm_revision,
+            local_files_only=local_files_only,
+        )
+        self.inversion_model_names = tuple(selected_inversion_models)
+        self.hero_critic_model_names = tuple(selected_critic_models)
+        self.lm_name = selected_lm
 
     def design(
         self,
@@ -1193,10 +1752,20 @@ def _design_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def run_local(args: argparse.Namespace) -> None:
+    _require_fresh_output_directory(args.output_dir)
     runner = FastPLMsBinderDesign()
     runner.load(
         kernel_backend=args.kernel_backend,
         compile_model=args.compile_model,
+        inversion_model_names=(
+            tuple(args.inversion_model_names) if args.inversion_model_names is not None else None
+        ),
+        critic_model_names=(
+            tuple(args.critic_model_names) if args.critic_model_names is not None else None
+        ),
+        lm_name=args.lm_model,
+        model_revisions=args.model_revisions,
+        local_files_only=args.local_files_only,
     )
     best_sequences, _, results = runner.design(**_design_kwargs_from_args(args))
     logger.info("Designed sequences: %s", best_sequences)
@@ -1204,7 +1773,7 @@ def run_local(args: argparse.Namespace) -> None:
     _log_official_selection_summary(results)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-name", default="pd-l1")
     parser.add_argument("--target-sequence", default=None)
@@ -1214,12 +1783,54 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
     parser.add_argument("--output-dir", default="binder_design_out")
+    parser.add_argument(
+        "--inversion-model",
+        dest="inversion_model_names",
+        action="append",
+        default=None,
+        help="FastPLMs inversion checkpoint; repeat to use multiple checkpoints.",
+    )
+    parser.add_argument(
+        "--critic-model",
+        dest="critic_model_names",
+        action="append",
+        default=None,
+        help="FastPLMs critic checkpoint; repeat to use multiple checkpoints.",
+    )
+    parser.add_argument(
+        "--lm-model",
+        default=None,
+        help="FastPLMs masked-language-model checkpoint.",
+    )
+    parser.add_argument(
+        "--model-revision",
+        dest="model_revisions",
+        action="append",
+        default=[],
+        metavar="REPO=COMMIT",
+        help=(
+            "Immutable 40-character Hub commit for a custom model repository; "
+            "repeat once per custom repository. Registered defaults use models.toml."
+        ),
+    )
+    parser.add_argument(
+        "--local-files-only",
+        action="store_true",
+        help=(
+            "Use cached snapshots only and set HF_HUB_OFFLINE=1 plus "
+            "TRANSFORMERS_OFFLINE=1 before model loading."
+        ),
+    )
     parser.add_argument("--kernel-backend", default=None)
     parser.add_argument("--compile-model", action="store_true")
     parser.add_argument("--is-antibody", dest="is_antibody", action="store_true")
     parser.add_argument("--not-antibody", dest="is_antibody", action="store_false")
     parser.set_defaults(is_antibody=None)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    try:
+        args.model_revisions = _parse_model_revision_args(args.model_revisions)
+    except ValueError as error:
+        parser.error(str(error))
     if args.target_sequence is not None:
         args.target_name = None
     if args.binder_sequence is not None:
@@ -1227,9 +1838,16 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def main(argv: list[str] | None = None) -> int:
+    """Run the local binder-design workflow from explicit CLI arguments."""
+
+    run_local(parse_args(argv))
+    return 0
+
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s: %(message)s",
     )
-    run_local(parse_args())
+    raise SystemExit(main())

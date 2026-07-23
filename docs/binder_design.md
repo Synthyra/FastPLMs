@@ -25,19 +25,30 @@ critics. Candidates are ranked by mean iPTM across those critics. The workflow
 writes sequences, loss trajectories, structures, confidence fields, and a
 selection table under the requested output directory.
 
+Prepared atom tensors are padded to the largest observed atom table in the
+batch, rounded upward for kernel alignment. They are never sized from the first
+sequence or rounded downward, so dense binder batches cannot truncate atoms.
+
 ![FastPLMs EGFR minibinder design](assets/egfr_fastplms_binder_design.png)
 
 ## Run
 
 Run inside the project environment with the `structure` extra and the example's
-analysis dependencies:
+analysis dependencies. The published workflow requires Python 3.11-3.14,
+PyTorch 2.13, Transformers 5.13, verified ESMFold2 runtime assets, and CUDA. The
+current release evidence target is the exact containerized Linux aarch64
+environment on the NVIDIA GH200 workstation. CPU-only, x86-64, Windows, macOS,
+H100, and H200 binder runs do not substitute for that evidence.
+
+The script intentionally has no standalone PEP 723 dependency block. The
+project's `pyproject.toml` and `uv.lock` remain authoritative. The separate
+`binder` extra locks AbNumber 0.4.4, its ANARCII 2.0.8 backend, pandas, and
+PyArrow without adding them to the general structure installation:
 
 ```bash
-uv run \
+uv run --frozen \
   --extra structure \
-  --with abnumber \
-  --with pandas \
-  --with pyarrow \
+  --extra binder \
   python examples/binder_design_fastplms.py \
   --target-name pd-l1 \
   --binder-name minibinder \
@@ -50,10 +61,56 @@ Pass `--target-sequence` instead of `--target-name` for a custom target. Pass
 `--binder-sequence` with `#` at mutable positions instead of a named binder
 prompt.
 
+The output directory must not already exist, including as an empty directory.
+The CLI checks this before loading models, and the design call creates the path
+exclusively before optimization. A concurrent, interrupted, or stale run is
+therefore rejected instead of having its files mixed with a new campaign.
+`run_manifest.json` is written atomically and last; if it is absent, treat the
+directory as an incomplete run and preserve or move it for diagnosis before
+choosing a new output path.
+
+The default inversion, critic, and ESM++ repositories are loaded at the
+immutable FastPLMs commits declared in `src/fastplms/models.toml`; the example
+never follows a mutable Hub branch. For a fully cached, network-free run, add
+`--local-files-only`. That option passes `local_files_only=True` to every
+top-level model load and sets both `HF_HUB_OFFLINE=1` and
+`TRANSFORMERS_OFFLINE=1` before loading nested runtime assets. Missing cached
+files fail the run instead of downloading them.
+
+Custom repositories require an explicit immutable commit for every model
+(replace the example 40-character values below):
+
+```bash
+python examples/binder_design_fastplms.py \
+  --inversion-model lab/esmfold2-inversion \
+  --critic-model lab/esmfold2-critic \
+  --lm-model lab/esmplusplus \
+  --model-revision lab/esmfold2-inversion=1111111111111111111111111111111111111111 \
+  --model-revision lab/esmfold2-critic=2222222222222222222222222222222222222222 \
+  --model-revision lab/esmplusplus=3333333333333333333333333333333333333333 \
+  --local-files-only
+```
+
+Repeat `--inversion-model`, `--critic-model`, and `--model-revision` when a
+campaign uses multiple checkpoints.
+
 The example writes `trajectory.jsonl`, `best_sequences.fasta`,
 `results.parquet`, `selection.parquet`, and critic-specific structure and
-confidence files. Retain the complete command, model revisions, seed, and
-output directory when comparing campaigns.
+confidence files plus `run_manifest.json`. The example records the complete
+command and normalized configuration; exact optimizer; ESMFold2 critic and
+ESM++ weight and runtime revisions; tokenizer identity; backend; parameter and
+compute dtype; Torch, Transformers, CUDA runtime, Python, and package
+environment; all random seeds; and target, prompt, and input-file hashes. Each
+model record separates the requested Hub commit, resolved Hub commit,
+`fastplms_weights_revision`, and `fastplms_runtime_revision`. The tokenizer
+record carries the ESM++ snapshot and runtime identity alongside its vocabulary
+hash.
+Antibody CDR positions are obtained through AbNumber's public
+`Chain.multiple_domains` API with ANARCII-backed Chothia numbering; the workflow
+does not depend on AbNumber's private modules.
+Retain the full output directory when comparing campaigns. CUDA driver identity
+and ranked-output-table hashes are useful promotion evidence, but the current
+example does not emit them and this manifest must not be cited as if it did.
 
 ## Validation boundary
 

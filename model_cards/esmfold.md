@@ -16,6 +16,19 @@ Accepted inputs are raw amino-acid sequences through folding helpers, or
 prepared residue tensors.
 Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
+## Install and platform requirements
+
+Install FastPLMs from the exact source revision paired with this model card:
+
+```bash
+python -m pip install \
+  "fastplms[structure] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Structure inference requires the `structure` extra and a CUDA device for the published execution contract. The current validated release target is the exact NVIDIA GH200 on Linux aarch64; Linux x86-64, CPU-only, Windows, and macOS structure runs are not current release evidence. The Hub quick start below requires network
+access on first download. For an air-gapped run, first build the manifest-pinned
+local artifact and use the offline form shown in the example.
+
 ## Quick start
 
 ```python
@@ -35,6 +48,11 @@ the manifest-pinned artifact and replace `model_id` with its local
 Leave attention unspecified for the Transformers default. Supported explicit
 choices are `eager`, `sdpa`, `flex_attention`.
 Pass the selected name through `attn_implementation`.
+When an optimized backend cannot return full attention tensors,
+`output_attentions=True` emits one explicit runtime warning and uses a correctly
+masked eager implementation for that call only. The warning identifies the
+configured backend, effective backend, and reason. Configuration and later
+calls are unchanged.
 For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Protein structure prediction
@@ -70,15 +88,23 @@ does not contain a trained masked-language-model head for that objective, so
 
 - Public input: Raw amino-acid sequences through folding helpers, or prepared residue tensors
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`
+- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`
 - Precision policies: `default`
 - BF16 execution: `fp32_parameters_autocast`
 - Generation contract: `not_applicable`
 - Optional dependency group: `structure`
+- Weight publication allowed: `true`
+- Weight license status: `resolved`
+- Redistributable: `true`
+- Complete weight publication required: `false`
 
 ## Provenance
 
-- FastPLMs checkpoint: `Synthyra/FastESMFold@b88c8cb50d19b2cf7ab4fee4b0a61f5e02da7823`
+- FastPLMs weights: `Synthyra/FastESMFold@b88c8cb50d19b2cf7ab4fee4b0a61f5e02da7823`
+- Runtime revision: recorded separately in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 - Official checkpoint: `facebook/esmfold_v1@75a3841ee059df2bf4d56688166c8fb459ddd97a`
 - Artifact source: `fast`
 - State transform: `esmfold_meta_to_fastplms_v1`

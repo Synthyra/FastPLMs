@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import benchmarks.suite as benchmark_suite
 from benchmarks.run import (
     _benchmark_load_dtype,
     _resolve_bf16_execution,
     _uses_bf16_autocast,
     run_case,
+    validate_hopper_sm90_environment,
 )
 from benchmarks.suite import (
     ESMFOLD2_DEDICATED_MODE,
@@ -22,9 +26,73 @@ from benchmarks.suite import (
     benchmark_auto_class,
     benchmark_cases,
     benchmark_model_key,
+    bind_local_artifacts,
+    build_parser,
     exhaustive_benchmark_cases,
 )
-from fastplms.registry import get_model_registry
+from fastplms.registry import ModelSpec, get_model_registry
+
+_RUNTIME_REVISION = "a" * 40
+_SOURCE_SHA256 = "b" * 64
+_RUNTIME_BUNDLE_SHA256 = "c" * 64
+_STATE_SHA256 = "d" * 64
+
+
+def _write_benchmark_artifact(
+    root: Path,
+    spec: ModelSpec,
+    *,
+    runtime_revision: str = _RUNTIME_REVISION,
+    source_tree_sha256: str = _SOURCE_SHA256,
+    config_updates: dict[str, object] | None = None,
+) -> Path:
+    path = root / spec.fast.repo_id.rsplit("/", maxsplit=1)[1]
+    path.mkdir(parents=True)
+    config: dict[str, object] = {
+        "fastplms_model_id": spec.id,
+        "fastplms_checkpoint_repo_id": spec.artifact_checkpoint.repo_id,
+        "fastplms_checkpoint_revision": spec.artifact_checkpoint.revision,
+        "fastplms_weights_revision": spec.artifact_checkpoint.revision,
+        "fastplms_runtime_revision": runtime_revision,
+        "fastplms_source_tree_sha256": source_tree_sha256,
+        "fastplms_runtime_bundle_sha256": _RUNTIME_BUNDLE_SHA256,
+    }
+    if config_updates:
+        config.update(config_updates)
+    provenance = {
+        "model_id": spec.id,
+        "artifact_checkpoint": {
+            "repo_id": spec.artifact_checkpoint.repo_id,
+            "revision": spec.artifact_checkpoint.revision,
+        },
+        "weights_revision": spec.artifact_checkpoint.revision,
+        "runtime_revision": runtime_revision,
+        "source_tree_sha256": source_tree_sha256,
+        "runtime_bundle_sha256": _RUNTIME_BUNDLE_SHA256,
+        "canonical_weights": {
+            "state_digest": {
+                "schema_version": 1,
+                "algorithm": "sha256",
+                "sha256": _STATE_SHA256,
+            }
+        },
+    }
+    (path / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    (path / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+    (path / "artifact-manifest.json").write_text(
+        json.dumps({"config.json": "sha256:" + "e" * 64}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _stub_artifact_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(benchmark_suite, "_validate_built_artifact", lambda *_args: None)
+    monkeypatch.setattr(
+        benchmark_suite,
+        "_frozen_runtime_identity",
+        lambda *_args: (_RUNTIME_REVISION, _SOURCE_SHA256),
+    )
 
 
 def _shape(case: SimpleNamespace) -> tuple[int, int, tuple[int, ...]]:
@@ -79,6 +147,33 @@ def test_full_matrix_covers_fixed_shapes_for_each_sequence_backend() -> None:
         assert len(startup) == len(embedding) == 1
         assert startup[0].suite_profile == SEQUENCE_FORWARD_PROFILE
         assert embedding[0].suite_profile == SEQUENCE_FORWARD_PROFILE
+
+
+def test_gh200_matrix_explicitly_selects_eager_sdpa_and_flex_only() -> None:
+    selected = ("eager", "sdpa", "flex_attention")
+    cases = list(
+        benchmark_cases(
+            family=None,
+            quick=False,
+            local_files_only=True,
+            backends=selected,
+        )
+    )
+
+    assert {case.backend for case in cases}.issubset(set(selected))
+    assert "flash_attention_2" not in {case.backend for case in cases}
+    assert "flash_attention_3" not in {case.backend for case in cases}
+    for spec in get_model_registry().values():
+        if not spec.is_deep_reference or "benchmark" not in spec.family.test_tiers:
+            continue
+        expected = set(spec.family.attention).intersection(selected)
+        measured = {
+            case.backend
+            for case in cases
+            if case.model == spec.fast.repo_id and case.mode in {"compile", "steady"}
+        }
+        if spec.family.tokenizer_mode != "structure":
+            assert measured == expected
 
 
 def test_esmfold2_matrix_separates_projection_from_esmc_precision() -> None:
@@ -207,6 +302,29 @@ def test_quick_matrix_is_one_short_case() -> None:
     assert cases[0].sequence_length <= 128
 
 
+@pytest.mark.parametrize(
+    "gpu",
+    ("NVIDIA H100 PCIe", "NVIDIA H200 NVL", "NVIDIA GH200 480GB"),
+)
+def test_release_benchmark_accepts_named_hopper_sm90_products(gpu: str) -> None:
+    validate_hopper_sm90_environment({"gpu": gpu, "gpu_capability": [9, 0]})
+
+
+@pytest.mark.parametrize(
+    "environment",
+    (
+        {"gpu": "NVIDIA A100-SXM4-80GB", "gpu_capability": [8, 0]},
+        {"gpu": "NVIDIA B200", "gpu_capability": [10, 0]},
+        {"gpu": "NVIDIA H100 PCIe", "gpu_capability": [8, 0]},
+    ),
+)
+def test_release_benchmark_rejects_non_hopper_sm90_hardware(
+    environment: dict[str, object],
+) -> None:
+    with pytest.raises(RuntimeError):
+        validate_hopper_sm90_environment(environment)
+
+
 def test_benchmark_load_class_is_manifest_advertised() -> None:
     registry = get_model_registry()
     for spec in registry.values():
@@ -278,3 +396,119 @@ def test_model_cache_key_reuses_backends_and_shapes_but_not_precision() -> None:
         for model_id in {case.model for case in structure_cases}
     }
     assert all(len(keys) == 2 for keys in by_model.values())
+
+
+def test_suite_parser_accepts_local_artifact_root() -> None:
+    arguments = build_parser().parse_args(
+        [
+            "--output",
+            "report.json",
+            "--artifact-root",
+            "dist/hub",
+            "--backends",
+            "eager",
+            "sdpa",
+            "flex_attention",
+        ]
+    )
+
+    assert arguments.artifact_root == Path("dist/hub")
+    assert arguments.backends == ["eager", "sdpa", "flex_attention"]
+
+
+def test_local_artifact_binding_preserves_registry_report_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_artifact_validation(monkeypatch)
+    spec = get_model_registry()["esm2_8m"]
+    artifact = _write_benchmark_artifact(tmp_path, spec)
+    cases = list(benchmark_cases(family="esm2", quick=True, local_files_only=False))
+
+    identities = bind_local_artifacts(cases, tmp_path, source_root=tmp_path)
+
+    case = cases[0]
+    assert case.model == spec.fast.repo_id
+    assert case.revision == spec.fast.revision
+    assert case.load_model == artifact.resolve()
+    assert case.load_revision is None
+    assert case.local_files_only is True
+    assert identities[spec.id] == case.artifact_identity
+    assert case.artifact_identity["weights_revision"] == spec.artifact_checkpoint.revision
+    assert str(tmp_path) not in json.dumps(identities, sort_keys=True)
+
+
+def test_local_artifact_binding_rejects_missing_and_stale_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_artifact_validation(monkeypatch)
+    spec = get_model_registry()["esm2_8m"]
+    cases = list(benchmark_cases(family="esm2", quick=True, local_files_only=True))
+
+    with pytest.raises(ValueError, match="Missing or invalid selected benchmark artifacts"):
+        bind_local_artifacts(cases, tmp_path, source_root=tmp_path)
+
+    _write_benchmark_artifact(
+        tmp_path,
+        spec,
+        runtime_revision="f" * 40,
+        source_tree_sha256="0" * 64,
+    )
+    with pytest.raises(ValueError, match="registry/frozen source"):
+        bind_local_artifacts(cases, tmp_path, source_root=tmp_path)
+
+
+def test_local_artifact_binding_rejects_swapped_or_forged_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_artifact_validation(monkeypatch)
+    spec = get_model_registry()["esm2_8m"]
+    _write_benchmark_artifact(
+        tmp_path,
+        spec,
+        config_updates={"fastplms_model_id": "esm2_35m"},
+    )
+    cases = list(benchmark_cases(family="esm2", quick=True, local_files_only=True))
+
+    with pytest.raises(ValueError, match="fastplms_model_id"):
+        bind_local_artifacts(cases, tmp_path, source_root=tmp_path)
+
+    monkeypatch.setattr(
+        benchmark_suite,
+        "_validate_built_artifact",
+        lambda *_args: (_ for _ in ()).throw(ValueError("forged manifest")),
+    )
+    config_path = tmp_path / spec.fast.repo_id.rsplit("/", maxsplit=1)[1] / "config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["fastplms_model_id"] = spec.id
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(ValueError, match="forged manifest"):
+        bind_local_artifacts(cases, tmp_path, source_root=tmp_path)
+
+
+def test_esmfold2_local_artifact_binding_requires_and_records_esmc_backbone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_artifact_validation(monkeypatch)
+    registry = get_model_registry()
+    spec = registry["esmfold2"]
+    backbone_id = spec.family.backbone_model
+    assert backbone_id is not None
+    backbone = registry[backbone_id]
+    primary_path = _write_benchmark_artifact(tmp_path, spec)
+    cases = list(benchmark_cases(family="esmfold2", quick=True, local_files_only=False))
+
+    with pytest.raises(ValueError, match=backbone_id):
+        bind_local_artifacts(cases, tmp_path, source_root=tmp_path)
+
+    backbone_path = _write_benchmark_artifact(tmp_path, backbone)
+    identities = bind_local_artifacts(cases, tmp_path, source_root=tmp_path)
+
+    case = cases[0]
+    assert case.load_model == primary_path.resolve()
+    assert case.esmc_load_model == backbone_path.resolve()
+    assert case.artifact_dependencies == {"esmc": identities[backbone_id]}
+    assert str(tmp_path) not in json.dumps(case.artifact_dependencies, sort_keys=True)

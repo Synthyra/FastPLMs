@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import tarfile
 import time
 import urllib.error
@@ -12,6 +13,7 @@ from email.utils import format_datetime
 import pytest
 import torch
 
+from fastplms.embeddings import EmbeddingResult, load_sqlite_result
 from fastplms.models.e1 import retrieval as e1_retrieval
 from fastplms.models.e1.modeling_e1 import (
     E1_MSA_SAMPLING_SOURCE_REVISION,
@@ -274,8 +276,17 @@ def test_e1_token_classifier_exactly_consumes_official_encoder_width() -> None:
     config = _tiny_e1_config()
     config.num_labels = 3
     model = E1ForTokenClassification(config).eval()
-    batch = model.prep_tokens.get_batch_kwargs(["MSTNPKPQ"], device=torch.device("cpu"))
-    inputs = {name: value for name, value in batch.items() if name != "labels"}
+    prepared = model.prep_tokens.get_batch_kwargs(["MSTNPKPQ"], device=torch.device("cpu"))
+    inputs: dict[str, torch.Tensor] = {}
+    for name in (
+        "input_ids",
+        "within_seq_position_ids",
+        "global_position_ids",
+        "sequence_ids",
+    ):
+        value = prepared[name]
+        assert isinstance(value, torch.Tensor)
+        inputs[name] = value
 
     with torch.inference_mode():
         encoder_output = model.model(**inputs)
@@ -336,14 +347,31 @@ def test_colabfold_request_respects_expired_deadline(monkeypatch) -> None:
 
 def test_mmseqs_searcher_subprocess_path_is_mockable(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
+    (tmp_path / "target_db.dbtype").write_bytes(b"test-db")
     searcher = HomologueSearcher(target_db="target_db")
     calls = []
 
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        return None
+    identity = e1_retrieval._DockerImageIdentity(
+        reference=e1_retrieval.DOCKER_IMAGE,
+        repository=e1_retrieval.MMSEQS2_IMAGE_REPOSITORY,
+        version=e1_retrieval.MMSEQS2_VERSION,
+        manifest_digest=e1_retrieval.MMSEQS2_CPU_MANIFEST_DIGEST,
+        image_id="sha256:" + "a" * 64,
+        os="linux",
+        architecture=e1_retrieval._docker_architecture(),
+    )
 
-    monkeypatch.setattr(searcher, "_ensure_docker_image", lambda: None)
+    def fake_run(cmd, **kwargs):
+        del kwargs
+        calls.append(cmd)
+        if "result2msa" in cmd:
+            command_index = cmd.index("result2msa")
+            output = tmp_path / cmd[command_index + 4]
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(">query\nACDEFG\n", encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(searcher, "_ensure_docker_image", lambda: identity)
     monkeypatch.setattr(searcher, "_run_docker_command", fake_run)
 
     a3m_path = searcher.search("ACDEFG", output_dir="msas", seq_id="query")
@@ -352,6 +380,7 @@ def test_mmseqs_searcher_subprocess_path_is_mockable(tmp_path, monkeypatch) -> N
     assert any("createdb" in call for call in calls)
     assert any("search" in call for call in calls)
     assert any("result2msa" in call for call in calls)
+    assert (tmp_path / "msas/query/search-provenance.json").is_file()
 
 
 def test_colabfold_searcher_http_path_is_mockable(tmp_path, monkeypatch) -> None:
@@ -384,6 +413,69 @@ def test_colabfold_searcher_http_path_is_mockable(tmp_path, monkeypatch) -> None
 
     assert a3m_path.endswith("query.a3m")
     assert get_query_from_a3m(a3m_path) == "ACDEFG"
+
+
+@pytest.mark.parametrize(
+    ("searcher", "provider"),
+    (
+        (HomologueSearcher(target_db="target_db"), "mmseqs2"),
+        (ColabFoldSearcher(inter_request_delay=(0.0, 0.0)), "colabfold"),
+    ),
+)
+def test_batch_search_warns_on_partial_failure_without_sequence_leak(
+    searcher,
+    provider,
+    tmp_path,
+    monkeypatch,
+    caplog,
+) -> None:
+    sensitive_sequence = "SENSITIVESEQUENCE"
+    monkeypatch.chdir(tmp_path)
+
+    def fail_search(sequence, output_dir, seq_id=None):
+        raise RuntimeError(f"provider failure included {sequence}")
+
+    monkeypatch.setattr(searcher, "search", fail_search)
+    with caplog.at_level("WARNING", logger=e1_retrieval.__name__):
+        result = searcher.batch_search(
+            [sensitive_sequence],
+            "results",
+            seq_ids=["public-seq-id"],
+            continue_on_error=True,
+        )
+
+    assert result == {}
+    assert provider in caplog.text
+    assert "public-seq-id" in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert sensitive_sequence not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "searcher",
+    (
+        HomologueSearcher(target_db="target_db"),
+        ColabFoldSearcher(inter_request_delay=(0.0, 0.0)),
+    ),
+)
+def test_batch_search_preserves_failure_when_continue_is_disabled(
+    searcher,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def fail_search(sequence, output_dir, seq_id=None):
+        raise RuntimeError("provider failure")
+
+    monkeypatch.setattr(searcher, "search", fail_search)
+    with pytest.raises(RuntimeError, match="provider failure"):
+        searcher.batch_search(
+            ["ACDEFG"],
+            "results",
+            seq_ids=["query"],
+            continue_on_error=False,
+        )
 
 
 @pytest.mark.gpu
@@ -446,18 +538,30 @@ def test_e1_embed_with_msa_shapes(tmp_path) -> None:
 
 
 @pytest.mark.gpu
-def test_e1_embed_dataset_with_msa_falls_back_without_msa() -> None:
+def test_e1_embed_dataset_with_msa_falls_back_without_msa(tmp_path) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = _tiny_e1_model(device)
+    output = tmp_path / "e1-msa.sqlite"
 
     embeddings = model.embed_dataset_with_msa(
-        ["ACDEFG"],
+        ["ACDEFG", "ACDEFG"],
         msa_lookup={},
         batch_size=1,
         max_len=16,
         pooling_types=["mean"],
         progress=False,
+        embed_dtype=torch.float32,
+        output=output,
+        format="sqlite",
     )
 
-    assert set(embeddings) == {"ACDEFG"}
-    assert embeddings["ACDEFG"].shape == (model.config.hidden_size,)
+    assert isinstance(embeddings, EmbeddingResult)
+    assert [(record.id, record.sequence) for record in embeddings] == [
+        ("0", "ACDEFG"),
+        ("1", "ACDEFG"),
+    ]
+    assert all(record.load_tensor().shape == (model.config.hidden_size,) for record in embeddings)
+    assert embeddings.metadata["descriptor_index"] == "sqlite-records"
+    assert embeddings.metadata["family_adapter"]["kind"] == "e1-msa-v1"
+    reopened = load_sqlite_result(output)
+    assert [record.sequence for record in reopened] == ["ACDEFG", "ACDEFG"]

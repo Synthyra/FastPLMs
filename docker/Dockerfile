@@ -37,22 +37,50 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /opt/fastplms
 
-FROM python312 AS source
+FROM python312 AS project-metadata
 
-COPY pyproject.toml uv.lock kernels.lock README.md LICENSE ./
+# Keep dependency-only layers independent from runtime source, tests, docs, and
+# legal text. A source edit must not rebuild the locked CUDA/Python environment.
+COPY pyproject.toml uv.lock kernels.lock ./
+
+FROM project-metadata AS source-dependencies
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev --group validation
+
+FROM source-dependencies AS source
+
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
 COPY LICENSES ./LICENSES
-COPY THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
 COPY src ./src
-
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --group validation --no-editable
 
-FROM source AS runtime
+FROM project-metadata AS runtime-dependencies
 
 ARG FASTPLMS_RUNTIME_PROFILE=core
 RUN --mount=type=cache,target=/root/.cache/uv \
     case "${FASTPLMS_RUNTIME_PROFILE}" in \
-        core) ;; \
+        core) \
+            uv sync --frozen --no-install-project --no-dev --group validation ;; \
+        esmfold2-fp8) \
+            uv sync --frozen --no-install-project --no-dev --group validation \
+                --extra structure --extra fp8 ;; \
+        *) \
+            echo "Unsupported FastPLMs runtime profile: ${FASTPLMS_RUNTIME_PROFILE}" >&2; \
+            exit 64 ;; \
+    esac
+
+FROM runtime-dependencies AS runtime
+
+ARG FASTPLMS_RUNTIME_PROFILE=core
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY LICENSES ./LICENSES
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv \
+    case "${FASTPLMS_RUNTIME_PROFILE}" in \
+        core) \
+            uv sync --frozen --no-dev --group validation --no-editable ;; \
         esmfold2-fp8) \
             uv sync --frozen --no-dev --group validation --extra structure --extra fp8 \
                 --no-editable ;; \
@@ -63,10 +91,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 WORKDIR /workspace
 CMD ["python"]
 
-FROM source AS candidate
+FROM project-metadata AS candidate-dependencies
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --group validation --extra dev --extra flash \
+    uv sync --frozen --no-install-project --no-dev --group validation --extra dev \
+        --extra flash --extra train
+
+FROM candidate-dependencies AS candidate
+
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY LICENSES ./LICENSES
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev --group validation --extra dev --extra flash --extra train \
         --no-editable
 COPY tests /opt/fastplms/tests
 COPY benchmarks /opt/fastplms/benchmarks
@@ -75,21 +112,45 @@ ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms
 WORKDIR /workspace
 CMD ["python", "-m", "pytest", "tests/unit", "tests/integration", "-m", "not gpu and not slow and not structure"]
 
-FROM candidate AS candidate-structure
+FROM project-metadata AS candidate-structure-dependencies
 
-WORKDIR /opt/fastplms
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev --group validation --extra dev \
+        --extra flash --extra structure --extra cueq --extra train
+
+FROM candidate-structure-dependencies AS candidate-structure
+
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY LICENSES ./LICENSES
+COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --group validation --extra dev --extra flash --extra structure \
-        --no-editable
+        --extra cueq --extra train --no-editable
+COPY tests /opt/fastplms/tests
+COPY benchmarks /opt/fastplms/benchmarks
+COPY tools /opt/fastplms/tools
+ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms
 WORKDIR /workspace
 CMD ["python", "-m", "pytest", "tests/structure", "-m", "structure"]
 
-FROM candidate-structure AS candidate-fp8
+FROM project-metadata AS candidate-fp8-dependencies
 
-WORKDIR /opt/fastplms
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev --group validation --extra dev \
+        --extra flash --extra structure --extra cueq --extra train --extra fp8
+
+FROM candidate-fp8-dependencies AS candidate-fp8
+
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY LICENSES ./LICENSES
+COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --group validation --extra dev --extra flash --extra structure \
-        --extra fp8 --no-editable
+        --extra cueq --extra train --extra fp8 --no-editable
+COPY tests /opt/fastplms/tests
+COPY benchmarks /opt/fastplms/benchmarks
+COPY tools /opt/fastplms/tools
+ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms
 WORKDIR /workspace
 CMD ["python", "-m", "pytest", "tests/structure", "-m", "gpu and structure"]
 
@@ -143,18 +204,24 @@ COPY tests/structure/support/state_contract.py /opt/oracle/tests/structure/suppo
 COPY tests/structure/support/boltz2_bundle.py /opt/oracle/tests/structure/support/boltz2_bundle.py
 COPY tests/structure/support/esmfold_bundle.py /opt/oracle/tests/structure/support/esmfold_bundle.py
 COPY tests/structure/support/esmfold2_bundle.py /opt/oracle/tests/structure/support/esmfold2_bundle.py
+COPY tools/source_provenance.py /opt/oracle/tools/source_provenance.py
+COPY tools/remote/__init__.py /opt/oracle/tools/remote/__init__.py
+COPY tools/remote/biohub_reference_environment.py /opt/oracle/tools/remote/biohub_reference_environment.py
+COPY tools/remote/biohub_reference_lock.py /opt/oracle/tools/remote/biohub_reference_lock.py
+COPY tools/remote/biohub_reference_requirements.py /opt/oracle/tools/remote/biohub_reference_requirements.py
+COPY tools/remote/reference_source_attestation.py /opt/oracle/tools/remote/reference_source_attestation.py
 
 FROM python310-reference AS reference-ankh
 
 COPY docker/constraints/ankh.txt /tmp/constraints.txt
-COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY --from=upstream_ankh --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/ankh
-COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-COPY LICENSES/ankh /licenses/ankh
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130 && \
     pip install --constraint /tmp/constraints.txt /opt/oracle/vendor/upstream/ankh \
         pytest==8.4.2 safetensors==0.6.2
+COPY --from=reference-protocol /opt/oracle /opt/oracle
+COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY LICENSES/ankh /licenses/ankh
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/ankh/src:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.parity.support.reference_adapters.ankh"]
@@ -162,10 +229,7 @@ CMD ["python", "-m", "tests.parity.support.reference_adapters.ankh"]
 FROM python310-reference AS reference-dplm
 
 COPY docker/constraints/dplm.txt /tmp/constraints.txt
-COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY --from=upstream_dplm --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/dplm
-COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-COPY LICENSES/dplm /licenses/dplm
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.2.0 torchtext==0.17.0 --index-url https://download.pytorch.org/whl/cu121 && \
     pip install --constraint /tmp/constraints.txt --only-binary=:all: \
@@ -173,6 +237,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         torch-scatter==2.1.2+pt22cu121 && \
     pip install --constraint /tmp/constraints.txt -e /opt/oracle/vendor/upstream/dplm \
         safetensors==0.6.2
+COPY --from=reference-protocol /opt/oracle /opt/oracle
+COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY LICENSES/dplm /licenses/dplm
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/dplm/src:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.parity.support.reference_adapters.dplm"]
@@ -180,61 +247,126 @@ CMD ["python", "-m", "tests.parity.support.reference_adapters.dplm"]
 FROM python312 AS reference-e1
 
 COPY docker/constraints/e1.txt /tmp/constraints.txt
-COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY --from=upstream_e1 --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/e1
-COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-COPY LICENSES/e1 /licenses/e1
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128 && \
     pip install --constraint /tmp/constraints.txt -e /opt/oracle/vendor/upstream/e1 \
         pytest==8.4.2 safetensors==0.6.2
+COPY --from=reference-protocol /opt/oracle /opt/oracle
+COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY LICENSES/e1 /licenses/e1
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/e1/src:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.parity.support.reference_adapters.e1"]
 
 FROM python312 AS reference-biohub-esm
 
-COPY docker/constraints/biohub.txt /tmp/constraints.txt
-COPY --from=reference-protocol /opt/oracle /opt/oracle
+ARG TARGETARCH
+RUN test "${TARGETARCH}" = "arm64" && test "$(uname -m)" = "aarch64"
+COPY docker/biohub-reference-lock.Dockerfile /opt/lock-root/docker/biohub-reference-lock.Dockerfile
+COPY docker/constraints/biohub-reference.in /opt/lock-root/docker/constraints/biohub-reference.in
+COPY docker/constraints/biohub-reference.lock.txt /opt/lock-root/docker/constraints/biohub-reference.lock.txt
+COPY docker/constraints/biohub-biotraj-build.in /opt/lock-root/docker/constraints/biohub-biotraj-build.in
+COPY docker/constraints/biohub-biotraj-build.lock.txt /opt/lock-root/docker/constraints/biohub-biotraj-build.lock.txt
+COPY docker/constraints/biohub-reference-lock.json /opt/lock-root/docker/constraints/biohub-reference-lock.json
+COPY tools/remote/biohub_reference_lock.py /opt/lock-root/biohub_reference_lock.py
+COPY --from=biohub_biotraj_wheel \
+    /biohub-reference-lock/biotraj-1.2.2-cp312-cp312-linux_aarch64.whl \
+    /opt/wheels/biotraj-1.2.2-cp312-cp312-linux_aarch64.whl
 COPY --from=upstream_biohub_transformers --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/biohub-transformers
 COPY --from=upstream_biohub_esm --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/biohub-esm
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python /opt/lock-root/biohub_reference_lock.py verify-contract \
+        --root /opt/lock-root \
+        --contract /opt/lock-root/docker/constraints/biohub-reference-lock.json && \
+    python /opt/lock-root/biohub_reference_lock.py materialize-wheel-lock \
+        --root /opt/lock-root \
+        --contract /opt/lock-root/docker/constraints/biohub-reference-lock.json \
+        --wheel /opt/wheels/biotraj-1.2.2-cp312-cp312-linux_aarch64.whl \
+        --wheel-uri file:///opt/wheels/biotraj-1.2.2-cp312-cp312-linux_aarch64.whl \
+        --output /tmp/biohub-reference.install.lock.txt && \
+    cp -a /opt/oracle/vendor/upstream/biohub-transformers /tmp/biohub-transformers-build && \
+    cp -a /opt/oracle/vendor/upstream/biohub-esm /tmp/biohub-esm-build && \
+    pip install --require-hashes --only-binary=:all: --no-deps \
+        --requirement /tmp/biohub-reference.install.lock.txt && \
+    pip install --no-deps --no-build-isolation \
+        /tmp/biohub-transformers-build /tmp/biohub-esm-build && \
+    python /opt/lock-root/biohub_reference_lock.py verify-pip-check \
+        --root /opt/lock-root \
+        --contract /opt/lock-root/docker/constraints/biohub-reference-lock.json && \
+    python /opt/lock-root/biohub_reference_lock.py verify-inventory \
+        --root /opt/lock-root \
+        --contract /opt/lock-root/docker/constraints/biohub-reference-lock.json \
+        --profile final && \
+    rm -rf -- /tmp/biohub-transformers-build /tmp/biohub-esm-build
+COPY docker/constraints/biohub-esm-source.json /opt/oracle/biohub-esm-source-contract.json
+COPY docker/constraints/biohub-transformers-source.json /opt/oracle/biohub-transformers-source-contract.json
+COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
 COPY LICENSES/biohub-esm /licenses/biohub-esm
 COPY LICENSES/biohub-transformers /licenses/biohub-transformers
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130 && \
-    pip install --constraint /tmp/constraints.txt --no-deps \
-        -e /opt/oracle/vendor/upstream/biohub-transformers && \
-    pip install --constraint /tmp/constraints.txt \
-        -e /opt/oracle/vendor/upstream/biohub-esm pytest==9.0.2
-ENV PYTHONPATH=/opt/oracle/vendor/upstream/biohub-esm:/opt/oracle/vendor/upstream/biohub-transformers/src:/opt/oracle
+RUN PYTHONPATH=/opt/oracle python -m tools.remote.reference_source_attestation create \
+        --source-root /opt/oracle/vendor/upstream/biohub-esm \
+        --contract /opt/oracle/biohub-esm-source-contract.json \
+        --output /opt/oracle/biohub-esm-source-attestation.json && \
+    PYTHONPATH=/opt/oracle python -m tools.remote.reference_source_attestation create \
+        --source-root /opt/oracle/vendor/upstream/biohub-transformers \
+        --contract /opt/oracle/biohub-transformers-source-contract.json \
+        --output /opt/oracle/biohub-transformers-source-attestation.json && \
+    PYTHONPATH=/opt/oracle python -m tools.remote.reference_source_attestation verify \
+        --source-root /opt/oracle/vendor/upstream/biohub-esm \
+        --attestation /opt/oracle/biohub-esm-source-attestation.json \
+        --contract /opt/oracle/biohub-esm-source-contract.json \
+        --expected-revision 82ee35553d39169d678f784c8d3f8712ffd7d2c4 && \
+    PYTHONPATH=/opt/oracle python -m tools.remote.reference_source_attestation verify \
+        --source-root /opt/oracle/vendor/upstream/biohub-transformers \
+        --attestation /opt/oracle/biohub-transformers-source-attestation.json \
+        --contract /opt/oracle/biohub-transformers-source-contract.json \
+        --expected-revision 3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf && \
+    PYTHONPATH=/opt/oracle python -m tools.remote.biohub_reference_lock verify-inventory \
+        --root /opt/lock-root \
+        --contract /opt/lock-root/docker/constraints/biohub-reference-lock.json \
+        --profile final
+ENV FASTPLMS_BIOHUB_ESM_REVISION=82ee35553d39169d678f784c8d3f8712ffd7d2c4 \
+    FASTPLMS_BIOHUB_ESM_SOURCE=/opt/oracle/vendor/upstream/biohub-esm \
+    FASTPLMS_BIOHUB_ESM_ATTESTATION=/opt/oracle/biohub-esm-source-attestation.json \
+    FASTPLMS_BIOHUB_ESM_CONTRACT=/opt/oracle/biohub-esm-source-contract.json \
+    FASTPLMS_BIOHUB_TRANSFORMERS_REVISION=3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf \
+    FASTPLMS_BIOHUB_TRANSFORMERS_SOURCE=/opt/oracle/vendor/upstream/biohub-transformers \
+    FASTPLMS_BIOHUB_TRANSFORMERS_ATTESTATION=/opt/oracle/biohub-transformers-source-attestation.json \
+    FASTPLMS_BIOHUB_TRANSFORMERS_CONTRACT=/opt/oracle/biohub-transformers-source-contract.json \
+    FASTPLMS_BIOHUB_LOCK_ROOT=/opt/lock-root \
+    FASTPLMS_BIOHUB_LOCK_CONTRACT=/opt/lock-root/docker/constraints/biohub-reference-lock.json \
+    FASTPLMS_REFERENCE_CONTAINER_IDENTITIES=/exchange/environment/container-images.json \
+    FASTPLMS_REFERENCE_CONTAINER_TARGET=reference-biohub-esm \
+    PYTHONPATH=/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.parity.support.reference_adapters.esm_plusplus"]
 
 FROM python312 AS reference-esm2
 
-COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY --from=upstream_fair_esm --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/fair-esm
-COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-COPY LICENSES/fair-esm /licenses/fair-esm
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130 && \
     pip install -e /opt/oracle/vendor/upstream/fair-esm huggingface-hub==0.36.2 \
         numpy==1.26.4 pytest==9.0.2 safetensors==0.6.2
+COPY --from=reference-protocol /opt/oracle /opt/oracle
+COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY LICENSES/fair-esm /licenses/fair-esm
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/fair-esm:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.parity.support.reference_adapters.esm2"]
 
 FROM python310-reference AS reference-boltz2
 
-COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY --from=upstream_boltz --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/boltz
-COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-COPY LICENSES/boltz /licenses/boltz
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu121 && \
     pip install '/opt/oracle/vendor/upstream/boltz[test]' \
         huggingface-hub==0.36.0 safetensors==0.6.2
+COPY --from=reference-protocol /opt/oracle /opt/oracle
+COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY LICENSES/boltz /licenses/boltz
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/boltz/src:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.structure.support.boltz2_bundle", "--help"]
@@ -245,14 +377,14 @@ CMD ["python", "-m", "tests.structure.support.boltz2_bundle", "--help"]
 # FlashAttention; Boltz2 structure parity uses its eager attention path.
 FROM python312 AS reference-boltz2-same-runtime
 
-COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY --from=upstream_boltz --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/boltz
-COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-COPY LICENSES/boltz /licenses/boltz
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130 && \
     pip install '/opt/oracle/vendor/upstream/boltz[test]' \
         huggingface-hub==0.36.0 safetensors==0.6.2
+COPY --from=reference-protocol /opt/oracle /opt/oracle
+COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY LICENSES/boltz /licenses/boltz
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/boltz/src:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.structure.support.boltz2_bundle", "--help"]
@@ -261,13 +393,8 @@ FROM python310-reference AS reference-esmfold
 
 COPY docker/constraints/esmfold.txt /tmp/constraints.txt
 COPY docker/constraints/openfold-sm90.patch /tmp/openfold-sm90.patch
-COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY --from=upstream_openfold --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/openfold
 COPY --from=upstream_fair_esm --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/fair-esm
-COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-COPY LICENSES/fair-esm /licenses/fair-esm
-COPY LICENSES/openfold /licenses/openfold
-COPY LICENSES/dllogger/PROVENANCE.md /licenses/dllogger/PROVENANCE.md
 RUN cd /opt/oracle/vendor/upstream/openfold && \
     git apply --no-index --ignore-space-change --check /tmp/openfold-sm90.patch && \
     git apply --no-index --ignore-space-change /tmp/openfold-sm90.patch && \
@@ -285,23 +412,29 @@ RUN extension="$(python -c 'import torch; import attn_core_inplace_cuda as exten
     test -f /opt/venv/lib/python3.10/site-packages/dllogger-1.1.0.dist-info/licenses/LICENSE && \
     grep -F 'Apache License' \
         /opt/venv/lib/python3.10/site-packages/dllogger-1.1.0.dist-info/licenses/LICENSE
+COPY --from=reference-protocol /opt/oracle /opt/oracle
+COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY LICENSES/fair-esm /licenses/fair-esm
+COPY LICENSES/openfold /licenses/openfold
+COPY LICENSES/dllogger/PROVENANCE.md /licenses/dllogger/PROVENANCE.md
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/openfold:/opt/oracle/vendor/upstream/fair-esm:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.structure.support.esmfold_bundle", "--help"]
 
 FROM reference-biohub-esm AS reference-esmfold2
 
-CMD ["python", "-c", "from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model; print(ESMFold2Model.__name__)"]
+ENV FASTPLMS_REFERENCE_CONTAINER_TARGET=reference-esmfold2
+CMD ["python", "-c", "from tests.parity.support.reference_adapters.biohub_source import reference_sources; reference_sources(); from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model; print(ESMFold2Model.__name__)"]
 
 FROM python310-reference AS reference-protein-ttt
 
 COPY --from=upstream_protein_ttt --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/protein-ttt
-COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
-COPY LICENSES/protein-ttt /licenses/protein-ttt
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cu121 && \
     if [ -f /opt/oracle/vendor/upstream/protein-ttt/requirements.txt ]; then \
         pip install -r /opt/oracle/vendor/upstream/protein-ttt/requirements.txt; \
     fi
+COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
+COPY LICENSES/protein-ttt /licenses/protein-ttt
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/protein-ttt
 CMD ["python", "-c", "import pathlib; print(pathlib.Path('/opt/oracle/vendor/upstream/protein-ttt').resolve())"]

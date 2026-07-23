@@ -18,6 +18,19 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`,
 `AutoModelForTokenClassification`.
 
+## Install and platform requirements
+
+Install FastPLMs from the exact source revision paired with this model card:
+
+```bash
+python -m pip install \
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Eager, SDPA, and Flex use the core install. FlashAttention requires the `flash` extra, compatible CUDA hardware, and BF16 execution. The Hub quick start below requires network
+access on first download. For an air-gapped run, first build the manifest-pinned
+local artifact and use the offline form shown in the example.
+
 ## Quick start
 
 ```python
@@ -37,6 +50,11 @@ the manifest-pinned artifact and replace `model_id` with its local
 Leave attention unspecified for the Transformers default. Supported explicit
 choices are `eager`, `sdpa`, `flex_attention`, `flash_attention_3`.
 Pass the selected name through `attn_implementation`.
+When an optimized backend cannot return full attention tensors,
+`output_attentions=True` emits one explicit runtime warning and uses a correctly
+masked eager implementation for that call only. The warning identifies the
+configured backend, effective backend, and reason. Configuration and later
+calls are unchanged.
 For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
 
 ## Tokenization and forward inference
@@ -139,19 +157,35 @@ Plain `AutoModel` omits the optional ESM pooler because this diffusion
 checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
 only when intentionally initializing and training that head.
 
+DPLM1 and DPLM2 checkpoint weights are Apache-2.0. At the pinned ByteDance
+revision, the [LICENSE](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE) is Apache-2.0 and the
+[README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+explicitly scopes the repository release to the pretrained DPLM1 and DPLM2
+weights. FastPLMs artifacts record `weights_license_status="resolved"` and
+`redistributable=true`; complete publication is permitted only after all
+artifact, legal, parity, and atomic-publication preflights pass.
+
 ## Runtime contract
 
 - Public input: Amino-acid sequences tokenized to masked or partially masked residue IDs
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
+- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForMaskedLM` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`, `flash_attention_3`
 - Precision policies: `default`
 - BF16 execution: `fp32_parameters_autocast`
 - Generation contract: `required`
 - Optional dependency group: `core`
+- Weight publication allowed: `true`
+- Weight license status: `resolved`
+- Redistributable: `true`
+- Complete weight publication required: `false`
 
 ## Provenance
 
-- FastPLMs checkpoint: `Synthyra/DPLM-650M@05dc16d97c5c028aed924c9ed681cee4ab609760`
+- FastPLMs weights: `Synthyra/DPLM-650M@05dc16d97c5c028aed924c9ed681cee4ab609760`
+- Runtime revision: recorded separately in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 - Official checkpoint: `airkingbd/dplm_650m@7a7e651baa667d094aba05e9dc1cf52a3332110a`
 - Artifact source: `fast`
 - State transform: `dplm_to_fastplms_v1`
@@ -176,7 +210,7 @@ therapeutic validity.
 
 ## License
 
-Checkpoint terms: Apache-2.0 (project assumption; upstream checkpoint cards do not independently state it). The Hub model-card identifier is
+Checkpoint terms: Apache-2.0. The Hub model-card identifier is
 `apache-2.0`. Applicable source licenses, notices, attribution,
 and conversion records are distributed with the local artifact. Review them
 before use.

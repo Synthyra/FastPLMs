@@ -2,16 +2,80 @@
 
 FastPLMs supports exactly four Biohub ESMFold2 variants:
 
-| Official checkpoint | FastPLMs mirror |
-| --- | --- |
-| `biohub/ESMFold2` | `Synthyra/ESMFold2` |
-| `biohub/ESMFold2-Fast` | `Synthyra/ESMFold2-Fast` |
-| `biohub/ESMFold2-Experimental-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Cutoff2025` |
-| `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` |
+| Official checkpoint | FastPLMs mirror | Folding blocks | MSA conditioning |
+| --- | --- | ---: | --- |
+| `biohub/ESMFold2` | `Synthyra/ESMFold2` | 48 | Optional; single-sequence and MSA-conditioned inference are supported |
+| `biohub/ESMFold2-Fast` | `Synthyra/ESMFold2-Fast` | 24 | None; inference-optimized single-sequence conditioning |
+| `biohub/ESMFold2-Experimental-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Cutoff2025` | 48 | Optional; experimental full-checkpoint contract |
+| `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; experimental Fast single-sequence-conditioning contract |
+
+The Fast variants are inference-optimized for single-sequence conditioning and
+are not MSA-conditioned. They still support the checkpoint's typed
+multichain and multimolecule inputs, but every protein chain must use
+single-sequence mode with `msa=None`. Use the corresponding full ESMFold2
+variant when any protein input carries an MSA. This distinction follows the
+official Biohub architecture description: Appendix A.2.1 reports 24 folding
+blocks for Fast versus 48 for full ESMFold2 and describes Fast as operating
+without MSA conditioning for single-sequence inference
+([Biohub preprint](https://biohub.ai/papers/esm_protein.pdf)).
 
 Other snapshots are not advertised in code, artifacts, tests, or documentation.
 Local artifact building does not modify the Hub. Files-only publication is a
 separate, add-only workflow described in [Hub artifacts](artifacts.md).
+
+## Install and platform requirements
+
+ESMFold2 requires the structure dependency group, Python 3.11-3.14, PyTorch
+2.13, Transformers 5.13, and a CUDA device for its published execution
+contract. The current validated release target is the exact containerized Linux
+aarch64 environment on the NVIDIA GH200 workstation. CPU-only, x86-64,
+Windows, macOS, H100, and H200 structure runs do not substitute for that release
+evidence:
+
+```bash
+python -m pip install \
+  "fastplms[structure] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+The pruned `structure` extra retains Accelerate specifically for the documented
+`device_map`-based, memory-safe loading of the 6B ESMC backbone. It retains
+OmegaConf for the explicit trusted-deserialization boundary in
+`Boltz2Model.from_boltz_checkpoint`, where official Lightning checkpoints may
+contain OmegaConf objects. Plotting, reporting, table, and antibody-numbering
+packages are not structure runtime dependencies and remain in `reporting` or
+example-local `uv --with` inputs.
+
+The reference folding path is included in `structure`. The named
+`cuequivariance` kernel backend is a separate opt-in because it adds NVIDIA's
+CUDA-specific binary runtime:
+
+```bash
+python -m pip install \
+  "fastplms[structure,cueq] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+The `cueq` extra pins the version-aligned frontend and CUDA kernels used by the
+release contract: `cuequivariance==0.10.0`, `cuequivariance-torch==0.10.0`, and
+`cuequivariance-ops-torch-cu13==0.10.0`. It intentionally selects NVIDIA's
+CUDA 13 build because FastPLMs validates PyTorch 2.13 on CUDA 13.0. Do not
+install the CUDA 12 and CUDA 13 kernel packages into the same environment.
+FastPLMs requires both the frontend and the CUDA ops package before accepting
+`model.set_kernel_backend("cuequivariance")`; a frontend-only installation is
+not treated as backend availability.
+
+This backend extra is installable only on Linux with an NVIDIA GPU, a compatible
+CUDA 13 driver, and CPython 3.11-3.14. NVIDIA publishes both x86-64 and ARM64
+manylinux wheels for those interpreters, so the Linux aarch64 GH200 validation
+workstation can resolve this exact package set. H100 and H200 remain supported
+Hopper-class execution devices, but only the exact GH200/aarch64 environment is
+the current release evidence target. Results must identify the exact device and
+architecture, and performance baselines from different accelerator models are
+not interchangeable. Windows, macOS, CPU-only hosts, and the FastPLMs CUDA 12
+legacy reference images are not supported execution paths.
+The cuEquivariance Python frontend is Apache-2.0, while the CUDA ops wheels are
+distributed under the NVIDIA Software License Agreement and are described by
+NVIDIA as beta software. Installing `fastplms[cueq]` means accepting those
+separate NVIDIA terms; FastPLMs does not redistribute the wheels.
 
 ## Loading
 
@@ -27,6 +91,10 @@ model = AutoModel.from_pretrained(
 ).eval()
 ```
 
+This Fast quick start intentionally demonstrates the no-MSA path. It does not
+turn MSA conditioning on implicitly. For MSA-conditioned inference, load
+`Synthyra/ESMFold2` or the experimental full Cutoff2025 checkpoint instead.
+
 The folding model and its ESMC backbone use the same explicitly resolved
 attention implementation. Unsupported names raise. The ESMC checkpoint is
 loaded directly on the requested CUDA device when a CUDA device is used. For a
@@ -41,6 +109,25 @@ folding trunk, and diffusion computation run under CUDA BF16 autocast. ESMC has
 an independent precision policy: its canonical BF16 weights may remain BF16 or
 be used to reconstruct the transient FP8 inference path without changing the
 folding checkpoint's FP32 storage.
+
+## Hash-pinned CCD asset
+
+Structure preparation requires `ccd.pkl` from the immutable snapshot
+`biohub/ESMFold2@1ebf0e3481a5184eb6171d40615c79e384b48796`. The manifest
+records its 417,306,584-byte size, MIT license, and SHA-256
+`9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5`.
+
+This file is a pickle and therefore an explicit trusted-deserialization
+boundary. FastPLMs rejects user-supplied asset and `cache_dir` symlinks. The
+only allowed link is the Hugging Face snapshot entry for the exact manifest
+repository and revision, and it must resolve inside that repository's contained
+blob directory. The loader creates a private, loader-owned temporary snapshot,
+verifies that snapshot's size and SHA-256, and unpickles only the verified
+snapshot. This closes path-replacement and in-place source-write races between
+validation and deserialization. `HF_HUB_OFFLINE=1` and
+`TRANSFORMERS_OFFLINE=1` require the exact cache object to exist; an offline
+call never downloads or substitutes an asset. Provenance records the identity
+and cache policy for every artifact.
 
 ## Inputs and outputs
 
@@ -77,11 +164,22 @@ result = model.fold(
 print(result.ptm, result.plddt.mean().item())
 ```
 
-The schema also supports RNA, protein MSAs, modifications, covalent bonds,
-pockets, and distogram conditioning. It does not require a known target
-structure. Prepared feature tensors include `ref_pos`, but this is component
+The shared schema also supports RNA, modifications, covalent bonds, and
+distogram conditioning. Full ESMFold2 checkpoints additionally accept protein
+MSAs. Fast and experimental Fast checkpoints reject a non-null
+`ProteinInput.msa`; this does not prevent no-MSA multichain or multimolecule
+inference. `PocketConditioning` is recognized by the schema, but
+the pinned official runtime drops it and hard-codes a zero pocket feature.
+FastPLMs rejects a non-null pocket request rather than silently discarding it;
+pocket conditioning is not supported in 1.0. No known target structure is
+required. Prepared feature tensors include `ref_pos`, but this is component
 reference geometry created during featurization, not the target coordinates.
 Atomic coordinates and confidence fields are model outputs.
+The offline [`structure_preparation.py`](../examples/structure_preparation.py)
+example constructs the supported MSA, protein-complex, RNA, DNA, ligand,
+modification, covalent-bond, and distogram inputs and executes the pocket
+rejection contract. Its MSA path is for the full variants. Fast variants may
+use the other typed modalities only when every protein input has `msa=None`.
 
 ## Learned sequence representation
 
@@ -172,8 +270,8 @@ parameters remain BF16. `Float8CurrentScaling` quantizes the GEMMs during the
 inference context, and sequence inputs are padded to a multiple of 16 before
 ESMC execution.
 
-Three fresh BF16-to-FP8 reload cycles on the locked H100 environment produced
-identical metrics in each cycle: projection relative L2 `0.0375936`,
+Three fresh BF16-to-FP8 reload cycles on the historical locked H100 environment
+produced identical metrics in each cycle: projection relative L2 `0.0375936`,
 first-percentile residue cosine `0.999091`, and minimum per-sequence pooled
 cosine `0.999754`. These satisfy the engineering targets of `0.04`, `0.995`,
 and `0.999`, respectively. The runtime loads canonical BF16 weights and rebuilds
@@ -181,7 +279,9 @@ Transformer Engine modules on every startup or reload. Transformer Engine
 workspaces and quantized caches are transient and are excluded from folding
 checkpoints.
 
-The locked H100 image uses Transformer Engine `2.12.0` with its CUDA 13 core.
+That historical locked H100 image uses Transformer Engine `2.12.0` with its
+CUDA 13 core. These H100 measurements do not satisfy the current GH200/aarch64
+release gate.
 The `uv` override excludes the package's default CUDA 12 core, so the FP8 image
 contains one Transformer Engine runtime rather than two. Transformer Engine
 `2.13` through `2.16` are not advertised on this validation stack because their

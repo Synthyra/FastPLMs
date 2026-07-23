@@ -1,15 +1,51 @@
-# H100 benchmarks
+# Hopper/SM90 benchmarks
 
 Benchmarks run independently from pytest. The steady-state path times only a
 forward pass over pre-tokenized tensors already resident on the GPU. Startup,
 compilation, end-to-end embedding, and the ESMFold2 projection are distinct
 modes.
 
-Run the complete manifest-derived H100 matrix with:
+Run the complete manifest-derived release matrix on the current NVIDIA GH200
+validation workstation in its exact containerized Linux aarch64 environment:
 
 ```bash
-python -m benchmarks.suite --output artifacts/benchmarks/h100.json
+python -m benchmarks.suite \
+  --backends eager sdpa flex_attention \
+  --junit-output artifacts/junit/benchmark.xml \
+  --output artifacts/benchmarks/h100.json
 ```
+
+The output name is a legacy automation identifier. Every report carries the
+actual accelerator, architecture, and software fingerprint, and regression
+comparisons require an exact match. H100 and H200 remain supported Hopper-class
+devices, but are not interchangeable with or accepted as the current
+GH200/aarch64 release evidence.
+Remote orchestration binds Bake to native `linux/arm64` on the GH200 and verifies
+the loaded image architecture and content digest rather than relying on
+emulated `linux/amd64` images.
+
+For the pre-publication baseline, build and consume the manifest-selected local
+Hub artifacts in the same frozen source job:
+
+```bash
+python -m tools.artifacts.build_all \
+  --benchmark-suite --source-root . --output-root dist/hub
+python -m benchmarks.suite \
+  --artifact-root dist/hub --local-files-only \
+  --backends eager sdpa flex_attention \
+  --junit-output artifacts/junit/benchmark-capture.xml \
+  --output artifacts/benchmarks/h100-baseline-candidate.json
+```
+
+Artifact mode validates the complete selected artifacts and ESMFold2's local
+ESMC dependency before loading. Reports retain registry repository/revision
+case keys and path-free weights, runtime, source, canonical-state, and manifest
+identities. Local filesystem paths are never baseline identities.
+The GH200 release runner records FA2 as prior focused evidence and FA3 as
+unavailable on linux/arm64; it never downloads, builds, or executes either
+Flash kernel. Capture reports include the exact environment/artifact identities
+needed for mechanical baseline promotion and keep cold compile time separate
+from warm throughput blocks.
 
 The matrix includes startup, compilation, full embedding, `b=1, l=512`
 latency, `b=8, l=1024` throughput, the fixed skewed-padding case, and BF16/FP8

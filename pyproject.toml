@@ -9,7 +9,7 @@ description = "Minimal Hugging Face-compatible protein language and structure mo
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 license = "Apache-2.0"
-license-files = ["LICENSE", "LICENSES/**", "THIRD_PARTY_NOTICES.md"]
+license-files = ["LICENSE", "LICENSES/*", "LICENSES/*/*", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "Synthyra" }]
 keywords = ["bioinformatics", "protein-language-models", "pytorch", "transformers"]
 classifiers = [
@@ -35,26 +35,31 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cpu = [
+  "torch==2.13.0",
+]
 structure = [
   "accelerate>=1.10,<2",
-  "attrs>=25,<27",
   "biopython>=1.85,<2",
   "biotite>=1.4,<2",
   "brotli>=1.1,<2",
-  "cloudpathlib>=0.20,<1",
-  "httpx>=0.28,<1",
   "msgpack>=1.1,<2",
   "msgpack-numpy>=0.4.8,<1",
   "omegaconf>=2.3,<3",
-  "pydssp>=0.9,<1",
-  "pygtrie>=2.5,<3",
   "rdkit>=2025.9,<2027",
-  "rich>=14,<16",
   "scipy>=1.15,<2",
-  "tenacity>=9,<10",
-  "trifast>=0.1,<1",
-  "typing-extensions>=4.12,<5",
   "zstandard>=0.23,<1",
+]
+binder = [
+  "abnumber==0.4.4",
+  "anarcii==2.0.8",
+  "pandas>=3.0,<3.1",
+  "pyarrow>=25,<26",
+]
+cueq = [
+  "cuequivariance==0.10.0; platform_system == 'Linux'",
+  "cuequivariance-torch==0.10.0; platform_system == 'Linux'",
+  "cuequivariance-ops-torch-cu13==0.10.0; platform_system == 'Linux'",
 ]
 flash = [
   "kernels>=0.15,<0.16",
@@ -70,9 +75,15 @@ train = [
   "datasets>=4,<5",
   "peft>=0.18,<1",
 ]
+reporting = [
+  "matplotlib>=3.10,<4",
+  "scikit-learn>=1.7,<2",
+  "scipy>=1.15,<2",
+  "seaborn>=0.13,<1",
+]
 dev = [
   "accelerate>=1.10,<2",
-  "build>=1.3,<2",
+  "build>=1.3,!=1.5.1,<2",
   "mypy>=1.18,<2",
   "pytest>=9,<10",
   "pytest-xdist>=3.8,<4",
@@ -86,9 +97,29 @@ validation = [
 ]
 
 [tool.uv]
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cueq" },
+  ],
+  [
+    { extra = "cpu" },
+    { extra = "fp8" },
+  ],
+]
 override-dependencies = [
   "transformer-engine-cu12; sys_platform == 'never'",
 ]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.kernels.dependencies]
 "kernels-community/flash-attn2" = 2
@@ -134,9 +165,14 @@ testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "-ra --strict-markers --strict-config"
 markers = [
+  "cpu_contract: hermetic, deterministic CPU contract required on every pull request",
   "gpu: requires a CUDA accelerator",
   "slow: loads large checkpoints or performs long numerical comparisons",
   "large: requires at least 24 GiB of accelerator memory",
+  "network: performs external network access",
+  "checkpoint: loads a non-micro checkpoint",
+  "reference: executes a pinned official implementation",
+  "packaging: builds or installs a distribution environment",
   "structure: exercises protein structure models",
   "compliance: compares against a pinned official upstream implementation",
   "feature: exercises generation, multimodal, TTT, binder, and adapter workflows",

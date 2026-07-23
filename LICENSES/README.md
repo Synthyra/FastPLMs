@@ -31,6 +31,7 @@ construction always writes LF. No other whitespace or content is normalized.
 | Biohub Transformers | `biohub-transformers/LICENSE` | Verbatim Apache-2.0 license |
 | Boltz | `boltz/LICENSE` | Verbatim MIT license |
 | DPLM | `dplm/LICENSE` | Verbatim Apache-2.0 license |
+| DPLM | `dplm/PROVENANCE.md` | Pinned license scope for DPLM1 and DPLM2 checkpoint weights |
 | Profluent-E1 | `e1/LICENSE` | Verbatim Profluent-E1 agreement |
 | Profluent-E1 | `e1/ATTRIBUTION` | Verbatim attribution guidelines |
 | Profluent-E1 | `e1/NOTICE` | Verbatim required notice |
@@ -58,6 +59,7 @@ complete standard texts are included here. The BSD notice follows the official
 E1 source header that identifies `flash_attention_utils.py` as adapted from
 Dao-AILab FlashAttention under BSD-3-Clause.
 
-FastPLMs does not enforce ANKH use restrictions in software. DPLM1 checkpoint
-Apache-2.0 status remains a documented project assumption because its upstream
-checkpoint card does not state an independent weight license.
+FastPLMs does not enforce ANKH use restrictions in software. The pinned DPLM
+repository's Apache-2.0 `LICENSE` and README scope the official release to the
+pretrained DPLM1 and DPLM2 weights. The immutable evidence and FastPLMs
+conversion boundary are recorded in `dplm/PROVENANCE.md`.

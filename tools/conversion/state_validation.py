@@ -13,11 +13,13 @@ def assert_model_parameters_fp32(model: torch.nn.Module, model_name: str) -> Non
         if parameter.dtype != torch.float32:
             non_fp32.append({"name": name, "dtype": str(parameter.dtype)})
 
-    assert parameter_count > 0, f"{model_name} has no parameters."
-    assert len(non_fp32) == 0, (
-        f"{model_name} parameters must all be torch.float32. "
-        f"non_fp32_count={len(non_fp32)} sample={non_fp32[:5]}"
-    )
+    if parameter_count == 0:
+        raise AssertionError(f"{model_name} has no parameters.")
+    if non_fp32:
+        raise AssertionError(
+            f"{model_name} parameters must all be torch.float32. "
+            f"non_fp32_count={len(non_fp32)} sample={non_fp32[:5]}"
+        )
 
 
 def assert_state_dict_floating_tensors_fp32(
@@ -27,17 +29,19 @@ def assert_state_dict_floating_tensors_fp32(
     non_fp32: list[dict[str, str]] = []
     for tensor_name in sorted(state_dict.keys()):
         tensor = state_dict[tensor_name]
-        assert torch.is_tensor(tensor), (
-            f"{state_dict_name} state_dict entry must be a tensor. "
-            f"name={tensor_name} type={type(tensor)}"
-        )
+        if not torch.is_tensor(tensor):
+            raise AssertionError(
+                f"{state_dict_name} state_dict entry must be a tensor. "
+                f"name={tensor_name} type={type(tensor)}"
+            )
         if tensor.is_floating_point() and tensor.dtype != torch.float32:
             non_fp32.append({"name": tensor_name, "dtype": str(tensor.dtype)})
 
-    assert len(non_fp32) == 0, (
-        f"{state_dict_name} floating tensors must be torch.float32. "
-        f"non_fp32_count={len(non_fp32)} sample={non_fp32[:5]}"
-    )
+    if non_fp32:
+        raise AssertionError(
+            f"{state_dict_name} floating tensors must be torch.float32. "
+            f"non_fp32_count={len(non_fp32)} sample={non_fp32[:5]}"
+        )
 
 
 def assert_state_dict_equal(
@@ -69,7 +73,10 @@ def assert_state_dict_equal(
             continue
         if not torch.equal(reference, candidate):
             errors.append(f"{name}: tensor values differ")
-    assert not errors, f"{context} state_dict parity failed: {' | '.join(errors[:max_report])}"
+    if errors:
+        raise AssertionError(
+            f"{context} state_dict parity failed: {' | '.join(errors[:max_report])}"
+        )
 
 
 def assert_models_fp32_and_equal(

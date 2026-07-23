@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 
@@ -192,3 +193,126 @@ def test_reference_sources_use_target_specific_build_contexts() -> None:
         assert f"--from={name} --exclude=.git --exclude=.git/**" in dockerfile
         assignment = rf"{re.escape(name)}\s*=\s*\"{re.escape(source)}\""
         assert re.search(assignment, bake)
+
+
+def test_biohub_reference_is_locked_attested_and_arm64_native() -> None:
+    dockerfile = (ROOT / "docker" / "Dockerfile").read_text(encoding="utf-8")
+    bake = (ROOT / "docker" / "docker-bake.hcl").read_text(encoding="utf-8")
+    stage = dockerfile.split("FROM python312 AS reference-biohub-esm", maxsplit=1)[1].split(
+        "FROM python312 AS reference-esm2", maxsplit=1
+    )[0]
+
+    assert "git+https://github.com/Biohub/transformers" not in stage
+    assert "@main" not in stage
+    assert 'test "${TARGETARCH}" = "arm64"' in stage
+    assert 'test "$(uname -m)" = "aarch64"' in stage
+    assert "--from=biohub_biotraj_wheel" in stage
+    assert "biohub-reference.lock.txt" in stage
+    assert "biohub-reference-lock.json" in stage
+    assert "verify-contract" in stage
+    assert "materialize-wheel-lock" in stage
+    assert "--require-hashes --only-binary=:all: --no-deps" in stage
+    assert stage.count("verify-inventory") == 2
+    assert stage.count("--profile final") == 2
+    assert "--no-deps" in stage
+    assert "--no-build-isolation" in stage
+    assert "-e /opt/oracle/vendor" not in stage
+    assert "--force-reinstall" not in stage
+    assert "cp -a /opt/oracle/vendor/upstream/biohub-transformers" in stage
+    assert "cp -a /opt/oracle/vendor/upstream/biohub-esm" in stage
+    assert "verify-pip-check" in stage
+    assert "dist-info/WHEEL" not in stage
+    assert "manylinux2014_sbsa" not in stage
+    assert "reference_source_attestation create" in stage
+    assert "reference_source_attestation verify" in stage
+    assert stage.count("--contract /opt/oracle/biohub-esm-source-contract.json") == 2
+    assert stage.count("--contract /opt/oracle/biohub-transformers-source-contract.json") == 2
+    assert stage.index("pip install --require-hashes") < stage.index(
+        "COPY --from=reference-protocol"
+    )
+    assert stage.index("pip install --require-hashes") < stage.index("COPY THIRD_PARTY_NOTICES.md")
+    environment = stage.split("ENV FASTPLMS_BIOHUB_ESM_REVISION", maxsplit=1)[1]
+    assert "FASTPLMS_BIOHUB_ESM_CONTRACT=" in environment
+    assert "FASTPLMS_BIOHUB_TRANSFORMERS_CONTRACT=" in environment
+    assert "FASTPLMS_BIOHUB_LOCK_CONTRACT=" in environment
+    assert "FASTPLMS_REFERENCE_CONTAINER_IDENTITIES=" in environment
+    assert "FASTPLMS_REFERENCE_CONTAINER_TARGET=reference-biohub-esm" in environment
+    assert "PYTHONPATH=/opt/oracle" in environment
+    assert "biohub-transformers/src" not in environment
+    assert "vendor/upstream/biohub-esm:/opt/oracle" not in environment
+
+    assert 'target "biohub-biotraj-wheel"' in bake
+    assert re.search(r'target\s*=\s*"biotraj-wheel-artifact"', bake)
+    assert 'biohub_biotraj_wheel         = "target:biohub-biotraj-wheel"' in bake
+
+    registry = get_model_registry()
+    expected_sources = {
+        "biohub-esm": {
+            "import_name": "esm",
+            "import_root": "esm",
+            "package_version": "3.3.0",
+            "tree_sha256": "c5489f1fc58de200978803de2c38e1a78f769cb183a2ee90be833f0f4a0212e8",
+        },
+        "biohub-transformers": {
+            "import_name": "transformers",
+            "import_root": "src/transformers",
+            "package_version": "4.57.6",
+            "tree_sha256": "28b910cc18b821870db2fb6d1c50376c2d14287ae18485080699e03fa4ba4f43",
+        },
+    }
+    for source_id, expected in expected_sources.items():
+        source = registry.upstreams[source_id]
+        contract = json.loads(
+            (ROOT / f"docker/constraints/{source_id}-source.json").read_text(encoding="utf-8")
+        )
+        assert contract == {
+            **expected,
+            "schema_version": 1,
+            "source_revision": source.revision,
+        }
+        environment_name = source_id.removeprefix("biohub-").upper().replace("-", "_")
+        assert f"FASTPLMS_BIOHUB_{environment_name}_REVISION={source.revision}" in stage
+
+    import_boundaries = {
+        "esm_plusplus.py": "from transformers import AutoTokenizer",
+        "esmfold2.py": "from transformers.models.esmfold2.configuration_esmfold2 import",
+        "esm3.py": "from esm.pretrained import load_local_model",
+    }
+    for filename, boundary in import_boundaries.items():
+        adapter = (ADAPTER_ROOT / filename).read_text(encoding="utf-8")
+        load_function = adapter.split("def load_official_model", maxsplit=1)[1]
+        assert load_function.index("reference_sources()") < load_function.index(boundary)
+
+    shared_gate = (ADAPTER_ROOT / "biohub_source.py").read_text(encoding="utf-8")
+    for source_id, expected in expected_sources.items():
+        assert registry.upstreams[source_id].revision in shared_gate
+        assert expected["tree_sha256"] in shared_gate
+    assert "capture_biohub_reference_environment" in shared_gate
+    assert 'environment_prefix="FASTPLMS_BIOHUB_ESM"' in shared_gate
+    assert 'environment_prefix="FASTPLMS_BIOHUB_TRANSFORMERS"' in shared_gate
+    assert 'f"{environment_prefix}_CONTRACT"' in shared_gate
+
+    structure_bundle = (ROOT / "tests/structure/support/esmfold2_bundle.py").read_text(
+        encoding="utf-8"
+    )
+    reference_producer = structure_bundle.split("def produce_reference", maxsplit=1)[1].split(
+        "def produce_candidate", maxsplit=1
+    )[0]
+    assert reference_producer.index("reference_sources()") < reference_producer.index(
+        "_load_reference_model(request, device)"
+    )
+    assert reference_producer.index("reference_environment()") < reference_producer.index(
+        "_load_reference_model(request, device)"
+    )
+
+    native_reference = (ROOT / "tests/parity/support/native_reference.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'metadata["reference_sources"] = reference_sources' in native_reference
+    assert 'metadata["reference_environment"] = reference_environment' in native_reference
+
+    esmfold2_stage = dockerfile.split(
+        "FROM reference-biohub-esm AS reference-esmfold2", maxsplit=1
+    )[1].split("FROM python310-reference AS reference-protein-ttt", maxsplit=1)[0]
+    assert "FASTPLMS_REFERENCE_CONTAINER_TARGET=reference-esmfold2" in esmfold2_stage
+    assert "reference_sources; reference_sources(); from transformers" in esmfold2_stage

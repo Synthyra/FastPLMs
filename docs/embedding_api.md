@@ -1,5 +1,22 @@
 # Embedding API
 
+## Install and platform requirements
+
+The shared sequence embedding API requires Python 3.11-3.14, PyTorch 2.13, and
+Transformers 5.13. Install an immutable FastPLMs runtime revision before loading
+a published checkpoint:
+
+```bash
+python -m pip install \
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+Core tokenizer-mode embeddings run on CPU or CUDA. E1 uses its raw-sequence
+adapter rather than a tokenizer. Structure models and optional FlashAttention
+backends require the extras and CUDA platforms declared in the support matrix.
+
+## Quick start
+
 FastPLMs exposes the same dataset operation as `fastplms.embed_dataset(model,
 ...)` and `model.embed_dataset(...)`. This minimal example loads a tokenizer-
 based model and returns one mean-pooled vector per sequence:
@@ -35,14 +52,16 @@ preserves input order, mapping and FASTA identifiers, and duplicate records.
 | --- | --- |
 | `inputs` | Sequence iterable, `(id, sequence)` pairs, `EmbeddingInput` values, `{id: sequence}` mapping, or FASTA path |
 | `batch_size` | Number of records prepared together; must be positive |
-| `pooling` | One pooler or an ordered pooler sequence; required unless `full_embeddings=True` |
+| `pooling` | One pooler or an ordered pooler sequence; `None` selects mean unless `full_embeddings=True` |
 | `full_embeddings` | Return residue-level tensors instead of pooled vectors |
 | `output` | Safetensors directory or SQLite file; omit for in-memory results |
 | `format` | `safetensors` or `sqlite` when `output` is set |
 | `resume` | Reuse an exact compatible ordered prefix when persistent output exists |
 | `tokenizer` | Explicit tokenizer override for a compatible tokenizer-mode family |
-| `max_length` | Optional maximum prepared sequence length |
-| `truncate` | Truncate to `max_length`; disabling it retains the complete sequence |
+| `max_length` | Optional maximum number of biological residues, excluding tokenizer-added special tokens |
+| `truncate` | Truncate biological residues to `max_length`; when false, an over-length record raises |
+| `batch_window_size` | Bounded number of records eligible for stable length bucketing; defaults to `16 * batch_size` |
+| `max_tokens_per_batch` | Optional padded biological-residue budget for one inference batch |
 | `dtype` | Output tensor dtype; `None` retains the model output dtype |
 | `shard_size` | Target safetensors shard size in bytes |
 | `model_state_fingerprint` | Caller-supplied state identity for offloaded or externally managed models |
@@ -50,7 +69,36 @@ preserves input order, mapping and FASTA identifiers, and duplicate records.
 
 `store_all_hidden_states=True` is a model keyword and requires
 `full_embeddings=True`. `full_embeddings=True` cannot be combined with an
-explicit pooler. Invalid combinations raise before persistence begins.
+explicit pooler. The output format and every invalid argument combination are
+validated before input hashing, model inference, or output creation.
+
+## Bounded streaming and length policy
+
+FASTA input is read line by line into an immutable, incrementally fingerprinted
+spool. The runner never reads the complete FASTA file into memory. It keeps only
+one bounded `batch_window_size` group eligible for length bucketing, applies
+`max_tokens_per_batch` to the padded biological-residue count, and then restores
+exact source order. Omitting the window size resolves it to sixteen times the
+batch size; an explicit value always wins. The resolved window is included in
+the result metadata and resume fingerprint. Result descriptors are stored once;
+tensor payloads remain lazy for persistent outputs.
+
+SQLite prefixes commit at completed batch-window boundaries. Safetensors packs
+windows into bounded shards and publishes a resumable prefix whenever a shard
+flushes; an interruption replays the unflushed in-memory shard. Set
+`batch_window_size=batch_size` when per-batch inference boundaries matter more
+than the default padding-efficiency lookahead.
+
+`result.metadata["batching"]["resume_commit_granularity"]` records
+`"batch-window"` for persistent SQLite, `"shard-flush"` for persistent
+safetensors, and `"not-applicable"` for an in-memory result. A new or replacement
+SQLite run remains staged or deferred and does not replace the default readable
+run until its first batch window commits.
+
+`max_length` always counts amino-acid residues. Tokenizer-mode families add
+their required BOS, EOS, or modality boundary width when constructing the model
+token budget. `truncate=False` does not silently exceed the model contract: an
+input longer than `max_length` raises with the record position and identifier.
 
 ## Result types
 
@@ -154,6 +202,81 @@ ESMFold2 returns the learned projection with shape `(l_i, 256)`. Its dataset
 path accepts only single-chain sequences and FASTA records and supports the
 residue-statistic poolers. It rejects `cls` and `parti`.
 
+### ANKH encoder and decoder layers
+
+The currently published immutable Synthyra ANKH revisions are legacy
+encoder-only checkpoints. Decoder examples require either a validated local
+full 1.0 artifact or a new immutable Hub revision published after the atomic
+replacement; the existing Hub revisions must not be used for this path.
+
+ANKH defaults to the encoder final state:
+
+```python
+encoder = model.embed_dataset(
+    inputs,
+    hidden_state_source="encoder",
+    hidden_state_index=-1,
+    full_embeddings=True,
+)
+```
+
+`hidden_state_index` is applied to the selected stack, and
+`store_all_hidden_states=True` stores every state from that stack. Decoder
+extraction requires the full `AutoModelForSeq2SeqLM` view and exactly one
+explicit aligned `decoder_inputs` sequence or `decoder_input_ids` tensor:
+
+Use raw protein strings such as `MSTNPK`, not space-separated residues.
+Decoder sentinels must be adjacent to their residues, as in
+`M<extra_id_0>`. FastPLMs applies this normalization consistently to the
+model-owned tokenizer and an explicitly supplied tokenizer object.
+
+```python
+decoder = seq2seq.embed_dataset(
+    inputs,
+    hidden_state_source="decoder",
+    decoder_inputs=["M<extra_id_0>" for _ in inputs],
+    hidden_state_index=-1,
+    full_embeddings=True,
+)
+```
+
+There is no implicit shifted-source decoder input. Official ANKH tasks use
+task-dependent prompts, sentinels, or generated tokens. A
+`decoder_attention_mask` is valid only with `decoder_input_ids`. Decoder pooling
+uses the decoder biological mask and excludes start, EOS, padding, sentinel,
+and other tokenizer-special positions. Metadata records stack, layer, decoder
+input and mask fingerprints, input-position alignment, and mask policy.
+
+### E1 MSA-aware embeddings
+
+E1 keeps its native raw-sequence and retrieval preparation, but returns the
+same ordered, duplicate-preserving `EmbeddingResult` as the shared embedding
+API. Record IDs are the zero-based input positions, so repeated query sequences
+remain independently addressable as `"0"`, `"1"`, and so on.
+
+```python
+result = model.embed_dataset_with_msa(
+    [query, query],
+    msa_lookup={query: "/data/query.a3m"},
+    batch_size=2,
+    max_len=len(query),
+    pooling_types=["mean"],
+    seed=7,
+    batch_window_size=2,
+    max_tokens_per_batch=2 * len(query),
+    output="e1-msa.sqlite",
+    format="sqlite",
+    resume=True,
+)
+assert [record.id for record in result] == ["0", "1"]
+```
+
+`max_len` is measured in biological residues. `matrix_embed=True` selects full
+residue output. `output`, `format`, `resume`, `shard_size`, and
+`model_state_fingerprint` have the same persistence and compatibility meaning
+as ordinary dataset embedding. Local A3M input is offline; homology search and
+Hub MSA acquisition are separate, explicit networked workflows.
+
 ## Safetensors storage
 
 With `format="safetensors"`, `output` names an output directory. FastPLMs writes
@@ -161,28 +284,50 @@ generation-scoped shards and then transactionally publishes:
 
 ```text
 output/
-  embeddings-run-00001-00001.safetensors
+  embeddings-run-<generation>-00001.safetensors
+  embeddings-records-run-<generation>-00001.jsonl
+  embeddings-index-run-<generation>-00001.json
   index.json
   run.json
 ```
 
 The default maximum shard size is 2 GiB. Tensors are packed across inference
 batches and written one shard at a time, so the complete tensor dataset is
-never materialized in host memory. Each completed shard publishes an
-incomplete ordered prefix that a matching `resume=True` call can continue.
-An interrupted, not-yet-full shard is recomputed. The JSON index preserves record position,
+never materialized in host memory. Each flushed shard publishes an incomplete
+ordered prefix that a matching `resume=True` call can continue. An interrupted,
+unflushed shard is recomputed. Generation descriptors preserve record position,
 identifier, sequence, shape, dtype, tensor hash, and shard key. Loading the
 result creates lazy references rather than reading every shard into memory.
-`run.json` is the transactional commit marker: it stores the complete run
-metadata, the SHA-256 digest of `index.json`, and the authoritative index
-snapshot. It is atomically replaced only after the standalone index and every
-referenced shard are durable. Overwrites use new shard names and remove the
-previous generation only after the new run manifest commits, so an interruption
-between the two metadata writes still leaves the last committed generation
-readable. Legacy manifests without an embedded snapshot retain strict
-index-digest validation.
+`run.json` is the transactional commit marker. It points to one immutable
+generation index by filename and SHA-256 digest and is atomically replaced only
+after that index, its descriptor shards, and every tensor shard are durable.
+`index.json` is a non-authoritative convenience pointer; reopening follows
+`run.json` even when the convenience pointer is missing or interrupted.
 
-## SQLite streaming and resume
+Successful overwrites retain earlier immutable generation indexes, descriptors,
+and tensor shards. This is required for correctness: an `EmbeddingResult` opened
+before the overwrite still resolves its lazy tensors through the earlier paths.
+FastPLMs never guesses when those readers have been released. Preview and then
+explicitly collect stale generations only after guaranteeing that no reader or
+writer for the output remains active:
+
+```python
+from fastplms.embeddings import garbage_collect_safetensors_generations
+
+stale = garbage_collect_safetensors_generations("output")  # dry run
+garbage_collect_safetensors_generations(
+    "output",
+    dry_run=False,
+    confirm_no_active_readers_or_writers=True,
+)
+```
+
+Destructive collection invalidates any older `EmbeddingResult`,
+`EmbeddingRecord`, or `LazyTensorReference` that still names a collected shard.
+It also removes abandoned generation files from interrupted writers. Never run
+it concurrently with embedding, overwrite, resume, or result retrieval.
+
+## SQLite streaming, retrieval, and resume
 
 Use `format="sqlite"` when a long run should commit each batch:
 
@@ -197,15 +342,54 @@ result = model.embed_dataset(
 ```
 
 Tensor payloads store raw bytes and an explicit dtype, so BF16 is lossless.
-Each batch is committed transactionally. Resume is allowed only when the full
-run fingerprint matches and existing records form the exact ordered prefix of
-the request.
+Each completed batch window is committed transactionally. Resume is allowed
+only when the full run fingerprint matches and existing records form the exact
+ordered prefix of the request.
+
+SQLite keeps runs under their full fingerprint. With `resume=False`, a new or
+restarted run becomes the default result as soon as its first batch commits;
+other fingerprints remain available through `run_id`. An interrupted overwrite
+therefore exposes a resumable incomplete prefix while retaining the previous
+complete run. This is batch-transactional behavior, not the full-run atomic
+replacement provided by safetensors generations.
+
+Reopening uses SQLite read-only mode. Filtered retrieval accepts exactly one
+ordered selector and preserves request order and duplicates:
+
+```python
+from fastplms.embeddings import load_sqlite_result
+
+selected = load_sqlite_result(
+    "embeddings.sqlite",
+    record_ids=["protein-b", "protein-a", "protein-b"],
+)
+print([record.id for record in selected])
+```
+
+Selectors are `positions`, `record_ids`, or `sequences`; `run_id` may select a
+specific compatible run. A writable connection is never opened by the result
+reader.
+
+Convert an older FastPLMs SQLite database once, then use the current read-only
+reader:
+
+```python
+from fastplms.embeddings import convert_legacy_sqlite
+
+convert_legacy_sqlite("legacy.sqlite", "embeddings-v1.sqlite")
+```
+
+Compact and weights-only tensor blobs convert without pickle. An unsupported
+pickle payload is rejected unless `allow_unsafe_pickle=True` is explicitly set
+for a trusted source.
 
 ## Run metadata
 
 Persisted results include:
 
 - model ID, immutable revision, checkpoint hash, and package versions;
+- Torch and Transformers versions, backend/device policy, checkpoint identity,
+  and adapter identity;
 - tensor dtype and resolved attention backend;
 - selected layer or projection;
 - tokenizer and biological-residue policy;
@@ -213,7 +397,7 @@ Persisted results include:
 - truncation settings;
 - input and complete-run fingerprints;
 - fingerprint schema version and exact model-state fingerprint;
-- output tensor shapes and SHA-256 hashes.
+- generation-indexed output tensor shapes and SHA-256 hashes.
 
 When a model is loaded from `dist/hub/<model>`, Transformers does not assign a
 Hub commit to `config._commit_hash`. The artifact therefore carries
@@ -222,12 +406,15 @@ checkpoint-identity hash fields. Embedding metadata and resume fingerprints use
 those fields as the fallback, so local offline runs retain complete provenance.
 The packaging fields are excluded from semantic configuration parity.
 
-Run-fingerprint schema v2 binds the exact bytes, names, dtypes, and shapes of
-every model parameter and persistent buffer. State tensors are copied to CPU in
-bounded chunks rather than duplicating the complete model. Changing any
-material input, model state, or setting changes the run fingerprint and
-prevents resume into an incompatible output. Results written by older
-fingerprint schemas cannot be resumed.
+Run-fingerprint schema v3 binds the exact current bytes, names, dtypes, and
+shapes of every model parameter and persistent buffer. State tensors are copied
+to CPU in bounded chunks rather than duplicating the complete model. The digest
+is recomputed from authoritative bytes for every persisted run; object identity,
+autograd version counters, and cached state digests are never trusted. Mutations
+through `Parameter.data` or another storage alias therefore change both the
+model-state digest and resume identity. Changing any material input, model
+state, or setting prevents resume into an incompatible output. Results written
+by older fingerprint schemas cannot be resumed.
 
 Models with meta-device tensors, custom offloading, or an externally managed
 state identity may pass the keyword-only `model_state_fingerprint` override.

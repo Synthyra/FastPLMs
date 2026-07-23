@@ -89,6 +89,8 @@ _SERIALIZED_ARRAYS = frozenset(
         "atom_hetero",
         "token_to_atoms",
         "chain_id",
+        "entity_id",
+        "sym_id",
         "plddt",
     }
 )
@@ -96,21 +98,78 @@ _SERIALIZED_ARRAYS = frozenset(
 
 def _assert_table_lengths(complex_value: MolecularComplex) -> None:
     """Check that token and atom annotations align with their tables."""
+    if not isinstance(complex_value.sequence, list) or any(
+        not isinstance(token, str) for token in complex_value.sequence
+    ):
+        raise TypeError("sequence must be a list of token strings.")
     n_tokens = len(complex_value.sequence)
+    if not isinstance(complex_value.atom_positions, np.ndarray):
+        raise TypeError("atom_positions must be a NumPy array.")
+    if complex_value.atom_positions.ndim != 2 or complex_value.atom_positions.shape[1:] != (
+        3,
+    ):
+        raise ValueError(
+            "atom_positions must have shape (n_atoms, 3), got "
+            f"{complex_value.atom_positions.shape}."
+        )
+    if not np.issubdtype(complex_value.atom_positions.dtype, np.number):
+        raise TypeError("atom_positions must use a numeric dtype.")
     n_atoms = len(complex_value.atom_positions)
+    if not isinstance(complex_value.atom_elements, np.ndarray):
+        raise TypeError("atom_elements must be a NumPy array.")
+    if complex_value.atom_elements.shape != (n_atoms,):
+        raise ValueError(
+            f"atom_elements shape {complex_value.atom_elements.shape} != {n_atoms} atoms"
+        )
     token_tables = {
         "token_to_atoms": complex_value.token_to_atoms,
         "chain_id": complex_value.chain_id,
         "plddt": complex_value.plddt,
     }
+    if complex_value.entity_id is not None:
+        token_tables["entity_id"] = complex_value.entity_id
+    if complex_value.sym_id is not None:
+        token_tables["sym_id"] = complex_value.sym_id
     for label, values in token_tables.items():
-        assert values.shape[0] == n_tokens, f"{label} shape {values.shape} != {n_tokens} tokens"
+        if not isinstance(values, np.ndarray):
+            raise TypeError(f"{label} must be a NumPy array, got {type(values).__name__}.")
+        if values.ndim == 0 or values.shape[0] != n_tokens:
+            raise ValueError(f"{label} shape {values.shape} != {n_tokens} tokens")
+    if complex_value.token_to_atoms.shape != (n_tokens, 2):
+        raise ValueError(
+            "token_to_atoms must have shape "
+            f"({n_tokens}, 2), got {complex_value.token_to_atoms.shape}."
+        )
+    if not np.issubdtype(complex_value.token_to_atoms.dtype, np.integer):
+        raise TypeError("token_to_atoms must use an integer dtype.")
+    if complex_value.chain_id.shape != (n_tokens,):
+        raise ValueError(f"chain_id must have shape ({n_tokens},).")
+    for label, values in (
+        ("chain_id", complex_value.chain_id),
+        ("entity_id", complex_value.entity_id),
+        ("sym_id", complex_value.sym_id),
+    ):
+        if values is not None and values.shape != (n_tokens,):
+            raise ValueError(f"{label} must have shape ({n_tokens},).")
+        if values is not None and not np.issubdtype(values.dtype, np.integer):
+            raise TypeError(f"{label} must use an integer dtype.")
+    if complex_value.plddt.shape != (n_tokens,):
+        raise ValueError(f"plddt must have shape ({n_tokens},).")
+    if not np.issubdtype(complex_value.plddt.dtype, np.number):
+        raise TypeError("plddt must use a numeric dtype.")
+    if n_tokens:
+        starts = complex_value.token_to_atoms[:, 0]
+        stops = complex_value.token_to_atoms[:, 1]
+        if np.any(starts < 0) or np.any(stops < starts) or np.any(stops > n_atoms):
+            raise ValueError("token_to_atoms contains an invalid or out-of-bounds atom span.")
     for label, values in (
         ("atom_names", complex_value.atom_names),
         ("atom_hetero", complex_value.atom_hetero),
     ):
-        if values is not None:
-            assert values.shape[0] == n_atoms, f"{label} shape {values.shape} != {n_atoms} atoms"
+        if values is not None and not isinstance(values, np.ndarray):
+            raise TypeError(f"{label} must be a NumPy array, got {type(values).__name__}.")
+        if isinstance(values, np.ndarray) and values.shape != (n_atoms,):
+            raise ValueError(f"{label} shape {values.shape} != {n_atoms} atoms")
 
 
 def _flat_protein_atoms(
@@ -148,7 +207,7 @@ def _flat_protein_atoms(
 
 def _protein_sequence_and_indices(
     complex_value: MolecularComplex,
-) -> tuple[list[int], str, np.ndarray, np.ndarray]:
+) -> tuple[list[int], str, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     protein_indices = [
         index
         for index, token in enumerate(complex_value.sequence)
@@ -158,15 +217,39 @@ def _protein_sequence_and_indices(
         raise ValueError("No protein tokens found in MolecularComplex")
 
     chain_ids = complex_value.chain_id[protein_indices]
+    entity_ids = (
+        chain_ids
+        if complex_value.entity_id is None
+        else complex_value.entity_id[protein_indices]
+    )
+    sym_ids = (
+        np.zeros_like(chain_ids)
+        if complex_value.sym_id is None
+        else complex_value.sym_id[protein_indices]
+    )
     confidences = complex_value.plddt[protein_indices]
     sequence: list[str] = []
-    previous_chain: Any = None
-    for index, chain_id in zip(protein_indices, chain_ids, strict=True):
-        if previous_chain is not None and chain_id != previous_chain:
+    previous_instance: Any = None
+    preserve_instances = complex_value.sym_id is not None
+    for index, chain_id, sym_id in zip(
+        protein_indices, chain_ids, sym_ids, strict=True
+    ):
+        instance = (int(chain_id), int(sym_id)) if preserve_instances else int(chain_id)
+        if previous_instance is not None and instance != previous_instance:
             sequence.append("|")
         sequence.append(residue_constants.restype_3to1[complex_value.sequence[index]])
-        previous_chain = chain_id
-    return protein_indices, "".join(sequence), chain_ids, confidences
+        previous_instance = instance
+    return protein_indices, "".join(sequence), chain_ids, entity_ids, sym_ids, confidences
+
+
+def _protein_entity_metadata_value(value: int | str) -> int | str:
+    """Restore the numeric entity labels used by ProteinComplex metadata."""
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    return value
 
 
 def _atom37_from_flat(
@@ -200,6 +283,8 @@ def _atom37_from_flat(
 def _expand_protein_rows(
     sequence: str,
     protein_chain_ids: np.ndarray,
+    protein_entity_ids: np.ndarray,
+    protein_sym_ids: np.ndarray,
     confidences: np.ndarray,
     compact_positions: np.ndarray,
     compact_mask: np.ndarray,
@@ -216,16 +301,17 @@ def _expand_protein_rows(
         "atom37_positions": np.full((n_positions, 37, 3), np.nan, dtype=np.float32),
         "atom37_mask": np.zeros((n_positions, 37), dtype=bool),
     }
-    next_residue: dict[Any, int] = {}
+    residue_number = 0
     compact_index = 0
     for sequence_index, residue in enumerate(sequence):
         if residue == "|":
+            residue_number = 0
             continue
         chain_id = protein_chain_ids[compact_index]
-        residue_number = next_residue.get(chain_id, 0) + 1
-        next_residue[chain_id] = residue_number
+        residue_number += 1
         expanded["chain_id"][sequence_index] = chain_id
-        expanded["entity_id"][sequence_index] = chain_id
+        expanded["entity_id"][sequence_index] = protein_entity_ids[compact_index]
+        expanded["sym_id"][sequence_index] = protein_sym_ids[compact_index]
         expanded["residue_index"][sequence_index] = residue_number
         expanded["confidence"][sequence_index] = confidences[compact_index]
         expanded["atom37_positions"][sequence_index] = compact_positions[compact_index]
@@ -602,7 +688,9 @@ class MolecularComplex:
     """A token sequence backed by one contiguous atom table.
 
     P stores atom coordinates with shape (n_atoms, 3).  Token span ``i`` is
-    ``P[token_to_atoms[i, 0]:token_to_atoms[i, 1]]``.
+    ``P[token_to_atoms[i, 0]:token_to_atoms[i, 1]]``. ``chain_id`` identifies
+    the author chain, while optional ``entity_id`` and ``sym_id`` distinguish
+    biological entities and repeated chain instances.
     """
 
     id: str
@@ -615,6 +703,11 @@ class MolecularComplex:
     metadata: MolecularComplexMetadata
     atom_names: np.ndarray | None = None  # N has shape (n_atoms,) when present.
     atom_hetero: np.ndarray | None = None  # M has shape (n_atoms,) when present.
+    # These token-aligned IDs are optional for compatibility with older blobs.
+    # ProteinComplex adapters populate them so homomers and repeated author-chain
+    # labels survive a MolecularComplex round trip.
+    entity_id: np.ndarray | None = None
+    sym_id: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         _assert_table_lengths(self)
@@ -649,7 +742,7 @@ class MolecularComplex:
         residue_positions = [index for index, value in enumerate(pc.sequence) if value != "|"]
         metadata = MolecularComplexMetadata(
             entity_lookup={key: str(value) for key, value in pc.metadata.entity_lookup.items()},
-            chain_lookup=pc.metadata.chain_lookup,
+            chain_lookup=dict(pc.metadata.chain_lookup),
             assembly_composition=pc.metadata.assembly_composition,
         )
         return cls(
@@ -666,17 +759,38 @@ class MolecularComplex:
             metadata=metadata,
             atom_names=names,
             atom_hetero=hetero,
+            entity_id=np.asarray(pc.entity_id[residue_positions], dtype=np.int64),
+            sym_id=np.asarray(pc.sym_id[residue_positions], dtype=np.int64),
         )
 
     def to_protein_complex(self) -> ProteinComplex:
-        protein_indices, sequence, chain_ids, confidences = _protein_sequence_and_indices(self)
+        (
+            protein_indices,
+            sequence,
+            chain_ids,
+            entity_ids,
+            sym_ids,
+            confidences,
+        ) = _protein_sequence_and_indices(self)
         compact_positions, compact_mask = _atom37_from_flat(self, protein_indices)
         arrays = _expand_protein_rows(
-            sequence, chain_ids, confidences, compact_positions, compact_mask
+            sequence,
+            chain_ids,
+            entity_ids,
+            sym_ids,
+            confidences,
+            compact_positions,
+            compact_mask,
         )
         unique_chains = np.unique(chain_ids)
+        unique_entities = np.unique(entity_ids)
         metadata = ProteinComplexMetadata(
-            entity_lookup={int(chain): int(chain) for chain in unique_chains},
+            entity_lookup={
+                int(entity): _protein_entity_metadata_value(
+                    self.metadata.entity_lookup.get(int(entity), int(entity))
+                )
+                for entity in unique_entities
+            },
             chain_lookup={
                 int(chain): self.metadata.chain_lookup.get(int(chain), chr(65 + int(chain)))
                 for chain in unique_chains
@@ -853,6 +967,9 @@ class MolecularComplex:
 
     def state_dict(self) -> dict[str, Any]:
         state = dict(vars(self))
+        for optional_identity in ("entity_id", "sym_id"):
+            if state[optional_identity] is None:
+                state.pop(optional_identity)
         for key, value in tuple(state.items()):
             if isinstance(value, MolecularComplexMetadata):
                 state[key] = asdict(value)
@@ -869,6 +986,7 @@ class MolecularComplex:
 
     @classmethod
     def from_state_dict(cls, dct: dict[str, Any]) -> MolecularComplex:
+        dct = dict(dct)
         for key, value in tuple(dct.items()):
             if isinstance(value, list) and key in _SERIALIZED_ARRAYS:
                 dct[key] = np.asarray(value)
@@ -879,7 +997,7 @@ class MolecularComplex:
                 dct[key] = value.astype(np.float32)
             elif key == "token_to_atoms":
                 dct[key] = value.astype(np.int32)
-            elif key == "chain_id":
+            elif key in {"chain_id", "entity_id", "sym_id"}:
                 dct[key] = value.astype(np.int64)
         dct["metadata"] = MolecularComplexMetadata(**dct["metadata"])
         if "chain_id" not in dct:

@@ -16,6 +16,7 @@ group "check" {
 
 group "references" {
   targets = [
+    "biohub-biotraj-wheel",
     "reference-ankh",
     "reference-biohub-esm",
     "reference-boltz2",
@@ -31,7 +32,13 @@ group "references" {
 target "common" {
   context    = "."
   dockerfile = "docker/Dockerfile"
-  platforms  = ["linux/amd64"]
+}
+
+target "biohub-biotraj-wheel" {
+  context    = "."
+  dockerfile = "docker/biohub-reference-lock.Dockerfile"
+  target     = "biotraj-wheel-artifact"
+  tags       = ["${REGISTRY}/fastplms-biohub-biotraj-wheel:${TAG}"]
 }
 
 target "runtime" {
@@ -90,6 +97,7 @@ target "reference-biohub-esm" {
   target   = "reference-biohub-esm"
   tags     = ["${REGISTRY}/fastplms-reference-biohub-esm:${TAG}"]
   contexts = {
+    biohub_biotraj_wheel         = "target:biohub-biotraj-wheel"
     upstream_biohub_esm          = "vendor/upstream/biohub-esm"
     upstream_biohub_transformers = "vendor/upstream/biohub-transformers"
   }
@@ -155,6 +163,7 @@ target "reference-esmfold2" {
   target   = "reference-esmfold2"
   tags     = ["${REGISTRY}/fastplms-reference-esmfold2:${TAG}"]
   contexts = {
+    biohub_biotraj_wheel         = "target:biohub-biotraj-wheel"
     upstream_biohub_esm          = "vendor/upstream/biohub-esm"
     upstream_biohub_transformers = "vendor/upstream/biohub-transformers"
   }

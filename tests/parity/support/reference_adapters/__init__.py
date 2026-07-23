@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
@@ -82,7 +82,7 @@ def install_byprot_sequence_namespace(source_root: Path) -> None:
         module = ModuleType(name)
         module.__file__ = str(path / "__init__.py")
         module.__package__ = name
-        module.__path__ = [str(path)]  # type: ignore[attr-defined]
+        module.__dict__["__path__"] = [str(path)]
         sys.modules[name] = module
         parent_name, _, child_name = name.rpartition(".")
         if parent_name:
@@ -90,7 +90,7 @@ def install_byprot_sequence_namespace(source_root: Path) -> None:
 
     registry: dict[str, type[Any]] = {}
 
-    def register_model(name: str):
+    def register_model(name: str) -> Callable[[type[Any]], type[Any]]:
         def decorator(model_class: type[Any]) -> type[Any]:
             registry[name] = model_class
             return model_class
@@ -98,9 +98,9 @@ def install_byprot_sequence_namespace(source_root: Path) -> None:
         return decorator
 
     models = sys.modules["byprot.models"]
-    models.MODEL_REGISTRY = registry
-    models.register_model = register_model
-    sys.modules["byprot"]._fastplms_source_root = marker
+    models.__dict__["MODEL_REGISTRY"] = registry
+    models.__dict__["register_model"] = register_model
+    sys.modules["byprot"].__dict__["_fastplms_source_root"] = marker
 
 
 def use_esm_submodule() -> None:

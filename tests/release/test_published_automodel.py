@@ -12,11 +12,12 @@ import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
 from tools.artifacts.offline_probe import (
+    ProbeCase,
     _exercise,
     _load_kwargs,
     _load_model_exact,
@@ -24,6 +25,7 @@ from tools.artifacts.offline_probe import (
     _runtime_site_packages,
     _save_model_for_probe,
     _semantic_config,
+    probe_many,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,15 +36,15 @@ _INITIAL_WEIGHT_ALLOWANCES: dict[
     tuple[str, str],
     tuple[tuple[str, ...], tuple[str, ...]],
 ] = {
-    ("ankh", "AutoModel"): ((), ("decoder", "lm_head")),
-    ("ankh", "AutoModelForMaskedLM"): ((), ("decoder",)),
+    ("ankh", "AutoModel"): ((), ()),
+    ("ankh", "AutoModelForMaskedLM"): ((), ()),
     ("ankh", "AutoModelForSequenceClassification"): (
         ("classifier",),
-        ("decoder", "lm_head"),
+        (),
     ),
     ("ankh", "AutoModelForTokenClassification"): (
         ("classifier",),
-        ("decoder", "lm_head"),
+        (),
     ),
     ("dplm", "AutoModel"): ((), ("lm_head",)),
     ("dplm", "AutoModelForSequenceClassification"): (("classifier",), ("lm_head",)),
@@ -59,34 +61,40 @@ _INITIAL_WEIGHT_ALLOWANCES: dict[
 }
 
 
-def _cases() -> list[Any]:
+def _checkpoint_cases() -> list[Any]:
     cases: list[Any] = []
     families = MANIFEST["families"]
     for model in MANIFEST["models"]:
         family_id = model["family"]
         auto_map = model.get("auto_map", families[family_id]["auto_map"])
         repository_name = model["fast_repo"].split("/", maxsplit=1)[1]
+        auto_classes: list[dict[str, object]] = []
         for auto_class, class_path in sorted(auto_map.items()):
             expected_missing, expected_unexpected = _INITIAL_WEIGHT_ALLOWANCES.get(
                 (family_id, auto_class),
                 ((), ()),
             )
-            marks = [pytest.mark.artifact, pytest.mark.gpu, pytest.mark.slow]
-            if model["size_category"] == "xlarge":
-                marks.append(pytest.mark.large)
-            cases.append(
-                pytest.param(
-                    model["id"],
-                    family_id,
-                    repository_name,
-                    auto_class,
-                    class_path,
-                    expected_missing,
-                    expected_unexpected,
-                    id=f"{model['id']}-{auto_class}",
-                    marks=marks,
-                )
+            auto_classes.append(
+                {
+                    "auto_class": auto_class,
+                    "class_path": class_path,
+                    "expected_missing_key_prefixes": list(expected_missing),
+                    "expected_unexpected_key_prefixes": list(expected_unexpected),
+                }
             )
+        marks = [pytest.mark.artifact, pytest.mark.gpu, pytest.mark.slow]
+        if model["size_category"] == "xlarge":
+            marks.append(pytest.mark.large)
+        cases.append(
+            pytest.param(
+                model["id"],
+                family_id,
+                repository_name,
+                tuple(auto_classes),
+                id=model["id"],
+                marks=marks,
+            )
+        )
     return cases
 
 
@@ -94,10 +102,11 @@ def _run_probe(
     *,
     artifact: Path,
     family: str,
-    auto_class: str,
-    class_path: str,
     implementation: str,
     output: Path,
+    auto_class: str | None = None,
+    class_path: str | None = None,
+    auto_classes: tuple[dict[str, object], ...] | None = None,
     expected_missing_key_prefixes: tuple[str, ...] = (),
     expected_unexpected_key_prefixes: tuple[str, ...] = (),
     attn_implementation: str | None = None,
@@ -113,10 +122,6 @@ def _run_probe(
         family,
         "--bf16-execution",
         MANIFEST["families"][family]["bf16_execution"],
-        "--auto-class",
-        auto_class,
-        "--class-path",
-        class_path,
         "--implementation",
         implementation,
         "--output",
@@ -126,10 +131,23 @@ def _run_probe(
         command.extend(("--runtime-site-package", str(path)))
     if attn_implementation is not None:
         command.extend(("--attn-implementation", attn_implementation))
-    for prefix in expected_missing_key_prefixes:
-        command.extend(("--expected-missing-key-prefix", prefix))
-    for prefix in expected_unexpected_key_prefixes:
-        command.extend(("--expected-unexpected-key-prefix", prefix))
+    if auto_classes is not None:
+        if auto_class is not None or class_path is not None:
+            raise ValueError("A probe must select one AutoClass or an AutoClass batch")
+        cases_path = output.with_name(f"{output.stem}-cases.json")
+        cases_path.write_text(
+            json.dumps(auto_classes, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        command.extend(("--cases-file", str(cases_path)))
+    else:
+        if auto_class is None or class_path is None:
+            raise ValueError("Single-class probes require auto_class and class_path")
+        command.extend(("--auto-class", auto_class, "--class-path", class_path))
+        for prefix in expected_missing_key_prefixes:
+            command.extend(("--expected-missing-key-prefix", prefix))
+        for prefix in expected_unexpected_key_prefixes:
+            command.extend(("--expected-unexpected-key-prefix", prefix))
     if implementation == "package":
         command.extend(("--source-root", str(ROOT / "src")))
     environment = os.environ.copy()
@@ -319,7 +337,7 @@ def test_offline_probe_allows_only_declared_task_head_keys(tmp_path: Path) -> No
     model = object()
 
     class AutoType:
-        loading_info = {
+        loading_info: ClassVar[dict[str, list[str]]] = {
             "missing_keys": ["classifier.weight", "classifier.bias"],
             "unexpected_keys": ["lm_head.decoder.weight"],
             "mismatched_keys": [],
@@ -350,7 +368,7 @@ def test_offline_probe_allows_only_declared_task_head_keys(tmp_path: Path) -> No
         **AutoType.loading_info,
         "missing_keys": ["classifier.weight", "encoder.layer.0.weight"],
     }
-    with pytest.raises(RuntimeError, match="encoder.layer.0.weight"):
+    with pytest.raises(RuntimeError, match=r"encoder\.layer\.0\.weight"):
         _load_model_exact(
             AutoType,
             tmp_path,
@@ -368,6 +386,10 @@ def test_offline_probe_semantic_config_excludes_artifact_identity() -> None:
             "fastplms_checkpoint_repo_id": "organization/toy",
             "fastplms_checkpoint_revision": "a" * 40,
             "fastplms_checkpoint_hash": "b" * 64,
+            "fastplms_weights_revision": "a" * 40,
+            "fastplms_runtime_revision": "c" * 40,
+            "fastplms_source_tree_sha256": "d" * 64,
+            "fastplms_runtime_bundle_sha256": "e" * 64,
         }
     )
     assert _semantic_config(config) == {"hidden_size": 8}
@@ -439,29 +461,65 @@ def test_package_probe_disables_remote_code_collection_only_while_saving(
     assert model.is_remote_code()
 
 
+def test_batch_probe_establishes_artifact_isolation_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preparations: list[tuple[str, Path | None, bool]] = []
+    observed: list[tuple[str, bool]] = []
+
+    def prepare(
+        implementation: str,
+        source_root: Path | None,
+        *,
+        reload_only: bool,
+    ) -> None:
+        preparations.append((implementation, source_root, reload_only))
+
+    def run_case(**kwargs: Any) -> dict[str, str]:
+        observed.append(
+            (kwargs["auto_class"], kwargs["_environment_prepared"])
+        )
+        return {"class_path": kwargs["class_path"]}
+
+    monkeypatch.setattr("tools.artifacts.offline_probe._prepare_probe_environment", prepare)
+    monkeypatch.setattr("tools.artifacts.offline_probe.probe", run_case)
+    monkeypatch.setattr("tools.artifacts.offline_probe._release_case_memory", lambda: None)
+
+    result = probe_many(
+        artifact=tmp_path,
+        family="toy",
+        bf16_execution="static_parameters",
+        cases=(
+            ProbeCase("AutoConfig", "toy.Config"),
+            ProbeCase("AutoModel", "toy.Model"),
+        ),
+        implementation="artifact",
+        source_root=None,
+    )
+
+    assert preparations == [("artifact", None, False)]
+    assert observed == [("AutoConfig", True), ("AutoModel", True)]
+    assert set(result) == {"AutoConfig", "AutoModel"}
+
+
 @pytest.mark.parametrize(
     (
         "model_id",
         "family",
         "repository_name",
-        "auto_class",
-        "class_path",
-        "expected_missing_key_prefixes",
-        "expected_unexpected_key_prefixes",
+        "auto_classes",
     ),
-    _cases(),
+    _checkpoint_cases(),
 )
 def test_local_artifact_offline_autoclass_parity(
     model_id: str,
     family: str,
     repository_name: str,
-    auto_class: str,
-    class_path: str,
-    expected_missing_key_prefixes: tuple[str, ...],
-    expected_unexpected_key_prefixes: tuple[str, ...],
+    auto_classes: tuple[dict[str, object], ...],
     tmp_path: Path,
 ) -> None:
-    """Load offline, infer, save/reload, and match unchanged package source."""
+    """Exercise one checkpoint's AutoClasses in two isolated processes."""
 
     artifact = ROOT / "dist" / "hub" / repository_name
     assert artifact.is_dir(), f"Missing required built artifact for {model_id}: {artifact}"
@@ -471,28 +529,24 @@ def test_local_artifact_offline_autoclass_parity(
     isolated = _run_probe(
         artifact=artifact,
         family=family,
-        auto_class=auto_class,
-        class_path=class_path,
+        auto_classes=auto_classes,
         implementation="artifact",
         output=artifact_output,
-        expected_missing_key_prefixes=expected_missing_key_prefixes,
-        expected_unexpected_key_prefixes=expected_unexpected_key_prefixes,
     )
     assert isolated.returncode == 0, isolated.stdout + isolated.stderr
     package = _run_probe(
         artifact=artifact,
         family=family,
-        auto_class=auto_class,
-        class_path=class_path,
+        auto_classes=auto_classes,
         implementation="package",
         output=package_output,
-        expected_missing_key_prefixes=expected_missing_key_prefixes,
-        expected_unexpected_key_prefixes=expected_unexpected_key_prefixes,
     )
     assert package.returncode == 0, package.stdout + package.stderr
-    assert json.loads(artifact_output.read_text(encoding="utf-8")) == json.loads(
-        package_output.read_text(encoding="utf-8")
-    )
+    artifact_results = json.loads(artifact_output.read_text(encoding="utf-8"))
+    package_results = json.loads(package_output.read_text(encoding="utf-8"))
+    expected_classes = {str(case["auto_class"]) for case in auto_classes}
+    assert set(artifact_results) == expected_classes
+    assert artifact_results == package_results
 
 
 @pytest.mark.parametrize(

@@ -8,14 +8,18 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from .configuration_esmfold2 import ESMFold2Config as ESMFold2Config
     from .modeling_esmfold2 import ESMFold2Model as ESMFold2Model
+    from .modeling_esmfold2 import ESMFold2Output as ESMFold2Output
     from .modeling_esmfold2_experimental import (
         ESMFold2ExperimentalModel as ESMFold2ExperimentalModel,
     )
+    from .reproducibility import seed_context as seed_context
 
 _EXPORT_MODULES = {
     "ESMFold2Config": ".configuration_esmfold2",
     "ESMFold2ExperimentalModel": ".modeling_esmfold2_experimental",
     "ESMFold2Model": ".modeling_esmfold2",
+    "ESMFold2Output": ".modeling_esmfold2",
+    "seed_context": ".reproducibility",
 }
 
 

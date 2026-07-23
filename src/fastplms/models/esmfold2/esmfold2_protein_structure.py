@@ -32,9 +32,9 @@ def _coordinate_operations(
 
 def infer_cbeta_from_atom37(
     atom37: ArrayOrTensor,
-    l: float = 1.522,
-    a: float = 1.927,
-    d: float = -2.143,
+    bond_length: float = 1.522,
+    bond_angle: float = 1.927,
+    dihedral: float = -2.143,
 ) -> ArrayOrTensor:
     """Infer C-beta coordinates from backbone tensor ``X``.
 
@@ -53,9 +53,9 @@ def infer_cbeta_from_atom37(
     normal = normalize(cross(n_to_c, unit_n_to_ca))
     basis = [unit_n_to_ca, cross(normal, unit_n_to_ca), normal]
     coefficients = [
-        l * np.cos(a),
-        l * np.sin(a) * np.cos(d),
-        -l * np.sin(a) * np.sin(d),
+        bond_length * np.cos(bond_angle),
+        bond_length * np.sin(bond_angle) * np.cos(dihedral),
+        -bond_length * np.sin(bond_angle) * np.sin(dihedral),
     ]
     offset = sum(
         vector * coefficient for vector, coefficient in zip(basis, coefficients, strict=True)

@@ -1,0 +1,54 @@
+# Biohub ESM reference runtime inputs.
+#
+# Biohub ESM source: 82ee35553d39169d678f784c8d3f8712ffd7d2c4
+# Biohub Transformers source: 3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf
+#
+# The mutable `transformers @ ...@main` Biohub ESM requirement is deliberately
+# absent. Its pinned source checkout is installed separately without dependency
+# resolution. The remaining 22 ESM requirements and the pinned fork's 10 base
+# install requirements are represented below. Policy pins narrow the shared
+# requirements used by the reference image.
+
+# Biohub ESM runtime requirements (minus the mutable Transformers direct URL).
+torch==2.13.0
+ipython
+einops
+biotite>=1.0.0
+# BioTraj 1.2.2 publishes no CPython 3.12 Linux ARM64 wheel. Pin the one
+# authoritative sdist by URL and digest; the reference build attests the wheel
+# produced from it on the GH200 target.
+biotraj @ https://files.pythonhosted.org/packages/07/21/2287edfd0d2569639eea706e25c39e63b46a384cf1712db8ea05768317b0/biotraj-1.2.2.tar.gz#sha256=4bcba92101ed50f369cc1487fb5dfcfe1d8402ad47adaa9232b080553271663a
+rdkit
+msgpack-numpy
+biopython
+scikit-learn
+brotli
+attrs
+pandas
+cloudpathlib
+httpx
+tenacity
+zstd==1.5.6.1
+ipywidgets
+py3dmol
+pydssp
+boto3
+pygtrie
+dna_features_viewer
+accelerate==1.13.0
+
+# Biohub Transformers base install requirements.
+filelock
+huggingface-hub==0.36.2
+numpy==1.26.4
+packaging>=20.0
+pyyaml>=5.1
+regex!=2019.12.17
+requests
+tokenizers>=0.22.0,<=0.23.0
+safetensors==0.5.3
+tqdm>=4.27
+
+# Reference harness and deterministic wheel-install prerequisites.
+pytest==9.0.2
+wheel==0.47.0

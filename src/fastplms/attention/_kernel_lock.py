@@ -61,8 +61,7 @@ def _locked_entry(lock_path: Path, repository: str) -> dict[str, Any]:
     matches = [entry for entry in data if entry.get("repo_id") == repository]
     if len(matches) != 1:
         raise RuntimeError(
-            f"kernels.lock must contain exactly one entry for {repository!r}; "
-            f"found {len(matches)}."
+            f"kernels.lock must contain exactly one entry for {repository!r}; found {len(matches)}."
         )
     return matches[0]
 
@@ -70,7 +69,11 @@ def _locked_entry(lock_path: Path, repository: str) -> dict[str, Any]:
 def _offline_mode() -> bool:
     """Return whether Hub access was explicitly disabled for this process."""
 
-    return os.environ.get("HF_HUB_OFFLINE", "").strip().lower() in {"1", "on", "true", "yes"}
+    enabled_values = {"1", "on", "true", "yes"}
+    return any(
+        os.environ.get(name, "").strip().lower() in enabled_values
+        for name in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    )
 
 
 def _offline_snapshot_path(repository: str, revision: str) -> Path:
@@ -103,16 +106,6 @@ def _load_offline_locked_kernel(
     variant_locks: dict[str, object],
 ) -> object:
     """Validate and import the one compatible variant from a sparse Hub snapshot."""
-
-    try:
-        from kernels import get_local_kernel
-        from kernels.utils import validate_kernel
-        from kernels.variants import get_variants_local, resolve_variants
-    except ImportError as error:
-        raise RuntimeError(
-            "Precompiled FlashAttention requires the FastPLMs 'flash' extra."
-        ) from error
-
     snapshot = _offline_snapshot_path(repository, revision)
     build_root = snapshot / "build"
     if not build_root.is_dir():
@@ -125,6 +118,15 @@ def _load_offline_locked_kernel(
             f"The cached {repository}@{revision} snapshot contains unlocked variants: "
             f"{', '.join(unexpected)}"
         )
+
+    try:
+        from kernels import get_local_kernel
+        from kernels.utils import validate_kernel
+        from kernels.variants import get_variants_local, resolve_variants
+    except ImportError as error:
+        raise RuntimeError(
+            "Precompiled FlashAttention requires the FastPLMs 'flash' extra."
+        ) from error
 
     parsed = get_variants_local(build_root)
     parsed_names = {variant.variant_str for variant in parsed}

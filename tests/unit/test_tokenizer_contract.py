@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -16,15 +18,25 @@ from fastplms.models.ankh.modeling_ankh import (
     FastAnkhConfig,
     _load_ankh_tokenizer,
 )
-from fastplms.models.dplm.modeling_dplm import DPLMPreTrainedModel
+from fastplms.models.dplm.modeling_dplm import (
+    DPLMConfig,
+    DPLMForMaskedLM,
+    DPLMPreTrainedModel,
+)
 from fastplms.models.dplm2.modeling_dplm2 import (
     DPLM2Config,
+    DPLM2ForMaskedLM,
     DPLM2PreTrainedModel,
     _normalize_dplm2_input_ids,
 )
 from fastplms.models.dplm2.tokenization_dplm2 import DPLM2Tokenizer
 from fastplms.models.e1.modeling_e1 import E1BatchPreparer, E1Config, E1ForMaskedLM, get_tokenizer
-from fastplms.models.esm2.modeling_fastesm import FastEsmPreTrainedModel, FastEsmTokenizer
+from fastplms.models.esm2.modeling_fastesm import (
+    FastEsmConfig,
+    FastEsmForMaskedLM,
+    FastEsmPreTrainedModel,
+    FastEsmTokenizer,
+)
 from fastplms.models.esm3.modeling_esm3 import (
     SEQUENCE_VOCAB as ESM3_SEQUENCE_VOCAB,
 )
@@ -196,6 +208,102 @@ def test_esm_tokenizer_loaders_reject_missing_checkpoint_provenance(
 
     with pytest.raises(RuntimeError, match=rf"{model_name} tokenizer loading requires"):
         model_class.tokenizer.fget(owner)
+
+
+def _tiny_esm_family_config(config_class: type, vocab_size: int):
+    kwargs = {
+        "vocab_size": vocab_size,
+        "hidden_size": 8,
+        "num_hidden_layers": 1,
+        "num_attention_heads": 2,
+        "intermediate_size": 16,
+        "hidden_dropout_prob": 0.0,
+        "attention_probs_dropout_prob": 0.0,
+        "max_position_embeddings": 16,
+        "pad_token_id": 1,
+        "mask_token_id": min(32, vocab_size - 1),
+        "attn_backend": "sdpa",
+    }
+    if config_class is FastEsmConfig:
+        kwargs["position_embedding_type"] = "absolute"
+        kwargs["attn_backend"] = "eager"
+    return config_class(**kwargs)
+
+
+@pytest.mark.parametrize(
+    ("model_class", "config_class", "tokenizer_class", "vocab_size"),
+    (
+        (DPLMForMaskedLM, DPLMConfig, EsmTokenizer, 33),
+        (DPLM2ForMaskedLM, DPLM2Config, DPLM2Tokenizer, 64),
+        (FastEsmForMaskedLM, FastEsmConfig, FastEsmTokenizer, 33),
+    ),
+)
+def test_tokenizer_context_survives_loading_info_and_concurrent_lazy_loads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    model_class: type,
+    config_class: type,
+    tokenizer_class: type,
+    vocab_size: int,
+) -> None:
+    roots = [tmp_path / "first", tmp_path / "second"]
+    for root in roots:
+        model = model_class(_tiny_esm_family_config(config_class, vocab_size)).eval()
+        model.save_pretrained(root / "nested")
+
+    loaded_models = []
+    loading_infos = []
+    for index, root in enumerate(roots):
+        loaded, loading_info = model_class.from_pretrained(
+            root,
+            subfolder="nested",
+            revision=f"requested-{index}",
+            cache_dir=tmp_path / f"cache-{index}",
+            local_files_only=True,
+            force_download=False,
+            trust_remote_code=False,
+            token=f"secret-{index}",
+            output_loading_info=True,
+        )
+        loaded.config._commit_hash = str(index) * 40
+        loaded_models.append(loaded)
+        loading_infos.append(loading_info)
+
+    assert all(not info["missing_keys"] for info in loading_infos)
+    assert all(not info["unexpected_keys"] for info in loading_infos)
+    assert all(
+        "secret-" not in json.dumps(model.config.to_dict(), default=str)
+        for model in loaded_models
+    )
+
+    requests: list[tuple[object, dict[str, object]]] = []
+    rendezvous = Barrier(2)
+
+    def load_tokenizer(source: object, **kwargs: object) -> object:
+        requests.append((source, kwargs))
+        rendezvous.wait(timeout=5)
+        return SimpleNamespace(bos_token_id=0, cls_token="<cls>")
+
+    monkeypatch.setattr(
+        tokenizer_class,
+        "from_pretrained",
+        staticmethod(load_tokenizer),
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        tokenizers = list(executor.map(lambda model: model.tokenizer, loaded_models))
+
+    assert len(tokenizers) == 2
+    observed = {str(source): kwargs for source, kwargs in requests}
+    for index, root in enumerate(roots):
+        assert observed[str(root)] == {
+            "cache_dir": tmp_path / f"cache-{index}",
+            "force_download": False,
+            "local_files_only": True,
+            "revision": str(index) * 40,
+            "subfolder": "nested",
+            "token": f"secret-{index}",
+            "trust_remote_code": False,
+        }
 
 
 def test_ankh_tokenizer_loader_uses_checkpoint_provenance(

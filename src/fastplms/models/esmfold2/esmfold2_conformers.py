@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import os
 import pickle
+import stat
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from hashlib import file_digest
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import numpy as np
 from huggingface_hub import hf_hub_download
+from huggingface_hub.constants import HF_HUB_CACHE
 
 from fastplms.registry import RuntimeAsset, get_model_registry
 
@@ -22,6 +28,12 @@ from .esmfold2_constants import RES_TYPE_TO_CCD
 
 _CCD_ENVIRONMENT_VARIABLE = "ESMCFOLD_CCD_PATH"
 _CCD_ASSET_ID = "esmfold2_ccd"
+
+
+@dataclass(frozen=True)
+class _ResolvedAsset:
+    path: Path
+    trusted_hub_cache_root: Path | None = None
 
 
 def _asset_contract() -> RuntimeAsset:
@@ -40,20 +52,139 @@ def _asset_contract() -> RuntimeAsset:
     return asset
 
 
-def _verify_asset(asset_path: Path, contract: RuntimeAsset) -> None:
-    """Verify the complete immutable asset identity before deserialization."""
+@contextmanager
+def _open_verified_asset(
+    asset_path: Path,
+    contract: RuntimeAsset,
+    *,
+    trusted_hub_cache_root: Path | None = None,
+) -> Iterator[BinaryIO]:
+    """Yield a private snapshot containing exactly the verified pickle bytes."""
 
-    actual_size = asset_path.stat().st_size
-    if actual_size != contract.size:
-        raise ValueError(
-            f"CCD asset size mismatch: expected {contract.size} bytes, received {actual_size}."
+    try:
+        path_state = asset_path.lstat()
+    except FileNotFoundError as error:
+        raise FileNotFoundError(f"CCD asset does not exist: {asset_path}") from error
+    opened_path = asset_path
+    if stat.S_ISLNK(path_state.st_mode):
+        if trusted_hub_cache_root is None:
+            raise ValueError(f"CCD asset must not be a symlink: {asset_path}")
+        opened_path = _resolve_trusted_hub_snapshot_link(
+            asset_path,
+            contract,
+            trusted_hub_cache_root,
         )
-    with asset_path.open("rb") as handle:
-        actual_hash = file_digest(handle, "sha256").hexdigest()
-    if actual_hash != contract.sha256:
+        path_state = opened_path.lstat()
+    if not stat.S_ISREG(path_state.st_mode):
+        raise ValueError(f"CCD asset must be a regular file: {asset_path}")
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(opened_path, flags)
+        opened_state = os.fstat(descriptor)
+        if not stat.S_ISREG(opened_state.st_mode):
+            raise ValueError(f"CCD asset must be a regular file: {asset_path}")
+        if (path_state.st_dev, path_state.st_ino) != (
+            opened_state.st_dev,
+            opened_state.st_ino,
+        ):
+            raise ValueError(f"CCD asset changed while it was being opened: {asset_path}")
+
+        source = os.fdopen(descriptor, "rb")
+        descriptor = None
+        with source, tempfile.TemporaryFile(mode="w+b") as snapshot:
+            actual_size = opened_state.st_size
+            if actual_size != contract.size:
+                raise ValueError(
+                    "CCD asset size mismatch: "
+                    f"expected {contract.size} bytes, received {actual_size}."
+                )
+            # Copy into a loader-owned OS temporary file. Hashing and
+            # deserialization then consume the same immutable snapshot, so a
+            # path replacement or in-place source write cannot substitute
+            # unverified pickle bytes after validation.
+            remaining = contract.size
+            while remaining:
+                chunk = source.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                snapshot.write(chunk)
+                remaining -= len(chunk)
+            copied_size = snapshot.tell()
+            extra_byte = source.read(1)
+            if remaining or extra_byte:
+                observed_size = copied_size if remaining else copied_size + len(extra_byte)
+                raise ValueError(
+                    "CCD asset size changed while it was being copied: "
+                    f"expected {contract.size} bytes, received at least {observed_size}."
+                )
+            snapshot.flush()
+            snapshot.seek(0)
+            actual_hash = file_digest(snapshot, "sha256").hexdigest()
+            if actual_hash != contract.sha256:
+                raise ValueError(
+                    "CCD asset SHA256 mismatch; refusing to cross the "
+                    "trusted-pickle boundary."
+                )
+            snapshot.seek(0)
+            yield snapshot
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _resolve_trusted_hub_snapshot_link(
+    asset_path: Path,
+    contract: RuntimeAsset,
+    cache_root: Path,
+) -> Path:
+    """Resolve only the immutable Hub snapshot link declared by the manifest."""
+
+    root = cache_root.expanduser().resolve(strict=True)
+    if len(contract.revision) != 40 or any(
+        character not in "0123456789abcdef" for character in contract.revision.lower()
+    ):
+        raise ValueError("CCD Hub asset revision must be an immutable 40-character commit.")
+    relative_asset = Path(contract.path)
+    if relative_asset.is_absolute() or ".." in relative_asset.parts:
+        raise ValueError(f"CCD Hub asset path is unsafe: {contract.path!r}")
+    repository_cache = root / f"models--{contract.repository.replace('/', '--')}"
+    try:
+        repository_cache.resolve(strict=True).relative_to(root)
+    except (FileNotFoundError, ValueError) as error:
         raise ValueError(
-            "CCD asset SHA256 mismatch; refusing to cross the trusted-pickle boundary."
+            f"CCD Hub repository cache escapes the effective Hub cache root: {repository_cache}"
+        ) from error
+    snapshot_root = repository_cache / "snapshots" / contract.revision
+    expected_path = snapshot_root / relative_asset
+    lexical_path = Path(os.path.abspath(asset_path))
+    if lexical_path != Path(os.path.abspath(expected_path)):
+        raise ValueError(
+            "CCD Hub symlink is not the manifest-owned immutable snapshot path: "
+            f"{asset_path}"
         )
+
+    try:
+        asset_path.parent.resolve(strict=True).relative_to(root)
+    except (FileNotFoundError, ValueError) as error:
+        raise ValueError(
+            f"CCD Hub snapshot path escapes the effective Hub cache root: {asset_path}"
+        ) from error
+
+    resolved = asset_path.resolve(strict=True)
+    blob_root = (repository_cache / "blobs").resolve(strict=True)
+    try:
+        blob_root.relative_to(root)
+        resolved.relative_to(blob_root)
+    except ValueError as error:
+        raise ValueError(
+            f"CCD Hub snapshot link escapes its repository blob cache: {asset_path}"
+        ) from error
+    if not resolved.is_file() or resolved.is_symlink():
+        raise ValueError(f"CCD Hub snapshot target must be a regular file: {resolved}")
+    return resolved
 
 
 class _ChemicalComponentStore:
@@ -69,12 +200,20 @@ class _ChemicalComponentStore:
     def load(self, cache_dir: Path | str | None = None) -> dict[str, Any]:
         if self.molecules is not None:
             return self.molecules
-        asset = self._resolve_asset(cache_dir)
+        contract = _asset_contract()
+        resolved = self._resolve_asset_location(cache_dir, contract)
+        asset = resolved.path
         try:
-            # SECURITY: _resolve_asset verifies the manifest-pinned byte length and
-            # SHA256 before this trusted Biohub pickle is deserialized.
-            with asset.open("rb") as handle:
+            # SECURITY: the private snapshot is both hash-validated and
+            # deserialized, closing path-replacement and in-place-write races.
+            with _open_verified_asset(
+                asset,
+                contract,
+                trusted_hub_cache_root=resolved.trusted_hub_cache_root,
+            ) as handle:
                 loaded = pickle.load(handle)
+        except FileNotFoundError:
+            raise
         except Exception as error:
             raise ValueError(f"Could not read the CCD asset at {asset}: {error}") from error
         if loaded is not None and not isinstance(loaded, dict):
@@ -85,6 +224,13 @@ class _ChemicalComponentStore:
     @staticmethod
     def _resolve_asset(cache_dir: Path | str | None) -> Path:
         contract = _asset_contract()
+        return _ChemicalComponentStore._resolve_asset_location(cache_dir, contract).path
+
+    @staticmethod
+    def _resolve_asset_location(
+        cache_dir: Path | str | None,
+        contract: RuntimeAsset,
+    ) -> _ResolvedAsset:
         configured = os.environ.get(_CCD_ENVIRONMENT_VARIABLE)
         if configured:
             asset = Path(configured).expanduser()
@@ -104,10 +250,11 @@ class _ChemicalComponentStore:
                     "Could not resolve the ESMFold2 CCD asset. Set "
                     f"{_CCD_ENVIRONMENT_VARIABLE} or populate the Hugging Face cache."
                 ) from error
-        if not asset.is_file():
-            raise FileNotFoundError(f"CCD asset does not exist: {asset}")
-        _verify_asset(asset, contract)
-        return asset
+            return _ResolvedAsset(
+                path=asset,
+                trusted_hub_cache_root=Path(HF_HUB_CACHE),
+            )
+        return _ResolvedAsset(path=asset)
 
     def _component_with_conformer(self, component_id: str):
         molecule = self.load().get(component_id)

@@ -12,7 +12,11 @@ import hashlib
 import io
 import json
 import math
+import os
 import shutil
+import stat
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import ClassVar
@@ -37,191 +41,700 @@ try:
         _get_flex_attention_fn,
         create_block_mask,
         resolve_attention_backend,
-        warn_attention_backend_fallback,
+        resolve_attention_backend_for_call,
     )
     from fastplms.embeddings import EmbeddingMixin
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
 except ModuleNotFoundError as error:
-    if error.name != "fastplms":
+    _COMPOSITE_REQUIRED_NAMES = (
+        "AttentionBackend",
+        "BlockMask",
+        "EmbeddingMixin",
+        "FastPLMsAttentionMixin",
+        "FastPLMTestTimeTrainingMixin",
+        "_get_flex_attention_fn",
+        "create_block_mask",
+        "resolve_attention_backend",
+        "resolve_attention_backend_for_call",
+    )
+    if error.name != "fastplms" or any(
+        name not in globals() for name in _COMPOSITE_REQUIRED_NAMES
+    ):
         raise
-    # A saved HF composite installs its bundled package alias before this import.
+    # Legacy flat Hub composites define every shared symbol above this block.
 
 
-_SAVED_RUNTIME_PATHS = (
+_SAVED_RUNTIME_SCHEMA_VERSION = 1
+_SAVED_RUNTIME_FILES = (
     "__init__.py",
+    "attention/__init__.py",
+    "attention/_core.py",
+    "attention/_kernel_lock.py",
+    "attention/interfaces.py",
+    "embeddings/__init__.py",
+    "embeddings/pooling.py",
+    "embeddings/runner.py",
+    "embeddings/storage.py",
+    "embeddings/types.py",
+    "models/__init__.py",
+    "models/esm3/__init__.py",
+    "models/esm3/modeling_esm3.py",
+    "models/ttt.py",
+    "models.toml",
     "registry.py",
     "runtime.py",
-    "models.toml",
-    "attention",
-    "embeddings",
-    "models/esm3",
-    "models/ttt.py",
 )
+_MAX_SAVED_RUNTIME_FILE_BYTES = 1024 * 1024
+_MAX_SAVED_RUNTIME_TOTAL_BYTES = 4 * 1024 * 1024
+_MAX_SAVED_RUNTIME_ARCHIVE_BYTES = 2 * 1024 * 1024
 
 
-def _copy_saved_runtime(source: Path, destination: Path) -> None:
-    """Copy the ESM3 runtime required by an isolated Transformers reload."""
+@contextmanager
+def _temporary_eval(model: nn.Module):
+    """Temporarily disable training behavior without flattening mixed module states."""
+    training_states = tuple((module, module.training) for module in model.modules())
+    model.eval()
+    try:
+        yield
+    finally:
+        for module, training in training_states:
+            module.training = training
 
-    if source.resolve() == destination.resolve():
-        return
-    if source.is_dir():
-        shutil.copytree(
-            source,
-            destination,
-            dirs_exist_ok=True,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+
+def _validate_saved_runtime_relative_path(value: str) -> PurePosixPath:
+    """Return one canonical, fixed-inventory runtime source path."""
+
+    relative = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or relative.is_absolute()
+        or relative.as_posix() != value
+        or any(part in {"", ".", ".."} or ":" in part or "\0" in part for part in relative.parts)
+    ):
+        raise RuntimeError(f"Saved ESM3 runtime path is unsafe: {value!r}.")
+    return relative
+
+
+def _read_saved_runtime_file(package_root: Path, relative: PurePosixPath) -> bytes:
+    """Read one allowlisted regular file without following a symlink."""
+
+    current = package_root
+    for index, part in enumerate(relative.parts):
+        current = current / part
+        try:
+            metadata = current.lstat()
+        except OSError as error:
+            raise RuntimeError(
+                f"Saved ESM3 runtime file is missing: {relative.as_posix()!r}."
+            ) from error
+        if stat.S_ISLNK(metadata.st_mode):
+            raise RuntimeError(
+                f"Saved ESM3 runtime path must not contain a symlink: {relative.as_posix()!r}."
+            )
+        if index < len(relative.parts) - 1:
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise RuntimeError(
+                    f"Saved ESM3 runtime parent is not a directory: {relative.as_posix()!r}."
+                )
+            continue
+        if not stat.S_ISREG(metadata.st_mode):
+            raise RuntimeError(
+                f"Saved ESM3 runtime entry is not a regular file: {relative.as_posix()!r}."
+            )
+        if metadata.st_size > _MAX_SAVED_RUNTIME_FILE_BYTES:
+            raise RuntimeError(
+                f"Saved ESM3 runtime file exceeds its size limit: {relative.as_posix()!r}."
+            )
+        before = metadata
+
+    try:
+        with current.open("rb") as handle:
+            payload = handle.read(_MAX_SAVED_RUNTIME_FILE_BYTES + 1)
+        after = current.lstat()
+    except OSError as error:
+        raise RuntimeError(
+            f"Unable to read saved ESM3 runtime file: {relative.as_posix()!r}."
+        ) from error
+    identity_before = (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    identity_after = (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISREG(after.st_mode)
+        or identity_before != identity_after
+        or len(payload) != before.st_size
+        or len(payload) > _MAX_SAVED_RUNTIME_FILE_BYTES
+    ):
+        raise RuntimeError(
+            f"Saved ESM3 runtime file changed while it was validated: {relative.as_posix()!r}."
         )
-        return
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(source, destination)
+    return payload
 
 
-def _build_saved_runtime_archive(package_root: Path) -> bytes:
-    """Return a deterministic archive of the unchanged ESM3 runtime sources."""
+def _saved_runtime_files(package_root: Path) -> dict[str, bytes]:
+    """Read exactly the fixed ESM3 runtime inventory into validated bytes."""
+
+    try:
+        root_metadata = package_root.lstat()
+    except OSError as error:
+        raise RuntimeError(f"Saved ESM3 runtime package is unavailable: {package_root}.") from error
+    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
+        raise RuntimeError("Saved ESM3 runtime package root must be a non-symlink directory.")
 
     files: dict[str, bytes] = {}
-    for relative_path in _SAVED_RUNTIME_PATHS:
-        source = package_root / relative_path
-        candidates = [source] if source.is_file() else sorted(source.rglob("*"))
-        for candidate in candidates:
-            if not candidate.is_file():
-                continue
-            if "__pycache__" in candidate.parts or candidate.suffix in {".pyc", ".pyo"}:
-                continue
-            archive_path = PurePosixPath("fastplms") / PurePosixPath(
-                candidate.relative_to(package_root).as_posix()
-            )
-            files[archive_path.as_posix()] = candidate.read_bytes()
+    total_size = 0
+    for value in _SAVED_RUNTIME_FILES:
+        relative = _validate_saved_runtime_relative_path(value)
+        payload = _read_saved_runtime_file(package_root, relative)
+        total_size += len(payload)
+        if total_size > _MAX_SAVED_RUNTIME_TOTAL_BYTES:
+            raise RuntimeError("Saved ESM3 runtime exceeds its total expanded size limit.")
+        files[relative.as_posix()] = payload
+    if len(files) != len(_SAVED_RUNTIME_FILES):
+        raise RuntimeError("Saved ESM3 runtime allowlist contains duplicate paths.")
+    return files
+
+
+def _saved_runtime_manifest(files: dict[str, bytes]) -> dict[str, object]:
+    records = {
+        relative: {
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size": len(payload),
+        }
+        for relative, payload in sorted(files.items())
+    }
+    return {
+        "schema_version": _SAVED_RUNTIME_SCHEMA_VERSION,
+        "files": records,
+        "total_size": sum(record["size"] for record in records.values()),
+    }
+
+
+def _saved_runtime_tree_hash(manifest: dict[str, object]) -> str:
+    files = manifest["files"]
+    if not isinstance(files, dict):
+        raise RuntimeError("Saved ESM3 runtime manifest files are invalid.")
+    digest = hashlib.sha256()
+    for relative, raw_record in sorted(files.items()):
+        if not isinstance(relative, str) or not isinstance(raw_record, dict):
+            raise RuntimeError("Saved ESM3 runtime manifest record is invalid.")
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(raw_record["size"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(raw_record["sha256"]).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _build_saved_runtime_archive(
+    package_root: Path,
+) -> tuple[bytes, dict[str, object], str]:
+    """Build a deterministic archive directly from validated runtime bytes."""
+
+    files = _saved_runtime_files(package_root)
+    manifest = _saved_runtime_manifest(files)
+    tree_hash = _saved_runtime_tree_hash(manifest)
 
     buffer = io.BytesIO()
     with ZipFile(buffer, mode="w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
-        for archive_path, contents in sorted(files.items()):
+        for relative, contents in sorted(files.items()):
+            archive_path = (PurePosixPath("fastplms") / relative).as_posix()
             info = ZipInfo(archive_path, date_time=(1980, 1, 1, 0, 0, 0))
+            info.create_system = 3
             info.compress_type = ZIP_DEFLATED
             info.external_attr = 0o100644 << 16
             archive.writestr(info, contents, compress_type=ZIP_DEFLATED, compresslevel=9)
-    return buffer.getvalue()
+    payload = buffer.getvalue()
+    if len(payload) > _MAX_SAVED_RUNTIME_ARCHIVE_BYTES:
+        raise RuntimeError("Saved ESM3 runtime archive exceeds its compressed size limit.")
+    return payload, manifest, tree_hash
 
 
-def _write_saved_runtime(save_directory: Path) -> None:
-    """Make one ESM3 ``save_pretrained`` directory independently loadable."""
-
-    package_source = Path(__file__).resolve().parents[2]
-    package_destination = save_directory / "fastplms"
-    for relative_path in _SAVED_RUNTIME_PATHS:
-        _copy_saved_runtime(
-            package_source / relative_path,
-            package_destination / relative_path,
-        )
-
-    archive = _build_saved_runtime_archive(package_destination)
+def _render_saved_runtime_bundle(
+    archive: bytes,
+    manifest: dict[str, object],
+    tree_hash: str,
+) -> tuple[str, bytes]:
     archive_hash = hashlib.sha256(archive).hexdigest()
-    encoded_archive = base64.b85encode(archive).decode("ascii")
-    archive_chunks = tuple(
-        encoded_archive[index : index + 100] for index in range(0, len(encoded_archive), 100)
-    )
-    bundle_lines = [
+    encoded = base64.b85encode(archive).decode("ascii")
+    chunks = (encoded[index : index + 100] for index in range(0, len(encoded), 100))
+    manifest_source = json.dumps(manifest, indent=2, sort_keys=True, ensure_ascii=True)
+    lines = [
         '"""Deterministic embedded FastPLMs runtime for one saved ESM3 model."""',
         "",
         f'RUNTIME_HASH = "{archive_hash}"',
+        f'RUNTIME_TREE_HASH = "{tree_hash}"',
+        f"RUNTIME_MANIFEST = {manifest_source}",
         "RUNTIME_DATA = (",
-        *(f"    {chunk!r}" for chunk in archive_chunks),
+        *(f"    {chunk!r}," for chunk in chunks),
         ")",
         "",
     ]
-    (save_directory / "fastplms_bundle.py").write_text(
-        "\n".join(bundle_lines),
-        encoding="utf-8",
-        newline="\n",
-    )
+    return archive_hash, "\n".join(lines).encode("utf-8")
 
-    bridge = "\n".join(
+
+def _render_saved_runtime_bridge(archive_hash: str, tree_hash: str) -> str:
+    """Render the fail-closed Transformers bridge for one runtime identity."""
+
+    lines = [
+        '"""Bridge to the bundled FastPLMs ESM3 runtime."""',
+        "",
+        "import atexit",
+        "import base64",
+        "import hashlib",
+        "import importlib",
+        "import importlib.util",
+        "import stat",
+        "import sys",
+        "import tempfile",
+        "from io import BytesIO",
+        "from pathlib import Path, PurePosixPath",
+        "from zipfile import BadZipFile, ZIP_DEFLATED, ZipFile",
+        "",
+        "from .fastplms_bundle import (",
+        "    RUNTIME_DATA,",
+        "    RUNTIME_HASH,",
+        "    RUNTIME_MANIFEST,",
+        "    RUNTIME_TREE_HASH,",
+        ")",
+        "",
+        f'if RUNTIME_HASH != "{archive_hash}" or RUNTIME_TREE_HASH != "{tree_hash}":',
+        '    raise RuntimeError("FastPLMs runtime identity differs from the saved ESM3 bridge.")',
+        "",
+        f"_MAX_RUNTIME_FILE_BYTES = {_MAX_SAVED_RUNTIME_FILE_BYTES}",
+        f"_MAX_RUNTIME_TOTAL_BYTES = {_MAX_SAVED_RUNTIME_TOTAL_BYTES}",
+        f"_MAX_RUNTIME_ARCHIVE_BYTES = {_MAX_SAVED_RUNTIME_ARCHIVE_BYTES}",
+        "_MAX_RUNTIME_ENCODED_BYTES = (_MAX_RUNTIME_ARCHIVE_BYTES * 5 + 3) // 4",
+        "_EXPECTED_RUNTIME_FILES = (",
+        *(f"    {relative!r}," for relative in _SAVED_RUNTIME_FILES),
+        ")",
+        "_RUNTIME_TEMPORARIES = []",
+        "",
+        "def _runtime_tree_hash(files):",
+        "    digest = hashlib.sha256()",
+        "    for relative, record in sorted(files.items()):",
+        '        digest.update(relative.encode("utf-8"))',
+        '        digest.update(b"\\0")',
+        '        digest.update(str(record["size"]).encode("ascii"))',
+        '        digest.update(b"\\0")',
+        '        digest.update(record["sha256"].encode("ascii"))',
+        '        digest.update(b"\\n")',
+        "    return digest.hexdigest()",
+        "",
+        "def _validated_manifest():",
+        "    if not isinstance(RUNTIME_MANIFEST, dict) or set(RUNTIME_MANIFEST) != {",
+        '        "schema_version",',
+        '        "files",',
+        '        "total_size",',
+        "    }:",
+        '        raise RuntimeError("Embedded FastPLMs runtime manifest is invalid.")',
+        f'    if RUNTIME_MANIFEST["schema_version"] != {_SAVED_RUNTIME_SCHEMA_VERSION}:',
+        '        raise RuntimeError("Embedded FastPLMs runtime manifest schema is unsupported.")',
+        '    raw_files = RUNTIME_MANIFEST["files"]',
+        "    if not isinstance(raw_files, dict) or set(raw_files) != set(_EXPECTED_RUNTIME_FILES):",
+        '        raise RuntimeError("Embedded FastPLMs runtime inventory is invalid.")',
+        "    files = {}",
+        "    total_size = 0",
+        "    for relative in _EXPECTED_RUNTIME_FILES:",
+        "        record = raw_files[relative]",
+        '        if not isinstance(record, dict) or set(record) != {"sha256", "size"}:',
+        '            raise RuntimeError("Embedded FastPLMs runtime manifest record is invalid.")',
+        '        size = record["size"]',
+        '        file_hash = record["sha256"]',
+        "        if (",
+        "            isinstance(size, bool)",
+        "            or not isinstance(size, int)",
+        "            or size < 0",
+        "            or size > _MAX_RUNTIME_FILE_BYTES",
+        "            or not isinstance(file_hash, str)",
+        "            or len(file_hash) != 64",
+        '            or any(character not in "0123456789abcdef" for character in file_hash)',
+        "        ):",
+        '            raise RuntimeError("Embedded FastPLMs runtime manifest record is invalid.")',
+        '        files[relative] = {"sha256": file_hash, "size": size}',
+        "        total_size += size",
+        "        if total_size > _MAX_RUNTIME_TOTAL_BYTES:",
+        '            raise RuntimeError("Embedded FastPLMs runtime exceeds its size limit.")',
+        "    if (",
+        '        isinstance(RUNTIME_MANIFEST["total_size"], bool)',
+        '        or RUNTIME_MANIFEST["total_size"] != total_size',
+        "    ):",
+        '        raise RuntimeError("Embedded FastPLMs runtime total size is invalid.")',
+        "    if _runtime_tree_hash(files) != RUNTIME_TREE_HASH:",
+        '        raise RuntimeError("Embedded FastPLMs runtime tree hash mismatch.")',
+        "    return files",
+        "",
+        "_EXPECTED_MANIFEST = _validated_manifest()",
+        "",
+        "def _archive_relative_path(member):",
+        "    name = member.filename",
+        "    relative_archive = PurePosixPath(name)",
+        "    parts = relative_archive.parts",
+        "    if (",
+        '        not name or "\\\\" in name',
+        "        or relative_archive.is_absolute()",
+        "        or relative_archive.as_posix() != name",
+        "        or len(parts) < 2",
+        '        or parts[0] != "fastplms"',
+        '        or any(part in {"", ".", ".."} or ":" in part or "\\0" in part for part in parts)',
+        "    ):",
+        '        raise RuntimeError("Embedded FastPLMs archive has an unsafe path.")',
+        "    relative = PurePosixPath(*parts[1:]).as_posix()",
+        "    if relative not in _EXPECTED_MANIFEST:",
+        '        raise RuntimeError("Embedded FastPLMs archive inventory is unexpected.")',
+        "    return relative",
+        "",
+        "def _validated_archive_files(payload):",
+        "    if len(payload) > _MAX_RUNTIME_ARCHIVE_BYTES:",
         (
-            '"""Bridge to the bundled FastPLMs ESM3 runtime."""',
-            "",
-            "import base64",
-            "import hashlib",
-            "import importlib",
-            "import importlib.util",
-            "import shutil",
-            "import sys",
-            "import tempfile",
-            "from io import BytesIO",
-            "from pathlib import Path",
-            "from zipfile import ZipFile",
-            "",
-            "from .fastplms_bundle import RUNTIME_DATA, RUNTIME_HASH",
-            "",
-            "def _ensure_runtime():",
-            '    payload = base64.b85decode("".join(RUNTIME_DATA))',
-            "    if hashlib.sha256(payload).hexdigest() != RUNTIME_HASH:",
-            '        raise RuntimeError("Embedded FastPLMs runtime hash mismatch.")',
-            "    module_root = Path(__file__).resolve().parent",
-            '    runtime_root = module_root / f"_fastplms_runtime_{RUNTIME_HASH[:16]}"',
-            '    package_root = runtime_root / "fastplms"',
-            '    marker = package_root / "models" / "esm3" / "modeling_esm3.py"',
-            "    if not marker.is_file():",
-            "        temporary = Path(",
-            '            tempfile.mkdtemp(prefix=f".{runtime_root.name}.", dir=module_root)',
-            "        )",
-            "        try:",
-            "            with ZipFile(BytesIO(payload)) as archive:",
-            "                archive.extractall(temporary)",
-            "            try:",
-            "                temporary.rename(runtime_root)",
-            "            except OSError:",
-            "                if not marker.is_file():",
-            "                    raise",
-            "        finally:",
-            "            if temporary.exists():",
-            "                shutil.rmtree(temporary)",
-            "    return package_root",
-            "",
-            "def _install_runtime():",
-            '    if sys.modules.get("fastplms") is not None:',
-            '        return sys.modules["fastplms"]',
-            '    sys.modules.pop("fastplms", None)',
-            "    package_root = _ensure_runtime()",
-            "    spec = importlib.util.spec_from_file_location(",
-            '        "fastplms",',
-            '        package_root / "__init__.py",',
-            "        submodule_search_locations=[str(package_root)],",
-            "    )",
-            "    if spec is None or spec.loader is None:",
-            '        raise ImportError("Unable to load the embedded FastPLMs runtime.")',
-            "    package = importlib.util.module_from_spec(spec)",
-            '    sys.modules["fastplms"] = package',
-            "    try:",
-            "        spec.loader.exec_module(package)",
-            "    except BaseException:",
-            '        sys.modules.pop("fastplms", None)',
-            "        raise",
-            "    return package",
-            "",
-            "_install_runtime()",
-            '_modeling = importlib.import_module("fastplms.models.esm3.modeling_esm3")',
-            "FastESM3Config = _modeling.FastESM3Config",
-            "FastESM3Model = _modeling.FastESM3Model",
-            "",
-        )
-    )
-    (save_directory / "modeling_fastplms.py").write_text(
-        bridge,
-        encoding="utf-8",
-        newline="\n",
-    )
+            '        raise RuntimeError("Embedded FastPLMs archive exceeds its compressed '
+            'size limit.")'
+        ),
+        "    try:",
+        "        with ZipFile(BytesIO(payload)) as archive:",
+        "            members = archive.infolist()",
+        "            if archive.comment or len(members) != len(_EXPECTED_MANIFEST):",
+        '                raise RuntimeError("Embedded FastPLMs archive inventory is invalid.")',
+        "            files = {}",
+        "            total_size = 0",
+        "            for member in members:",
+        "                relative = _archive_relative_path(member)",
+        "                if relative in files:",
+        '                    raise RuntimeError("Embedded FastPLMs archive repeats a path.")',
+        "                record = _EXPECTED_MANIFEST[relative]",
+        "                if (",
+        "                    member.is_dir()",
+        "                    or member.flag_bits & 0x1",
+        "                    or member.compress_type != ZIP_DEFLATED",
+        "                    or member.create_system != 3",
+        "                    or member.external_attr >> 16 != 0o100644",
+        "                    or member.date_time != (1980, 1, 1, 0, 0, 0)",
+        "                    or member.extra",
+        "                    or member.comment",
+        '                    or member.filename != f"fastplms/{relative}"',
+        '                    or member.file_size != record["size"]',
+        "                    or member.file_size > _MAX_RUNTIME_FILE_BYTES",
+        "                    or member.compress_size > _MAX_RUNTIME_ARCHIVE_BYTES",
+        "                ):",
+        (
+            '                    raise RuntimeError("Embedded FastPLMs archive member is not '
+            'canonical.")'
+        ),
+        '                with archive.open(member, mode="r") as handle:',
+        '                    contents = handle.read(record["size"] + 1)',
+        "                if (",
+        '                    len(contents) != record["size"]',
+        '                    or hashlib.sha256(contents).hexdigest() != record["sha256"]',
+        "                ):",
+        '                    raise RuntimeError("Embedded FastPLMs archive member hash mismatch.")',
+        "                total_size += len(contents)",
+        "                if total_size > _MAX_RUNTIME_TOTAL_BYTES:",
+        (
+            '                    raise RuntimeError("Embedded FastPLMs archive exceeds its size '
+            'limit.")'
+        ),
+        "                files[relative] = contents",
+        "    except RuntimeError:",
+        "        raise",
+        "    except (BadZipFile, KeyError, OSError, ValueError) as error:",
+        '        raise RuntimeError("Embedded FastPLMs archive is invalid.") from error',
+        "    if set(files) != set(_EXPECTED_MANIFEST):",
+        '        raise RuntimeError("Embedded FastPLMs archive inventory is incomplete.")',
+        "    return files",
+        "",
+        "def _read_runtime_file(package_root, relative):",
+        "    current = package_root",
+        "    parts = PurePosixPath(relative).parts",
+        "    for index, part in enumerate(parts):",
+        "        current = current / part",
+        "        try:",
+        "            metadata = current.lstat()",
+        "        except OSError as error:",
+        '            raise RuntimeError(f"Runtime file is missing: {relative!r}.") from error',
+        "        if stat.S_ISLNK(metadata.st_mode):",
+        '            raise RuntimeError(f"Runtime path contains a symlink: {relative!r}.")',
+        "        if index < len(parts) - 1:",
+        "            if not stat.S_ISDIR(metadata.st_mode):",
+        '                raise RuntimeError(f"Runtime parent is not a directory: {relative!r}.")',
+        "            continue",
+        "        if not stat.S_ISREG(metadata.st_mode):",
+        '            raise RuntimeError(f"Runtime entry is not a regular file: {relative!r}.")',
+        "        if metadata.st_size > _MAX_RUNTIME_FILE_BYTES:",
+        '            raise RuntimeError(f"Runtime file exceeds its size limit: {relative!r}.")',
+        "        before = metadata",
+        "    try:",
+        '        with current.open("rb") as handle:',
+        "            contents = handle.read(_MAX_RUNTIME_FILE_BYTES + 1)",
+        "        after = current.lstat()",
+        "    except OSError as error:",
+        '        raise RuntimeError(f"Unable to read runtime file: {relative!r}.") from error',
+        "    before_identity = (",
+        "        before.st_dev,",
+        "        before.st_ino,",
+        "        before.st_size,",
+        "        before.st_mtime_ns,",
+        "        before.st_ctime_ns,",
+        "    )",
+        "    after_identity = (",
+        "        after.st_dev,",
+        "        after.st_ino,",
+        "        after.st_size,",
+        "        after.st_mtime_ns,",
+        "        after.st_ctime_ns,",
+        "    )",
+        "    if (",
+        "        stat.S_ISLNK(after.st_mode)",
+        "        or not stat.S_ISREG(after.st_mode)",
+        "        or before_identity != after_identity",
+        "        or len(contents) != before.st_size",
+        "        or len(contents) > _MAX_RUNTIME_FILE_BYTES",
+        "    ):",
+        '        raise RuntimeError(f"Runtime file changed while validated: {relative!r}.")',
+        "    return contents",
+        "",
+        "def _runtime_file_manifest(package_root):",
+        "    try:",
+        "        root_metadata = package_root.lstat()",
+        "    except OSError as error:",
+        '        raise RuntimeError("Runtime package root is unavailable.") from error',
+        "    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):",
+        '        raise RuntimeError("Runtime package root must be a non-symlink directory.")',
+        "    files = {}",
+        "    total_size = 0",
+        "    for relative in _EXPECTED_RUNTIME_FILES:",
+        "        contents = _read_runtime_file(package_root, relative)",
+        "        files[relative] = {",
+        '            "sha256": hashlib.sha256(contents).hexdigest(),',
+        '            "size": len(contents),',
+        "        }",
+        "        total_size += len(contents)",
+        "        if total_size > _MAX_RUNTIME_TOTAL_BYTES:",
+        '            raise RuntimeError("Runtime package exceeds its total size limit.")',
+        "    return files",
+        "",
+        "def _cleanup_runtime_temporaries():",
+        "    while _RUNTIME_TEMPORARIES:",
+        "        _RUNTIME_TEMPORARIES.pop().cleanup()",
+        "",
+        "atexit.register(_cleanup_runtime_temporaries)",
+        "",
+        "def _ensure_runtime():",
+        "    if (",
+        "        not isinstance(RUNTIME_DATA, tuple)",
+        "        or not RUNTIME_DATA",
+        "        or any(not isinstance(chunk, str) for chunk in RUNTIME_DATA)",
+        "    ):",
+        '        raise RuntimeError("Embedded FastPLMs runtime data is invalid.")',
+        '    encoded = "".join(RUNTIME_DATA)',
+        "    if len(encoded) > _MAX_RUNTIME_ENCODED_BYTES:",
+        '        raise RuntimeError("Embedded FastPLMs runtime data exceeds its size limit.")',
+        "    try:",
+        '        payload = base64.b85decode(encoded.encode("ascii"))',
+        "    except (UnicodeEncodeError, ValueError) as error:",
+        '        raise RuntimeError("Embedded FastPLMs runtime data is invalid.") from error',
+        "    if hashlib.sha256(payload).hexdigest() != RUNTIME_HASH:",
+        '        raise RuntimeError("Embedded FastPLMs runtime hash mismatch.")',
+        "    files = _validated_archive_files(payload)",
+        '    temporary = tempfile.TemporaryDirectory(prefix="fastplms-esm3-runtime-")',
+        "    try:",
+        "        runtime_root = Path(temporary.name).resolve()",
+        "        module_root = Path(__file__).resolve().parent",
+        "        if runtime_root == module_root or module_root in runtime_root.parents:",
+        (
+            '            raise RuntimeError("FastPLMs runtime temporary must be outside the saved '
+            'model.")'
+        ),
+        '        package_root = runtime_root / "fastplms"',
+        "        for relative in _EXPECTED_RUNTIME_FILES:",
+        "            target = package_root.joinpath(*PurePosixPath(relative).parts)",
+        "            target.parent.mkdir(parents=True, exist_ok=True)",
+        '            with target.open("xb") as handle:',
+        "                handle.write(files[relative])",
+        "        actual = _runtime_file_manifest(package_root)",
+        "        if (",
+        "            actual != _EXPECTED_MANIFEST",
+        "            or _runtime_tree_hash(actual) != RUNTIME_TREE_HASH",
+        "        ):",
+        '            raise RuntimeError("Extracted FastPLMs runtime identity mismatch.")',
+        "    except BaseException:",
+        "        temporary.cleanup()",
+        "        raise",
+        "    return package_root, temporary",
+        "",
+        "def _verify_loaded_runtime(package):",
+        '    package_file = getattr(package, "__file__", None)',
+        "    if not isinstance(package_file, str) or not package_file:",
+        "        raise RuntimeError(",
+        '            "Loaded FastPLMs version/runtime mismatch: source path is unavailable."',
+        "        )",
+        "    package_root = Path(package_file).absolute().parent",
+        "    try:",
+        "        actual = _runtime_file_manifest(package_root)",
+        "    except RuntimeError as error:",
+        "        raise RuntimeError(",
+        '            "Loaded FastPLMs version/runtime mismatch: sources cannot be verified."',
+        "        ) from error",
+        "    if actual != _EXPECTED_MANIFEST or _runtime_tree_hash(actual) != RUNTIME_TREE_HASH:",
+        "        mismatch = next(",
+        "            (",
+        "                relative",
+        "                for relative in _EXPECTED_RUNTIME_FILES",
+        "                if actual.get(relative) != _EXPECTED_MANIFEST[relative]",
+        "            ),",
+        '            "unknown",',
+        "        )",
+        "        raise RuntimeError(",
+        '            f"Loaded FastPLMs version/runtime mismatch at {mismatch!r}. "',
+        '            "Install the matching FastPLMs release or use a separate Python process."',
+        "        )",
+        "    package.__fastplms_saved_runtime_tree_hash__ = RUNTIME_TREE_HASH",
+        "    package.__fastplms_saved_runtime_manifest__ = _EXPECTED_MANIFEST",
+        "    return package",
+        "",
+        "def _install_runtime():",
+        '    installed = sys.modules.get("fastplms")',
+        "    if installed is not None:",
+        "        return _verify_loaded_runtime(installed)",
+        '    stale = sorted(name for name in sys.modules if name.startswith("fastplms."))',
+        "    if stale:",
+        "        raise RuntimeError(",
+        '            "Loaded FastPLMs version/runtime mismatch: orphaned submodules exist."',
+        "        )",
+        "    package_root, temporary = _ensure_runtime()",
+        "    spec = importlib.util.spec_from_file_location(",
+        '        "fastplms",',
+        '        package_root / "__init__.py",',
+        "        submodule_search_locations=[str(package_root)],",
+        "    )",
+        "    if spec is None or spec.loader is None:",
+        "        temporary.cleanup()",
+        '        raise ImportError("Unable to load the embedded FastPLMs runtime.")',
+        "    package = importlib.util.module_from_spec(spec)",
+        '    sys.modules["fastplms"] = package',
+        "    previous = sys.dont_write_bytecode",
+        "    sys.dont_write_bytecode = True",
+        "    try:",
+        "        spec.loader.exec_module(package)",
+        "    except BaseException:",
+        '        sys.modules.pop("fastplms", None)',
+        "        temporary.cleanup()",
+        "        raise",
+        "    finally:",
+        "        sys.dont_write_bytecode = previous",
+        "    _RUNTIME_TEMPORARIES.append(temporary)",
+        "    package.__fastplms_saved_runtime_tree_hash__ = RUNTIME_TREE_HASH",
+        "    package.__fastplms_saved_runtime_manifest__ = _EXPECTED_MANIFEST",
+        "    package.__fastplms_saved_runtime_temporary__ = temporary",
+        "    return package",
+        "",
+        "def _import_without_bytecode(module_name):",
+        "    previous = sys.dont_write_bytecode",
+        "    sys.dont_write_bytecode = True",
+        "    try:",
+        "        return importlib.import_module(module_name)",
+        "    finally:",
+        "        sys.dont_write_bytecode = previous",
+        "",
+        "_install_runtime()",
+        '_modeling = _import_without_bytecode("fastplms.models.esm3.modeling_esm3")',
+        "FastESM3Config = _modeling.FastESM3Config",
+        "FastESM3Model = _modeling.FastESM3Model",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _replace_saved_runtime_file(path: Path, payload: bytes) -> None:
+    """Atomically replace one generated runtime file without following a symlink."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _remove_old_saved_runtime_path(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+        shutil.rmtree(path)
+        return
+    path.unlink()
+
+
+def _clean_old_saved_runtime(save_directory: Path) -> None:
+    _remove_old_saved_runtime_path(save_directory / "fastplms")
+    for pattern in ("_fastplms_runtime_*", "._fastplms_runtime_*"):
+        for candidate in save_directory.glob(pattern):
+            _remove_old_saved_runtime_path(candidate)
+
+
+def _validate_saved_runtime_destination(save_directory: Path) -> None:
+    if save_directory.is_symlink():
+        raise ValueError("ESM3 save directory must not be a symlink.")
+    package_source = Path(__file__).resolve().parents[2]
+    destination = save_directory.resolve(strict=False)
+    if destination == package_source or package_source in destination.parents:
+        raise ValueError("ESM3 save directory must be outside the FastPLMs source package.")
+    for name in ("config.json", "fastplms_bundle.py", "modeling_fastplms.py"):
+        if (save_directory / name).is_symlink():
+            raise ValueError(f"ESM3 generated save path must not be a symlink: {name!r}.")
+
+
+def _write_saved_runtime(
+    save_directory: Path,
+    prepared_runtime: tuple[bytes, dict[str, object], str] | None = None,
+) -> None:
+    """Make one ESM3 ``save_pretrained`` directory independently loadable."""
+
+    _validate_saved_runtime_destination(save_directory)
+    if prepared_runtime is None:
+        package_source = Path(__file__).resolve().parents[2]
+        prepared_runtime = _build_saved_runtime_archive(package_source)
+    archive, manifest, tree_hash = prepared_runtime
+    archive_hash, bundle = _render_saved_runtime_bundle(archive, manifest, tree_hash)
+    bridge = _render_saved_runtime_bridge(archive_hash, tree_hash).encode("utf-8")
+
+    _clean_old_saved_runtime(save_directory)
+    _replace_saved_runtime_file(save_directory / "fastplms_bundle.py", bundle)
+    _replace_saved_runtime_file(save_directory / "modeling_fastplms.py", bridge)
 
     config_path = save_directory / "config.json"
-    config = json.loads(config_path.read_text(encoding="utf-8"))
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("Saved ESM3 config.json is missing or invalid.") from error
+    if not isinstance(config, dict):
+        raise RuntimeError("Saved ESM3 config.json must contain a JSON object.")
     config["auto_map"] = {
         "AutoConfig": "modeling_fastplms.FastESM3Config",
         "AutoModel": "modeling_fastplms.FastESM3Model",
     }
-    config_path.write_text(
-        json.dumps(config, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    config_payload = (json.dumps(config, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    _replace_saved_runtime_file(config_path, config_payload)
 
 
 ESM3_OPEN_SMALL = "esm3_sm_open_v1"
@@ -295,7 +808,6 @@ _SUPPORTED_ATTENTION_BACKENDS = ("eager", "sdpa", "flex_attention")
 
 class FastESM3Config(PretrainedConfig):
     model_type = "fast_esm3"
-    _auto_class = "AutoConfig"
 
     def __init__(
         self,
@@ -310,8 +822,19 @@ class FastESM3Config(PretrainedConfig):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        assert hidden_size % FUNCTION_TOKENS_DEPTH == 0
-        assert hidden_size % num_attention_heads == 0
+        if hidden_size <= 0:
+            raise ValueError(f"hidden_size must be positive, got {hidden_size}.")
+        if num_attention_heads <= 0:
+            raise ValueError(f"num_attention_heads must be positive, got {num_attention_heads}.")
+        if hidden_size % FUNCTION_TOKENS_DEPTH != 0:
+            raise ValueError(
+                f"hidden_size must be divisible by {FUNCTION_TOKENS_DEPTH}, got {hidden_size}."
+            )
+        if hidden_size % num_attention_heads != 0:
+            raise ValueError(
+                "hidden_size must be divisible by num_attention_heads, "
+                f"got hidden_size={hidden_size} and num_attention_heads={num_attention_heads}."
+            )
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_attention_heads = num_attention_heads
@@ -326,8 +849,10 @@ class FastESM3Config(PretrainedConfig):
 @dataclass
 class FastESM3Output(ModelOutput):
     loss: torch.Tensor | None = None
-    logits: torch.Tensor | None = None
     last_hidden_state: torch.Tensor | None = None
+    hidden_states: tuple[torch.Tensor, ...] | None = None
+    attentions: tuple[torch.Tensor, ...] | None = None
+    logits: torch.Tensor | None = None
     sequence_logits: torch.Tensor | None = None
     structure_logits: torch.Tensor | None = None
     secondary_structure_logits: torch.Tensor | None = None
@@ -335,8 +860,6 @@ class FastESM3Output(ModelOutput):
     function_logits: torch.Tensor | None = None
     residue_logits: torch.Tensor | None = None
     embeddings: torch.Tensor | None = None
-    hidden_states: tuple[torch.Tensor, ...] | None = None
-    attentions: tuple[torch.Tensor, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -407,7 +930,8 @@ class EsmSequenceTokenizer(PreTrainedTokenizerFast):
     @property
     def chain_break_token_id(self) -> int:
         token_id = self.convert_tokens_to_ids(self.chain_break_token)
-        assert isinstance(token_id, int)
+        if not isinstance(token_id, int):
+            raise RuntimeError("ESM3 chain-break token did not resolve to one token id.")
         return token_id
 
     @property
@@ -466,7 +990,11 @@ def apply_rotary_emb_torch(
     interleaved: bool = False,
 ) -> torch.Tensor:
     ro_dim = cos.shape[-1] * 2
-    assert ro_dim <= x.shape[-1]
+    if ro_dim > x.shape[-1]:
+        raise ValueError(
+            "Rotary embedding width cannot exceed the input head dimension; "
+            f"got rotary width {ro_dim} and head dimension {x.shape[-1]}."
+        )
     seqlen = x.size(1)
     cos = cos[:seqlen]
     sin = sin[:seqlen]
@@ -565,8 +1093,10 @@ class RotaryEmbedding(nn.Module):
             device=q.device,
             dtype=q.dtype,
         )
-        assert self._cos_cached is not None
-        assert self._sin_cached is not None
+        if self._cos_cached is None or self._sin_cached is None:
+            raise RuntimeError(
+                "ESM3 rotary cache initialization did not produce sine/cosine tables."
+            )
         return (
             apply_rotary_emb_torch(
                 q,
@@ -591,10 +1121,13 @@ def fp32_autocast_context(device_type: str):
 
 class RotationMatrix:
     def __init__(self, rots: torch.Tensor):
-        if rots.shape[-1] == 9:
+        if rots.ndim >= 1 and rots.shape[-1] == 9:
             rots = rots.unflatten(-1, (3, 3))
-        assert rots.shape[-1] == 3
-        assert rots.shape[-2] == 3
+        if rots.ndim < 2 or tuple(rots.shape[-2:]) != (3, 3):
+            raise ValueError(
+                "Rotation matrices must have trailing shape (3, 3) or flattened "
+                f"shape (9,); got {tuple(rots.shape)}."
+            )
         self._rots = rots.to(torch.float32)
 
     @classmethod
@@ -657,7 +1190,16 @@ class Affine3D:
     rot: RotationMatrix
 
     def __post_init__(self) -> None:
-        assert self.trans.shape[:-1] == self.rot.shape
+        if self.trans.ndim < 1 or self.trans.shape[-1] != 3:
+            raise ValueError(
+                "Affine translations must have trailing dimension 3; "
+                f"got {tuple(self.trans.shape)}."
+            )
+        if self.trans.shape[:-1] != self.rot.shape:
+            raise ValueError(
+                "Affine translation and rotation batch shapes must match; "
+                f"got {tuple(self.trans.shape[:-1])} and {tuple(self.rot.shape)}."
+            )
 
     def __getitem__(self, idx) -> Affine3D:
         indices = (idx,) if isinstance(idx, int) or idx is None else tuple(idx)
@@ -803,7 +1345,9 @@ class MultiHeadAttention(nn.Module):
         self,
         x: torch.Tensor,
         seq_id: torch.Tensor | None,
+        attention_mask: torch.Tensor | None = None,
         output_attentions: bool = False,
+        effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         qkv = self.layernorm_qkv(x)
         query, key, value = torch.chunk(qkv, 3, dim=-1)
@@ -818,44 +1362,52 @@ class MultiHeadAttention(nn.Module):
         )
         query, key, value = map(reshaper, (query, key, value))
 
+        mask = None
         if seq_id is not None:
-            mask = seq_id.unsqueeze(-1) == seq_id.unsqueeze(-2)
-            mask = mask.unsqueeze(1)
-        else:
-            mask = None
+            mask = (seq_id.unsqueeze(-1) == seq_id.unsqueeze(-2)).unsqueeze(1)
+        if attention_mask is not None:
+            key_padding_mask = attention_mask[:, None, None, :]
+            mask = key_padding_mask if mask is None else mask & key_padding_mask
 
-        if output_attentions and self.attn_backend != AttentionBackend.EAGER:
-            warn_attention_backend_fallback(
+        if effective_backend is None:
+            effective_backend = resolve_attention_backend_for_call(
                 self.attn_backend,
-                effective_backend=AttentionBackend.EAGER,
-                reason=(
-                    "output_attentions=True requires the full materialized attention "
-                    "probability matrix, which optimized PyTorch attention APIs do not return."
-                ),
+                output_attentions=output_attentions,
             )
-        if output_attentions or self.attn_backend == AttentionBackend.EAGER:
+        if output_attentions or effective_backend == AttentionBackend.EAGER:
             attn_scores = torch.einsum("bhld,bhsd->bhls", query, key) * self.scale
             if mask is not None:
-                attn_scores = attn_scores.masked_fill(~mask, float("-inf"))
+                attn_scores = attn_scores.masked_fill(
+                    ~mask,
+                    torch.finfo(attn_scores.dtype).min,
+                )
             attn_weights = torch.softmax(attn_scores, dim=-1)
+            if mask is not None:
+                attn_weights = attn_weights.masked_fill(~mask, 0.0)
             context = torch.einsum("bhls,bhsd->bhld", attn_weights, value)
             if not output_attentions:
                 attn_weights = None
         else:
             attn_weights = None
-            if self.attn_backend == AttentionBackend.FLEX:
-                block_mask = self._create_flex_block_mask(seq_id, query)
-                sequence_lengths = None
-                if seq_id is not None:
-                    sequence_lengths = tuple(int(n) for n in (seq_id >= 0).sum(dim=-1).tolist())
+            if effective_backend == AttentionBackend.FLEX:
+                block_mask = self._create_flex_block_mask(seq_id, attention_mask, query)
+                if seq_id is not None and attention_mask is not None:
+                    mask_semantics = "sequence_id_and_padding"
+                elif seq_id is not None:
+                    mask_semantics = "sequence_id_equality"
+                elif attention_mask is not None:
+                    mask_semantics = "padding"
+                else:
+                    mask_semantics = "dense"
                 fn = _get_flex_attention_fn(
                     device=query.device,
                     dtype=query.dtype,
                     shape=tuple(query.shape),
-                    sequence_lengths=sequence_lengths,
-                    mask_semantics="sequence_id_equality",
+                    sequence_lengths=None,
+                    mask_semantics=mask_semantics,
                 )
-                assert fn is not None, "Flex Attention is not available in this environment."
+                if fn is None:
+                    raise RuntimeError("Flex Attention is not available in this environment.")
                 context = fn(
                     query,
                     key,
@@ -863,7 +1415,7 @@ class MultiHeadAttention(nn.Module):
                     block_mask=block_mask,
                     scale=self.scale,
                 )
-            elif self.attn_backend == AttentionBackend.SDPA:
+            elif effective_backend == AttentionBackend.SDPA:
                 context = F.scaled_dot_product_attention(
                     query,
                     key,
@@ -872,25 +1424,34 @@ class MultiHeadAttention(nn.Module):
                     scale=self.scale,
                 )
             else:
-                raise AssertionError(f"Unsupported resolved ESM3 backend: {self.attn_backend}")
+                raise RuntimeError(f"Unsupported resolved ESM3 backend: {effective_backend}")
 
+        if mask is not None:
+            context = context.masked_fill(~mask.any(dim=-1, keepdim=True), 0.0)
         context = einops.rearrange(context, "b h s d -> b s (h d)")
         return self.out_proj(context), attn_weights
 
     @staticmethod
     def _create_flex_block_mask(
         seq_id: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
         query: torch.Tensor,
     ) -> BlockMask | None:
-        if seq_id is None:
+        if seq_id is None and attention_mask is None:
             return None
-        assert create_block_mask is not None, (
-            "Flex Attention requested but torch.create_block_mask is unavailable."
-        )
+        if create_block_mask is None:
+            raise RuntimeError(
+                "Flex Attention requested but torch.create_block_mask is unavailable."
+            )
         batch_size, _, seq_len, _ = query.shape
 
-        def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
-            return seq_id[batch_idx, q_idx] == seq_id[batch_idx, kv_idx]
+        def mask_mod(batch_idx, _head_idx, q_idx, kv_idx):
+            if seq_id is None:
+                return attention_mask[batch_idx, kv_idx]
+            allowed = seq_id[batch_idx, q_idx] == seq_id[batch_idx, kv_idx]
+            if attention_mask is not None:
+                allowed = allowed & attention_mask[batch_idx, kv_idx]
+            return allowed
 
         return create_block_mask(
             mask_mod,
@@ -1085,7 +1646,8 @@ class UnifiedTransformerBlock(nn.Module):
             )
         self.use_geom_attn = use_geom_attn
         if self.use_geom_attn:
-            assert v_heads is not None
+            if v_heads is None:
+                raise ValueError("v_heads is required when geometric attention is enabled.")
             self.geom_attn = GeometricReasoningOriginalImpl(
                 c_s=d_model,
                 v_heads=v_heads,
@@ -1109,17 +1671,21 @@ class UnifiedTransformerBlock(nn.Module):
         self,
         x: torch.Tensor,
         sequence_id: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
         frames: Affine3D,
         frames_mask: torch.Tensor,
         chain_id: torch.Tensor,
         output_attentions: bool = False,
+        effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         attn_weights: torch.Tensor | None = None
         if self.use_plain_attn:
             plain_residual, attn_weights = self.attn(
                 x,
                 sequence_id,
+                attention_mask,
                 output_attentions=output_attentions,
+                effective_backend=effective_backend,
             )
             x = self._add_scaled_residual(x, plain_residual)
 
@@ -1171,52 +1737,62 @@ class TransformerStack(nn.Module):
                 for index in range(n_layers)
             ]
         )
+        self.attention_backend = resolve_attention_backend(attn_backend)
         self.norm = nn.LayerNorm(d_model, bias=False)
 
     def forward(
         self,
         x: torch.Tensor,
         sequence_id: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
         affine: Affine3D | None = None,
         affine_mask: torch.Tensor | None = None,
         chain_id: torch.Tensor | None = None,
         output_attentions: bool = False,
+        output_hidden_states: bool = False,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
-        tuple[torch.Tensor, ...],
+        tuple[torch.Tensor, ...] | None,
         tuple[torch.Tensor, ...] | None,
     ]:
         *batch_dims, _ = x.shape
         if chain_id is None:
             chain_id = torch.ones(size=batch_dims, dtype=torch.int64, device=x.device)
-        assert affine is not None
-        assert affine_mask is not None
-        all_hidden_states = []
+        if affine is None or affine_mask is None:
+            raise ValueError("affine and affine_mask are required for ESM3 transformer calls.")
+        effective_backend = resolve_attention_backend_for_call(
+            self.attention_backend,
+            output_attentions=output_attentions,
+        )
+        all_hidden_states = [] if output_hidden_states else None
         all_attentions = []
         for block in self.blocks:
             x, attn_weights = block(
                 x,
                 sequence_id,
+                attention_mask,
                 affine,
                 affine_mask,
                 chain_id,
                 output_attentions=output_attentions,
+                effective_backend=effective_backend,
             )
-            all_hidden_states.append(x)
+            if all_hidden_states is not None:
+                all_hidden_states.append(x)
             if output_attentions and attn_weights is not None:
                 all_attentions.append(attn_weights)
-        hidden_states = tuple(all_hidden_states)
+        hidden_states = tuple(all_hidden_states) if all_hidden_states is not None else None
         attentions = tuple(all_attentions) if output_attentions else None
         return self.norm(x), x, hidden_states, attentions
 
 
 class EncodeInputs(nn.Module):
-    def __init__(self, d_model: int):
+    def __init__(self, d_model: int, sequence_vocab_size: int = 64):
         super().__init__()
 
         discrete_tracks = (
-            ("sequence_embed", 64),
+            ("sequence_embed", sequence_vocab_size),
             ("structure_tokens_embed", 4101),
             ("ss8_embed", 11),
             ("sasa_embed", 19),
@@ -1306,14 +1882,14 @@ class ESM3CoreOutput:
     function_logits: torch.Tensor
     residue_logits: torch.Tensor
     embeddings: torch.Tensor
-    hidden_states: tuple[torch.Tensor, ...]
+    hidden_states: tuple[torch.Tensor, ...] | None = None
     attentions: tuple[torch.Tensor, ...] | None = None
 
 
 class OutputHeads(nn.Module):
-    def __init__(self, d_model: int):
+    def __init__(self, d_model: int, sequence_vocab_size: int = 64):
         super().__init__()
-        self.sequence_head = RegressionHead(d_model, 64)
+        self.sequence_head = RegressionHead(d_model, sequence_vocab_size)
         self.structure_head = RegressionHead(d_model, 4096)
         self.ss8_head = RegressionHead(d_model, 8 + 3)
         self.sasa_head = RegressionHead(d_model, 16 + 3)
@@ -1324,7 +1900,7 @@ class OutputHeads(nn.Module):
         self,
         x: torch.Tensor,
         embed: torch.Tensor,
-        hidden_states: tuple[torch.Tensor, ...],
+        hidden_states: tuple[torch.Tensor, ...] | None = None,
         attentions: tuple[torch.Tensor, ...] | None = None,
     ) -> ESM3CoreOutput:
         function_logits = self.function_head(x)
@@ -1350,9 +1926,10 @@ class ESM3Core(nn.Module):
         v_heads: int,
         n_layers: int,
         attn_backend: str = "sdpa",
+        sequence_vocab_size: int = 64,
     ):
         super().__init__()
-        self.encoder = EncodeInputs(d_model)
+        self.encoder = EncodeInputs(d_model, sequence_vocab_size)
         self.transformer = TransformerStack(
             d_model,
             n_heads,
@@ -1361,7 +1938,7 @@ class ESM3Core(nn.Module):
             mask_and_zero_frameless=True,
             attn_backend=attn_backend,
         )
-        self.output_heads = OutputHeads(d_model)
+        self.output_heads = OutputHeads(d_model, sequence_vocab_size)
 
     def forward(
         self,
@@ -1377,9 +1954,12 @@ class ESM3Core(nn.Module):
         structure_coords: torch.Tensor | None = None,
         chain_id: torch.Tensor | None = None,
         sequence_id: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
         output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
     ) -> ESM3CoreOutput:
         output_attentions = bool(output_attentions)
+        output_hidden_states = bool(output_hidden_states)
         present_inputs = [
             sequence_tokens,
             structure_tokens,
@@ -1458,13 +2038,35 @@ class ESM3Core(nn.Module):
             function_tokens,
             residue_annotation_tokens,
         )
+        expected_mask_shape = tuple(x.shape[:2])
+        if sequence_id is not None and tuple(sequence_id.shape) != expected_mask_shape:
+            raise ValueError(
+                "sequence_id must have shape (batch, sequence); "
+                f"expected {expected_mask_shape}, received {tuple(sequence_id.shape)}."
+            )
+        if attention_mask is not None:
+            if tuple(attention_mask.shape) != expected_mask_shape:
+                raise ValueError(
+                    "attention_mask must have shape (batch, sequence); "
+                    f"expected {expected_mask_shape}, received {tuple(attention_mask.shape)}."
+                )
+            if attention_mask.dtype != torch.bool and not bool(
+                torch.logical_or(attention_mask == 0, attention_mask == 1).all()
+            ):
+                raise ValueError("attention_mask must contain only boolean or 0/1 values.")
+            attention_mask = attention_mask.to(device=x.device, dtype=torch.bool)
+            if not bool(attention_mask.any(dim=-1).all()):
+                raise ValueError("attention_mask must keep at least one valid key per batch row.")
+            affine_mask = affine_mask & attention_mask
         x, embedding, hidden_states, attentions = self.transformer(
             x,
             sequence_id,
+            attention_mask,
             affine,
             affine_mask,
             chain_id,
             output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
         )
         return self.output_heads(
             x,
@@ -1490,6 +2092,7 @@ def _build_esm3_core(config: FastESM3Config) -> nn.Module:
         v_heads=config.num_vector_heads,
         n_layers=config.num_hidden_layers,
         attn_backend=config.attn_backend,
+        sequence_vocab_size=config.vocab_size,
     )
 
 
@@ -1502,10 +2105,6 @@ class FastESM3PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
     _supports_flash_attn_2 = False
     _supports_flash_attn_3 = False
     _fastplms_attention_implementations = _SUPPORTED_ATTENTION_BACKENDS
-
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        return True
 
     @property
     def tokenizer(self) -> EsmSequenceTokenizer:
@@ -1546,23 +2145,24 @@ class FastESM3PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
 
     @attn_backend.setter
     def attn_backend(self, backend: str) -> None:
-        assert backend in _SUPPORTED_ATTENTION_BACKENDS, (
-            f"ESM3 currently supports only {_SUPPORTED_ATTENTION_BACKENDS}; got {backend}."
-        )
-        self.config.attn_backend = backend
-        resolved = resolve_attention_backend(backend)
-        for module in self.modules():
-            if isinstance(module, MultiHeadAttention):
-                module.attn_backend = resolved
+        if backend not in _SUPPORTED_ATTENTION_BACKENDS:
+            raise ValueError(
+                f"ESM3 currently supports only {_SUPPORTED_ATTENTION_BACKENDS}; got {backend}."
+            )
+        self.set_attn_implementation(backend)
 
 
 class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, EmbeddingMixin):
     config_class = FastESM3Config
+    # Direct ESM3 saves intentionally package an independently loadable remote
+    # runtime. Register the concrete advertised class explicitly so
+    # Transformers writes a real AutoModel key instead of a null auto_map key.
     _auto_class = "AutoModel"
 
     def __init__(self, config: FastESM3Config, **kwargs):
         super().__init__(config, **kwargs)
         self.esm3 = _build_esm3_core(config)
+        self.post_init()
         self.init_ttt({"lora_target_replace_module": "MultiHeadAttention"})
 
     @property
@@ -1579,11 +2179,20 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
     def set_input_embeddings(self, value: nn.Module) -> None:
         self.esm3.encoder.sequence_embed = value
 
+    def get_output_embeddings(self) -> nn.Module:
+        return self.esm3.output_heads.sequence_head[-1]
+
+    def set_output_embeddings(self, value: nn.Module) -> None:
+        self.esm3.output_heads.sequence_head[-1] = value
+
     def save_pretrained(self, save_directory, *args, **kwargs) -> None:
         """Save weights plus the unchanged sources needed for an isolated reload."""
 
+        save_path = Path(save_directory)
+        _validate_saved_runtime_destination(save_path)
+        prepared_runtime = _build_saved_runtime_archive(Path(__file__).resolve().parents[2])
         super().save_pretrained(save_directory, *args, **kwargs)
-        _write_saved_runtime(Path(save_directory))
+        _write_saved_runtime(save_path, prepared_runtime)
 
     def tokenize_sequences(
         self,
@@ -1622,21 +2231,22 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
         store_all_hidden_states: bool = False,
         **kwargs,
     ) -> torch.Tensor:
+        output_hidden_states = store_all_hidden_states or hidden_state_index != -1
         output = self(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
             **kwargs,
         )
         if store_all_hidden_states:
-            assert output.hidden_states is not None, (
-                "store_all_hidden_states requires hidden states."
-            )
+            if output.hidden_states is None:
+                raise RuntimeError("store_all_hidden_states requires hidden states.")
             return torch.stack(tuple(output.hidden_states), dim=1)
         if hidden_state_index == -1:
             return output.last_hidden_state
-        assert output.hidden_states is not None, (
-            "hidden_state_index selection requires hidden states."
-        )
+        if output.hidden_states is None:
+            raise RuntimeError("hidden_state_index selection requires hidden states.")
         return output.hidden_states[hidden_state_index]
 
     def encode(
@@ -1677,27 +2287,65 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
         config = config or FastESM3GenerationConfig()
         if config.temperature <= 0:
             raise ValueError("temperature must be greater than zero")
+        if config.num_steps is not None:
+            if isinstance(config.num_steps, bool) or not isinstance(config.num_steps, int):
+                raise TypeError("num_steps must be an integer or None")
+            if config.num_steps <= 0:
+                raise ValueError("num_steps must be positive")
 
         return_strings = isinstance(inputs, (str, list))
         single_string = isinstance(inputs, str)
         if return_strings:
             encoded = self.encode(inputs)
             token_ids = encoded["input_ids"]
-            attention_mask = encoded["attention_mask"]
+            conditioning = {"attention_mask": encoded["attention_mask"]}
         elif isinstance(inputs, dict):
-            token_ids = inputs["input_ids"].to(self.device)
-            attention_mask = inputs.get("attention_mask")
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(self.device)
+            supported_inputs = {
+                "input_ids",
+                "attention_mask",
+                "sequence_tokens",
+                "structure_tokens",
+                "ss8_tokens",
+                "sasa_tokens",
+                "function_tokens",
+                "residue_annotation_tokens",
+                "average_plddt",
+                "per_res_plddt",
+                "structure_coords",
+                "chain_id",
+                "sequence_id",
+            }
+            unsupported = sorted(set(inputs) - supported_inputs)
+            if unsupported:
+                names = ", ".join(unsupported)
+                raise TypeError(f"Unsupported ESM3 generation inputs: {names}")
+            if "input_ids" in inputs and "sequence_tokens" in inputs:
+                raise ValueError("Pass only one of input_ids or sequence_tokens to generate().")
+            sequence_key = "input_ids" if "input_ids" in inputs else "sequence_tokens"
+            if sequence_key not in inputs:
+                raise ValueError("ESM3 generation requires input_ids or sequence_tokens.")
+            token_ids = inputs[sequence_key].to(self.device)
+            conditioning = {
+                name: value.to(self.device)
+                for name, value in inputs.items()
+                if name != sequence_key
+            }
         else:
             token_ids = inputs.to(self.device)
-            attention_mask = None
+            conditioning = {}
 
         single_tensor = token_ids.ndim == 1
         if single_tensor:
+            sequence_length = token_ids.shape[0]
             token_ids = token_ids.unsqueeze(0)
-            if attention_mask is not None and attention_mask.ndim == 1:
-                attention_mask = attention_mask.unsqueeze(0)
+            conditioning = {
+                name: (
+                    value.unsqueeze(0)
+                    if value.ndim > 0 and value.shape[0] == sequence_length
+                    else value
+                )
+                for name, value in conditioning.items()
+            }
         sampled_ids = token_ids.clone()
         initial_mask = sampled_ids.eq(SEQUENCE_MASK_TOKEN)
         n_masked = int(initial_mask.sum().item())
@@ -1708,9 +2356,7 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
                 return decoded[0] if single_string and isinstance(decoded, list) else decoded
             return result
 
-        n_steps = config.num_steps or n_masked
-        if n_steps < 1:
-            raise ValueError("num_steps must be positive")
+        n_steps = n_masked if config.num_steps is None else config.num_steps
         generator = None
         if config.seed is not None:
             generator = torch.Generator(device=sampled_ids.device)
@@ -1720,7 +2366,14 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
             remaining = sampled_ids.eq(SEQUENCE_MASK_TOKEN)
             if not bool(remaining.any()):
                 break
-            output = self(input_ids=sampled_ids, attention_mask=attention_mask)
+            with _temporary_eval(self):
+                output = self(
+                    sequence_tokens=sampled_ids,
+                    output_attentions=False,
+                    output_hidden_states=False,
+                    return_dict=True,
+                    **conditioning,
+                )
             amino_acid_logits = output.sequence_logits[..., 4:29] / config.temperature
             probabilities = amino_acid_logits.softmax(dim=-1)
             sampled = (
@@ -1800,13 +2453,23 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
         **kwargs,
-    ) -> FastESM3Output:
-        del output_hidden_states, return_dict, kwargs
+    ) -> FastESM3Output | tuple[torch.Tensor, ...]:
+        if kwargs:
+            names = ", ".join(sorted(kwargs))
+            raise TypeError(f"Unexpected ESM3 forward arguments: {names}")
+        output_attentions = (
+            output_attentions if output_attentions is not None else self.config.output_attentions
+        )
+        output_hidden_states = (
+            output_hidden_states
+            if output_hidden_states is not None
+            else self.config.output_hidden_states
+        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        if input_ids is not None and sequence_tokens is not None:
+            raise ValueError("Pass only one of input_ids or sequence_tokens.")
         if sequence_tokens is None:
             sequence_tokens = input_ids
-        if sequence_id is None and attention_mask is not None:
-            sequence_id = attention_mask.to(dtype=torch.bool)
-
         output = self.esm3(
             sequence_tokens=sequence_tokens,
             structure_tokens=structure_tokens,
@@ -1819,21 +2482,25 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
             structure_coords=structure_coords,
             chain_id=chain_id,
             sequence_id=sequence_id,
+            attention_mask=attention_mask,
             output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
         )
 
         loss = None
         if labels is not None:
+            labels = labels.to(output.sequence_logits.device)
             loss = F.cross_entropy(
                 output.sequence_logits.view(-1, output.sequence_logits.shape[-1]),
                 labels.view(-1),
                 ignore_index=-100,
             )
 
-        return FastESM3Output(
-            loss=loss,
-            logits=output.sequence_logits,
+        result = FastESM3Output(
             last_hidden_state=output.embeddings,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+            logits=output.sequence_logits,
             sequence_logits=output.sequence_logits,
             structure_logits=output.structure_logits,
             secondary_structure_logits=output.secondary_structure_logits,
@@ -1841,6 +2508,8 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
             function_logits=output.function_logits,
             residue_logits=output.residue_logits,
             embeddings=output.embeddings,
-            hidden_states=output.hidden_states,
-            attentions=output.attentions,
+            loss=loss,
         )
+        if not return_dict:
+            return result.to_tuple()
+        return result

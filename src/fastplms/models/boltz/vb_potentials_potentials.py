@@ -315,13 +315,37 @@ class FlatBottomPotential(Potential):
         )
 
         if negation_mask is not None:
+            if not torch.is_tensor(negation_mask):
+                raise TypeError(
+                    f"negation_mask must be a boolean tensor, got {type(negation_mask).__name__}."
+                )
+            if negation_mask.dtype != torch.bool:
+                raise TypeError(
+                    f"negation_mask must be a boolean tensor, got {negation_mask.dtype}."
+                )
+            if negation_mask.device != value.device:
+                raise ValueError(
+                    "negation_mask must be on the same device as value; "
+                    f"got {negation_mask.device} and {value.device}."
+                )
+            try:
+                expanded_negation_mask = negation_mask.expand_as(value)
+            except RuntimeError as error:
+                raise ValueError(
+                    "negation_mask must be broadcastable to value shape "
+                    f"{tuple(value.shape)}, got {tuple(negation_mask.shape)}."
+                ) from error
             unbounded_below = torch.isneginf(lower)
             unbounded_above = torch.isposinf(upper)
-            assert torch.all(unbounded_below + unbounded_above + negation_mask)
-            select_upper = ~unbounded_above * ~negation_mask
+            valid_negation = unbounded_below | unbounded_above | expanded_negation_mask
+            if not bool(torch.all(valid_negation).item()):
+                raise ValueError(
+                    "negation_mask may be false only where at least one bound is infinite."
+                )
+            select_upper = ~unbounded_above & ~expanded_negation_mask
             lower[select_upper] = upper[select_upper]
             upper[select_upper] = float("inf")
-            select_lower = ~unbounded_below * ~negation_mask
+            select_lower = ~unbounded_below & ~expanded_negation_mask
             upper[select_lower] = lower[select_lower]
             lower[select_lower] = float("-inf")
 

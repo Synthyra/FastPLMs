@@ -14,6 +14,7 @@ depend on the pinned fair-esm or OpenFold parity repositories.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,7 +39,7 @@ from transformers.models.esm.openfold_utils import residue_constants
 from fastplms.models._esm_rotary import RotaryEmbedding
 
 # Hub composite artifacts define these shared names earlier in the assembled file.
-try:  # noqa: SIM105
+try:
     from fastplms.attention import (
         AttentionBackend,
         BlockMask,
@@ -48,10 +49,25 @@ try:  # noqa: SIM105
         get_attention_mask,
         kernels_flash_attention_func,
         resolve_attention_backend,
-        warn_attention_backend_fallback,
+        resolve_attention_backend_for_call,
     )
-except ImportError:
-    pass  # Running as HF Hub composite; shared definitions are above
+except ModuleNotFoundError as error:
+    _COMPOSITE_REQUIRED_NAMES = (
+        "AttentionBackend",
+        "BlockMask",
+        "FastPLMsAttentionMixin",
+        "_get_flex_attention_fn",
+        "flex_attention",
+        "get_attention_mask",
+        "kernels_flash_attention_func",
+        "resolve_attention_backend",
+        "resolve_attention_backend_for_call",
+    )
+    if error.name != "fastplms" or any(
+        name not in globals() for name in _COMPOSITE_REQUIRED_NAMES
+    ):
+        raise
+    # Legacy flat Hub composites define every shared symbol above this block.
 
 
 # =============================================================================
@@ -66,6 +82,99 @@ class FastEsmEncoderOutput(ModelOutput):
     attentions: tuple[torch.Tensor, ...] | None = None
 
 
+@dataclass
+class FastEsmForProteinFoldingOutput(ModelOutput):
+    """Folding output with a standard Transformers AutoModel prefix."""
+
+    last_hidden_state: torch.Tensor | None = None
+    hidden_states: tuple[torch.Tensor, ...] | None = None
+    attentions: tuple[torch.Tensor, ...] | None = None
+    frames: torch.Tensor | None = None
+    sidechain_frames: torch.Tensor | None = None
+    unnormalized_angles: torch.Tensor | None = None
+    angles: torch.Tensor | None = None
+    positions: torch.Tensor | None = None
+    states: torch.Tensor | None = None
+    s_s: torch.Tensor | None = None
+    s_z: torch.Tensor | None = None
+    distogram_logits: torch.Tensor | None = None
+    lm_logits: torch.Tensor | None = None
+    aatype: torch.Tensor | None = None
+    atom14_atom_exists: torch.Tensor | None = None
+    residx_atom14_to_atom37: torch.Tensor | None = None
+    residx_atom37_to_atom14: torch.Tensor | None = None
+    atom37_atom_exists: torch.Tensor | None = None
+    residue_index: torch.Tensor | None = None
+    lddt_head: torch.Tensor | None = None
+    plddt: torch.Tensor | None = None
+    ptm_logits: torch.Tensor | None = None
+    ptm: torch.Tensor | None = None
+    aligned_confidence_probs: torch.Tensor | None = None
+    predicted_aligned_error: torch.Tensor | None = None
+    max_predicted_aligned_error: torch.Tensor | None = None
+    mlm_targets: torch.Tensor | None = None
+
+
+# ``EsmForProteinFolding.forward`` calls
+# ``compute_language_model_representations`` without forwarding output controls.
+# Context variables bridge that private call boundary without mutating the model
+# instance, so concurrent calls can independently request attention tensors.
+_ESMFOLD_OUTPUT_ATTENTIONS: ContextVar[bool] = ContextVar(
+    "fastplms_esmfold_output_attentions",
+    default=False,
+)
+_ESMFOLD_CAPTURED_ATTENTIONS: ContextVar[
+    tuple[torch.Tensor, ...] | None
+] = ContextVar(
+    "fastplms_esmfold_captured_attentions",
+    default=None,
+)
+
+
+def _align_internal_esm_attentions(
+    attentions: tuple[torch.Tensor, ...],
+    residue_mask: torch.Tensor,
+) -> tuple[torch.Tensor, ...]:
+    """Remove internal BOS/EOS positions while preserving public padding slots."""
+
+    batch_size, sequence_length = residue_mask.shape
+    public_positions = torch.arange(sequence_length, device=residue_mask.device)
+    valid_lengths = residue_mask.to(dtype=torch.int64).sum(dim=-1, keepdim=True)
+    # Internal layout is BOS, compact biological residues, EOS, then padding.
+    # Public padding positions therefore advance by two rather than one.
+    internal_positions = public_positions.unsqueeze(0) + 1
+    internal_positions = internal_positions + (
+        public_positions.unsqueeze(0) >= valid_lengths
+    ).to(dtype=torch.int64)
+
+    aligned: list[torch.Tensor] = []
+    for attention in attentions:
+        if attention.shape[0] != batch_size or attention.shape[-2:] != (
+            sequence_length + 2,
+            sequence_length + 2,
+        ):
+            raise RuntimeError(
+                "FastESM attention shape does not match the folding input: "
+                f"got {tuple(attention.shape)} for residue mask "
+                f"{tuple(residue_mask.shape)}."
+            )
+        query_index = internal_positions[:, None, :, None].expand(
+            batch_size,
+            attention.shape[1],
+            sequence_length,
+            attention.shape[-1],
+        )
+        query_aligned = torch.gather(attention, dim=2, index=query_index)
+        key_index = internal_positions[:, None, None, :].expand(
+            batch_size,
+            attention.shape[1],
+            sequence_length,
+            sequence_length,
+        )
+        aligned.append(torch.gather(query_aligned, dim=3, index=key_index))
+    return tuple(aligned)
+
+
 # =============================================================================
 # FastESM2 Attention Layers (multi-backend: SDPA, Flash, Flex)
 # =============================================================================
@@ -74,10 +183,11 @@ class FastEsmEncoderOutput(ModelOutput):
 class EsmSelfAttention(nn.Module):
     def __init__(self, config, position_embedding_type: str | None = None):
         super().__init__()
-        assert config.hidden_size % config.num_attention_heads == 0, (
-            f"The hidden size ({config.hidden_size}) is not a multiple of the number of attention "
-            f"heads ({config.num_attention_heads})"
-        )
+        if config.hidden_size % config.num_attention_heads != 0:
+            raise ValueError(
+                f"The hidden size ({config.hidden_size}) is not a multiple of the number "
+                f"of attention heads ({config.num_attention_heads})."
+            )
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
@@ -136,15 +246,17 @@ class EsmSelfAttention(nn.Module):
         output_attentions: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if output_attentions:
-            warn_attention_backend_fallback(
-                self.attn_backend,
-                effective_backend=AttentionBackend.EAGER,
-                reason=(
-                    "output_attentions=True requires the full materialized attention "
-                    "probability matrix, which optimized PyTorch attention APIs do not return."
-                ),
-            )
             return self._manual_attn(query_heads, key_heads, value_heads, attention_mask_4d)
+
+        if (
+            self.training
+            and self.dropout_prob > 0
+            and self.attn_backend == AttentionBackend.FLEX_ATTENTION
+        ):
+            raise RuntimeError(
+                "ESMFold flex_attention is inference-only when attention dropout is "
+                "nonzero. Use eager or SDPA for this training configuration."
+            )
 
         if self.attn_backend == AttentionBackend.EAGER:
             attn_output, _ = self._manual_attn(
@@ -214,17 +326,12 @@ class EsmSelfAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         attention_mask_2d: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, None]:
-        assert flex_attention is not None, "Flex attention is not available in this environment."
-        sequence_lengths = (
-            tuple(int(length) for length in attention_mask_2d.sum(dim=-1).tolist())
-            if attention_mask_2d is not None
-            else (query_heads.shape[-2],) * query_heads.shape[0]
-        )
+        if flex_attention is None:
+            raise RuntimeError("Flex attention is not available in this environment.")
         fn = _get_flex_attention_fn(
             device=query_heads.device,
             dtype=query_heads.dtype,
             shape=tuple(query_heads.shape),
-            sequence_lengths=sequence_lengths,
             mask_semantics="padding",
         )
         context_heads = fn(
@@ -327,8 +434,12 @@ class FastEsmEncoder(nn.Module):
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
 
+        effective_backend = resolve_attention_backend_for_call(
+            self.attention_backend,
+            output_attentions=output_attentions,
+        )
         attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
-            effective_backend=self.attention_backend,
+            effective_backend=effective_backend,
             batch_size=hidden_states.shape[0],
             seq_len=hidden_states.shape[1],
             device=hidden_states.device,
@@ -393,10 +504,18 @@ class FastEsmBackbone(nn.Module):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
-        **kwargs,
-    ) -> FastEsmEncoderOutput:
-        output_attentions = output_attentions if output_attentions is not None else False
-        output_hidden_states = output_hidden_states if output_hidden_states is not None else False
+    ) -> FastEsmEncoderOutput | tuple[Any, ...]:
+        output_attentions = (
+            self.config.output_attentions
+            if output_attentions is None
+            else output_attentions
+        )
+        output_hidden_states = (
+            self.config.output_hidden_states
+            if output_hidden_states is None
+            else output_hidden_states
+        )
+        return_dict = self.config.use_return_dict if return_dict is None else return_dict
 
         token_embedding_output = self.embeddings(
             input_ids=input_ids,
@@ -410,11 +529,12 @@ class FastEsmBackbone(nn.Module):
             output_hidden_states=output_hidden_states,
             output_attentions=output_attentions,
         )
-        return FastEsmEncoderOutput(
+        output = FastEsmEncoderOutput(
             last_hidden_state=encoder_outputs.last_hidden_state,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
         )
+        return output if return_dict else output.to_tuple()
 
 
 # =============================================================================
@@ -466,6 +586,58 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
         if config.esmfold_config.fp16_esm:
             self.esm.half()
 
+    def compute_language_model_representations(
+        self,
+        esmaa: torch.Tensor,
+    ) -> torch.Tensor:
+        """Run the internal ESM stem with a structured output unconditionally.
+
+        The outer folding model still honors ``config.return_dict``. This
+        internal call must remain structured because the folding stem selects
+        hidden states by name before constructing the public output.
+        """
+
+        device = next(self.parameters()).device
+        batch_size, sequence_length = esmaa.shape
+        output_attentions = _ESMFOLD_OUTPUT_ATTENTIONS.get()
+        if self.config.esmfold_config.bypass_lm:
+            if output_attentions:
+                _ESMFOLD_CAPTURED_ATTENTIONS.set(())
+            return torch.zeros(
+                batch_size,
+                sequence_length,
+                self.esm_s_combine.size(0),
+                self.esm_feats,
+                device=device,
+            )
+
+        bos = esmaa.new_full((batch_size, 1), self.esm_dict_cls_idx)
+        eos = esmaa.new_full((batch_size, 1), self.esm_dict_padding_idx)
+        residue_mask = esmaa != self.esm_dict_padding_idx
+        with_special_tokens = torch.cat([bos, esmaa, eos], dim=1)
+        with_special_tokens[
+            range(batch_size),
+            (with_special_tokens != self.esm_dict_padding_idx).sum(1),
+        ] = self.esm_dict_eos_idx
+        esm_output = self.esm(
+            with_special_tokens,
+            attention_mask=with_special_tokens != self.esm_dict_padding_idx,
+            output_attentions=output_attentions,
+            output_hidden_states=True,
+            return_dict=True,
+        )
+        if not isinstance(esm_output, FastEsmEncoderOutput):
+            raise TypeError("FastESM internal backbone did not return FastEsmEncoderOutput.")
+        if esm_output.hidden_states is None:
+            raise RuntimeError("FastESM internal backbone omitted requested hidden states.")
+        if output_attentions:
+            if esm_output.attentions is None:
+                raise RuntimeError("FastESM internal backbone omitted requested attentions.")
+            _ESMFOLD_CAPTURED_ATTENTIONS.set(
+                _align_internal_esm_attentions(esm_output.attentions, residue_mask)
+            )
+        return torch.stack(esm_output.hidden_states, dim=2)[:, 1:-1]
+
     def forward(
         self,
         input_ids: torch.Tensor,
@@ -473,24 +645,68 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
         position_ids: torch.Tensor | None = None,
         masking_pattern: torch.Tensor | None = None,
         num_recycles: int | None = None,
-        output_hidden_states: bool | None = False,
-        **kwargs: Any,
-    ):
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> FastEsmForProteinFoldingOutput | tuple[Any, ...]:
         """Run folding with Meta ESMFold's 0-to-100 pLDDT convention."""
 
-        output = super().forward(
-            input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            masking_pattern=masking_pattern,
-            num_recycles=num_recycles,
-            output_hidden_states=output_hidden_states,
-            **kwargs,
+        config = getattr(self, "config", None)
+        resolved_attentions = (
+            bool(getattr(config, "output_attentions", False))
+            if output_attentions is None
+            else output_attentions
         )
+        resolved_hidden_states = (
+            bool(getattr(config, "output_hidden_states", False))
+            if output_hidden_states is None
+            else output_hidden_states
+        )
+        resolved_return_dict = (
+            bool(getattr(config, "use_return_dict", True))
+            if return_dict is None
+            else return_dict
+        )
+
+        request_token = _ESMFOLD_OUTPUT_ATTENTIONS.set(bool(resolved_attentions))
+        capture_token = _ESMFOLD_CAPTURED_ATTENTIONS.set(None)
+        captured_attentions: tuple[torch.Tensor, ...] | None = None
+        try:
+            output = super().forward(
+                input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                masking_pattern=masking_pattern,
+                num_recycles=num_recycles,
+                output_hidden_states=resolved_hidden_states,
+            )
+            captured_attentions = _ESMFOLD_CAPTURED_ATTENTIONS.get()
+        finally:
+            _ESMFOLD_CAPTURED_ATTENTIONS.reset(capture_token)
+            _ESMFOLD_OUTPUT_ATTENTIONS.reset(request_token)
         # Transformers 5.13 returns categorical lDDT probabilities on [0, 1],
         # while Meta ESMFold's public forward output reports pLDDT on [0, 100].
         output["plddt"] = output["plddt"] * 100
-        return output
+        payload = dict(output)
+        payload.pop("last_hidden_state", None)
+        payload.pop("hidden_states", None)
+        parent_attentions = payload.pop("attentions", None)
+        if captured_attentions is None:
+            captured_attentions = parent_attentions
+        if resolved_attentions and captured_attentions is None:
+            # A bypassed or injected folding stem has no attention layers, but
+            # still honors the output contract without fabricating tensors.
+            captured_attentions = ()
+        sequence_state = payload.get("s_s")
+        structured = FastEsmForProteinFoldingOutput(
+            last_hidden_state=sequence_state,
+            hidden_states=(sequence_state,)
+            if resolved_hidden_states and sequence_state is not None
+            else None,
+            attentions=captured_attentions if resolved_attentions else None,
+            **payload,
+        )
+        return structured if resolved_return_dict else structured.to_tuple()
 
     @torch.no_grad()
     def infer(
@@ -605,15 +821,21 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
         """Fold a sequence once and return pLDDT, ptm, and optionally PDB string."""
         with torch.no_grad():
             output = self.infer(sequence)
-        plddt = output["plddt"]
-        # P has shape (b, l, 37), with confidence for each atom37 position.
-        # Use CA atom (index 1) only, matching PDB B-factor output.
-        if plddt.dim() == 3:
-            mean_plddt = float(plddt[:, :, 1].mean().item())
-        elif plddt.dim() == 2:
-            mean_plddt = float(plddt[:, 1].mean().item())
+        if "mean_plddt" in output:
+            # ``infer`` masks multimer linker atoms before computing this mean.
+            # Reusing it prevents synthetic linker confidence from affecting the
+            # public fold_protein summary.
+            mean_plddt = float(output["mean_plddt"].reshape(-1)[0].item())
         else:
-            mean_plddt = float(plddt.mean().item())
+            plddt = output["plddt"]
+            # P has shape (b, l, 37), with confidence for each atom37 position.
+            # Use CA atom (index 1) only, matching PDB B-factor output.
+            if plddt.dim() == 3:
+                mean_plddt = float(plddt[:, :, 1].mean().item())
+            elif plddt.dim() == 2:
+                mean_plddt = float(plddt[:, 1].mean().item())
+            else:
+                mean_plddt = float(plddt.mean().item())
         result = {
             "plddt": mean_plddt,
             "ptm": float(output["ptm"].item()) if "ptm" in output else None,

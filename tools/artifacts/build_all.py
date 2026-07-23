@@ -14,6 +14,7 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
+from benchmarks.suite import benchmark_artifact_model_ids
 from fastplms.registry import get_model_registry
 from tools.artifacts.build import (
     _TOKENIZER_FILE_NAMES,
@@ -28,12 +29,21 @@ def build_all_artifacts(
     output_root: Path,
     source_root: Path,
     model_ids: Iterable[str] | None = None,
+    benchmark_suite: bool = False,
     replace: bool = False,
 ) -> tuple[Path, ...]:
     """Build selected artifacts after resolving their immutable snapshots."""
 
     registry = get_model_registry()
-    selected = tuple(model_ids) if model_ids is not None else tuple(registry)
+    if model_ids is not None and benchmark_suite:
+        raise ValueError("model_ids and benchmark_suite are mutually exclusive")
+    selected = (
+        tuple(model_ids)
+        if model_ids is not None
+        else benchmark_artifact_model_ids()
+        if benchmark_suite
+        else tuple(registry)
+    )
     unknown = sorted(set(selected).difference(registry))
     if unknown:
         raise ValueError(f"Unknown model IDs: {unknown}")
@@ -77,7 +87,11 @@ def build_all_artifacts(
             tokenizer_dir=tokenizer_snapshot,
             replace=replace,
         )
-        validate_artifact(destination)
+        # Keep the completed artifact bound to the same current registry entry
+        # used for construction.  This is required for official-source
+        # artifacts, whose canonical-state commitment cannot be authenticated
+        # from their self-authored provenance alone.
+        validate_artifact(destination, spec=spec, registry=registry)
         destinations.append(destination)
     return tuple(destinations)
 
@@ -87,6 +101,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("model_ids", nargs="*")
     parser.add_argument("--output-root", type=Path, default=Path("dist/hub"))
     parser.add_argument("--source-root", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--benchmark-suite",
+        action="store_true",
+        help="Build only the fixed benchmark matrix artifacts and nested backbones.",
+    )
     parser.add_argument("--replace", action="store_true")
     return parser.parse_args()
 
@@ -97,6 +116,7 @@ def main() -> None:
         output_root=arguments.output_root,
         source_root=arguments.source_root,
         model_ids=arguments.model_ids or None,
+        benchmark_suite=arguments.benchmark_suite,
         replace=arguments.replace,
     )
     for path in paths:

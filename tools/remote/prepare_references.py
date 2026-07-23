@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import random
 from dataclasses import asdict
@@ -11,16 +10,17 @@ from pathlib import Path
 
 from fastplms.registry import get_model_registry
 from tests.parity.support.esmc_calibration import (
-    ESMC_BOUNDARY_LENGTHS,
-    load_esmc_biological_holdout,
+    CANONICAL_AA_ALPHABET,
+    ESMC_CALIBRATION_SEED,
+    esmc_calibration_batches,
 )
 from tests.parity.support.reference_adapters.dplm2 import (
     DPLM2_3B_GENERATION_LIMITATION,
 )
 
 SCHEMA_VERSION = 1
-SEED = 42
-CANONICAL_AAS = "ACDEFGHIKLMNPQRSTVWY"
+SEED = ESMC_CALIBRATION_SEED
+CANONICAL_AAS = CANONICAL_AA_ALPHABET
 MIXED_LENGTHS = (61, 29, 13)
 EDGE_SEQUENCES = (
     "ACDEFGHIKLMNPQRSTVWY",
@@ -51,50 +51,8 @@ def _sequence_batch() -> tuple[str, ...]:
     )
 
 
-def _generated_sequences(lengths: tuple[int, ...]) -> tuple[str, ...]:
-    generator = random.Random(SEED)
-    return tuple(
-        "M" + "".join(generator.choices(CANONICAL_AAS, k=length - 1)) for length in lengths
-    )
-
-
-def _calibration_batch(kind: str, cases: list[dict[str, str]]) -> dict[str, object]:
-    return {
-        "kind": kind,
-        "seed": SEED,
-        "cases": [
-            {
-                **case,
-                "sequence_length": len(case["sequence"]),
-                "sequence_sha256": hashlib.sha256(case["sequence"].encode("ascii")).hexdigest(),
-            }
-            for case in cases
-        ],
-    }
-
-
 def _esmc_calibration_batches() -> list[dict[str, object]]:
-    boundary = [
-        {"case_id": f"generated-boundary-{length}", "sequence": sequence}
-        for length, sequence in zip(
-            ESMC_BOUNDARY_LENGTHS,
-            _generated_sequences(ESMC_BOUNDARY_LENGTHS),
-            strict=True,
-        )
-    ]
-    biological = [
-        {
-            "case_id": str(case["case_id"]),
-            "sequence": str(case["sequence"]),
-            "source": str(case["source"]),
-            "source_sha256": str(case["source_sha256"]),
-        }
-        for case in load_esmc_biological_holdout()
-    ]
-    return [
-        _calibration_batch("generated_kernel_boundary", boundary),
-        _calibration_batch("real_biological_holdout", biological),
-    ]
+    return [dict(batch) for batch in esmc_calibration_batches()]
 
 
 def prepare_reference_requests(output_root: Path) -> tuple[Path, ...]:
@@ -127,12 +85,12 @@ def prepare_reference_requests(output_root: Path) -> tuple[Path, ...]:
             ],
             "sequences": list(_sequence_batch()),
             "edge_sequences": list(EDGE_SEQUENCES),
+            "generation_policy": spec.generation_contract,
             "seed": SEED,
         }
         if spec.family.id == "esm_plusplus":
             request["calibration_batches"] = _esmc_calibration_batches()
         if spec.generation_contract == "official_unavailable":
-            request["generation_policy"] = spec.generation_contract
             request["official_generation_limitation"] = dict(
                 DPLM2_3B_GENERATION_LIMITATION
             )

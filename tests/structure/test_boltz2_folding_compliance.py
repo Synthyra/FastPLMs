@@ -17,6 +17,10 @@ from fastplms.models.boltz.modeling_boltz2 import Boltz2Config
 from fastplms.registry import get_model_registry
 from tests.structure.support import boltz2_bundle
 from tests.structure.support.boltz2_bundle import load_bundle, load_request
+from tests.structure.support.hardware import (
+    assert_same_hopper_sm90_device,
+    hopper_sm90_fingerprint,
+)
 from tests.structure.support.state_contract import semantic_config_contract
 
 bf16_targets = {
@@ -129,7 +133,7 @@ def _assert_bundle_identity(
     assert metadata["attention_backend"] == "eager"
     environment = metadata["environment"]
     assert isinstance(environment, Mapping)
-    assert "H100" in str(environment["cuda_device"])
+    hopper_sm90_fingerprint(environment)
     if producer == "candidate":
         assert str(environment["torch"]).split("+", maxsplit=1)[0] == "2.13.0"
         packages = environment["packages"]
@@ -438,6 +442,11 @@ def test_boltz2_live_folding_matches_pinned_official() -> None:
     candidate_tensors, candidate_metadata = load_bundle(candidate_path)
     _assert_bundle_identity(reference_metadata, request, producer="reference")
     _assert_bundle_identity(candidate_metadata, request, producer="candidate")
+    reference_environment = reference_metadata["environment"]
+    candidate_environment = candidate_metadata["environment"]
+    assert isinstance(reference_environment, Mapping)
+    assert isinstance(candidate_environment, Mapping)
+    assert_same_hopper_sm90_device(candidate_environment, reference_environment)
     expected_keys = set(candidate_metadata["state"]["tensors"])
     canonical_reference = boltz2_bundle.canonicalize_reference_state_contract(
         reference_metadata["state"],

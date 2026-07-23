@@ -272,6 +272,21 @@ class ESMFold2Config(PretrainedConfig):
 
         for name, config_type in _NESTED_CONFIGS:
             setattr(self, name, _nested_config(kwargs.get(name), config_type))
+        if not isinstance(self.msa_encoder.enabled, bool):
+            raise TypeError("msa_encoder.enabled must be a boolean.")
+        declared_msa_conditioning = kwargs.get("msa_conditioning")
+        if "msa_conditioning" in kwargs and not isinstance(declared_msa_conditioning, bool):
+            raise TypeError("msa_conditioning must be a boolean when provided.")
+        self.msa_conditioning = (
+            self.msa_encoder.enabled
+            if "msa_conditioning" not in kwargs
+            else declared_msa_conditioning
+        )
+        if self.msa_conditioning != self.msa_encoder.enabled:
+            raise ValueError(
+                "msa_conditioning must match msa_encoder.enabled; received "
+                f"{self.msa_conditioning!r} and {self.msa_encoder.enabled!r}."
+            )
         self.msa_encoder_overwrite = bool(kwargs.get("msa_encoder_overwrite", True))
 
     def to_dict(self) -> dict[str, Any]:

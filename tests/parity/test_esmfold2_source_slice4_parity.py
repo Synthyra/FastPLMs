@@ -364,7 +364,7 @@ def _assert_protein_equal(actual: Any, expected: Any) -> None:
     assert actual.metadata.assembly_composition == expected.metadata.assembly_composition
 
 
-def test_molecular_complex_conversion_io_and_storage_match_pinned_biohub() -> None:
+def test_molecular_complex_conversion_extends_pinned_biohub_with_identity_storage() -> None:
     official = _official_complex()
     protein = _protein_fixture()
     actual = local_complex.MolecularComplex.from_protein_complex(protein)
@@ -383,8 +383,17 @@ def test_molecular_complex_conversion_io_and_storage_match_pinned_biohub() -> No
         local_complex.MolecularComplex.from_mmcif(expected_mmcif, id="roundtrip"),
         official.MolecularComplex.from_mmcif(expected_mmcif, id="roundtrip"),
     )
-    assert actual.state_dict() == expected.state_dict()
-    assert actual.to_blob() == expected.to_blob()
+    actual_state = actual.state_dict()
+    identity_state = {key: actual_state.pop(key) for key in ("entity_id", "sym_id")}
+    assert actual_state == expected.state_dict()
+    assert identity_state == {
+        "entity_id": [0, 0, 1, 1],
+        "sym_id": [0, 0, 0, 0],
+    }
+    restored = local_complex.MolecularComplex.from_blob(actual.to_blob())
+    _assert_complex_equal(restored, actual)
+    _assert_value_equal(restored.entity_id, actual.entity_id)
+    _assert_value_equal(restored.sym_id, actual.sym_id)
     _assert_complex_equal(
         local_complex.MolecularComplex.from_blob(expected.to_blob()),
         official.MolecularComplex.from_blob(expected.to_blob()),

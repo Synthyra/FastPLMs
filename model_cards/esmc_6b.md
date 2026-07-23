@@ -16,6 +16,19 @@ Accepted inputs are amino-acid sequences tokenized to residue IDs.
 Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 `AutoModelForMaskedLM`.
 
+## Install and platform requirements
+
+Install FastPLMs from the exact source revision paired with this model card:
+
+```bash
+python -m pip install \
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Eager, SDPA, and Flex use the core install. FlashAttention requires the `flash` extra, compatible CUDA hardware, and BF16 execution. The Hub quick start below requires network
+access on first download. For an air-gapped run, first build the manifest-pinned
+local artifact and use the offline form shown in the example.
+
 ## Quick start
 
 ```python
@@ -36,6 +49,11 @@ Leave attention unspecified for the Transformers default. Supported explicit
 choices are `eager`, `sdpa`, `flex_attention`, `flash_attention_2`,
 `flash_attention_3`.
 Pass the selected name through `attn_implementation`.
+When an optimized backend cannot return full attention tensors,
+`output_attentions=True` emits one explicit runtime warning and uses a correctly
+masked eager implementation for that call only. The warning identifies the
+configured backend, effective backend, and reason. Configuration and later
+calls are unchanged.
 For BF16 execution, this family uses parameters loaded directly in BF16.
 
 ## Tokenization and forward inference
@@ -108,47 +126,77 @@ existing run.
 
 This artifact exposes the Biohub ESMC sequence encoder and masked-language-model
 head through Transformers. It is also the language-model family used by
-ESMFold2. Request SDPA when exact pinned Biohub inference parity is required;
-the provenance section records backend-specific validation boundaries for this
-checkpoint.
+ESMFold2. SDPA is the default and the recommended choice for highest numerical
+fidelity. Flex Attention and FlashAttention 3 are supported, non-experimental
+backends, but their BF16 arithmetic may be numerically divergent from SDPA.
+Those deviations produce diagnostic warnings rather than strict parity
+failures; dispatch integrity, masks, finite outputs, shapes, and catastrophic
+biological disagreement remain hard gates.
 
-> **Numerical-backend warning:** Flex Attention and FlashAttention 3 are
-> explicit speed-oriented alternatives, not strict-parity backends for ESMC.
-> On the locked H100 BF16 boundary panel, ESMC-6B Flex exceeds the `0.03`
-> relative-L2 hard limit and FlashAttention 3 falls below the `0.995`
-> first-percentile residue-cosine hard limit. Use SDPA for exact pinned Biohub
-> parity or FlashAttention 2 for release-gated acceleration.
+The current locked GH200/aarch64 release image executes eager, SDPA, and Flex.
+It has no validated FlashAttention 2 kernel and no locked aarch64 artifact for
+the manifest-pinned FlashAttention 3 kernel. Both Flash backends remain
+supported, non-experimental interfaces, but requests fail closed without
+dispatch on this image. Prior real FlashAttention 2 execution was captured in
+separate workstation JUnit, but that immutable report and environment
+attestation are not bundled in this repository. It is not reused as a current
+ESMC release distribution or numerical claim.
 
-## Notes and limitations
+When `sequence_id` is supplied, it is authoritative for ESMC attention grouping
+and padding, and `attention_mask` is ignored. Values greater than or equal to
+zero are valid sequence-group IDs; `-1` denotes padding. Omit `sequence_id` to
+use `attention_mask` as the padding contract.
 
-Release contract: SDPA must match the pinned Biohub implementation bit-for-bit
-across every hidden state, last hidden state, logits, special token, and
-padding position. Eager and FlashAttention 2 are release-gated in BF16 against
-the pinned boundary-length and biological panels with a relative-L2 engineering
-target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049,
-first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of
-0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex
-Attention and FlashAttention 3 remain selectable as opt-in alternatives, but
-they are not strict-parity choices: on the locked H100 BF16 generated-boundary
-panel, ESMC-6B Flex Attention exceeds the 0.03 relative-L2 hard limit and
-FlashAttention 3 falls below the 0.995 residue-cosine hard limit. The deviation
-is consistent with backend-specific BF16 kernel arithmetic; it is not a
-weight-conversion difference or silent fallback. Use SDPA for exact Biohub
-parity or FlashAttention 2 for release-gated acceleration.
+| Backend | Support | Measurement status |
+| --- | --- | --- |
+| `sdpa` | Recommended fidelity path | Pending complete validated 30-record frozen-head GH200/aarch64 set |
+| `eager` | Supported | Pending complete validated 30-record frozen-head GH200/aarch64 set |
+| `flash_attention_2` | Supported | Current GH200/aarch64 lock: unavailable; pending structured schema-v3 availability record |
+| `flex_attention` | Supported, numerically divergent | Pending complete validated 30-record frozen-head GH200/aarch64 set |
+| `flash_attention_3` | Supported, numerically divergent | Current GH200/aarch64 lock: unavailable; pending structured schema-v3 availability record |
+
+No threshold, report from another checkpoint, or result from another
+accelerator is substituted for a measurement. A release set contains all
+30 model/backend/panel records from one exact GH200 device and aarch64 runtime:
+18 eager/SDPA/Flex measurements include relative L2, Q99.9, residue
+cosine, pooled cosine, top-1, and Jensen-Shannon distributions; 12
+FlashAttention 2/3 records explicitly attest locked-platform unavailability.
+
+No number is inferred from a threshold or copied from a different checkpoint.
+Before release, replace each pending cell only through the strict 30-record
+ingestion gate tied to this exact Hub revision, runtime revision, BF16 dtype,
+the current exact GH200/aarch64 accelerator and container identity, and both
+locked sequence panels. The set contains 18 eager/SDPA/Flex measurement records
+and 12 structured Flash locked-platform unavailable records. H100 and H200
+remain Hopper-class deployment examples, but they are not current ESMC release-confirmation evidence.
+Results are never
+carried across device, platform, source, lock, or image identities.
+Diagnostic JSON is written under `artifacts/diagnostics/esmc/`. Catastrophe
+guardrails (relative L2 `0.25`, Q99.9 `0.50`, residue cosine `0.90`, pooled
+cosine `0.95`, top-1 `0.80`, Jensen-Shannon `0.05`) detect corruption and do
+not constitute parity or quality claims.
 
 ## Runtime contract
 
 - Public input: Amino-acid sequences tokenized to residue IDs
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`
+- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForMaskedLM` = `pretrained`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3`
 - Precision policies: `default`
 - BF16 execution: `static_parameters`
 - Generation contract: `not_applicable`
 - Optional dependency group: `core`
+- Weight publication allowed: `true`
+- Weight license status: `resolved`
+- Redistributable: `true`
+- Complete weight publication required: `false`
 
 ## Provenance
 
-- FastPLMs checkpoint: `Synthyra/ESMplusplus_6B@0d579cce3b0f09efa6b3baddf6cc3fd8c9b616c8`
+- FastPLMs weights: `Synthyra/ESMplusplus_6B@0d579cce3b0f09efa6b3baddf6cc3fd8c9b616c8`
+- Runtime revision: recorded separately in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 - Official checkpoint: `biohub/ESMC-6B@45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a`
 - Artifact source: `fast`
 - State transform: `esmc_to_fastplms_v1`

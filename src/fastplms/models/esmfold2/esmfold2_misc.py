@@ -156,11 +156,14 @@ def iterate_with_intermediate(
 def concat_objects(objs: Sequence[Any], separator: Any | None = None):
     """Concatenate one supported homogeneous collection."""
 
+    if not objs:
+        raise ValueError("objs must contain at least one value.")
     first = objs[0]
     if isinstance(first, Concatable):
         return first.__class__.concat(objs)
     if isinstance(first, str):
-        assert isinstance(separator, str), "Trying to join strings but separator is not a string"
+        if not isinstance(separator, str):
+            raise TypeError("separator must be a string when joining strings.")
         return separator.join(objs)
     if isinstance(first, list):
         return join_lists(objs, None if separator is None else [separator])
@@ -329,7 +332,10 @@ def merge_ranges(
     """Merge overlapping or sufficiently close ranges in positional order."""
 
     maximum_gap = 0 if merge_gap_max is None else merge_gap_max
-    assert maximum_gap >= 0, f"Invalid merge_gap_max: {maximum_gap}"
+    if not isinstance(maximum_gap, int) or isinstance(maximum_gap, bool):
+        raise TypeError("merge_gap_max must be an integer or None.")
+    if maximum_gap < 0:
+        raise ValueError(f"merge_gap_max must be non-negative, got {maximum_gap}.")
     merged: list[range] = []
     for current in sorted(ranges, key=lambda item: item.start):
         if not merged or merged[-1].stop + maximum_gap < current.start:

@@ -338,13 +338,19 @@ def _environment_metadata() -> dict[str, Any]:
         transformer_engine_version = transformer_engine.__version__
     except ImportError:
         pass
-    device_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    cuda_properties = torch.cuda.get_device_properties(0) if torch.cuda.is_available() else None
     return {
         "python": platform.python_version(),
         "torch": torch.__version__,
         "transformers": transformers.__version__,
         "cuda_runtime": torch.version.cuda,
-        "cuda_device": device_name,
+        "cuda_device": cuda_properties.name if cuda_properties is not None else None,
+        "cuda_device_capability": (
+            list(torch.cuda.get_device_capability(0)) if cuda_properties is not None else None
+        ),
+        "cuda_total_memory": (
+            int(cuda_properties.total_memory) if cuda_properties is not None else None
+        ),
         "transformer_engine": transformer_engine_version,
     }
 
@@ -586,9 +592,16 @@ def load_bundle(path: Path) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
 def produce_reference(request_path: Path, output_dir: Path) -> None:
     """Produce an official BF16 bundle in the native Biohub service."""
 
+    from tests.parity.support.reference_adapters.biohub_source import (
+        reference_environment,
+        reference_sources,
+    )
+
     request = load_request(request_path)
     if not torch.cuda.is_available():
         raise RuntimeError("Official ESMFold2 structure bundles require CUDA.")
+    sources = reference_sources()
+    locked_environment = reference_environment()
     device = torch.device("cuda")
     model = _load_reference_model(request, device)
     try:
@@ -612,6 +625,8 @@ def produce_reference(request_path: Path, output_dir: Path) -> None:
             },
             model=model,
         )
+        metadata["reference_sources"] = sources
+        metadata["reference_environment"] = locked_environment
         tensors = _run_fold(model, request)
         write_bundle(output_dir, tensors, metadata)
     finally:

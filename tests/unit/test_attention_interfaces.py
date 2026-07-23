@@ -7,8 +7,10 @@ import inspect
 import json
 import sys
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
 from pathlib import Path
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -22,9 +24,11 @@ _TRANSFORMERS_FLASH_HANDLERS = {
 import fastplms.attention.interfaces as attention_interfaces  # noqa: E402
 import fastplms.models.ankh.modeling_ankh as ankh_module  # noqa: E402
 import fastplms.models.dplm.modeling_dplm as dplm_module  # noqa: E402
+import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module  # noqa: E402
 from fastplms.attention import (  # noqa: E402
     FASTPLMS_ATTENTION_FUNCTIONS,
     FASTPLMS_ATTENTION_MASKS,
+    AttentionBackend,
     FastPLMsAttentionMixin,
     _core,
     _kernel_lock,
@@ -92,14 +96,22 @@ class _SupportedFlashMixin(FastPLMsAttentionMixin, _RejectingTransformersBase):
             "flash_attention_2",
             "kernels-community/flash-attn2",
             "db6b51744f0cd7061386442c09df890fc6d9f47e",
-            SimpleNamespace(fwd=object(), varlen_fwd=object()),
+            SimpleNamespace(
+                fwd=lambda **kwargs: kwargs["q"],
+                varlen_fwd=lambda **kwargs: kwargs["q"],
+                flash_attn_func=lambda **kwargs: kwargs["q"],
+                flash_attn_varlen_func=lambda **kwargs: kwargs["q"],
+            ),
             "flash_attn2",
         ),
         (
             "flash_attention_3",
             "kernels-community/flash-attn3",
             "43f0bd269777115d94ff826e0d113ce9c1c9087b",
-            SimpleNamespace(flash_attn_func=object(), flash_attn_varlen_func=object()),
+            SimpleNamespace(
+                flash_attn_func=lambda **kwargs: kwargs["q"],
+                flash_attn_varlen_func=lambda **kwargs: kwargs["q"],
+            ),
             "flash_attn3",
         ),
     ),
@@ -186,6 +198,8 @@ def test_locked_kernel_is_hash_validated_before_import(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
     revision = "d" * 40
     lock_path = tmp_path / "kernels.lock"
     lock_path.write_text(
@@ -242,10 +256,7 @@ def test_locked_kernel_is_hash_validated_before_import(
     )
     monkeypatch.setitem(sys.modules, "kernels.lockfile", SimpleNamespace(KernelLock=KernelLock))
 
-    assert (
-        _kernel_lock.load_locked_kernel("kernels-community/flash-attn2", revision)
-        is kernel
-    )
+    assert _kernel_lock.load_locked_kernel("kernels-community/flash-attn2", revision) is kernel
     assert events == ["validate", "import"]
 
 
@@ -782,54 +793,27 @@ def test_esm2_training_rejects_unsupported_attention_dropout(
 def test_output_attentions_warns_when_falling_back_to_eager(
     implementation: str,
 ) -> None:
-    attention = EsmSelfAttention(
-        FastEsmConfig(
-            hidden_size=8,
-            num_attention_heads=2,
-            attention_probs_dropout_prob=0.0,
-            position_embedding_type="absolute",
-            attn_backend=implementation,
-        )
-    )
-    heads = torch.randn(1, 2, 3, 4)
-
     with pytest.warns(
         RuntimeWarning,
         match=rf"output_attentions=True.*{implementation!r}.*using 'eager'",
     ):
-        _, weights, _ = attention._attn(
-            heads,
-            heads,
-            heads,
+        effective = _core.resolve_attention_backend_for_call(
+            implementation,
             output_attentions=True,
         )
 
-    assert weights is not None
-    assert attention.attn_backend.value == implementation
+    assert effective == _core.AttentionBackend.EAGER
 
 
 def test_output_attentions_does_not_warn_for_configured_eager() -> None:
-    attention = EsmSelfAttention(
-        FastEsmConfig(
-            hidden_size=8,
-            num_attention_heads=2,
-            attention_probs_dropout_prob=0.0,
-            position_embedding_type="absolute",
-            attn_backend="eager",
-        )
-    )
-    heads = torch.randn(1, 2, 3, 4)
-
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        _, weights, _ = attention._attn(
-            heads,
-            heads,
-            heads,
+        effective = _core.resolve_attention_backend_for_call(
+            "eager",
             output_attentions=True,
         )
 
-    assert weights is not None
+    assert effective == _core.AttentionBackend.EAGER
 
 
 @pytest.mark.parametrize("training", (False, True))
@@ -1102,12 +1086,10 @@ def test_optional_esm_pooler_is_returned_and_round_trips(
 
 
 @pytest.mark.parametrize("should_raise", (False, True))
-def test_ankh_sdpa_restores_reduced_math_policy(
+def test_ankh_sdpa_never_mutates_process_global_reduction_policy(
     monkeypatch: pytest.MonkeyPatch,
     should_raise: bool,
 ) -> None:
-    original_policy = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
-    torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(False)
     attention = AnkhSelfAttention(
         FastAnkhConfig(
             vocab_size=16,
@@ -1120,24 +1102,132 @@ def test_ankh_sdpa_restores_reduced_math_policy(
         )
     )
     query = torch.randn(1, 2, 3, 4)
+    mutations: list[bool] = []
+
+    monkeypatch.setattr(
+        torch.backends.cuda,
+        "allow_fp16_bf16_reduction_math_sdp",
+        lambda enabled: mutations.append(enabled),
+    )
 
     def fake_sdpa(*args, **_kwargs):
-        assert torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
         if should_raise:
             raise RuntimeError("forced SDPA failure")
         return args[0]
 
     monkeypatch.setattr(ankh_module.F, "scaled_dot_product_attention", fake_sdpa)
-    try:
-        if should_raise:
-            with pytest.raises(RuntimeError, match="forced SDPA failure"):
-                attention._sdpa_attn(query, query, query, None)
-        else:
-            output = attention._sdpa_attn(query, query, query, None)
-            assert output.shape == (1, 3, 8)
-        assert not torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed()
-    finally:
-        torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(original_policy)
+    if should_raise:
+        with pytest.raises(RuntimeError, match="forced SDPA failure"):
+            attention._sdpa_attn(query, query, query, None)
+    else:
+        output = attention._sdpa_attn(query, query, query, None)
+        assert output.shape == (1, 3, 8)
+    assert mutations == []
+
+
+def test_ankh_concurrent_fallback_and_sdpa_keep_backend_and_global_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = FastAnkhModel(
+        FastAnkhConfig(
+            vocab_size=16,
+            d_model=8,
+            d_kv=4,
+            d_ff=16,
+            num_heads=2,
+            num_layers=1,
+            attn_backend="sdpa",
+        )
+    ).eval()
+    attention = model.encoder.block[0].layer[0].SelfAttention
+    configured_backend = attention.attn_backend
+    input_ids = torch.tensor(((2, 3, 1, 0), (4, 1, 0, 0)))
+    attention_mask = input_ids.ne(0)
+    rendezvous = Barrier(2)
+    global_policy_mutations: list[tuple[str, bool]] = []
+    sdpa_calls: list[torch.Tensor] = []
+    original_manual_attention = attention._manual_attn
+
+    def synchronized_manual_attention(query, key, value, position_bias):
+        rendezvous.wait(timeout=3.0)
+        return original_manual_attention(query, key, value, position_bias)
+
+    def synchronized_sdpa(query, _key, _value, **_kwargs):
+        sdpa_calls.append(query)
+        if len(sdpa_calls) == 1:
+            rendezvous.wait(timeout=3.0)
+        return query
+
+    monkeypatch.setattr(attention, "_manual_attn", synchronized_manual_attention)
+    monkeypatch.setattr(ankh_module.F, "scaled_dot_product_attention", synchronized_sdpa)
+    monkeypatch.setattr(
+        torch.backends.cuda,
+        "allow_fp16_bf16_reduction_math_sdp",
+        lambda enabled: global_policy_mutations.append(("reduction_math", enabled)),
+    )
+    for setter_name in (
+        "_set_sdp_use_math",
+        "_set_sdp_use_flash",
+        "_set_sdp_use_mem_efficient",
+        "_set_sdp_use_cudnn",
+        "_set_sdp_use_overrideable",
+    ):
+        monkeypatch.setattr(
+            torch._C,
+            setter_name,
+            lambda enabled, name=setter_name: global_policy_mutations.append((name, enabled)),
+            raising=False,
+        )
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            fallback_future = executor.submit(
+                model,
+                input_ids,
+                attention_mask=attention_mask,
+                output_attentions=True,
+            )
+            sdpa_future = executor.submit(
+                model,
+                input_ids,
+                attention_mask=attention_mask,
+            )
+            fallback_output = fallback_future.result(timeout=5.0)
+            sdpa_output = sdpa_future.result(timeout=5.0)
+
+    fallback_warnings = [
+        warning
+        for warning in captured
+        if issubclass(warning.category, RuntimeWarning)
+        and "output_attentions=True" in str(warning.message)
+    ]
+    assert len(fallback_warnings) == 1
+    warning_message = str(fallback_warnings[0].message)
+    assert "requested 'sdpa'" in warning_message
+    assert "using 'eager'" in warning_message
+    assert "call only" in warning_message
+    assert model.attn_backend == "sdpa"
+    assert model.config.attn_backend == "sdpa"
+    assert model.config._attn_implementation == "sdpa"
+    assert model.encoder.attention_backend == configured_backend
+    assert attention.attn_backend == configured_backend
+    assert global_policy_mutations == []
+    assert fallback_output.last_hidden_state.shape == (2, 4, 8)
+    assert fallback_output.attentions is not None
+    assert sdpa_output.last_hidden_state.shape == (2, 4, 8)
+    assert sdpa_output.attentions is None
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        post_fallback_output = model(
+            input_ids,
+            attention_mask=attention_mask,
+            output_attentions=False,
+        )
+    assert post_fallback_output.attentions is None
+    assert len(sdpa_calls) == 2
+    assert global_policy_mutations == []
 
 
 def test_ankh_rejects_unadvertised_flex_attention() -> None:
@@ -1178,7 +1268,51 @@ def test_attention_mixin_leaves_unspecified_backend_to_transformers() -> None:
     assert config.attn_backend == "sdpa"
 
 
-def test_compiled_flex_cache_key_covers_every_execution_dimension(monkeypatch) -> None:
+def test_attention_mixin_forwards_explicit_legacy_backend_to_transformers() -> None:
+    observed: list[str | None] = []
+
+    class Base:
+        def __init__(self, config) -> None:
+            observed.append(config._attn_implementation)
+            config._attn_implementation_internal = config._attn_implementation
+
+    class Model(FastPLMsAttentionMixin, Base):
+        _fastplms_attention_implementations = ("eager", "sdpa", "flex_attention")
+
+    config = SimpleNamespace(
+        _attn_implementation=None,
+        attn_backend="flex_attention",
+    )
+    Model(config)
+
+    assert observed == ["flex_attention"]
+    assert config._attn_implementation_internal == "flex_attention"
+    assert config.attn_backend == "flex_attention"
+
+
+def test_attention_mixin_preserves_explicit_transformers_override() -> None:
+    observed: list[str | None] = []
+
+    class Base:
+        def __init__(self, config) -> None:
+            observed.append(config._attn_implementation)
+
+    class Model(FastPLMsAttentionMixin, Base):
+        _fastplms_attention_implementations = ("eager", "sdpa", "flex_attention")
+
+    config = SimpleNamespace(
+        _attn_implementation="eager",
+        _attn_implementation_internal="eager",
+        attn_backend="flex_attention",
+    )
+    Model(config)
+
+    assert observed == ["eager"]
+    assert config._attn_implementation_internal == "eager"
+    assert config.attn_backend == "eager"
+
+
+def test_compiled_flex_cache_key_covers_execution_not_batch_contents(monkeypatch) -> None:
     source = object()
     compiled: list[object] = []
 
@@ -1208,12 +1342,17 @@ def test_compiled_flex_cache_key_covers_every_execution_dimension(monkeypatch) -
     }
     first = _core._get_flex_attention_fn(**base)
     assert _core._get_flex_attention_fn(**base) is first
+    assert (
+        _core._get_flex_attention_fn(
+            **{**base, "sequence_lengths": (64, 30)},
+        )
+        is first
+    )
 
     variants = (
         {**base, "device": torch.device("cuda:1")},
         {**base, "dtype": torch.float32},
         {**base, "shape": (2, 8, 128, 64)},
-        {**base, "sequence_lengths": (64, 30)},
         {**base, "mask_semantics": "chain_and_padding"},
     )
     values = [_core._get_flex_attention_fn(**variant) for variant in variants]
@@ -1274,3 +1413,129 @@ def test_flex_block_mask_supports_disjoint_valid_spans_and_exact_cache_keys(
     )
     assert second is not first
     assert len(created) == 2
+
+
+def test_flex_block_mask_key_separates_equal_bytes_with_different_pattern_dtypes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[object] = []
+
+    def fake_create_block_mask(mask_mod, *args, **kwargs):
+        del mask_mod, args, kwargs
+        block_mask = object()
+        created.append(block_mask)
+        return block_mask
+
+    monkeypatch.setattr(_core, "create_block_mask", fake_create_block_mask)
+    _core.clear_flex_attention_caches()
+    boolean_pattern = torch.tensor(((True, False), (False, True)))
+    byte_pattern = boolean_pattern.to(dtype=torch.uint8)
+    assert boolean_pattern.view(torch.uint8).numpy().tobytes() == byte_pattern.numpy().tobytes()
+
+    common = {
+        "batch_size": 2,
+        "query_length": 2,
+        "key_value_length": 2,
+        "device": torch.device("cpu"),
+        "dtype": torch.bfloat16,
+        "mask_semantics": "dtype-collision-contract",
+        "mask_mod": lambda batch_idx, head_idx, query_idx, key_idx: True,
+    }
+    boolean_mask = _core._get_flex_block_mask(
+        mask_pattern=boolean_pattern,
+        **common,
+    )
+    repeated_boolean_mask = _core._get_flex_block_mask(
+        mask_pattern=boolean_pattern.clone(),
+        **common,
+    )
+    byte_mask = _core._get_flex_block_mask(
+        mask_pattern=byte_pattern,
+        **common,
+    )
+
+    assert repeated_boolean_mask is boolean_mask
+    assert byte_mask is not boolean_mask
+    assert len(created) == 2
+
+
+def test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created: list[object] = []
+
+    def fake_create_block_mask(mask_mod, *args, **kwargs):
+        del args, kwargs
+        block_mask = object()
+        created.append((mask_mod, block_mask))
+        return block_mask
+
+    monkeypatch.setattr(_core, "create_block_mask", fake_create_block_mask)
+    monkeypatch.setattr(_core, "_MAX_FLEX_CACHE_ENTRIES", 2)
+    _core.clear_flex_attention_caches()
+    stack = esmpp_module.TransformerStack(
+        d_model=8,
+        n_heads=2,
+        n_layers=1,
+        attn_backend="flex_attention",
+    )
+    boolean_pattern = torch.tensor(
+        ((True, True, False, False), (True, False, True, False))
+    )
+
+    *_, first = stack._sequence_id_attention_masks(
+        boolean_pattern,
+        batch_size=2,
+        seq_len=4,
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+        effective_backend=AttentionBackend.FLEX,
+    )
+    *_, repeated = stack._sequence_id_attention_masks(
+        boolean_pattern.clone(),
+        batch_size=2,
+        seq_len=4,
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+        effective_backend=AttentionBackend.FLEX,
+    )
+    assert repeated is first
+    assert len(created) == 1
+
+    *_, different_dtype = stack._sequence_id_attention_masks(
+        boolean_pattern,
+        batch_size=2,
+        seq_len=4,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        effective_backend=AttentionBackend.FLEX,
+    )
+    assert different_dtype is not first
+
+    chain_pattern = torch.tensor(((0, 0, -1, -1), (0, 1, 1, -1)))
+    *_, chain_mask = stack._sequence_id_attention_masks(
+        chain_pattern,
+        batch_size=2,
+        seq_len=4,
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+        effective_backend=AttentionBackend.FLEX,
+    )
+    assert chain_mask is not first
+    assert len(created) == 3
+    assert len(_core._flex_block_masks) == 2
+
+    *_, rebuilt = stack._sequence_id_attention_masks(
+        boolean_pattern,
+        batch_size=2,
+        seq_len=4,
+        device=torch.device("cpu"),
+        dtype=torch.bfloat16,
+        effective_backend=AttentionBackend.FLEX,
+    )
+    assert rebuilt is not first
+    assert len(created) == 4
+    assert len(_core._flex_block_masks) == 2
+
+    _core.clear_flex_attention_caches()
+    assert not _core._flex_block_masks

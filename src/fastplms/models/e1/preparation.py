@@ -19,9 +19,12 @@ E1_TOKENIZER_REPO_ID = "Synthyra/Profluent-E1-150M"
 
 def _load_tokenizer_file(fname: str) -> Tokenizer:
     tokenizer: Tokenizer = Tokenizer.from_file(fname)
-    assert tokenizer.padding["pad_id"] == PAD_TOKEN_ID, (
-        f"Padding token id must be {PAD_TOKEN_ID}, but got {tokenizer.padding['pad_id']}"
-    )
+    padding = tokenizer.padding
+    actual_pad_id = None if padding is None else padding.get("pad_id")
+    if actual_pad_id != PAD_TOKEN_ID:
+        raise ValueError(
+            f"Padding token id must be {PAD_TOKEN_ID}, but got {actual_pad_id}"
+        )
     return tokenizer
 
 
@@ -258,6 +261,7 @@ class E1BatchPreparer:
         return tokens == self.mask_token_id
 
     def validate_sequence(self, sequence: str) -> bool:
-        assert isinstance(sequence, str), "Sequence must be a string"
+        if not isinstance(sequence, str):
+            raise TypeError("Sequence must be a string.")
         sequence = sequence.replace(self.mask_token, "")
         return sequence.isalpha() and sequence.isupper()

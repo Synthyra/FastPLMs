@@ -5,6 +5,22 @@ families, checkpoints, AutoClasses, backends, precisions, licenses, and release
 tiers. It is produced from `src/fastplms/models.toml`; edit the manifest, not the
 table.
 
+## Install and platform requirements
+
+FastPLMs 1.0 sequence models require Python 3.11-3.14, PyTorch 2.13, and
+Transformers 5.13. Install an immutable runtime revision before loading a Hub
+checkpoint:
+
+```bash
+python -m pip install \
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+Eager and SDPA are portable CPU or CUDA paths. Optimized backends and structure
+families have additional dependency, dtype, CUDA, and platform requirements;
+check the generated support matrix and the relevant family guide before
+selecting one.
+
 ## Shared loading contract
 
 Tokenizer-based sequence models load through the normal Transformers auto
@@ -44,9 +60,24 @@ loading, shared embeddings, and residue-aware pooling. It is also the language
 model used by ESMFold2. The model records the resolved attention implementation
 and rejects an unavailable requested kernel.
 
+ESMC follows the pinned Biohub mask precedence. When `sequence_id` is supplied,
+it is authoritative: non-negative values identify chains and `-1` identifies
+padding, while `attention_mask` is ignored. Without `sequence_id`,
+`attention_mask` is the ordinary padding mask and defaults from the tokenizer
+padding ID. Callers that need both chain isolation and padding must encode both
+in `sequence_id`; the two public masks are not intersected.
+
 Exact semantic configuration, tokenizer, state, alias, and SDPA contracts are
-validated against the pinned Biohub implementation. Backend-specific H100
-reproducibility notes are recorded in the ESM++ checkpoint cards.
+validated against the pinned Biohub implementation. SDPA is the recommended
+highest-fidelity path. Flex Attention and FlashAttention 3 are supported,
+non-experimental backends with diagnostic numerical-deviation warnings rather
+than strict parity gates. Every checkpoint card exposes the required relative
+L2, Q99.9, residue-cosine, pooled-cosine, top-1, and Jensen-Shannon table. Cells
+remain explicitly pending until a frozen-head report from the exact
+GH200/aarch64 validation target for the backend, dtype, software stack, and
+sequence panel is attached. H100 and H200 remain supported Hopper-class
+devices, but measurements from them are not interchangeable with or accepted
+as the current GH200 release evidence.
 
 ### ESM3
 
@@ -54,6 +85,10 @@ ESM3 retains sequence, structure, and function tracks and generation helpers
 without importing the official checkout at runtime. Feature tests cover encoding,
 multimodal inputs, forward outputs, and seeded generation. Dataset embedding
 uses the sequence representation and excludes non-protein track tokens.
+With `return_dict=False`, the standard base-model prefix is
+`(last_hidden_state, hidden_states, attentions)` with disabled optional fields
+omitted; multimodal logits and extensions follow. Named output fields are the
+recommended interface for individual tracks.
 
 ### DPLM
 
@@ -115,6 +150,12 @@ fails closed when another backend is requested.
 Plain DPLM and DPLM2 `AutoModel` loads likewise omit the optional untrained ESM
 pooler by default; it remains available through explicit
 `add_pooling_layer=True`.
+
+DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The pinned ByteDance
+[LICENSE](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE)
+and [README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+provide the immutable license basis; the latter explicitly scopes the official
+repository release to the pretrained weights for both model families.
 
 ### DPLM2
 
@@ -183,15 +224,77 @@ upstream agreement. E1 legal files and modified-file notices are distributed
 with relevant artifacts and containers. E1 advertises SDPA and Flex Attention;
 its eager path is not advertised because it misses the pinned output contract.
 
+MSA-aware embedding returns the same ordered, duplicate-preserving
+`EmbeddingResult` and uses the same safetensors or SQLite persistence as
+ordinary dataset embedding. Record IDs are zero-based input positions, and
+`max_len` is measured in biological residues. `matrix_embed=True` selects full
+residue output. Local A3M input is deterministic and offline. Homology search
+and Hub MSA download are separate, networked acquisition steps and are never
+triggered by an offline embedding call.
+
+Local MMseqs2 search defaults to the official multi-architecture CPU image
+`ghcr.io/soedinglab/mmseqs2:18-8cc5c` pinned to manifest digest
+`sha256:41b12b0d5f41432fa1b9976123da6e2e06e7fab49a34964f3b54ec038e5845d9`.
+It never pulls implicitly. The container runs with `--network none`, each phase
+has a bounded timeout, and every local image inspection must match the requested
+repository digest, Linux platform, host architecture, and a valid image ID.
+
+```python
+from fastplms.models.e1.retrieval import HomologueSearcher
+
+searcher = HomologueSearcher(
+    target_db="databases/uniref30",
+    use_gpu=False,
+    allow_pull=False,
+    allow_network=False,
+    phase_timeout=1800,
+    target_db_identity="uniref30-release-2025-02",
+)
+a3m_path = searcher.search("MSTNPKPQRKTKRNT", "msa-results", seq_id="query-1")
+```
+
+The database and output must resolve beneath the current working directory;
+symlink escapes are rejected before Docker runs. Successful searches write
+`search-provenance.json` beside the A3M with the image version, manifest digest,
+local image ID, platform, database identity, parameters, and sequence hash.
+The sidecar also records the A3M size and SHA-256; cached output is reused only
+when both provenance and result integrity match. `allow_pull=True` is an explicit
+network acquisition opt-in. `allow_network=True` separately permits network
+access inside the search container, which a local database search does not
+require.
+
+GPU MMseqs2 is not selected automatically. The stable official CUDA image is
+AMD64-only, so it is incompatible with GH200/ARM64. `use_gpu=True` requires a
+caller-supplied, digest-pinned image that is compatible with the current host;
+the CPU default fails closed instead of silently attempting GPU execution.
+
 ### ANKH
 
-ANKH compatibility uses the official T5 encoder and sequence-to-sequence heads.
-`FastAnkhModel` matches the encoder contract and
-`FastAnkhForConditionalGeneration` matches the official decoder and LM head.
+The ANKH 1.0 migration will replace every existing Synthyra ANKH repository
+with full official-compatible T5 state. The currently published immutable
+Synthyra revisions are legacy encoder-only checkpoints and are not valid
+seq2seq artifacts. Until atomic replacement and validation finish, use a
+validated local full artifact for decoder behavior. In the replacement,
+`FastAnkhModel` and `AutoModel` load the encoder and shared embeddings cleanly
+without decoder allocation, while `FastAnkhForConditionalGeneration` and
+`AutoModelForSeq2SeqLM` load the encoder, decoder, cross-attention, and LM head
+from the same new immutable commit. The larger full checkpoint changes the
+default Hub contents while preserving encoder output parity.
+
+Encoder embeddings are the default and select the final state unless
+`hidden_state_index` or `store_all_hidden_states` requests another view.
+Decoder embeddings require exactly one explicit aligned `decoder_inputs` list
+or `decoder_input_ids` tensor. FastPLMs does not shift the source implicitly,
+because official ANKH tasks use prompts, sentinels, or generated tokens. The
+decoder biological mask excludes start, EOS, padding, sentinel, and other
+special tokens; persistence fingerprints stack, layer, decoder input, mask, and
+alignment.
+
 The encoder is the representative throughput architecture and supports the
-manifest-declared eager and SDPA attention implementations. The optional
-sequence-to-sequence head is eager-only; exact weights, aliases, seeded
-inference, and save/reload are validated in a separate compliance contract.
+manifest-declared eager and SDPA attention implementations. Exact encoder and
+sequence-to-sequence weights, aliases, seeded inference, and save/reload must be
+validated from the same artifact and new Hub revision before that revision is
+advertised. Files-only publication is forbidden for the migration.
 The previous synthesized masked-language-model head remains available only as
 the separately named `FastAnkhForMaskedLMExtension`; it is a FastPLMs extension,
 not an official equivalent.
@@ -213,6 +316,8 @@ heads because folding consumes hidden states only. Both independently
 implemented checkpoint transforms declare and test those omissions. Reported
 pLDDT remains on the conventional `(0, 100)` scale; compliance normalizes it to
 `(0, 1)` before computing mean absolute error.
+For multimer inputs, summary mean pLDDT excludes synthetic linker residues and
+includes only biological residues from the requested chains.
 
 The folding checkpoint remains in FP32 parameter storage. CUDA BF16 inference
 enters autocast around the folding operation; loading the checkpoint itself as
@@ -222,10 +327,21 @@ static BF16 is not the declared compliance path.
 
 Supported variants are restricted to:
 
-- `biohub/ESMFold2`
-- `biohub/ESMFold2-Fast`
-- `biohub/ESMFold2-Experimental-Cutoff2025`
-- `biohub/ESMFold2-Experimental-Fast-Cutoff2025`
+| Official checkpoint | Folding blocks | MSA conditioning | Intended path |
+| --- | ---: | --- | --- |
+| `biohub/ESMFold2` | 48 | Optional | Full sequence or complex inference, including MSA-conditioned requests |
+| `biohub/ESMFold2-Fast` | 24 | None; MSA-derived inputs are rejected | Inference-optimized single-sequence use |
+| `biohub/ESMFold2-Experimental-Cutoff2025` | 48 | Optional | Experimental-cutoff full inference, including MSA-conditioned requests |
+| `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; MSA-derived inputs are rejected | Experimental-cutoff, inference-optimized single-sequence use |
+
+The Fast distinction is architectural, not merely a speed label. Biohub's
+[Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf) describes Fast as a
+model with 24 folding blocks trained without MSA conditioning for
+single-sequence inference, compared with 48 folding blocks in the full model.
+The Fast variants are not necessarily single-chain-only: supported multichain
+and multimolecule requests remain available, but each protein chain uses
+single-sequence mode. Fast variants reject MSA-derived inputs. Use a full variant
+whenever optional MSA conditioning is part of the request.
 
 All four expose the learned ESMC projection and the `auto`, `bf16`, `fp32`, and
 `fp8` ESMC precision policy. The manifest marks `fp8` as experimental; it is an
@@ -248,6 +364,13 @@ chemistry or plotting dependency enters the core package.
 Boltz2 retains FP32 parameters and runs supported CUDA BF16 structure inference
 inside autocast. Static BF16 parameter loading is not its declared compliance
 or artifact-validation path.
+
+`predict_structure(..., seed=...)` owns a scoped Python, NumPy, CPU Torch, and
+CUDA RNG context and restores caller state on return. Prepared features and
+parameters remain FP32; the supported CUDA compute path enters BF16 autocast
+inside that scope. `seed` accepts a Python `int` or `None`; booleans, floats,
+strings, NumPy integer scalars, and other coercible values are rejected before
+any RNG state is read or changed.
 
 Boltz2 is provisional in FastPLMs 1.0. Exact configuration, the declared
 inference-core state, feature preparation, and seeded execution remain covered,

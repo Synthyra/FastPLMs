@@ -12,6 +12,14 @@ from tests.parity.support.reference_adapters import (
     pinned_biohub_snapshot,
     use_esm_submodule,
 )
+from tests.parity.support.reference_adapters.biohub_source import (
+    reference_environment as _reference_environment,
+)
+from tests.parity.support.reference_adapters.biohub_source import (
+    reference_sources,
+)
+
+reference_environment = _reference_environment
 
 use_esm_submodule()
 
@@ -118,6 +126,7 @@ def load_official_model(
 ) -> tuple[nn.Module, object]:
     """Load official weights, then expose only name-normalized outputs."""
 
+    reference_sources()
     from esm.pretrained import load_local_model
     from esm.utils.constants.models import normalize_model_name
 

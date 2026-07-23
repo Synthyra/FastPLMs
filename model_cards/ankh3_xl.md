@@ -18,6 +18,19 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`,
 `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
 
+## Install and platform requirements
+
+Install FastPLMs from the exact source revision paired with this model card:
+
+```bash
+python -m pip install \
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+```
+
+Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The declared CPU gate covers tiny offline contracts; published checkpoint throughput and parity require the documented device tier. The Hub quick start below requires network
+access on first download. For an air-gapped run, first build the manifest-pinned
+local artifact and use the offline form shown in the example.
+
 ## Quick start
 
 ```python
@@ -37,22 +50,28 @@ the manifest-pinned artifact and replace `model_id` with its local
 Leave attention unspecified for the Transformers default. Supported explicit
 choices are `eager`, `sdpa`.
 Pass the selected name through `attn_implementation`.
+When an optimized backend cannot return full attention tensors,
+`output_attentions=True` emits one explicit runtime warning and uses a correctly
+masked eager implementation for that call only. The warning identifies the
+configured backend, effective backend, and reason. Configuration and later
+calls are unchanged.
 For BF16 execution, this family uses parameters loaded directly in BF16.
 
 ## Tokenization and forward inference
 
-Load the tokenizer from the same artifact as the model. Padding is represented
-explicitly by the attention mask:
+The live `Synthyra/ANKH3_xl` revision `3cbf2c22c4f7d67bf0bfcbdcd500f41723e91d29` is legacy
+encoder-only. The Hub quick start above is therefore an encoder-only
+`AutoModel` path, not evidence that decoder or language-model-head weights are
+already published.
+
+Use the tokenizer owned by the loaded model so tokenizer files, revision,
+offline/cache policy, and ANKH's residue-aware pre-tokenizer stay aligned.
+Pass raw protein strings without inserted residue spaces:
 
 ```python
 import torch
-from transformers import AutoTokenizer
 
-model_id = "Synthyra/ANKH3_xl"
-tokenizer = AutoTokenizer.from_pretrained(
-    model_id,
-    trust_remote_code=True,
-)
+tokenizer = model.tokenizer
 batch = tokenizer(
     ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
     padding=True,
@@ -67,59 +86,90 @@ print(output.last_hidden_state.shape)
 
 ## Dataset embeddings
 
-The shared embedding API accepts sequences, `(id, sequence)` pairs,
-`EmbeddingInput` records, insertion-ordered `{id: sequence}` mappings, or a
-FASTA path. Results preserve order and duplicate identifiers:
+The current live Hub revision is legacy encoder-only. It supports encoder
+dataset embeddings, which default to the encoder's final hidden state. Layer
+indices use the selected stack's native hidden-state order:
 
 ```python
-result = model.embed_dataset(
-    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
-    batch_size=2,
-    pooling=("mean", "std"),
+encoder_result = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    hidden_state_source="encoder",
+    hidden_state_index=-1,
+    full_embeddings=True,
 )
-
-for record in result:
-    print(record.id, record.sequence, record.tensor.shape)
-```
-
-Set `full_embeddings=True` for one residue tensor with shape `(l, d)` per
-sequence. Set `output` to a directory for bounded-memory, transactional
-safetensors with ordered-prefix resume, or choose `format="sqlite"` for
-batch-level database commits and exact resume. Pooling excludes boundary,
-padding, and other non-biological positions.
-
-For a long FASTA run, stream completed batches into SQLite:
-
-```python
-persisted = model.embed_dataset(
-    "proteins.fasta",
-    batch_size=64,
-    pooling=("mean",),
-    output="protein-embeddings.sqlite",
-    format="sqlite",
-    resume=True,
+all_encoder_layers = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    hidden_state_source="encoder",
+    store_all_hidden_states=True,
+    full_embeddings=True,
 )
 ```
 
-Resume verifies the input order, model state, tokenizer policy, backend, dtype,
-and pooling configuration. It never appends incompatible records to an
-existing run.
+Decoder representations require `AutoModelForSeq2SeqLM` and exactly one
+explicit, aligned `decoder_inputs` sequence or `decoder_input_ids` tensor. ANKH
+does not infer a shifted source sequence because official tasks use prompts,
+sentinel tokens, or generated tokens that depend on the task. Protein inputs
+remain raw residue strings and sentinel prompts remain tight, as in
+`M<extra_id_0>`. Until the atomic Hub replacement is published, load the
+validated complete local artifact and fail closed on its registry-bound
+attestation:
+
+```python
+from pathlib import Path
+from transformers import AutoModelForSeq2SeqLM
+from fastplms.registry import get_model_registry
+from tools.artifacts.build import validate_artifact
+
+artifact = Path("dist/hub/ANKH3_xl").resolve()
+registry = get_model_registry()
+validate_artifact(artifact, spec=registry["ankh3_xl"], registry=registry)
+seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
+    artifact,
+    trust_remote_code=True,
+    local_files_only=True,
+).eval()
+decoder_result = seq2seq.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    hidden_state_source="decoder",
+    hidden_state_index=-1,
+    decoder_inputs=["M<extra_id_0>"],
+    full_embeddings=True,
+)
+```
+
+`decoder_attention_mask` is accepted only with `decoder_input_ids`. Decoder
+pooling excludes start, EOS, padding, sentinel, and other tokenizer-special
+positions. Persisted results record the selected stack and layer, decoder input
+and mask fingerprints, input-position alignment, and biological-mask policy.
 
 ## Encoder and sequence-to-sequence use
 
-`AutoModel` loads the optimized ANKH encoder. The official-compatible decoder
-and language-model head are available through `AutoModelForSeq2SeqLM`:
+The current manifest Hub revision `3cbf2c22c4f7d67bf0bfcbdcd500f41723e91d29` for
+`Synthyra/ANKH3_xl` is legacy encoder-only. It supports the `AutoModel`
+encoder path, but it is not the full FastPLMs 1.0 sequence-to-sequence
+artifact. Do not load `AutoModelForSeq2SeqLM` from that live revision.
+
+The full encoder-decoder replacement is still pending atomic publication. Use
+sequence-to-sequence behavior only from a locally built artifact whose complete
+weight, runtime, provenance, and registry validation has passed. The following
+snippet fails closed if that artifact is missing or invalid:
 
 ```python
 import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from pathlib import Path
+from transformers import AutoModelForSeq2SeqLM
+from fastplms.registry import get_model_registry
+from tools.artifacts.build import validate_artifact
 
-model_id = "Synthyra/ANKH3_xl"
-tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+artifact = Path("dist/hub/ANKH3_xl").resolve()
+registry = get_model_registry()
+validate_artifact(artifact, spec=registry["ankh3_xl"], registry=registry)
 seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
-    model_id,
+    artifact,
     trust_remote_code=True,
+    local_files_only=True,
 ).eval()
+tokenizer = seq2seq.tokenizer
 batch = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
 
 with torch.inference_mode():
@@ -128,7 +178,11 @@ print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
 ```
 
 ANKH artifacts retain CC BY-NC-SA 4.0 terms. The notes below distinguish the
-official heads from FastPLMs extensions.
+official heads from FastPLMs extensions. Once validated and published, the 1.0
+replacement will increase the default repository size while preserving
+encoder-output parity. Runtime code,
+configuration, tokenizer, card, provenance, and every weight shard must be
+published atomically. Files-only publication is forbidden for this migration.
 
 ## Notes and limitations
 
@@ -140,15 +194,25 @@ masked-LM extension and is not an official ANKH head.
 
 - Public input: Amino-acid sequences tokenized for encoder or sequence-to-sequence use
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
+- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForMaskedLM` = `FastPLMs extension`, `AutoModelForSeq2SeqLM` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
 - Attention implementations: `eager`, `sdpa`
 - Precision policies: `default`
 - BF16 execution: `static_parameters`
-- Generation contract: `not_applicable`
+- Generation contract: `required`
 - Optional dependency group: `core`
+- Weight publication allowed: `true`
+- Weight license status: `resolved`
+- Redistributable: `true`
+- Complete weight publication required: `true`
 
 ## Provenance
 
-- FastPLMs checkpoint: `Synthyra/ANKH3_xl@3cbf2c22c4f7d67bf0bfcbdcd500f41723e91d29`
+- FastPLMs weights: `Synthyra/ANKH3_xl@3cbf2c22c4f7d67bf0bfcbdcd500f41723e91d29`
+- Runtime revision: recorded separately in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
+- Canonical transformed state SHA-256: `dd2188e0d2ca65232135714eef6de394239734d843ddae4928c7398685d858e7`
+- Conversion equality attestation: recorded in `provenance.json`
 - Official checkpoint: `ElnaggarLab/ankh3-xl@e00113df5c95ef71df7ea3f5a73d56bd00e473a4`
 - Artifact source: `official`
 - State transform: `ankh_t5_to_fastplms_v1`

@@ -1,25 +1,22 @@
-from __future__ import annotations
+"""FastPLMs-compatible DPLM implementation."""
 
 # Copyright (c) 2024 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: Apache-2.0
-"""
-FastPLMs-compatible DPLM implementation.
-"""
+
+from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
+from typing import ClassVar
 
 import torch
 import torch.nn as nn
+from einops import rearrange
 from torch.nn import functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
-from dataclasses import dataclass
-from typing import List, Optional, Tuple, Union
-from einops import rearrange
-
 from transformers import EsmTokenizer
 from transformers.modeling_outputs import (
-    BaseModelOutputWithPastAndCrossAttentions,
-    BaseModelOutputWithPoolingAndCrossAttentions,
+    MaskedLMOutput,
     ModelOutput,
     SequenceClassifierOutput,
     TokenClassifierOutput,
@@ -31,55 +28,95 @@ from transformers.models.esm.modeling_esm import (
     EsmContactPredictionHead,
     EsmEmbeddings,
     EsmEncoder,
-    EsmIntermediate,
     EsmLayer,
     EsmLMHead,
-    EsmOutput,
     EsmPooler,
     EsmPreTrainedModel,
     EsmSelfAttention,
-    EsmSelfOutput,
 )
 
-from fastplms.models._esm_rotary import RotaryEmbedding
 from fastplms.models._diffusion_generation import generate_dplm
+from fastplms.models._esm_rotary import RotaryEmbedding
 
 try:
     from fastplms.attention import (
         AttentionBackend,
-        resolve_attention_backend,
-        get_attention_mask,
-        _get_flex_attention_fn,
-        FastPLMsAttentionMixin,
-        kernels_flash_attention_func,
-        create_block_mask,
-        flex_attention,
         BlockMask,
-        warn_attention_backend_fallback,
+        FastPLMsAttentionMixin,
+        _get_flex_attention_fn,
+        flex_attention,
+        get_attention_mask,
+        kernels_flash_attention_func,
+        resolve_attention_backend,
+        resolve_attention_backend_for_call,
     )
     from fastplms.embeddings import EmbeddingMixin, select_hidden_state_embeddings
     from fastplms.models.ttt import FastPLMTestTimeTrainingMixin
-except ImportError:
-    pass  # Running as HF Hub composite; shared definitions are above
+except ModuleNotFoundError as error:
+    _COMPOSITE_REQUIRED_NAMES = (
+        "AttentionBackend",
+        "BlockMask",
+        "EmbeddingMixin",
+        "FastPLMsAttentionMixin",
+        "FastPLMTestTimeTrainingMixin",
+        "_get_flex_attention_fn",
+        "flex_attention",
+        "get_attention_mask",
+        "kernels_flash_attention_func",
+        "resolve_attention_backend",
+        "resolve_attention_backend_for_call",
+        "select_hidden_state_embeddings",
+    )
+    if error.name != "fastplms" or any(
+        name not in globals() for name in _COMPOSITE_REQUIRED_NAMES
+    ):
+        raise
+    # Legacy flat Hub composites define every shared symbol above this block.
 
 
 @dataclass
-class DPLMMaskedLMOutput(ModelOutput):
-    loss: Optional[torch.Tensor] = None
-    logits: Optional[torch.Tensor] = None
-    last_hidden_state: Optional[torch.Tensor] = None
-    hidden_states: Optional[Tuple[torch.Tensor, ...]] = None
-    attentions: Optional[Tuple[torch.Tensor, ...]] = None
-    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
+class DPLMMaskedLMOutput(MaskedLMOutput):
+    """Masked-LM output with DPLM extensions after the HF fields."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+    last_hidden_state: torch.Tensor | None = None
+
+
+@dataclass
+class DPLMSequenceClassifierOutput(SequenceClassifierOutput):
+    """Sequence-classification output with optional attention diagnostics."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+
+
+@dataclass
+class DPLMTokenClassifierOutput(TokenClassifierOutput):
+    """Token-classification output with optional attention diagnostics."""
+
+    s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
 @dataclass
 class DPLMEncoderOutput(ModelOutput):
-    last_hidden_state: Optional[torch.Tensor] = None
-    pooler_output: Optional[torch.Tensor] = None
-    hidden_states: Optional[Tuple[torch.Tensor, ...]] = None
-    attentions: Optional[Tuple[torch.Tensor, ...]] = None
-    s_max: Optional[Tuple[List[torch.Tensor], ...]] = None
+    last_hidden_state: torch.Tensor | None = None
+    pooler_output: torch.Tensor | None = None
+    hidden_states: tuple[torch.Tensor, ...] | None = None
+    attentions: tuple[torch.Tensor, ...] | None = None
+    s_max: tuple[list[torch.Tensor], ...] | None = None
+
+
+def _reject_unsupported_dplm_arguments(**arguments: object) -> None:
+    unsupported = [
+        name
+        for name, value in arguments.items()
+        if value is not None and not (name == "use_cache" and value is False)
+    ]
+    if unsupported:
+        names = ", ".join(sorted(unsupported))
+        raise ValueError(
+            "DPLM is an encoder-only diffusion model and does not support "
+            f"decoder, cross-attention, or KV-cache arguments: {names}."
+        )
 
 
 class DPLMConfig(EsmConfig):
@@ -87,7 +124,7 @@ class DPLMConfig(EsmConfig):
 
     def __init__(
         self,
-        attn_backend: Optional[str] = None,
+        attn_backend: str | None = None,
         add_pooling_layer: bool = False,
         **kwargs,
     ):
@@ -97,11 +134,26 @@ class DPLMConfig(EsmConfig):
         self.tie_word_embeddings = False
 
 
+_TOKENIZER_LOAD_CONTEXT_KEYS = (
+    "cache_dir",
+    "force_download",
+    "local_files_only",
+    "proxies",
+    "revision",
+    "subfolder",
+    "token",
+    "trust_remote_code",
+)
+
+
 class DPLMPreTrainedModel(FastPLMsAttentionMixin, EsmPreTrainedModel):
     config_class = DPLMConfig
-    base_model_prefix = "dplm"
+    # All advertised wrappers install the encoder at ``self.esm``.  Keep the
+    # Hugging Face base-model and checkpoint-prefix contract aligned with that
+    # actual module path.
+    base_model_prefix = "esm"
     supports_gradient_checkpointing = True
-    all_tied_weights_keys = {}
+    all_tied_weights_keys: ClassVar[dict[str, str]] = {}
     _supports_flash_attn = True
     _supports_flash_attn_2 = False
     _supports_flash_attn_3 = True
@@ -112,18 +164,40 @@ class DPLMPreTrainedModel(FastPLMsAttentionMixin, EsmPreTrainedModel):
         "flash_attention_3",
     )
 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
+        load_context = {key: kwargs[key] for key in _TOKENIZER_LOAD_CONTEXT_KEYS if key in kwargs}
+        if "token" not in load_context and "use_auth_token" in kwargs:
+            load_context["token"] = kwargs["use_auth_token"]
+        load_context["source"] = pretrained_model_name_or_path
+
+        loaded = super().from_pretrained(pretrained_model_name_or_path, *model_args, **kwargs)
+        model = loaded[0] if isinstance(loaded, tuple) else loaded
+        model.__dict__["_fastplms_tokenizer_load_context"] = load_context
+        model.__dict__["_fastplms_tokenizer"] = None
+        return loaded
+
     @property
     def tokenizer(self):
         tokenizer = self.__dict__.get("_fastplms_tokenizer")
         if tokenizer is None:
-            source = str(getattr(self.config, "_name_or_path", "")).strip()
+            load_context = dict(self.__dict__.get("_fastplms_tokenizer_load_context") or {})
+            source = load_context.pop("source", None)
+            if source is None:
+                source = str(getattr(self.config, "_name_or_path", "")).strip()
             if not source:
                 raise RuntimeError(
                     "DPLM tokenizer loading requires a model loaded with from_pretrained "
                     "so checkpoint provenance is available."
                 )
-            revision = getattr(self.config, "_commit_hash", None)
-            tokenizer_kwargs = {"revision": revision} if revision else {}
+            tokenizer_kwargs = {
+                key: value
+                for key, value in load_context.items()
+                if key in _TOKENIZER_LOAD_CONTEXT_KEYS and value is not None
+            }
+            resolved_revision = getattr(self.config, "_commit_hash", None)
+            if resolved_revision:
+                tokenizer_kwargs["revision"] = resolved_revision
             tokenizer = EsmTokenizer.from_pretrained(source, **tokenizer_kwargs)
             self.__dict__["_fastplms_tokenizer"] = tokenizer
         return tokenizer
@@ -131,11 +205,6 @@ class DPLMPreTrainedModel(FastPLMsAttentionMixin, EsmPreTrainedModel):
     @tokenizer.setter
     def tokenizer(self, value) -> None:
         self.__dict__["_fastplms_tokenizer"] = value
-
-    @classmethod
-    def is_remote_code(cls) -> bool:
-        # Prevent post-load reinitialization of tensors already loaded from checkpoints.
-        return True
 
     @property
     def attn_backend(self) -> str:
@@ -168,24 +237,24 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
             self.rotary_embeddings = RotaryEmbedding(dim=self.attention_head_size)
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
-        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
+        new_x_shape = (*x.size()[:-1], self.num_attention_heads, self.attention_head_size)
         x = x.view(new_x_shape)
         return x.permute(0, 2, 1, 3)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_2d: Optional[torch.Tensor] = None,
-        attention_mask_4d: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        encoder_hidden_states: Optional[torch.FloatTensor] = None,
-        encoder_attention_mask: Optional[torch.FloatTensor] = None,
-        past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-        output_attentions: Optional[bool] = False,
-        output_s_max: Optional[bool] = False,
-        past_key_values: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
+        attention_mask_2d: torch.Tensor | None = None,
+        attention_mask_4d: torch.Tensor | None = None,
+        flex_block_mask: object | None = None,
+        head_mask: torch.FloatTensor | None = None,
+        encoder_hidden_states: torch.FloatTensor | None = None,
+        encoder_attention_mask: torch.FloatTensor | None = None,
+        past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
+        output_attentions: bool | None = False,
+        output_s_max: bool | None = False,
+        past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if past_key_values is not None:
             past_key_value = past_key_values
 
@@ -233,14 +302,6 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
                     "Use eager or SDPA for decoder cross-attention."
                 )
             if output_attentions:
-                warn_attention_backend_fallback(
-                    self.attn_backend,
-                    effective_backend=AttentionBackend.EAGER,
-                    reason=(
-                        "output_attentions=True requires the full materialized attention "
-                        "probability matrix, which optimized PyTorch attention APIs do not return."
-                    ),
-                )
                 attn_output, attn_weights, s_max = self._manual_attn(
                     query_layer,
                     key_layer,
@@ -292,21 +353,13 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_heads: torch.Tensor,
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
-        attention_mask_2d: Optional[torch.Tensor] = None,
-        attention_mask_4d: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[BlockMask] = None,
+        attention_mask_2d: torch.Tensor | None = None,
+        attention_mask_4d: torch.Tensor | None = None,
+        flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if output_attentions:
-            warn_attention_backend_fallback(
-                self.attn_backend,
-                effective_backend=AttentionBackend.EAGER,
-                reason=(
-                    "output_attentions=True requires the full materialized attention "
-                    "probability matrix, which optimized PyTorch attention APIs do not return."
-                ),
-            )
             return self._manual_attn(
                 query_heads, key_heads, value_heads, attention_mask_4d, output_s_max
             )
@@ -314,10 +367,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         if (
             self.training
             and self.dropout_prob > 0
-            and (
-                self.attn_backend.is_flash
-                or self.attn_backend == AttentionBackend.FLEX_ATTENTION
-            )
+            and (self.attn_backend.is_flash or self.attn_backend == AttentionBackend.FLEX_ATTENTION)
         ):
             raise RuntimeError(
                 f"DPLM {self.attn_backend.value} attention is inference-only when attention "
@@ -354,7 +404,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
     @torch.no_grad()
     def _compute_s_max(
         self, query_heads: torch.Tensor, key_heads: torch.Tensor
-    ) -> List[torch.Tensor]:
+    ) -> list[torch.Tensor]:
         q_norm = torch.linalg.vector_norm(query_heads, dim=-1)
         k_norm = torch.linalg.vector_norm(key_heads, dim=-1)
         s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(dim=0).values
@@ -365,9 +415,9 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_heads: torch.Tensor,
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
-        attention_mask_4d: Optional[torch.Tensor] = None,
+        attention_mask_4d: torch.Tensor | None = None,
         output_s_max: bool = False,
-    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[List[torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
         attn_weights = torch.matmul(query_heads, key_heads.transpose(-1, -2))
         if attention_mask_4d is not None:
             if attention_mask_4d.dtype == torch.bool:
@@ -397,8 +447,8 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_heads: torch.Tensor,
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
-        attention_mask_2d: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, None]:
+        attention_mask_2d: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, None]:
         query_tokens = query_heads.transpose(1, 2).contiguous()
         key_tokens = key_heads.transpose(1, 2).contiguous()
         value_tokens = value_heads.transpose(1, 2).contiguous()
@@ -420,20 +470,15 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_heads: torch.Tensor,
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
-        flex_block_mask: Optional[BlockMask] = None,
-        attention_mask_2d: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, None]:
-        assert flex_attention is not None, "Flex attention is not available in this environment."
-        sequence_lengths = (
-            tuple(int(length) for length in attention_mask_2d.sum(dim=-1).tolist())
-            if attention_mask_2d is not None
-            else (query_heads.shape[-2],) * query_heads.shape[0]
-        )
+        flex_block_mask: BlockMask | None = None,
+        attention_mask_2d: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, None]:
+        if flex_attention is None:
+            raise RuntimeError("Flex attention is not available in this environment.")
         fn = _get_flex_attention_fn(
             device=query_heads.device,
             dtype=query_heads.dtype,
             shape=tuple(query_heads.shape),
-            sequence_lengths=sequence_lengths,
             mask_semantics="padding",
         )
         context_heads = fn(
@@ -446,8 +491,8 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         query_heads: torch.Tensor,
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
-        attention_mask_4d: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, None]:
+        attention_mask_4d: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, None]:
         # The pinned official DPLM path uses Torch's efficient SDPA kernel for
         # its non-null padding mask. Torch 2.13 otherwise selects cuDNN on H100,
         # changing every downstream hidden state. Requiring the same public
@@ -480,16 +525,16 @@ class ModifiedEsmAttention(EsmAttention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_2d: Optional[torch.Tensor] = None,
-        attention_mask_4d: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        attention_mask_2d: torch.Tensor | None = None,
+        attention_mask_4d: torch.Tensor | None = None,
+        flex_block_mask: object | None = None,
+        head_mask: torch.Tensor | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         hidden_states_ln = self.LayerNorm(hidden_states)
         attn_output, attn_weights, s_max = self.self(
             hidden_states_ln,
@@ -519,16 +564,16 @@ class ModifiedEsmLayer(EsmLayer):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask_2d: Optional[torch.Tensor] = None,
-        attention_mask_4d: Optional[torch.Tensor] = None,
-        flex_block_mask: Optional[object] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
+        attention_mask_2d: torch.Tensor | None = None,
+        attention_mask_4d: torch.Tensor | None = None,
+        flex_block_mask: object | None = None,
+        head_mask: torch.Tensor | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[List[torch.Tensor]]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         attention_output, attn_weights, s_max = self.attention(
             hidden_states,
             attention_mask_2d=attention_mask_2d,
@@ -543,7 +588,8 @@ class ModifiedEsmLayer(EsmLayer):
         if self.is_decoder and encoder_hidden_states is not None:
             if self.add_cross_attention is False:
                 raise AttributeError(
-                    f"If `encoder_hidden_states` are passed, {self} has to be instantiated with cross-attention "
+                    f"If `encoder_hidden_states` are passed, {self} has to be "
+                    "instantiated with cross-attention "
                     "layers by setting `config.add_cross_attention=True`"
                 )
             cross_attn_past_key_value = past_key_value[-2:] if past_key_value is not None else None
@@ -577,12 +623,12 @@ class ModifiedEsmEncoder(EsmEncoder):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[Tuple[Tuple[torch.FloatTensor]]]] = None,
-        use_cache: Optional[bool] = None,
+        attention_mask: torch.Tensor | None = None,
+        head_mask: torch.Tensor | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        past_key_values: list[tuple[tuple[torch.FloatTensor]]] | None = None,
+        use_cache: bool | None = None,
         output_attentions: bool = False,
         output_hidden_states: bool = False,
         output_s_max: bool = False,
@@ -602,8 +648,12 @@ class ModifiedEsmEncoder(EsmEncoder):
         all_self_attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
 
+        effective_backend = resolve_attention_backend_for_call(
+            self.attention_backend,
+            output_attentions=output_attentions,
+        )
         attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
-            effective_backend=self.attention_backend,
+            effective_backend=effective_backend,
             batch_size=hidden_states.shape[0],
             seq_len=hidden_states.shape[1],
             device=hidden_states.device,
@@ -614,7 +664,7 @@ class ModifiedEsmEncoder(EsmEncoder):
 
         for i, layer_module in enumerate(self.layer):
             if output_hidden_states:
-                all_hidden_states = all_hidden_states + (hidden_states,)
+                all_hidden_states = (*all_hidden_states, hidden_states)
 
             layer_head_mask = head_mask[i] if head_mask is not None else None
             past_key_value = past_key_values[i] if past_key_values is not None else None
@@ -648,15 +698,15 @@ class ModifiedEsmEncoder(EsmEncoder):
                 )
 
             if all_self_attentions is not None:
-                all_self_attentions = all_self_attentions + (attn_weights,)
+                all_self_attentions = (*all_self_attentions, attn_weights)
             if full_s_max is not None:
-                full_s_max = full_s_max + (s_max,)
+                full_s_max = (*full_s_max, s_max)
 
         if self.emb_layer_norm_after:
             hidden_states = self.emb_layer_norm_after(hidden_states)
 
         if output_hidden_states:
-            all_hidden_states = all_hidden_states + (hidden_states,)
+            all_hidden_states = (*all_hidden_states, hidden_states)
 
         return DPLMEncoderOutput(
             last_hidden_state=hidden_states,
@@ -691,7 +741,7 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -729,16 +779,17 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
             head_mask = head_mask.expand(num_hidden_layers, -1, -1, -1, -1)
         elif head_mask.dim() == 2:
             head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
-        assert head_mask.dim() == 5, f"head_mask.dim != 5, got {head_mask.dim()}"
+        if head_mask.dim() != 5:
+            raise ValueError(f"head_mask.dim != 5, got {head_mask.dim()}")
         head_mask = head_mask.to(dtype=self.dtype)
         return head_mask
 
     def get_head_mask(
         self,
-        head_mask: Optional[torch.Tensor],
+        head_mask: torch.Tensor | None,
         num_hidden_layers: int,
         is_attention_chunked: bool = False,
-    ) -> Union[torch.Tensor, List[None]]:
+    ) -> torch.Tensor | list[None]:
         if head_mask is None:
             return [None] * num_hidden_layers
         head_mask = self._convert_head_mask_to_5d(head_mask, num_hidden_layers)
@@ -748,20 +799,30 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor], DPLMEncoderOutput]:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        head_mask: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+    ) -> tuple[torch.Tensor] | DPLMEncoderOutput:
+        if self.config.is_decoder or self.config.add_cross_attention:
+            raise ValueError(
+                "DPLM is encoder-only; is_decoder and add_cross_attention must be false."
+            )
+        _reject_unsupported_dplm_arguments(
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+        )
         output_attentions = (
             output_attentions if output_attentions is not None else self.config.output_attentions
         )
@@ -789,18 +850,25 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
         batch_size, seq_length = input_shape
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
+        expected_attention_mask_shape = (batch_size, seq_length)
         if attention_mask is None:
             attention_mask_2d = torch.ones((batch_size, seq_length), device=device).bool()
-        elif attention_mask.dim() == 2:
-            attention_mask_2d = attention_mask.bool()
         elif attention_mask.dim() == 4:
             raise ValueError(
                 "DPLM accepts a two-dimensional padding mask. Passing a four-dimensional "
                 "custom attention mask is unsupported because it cannot be applied to both "
                 "the embedding and optimized-attention paths without changing semantics."
             )
+        elif (
+            attention_mask.dim() != 2
+            or tuple(attention_mask.shape) != expected_attention_mask_shape
+        ):
+            raise ValueError(
+                f"attention_mask must have shape {expected_attention_mask_shape}; "
+                f"received {tuple(attention_mask.shape)}."
+            )
         else:
-            raise ValueError(f"Unsupported attention_mask shape: {attention_mask.shape}")
+            attention_mask_2d = attention_mask.to(device=device, dtype=torch.bool)
 
         encoder_extended_attention_mask = encoder_attention_mask
         if self.config.is_decoder and encoder_hidden_states is not None:
@@ -833,14 +901,15 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
         sequence_output = encoder_outputs.last_hidden_state
 
         if return_dict is False:
-            return (sequence_output,) + encoder_outputs[1:]
+            return (sequence_output, *encoder_outputs[1:])
 
-        return DPLMEncoderOutput(
+        result = DPLMEncoderOutput(
             last_hidden_state=sequence_output,
             hidden_states=encoder_outputs.hidden_states,
             attentions=encoder_outputs.attentions,
             s_max=encoder_outputs.s_max,
         )
+        return result
 
 
 class DPLMModel(DPLMPreTrainedModel, EmbeddingMixin):
@@ -865,7 +934,7 @@ class DPLMModel(DPLMPreTrainedModel, EmbeddingMixin):
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -883,20 +952,20 @@ class DPLMModel(DPLMPreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.Tensor] = None,
-        head_mask: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[List[torch.FloatTensor]] = None,
-        use_cache: Optional[bool] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-    ) -> Union[Tuple[torch.Tensor], DPLMEncoderOutput]:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.Tensor | None = None,
+        head_mask: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+        past_key_values: list[torch.FloatTensor] | None = None,
+        use_cache: bool | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+    ) -> tuple[torch.Tensor] | DPLMEncoderOutput:
         outputs = self.esm(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -910,29 +979,28 @@ class DPLMModel(DPLMPreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             output_s_max=output_s_max,
-            return_dict=return_dict,
+            return_dict=True,
         )
         sequence_output = outputs[0]
         pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        if return_dict is False:
-            return (sequence_output, pooled_output) + outputs[1:]
-
-        return DPLMEncoderOutput(
+        result = DPLMEncoderOutput(
             last_hidden_state=sequence_output,
             pooler_output=pooled_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class DPLMForMaskedLM(FastPLMTestTimeTrainingMixin, DPLMPreTrainedModel, EmbeddingMixin):
     config_class = DPLMConfig
 
-    def __init__(self, config, dropout: float = 0.1):
-        config.hidden_dropout_prob = dropout
+    def __init__(self, config, dropout: float | None = None):
+        if dropout is not None:
+            config.hidden_dropout_prob = dropout
         DPLMPreTrainedModel.__init__(self, config)
         self.esm = FAST_DPLM_ENCODER(config)
         self.lm_head = EsmLMHead(config)
@@ -944,10 +1012,25 @@ class DPLMForMaskedLM(FastPLMTestTimeTrainingMixin, DPLMPreTrainedModel, Embeddi
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
 
+    def set_input_embeddings(self, value: nn.Module) -> None:
+        self.esm.set_input_embeddings(value)
+
     def get_output_embeddings(self):
         return self.lm_head.decoder
 
     def set_output_embeddings(self, new_embeddings):
+        old_bias = self.lm_head.bias
+        new_vocab_size = int(new_embeddings.out_features)
+        if old_bias.shape[0] != new_vocab_size:
+            resized_bias = old_bias.new_zeros(new_vocab_size)
+            copy_length = min(old_bias.shape[0], new_vocab_size)
+            with torch.no_grad():
+                resized_bias[:copy_length].copy_(old_bias[:copy_length])
+            self.lm_head.bias = nn.Parameter(resized_bias)
+        # EsmLMHead.forward adds this standalone bias after the decoder. HF's
+        # generic LM-head resizer may create a biased Linear, which would apply
+        # the bias twice and introduce an undeclared shared tensor on save.
+        new_embeddings.bias = None
         self.lm_head.decoder = new_embeddings
 
     def generate(
@@ -989,7 +1072,7 @@ class DPLMForMaskedLM(FastPLMTestTimeTrainingMixin, DPLMPreTrainedModel, Embeddi
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -1010,20 +1093,27 @@ class DPLMForMaskedLM(FastPLMTestTimeTrainingMixin, DPLMPreTrainedModel, Embeddi
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        decoder_input_ids: Optional[torch.Tensor] = None,
-        decoder_attention_mask: Optional[torch.Tensor] = None,
-        decoder_inputs_embeds: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-    ) -> Union[Tuple[torch.Tensor], DPLMMaskedLMOutput]:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        decoder_input_ids: torch.Tensor | None = None,
+        decoder_attention_mask: torch.Tensor | None = None,
+        decoder_inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
+        encoder_attention_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor] | DPLMMaskedLMOutput:
+        _reject_unsupported_dplm_arguments(
+            decoder_input_ids=decoder_input_ids,
+            decoder_attention_mask=decoder_attention_mask,
+            decoder_inputs_embeds=decoder_inputs_embeds,
+            encoder_hidden_states=encoder_hidden_states,
+            encoder_attention_mask=encoder_attention_mask,
+        )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         if attention_mask is None and input_ids is not None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
@@ -1047,20 +1137,15 @@ class DPLMForMaskedLM(FastPLMTestTimeTrainingMixin, DPLMPreTrainedModel, Embeddi
             labels = labels.to(logits.device)
             loss = self.loss_fct(logits.view(-1, self.config.vocab_size), labels.view(-1))
 
-        if return_dict is False:
-            output = (logits, sequence_output, outputs.hidden_states, outputs.attentions)
-            if loss is not None:
-                return (loss,) + output
-            return output
-
-        return DPLMMaskedLMOutput(
+        result = DPLMMaskedLMOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
+            last_hidden_state=sequence_output,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class DPLMForSequenceClassification(DPLMPreTrainedModel, EmbeddingMixin):
@@ -1068,6 +1153,9 @@ class DPLMForSequenceClassification(DPLMPreTrainedModel, EmbeddingMixin):
 
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
+
+    def set_input_embeddings(self, value: nn.Module) -> None:
+        self.esm.set_input_embeddings(value)
 
     def __init__(self, config):
         DPLMPreTrainedModel.__init__(self, config)
@@ -1082,7 +1170,7 @@ class DPLMForSequenceClassification(DPLMPreTrainedModel, EmbeddingMixin):
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -1095,16 +1183,16 @@ class DPLMForSequenceClassification(DPLMPreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-        **kwargs,
-    ) -> Union[Tuple[torch.Tensor], DPLMMaskedLMOutput]:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+    ) -> tuple[torch.Tensor, ...] | DPLMSequenceClassifierOutput:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs = self.esm(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1140,14 +1228,14 @@ class DPLMForSequenceClassification(DPLMPreTrainedModel, EmbeddingMixin):
             elif self.config.problem_type == "multi_label_classification":
                 loss = self.bce(logits, labels)
 
-        return DPLMMaskedLMOutput(
+        result = DPLMSequenceClassifierOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
 
 
 class DPLMForTokenClassification(DPLMPreTrainedModel, EmbeddingMixin):
@@ -1155,6 +1243,9 @@ class DPLMForTokenClassification(DPLMPreTrainedModel, EmbeddingMixin):
 
     def get_input_embeddings(self) -> nn.Module:
         return self.esm.get_input_embeddings()
+
+    def set_input_embeddings(self, value: nn.Module) -> None:
+        self.esm.set_input_embeddings(value)
 
     def __init__(self, config):
         DPLMPreTrainedModel.__init__(self, config)
@@ -1168,7 +1259,7 @@ class DPLMForTokenClassification(DPLMPreTrainedModel, EmbeddingMixin):
     def _embed(
         self,
         input_ids: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: torch.Tensor | None = None,
         hidden_state_index: int = -1,
         store_all_hidden_states: bool = False,
     ) -> torch.Tensor:
@@ -1181,16 +1272,16 @@ class DPLMForTokenClassification(DPLMPreTrainedModel, EmbeddingMixin):
 
     def forward(
         self,
-        input_ids: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        inputs_embeds: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-        output_attentions: Optional[bool] = None,
-        output_hidden_states: Optional[bool] = None,
-        output_s_max: Optional[bool] = False,
-        return_dict: Optional[bool] = None,
-        **kwargs,
-    ) -> Union[Tuple[torch.Tensor], DPLMMaskedLMOutput]:
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        output_s_max: bool | None = False,
+        return_dict: bool | None = None,
+    ) -> tuple[torch.Tensor, ...] | DPLMTokenClassifierOutput:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         outputs = self.esm(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1208,11 +1299,11 @@ class DPLMForTokenClassification(DPLMPreTrainedModel, EmbeddingMixin):
             labels = labels.to(logits.device)
             loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
 
-        return DPLMMaskedLMOutput(
+        result = DPLMTokenClassifierOutput(
             loss=loss,
             logits=logits,
-            last_hidden_state=sequence_output,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
             s_max=outputs.s_max,
         )
+        return result if return_dict else result.to_tuple()
