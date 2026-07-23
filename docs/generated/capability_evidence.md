@@ -72,7 +72,7 @@ automatically apply to the capability in this row.
 | `cpu:structure-contracts` | `cpu_contract` | `tests/cpu/test_structure_contracts.py` | Tiny injected structure cores, public outputs, save/reload, and binder batching. |
 | `structure:public-contracts` | `structure` | `tests/structure/test_structure_public_helpers.py` | Seeded Boltz helper, linker masking, real features, losses, and binder gradients. |
 | `structure:full-suite` | `structure` | `tests/structure` | The declared GPU structure suite for folding and preparation behavior. |
-| `feature:binder` | `feature` | `tests/integration/test_binder_design.py` | Seeded binder workflow, atom padding, critic ranking, and provenance. |
+| `feature:binder` | `feature` | `tests/integration/test_binder_design.py` | Seeded binder workflow, atom padding, critic ranking, and traceability. |
 | `cpu:artifact-example` | `cpu_contract` | `tests/cpu/test_documentation_contracts.py::test_artifact_loading_example_executes_local_only_autoconfig` | The offline local-artifact example with AutoConfig. |
 | `cpu:task-head-example` | `cpu_contract` | `tests/cpu/test_documentation_contracts.py::test_task_head_example_executes_all_advertised_heads_offline` | Offline ESM2 masked-LM scoring, contacts, sequence classification, and token classification through the documented example. |
 

@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_HUB_LICENSE_NAME_RE = re.compile(r"[^a-z0-9.]+")
 _WINDOWS_INVALID_PATH_CHARACTERS = frozenset('<>:"|?*')
 _WINDOWS_RESERVED_PATH_NAMES = frozenset(
     {"AUX", "CON", "NUL", "PRN"}
@@ -353,7 +354,13 @@ class ModelFamily:
 
         metadata = {"license": self.hub_license}
         if self.hub_license_name is not None:
-            metadata["license_name"] = self.hub_license_name
+            # Hugging Face validates custom license names as lowercase slugs,
+            # while the manifest retains the reader-facing display name used
+            # in generated prose.
+            metadata["license_name"] = _HUB_LICENSE_NAME_RE.sub(
+                "-",
+                self.hub_license_name.lower(),
+            ).strip("-.")
         if self.hub_license_link is not None:
             metadata["license_link"] = self.hub_license_link
         return MappingProxyType(metadata)

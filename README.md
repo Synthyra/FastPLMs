@@ -68,12 +68,10 @@ AutoClasses, attention backends, precision paths, and release tiers.
 The model manifest, not this summary, controls support. A backend or AutoClass
 that is valid for one family may be rejected by another.
 
-The currently published immutable revisions of the existing Synthyra ANKH
-repositories are legacy encoder-only checkpoints. They do not yet satisfy the
-1.0 full-checkpoint contract and must not be used for decoder or seq2seq calls.
-The replacement becomes usable only after weights, tokenizer, runtime, card,
-and provenance are atomically published and the new immutable revisions pass
-both AutoClass views.
+The Synthyra ANKH repositories contain the complete 1.0 encoder-decoder
+checkpoints. `AutoModel` loads the encoder view, and
+`AutoModelForSeq2SeqLM` loads the decoder, cross-attention, and language-model
+head from the same repository.
 
 ## Installation
 
@@ -288,17 +286,12 @@ raw residue strings without inserted spaces and keep sentinel prompts tight,
 for example `M<extra_id_0>`. The model-owned and explicitly supplied tokenizer
 paths apply the same ANKH normalization contract.
 
-Until the atomic Hub replacement is complete, use a locally built and validated
-full artifact. Do not substitute the currently published legacy
-`Synthyra/ANKH_base` revision in this seq2seq example:
-
 ```python
 from transformers import AutoModelForSeq2SeqLM
 
 seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
-    "dist/hub/ANKH_base",
+    "Synthyra/ANKH_base",
     trust_remote_code=True,
-    local_files_only=True,
 ).eval()
 decoder_result = seq2seq.embed_dataset(
     ["MSTNPKPQRKTKRNT"],
@@ -773,7 +766,7 @@ self-contained and load through Transformers with `trust_remote_code=True`.
 ### Fail-closed artifacts and licenses
 
 Artifact construction verifies required file identities, canonical legal
-texts, conversion provenance, generated model-card metadata, and offline
+texts, conversion details, generated model-card metadata, and offline
 loading. A missing or changed required file is a release error. Source licenses
 and notices are centralized under [`LICENSES/`](LICENSES/); checkpoint-specific
 terms remain distinct from the FastPLMs Apache-2.0 code license.
@@ -851,15 +844,15 @@ safety contract.
 This files-only workflow is forbidden for the ANKH 1.0 migration. ANKH must
 replace its encoder-only contents with the full encoder-decoder state in one
 immutable commit containing every weight shard, tokenizer asset, configuration,
-runtime source, card, and provenance record. Validate both `AutoModel` and
+runtime source, card, and release record. Validate both `AutoModel` and
 `AutoModelForSeq2SeqLM` from that same commit before publication is accepted.
 Use the explicit `--complete <ankh-model-id>` dry-run and publication workflow.
 It makes one parent-guarded atomic commit containing validated additions and
 only the narrowly scoped deletions needed to replace obsolete registry-pinned
 files, such as a monolithic ANKH weight file superseded by indexed shards.
-DPLM1 and DPLM2 checkpoint weights are Apache-2.0. At the pinned ByteDance
-revision, the [license](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE)
-is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The maintained ByteDance
+[license](https://github.com/bytedance/dplm/blob/main/LICENSE)
+is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
 defines the repository release as including pretrained DPLM1 and DPLM2 weights.
 Validated DPLM artifacts therefore record `weights_license_status="resolved"`
 and `redistributable=true`; explicit `--complete` publication is permitted after

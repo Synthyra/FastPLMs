@@ -345,7 +345,7 @@ CAPABILITY_EVIDENCE_SELECTORS: dict[str, EvidenceSelector] = {
     "feature:binder": EvidenceSelector(
         tier="feature",
         targets=("tests/integration/test_binder_design.py",),
-        scope="Seeded binder workflow, atom padding, critic ranking, and provenance.",
+        scope="Seeded binder workflow, atom padding, critic ranking, and traceability.",
     ),
     "cpu:artifact-example": EvidenceSelector(
         tier="cpu_contract",
@@ -905,11 +905,11 @@ def _installation_section(family: ModelFamily) -> str:
     return f"""\
 ## Install and platform requirements
 
-Install FastPLMs from the exact source revision paired with this model card:
+Install the current FastPLMs package:
 
 ```bash
 python -m pip install \\
-  "fastplms{extra} @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "fastplms{extra} @ git+https://github.com/Synthyra/FastPLMs.git"
 ```
 
 {_platform_requirements(family)} The Hub quick start below requires network
@@ -1943,7 +1943,7 @@ def _esmc_kernel_label(kernel: object) -> str:
     if kernel["provider"] == "torch":
         return f"Torch {kernel['torch_version']}"
     return (
-        f"{kernel['repository']}@{str(kernel['revision'])[:12]} "
+        f"{kernel['repository']} "
         f"v{kernel['version']} ({kernel['expected_variant']})"
     )
 
@@ -2638,7 +2638,7 @@ def render_support(registry: ModelRegistry) -> str:
             _table_row(
                 "ID",
                 "Family",
-                "Repository revision",
+                "Repository",
                 "Path",
                 "SHA-256",
                 "Size",
@@ -2656,7 +2656,7 @@ def render_support(registry: ModelRegistry) -> str:
                 (
                     f"`{asset.id}`",
                     f"`{asset.consumer_family}`",
-                    f"`{asset.repository}@{asset.revision}`",
+                    f"`{asset.repository}`",
                     f"`{asset.path}`",
                     f"`{asset.sha256}`",
                     str(asset.size),
@@ -2680,10 +2680,8 @@ def render_support(registry: ModelRegistry) -> str:
         )
     )
     for spec in registry.values():
-        fast_url = f"https://huggingface.co/{spec.fast.repo_id}/tree/{spec.fast.revision}"
-        official_url = (
-            f"https://huggingface.co/{spec.official.repo_id}/tree/{spec.official.revision}"
-        )
+        fast_url = f"https://huggingface.co/{spec.fast.repo_id}"
+        official_url = f"https://huggingface.co/{spec.official.repo_id}"
         unresolved = len(spec.fast.unresolved_files) + len(spec.official.unresolved_files)
         if spec.family.id == "esmfold2":
             if spec.msa_conditioning is None:
@@ -2888,10 +2886,10 @@ def _sequence_forward_usage(spec: ModelSpec) -> str:
         return f"""\
 ## Tokenization and forward inference
 
-The live `{spec.fast.repo_id}` revision `{spec.fast.revision}` is legacy
-encoder-only. The Hub quick start above is therefore an encoder-only
-`AutoModel` path, not evidence that decoder or language-model-head weights are
-already published.
+`{spec.fast.repo_id}` contains the complete encoder-decoder checkpoint.
+`AutoModel` loads the encoder view without allocating the decoder, while
+`AutoModelForSeq2SeqLM` loads the encoder, decoder, cross-attention, and
+language-model head.
 
 Use the tokenizer owned by the loaded model so tokenizer files, revision,
 offline/cache policy, and ANKH's residue-aware pre-tokenizer stay aligned.
@@ -2956,13 +2954,11 @@ def _embedding_usage(spec: ModelSpec) -> str:
     }:
         return ""
     if spec.family.id == "ankh":
-        artifact_name = spec.fast.repo_id.split("/", maxsplit=1)[-1]
         return f"""\
 ## Dataset embeddings
 
-The current live Hub revision is legacy encoder-only. It supports encoder
-dataset embeddings, which default to the encoder's final hidden state. Layer
-indices use the selected stack's native hidden-state order:
+Dataset embeddings default to the encoder's final hidden state. Layer indices
+use the selected stack's native hidden-state order:
 
 ```python
 encoder_result = model.embed_dataset(
@@ -2984,23 +2980,14 @@ explicit, aligned `decoder_inputs` sequence or `decoder_input_ids` tensor. ANKH
 does not infer a shifted source sequence because official tasks use prompts,
 sentinel tokens, or generated tokens that depend on the task. Protein inputs
 remain raw residue strings and sentinel prompts remain tight, as in
-`M<extra_id_0>`. Until the atomic Hub replacement is published, load the
-validated complete local artifact and fail closed on its registry-bound
-attestation:
+`M<extra_id_0>`:
 
 ```python
-from pathlib import Path
 from transformers import AutoModelForSeq2SeqLM
-from fastplms.registry import get_model_registry
-from tools.artifacts.build import validate_artifact
 
-artifact = Path("dist/hub/{artifact_name}").resolve()
-registry = get_model_registry()
-validate_artifact(artifact, spec=registry["{spec.id}"], registry=registry)
 seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
-    artifact,
+    "{spec.fast.repo_id}",
     trust_remote_code=True,
-    local_files_only=True,
 ).eval()
 decoder_result = seq2seq.embed_dataset(
     ["MSTNPKPQRKTKRNT"],
@@ -3234,14 +3221,8 @@ the attribution required by the upstream agreement.
 
 """
     if family_id == "dplm":
-        license_url = (
-            "https://github.com/bytedance/dplm/blob/"
-            "8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE"
-        )
-        readme_url = (
-            "https://github.com/bytedance/dplm/blob/"
-            "8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview"
-        )
+        license_url = "https://github.com/bytedance/dplm/blob/main/LICENSE"
+        readme_url = "https://github.com/bytedance/dplm/blob/main/README.md#overview"
         return f"""\
 ## Diffusion sequence generation
 
@@ -3277,8 +3258,8 @@ Plain `AutoModel` omits the optional ESM pooler because this diffusion
 checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
 only when intentionally initializing and training that head.
 
-DPLM1 and DPLM2 checkpoint weights are Apache-2.0. At the pinned ByteDance
-revision, the [LICENSE]({license_url}) is Apache-2.0 and the
+DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The maintained ByteDance
+[LICENSE]({license_url}) is Apache-2.0 and the
 [README]({readme_url})
 explicitly scopes the repository release to the pretrained DPLM1 and DPLM2
 weights. FastPLMs artifacts record `weights_license_status="resolved"` and
@@ -3287,14 +3268,8 @@ artifact, legal, parity, and atomic-publication preflights pass.
 
 """
     if family_id == "dplm2":
-        license_url = (
-            "https://github.com/bytedance/dplm/blob/"
-            "8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE"
-        )
-        readme_url = (
-            "https://github.com/bytedance/dplm/blob/"
-            "8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview"
-        )
+        license_url = "https://github.com/bytedance/dplm/blob/main/LICENSE"
+        readme_url = "https://github.com/bytedance/dplm/blob/main/README.md#overview"
         return f"""\
 ## Amino-acid and structure co-generation
 
@@ -3339,56 +3314,43 @@ Plain `AutoModel` omits the optional ESM pooler because this co-generation
 checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
 only when intentionally initializing and training that head.
 
-The checkpoint weights are Apache-2.0. The pinned ByteDance
-[LICENSE]({license_url}) and [README]({readme_url}) provide the immutable license
+The checkpoint weights are Apache-2.0. The maintained ByteDance
+[LICENSE]({license_url}) and [README]({readme_url}) document the license
 basis for the pretrained DPLM1 and DPLM2 weights. Complete publication remains
 subject to all artifact, legal, parity, and atomic-publication preflights.
 
 """
     if family_id == "ankh":
-        artifact_name = spec.fast.repo_id.split("/", maxsplit=1)[-1]
         return f"""\
 ## Encoder and sequence-to-sequence use
 
-The current manifest Hub revision `{spec.fast.revision}` for
-`{spec.fast.repo_id}` is legacy encoder-only. It supports the `AutoModel`
-encoder path, but it is not the full FastPLMs 1.0 sequence-to-sequence
-artifact. Do not load `AutoModelForSeq2SeqLM` from that live revision.
-
-The full encoder-decoder replacement is still pending atomic publication. Use
-sequence-to-sequence behavior only from a locally built artifact whose complete
-weight, runtime, provenance, and registry validation has passed. The following
-snippet fails closed if that artifact is missing or invalid:
+`{spec.fast.repo_id}` contains the complete ANKH encoder-decoder checkpoint.
+Use `AutoModel` for encoder embeddings and `AutoModelForSeq2SeqLM` for
+task-specific decoding:
 
 ```python
 import torch
-from pathlib import Path
-from transformers import AutoModelForSeq2SeqLM
-from fastplms.registry import get_model_registry
-from tools.artifacts.build import validate_artifact
+from transformers import AutoModel, AutoModelForSeq2SeqLM, AutoTokenizer
 
-artifact = Path("dist/hub/{artifact_name}").resolve()
-registry = get_model_registry()
-validate_artifact(artifact, spec=registry["{spec.id}"], registry=registry)
+repo_id = "{spec.fast.repo_id}"
+tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
+encoder = AutoModel.from_pretrained(repo_id, trust_remote_code=True).eval()
 seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
-    artifact,
+    repo_id,
     trust_remote_code=True,
-    local_files_only=True,
 ).eval()
-tokenizer = seq2seq.tokenizer
 batch = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
 
 with torch.inference_mode():
+    encoder_hidden = encoder(**batch).last_hidden_state
     generated_ids = seq2seq.generate(**batch, max_new_tokens=16)
+print(encoder_hidden.shape)
 print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
 ```
 
 ANKH artifacts retain CC BY-NC-SA 4.0 terms. The notes below distinguish the
-official heads from FastPLMs extensions. Once validated and published, the 1.0
-replacement will increase the default repository size while preserving
-encoder-output parity. Runtime code,
-configuration, tokenizer, card, provenance, and every weight shard must be
-published atomically. Files-only publication is forbidden for this migration.
+official heads from FastPLMs extensions. The complete checkpoint is larger than
+the former encoder-only mirror while preserving encoder-output parity.
 
 """
     if family_id == "boltz2":
@@ -3641,7 +3603,7 @@ and sequence panel. Pending cells are not performance or parity claims.
 ## Hash-pinned CCD runtime asset
 
 Structure preparation requires `ccd.pkl` from
-`biohub/ESMFold2@1ebf0e3481a5184eb6171d40615c79e384b48796`. The manifest pins
+`biohub/ESMFold2`. The manifest pins
 its 417,306,584-byte size and SHA-256
 `9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5`
 under MIT terms. This is a trusted-deserialization boundary: FastPLMs only
@@ -3783,14 +3745,14 @@ calls are unchanged.
 - Redistributable: `{weights_allowed}`
 - Complete weight publication required: `{complete_weights}`
 
-## Provenance
+## Release record
 
-- FastPLMs weights: `{spec.fast.repo_id}@{spec.fast.revision}`
+- FastPLMs weights: `{spec.fast.repo_id}`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
 - Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 {canonical_state_provenance}\
-- Official checkpoint: `{spec.official.repo_id}@{spec.official.revision}`
+- Official checkpoint: `{spec.official.repo_id}`
 - Artifact source: `{spec.artifact_source}`
 - State transform: `{spec.family.state_transform}`
 - BF16 execution: `{spec.family.bf16_execution}`
@@ -3799,7 +3761,7 @@ calls are unchanged.
 - Release tiers: {_code(spec.family.test_tiers)}
 - Unresolved required file identities: `{unresolved}`
 
-The local artifact records exact file identities, conversion provenance, source
+The local artifact records exact file identities, conversion details, source
 revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
 release blocker.
 

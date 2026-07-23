@@ -18,11 +18,11 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
 ## Install and platform requirements
 
-Install FastPLMs from the exact source revision paired with this model card:
+Install the current FastPLMs package:
 
 ```bash
 python -m pip install \
-  "fastplms[structure] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "fastplms[structure] @ git+https://github.com/Synthyra/FastPLMs.git"
 ```
 
 Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Structure inference requires the `structure` extra and a CUDA device for the published execution contract. The current validated release target is the exact NVIDIA GH200 on Linux aarch64; Linux x86-64, CPU-only, Windows, and macOS structure runs are not current release evidence. The Hub quick start below requires network
@@ -187,7 +187,7 @@ and sequence panel. Pending cells are not performance or parity claims.
 ## Hash-pinned CCD runtime asset
 
 Structure preparation requires `ccd.pkl` from
-`biohub/ESMFold2@1ebf0e3481a5184eb6171d40615c79e384b48796`. The manifest pins
+`biohub/ESMFold2`. The manifest pins
 its 417,306,584-byte size and SHA-256
 `9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5`
 under MIT terms. This is a trusted-deserialization boundary: FastPLMs only
@@ -235,13 +235,13 @@ signals, not experimental evidence of affinity or specificity. See the
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Provenance
+## Release record
 
-- FastPLMs weights: `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025@8f022c2514a6c32692aaca078a8391d6bc6c4bac`
+- FastPLMs weights: `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
 - Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
-- Official checkpoint: `biohub/ESMFold2-Experimental-Fast-Cutoff2025@74b88548bf19688b8727432db0d698cb2e1d8783`
+- Official checkpoint: `biohub/ESMFold2-Experimental-Fast-Cutoff2025`
 - Artifact source: `fast`
 - State transform: `identity`
 - BF16 execution: `fp32_parameters_autocast`
@@ -250,7 +250,7 @@ signals, not experimental evidence of affinity or specificity. See the
 - Release tiers: `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The local artifact records exact file identities, conversion provenance, source
+The local artifact records exact file identities, conversion details, source
 revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
 release blocker.
 

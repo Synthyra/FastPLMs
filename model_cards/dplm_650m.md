@@ -20,11 +20,11 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 
 ## Install and platform requirements
 
-Install FastPLMs from the exact source revision paired with this model card:
+Install the current FastPLMs package:
 
 ```bash
 python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git"
 ```
 
 Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Eager, SDPA, and Flex use the core install. FlashAttention requires the `flash` extra, compatible CUDA hardware, and BF16 execution. The Hub quick start below requires network
@@ -157,9 +157,9 @@ Plain `AutoModel` omits the optional ESM pooler because this diffusion
 checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
 only when intentionally initializing and training that head.
 
-DPLM1 and DPLM2 checkpoint weights are Apache-2.0. At the pinned ByteDance
-revision, the [LICENSE](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE) is Apache-2.0 and the
-[README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The maintained ByteDance
+[LICENSE](https://github.com/bytedance/dplm/blob/main/LICENSE) is Apache-2.0 and the
+[README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
 explicitly scopes the repository release to the pretrained DPLM1 and DPLM2
 weights. FastPLMs artifacts record `weights_license_status="resolved"` and
 `redistributable=true`; complete publication is permitted only after all
@@ -180,13 +180,13 @@ artifact, legal, parity, and atomic-publication preflights pass.
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Provenance
+## Release record
 
-- FastPLMs weights: `Synthyra/DPLM-650M@05dc16d97c5c028aed924c9ed681cee4ab609760`
+- FastPLMs weights: `Synthyra/DPLM-650M`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
 - Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
-- Official checkpoint: `airkingbd/dplm_650m@7a7e651baa667d094aba05e9dc1cf52a3332110a`
+- Official checkpoint: `airkingbd/dplm_650m`
 - Artifact source: `fast`
 - State transform: `dplm_to_fastplms_v1`
 - BF16 execution: `fp32_parameters_autocast`
@@ -195,7 +195,7 @@ artifact, legal, parity, and atomic-publication preflights pass.
 - Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The local artifact records exact file identities, conversion provenance, source
+The local artifact records exact file identities, conversion details, source
 revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
 release blocker.
 

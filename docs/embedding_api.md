@@ -204,10 +204,9 @@ residue-statistic poolers. It rejects `cls` and `parti`.
 
 ### ANKH encoder and decoder layers
 
-The currently published immutable Synthyra ANKH revisions are legacy
-encoder-only checkpoints. Decoder examples require either a validated local
-full 1.0 artifact or a new immutable Hub revision published after the atomic
-replacement; the existing Hub revisions must not be used for this path.
+The Synthyra ANKH repositories contain the complete encoder-decoder
+checkpoints. `AutoModel` exposes the encoder view and
+`AutoModelForSeq2SeqLM` exposes the full sequence-to-sequence view.
 
 ANKH defaults to the encoder final state:
 
@@ -403,7 +402,7 @@ When a model is loaded from `dist/hub/<model>`, Transformers does not assign a
 Hub commit to `config._commit_hash`. The artifact therefore carries
 packaging-only model ID, checkpoint repository, immutable revision, and
 checkpoint-identity hash fields. Embedding metadata and resume fingerprints use
-those fields as the fallback, so local offline runs retain complete provenance.
+those fields as the fallback, so local offline runs retain complete traceability.
 The packaging fields are excluded from semantic configuration parity.
 
 Run-fingerprint schema v3 binds the exact current bytes, names, dtypes, and

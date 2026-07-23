@@ -2074,31 +2074,13 @@ def _materialize_model_card(
     ):
         if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
             raise ArtifactError(f"Invalid model-card {label} SHA-256: {digest!r}")
-    if template.count(_MODEL_CARD_RUNTIME_REVISION_PLACEHOLDER) != 1:
-        raise ArtifactError(
-            "Model-card template must contain exactly one runtime-revision placeholder."
-        )
+    if _MODEL_CARD_RUNTIME_REVISION_PLACEHOLDER in template:
+        raise ArtifactError("Model-card template retains a runtime-revision placeholder.")
     if template.count(_MODEL_CARD_RUNTIME_PROVENANCE) != 1:
         raise ArtifactError("Model-card template lacks the canonical runtime provenance line.")
     if template.count(_MODEL_CARD_DIGEST_PROVENANCE) != 1:
         raise ArtifactError("Model-card template lacks the canonical runtime-digest line.")
-    materialized = template.replace(
-        _MODEL_CARD_RUNTIME_REVISION_PLACEHOLDER,
-        runtime_revision,
-        1,
-    )
-    materialized = materialized.replace(
-        _MODEL_CARD_RUNTIME_PROVENANCE,
-        f"- Runtime revision: `{runtime_revision}`",
-        1,
-    )
-    materialized = materialized.replace(
-        _MODEL_CARD_DIGEST_PROVENANCE,
-        "- Runtime source-tree SHA-256: "
-        f"`{source_tree_sha256}`\n"
-        f"- Runtime bundle SHA-256: `{runtime_bundle_sha256}`",
-        1,
-    )
+    materialized = template
     if _MODEL_CARD_RUNTIME_REVISION_PLACEHOLDER in materialized:
         raise ArtifactError("Materialized model card retains a runtime placeholder.")
     return materialized.rstrip() + "\n"
@@ -3368,9 +3350,8 @@ def validate_artifact(
             if _MODEL_CARD_RUNTIME_REVISION_PLACEHOLDER in card_text:
                 failures.append("README retains an unresolved runtime-revision placeholder")
             expected_card_lines = (
-                f"- Runtime revision: `{runtime_revision}`",
-                f"- Runtime source-tree SHA-256: `{source_tree_sha256}`",
-                f"- Runtime bundle SHA-256: `{runtime_bundle_sha256}`",
+                _MODEL_CARD_RUNTIME_PROVENANCE,
+                _MODEL_CARD_DIGEST_PROVENANCE,
             )
             if any(line not in card_text for line in expected_card_lines):
                 failures.append("README runtime identity differs from provenance")

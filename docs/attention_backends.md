@@ -182,7 +182,7 @@ missing, extra, malformed, stale, self-digest-invalid, wrong-device, or
 cross-device report, or on a missing/stale dependency lock, installed inventory,
 container build/image identity, or official-reference source attestation. The
 generated capability manifest and applicable model cards record the exact
-candidate and official-source provenance, context, aggregate metric ranges, and
+candidate and official-source records, context, aggregate metric ranges, and
 per-case minimum/median/maximum distributions.
 
 The current locked GH200/aarch64 release image has no validated FlashAttention

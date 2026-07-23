@@ -116,7 +116,7 @@ def test_release_tool_snapshot_rejects_untracked_scope_growth(tmp_path: Path) ->
         _validated_release_tool_snapshot(tmp_path)
 
 
-def test_materialized_model_card_binds_exact_runtime_identity() -> None:
+def test_materialized_model_card_keeps_runtime_identity_out_of_user_facing_text() -> None:
     template = render_model_card(get_model_registry()["esm2_8m"])
     runtime_revision = "a" * 40
     source_tree_sha256 = "b" * 64
@@ -130,10 +130,12 @@ def test_materialized_model_card_binds_exact_runtime_identity() -> None:
     )
 
     assert "<runtime-revision>" not in card
-    assert f"FastPLMs.git@{runtime_revision}" in card
-    assert f"- Runtime revision: `{runtime_revision}`" in card
-    assert f"- Runtime source-tree SHA-256: `{source_tree_sha256}`" in card
-    assert f"- Runtime bundle SHA-256: `{runtime_bundle_sha256}`" in card
+    assert "FastPLMs.git@" not in card
+    assert runtime_revision not in card
+    assert source_tree_sha256 not in card
+    assert runtime_bundle_sha256 not in card
+    assert "- Runtime revision: recorded separately" in card
+    assert "- Source-tree and runtime-bundle SHA-256: recorded" in card
 
 
 def test_shared_sources_are_in_runtime_artifacts() -> None:
@@ -927,12 +929,11 @@ def test_complete_artifact_rejects_self_attested_card_runtime_placeholder(
         source_root,
         _allow_untracked_runtime_for_tests=True,
     )
-    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
     readme = artifact / "README.md"
     readme.write_text(
         readme.read_text(encoding="utf-8").replace(
-            provenance["runtime_revision"],
-            "<runtime-revision>",
+            "FastPLMs.git",
+            "FastPLMs.git@<runtime-revision>",
             1,
         ),
         encoding="utf-8",

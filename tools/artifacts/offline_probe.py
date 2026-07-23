@@ -352,7 +352,11 @@ def _exercise(
         }
     if family == "esm_plusplus":
         inputs["sequence_id"] = inputs["attention_mask"].bool()
-    if getattr(model.config, "is_encoder_decoder", False):
+    # AutoModel intentionally exposes the encoder-only ANKH view while
+    # retaining the official T5 ``is_encoder_decoder`` configuration value.
+    # Decoder inputs belong only to models that actually allocate a decoder,
+    # such as AutoModelForSeq2SeqLM.
+    if getattr(model.config, "is_encoder_decoder", False) and hasattr(model, "decoder"):
         inputs["decoder_input_ids"] = inputs["input_ids"]
         inputs["decoder_attention_mask"] = inputs["attention_mask"]
     with torch.inference_mode(), numeric_context:

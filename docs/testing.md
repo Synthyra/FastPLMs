@@ -421,7 +421,7 @@ official_golden = { metadata = "tests/goldens/<model>.json=sha256:<digest>", ten
 Absence of this record means that the checkpoint golden is not complete. It
 must be reported as release work rather than represented by a placeholder or a
 synthetic fixture. Presence makes a missing, modified, or
-provenance-inconsistent bundle a `check` failure. Other tiers do not infer a
+source-record-inconsistent bundle a `check` failure. Other tiers do not infer a
 golden requirement.
 
 The manifest-driven converter consumes only normalized output from an isolated

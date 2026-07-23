@@ -37,7 +37,7 @@ typed loader in `fastplms.registry` validates:
 - immutable checkpoint and upstream revisions;
 - file identities and explicitly unresolved release blockers;
 - AutoClass mappings and tokenizer modes;
-- state transformations and conversion provenance;
+- state transformations and conversion records;
 - attention, dtype, precision, dependency, VRAM, and test contracts;
 - code and checkpoint licenses;
 - reference containers and documentation state.
@@ -46,7 +46,7 @@ Tests derive model cases from this registry. Container validation checks that
 every declared reference target exists. Documentation support tables and model
 cards are generated from it. The artifact builder selects the declared source,
 verifies every pinned input, applies the named transformation, and records the
-same provenance in the output.
+same source record in the output.
 
 Adding a model only in Python code is therefore insufficient. A release-visible
 model must be represented completely in the manifest and pass all generated
@@ -106,7 +106,7 @@ Hub checkpoint files remain external assets pinned by immutable revision and
 hash. `tools/artifacts/build.py` consumes an already downloaded snapshot and
 never logs in, downloads, creates a repository, or uploads. It writes a local
 artifact under `dist/hub/<model>/` with unchanged runtime source modules,
-AutoClass metadata, tokenizer assets, legal files, provenance, and deterministic
+AutoClass metadata, tokenizer assets, legal files, source records, and deterministic
 safetensors shards.
 
 An artifact is valid only if it loads in a fresh offline environment with
@@ -116,7 +116,7 @@ reload, and match the package-source implementation.
 
 Runtime packaging uses tracked, clean regular files selected by path,
 extension, and size allowlists. It rejects untracked inputs, symlinks,
-credentials, unknown binaries, and path escapes. Provenance separates weight
+credentials, unknown binaries, and path escapes. Release records separate weight
 and runtime revisions, records source-tree and embedded-bundle digests plus
 generator/schema version, and provides distinct complete-artifact and
 runtime-only attestations. Publication rehashes validated bytes at preflight.

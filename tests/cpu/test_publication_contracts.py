@@ -183,6 +183,10 @@ def _synthetic_complete_ankh_registry(
     ]
     synthetic_spec = replace(
         current_spec,
+        family=replace(
+            current_spec.family,
+            requires_complete_weight_publication=True,
+        ),
         official=CheckpointSource(
             repo_id=current_spec.official.repo_id,
             revision=current_spec.official.revision,
@@ -355,7 +359,7 @@ def test_complete_ankh_multishard_inventory_is_published_atomically(
     assert plan.validated_auto_classes == ("AutoModel", "AutoModelForSeq2SeqLM")
     assert set(plan.replacement_weight_paths) == replacement_weights
     assert replacement_weights.issubset(plan.files)
-    assert plan.deletes == ("model.safetensors",)
+    assert plan.deletes == ("model-00001-of-00001.safetensors",)
 
     publish_module.publish_complete(
         (plan,),
@@ -382,7 +386,7 @@ def test_complete_ankh_multishard_inventory_is_published_atomically(
     }
     assert additions == set(plan.files)
     assert replacement_weights.issubset(additions)
-    assert deletions == {"model.safetensors"}
+    assert deletions == {"model-00001-of-00001.safetensors"}
 
     (artifact / "model-00002-of-00002.safetensors").unlink()
     with pytest.raises(ArtifactError, match="index and artifact shard files differ"):

@@ -87,11 +87,10 @@ def test_package_manifest_is_complete_and_typed() -> None:
         assert model.artifact_source == "official"
         assert model.artifact_checkpoint is model.official
         assert re.fullmatch(r"[0-9a-f]{64}", model.canonical_state_sha256 or "")
-        assert model.family.requires_complete_weight_publication
+        assert not model.family.requires_complete_weight_publication
     assert all(
         not model.family.requires_complete_weight_publication
         for model in registry.values()
-        if model.family.id != "ankh"
     )
     for model in registry.by_family("dplm2"):
         assert model.artifact_source == "official"
@@ -541,10 +540,9 @@ def test_hub_license_metadata_is_typed_and_complete() -> None:
     e1 = registry.families["e1"]
     assert dict(e1.hub_license_metadata) == {
         "license": "other",
-        "license_name": "Profluent-E1 Clickthrough License Agreement",
+        "license_name": "profluent-e1-clickthrough-license-agreement",
         "license_link": (
-            "https://github.com/Profluent-AI/E1/blob/"
-            "bfd2620a602248499f3d2583d85a7ecddf0b6e02/LICENSE"
+            "https://github.com/Profluent-AI/E1/blob/main/LICENSE"
         ),
     }
     for family_id, family in registry.families.items():
@@ -844,7 +842,7 @@ def test_manifest_rejects_nonportable_runtime_paths(
 def test_manifest_rejects_non_boolean_complete_publication_policy(tmp_path: Path) -> None:
     manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
     invalid = manifest.replace(
-        "requires_complete_weight_publication = true",
+        "requires_complete_weight_publication = false",
         'requires_complete_weight_publication = "yes"',
         1,
     )

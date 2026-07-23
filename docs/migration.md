@@ -153,17 +153,14 @@ Legacy pickle remains executable input and therefore requires explicit opt-in.
 
 ## ANKH full-checkpoint replacement
 
-FastPLMs 1.0 will replace each existing Synthyra encoder-only ANKH repository
-with the full official-compatible T5 state. The currently published immutable
-Synthyra revisions remain legacy encoder-only checkpoints and are not valid for
-the seq2seq code below. This migration increases the default checkpoint size
-while preserving encoder output parity.
+FastPLMs 1.0 replaced each Synthyra encoder-only ANKH repository with the full
+official-compatible T5 state. This increases the default checkpoint size while
+preserving encoder output parity.
 
 `AutoModel` loads the encoder and shared state without decoder allocation.
 `AutoModelForSeq2SeqLM` loads encoder, decoder, cross-attention, and LM head from
-the same new immutable commit. Until that atomic replacement is complete, set
-`ankh_id` to a validated local full artifact, or set `ankh_revision` only to the
-new full-checkpoint commit after it passes release validation:
+the same repository. Set `ankh_id` to a Synthyra ANKH repository or a validated
+local artifact:
 
 ```python
 from transformers import AutoModel, AutoModelForSeq2SeqLM
@@ -212,7 +209,7 @@ tokens and persisted metadata fingerprints the decoder input and alignment.
 
 Files-only publication is forbidden for this migration. Every weight shard,
 weight index, tokenizer asset, configuration, runtime source, model card, and
-provenance record must land in one immutable Hub commit. Both AutoClass views
+release record must land in one immutable Hub commit. Both AutoClass views
 must pass artifact and live parity from that same commit.
 
 Complete publication may remove a superseded monolithic weight path in that

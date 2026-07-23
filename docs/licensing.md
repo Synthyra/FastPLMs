@@ -32,9 +32,9 @@ agreement; review `LICENSES/e1/` before use.
 
 ## DPLM
 
-At pinned revision `8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d`, the ByteDance
-DPLM repository carries an [Apache-2.0 license](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE)
-and its [official README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+The ByteDance DPLM repository carries an
+[Apache-2.0 license](https://github.com/bytedance/dplm/blob/main/LICENSE)
+and its [official README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
 defines the repository release as including pretrained weights for both DPLM1
 and DPLM2. FastPLMs therefore records both checkpoint families as Apache-2.0,
 with Hub metadata `license: apache-2.0`,
@@ -48,7 +48,7 @@ legal inventory, state-parity evidence, and atomic Hub preflight all pass.
 
 Biohub MIT and Apache notices, including `THIRD_PARTY_NOTICE`, are retained for
 ESM++, ESM3, and ESMFold2. Boltz MIT terms, Meta ESM and ESMFold notices,
-OpenFold notices, and ProteinTTT provenance are included where their code or
+OpenFold notices, and ProteinTTT source records are included where their code or
 derived behavior is distributed.
 
 ESMFold2 additionally uses a 417,306,584-byte `ccd.pkl` runtime asset under MIT

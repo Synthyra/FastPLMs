@@ -152,8 +152,8 @@ pooler by default; it remains available through explicit
 `add_pooling_layer=True`.
 
 DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The pinned ByteDance
-[LICENSE](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE)
-and [README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+[LICENSE](https://github.com/bytedance/dplm/blob/main/LICENSE)
+and [README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
 provide the immutable license basis; the latter explicitly scopes the official
 repository release to the pretrained weights for both model families.
 
@@ -258,7 +258,7 @@ symlink escapes are rejected before Docker runs. Successful searches write
 `search-provenance.json` beside the A3M with the image version, manifest digest,
 local image ID, platform, database identity, parameters, and sequence hash.
 The sidecar also records the A3M size and SHA-256; cached output is reused only
-when both provenance and result integrity match. `allow_pull=True` is an explicit
+when both source-record and result integrity checks match. `allow_pull=True` is an explicit
 network acquisition opt-in. `allow_network=True` separately permits network
 access inside the search container, which a local database search does not
 require.
@@ -270,15 +270,12 @@ the CPU default fails closed instead of silently attempting GPU execution.
 
 ### ANKH
 
-The ANKH 1.0 migration will replace every existing Synthyra ANKH repository
-with full official-compatible T5 state. The currently published immutable
-Synthyra revisions are legacy encoder-only checkpoints and are not valid
-seq2seq artifacts. Until atomic replacement and validation finish, use a
-validated local full artifact for decoder behavior. In the replacement,
+The ANKH 1.0 migration replaced every Synthyra ANKH repository with full
+official-compatible T5 state.
 `FastAnkhModel` and `AutoModel` load the encoder and shared embeddings cleanly
 without decoder allocation, while `FastAnkhForConditionalGeneration` and
 `AutoModelForSeq2SeqLM` load the encoder, decoder, cross-attention, and LM head
-from the same new immutable commit. The larger full checkpoint changes the
+from the same repository. The larger full checkpoint changes the
 default Hub contents while preserving encoder output parity.
 
 Encoder embeddings are the default and select the final state unless

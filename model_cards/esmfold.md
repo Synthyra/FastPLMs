@@ -18,11 +18,11 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
 ## Install and platform requirements
 
-Install FastPLMs from the exact source revision paired with this model card:
+Install the current FastPLMs package:
 
 ```bash
 python -m pip install \
-  "fastplms[structure] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "fastplms[structure] @ git+https://github.com/Synthyra/FastPLMs.git"
 ```
 
 Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Structure inference requires the `structure` extra and a CUDA device for the published execution contract. The current validated release target is the exact NVIDIA GH200 on Linux aarch64; Linux x86-64, CPU-only, Windows, and macOS structure runs are not current release evidence. The Hub quick start below requires network
@@ -99,13 +99,13 @@ does not contain a trained masked-language-model head for that objective, so
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Provenance
+## Release record
 
-- FastPLMs weights: `Synthyra/FastESMFold@b88c8cb50d19b2cf7ab4fee4b0a61f5e02da7823`
+- FastPLMs weights: `Synthyra/FastESMFold`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
 - Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
-- Official checkpoint: `facebook/esmfold_v1@75a3841ee059df2bf4d56688166c8fb459ddd97a`
+- Official checkpoint: `facebook/esmfold_v1`
 - Artifact source: `fast`
 - State transform: `esmfold_meta_to_fastplms_v1`
 - BF16 execution: `fp32_parameters_autocast`
@@ -114,7 +114,7 @@ does not contain a trained masked-language-model head for that objective, so
 - Release tiers: `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The local artifact records exact file identities, conversion provenance, source
+The local artifact records exact file identities, conversion details, source
 revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
 release blocker.
 

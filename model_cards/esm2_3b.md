@@ -19,11 +19,11 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 
 ## Install and platform requirements
 
-Install FastPLMs from the exact source revision paired with this model card:
+Install the current FastPLMs package:
 
 ```bash
 python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git"
 ```
 
 Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Eager, SDPA, and Flex use the core install. FlashAttention requires the `flash` extra, compatible CUDA hardware, and BF16 execution. The Hub quick start below requires network
@@ -180,13 +180,13 @@ required.
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Provenance
+## Release record
 
-- FastPLMs weights: `Synthyra/ESM2-3B@ff89d0180f414ab9c677219a25da79bf09185456`
+- FastPLMs weights: `Synthyra/ESM2-3B`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
 - Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
-- Official checkpoint: `facebook/esm2_t36_3B_UR50D@476b639933c8baad5ad09a60ac1a87f987b656fc`
+- Official checkpoint: `facebook/esm2_t36_3B_UR50D`
 - Artifact source: `fast`
 - State transform: `esm2_hf_to_fastplms_v1`
 - BF16 execution: `fp32_parameters_autocast`
@@ -195,7 +195,7 @@ required.
 - Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The local artifact records exact file identities, conversion provenance, source
+The local artifact records exact file identities, conversion details, source
 revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
 release blocker.
 

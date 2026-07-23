@@ -231,15 +231,10 @@ non-weight `fast_files`, such as `config.json` or tokenizer assets.
 
 ## Publish a complete checkpoint atomically
 
-The currently published immutable revisions in the existing Synthyra ANKH
-repositories are legacy encoder-only checkpoints. Do not advertise them as
-full 1.0 or use them for `AutoModelForSeq2SeqLM`; the first valid full revision
-is the new commit produced only after this complete-mode workflow and its live
-validation succeed.
-
-ANKH 1.0 must publish the full encoder-decoder state together with runtime code,
-configuration, tokenizer, card, legal files, provenance, and scoped
-attestations:
+The Synthyra ANKH repositories now contain the complete 1.0 encoder-decoder
+state. Use complete mode for a future checkpoint replacement that changes
+weights. It publishes the full state together with runtime code, configuration,
+tokenizer, card, legal files, source records, and scoped attestations:
 
 ```bash
 PYTHONPATH=src python -m tools.artifacts.publish \
@@ -263,8 +258,8 @@ and LM-head state from the same artifact.
 
 DPLM1 and DPLM2 complete publication is permitted under Apache-2.0 after every
 normal preflight passes. At the pinned ByteDance revision, the
-[LICENSE](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE)
-is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/README.md#overview)
+[LICENSE](https://github.com/bytedance/dplm/blob/main/LICENSE)
+is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
 defines the repository release as including pretrained DPLM1 and DPLM2 weights.
 Built artifacts therefore carry Hub license `apache-2.0`,
 `weights_license_status="resolved"`, and `redistributable=true`, plus the
@@ -274,8 +269,8 @@ mutation when either license field is unresolved.
 
 ## ESMFold2 runtime asset
 
-ESMFold2 provenance includes `ccd.pkl` from
-`biohub/ESMFold2@1ebf0e3481a5184eb6171d40615c79e384b48796`: 417,306,584 bytes,
+The ESMFold2 source record includes `ccd.pkl` from
+`biohub/ESMFold2`: 417,306,584 bytes,
 SHA-256 `9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5`,
 MIT license, and trust kind `hash_pinned_pickle`. Deserialization occurs only
 from a private loader-owned temporary snapshot after verifying that snapshot's

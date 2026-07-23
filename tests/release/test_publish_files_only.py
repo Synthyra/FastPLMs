@@ -521,11 +521,8 @@ def test_files_only_plan_rejects_self_attested_card_runtime_placeholder(
     artifact = _files_only_artifact(tmp_path, spec)
     readme = artifact / "README.md"
     text = readme.read_text(encoding="utf-8")
-    runtime_revision = json.loads(
-        (artifact / "provenance.json").read_text(encoding="utf-8")
-    )["runtime_revision"]
     readme.write_text(
-        text.replace(runtime_revision, "<runtime-revision>", 1),
+        text.replace("FastPLMs.git", "FastPLMs.git@<runtime-revision>", 1),
         encoding="utf-8",
         newline="\n",
     )
@@ -1401,7 +1398,14 @@ def test_required_complete_probe_groups_ankh_views(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    spec = get_model_registry()["ankh_base"]
+    current_spec = get_model_registry()["ankh_base"]
+    spec = replace(
+        current_spec,
+        family=replace(
+            current_spec.family,
+            requires_complete_weight_publication=True,
+        ),
+    )
     artifact = tmp_path / "artifact"
     artifact.mkdir()
 
@@ -1431,7 +1435,14 @@ def test_complete_ankh_publish_rejects_missing_probe_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    spec = get_model_registry()["ankh_base"]
+    current_spec = get_model_registry()["ankh_base"]
+    spec = replace(
+        current_spec,
+        family=replace(
+            current_spec.family,
+            requires_complete_weight_publication=True,
+        ),
+    )
     artifact = tmp_path / "artifact"
     artifact.mkdir()
     manifest = artifact / "artifact-manifest.json"

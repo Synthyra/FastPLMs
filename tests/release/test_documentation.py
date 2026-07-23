@@ -476,7 +476,7 @@ def test_esmfold2_fast_docs_do_not_claim_msa_conditioning() -> None:
     assert "the distinct full and Fast MSA contracts" in docs_index
 
 
-def test_ankh_seq2seq_docs_do_not_misrepresent_legacy_live_revisions() -> None:
+def test_ankh_seq2seq_docs_describe_live_full_checkpoints() -> None:
     paths = (
         ROOT / "README.md",
         ROOT / "docs" / "artifacts.md",
@@ -487,31 +487,29 @@ def test_ankh_seq2seq_docs_do_not_misrepresent_legacy_live_revisions() -> None:
     )
     for path in paths:
         text = path.read_text(encoding="utf-8")
-        assert "legacy encoder-only" in " ".join(text.split()), path.relative_to(ROOT)
+        assert "legacy encoder-only" not in " ".join(text.split()), path.relative_to(ROOT)
 
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     seq2seq_section = readme.split("ANKH selects the encoder final state", maxsplit=1)[1].split(
         "### Safetensors output", maxsplit=1
     )[0]
-    assert '"dist/hub/ANKH_base"' in seq2seq_section
-    assert "local_files_only=True" in seq2seq_section
-    assert 'from_pretrained(\n    "Synthyra/ANKH_base"' not in seq2seq_section
+    assert '"Synthyra/ANKH_base"' in seq2seq_section
+    assert "local_files_only=True" not in seq2seq_section
 
     cards = {
-        "ankh_base.md": "ANKH_base",
-        "ankh_large.md": "ANKH_large",
-        "ankh2_large.md": "ANKH2_large",
-        "ankh3_large.md": "ANKH3_large",
-        "ankh3_xl.md": "ANKH3_xl",
+        "ankh_base.md": "Synthyra/ANKH_base",
+        "ankh_large.md": "Synthyra/ANKH_large",
+        "ankh2_large.md": "Synthyra/ANKH2_large",
+        "ankh3_large.md": "Synthyra/ANKH3_large",
+        "ankh3_xl.md": "Synthyra/ANKH3_xl",
     }
-    for filename, artifact_name in cards.items():
+    for filename, repo_id in cards.items():
         path = ROOT / "model_cards" / filename
         text = path.read_text(encoding="utf-8")
         normalized = " ".join(text.split())
-        assert "legacy encoder-only" in normalized, path.relative_to(ROOT)
-        assert f"dist/hub/{artifact_name}" in text, path.relative_to(ROOT)
-        assert "validate_artifact(artifact" in text, path.relative_to(ROOT)
-        assert "local_files_only=True" in text, path.relative_to(ROOT)
+        assert "legacy encoder-only" not in normalized, path.relative_to(ROOT)
+        assert repo_id in text, path.relative_to(ROOT)
+        assert "contains the complete ANKH encoder-decoder checkpoint" in normalized
         seq2seq_loads = re.findall(
             r"AutoModelForSeq2SeqLM\.from_pretrained\((.*?)\)",
             text,
@@ -519,8 +517,7 @@ def test_ankh_seq2seq_docs_do_not_misrepresent_legacy_live_revisions() -> None:
         )
         assert seq2seq_loads, path.relative_to(ROOT)
         for call in seq2seq_loads:
-            assert "Synthyra/" not in call, path.relative_to(ROOT)
-            assert "model_id" not in call, path.relative_to(ROOT)
+            assert repo_id in call or "repo_id" in call, path.relative_to(ROOT)
 
 
 def test_examples_readme_indexes_every_entry_point_and_states_coverage_boundaries() -> None:
@@ -611,7 +608,7 @@ def test_dplm_cards_mark_apache_weights_redistributable() -> None:
         assert 'license: "apache-2.0"' in text
         assert "Weight license status: `resolved`" in text
         assert "Redistributable: `true`" in text
-        assert "/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE" in text
+        assert "/bytedance/dplm/blob/main/LICENSE" in text
         assert "/README.md#overview" in text
 
 

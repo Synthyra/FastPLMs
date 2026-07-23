@@ -529,6 +529,51 @@ def test_saved_auto_map_must_remain_complete_and_non_null(tmp_path: Path) -> Non
         _assert_complete_saved_auto_map(tmp_path, expected_auto_classes=expected)
 
 
+def test_encoder_only_exercise_does_not_invent_decoder_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class _Tensor:
+        def to(self, *_args, **_kwargs):
+            return self
+
+    class _Tokenizer:
+        def __call__(self, _sequences, **_kwargs):
+            return {
+                "input_ids": _Tensor(),
+                "attention_mask": _Tensor(),
+            }
+
+    class _EncoderOnly:
+        config = SimpleNamespace(is_encoder_decoder=True)
+
+        def __call__(self, **kwargs):
+            observed.update(kwargs)
+            return kwargs["input_ids"]
+
+    monkeypatch.setattr(
+        "tools.artifacts.offline_probe._tokenizer",
+        lambda _artifact, _config: _Tokenizer(),
+    )
+    fake_torch = SimpleNamespace(
+        inference_mode=contextlib.nullcontext,
+        is_tensor=lambda value: isinstance(value, _Tensor),
+    )
+
+    _exercise(
+        _EncoderOnly(),
+        tmp_path,
+        "ankh",
+        "static_parameters",
+        fake_torch,
+    )
+
+    assert "decoder_input_ids" not in observed
+    assert "decoder_attention_mask" not in observed
+
+
 def test_batch_probe_establishes_artifact_isolation_once(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -20,11 +20,11 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 
 ## Install and platform requirements
 
-Install FastPLMs from the exact source revision paired with this model card:
+Install the current FastPLMs package:
 
 ```bash
 python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git"
 ```
 
 Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The declared CPU gate covers tiny offline contracts; published checkpoint throughput and parity require the documented device tier. The Hub quick start below requires network
@@ -59,10 +59,10 @@ For BF16 execution, this family uses parameters loaded directly in BF16.
 
 ## Tokenization and forward inference
 
-The live `Synthyra/ANKH3_large` revision `53600f175f328f986f43e55ca8ceb14935d337a4` is legacy
-encoder-only. The Hub quick start above is therefore an encoder-only
-`AutoModel` path, not evidence that decoder or language-model-head weights are
-already published.
+`Synthyra/ANKH3_large` contains the complete encoder-decoder checkpoint.
+`AutoModel` loads the encoder view without allocating the decoder, while
+`AutoModelForSeq2SeqLM` loads the encoder, decoder, cross-attention, and
+language-model head.
 
 Use the tokenizer owned by the loaded model so tokenizer files, revision,
 offline/cache policy, and ANKH's residue-aware pre-tokenizer stay aligned.
@@ -86,9 +86,8 @@ print(output.last_hidden_state.shape)
 
 ## Dataset embeddings
 
-The current live Hub revision is legacy encoder-only. It supports encoder
-dataset embeddings, which default to the encoder's final hidden state. Layer
-indices use the selected stack's native hidden-state order:
+Dataset embeddings default to the encoder's final hidden state. Layer indices
+use the selected stack's native hidden-state order:
 
 ```python
 encoder_result = model.embed_dataset(
@@ -110,23 +109,14 @@ explicit, aligned `decoder_inputs` sequence or `decoder_input_ids` tensor. ANKH
 does not infer a shifted source sequence because official tasks use prompts,
 sentinel tokens, or generated tokens that depend on the task. Protein inputs
 remain raw residue strings and sentinel prompts remain tight, as in
-`M<extra_id_0>`. Until the atomic Hub replacement is published, load the
-validated complete local artifact and fail closed on its registry-bound
-attestation:
+`M<extra_id_0>`:
 
 ```python
-from pathlib import Path
 from transformers import AutoModelForSeq2SeqLM
-from fastplms.registry import get_model_registry
-from tools.artifacts.build import validate_artifact
 
-artifact = Path("dist/hub/ANKH3_large").resolve()
-registry = get_model_registry()
-validate_artifact(artifact, spec=registry["ankh3_large"], registry=registry)
 seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
-    artifact,
+    "Synthyra/ANKH3_large",
     trust_remote_code=True,
-    local_files_only=True,
 ).eval()
 decoder_result = seq2seq.embed_dataset(
     ["MSTNPKPQRKTKRNT"],
@@ -144,45 +134,33 @@ and mask fingerprints, input-position alignment, and biological-mask policy.
 
 ## Encoder and sequence-to-sequence use
 
-The current manifest Hub revision `53600f175f328f986f43e55ca8ceb14935d337a4` for
-`Synthyra/ANKH3_large` is legacy encoder-only. It supports the `AutoModel`
-encoder path, but it is not the full FastPLMs 1.0 sequence-to-sequence
-artifact. Do not load `AutoModelForSeq2SeqLM` from that live revision.
-
-The full encoder-decoder replacement is still pending atomic publication. Use
-sequence-to-sequence behavior only from a locally built artifact whose complete
-weight, runtime, provenance, and registry validation has passed. The following
-snippet fails closed if that artifact is missing or invalid:
+`Synthyra/ANKH3_large` contains the complete ANKH encoder-decoder checkpoint.
+Use `AutoModel` for encoder embeddings and `AutoModelForSeq2SeqLM` for
+task-specific decoding:
 
 ```python
 import torch
-from pathlib import Path
-from transformers import AutoModelForSeq2SeqLM
-from fastplms.registry import get_model_registry
-from tools.artifacts.build import validate_artifact
+from transformers import AutoModel, AutoModelForSeq2SeqLM, AutoTokenizer
 
-artifact = Path("dist/hub/ANKH3_large").resolve()
-registry = get_model_registry()
-validate_artifact(artifact, spec=registry["ankh3_large"], registry=registry)
+repo_id = "Synthyra/ANKH3_large"
+tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
+encoder = AutoModel.from_pretrained(repo_id, trust_remote_code=True).eval()
 seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
-    artifact,
+    repo_id,
     trust_remote_code=True,
-    local_files_only=True,
 ).eval()
-tokenizer = seq2seq.tokenizer
 batch = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
 
 with torch.inference_mode():
+    encoder_hidden = encoder(**batch).last_hidden_state
     generated_ids = seq2seq.generate(**batch, max_new_tokens=16)
+print(encoder_hidden.shape)
 print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
 ```
 
 ANKH artifacts retain CC BY-NC-SA 4.0 terms. The notes below distinguish the
-official heads from FastPLMs extensions. Once validated and published, the 1.0
-replacement will increase the default repository size while preserving
-encoder-output parity. Runtime code,
-configuration, tokenizer, card, provenance, and every weight shard must be
-published atomically. Files-only publication is forbidden for this migration.
+official heads from FastPLMs extensions. The complete checkpoint is larger than
+the former encoder-only mirror while preserving encoder-output parity.
 
 ## Notes and limitations
 
@@ -203,17 +181,17 @@ masked-LM extension and is not an official ANKH head.
 - Weight publication allowed: `true`
 - Weight license status: `resolved`
 - Redistributable: `true`
-- Complete weight publication required: `true`
+- Complete weight publication required: `false`
 
-## Provenance
+## Release record
 
-- FastPLMs weights: `Synthyra/ANKH3_large@53600f175f328f986f43e55ca8ceb14935d337a4`
+- FastPLMs weights: `Synthyra/ANKH3_large`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
 - Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 - Canonical transformed state SHA-256: `60acb7ef86e85dc0c51fc1edf4c8e69a0480049723b6b2c95e6e9faa720c112a`
 - Conversion equality attestation: recorded in `provenance.json`
-- Official checkpoint: `ElnaggarLab/ankh3-large@2be091622e8a393f0ef21735070084123c874b6e`
+- Official checkpoint: `ElnaggarLab/ankh3-large`
 - Artifact source: `official`
 - State transform: `ankh_t5_to_fastplms_v1`
 - BF16 execution: `static_parameters`
@@ -222,7 +200,7 @@ masked-LM extension and is not an official ANKH head.
 - Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The local artifact records exact file identities, conversion provenance, source
+The local artifact records exact file identities, conversion details, source
 revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
 release blocker.
 

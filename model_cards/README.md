@@ -19,7 +19,7 @@ Each card combines:
 - family-appropriate preparation, inference, embedding, generation, or folding
   examples;
 - declared AutoClasses, backends, precision, and generation behavior;
-- immutable checkpoint and upstream provenance;
+- immutable checkpoint and upstream source records;
 - validation boundaries, limitations, and checkpoint terms.
 - explicit AutoClass weight status and weight-publication policy;
 - ESMC backend diagnostic tables whose missing frozen-head measurements remain

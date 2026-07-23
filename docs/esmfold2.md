@@ -113,8 +113,8 @@ folding checkpoint's FP32 storage.
 ## Hash-pinned CCD asset
 
 Structure preparation requires `ccd.pkl` from the immutable snapshot
-`biohub/ESMFold2@1ebf0e3481a5184eb6171d40615c79e384b48796`. The manifest
-records its 417,306,584-byte size, MIT license, and SHA-256
+of `biohub/ESMFold2`. The manifest records its 417,306,584-byte size, MIT
+license, and SHA-256
 `9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5`.
 
 This file is a pickle and therefore an explicit trusted-deserialization
@@ -126,7 +126,7 @@ verifies that snapshot's size and SHA-256, and unpickles only the verified
 snapshot. This closes path-replacement and in-place source-write races between
 validation and deserialization. `HF_HUB_OFFLINE=1` and
 `TRANSFORMERS_OFFLINE=1` require the exact cache object to exist; an offline
-call never downloads or substitutes an asset. Provenance records the identity
+call never downloads or substitutes an asset. The release record stores the identity
 and cache policy for every artifact.
 
 ## Inputs and outputs
