@@ -73,18 +73,9 @@ def test_diagnostic_typing_scope_retains_the_full_migration_surface() -> None:
     )
 
 
-def test_static_ci_consumes_the_checked_typing_scope_without_inline_shrinkage() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "cpu-contracts.yml").read_text(
-        encoding="utf-8"
-    )
+def test_manual_validation_documents_the_checked_typing_scope() -> None:
+    testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
 
-    assert "mapfile -t MYPY_TARGETS < tools/typing-critical-files.txt" in workflow
-    assert "--explicit-package-bases" in workflow
-    assert "--follow-imports=silent" in workflow
-    assert '"${MYPY_TARGETS[@]}"' in workflow
-    assert "src/fastplms/registry.py tools/remote" not in workflow
-    assert "Report broad typing no-regression debt" not in workflow
-    assert "tools.typing_gate compare" not in workflow
-    assert "continue-on-error: true" not in workflow
-    assert "tests/release/test_static_typing_scope.py" in workflow
-    assert "tests/release/test_typing_no_regression_gate.py" in workflow
+    assert "tools/typing-critical-files.txt" in testing
+    assert "--explicit-package-bases" in testing
+    assert "--follow-imports=silent" in testing

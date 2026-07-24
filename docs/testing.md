@@ -40,19 +40,15 @@ explicit provisional boundary, not a relaxed tolerance or silent skip.
 
 ## Required offline CPU gate
 
-Every pull request runs this positive allowlist as a required GitHub status:
+Run this positive allowlist on the validation workstation before merge:
 
 ```bash
 python -m pytest tests/cpu -m cpu_contract -n auto --dist=loadscope \
   --durations=25 --junitxml=artifacts/junit/cpu-contract.xml
 ```
 
-The protected required status is `cpu-contracts (3.12)` from the
-`CPU and package contracts` workflow. Branch protection should name that exact
-status so a similarly named job cannot satisfy the gate.
-
-The job uses Python 3.12, CPU-only Torch 2.13, Transformers 5.13, four hosted
-cores, fixed seeds and thread counts, hidden CUDA, and empty temporary caches.
+The command uses Python 3.12, CPU-only Torch 2.13, Transformers 5.13, four CPU
+workers, fixed seeds and thread counts, hidden CUDA, and empty temporary caches.
 It sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, guards sockets and Hub
 download functions, and fails on a skip or xfail. Tiny models use one layer,
 hidden width 8-16, two heads, and a mixed-padding batch of two. The suite budget
@@ -64,8 +60,15 @@ live process lacks PSS, the gate fails closed to the larger concurrent RSS sum
 and records the reason. Per-worker `RUSAGE_SELF` and `RUSAGE_CHILDREN` maxima
 remain in telemetry as a temporal upper-bound diagnostic, not as the budget
 metric, because those maxima can occur at different times.
-Before installation, CI runs `uv lock --check`. It then consumes that exact
-lock with `uv sync --frozen`, the `validation` dependency group, and the
+Prepare the exact CPU validation environment before running the gate:
+
+```bash
+uv lock --check
+uv sync --frozen --python 3.12 --no-default-groups \
+  --group validation --extra cpu --extra dev --extra structure --extra train
+```
+
+This consumes the checked lock, the `validation` dependency group, and the
 explicit `cpu`, `dev`, `structure`, and `train` extras. The `cpu` extra routes
 Torch to the locked PyTorch CPU index; `UV_TORCH_BACKEND` does not affect
 project-level `uv sync`. CUDA-only `cueq` and `fp8` extras conflict with the
@@ -82,27 +85,45 @@ bounded disk-spooled generator and FASTA streaming; generation and TTT; PEFT;
 injected-core structure and binder flows; publication security; and curated
 offline documentation examples.
 
-Pull-request CI is intentionally limited to two jobs. The required CPU gate
-runs the full offline contract above. One consolidated Python 3.12 quality and
-package smoke runs lint, bounded strict typing, generated-document and release
-checks, builds one wheel, loads its advertised AutoClasses in a clean
-environment, and checks the runtime import closure. GitHub does not run
-cross-version wheel matrices, source-distribution inspection, every-extra
-resolution, live official implementations, or GPU suites on each pull request.
-Those checks remain release-time responsibilities through the explicit
-`python-matrix`, `check`, `compliance`, and release suites on the declared
-workstation.
+Run the focused quality and package checks from the same locked environment:
+
+```bash
+python -m ruff check src tests tools examples benchmarks
+mapfile -t MYPY_TARGETS < tools/typing-critical-files.txt
+python -m mypy --python-version 3.12 --ignore-missing-imports \
+  --explicit-package-bases --follow-imports=silent "${MYPY_TARGETS[@]}"
+PYTHONPATH=src python -m tools.artifacts.generate_docs --check
+python -m pytest \
+  tests/release/test_binder_example_contracts.py \
+  tests/release/test_documentation.py \
+  tests/release/test_dependency_contracts.py \
+  tests/release/test_flash_source_policy.py \
+  tests/release/test_manifest_readiness.py \
+  tests/release/test_model_card_licenses.py \
+  tests/release/test_optimized_mode_contracts.py \
+  tests/release/test_production_source_boundary.py \
+  tests/release/test_python_support_matrix.py \
+  tests/release/test_static_typing_scope.py \
+  tests/release/test_typing_no_regression_gate.py \
+  tests/release/test_workflow_declared_inputs.py \
+  -q
+python tools/remote/runtime_import_closure.py \
+  --source-root src/fastplms --pyproject pyproject.toml
+```
+
+The repository has no GitHub Actions workflows. Run lint, bounded strict
+typing, generated-document checks, release contracts, wheel smoke, and runtime
+import closure directly on the workstation. Cross-version wheels, live
+official implementations, and GPU suites remain release-time responsibilities
+through the explicit `python-matrix`, `check`, `compliance`, and release suites.
 
 ## Cost-controlled schedule
 
-- Every PR: offline CPU contracts and static/package checks only.
-- Conditional GH200/aarch64 PR smoke: when a relevant sequence or structure path
-  changes, an authorized maintainer dispatches `golden-smoke` from the exact PR
-  head and supplies that same full SHA. The protected `h100-validation`
-  environment releases SSH material only after approval. Candidate output is
-  compared with checked-in goldens; no reference image is built. Its exact-SHA
-  status and report are required pre-merge for those relevant changes.
-- Manually dispatched nightly tier: sharded real-checkpoint goldens,
+- Before merge: offline CPU contracts and static/package checks.
+- Conditional GH200/aarch64 smoke: when a relevant sequence or structure path
+  changes, run `gpu-golden-smoke` against the exact candidate head. Candidate
+  output is compared with checked-in goldens; no reference image is built.
+- Extended workstation tier: sharded real-checkpoint goldens,
   eager/SDPA/Flex execution, generation, PEFT, structure, artifacts, FP8, and
   throughput by family. The GH200 job does not download, build, or execute
   FA2/FA3 kernels; FA2 retains separate prior focused evidence and FA3 is
@@ -116,8 +137,8 @@ for one checkpoint in one isolated process, build independent Buildx targets in
 parallel, and publish JUnit, duration, cache, environment, and immutable report
 telemetry. GH200/aarch64 benchmarking records cold compilation separately from warm
 throughput; a missing baseline remains a release blocker rather than a synthetic
-placeholder. All GH200 tiers are manual dispatches through the protected
-`h100-validation` environment. GitHub has no scheduled accelerator workflow.
+placeholder. All GH200 tiers are invoked directly with `python -m tools.remote`;
+there is no hosted CI or scheduled accelerator workflow.
 
 Every remote report contains a structured kernel-capability record. It names
 the measured eager, SDPA, and Flex backends, identifies the pinned FA2 revision

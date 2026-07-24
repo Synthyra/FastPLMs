@@ -165,7 +165,7 @@ testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "-ra --strict-markers --strict-config"
 markers = [
-  "cpu_contract: hermetic, deterministic CPU contract required on every pull request",
+  "cpu_contract: hermetic, deterministic CPU contract required before merge",
   "gpu: requires a CUDA accelerator",
   "slow: loads large checkpoints or performs long numerical comparisons",
   "large: requires at least 24 GiB of accelerator memory",

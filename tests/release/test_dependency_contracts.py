@@ -35,9 +35,9 @@ def test_uv_cpu_extra_is_explicit_locked_and_conflicts_with_cuda_extras() -> Non
         [{"extra": "cpu"}, {"extra": "cueq"}],
         [{"extra": "cpu"}, {"extra": "fp8"}],
     ]
-    assert "--all-extras" not in (ROOT / ".github/workflows/cpu-contracts.yml").read_text(
-        encoding="utf-8"
-    )
+    testing = (ROOT / "docs/testing.md").read_text(encoding="utf-8")
+    assert "--all-extras" in testing
+    assert "fails closed" in testing
 
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     torch_packages = [package for package in lock["package"] if package["name"] == "torch"]
@@ -174,15 +174,12 @@ def test_reporting_extra_is_separate_from_training_runtime() -> None:
     assert train_names.isdisjoint(reporting_names)
 
 
-def test_pr_ci_avoids_the_public_extra_resolution_matrix() -> None:
-    workflow = (ROOT / ".github" / "workflows" / "cpu-contracts.yml").read_text(
-        encoding="utf-8"
-    )
+def test_manual_cpu_environment_consumes_the_checked_lock() -> None:
+    testing = (ROOT / "docs/testing.md").read_text(encoding="utf-8")
 
-    assert "matrix:" not in workflow
-    assert "extras-resolution" not in workflow
-    assert "uv lock --check" in workflow
-    assert "uv sync --frozen" in workflow
+    assert "uv lock --check" in testing
+    assert "uv sync --frozen" in testing
+    assert "--group validation" in testing
 
 
 def test_runtime_import_closure_rejects_undeclared_literal_dynamic_import(

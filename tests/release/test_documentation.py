@@ -303,9 +303,9 @@ def test_capability_rows_fail_closed_against_invalid_tier_inheritance() -> None:
 def test_capability_evidence_selectors_resolve_to_their_declared_jobs() -> None:
     from tools.remote.run import SUITES
 
-    workflow = (ROOT / ".github" / "workflows" / "cpu-contracts.yml").read_text(encoding="utf-8")
     compose = (ROOT / "docker" / "compose.yaml").read_text(encoding="utf-8")
-    assert "tests/cpu" in workflow and "cpu_contract" in workflow
+    testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
+    assert "tests/cpu" in testing and "cpu_contract" in testing
 
     commands = {
         name: tuple(suite.command)
@@ -399,7 +399,7 @@ def test_curated_offline_examples_expose_executable_help() -> None:
     assert "requires a full 48-block checkpoint" in structure_help
 
 
-def test_routine_setup_avoids_parity_submodules_and_names_required_cpu_status() -> None:
+def test_routine_setup_avoids_parity_submodules_and_documents_manual_cpu_gate() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     install = readme.split("## Installation", maxsplit=1)[1].split("## Quick start", maxsplit=1)[0]
     validation = readme.split("## Validation and reproducibility", maxsplit=1)[1]
@@ -407,12 +407,13 @@ def test_routine_setup_avoids_parity_submodules_and_names_required_cpu_status() 
     assert "git submodule update --init --recursive" not in install
     assert "Official reference repositories are not runtime" in install
     assert "git submodule update --init --recursive" in validation
-    assert "`cpu-contracts (3.12)`" in validation
+    assert "does not use GitHub Actions" in validation
+    assert "tests/cpu" in validation
 
     remote = (ROOT / "tools" / "remote" / "README.md").read_text(encoding="utf-8")
     testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
-    assert "`cpu-contracts (3.12)`" in remote
-    assert "`cpu-contracts (3.12)`" in testing
+    assert "does not use GitHub Actions" in remote
+    assert "no GitHub Actions workflows" in testing
 
 
 def test_container_guide_runs_complete_candidate_and_compliance_workflows() -> None:

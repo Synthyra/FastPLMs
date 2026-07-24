@@ -788,16 +788,12 @@ benchmarks. Missing required dependencies or declared backends fail rather than
 skip. Expensive suites retain explicit `gpu`, `slow`, `large`, and `structure`
 markers.
 
-Every pull request also runs a positive, fully offline `tests/cpu/` allowlist on
-Python 3.12, CPU-only Torch 2.13, and Transformers 5.13. The required GitHub
-status is `cpu-contracts (3.12)` in the `CPU and package contracts` workflow. It
-hides CUDA, blocks socket and Hub downloads, rejects skips and xfails, and
-targets less than five minutes on four hosted CPU cores. Live official
-references are reserved for the release-candidate `compliance` tier; routine
-checks consume immutable goldens. Pull-request CI has only one additional
-consolidated Python 3.12 quality/package smoke; cross-version, every-extra,
-official-reference, and GPU validation run only through explicit workstation
-or release suites.
+Before merge, run the positive, fully offline `tests/cpu/` allowlist on the
+validation workstation with Python 3.12, CPU-only Torch 2.13, and Transformers
+5.13. It hides CUDA, blocks socket and Hub downloads, rejects skips and xfails,
+and targets less than five minutes on four CPU cores. Live official references
+remain reserved for the release-candidate `compliance` tier; routine checks
+consume immutable goldens. This repository does not use GitHub Actions.
 
 The canonical Docker workflow uses one candidate image and isolated official
 reference images:
