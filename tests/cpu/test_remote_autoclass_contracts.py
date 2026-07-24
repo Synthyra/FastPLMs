@@ -245,6 +245,13 @@ def _write_cpu_artifact(root: Path, family: ModelFamily) -> Path:
     config.auto_map = _artifact_auto_map(spec)
     config.fastplms_cpu_contract_only = True
     config.save_pretrained(artifact)
+    config_path = artifact / "config.json"
+    artifact_config = json.loads(config_path.read_text(encoding="utf-8"))
+    artifact_config["auto_map"] = _artifact_auto_map(spec)
+    config_path.write_text(
+        json.dumps(artifact_config, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     (artifact / _CPU_CONTRACT_MARKER).write_text(
         json.dumps(
             {"release_artifact": False, "schema_version": 1, "scope": "tests/cpu"},
