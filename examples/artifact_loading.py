@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+
 AUTO_CLASS_NAMES = (
     "AutoConfig",
     "AutoModel",
