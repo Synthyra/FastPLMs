@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
+
 _SCHEMA_VERSION = 2
 _EVIDENCE_SCHEMA_VERSION = 1
 _DIGEST = re.compile(r"[0-9a-f]{64}")

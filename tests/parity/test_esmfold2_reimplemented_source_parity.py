@@ -6,15 +6,14 @@ import importlib.util
 import random
 import sys
 import types
+import numpy as np
+import pytest
+import torch
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
-
-import numpy as np
-import pytest
-import torch
 
 from fastplms.models.esmfold2 import configuration_esmfold2 as local_configuration
 from fastplms.models.esmfold2 import esmfold2_affine3d as local_affine
@@ -32,6 +31,7 @@ from fastplms.models.esmfold2 import esmfold2_residue_constants as local_residue
 from fastplms.models.esmfold2 import esmfold2_types as local_types
 from fastplms.models.esmfold2.esmfold2_msa import MSA
 from fastplms.models.esmfold2.esmfold2_parsing import FastaEntry
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
@@ -168,6 +168,7 @@ def _load_official_processor() -> types.ModuleType:
 
 
 def _assert_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
+    # actual: (...), expected: (...)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
@@ -228,12 +229,14 @@ def test_protein_geometry_matches_pinned_biohub_on_h100() -> None:
     official = _load_official_structure()
     device = torch.device("cuda")
     generator = torch.Generator(device=device).manual_seed(20260714)
+    # mobile: (3, 12, 3)
     mobile = torch.randn((3, 12, 3), generator=generator, device=device)
     target = mobile + 0.05 * torch.randn(
         mobile.shape,
         generator=generator,
         device=device,
     )
+    # mask: (3, 12)
     mask = torch.tensor(
         [[1] * 12, [1] * 9 + [0] * 3, [1, 0] * 6],
         dtype=torch.bool,
@@ -260,17 +263,20 @@ def test_structure_metrics_match_pinned_biohub_on_h100() -> None:
     official = _load_official_metrics(_load_official_structure())
     device = torch.device("cuda")
     generator = torch.Generator(device=device).manual_seed(712)
+    # predicted: (2, 10, 3)
     predicted = torch.randn((2, 10, 3), generator=generator, device=device)
     target = predicted + 0.2 * torch.randn(
         predicted.shape,
         generator=generator,
         device=device,
     )
+    # atom_mask: (2, 10)
     atom_mask = torch.tensor(
         [[1] * 10, [1] * 7 + [0] * 3],
         dtype=torch.float32,
         device=device,
     )
+    # sequence_id: (2, 10)
     sequence_id = torch.tensor(
         [[0] * 5 + [1] * 5, [0] * 4 + [1] * 6],
         device=device,
@@ -293,9 +299,12 @@ def test_structure_metrics_match_pinned_biohub_on_h100() -> None:
             ),
         )
 
+    # predictions: (2, 14, 14)
     predictions = torch.rand((2, 14, 14), generator=generator, device=device)
+    # targets: (...)
     targets = torch.randint(0, 2, (2, 14, 14), generator=generator, device=device).float()
     targets[1, 11:] = -1
+    # lengths: (2,)
     lengths = torch.tensor([14, 11], device=device)
     actual_contacts = local_metrics.contact_precision(
         predictions, targets, lengths, minsep=3, maxsep=10

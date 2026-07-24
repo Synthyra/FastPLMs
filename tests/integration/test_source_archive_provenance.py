@@ -5,10 +5,10 @@ from __future__ import annotations
 import json
 import subprocess
 import tarfile
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
+from collections.abc import Iterable
+from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 
 import tools.artifacts.build as artifact_build
 from tools.artifacts.build import (
@@ -211,8 +211,12 @@ def test_git_free_runtime_snapshot_rejects_mutation_between_validation_and_snaps
     registry, spec = _runtime_contract()
     original_snapshot = artifact_build._snapshot_runtime_sources
 
-    def tampered_snapshot(*args, **kwargs):
-        payloads = original_snapshot(*args, **kwargs)
+    def tampered_snapshot(
+        source_root: Path,
+        entries: Iterable[tuple[Path, PurePosixPath]],
+        revision: str | None,
+    ) -> dict[str, bytes]:
+        payloads = original_snapshot(source_root, entries, revision)
         payloads["toy_runtime/core.py"] = b"VALUE = 2\n"
         return payloads
 

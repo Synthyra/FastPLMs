@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
+import torch
 from types import SimpleNamespace
 from typing import Any
-
-import torch
 from torch.nn import functional as F
 
 from fastplms.attention import FASTPLMS_ATTENTION_FUNCTIONS
@@ -17,6 +16,7 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusModel,
 )
 
+
 BACKENDS = ("flash_attention_2", "flash_attention_3")
 MODEL_BACKENDS = {
     "esm2": BACKENDS,
@@ -25,16 +25,17 @@ MODEL_BACKENDS = {
 
 
 def _metrics(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
-    actual_float = actual.float()
-    expected_float = expected.float()
+    # actual, expected: (..., d)
+    actual_float = actual.float()  # (..., d)
+    expected_float = expected.float()  # (..., d)
     relative_l2 = torch.linalg.vector_norm(
         actual_float - expected_float
-    ) / torch.linalg.vector_norm(expected_float).clamp_min(1e-12)
+    ) / torch.linalg.vector_norm(expected_float).clamp_min(1e-12)  # ()
     cosine = F.cosine_similarity(
-        actual_float.reshape(-1, actual.shape[-1]),
-        expected_float.reshape(-1, expected.shape[-1]),
+        actual_float.reshape(-1, actual.shape[-1]),  # (n, d)
+        expected_float.reshape(-1, expected.shape[-1]),  # (n, d)
         dim=-1,
-    )
+    )  # (n,)
     result = {
         "relative_l2": relative_l2.item(),
         "minimum_cosine": cosine.min().item(),
@@ -49,42 +50,47 @@ def _sdpa_reference(
     key_states: torch.Tensor,
     value_states: torch.Tensor,
 ) -> torch.Tensor:
+    # query_states, key_states, value_states: (b, l, h, d_h)
     return F.scaled_dot_product_attention(
-        query_states.transpose(1, 2),
-        key_states.transpose(1, 2),
-        value_states.transpose(1, 2),
-    ).transpose(1, 2)
+        query_states.transpose(1, 2),  # (b, h, l, d_h)
+        key_states.transpose(1, 2),  # (b, h, l, d_h)
+        value_states.transpose(1, 2),  # (b, h, l, d_h)
+    ).transpose(1, 2)  # (b, l, h, d_h)
 
 
 def _shared_results() -> dict[str, Any]:
     torch.manual_seed(17)
-    query_states = torch.randn(2, 17, 4, 16, device="cuda", dtype=torch.bfloat16)
-    key_states = torch.randn_like(query_states)
-    value_states = torch.randn_like(query_states)
+    query_states = torch.randn(  # (b=2, l=17, h=4, d_h=16)
+        2, 17, 4, 16, device="cuda", dtype=torch.bfloat16
+    )
+    key_states = torch.randn_like(query_states)  # (b, l, h, d_h)
+    value_states = torch.randn_like(query_states)  # (b, l, h, d_h)
     attention_mask = torch.tensor(
         [[1] * 17, [1] * 9 + [0] * 8],
         device="cuda",
         dtype=torch.bool,
+    )  # (b, l)
+    dense_reference = _sdpa_reference(  # (b, l, h, d_h)
+        query_states, key_states, value_states
     )
-    dense_reference = _sdpa_reference(query_states, key_states, value_states)
-    mixed_reference = torch.zeros_like(dense_reference)
+    mixed_reference = torch.zeros_like(dense_reference)  # (b, l, h, d_h)
     for batch_index, length in enumerate((17, 9)):
-        mixed_reference[batch_index, :length] = _sdpa_reference(
-            query_states[batch_index : batch_index + 1, :length],
-            key_states[batch_index : batch_index + 1, :length],
-            value_states[batch_index : batch_index + 1, :length],
-        )[0]
+        mixed_reference[batch_index, :length] = _sdpa_reference(  # (l_i, h, d_h)
+            query_states[batch_index : batch_index + 1, :length],  # (1, l_i, h, d_h)
+            key_states[batch_index : batch_index + 1, :length],  # (1, l_i, h, d_h)
+            value_states[batch_index : batch_index + 1, :length],  # (1, l_i, h, d_h)
+        )[0]  # (l_i, h, d_h)
 
     results: dict[str, Any] = {}
     module = SimpleNamespace(training=False, is_causal=False)
     for backend in BACKENDS:
-        dense = kernels_flash_attention_func(
+        dense = kernels_flash_attention_func(  # (b, l, h, d_h)
             query_states,
             key_states,
             value_states,
             implementation=backend,
         )
-        mixed = kernels_flash_attention_func(
+        mixed = kernels_flash_attention_func(  # (b, l, h, d_h)
             query_states,
             key_states,
             value_states,
@@ -93,18 +99,19 @@ def _shared_results() -> dict[str, Any]:
         )
         interface_output, interface_weights = FASTPLMS_ATTENTION_FUNCTIONS[backend](
             module,
-            query_states.transpose(1, 2),
-            key_states.transpose(1, 2),
-            value_states.transpose(1, 2),
-            attention_mask,
+            query_states.transpose(1, 2),  # (b, h, l, d_h)
+            key_states.transpose(1, 2),  # (b, h, l, d_h)
+            value_states.transpose(1, 2),  # (b, h, l, d_h)
+            attention_mask,  # (b, l)
         )
+        # interface_output: (b, l, h, d_h); interface_weights: None
         if interface_weights is not None or not torch.equal(interface_output, mixed):
             raise RuntimeError(f"{backend} AttentionInterface dispatch disagrees with core.")
         results[backend] = {
             "dense": _metrics(dense, dense_reference),
             "mixed_padding": _metrics(
-                mixed[attention_mask],
-                mixed_reference[attention_mask],
+                mixed[attention_mask],  # (n_valid, h, d_h)
+                mixed_reference[attention_mask],  # (n_valid, h, d_h)
             ),
             "padding_is_zero": bool(
                 torch.equal(
@@ -155,7 +162,7 @@ def _last_hidden_state(output: object) -> torch.Tensor:
     value = getattr(output, "last_hidden_state", None)
     if not torch.is_tensor(value):
         raise TypeError("Model output omitted last_hidden_state.")
-    return value
+    return value  # (b, l, d)
 
 
 def _model_results() -> dict[str, Any]:
@@ -165,8 +172,8 @@ def _model_results() -> dict[str, Any]:
             [0, 20, 19, 18, 17, 16, 15, 14, 2, 1, 1, 1, 1, 1, 1, 1, 1],
         ],
         device="cuda",
-    )
-    attention_mask = input_ids.ne(1)
+    )  # (b=2, l=17)
+    attention_mask = input_ids.ne(1)  # (b, l)
     results: dict[str, Any] = {}
     for family, model_class, config in _model_specs():
         torch.manual_seed(23)
@@ -176,15 +183,21 @@ def _model_results() -> dict[str, Any]:
         with torch.inference_mode():
             for backend in ("eager", "sdpa", *backends):
                 model.attn_backend = backend
-                outputs[backend] = _last_hidden_state(
+                outputs[backend] = _last_hidden_state(  # (b, l, d)
                     model(input_ids=input_ids, attention_mask=attention_mask)
                 ).detach()
-        valid = attention_mask
+        valid = attention_mask  # (b, l)
         family_results: dict[str, Any] = {}
         for backend in backends:
             family_results[backend] = {
-                "vs_eager": _metrics(outputs[backend][valid], outputs["eager"][valid]),
-                "vs_sdpa": _metrics(outputs[backend][valid], outputs["sdpa"][valid]),
+                "vs_eager": _metrics(
+                    outputs[backend][valid],  # (n_valid, d)
+                    outputs["eager"][valid],  # (n_valid, d)
+                ),
+                "vs_sdpa": _metrics(
+                    outputs[backend][valid],  # (n_valid, d)
+                    outputs["sdpa"][valid],  # (n_valid, d)
+                ),
                 "finite": bool(torch.isfinite(outputs[backend]).all()),
             }
             if not family_results[backend]["finite"]:

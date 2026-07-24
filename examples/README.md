@@ -5,30 +5,39 @@ claims. The curated offline examples consume local, manifest-built Hugging Face
 artifacts, set both Hub offline variables, pass `local_files_only=True`, and do
 not download models, tokenizers, kernels, or runtime assets.
 
-## Install and platform requirements
+## Dependencies and platform requirements
 
 FastPLMs 1.0 requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
-Install the exact runtime revision before loading a published or local artifact:
+Published models carry their runtime source in the Hugging Face repository.
+Install the core dependencies directly, then load the model with
+`trust_remote_code=True`:
 
 ```bash
 python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14"
 ```
 
-From a development checkout, install the locked tooling instead:
+These examples run from a source checkout. Install the profile needed by the
+workflow, then invoke them with `PYTHONPATH=src`. The CPU validation profile
+covers the portable examples:
 
 ```bash
-uv sync --frozen --extra dev
+uv pip install \
+  -r requirements/profiles/cpu-validation.in \
+  -c requirements/constraints/validation.txt \
+  --torch-backend cpu
 ```
 
 Core sequence examples accept `--device cpu|cuda[:index]` and
 `--dtype float32|bfloat16`; the defaults are the portable CPU/FP32 path.
-Structure examples require `fastplms[structure]`, verified runtime assets, and
-CUDA for the published execution contract. Binder design additionally requires
-the bounded `fastplms[binder]` extra. FlashAttention requires
-`fastplms[flash]`, compatible CUDA hardware, a pre-populated pinned kernel
-cache, and BF16. Fine-tuning requires `fastplms[train]`; add
-`fastplms[reporting]` only for plots and statistical reports.
+Structure examples require `requirements/features/structure.in`, verified
+runtime assets, and CUDA for the published execution contract. Binder design
+uses `requirements/profiles/binder.in`. FlashAttention requires
+`requirements/features/flash.in`, compatible CUDA hardware, a pre-populated
+pinned kernel cache, and BF16. Fine-tuning uses
+`requirements/features/train.in`; add `requirements/features/reporting.in`
+only for plots and statistical reports.
 
 For ESMFold2, choose the artifact by conditioning contract. The full
 `ESMFold2` and `ESMFold2-Experimental-Cutoff2025` checkpoints have 48 folding
@@ -54,12 +63,12 @@ PYTHONPATH=src python -m tools.artifacts.build \
 Start with `--help` for any entry point. Representative portable commands are:
 
 ```bash
-python examples/artifact_loading.py dist/hub/ESM2-8M --auto-class AutoModel
-python examples/embedding_and_retrieval.py dist/hub/ESM2-8M \
+PYTHONPATH=src python examples/artifact_loading.py dist/hub/ESM2-8M --auto-class AutoModel
+PYTHONPATH=src python examples/embedding_and_retrieval.py dist/hub/ESM2-8M \
   --sequence MSTNPKPQRKTKRNT --device cpu --dtype float32
-python examples/attention_switching.py dist/hub/ESM2-8M \
+PYTHONPATH=src python examples/attention_switching.py dist/hub/ESM2-8M \
   --backend sdpa --device cpu --dtype float32
-python examples/task_heads.py dist/hub/ESM2-8M \
+PYTHONPATH=src python examples/task_heads.py dist/hub/ESM2-8M \
   --attn-backend eager --device cpu --dtype float32
 ```
 
@@ -67,7 +76,7 @@ The structure-preparation example deliberately constructs an MSA-conditioned
 request, so point it at a full ESMFold2 artifact:
 
 ```bash
-python examples/structure_preparation.py \
+PYTHONPATH=src python examples/structure_preparation.py \
   esmfold2 dist/hub/ESMFold2 --device cuda:0
 ```
 
@@ -75,7 +84,7 @@ Use Flex when a compiled path is wanted on the current GH200/aarch64 validation
 target:
 
 ```bash
-python examples/attention_switching.py dist/hub/ESM2-8M \
+PYTHONPATH=src python examples/attention_switching.py dist/hub/ESM2-8M \
   --backend flex_attention --device cuda:0 --dtype bfloat16
 ```
 

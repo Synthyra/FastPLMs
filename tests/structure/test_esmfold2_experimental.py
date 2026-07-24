@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import torch
 import torch.nn.functional as F
+from pathlib import Path
 
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.modeling_esmfold2_common import NUM_RES_TYPES
@@ -15,6 +14,7 @@ from fastplms.models.esmfold2.modeling_esmfold2_experimental import (
 )
 from fastplms.models.esmfold2.protein_utils import prepare_protein_features
 from fastplms.registry import ModelSpec, get_model_registry
+
 
 TEST_SEQUENCE = "MSTNPKPQRKTKRNT"
 REGISTRY = get_model_registry()
@@ -47,6 +47,7 @@ def test_esmfold2_experimental_res_type_soft_gradients() -> None:
     features = {
         name: tensor.cuda() for name, tensor in prepare_protein_features(TEST_SEQUENCE).items()
     }
+    # res_type_soft: (...)
     res_type_soft = F.one_hot(features["res_type"].long(), num_classes=NUM_RES_TYPES).float()
     res_type_soft.requires_grad_(True)
 
@@ -59,6 +60,7 @@ def test_esmfold2_experimental_res_type_soft_gradients() -> None:
         calculate_confidence=False,
         seed=0,
     )
+    # loss: ()
     loss = output["distogram_logits"].float().mean()
     loss.backward()
 

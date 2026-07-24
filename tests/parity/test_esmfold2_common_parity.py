@@ -6,16 +6,16 @@ import importlib.util
 import inspect
 import sys
 import types
+import pytest
+import torch
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-
-import pytest
-import torch
 from torch import Tensor, nn
 
 from fastplms.models.esmfold2 import modeling_esmfold2_common as local
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
@@ -76,6 +76,7 @@ def official() -> types.ModuleType:
 
 
 def _assert_tensor_exact(actual: Tensor, expected: Tensor) -> None:
+    # actual: (...), expected: (...)
     assert actual.shape == expected.shape
     assert actual.dtype == expected.dtype
     assert actual.device == expected.device
@@ -137,7 +138,9 @@ def _paired_modules(
     *args: Any,
     **kwargs: Any,
 ) -> tuple[nn.Module, nn.Module]:
+    # expected: (...)
     expected = getattr(official, name)(*args, **kwargs).eval().cuda()
+    # actual: (...)
     actual = getattr(local, name)(*args, **kwargs).eval().cuda()
     actual.load_state_dict(expected.state_dict(), strict=True)
     return actual, expected
@@ -156,9 +159,11 @@ def test_projection_and_pair_blocks_match_exactly(
         actual_lm, expected_lm = _paired_modules(official, "LanguageModelShim", 8, 12, 2)
         actual_lm.to(dtype=dtype)
         expected_lm.to(dtype=dtype)
+        # hidden_states: (2, 5, 3, 12)
         hidden_states = torch.randn(2, 5, 3, 12, device="cuda", dtype=dtype)
         _assert_tensor_exact(actual_lm(hidden_states), expected_lm(hidden_states))
         sequence_projection = actual_lm.project_sequence(hidden_states)
+        # expected_projection: (...)
         expected_projection = (
             expected_lm.base_z_combine.softmax(0) @ expected_lm.base_z_linear(hidden_states)
         ).squeeze(-2)
@@ -171,7 +176,9 @@ def test_projection_and_pair_blocks_match_exactly(
         expected_triangle.to(dtype=dtype)
         actual_triangle.set_chunk_size(None)
         expected_triangle.set_chunk_size(None)
+        # pair: (1, 4, 4, 8)
         pair = torch.randn(1, 4, 4, 8, device="cuda", dtype=dtype)
+        # pair_mask: (1, 4, 4)
         pair_mask = torch.tensor(
             [[[1, 1, 1, 0], [1, 1, 1, 0], [1, 1, 1, 0], [0, 0, 0, 0]]],
             device="cuda",
@@ -193,9 +200,13 @@ def test_attention_and_diffusion_blocks_match_exactly(
     torch.manual_seed(4401)
     with torch.no_grad():
         actual, expected = _paired_modules(official, "DiffusionTransformer", 8, 6, 2, 2, d_cond=8)
+        # token: (2, 5, 8)
         token = torch.randn(2, 5, 8, device="cuda")
+        # condition: (2, 5, 8)
         condition = torch.randn(2, 5, 8, device="cuda")
+        # pair: (2, 5, 5, 6)
         pair = torch.randn(2, 5, 5, 6, device="cuda")
+        # mask: (2, 5)
         mask = torch.tensor(
             [[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]],
             device="cuda",
@@ -223,10 +234,15 @@ def test_input_pair_and_msa_blocks_match_exactly(
         actual_relative, expected_relative = _paired_modules(
             official, "ResIdxAsymIdSymIdEntityIdEncoding", 2, 1, 8
         )
+        # residue_index: (1, 4)
         residue_index = torch.tensor([[0, 1, 2, 0]], device="cuda")
+        # asym_id: (1, 4)
         asym_id = torch.tensor([[0, 0, 0, 1]], device="cuda")
+        # sym_id: (1, 4)
         sym_id = torch.tensor([[0, 0, 0, 1]], device="cuda")
+        # entity_id: (1, 4)
         entity_id = torch.tensor([[0, 0, 0, 0]], device="cuda")
+        # token_index: (1, 4)
         token_index = torch.tensor([[0, 1, 2, 0]], device="cuda")
         inputs = (residue_index, asym_id, sym_id, entity_id, token_index)
         _assert_tensor_exact(actual_relative(*inputs), expected_relative(*inputs))
@@ -234,7 +250,9 @@ def test_input_pair_and_msa_blocks_match_exactly(
         actual_opm, expected_opm = _paired_modules(official, "OuterProductMean", 6, 4, 8)
         actual_opm.set_chunk_size(None)
         expected_opm.set_chunk_size(None)
+        # msa: (2, 4, 3, 6)
         msa = torch.randn(2, 4, 3, 6, device="cuda")
+        # msa_mask: (2, 4, 3)
         msa_mask = torch.tensor(
             [
                 [[1, 1, 1], [1, 1, 0], [1, 1, 1], [1, 0, 0]],
@@ -246,13 +264,17 @@ def test_input_pair_and_msa_blocks_match_exactly(
         _assert_tensor_exact(actual_opm(msa, msa_mask), expected_opm(msa, msa_mask))
 
         actual_avg, expected_avg = _paired_modules(official, "MSAPairWeightedAveraging", 6, 8, 2, 4)
+        # pair: (2, 4, 4, 8)
         pair = torch.randn(2, 4, 4, 8, device="cuda")
+        # pair_mask: (2, 4, 4)
         pair_mask = torch.ones(2, 4, 4, device="cuda", dtype=torch.bool)
         _assert_tensor_exact(actual_avg(msa, pair, pair_mask), expected_avg(msa, pair, pair_mask))
 
 
 def test_tensor_utilities_match_pinned_biohub(official: types.ModuleType) -> None:
+    # token: (2, 4, 6)
     token = torch.arange(48, device="cuda", dtype=torch.float32).reshape(2, 4, 6)
+    # atom_to_token: (2, 5)
     atom_to_token = torch.tensor([[0, 0, 2, 3, 3], [0, 1, 1, 2, 3]], device="cuda")
     for name, args in (
         ("gather_token_to_atom", (token, atom_to_token)),
@@ -284,7 +306,9 @@ def test_atom_rope_attention_and_rigid_alignment_match_exactly(
     official: types.ModuleType,
 ) -> None:
     torch.manual_seed(314159)
+    # ref_pos: (2, 7, 3)
     ref_pos = torch.randn(2, 7, 3, device="cuda")
+    # space_uid: (2, 7)
     space_uid = torch.tensor([[0, 0, 1, 1, 2, 2, 2], [3, 3, 3, 4, 4, 5, 5]], device="cuda")
     actual_cos, actual_sin = local.build_3d_rope(
         ref_pos, space_uid, head_dim=16, n_spatial_per_axis=2, n_uid_pairs=1
@@ -299,15 +323,20 @@ def test_atom_rope_attention_and_rigid_alignment_match_exactly(
         actual_attention, expected_attention = _paired_modules(
             official, "SWA3DRoPEAttention", 64, 4, half_window=2
         )
+        # atom: (2, 7, 64)
         atom = torch.randn(2, 7, 64, device="cuda")
         _assert_tensor_exact(
             actual_attention(atom, (actual_cos, actual_sin)),
             expected_attention(atom, (expected_cos, expected_sin)),
         )
 
+    # mobile: (2, 7, 3)
     mobile = torch.randn(2, 7, 3, device="cuda")
+    # target: (2, 7, 3)
     target = torch.randn(2, 7, 3, device="cuda")
+    # weights: (2, 7)
     weights = torch.rand(2, 7, device="cuda")
+    # mask: (2, 7)
     mask = torch.tensor(
         [[1, 1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 1, 1, 1]],
         device="cuda",

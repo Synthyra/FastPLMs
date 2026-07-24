@@ -8,10 +8,9 @@ import os
 import shutil
 import subprocess
 import sys
+import pytest
 from collections.abc import Callable, Mapping
 from pathlib import Path
-
-import pytest
 
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
 from tests.unit.test_biohub_reference_lock import _reference_environment_payload
@@ -21,11 +20,13 @@ from tools.artifacts.generate_docs import (
     ESMC_MODEL_IDS,
     ESMC_PANEL_KINDS,
     EsmcReportError,
+    EsmcReportSet,
     EsmcRuntimeIdentity,
     load_esmc_report_set,
     render_capability_evidence,
     render_model_card,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = get_model_registry()
@@ -264,7 +265,7 @@ def _rewrite_report(
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _load(report_root: Path):
+def _load(report_root: Path) -> EsmcReportSet:
     return load_esmc_report_set(
         report_root,
         REGISTRY,

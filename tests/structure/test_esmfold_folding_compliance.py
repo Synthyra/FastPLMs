@@ -5,11 +5,10 @@ from __future__ import annotations
 import ast
 import inspect
 import os
-from collections.abc import Mapping
-from pathlib import Path
-
 import pytest
 import torch
+from collections.abc import Mapping
+from pathlib import Path
 
 from fastplms.registry import get_model_registry
 from tests.structure.support import esmfold_bundle
@@ -18,6 +17,7 @@ from tests.structure.support.hardware import (
     assert_same_hopper_sm90_device,
     hopper_sm90_fingerprint,
 )
+
 
 relative_l2_targets = {"fp32": 2e-6, "bf16": 1e-2}
 relative_l2_hard_limits = {"fp32": 2e-5, "bf16": 3e-2}
@@ -89,6 +89,7 @@ def _output(tensors: Mapping[str, torch.Tensor], name: str) -> torch.Tensor:
 
 
 def _residue_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    # atom37_mask: (...)
     atom37_mask = _output(tensors, "atom37_atom_exists").bool()
     assert atom37_mask.ndim == 3 and atom37_mask.shape[-1] == 37
     return atom37_mask[0, :, 1]
@@ -98,15 +99,18 @@ def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
     # P is the atom14 position tensor with shape (n_blocks, b, l, 14, 3).
     P = _output(tensors, "positions").float()
     assert P.ndim == 5 and P.shape[-2:] == (14, 3)
+    # coordinates: (..., 3)
     coordinates = P[-1, 0, :, 1]
     return coordinates[_residue_mask(tensors)]
 
 
 def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    # actual: (...), expected: (...)
     actual_centered = actual.float() - actual.float().mean(dim=0, keepdim=True)
     expected_centered = expected.float() - expected.float().mean(dim=0, keepdim=True)
     covariance = actual_centered.T @ expected_centered
     left, _, right = torch.linalg.svd(covariance)
+    # correction: (3, 3)
     correction = torch.eye(3, dtype=torch.float32)
     correction[-1, -1] = torch.sign(torch.det(left @ right))
     rotation = left @ correction @ right
@@ -115,12 +119,15 @@ def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
 
 
 def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    # actual: (...), expected: (...)
     actual_distances = torch.cdist(actual.float(), actual.float())
     expected_distances = torch.cdist(expected.float(), expected.float())
+    # pair_mask: (...)
     pair_mask = expected_distances.lt(15.0)
     pair_mask.fill_diagonal_(False)
     assert pair_mask.any(), "No valid C-alpha pairs for ESMFold lDDT."
     errors = (actual_distances - expected_distances).abs()
+    # scores: (...)
     scores = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
         dim=0
     )
@@ -132,11 +139,16 @@ def _structure_metrics(
     expected: Mapping[str, torch.Tensor],
 ) -> dict[str, float]:
     residue_mask = _residue_mask(actual)
+    # pair_mask: (...)
     pair_mask = residue_mask[:, None] & residue_mask[None, :]
     # Meta ESMFold reports pLDDT on (0, 100); compliance uses (0, 1).
+    # actual_plddt: (...)
     actual_plddt = _output(actual, "plddt").float()[0, :, 1] / 100.0
+    # expected_plddt: (...)
     expected_plddt = _output(expected, "plddt").float()[0, :, 1] / 100.0
+    # actual_pae: (...)
     actual_pae = _output(actual, "predicted_aligned_error").float()[0]
+    # expected_pae: (...)
     expected_pae = _output(expected, "predicted_aligned_error").float()[0]
     return {
         "ca_rmsd": _aligned_ca_rmsd(
@@ -166,7 +178,9 @@ def _relative_l2(
     expected: torch.Tensor,
     mask: torch.Tensor,
 ) -> float:
+    # actual: (...), expected: (...), mask: (...)
     while mask.ndim < actual.ndim:
+        # mask: (...)
         mask = mask.unsqueeze(-1)
     mask = torch.broadcast_to(mask, actual.shape)
     difference = (actual.float() - expected.float())[mask]
@@ -182,6 +196,7 @@ def _logit_metrics(
     expected: Mapping[str, torch.Tensor],
 ) -> dict[str, float]:
     residue_mask = _residue_mask(actual)
+    # pair_mask: (...)
     pair_mask = residue_mask[:, None] & residue_mask[None, :]
     return {
         "distogram_logits": _relative_l2(
@@ -289,7 +304,9 @@ def test_prepare_esmfold_request_is_manifest_exact(tmp_path: Path) -> None:
 
 
 def test_esmfold_metric_helpers_are_exact_for_rigid_identity() -> None:
+    # expected: (4, 3)
     expected = torch.tensor([[0.0, 0.0, 0.0], [3.8, 0.0, 0.0], [7.2, 1.0, 0.0], [9.0, 4.0, 1.0]])
+    # rotation: (3, 3)
     rotation = torch.tensor([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
     actual = expected @ rotation + torch.tensor([4.0, -2.0, 7.0])
     assert _aligned_ca_rmsd(actual, expected) == pytest.approx(0.0, abs=1e-5)

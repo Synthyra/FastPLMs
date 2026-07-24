@@ -7,15 +7,15 @@ import os
 import sys
 import tempfile
 import urllib.request
+import torch
+import torch.nn as nn
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import torch
-import torch.nn as nn
-
 from tests.parity.support.reference_adapters import move_model, snapshot_path
+
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _FAIR_ESM_SUBMODULE = _REPOSITORY_ROOT / "vendor" / "upstream" / "fair-esm"
@@ -112,12 +112,15 @@ class _AlphabetTokenizer:
             [(str(index), sequence) for index, sequence in enumerate(values)]
         )
         if padding == "max_length" and max_length is not None and input_ids.shape[1] < max_length:
+            # pad: (input_ids.shape[0], max_length - input_ids.shape[1])
             pad = torch.full(
                 (input_ids.shape[0], max_length - input_ids.shape[1]),
                 self.pad_token_id,
                 dtype=input_ids.dtype,
             )
+            # input_ids: (...)
             input_ids = torch.cat((input_ids, pad), dim=1)
+        # attention_mask: (b, l)
         attention_mask = input_ids.ne(self.pad_token_id).long()
         return {"input_ids": input_ids, "attention_mask": attention_mask}
 
@@ -134,6 +137,7 @@ class _OfficialESM2ForwardWrapper(nn.Module):
         attention_mask: torch.Tensor | None = None,
         **_kwargs: Any,
     ) -> Any:
+        # input_ids: (b, l)
         del attention_mask
         layers = list(range(self.model.num_layers + 1))
         output = self.model(input_ids, repr_layers=layers, return_contacts=False)

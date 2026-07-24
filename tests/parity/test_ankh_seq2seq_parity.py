@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import gc
-from pathlib import Path
-from typing import Any
-
 import pytest
 import torch
 import torch.nn.functional as F
+from pathlib import Path
+from typing import Any
 from transformers import AutoModelForSeq2SeqLM
 
 from fastplms.models.ankh.modeling_ankh import tokenize_ankh_sequences
 from fastplms.registry import ModelSpec, get_model_registry
 from tests.parity.support.reference_adapters.ankh import load_official_seq2seq
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.slow]
 ANKH_SPECS = get_model_registry().by_family("ankh")
@@ -74,13 +74,16 @@ def test_ankh_official_seq2seq_state_aliases_and_seeded_inference(
         padding=True,
     )
     inputs = {name: value.to(device) for name, value in encoded.items() if torch.is_tensor(value)}
+    # decoder_input_ids: (b, l)
     decoder_input_ids = inputs["input_ids"]
     with torch.inference_mode():
+        # fast_logits: (..., c)
         fast_logits = fast(
             **inputs,
             decoder_input_ids=decoder_input_ids,
             return_dict=True,
         ).logits.float()
+        # official_logits: (..., c)
         official_logits = official(
             **inputs,
             decoder_input_ids=decoder_input_ids,

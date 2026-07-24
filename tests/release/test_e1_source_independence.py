@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import ast
 import copy
+import pytest
 from difflib import SequenceMatcher
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCAL_MODEL = ROOT / "src/fastplms/models/e1/modeling_e1.py"

@@ -11,13 +11,16 @@ from fastplms.models.esmfold2.esmfold2_protein_complex import (
     ProteinComplexMetadata,
 )
 
+
 pytestmark = pytest.mark.structure
 
 
 def _homomer_with_repeated_chain_label() -> ProteinComplex:
     sequence = "AC|AC|GG"
     length = len(sequence)
+    # atom37_positions: (length, 37, 3)
     atom37_positions = np.full((length, 37, 3), np.nan, dtype=np.float32)
+    # atom37_mask: (length, 37)
     atom37_mask = np.zeros((length, 37), dtype=bool)
     for index, residue in enumerate(sequence):
         if residue == "|":

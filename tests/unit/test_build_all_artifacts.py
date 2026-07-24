@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 from benchmarks.suite import benchmark_artifact_model_ids
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry

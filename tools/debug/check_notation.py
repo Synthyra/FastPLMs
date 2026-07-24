@@ -11,7 +11,10 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-TEXT_SUFFIXES = frozenset({".hcl", ".md", ".rst", ".toml", ".txt", ".yaml", ".yml"})
+
+TEXT_SUFFIXES = frozenset(
+    {".hcl", ".in", ".md", ".rst", ".toml", ".txt", ".yaml", ".yml"}
+)
 SKIP_PARTS = frozenset(
     {
         ".git",
@@ -197,7 +200,7 @@ def iter_repository_files(root: Path) -> Iterator[Path]:
         root / "THIRD_PARTY_NOTICES.md",
         root / "LICENSES" / "README.md",
         root / "vendor" / "README.md",
-        root / "pyproject.toml",
+        root / "requirements",
         root / "docs",
         root / "model_cards",
         root / "docker",

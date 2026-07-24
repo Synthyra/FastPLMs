@@ -56,10 +56,13 @@ class AttentionPairBias(nn.Module):
     ) -> Tensor:
         """Transform S with K and pair input Z, returning shape ``(b, l_q, d)``."""
 
-        query = reshape_heads(self.proj_q(s), self.num_heads)
-        key = reshape_heads(self.proj_k(k_in), self.num_heads)
-        value = reshape_heads(self.proj_v(k_in), self.num_heads)
-        pair_bias = self.proj_z(z).repeat_interleave(multiplicity, dim=0)
+        # s: (b, l_q, d); k_in: (b, l_k, d); z: (b_z, l_q, l_k, d_z or h).
+        query = reshape_heads(self.proj_q(s), self.num_heads)  # (b, l_q, h, d_h)
+        key = reshape_heads(self.proj_k(k_in), self.num_heads)  # (b, l_k, h, d_h)
+        value = reshape_heads(self.proj_v(k_in), self.num_heads)  # (b, l_k, h, d_h)
+        pair_bias = self.proj_z(z).repeat_interleave(
+            multiplicity, dim=0
+        )  # (b, h, l_q, l_k)
         attended = pair_biased_attention(
             query,
             key,
@@ -67,7 +70,7 @@ class AttentionPairBias(nn.Module):
             pair_bias,
             mask,
             self.inf,
-        )
-        attended = attended.reshape(s.shape[0], -1, self.c_s)
-        gate = self.proj_g(s).sigmoid()
-        return self.proj_o(gate * attended)
+        )  # (b, l_q, h, d_h)
+        attended = attended.reshape(s.shape[0], -1, self.c_s)  # (b, l_q, d)
+        gate = self.proj_g(s).sigmoid()  # (b, l_q, d)
+        return self.proj_o(gate * attended)  # (b, l_q, d)

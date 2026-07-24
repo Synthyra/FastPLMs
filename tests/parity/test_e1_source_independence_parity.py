@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import importlib
 import sys
+import pytest
+import torch
+import torch.nn as nn
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
-
-import pytest
-import torch
-import torch.nn as nn
 
 from fastplms.models.e1.modeling_e1 import (
     FAST_E1_ENCODER,
@@ -31,6 +30,7 @@ from fastplms.models.e1.modeling_e1 import (
     get_overlapping_blocks,
     get_tokenizer,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 UPSTREAM_SRC = ROOT / "vendor/upstream/e1/src"
@@ -167,6 +167,7 @@ def test_e1_unpadding_metadata_is_exact(
     official_e1: tuple[ModuleType, ModuleType, ModuleType],
     sequence_ids: torch.Tensor,
 ) -> None:
+    # sequence_ids: (b, l)
     _, _, official_flash = official_e1
     candidate = _get_unpad_data(sequence_ids)
     official = official_flash._get_unpad_data(sequence_ids)
@@ -188,6 +189,7 @@ def test_e1_block_classification_and_mask_are_exact(
     q_lengths: torch.Tensor,
     k_lengths: torch.Tensor,
 ) -> None:
+    # q_lengths: (...), k_lengths: (...)
     _, official_flex, _ = official_e1
     candidate_full, candidate_partial = get_overlapping_blocks(q_lengths, k_lengths)
     official_full, official_partial = official_flex.get_overlapping_blocks(q_lengths, k_lengths)
@@ -217,6 +219,7 @@ def test_e1_block_classification_and_mask_are_exact(
 
     q_index = torch.arange(int(q_lengths.sum().item()))[:, None]
     k_index = torch.arange(int(k_lengths.sum().item()))[None, :]
+    # zero: (...)
     zero = torch.tensor(0)
     assert torch.equal(
         candidate_mask.mask_mod(zero, zero, q_index, k_index),
@@ -283,8 +286,10 @@ def _manual_encoder_forward(
 ) -> tuple[torch.Tensor, tuple[torch.Tensor, ...]]:
     sequence_ids = batch["sequence_ids"]
     hidden_states = model.embed_tokens(batch["input_ids"])
+    # hidden_states: (..., d)
     hidden_states = hidden_states + model.embed_seq_id(sequence_ids.clamp_min(0))
     first_layer = cast(DecoderLayer, model.layers[0])
+    # hidden_states: (..., d)
     hidden_states = hidden_states.to(first_layer.norm_attn_norm.self_attn.q_proj.weight.dtype)
 
     use_flex = model._attn_backend.value == "flex_attention"
@@ -344,6 +349,7 @@ def test_e1_refactored_forward_is_exact_on_h100(attn_backend: str) -> None:
         expected_last, expected_history = _manual_encoder_forward(model, batch)
         output = model(**batch, output_hidden_states=True)
         combined_embeddings = model.embed_tokens(batch["input_ids"])
+        # combined_embeddings: (...)
         combined_embeddings = combined_embeddings + model.embed_seq_id(
             batch["sequence_ids"].clamp_min(0)
         )

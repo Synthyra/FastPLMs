@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import sys
-from types import ModuleType
-from typing import Any
-
 import pytest
 import torch
+from types import ModuleType
+from typing import Any
 
 from examples import binder_design_fastplms as binder
 

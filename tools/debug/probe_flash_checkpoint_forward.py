@@ -6,10 +6,9 @@ import argparse
 import contextlib
 import gc
 import json
+import torch
 from collections.abc import Sequence
 from typing import Any
-
-import torch
 from torch.nn import functional as F
 from transformers import EsmTokenizer
 
@@ -20,6 +19,7 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     EsmSequenceTokenizer,
 )
 from fastplms.registry import get_model_registry
+
 
 BACKENDS = ("flash_attention_2", "flash_attention_3")
 CHECKPOINTS = {
@@ -35,13 +35,19 @@ BACKENDS_BY_CHECKPOINT = {
 
 
 def _metrics(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
-    actual_float = actual.float()
-    expected_float = expected.float()
+    # actual, expected: (n_valid, d)
+    actual_float = actual.float()  # (n_valid, d)
+    expected_float = expected.float()  # (n_valid, d)
     relative_l2 = (
         torch.linalg.vector_norm(actual_float - expected_float)
         / torch.linalg.vector_norm(expected_float).clamp_min(1e-12)
-    ).item()
-    cosine = F.cosine_similarity(actual_float, expected_float, dim=-1).min().item()
+    ).item()  # scalar
+    cosine_values = F.cosine_similarity(  # (n_valid,)
+        actual_float,
+        expected_float,
+        dim=-1,
+    )
+    cosine = cosine_values.min().item()
     return {"relative_l2": relative_l2, "minimum_cosine": cosine}
 
 
@@ -49,7 +55,7 @@ def _hidden_state(output: object) -> torch.Tensor:
     value = getattr(output, "last_hidden_state", None)
     if not torch.is_tensor(value):
         raise TypeError("Checkpoint output omitted last_hidden_state.")
-    return value
+    return value  # (b, l, d)
 
 
 def _run_checkpoint(
@@ -69,7 +75,8 @@ def _run_checkpoint(
         return_tensors="pt",
         padding=True,
     )
-    batch = {name: value.to("cuda") for name, value in batch.items()}
+    # Each tokenized batch value has shape (b=2, l).
+    batch = {name: value.to("cuda") for name, value in batch.items()}  # values: (b, l)
     use_bf16_autocast = spec.family.bf16_execution == "fp32_parameters_autocast"
     load_dtype = torch.float32 if use_bf16_autocast else torch.bfloat16
     model = (
@@ -91,11 +98,14 @@ def _run_checkpoint(
                 else contextlib.nullcontext()
             )
             with numeric_context:
-                outputs[backend] = _hidden_state(model(**batch)).detach()
-    valid = batch["attention_mask"].bool()
+                outputs[backend] = _hidden_state(model(**batch)).detach()  # (b, l, d)
+    valid = batch["attention_mask"].bool()  # (b, l)
     result = {
         backend: {
-            **_metrics(outputs[backend][valid], outputs["sdpa"][valid]),
+            **_metrics(
+                outputs[backend][valid],  # (n_valid, d)
+                outputs["sdpa"][valid],  # (n_valid, d)
+            ),
             "finite": bool(torch.isfinite(outputs[backend]).all()),
         }
         for backend in BACKENDS_BY_CHECKPOINT[model_id]

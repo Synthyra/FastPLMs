@@ -8,16 +8,16 @@ FastPLMs never downloads or compiles code.
 from __future__ import annotations
 
 import warnings
+import torch
 from collections import OrderedDict
 from collections.abc import Callable
 from enum import Enum
 from threading import RLock
-
-import torch
 from einops import rearrange
 from torch.nn import functional as F
 
 from ._kernel_lock import load_locked_kernel
+
 
 try:
     from torch.nn.attention.flex_attention import BlockMask, create_block_mask, flex_attention
@@ -117,12 +117,12 @@ def _get_flex_block_mask(
         raise RuntimeError(
             "'flex_attention' was requested, but torch.create_block_mask is unavailable."
         )
-    pattern = mask_pattern.detach().to(device=device).contiguous()
+    pattern = mask_pattern.detach().to(device=device).contiguous()  # mask_pattern.shape
     # One device-to-host transfer is required for an exact cache identity. Use
     # the contiguous buffer directly instead of materializing one Python int
     # per byte, which is prohibitively expensive for long batched sequences.
-    host_pattern = pattern.to(device="cpu").contiguous()
-    pattern_bytes = host_pattern.view(torch.uint8).numpy().tobytes(order="C")
+    host_pattern = pattern.to(device="cpu").contiguous()  # mask_pattern.shape
+    pattern_bytes = host_pattern.view(torch.uint8).numpy().tobytes(order="C")  # bytes
     cache_key = (
         str(device),
         None if dtype is None else str(dtype),
@@ -203,6 +203,7 @@ def _validate_kernels_flash_dtype(
 ) -> torch.dtype:
     """Reject dtypes outside the immutable kernel manifest before dispatch."""
 
+    # query_states, key_states, value_states: (b, l, h, d) or (t, h, d)
     tensor_dtypes = {query_states.dtype, key_states.dtype, value_states.dtype}
     if len(tensor_dtypes) != 1:
         observed = ", ".join(sorted(str(dtype) for dtype in tensor_dtypes))
@@ -243,6 +244,7 @@ def _validate_kernels_flash_device(
 ) -> torch.device:
     """Require Q, K, and V on one CUDA device before loading a kernel."""
 
+    # query_states, key_states, value_states: (b, l, h, d) or (t, h, d)
     devices = (query_states.device, key_states.device, value_states.device)
     if len(set(devices)) != 1:
         observed = ", ".join(str(device) for device in devices)
@@ -284,9 +286,10 @@ def _kernels_flash_forward(
     Failing to override when Q is pre-scaled applies the scale twice and breaks
     parity with eager attention and SDPA.
     """
+    # query_states, key_states, value_states: (b, l, h, d)
     flash_kernel, flash_kernel_variant = _ensure_flash_kernels_loaded(implementation)
     if flash_kernel_variant == "flash_attn2":
-        output = flash_kernel.flash_attn_func(
+        output = flash_kernel.flash_attn_func(  # (b, l, h, d) or tuple with that first
             q=query_states,
             k=key_states,
             v=value_states,
@@ -294,9 +297,9 @@ def _kernels_flash_forward(
             softmax_scale=softmax_scale,
             causal=causal,
         )
-        return output[0] if isinstance(output, tuple) else output
+        return output[0] if isinstance(output, tuple) else output  # (b, l, h, d)
     if flash_kernel_variant == "flash_attn3":
-        output = flash_kernel.flash_attn_func(
+        output = flash_kernel.flash_attn_func(  # (b, l, h, d) or tuple with that first
             q=query_states,
             k=key_states,
             v=value_states,
@@ -304,8 +307,8 @@ def _kernels_flash_forward(
             causal=causal,
         )
         if isinstance(output, tuple):
-            return output[0]
-        return output
+            return output[0]  # (b, l, h, d)
+        return output  # (b, l, h, d)
     raise RuntimeError(f"Unsupported FlashAttention kernel variant: {flash_kernel_variant}")
 
 
@@ -326,9 +329,11 @@ def _kernels_flash_varlen_forward(
     See `_kernels_flash_forward` docstring for why `softmax_scale=1.0` must be
     passed when Q has been pre-scaled by the caller.
     """
+    # query_states, key_states, value_states: (t, h, d)
+    # cu_seqlens_q, cu_seqlens_k: (b + 1,)
     flash_kernel, flash_kernel_variant = _ensure_flash_kernels_loaded(implementation)
     if flash_kernel_variant == "flash_attn2":
-        output = flash_kernel.flash_attn_varlen_func(
+        output = flash_kernel.flash_attn_varlen_func(  # (t, h, d) or tuple with that first
             q=query_states,
             k=key_states,
             v=value_states,
@@ -340,9 +345,9 @@ def _kernels_flash_varlen_forward(
             softmax_scale=softmax_scale,
             causal=causal,
         )
-        return output[0] if isinstance(output, tuple) else output
+        return output[0] if isinstance(output, tuple) else output  # (t, h, d)
     if flash_kernel_variant == "flash_attn3":
-        output = flash_kernel.flash_attn_varlen_func(
+        output = flash_kernel.flash_attn_varlen_func(  # (t, h, d) or tuple with that first
             q=query_states,
             k=key_states,
             v=value_states,
@@ -354,8 +359,8 @@ def _kernels_flash_varlen_forward(
             causal=causal,
         )
         if isinstance(output, tuple):
-            return output[0]
-        return output
+            return output[0]  # (t, h, d)
+        return output  # (t, h, d)
     raise RuntimeError(f"Unsupported FlashAttention kernel variant: {flash_kernel_variant}")
 
 
@@ -364,6 +369,7 @@ def _kernels_flash_varlen_forward(
 class IndexFirstAxis(torch.autograd.Function):
     @staticmethod
     def forward(ctx, input, indices) -> torch.Tensor:
+        # input: (n, ...); indices: (m,)
         ctx.save_for_backward(indices)
         if input.ndim < 2:
             raise ValueError(
@@ -377,12 +383,13 @@ class IndexFirstAxis(torch.autograd.Function):
             )
         ctx.first_axis_dim, other_shape = input.shape[0], input.shape[1:]
         second_dim = other_shape.numel()
-        return torch.gather(
+        return torch.gather(  # (m, ...)
             rearrange(input, "b ... -> b (...)"), 0, indices.unsqueeze(1).expand(-1, second_dim)
         ).reshape(-1, *other_shape)
 
     @staticmethod
     def backward(ctx, grad_output) -> tuple[torch.Tensor, None]:
+        # grad_output: (m, ...)
         (indices,) = ctx.saved_tensors
         if grad_output.ndim < 2:
             raise RuntimeError(
@@ -390,19 +397,20 @@ class IndexFirstAxis(torch.autograd.Function):
                 "two dimensions."
             )
         other_shape = grad_output.shape[1:]
-        grad_output = rearrange(grad_output, "b ... -> b (...)")
-        grad_input = torch.zeros(
+        grad_output = rearrange(grad_output, "b ... -> b (...)")  # (m, product(...))
+        grad_input = torch.zeros(  # (n, product(...))
             [ctx.first_axis_dim, grad_output.shape[1]],
             device=grad_output.device,
             dtype=grad_output.dtype,
         )
         grad_input.scatter_(0, indices.unsqueeze(1).expand(-1, grad_output.shape[1]), grad_output)
-        return grad_input.reshape(ctx.first_axis_dim, *other_shape), None
+        return grad_input.reshape(ctx.first_axis_dim, *other_shape), None  # (n, ...), None
 
 
 class IndexPutFirstAxis(torch.autograd.Function):
     @staticmethod
     def forward(ctx, values, indices, first_axis_dim) -> torch.Tensor:
+        # values: (m, ...); indices: (m,)
         ctx.save_for_backward(indices)
         if indices.ndim != 1:
             raise ValueError(
@@ -414,16 +422,17 @@ class IndexPutFirstAxis(torch.autograd.Function):
                 "index_put_first_axis values must have at least two dimensions; "
                 f"received shape {tuple(values.shape)}."
             )
-        output = torch.zeros(
+        output = torch.zeros(  # (n, ...)
             first_axis_dim, *values.shape[1:], device=values.device, dtype=values.dtype
         )
         output[indices] = values
-        return output
+        return output  # (n, ...)
 
     @staticmethod
     def backward(ctx, grad_output) -> tuple[torch.Tensor, None, None]:
+        # grad_output: (n, ...)
         (indices,) = ctx.saved_tensors
-        return grad_output[indices], None, None
+        return grad_output[indices], None, None  # (m, ...), None, None
 
 
 index_first_axis = IndexFirstAxis.apply
@@ -433,8 +442,9 @@ index_put_first_axis = IndexPutFirstAxis.apply
 def pad_input(
     hidden_states: torch.Tensor, indices: torch.Tensor, batch: int, seqlen: int
 ) -> torch.Tensor:
-    output = index_put_first_axis(hidden_states, indices, batch * seqlen)
-    return rearrange(output, "(b s) ... -> b s ...", b=batch)
+    # hidden_states: (t, ...); indices: (t,)
+    output = index_put_first_axis(hidden_states, indices, batch * seqlen)  # (b * l, ...)
+    return rearrange(output, "(b s) ... -> b s ...", b=batch)  # (b, l, ...)
 
 
 def _unpad_input(
@@ -450,18 +460,19 @@ def _unpad_input(
     tuple[torch.Tensor, torch.Tensor],
     tuple[int, int],
 ]:
+    # query_layer, key_layer, value_layer: (b, l, h, d); attention_mask_2d: (b, l)
     batch_size, seq_len, num_heads, head_dim = query_layer.shape
-    seqlens = attention_mask_2d.sum(dim=1).int()
-    cu_seqlens = F.pad(seqlens.cumsum(0, dtype=torch.int32), (1, 0))
+    seqlens = attention_mask_2d.sum(dim=1).int()  # (b,)
+    cu_seqlens = F.pad(seqlens.cumsum(0, dtype=torch.int32), (1, 0))  # (b + 1,)
     max_seqlen = int(seqlens.max().item())
-    indices = attention_mask_2d.flatten().nonzero(as_tuple=False).flatten()
-    query_layer = index_first_axis(
+    indices = attention_mask_2d.flatten().nonzero(as_tuple=False).flatten()  # (t,)
+    query_layer = index_first_axis(  # (t, h, d)
         query_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices
     )
-    key_layer = index_first_axis(
+    key_layer = index_first_axis(  # (t, h, d)
         key_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices
     )
-    value_layer = index_first_axis(
+    value_layer = index_first_axis(  # (t, h, d)
         value_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices
     )
     return (
@@ -482,6 +493,7 @@ def _validate_flash_padding_mask(
 ) -> torch.Tensor:
     """Validate the self-attention padding mask used by the varlen kernels."""
 
+    # query_states, key_states, value_states: (b, l, h, d); attention_mask_2d: (b, l)
     if attention_mask_2d.ndim != 2:
         raise ValueError("FlashAttention padding masks must have shape (batch, sequence_length).")
     expected_shape = query_states.shape[:2]
@@ -497,7 +509,7 @@ def _validate_flash_padding_mask(
         )
     if attention_mask_2d.device != query_states.device:
         raise ValueError("FlashAttention padding mask and Q, K, and V must be on the same device.")
-    return attention_mask_2d.to(dtype=torch.bool)
+    return attention_mask_2d.to(dtype=torch.bool)  # (b, l)
 
 
 def kernels_flash_attention_func(
@@ -521,6 +533,8 @@ def kernels_flash_attention_func(
     `softmax_scale=1.0`. Otherwise the flash kernel applies its default scale
     again, yielding an effective `1/head_dim` scale that drifts across layers.
     """
+    # query_states, key_states, value_states: (b, l, h, d)
+    # attention_mask_2d: (b, l) or None
     _validate_kernels_flash_device(
         query_states,
         key_states,
@@ -534,11 +548,11 @@ def kernels_flash_attention_func(
         implementation,
     )
     if query_states.dtype != runtime_dtype:
-        query_states = query_states.to(dtype=runtime_dtype)
-        key_states = key_states.to(dtype=runtime_dtype)
-        value_states = value_states.to(dtype=runtime_dtype)
+        query_states = query_states.to(dtype=runtime_dtype)  # (b, l, h, d)
+        key_states = key_states.to(dtype=runtime_dtype)  # (b, l, h, d)
+        value_states = value_states.to(dtype=runtime_dtype)  # (b, l, h, d)
     if attention_mask_2d is not None:
-        attention_mask_2d = _validate_flash_padding_mask(
+        attention_mask_2d = _validate_flash_padding_mask(  # (b, l)
             query_states,
             key_states,
             value_states,
@@ -554,8 +568,13 @@ def kernels_flash_attention_func(
             indices_q,
             (cu_seqlens_q, cu_seqlens_k),
             (max_seqlen_q, max_seqlen_k),
-        ) = _unpad_input(query_states, key_states, value_states, attention_mask_2d)
-        attn_output_unpad = _kernels_flash_varlen_forward(
+        ) = _unpad_input(  # (t, h, d), (t, h, d), (t, h, d), (t,), (b + 1,), scalars
+            query_states,
+            key_states,
+            value_states,
+            attention_mask_2d,
+        )
+        attn_output_unpad = _kernels_flash_varlen_forward(  # (t, h, d)
             query_states=query_states,
             key_states=key_states,
             value_states=value_states,
@@ -567,10 +586,10 @@ def kernels_flash_attention_func(
             softmax_scale=softmax_scale,
             implementation=implementation,
         )
-        output = pad_input(attn_output_unpad, indices_q, batch_size, q_len)
-        return output.masked_fill(~attention_mask_2d[:, :, None, None], 0)
+        output = pad_input(attn_output_unpad, indices_q, batch_size, q_len)  # (b, l, h, d)
+        return output.masked_fill(~attention_mask_2d[:, :, None, None], 0)  # (b, l, h, d)
     else:
-        return _kernels_flash_forward(
+        return _kernels_flash_forward(  # (b, l, h, d)
             query_states=query_states,
             key_states=key_states,
             value_states=value_states,
@@ -706,6 +725,7 @@ def get_attention_mask(
 
     Returns (attention_mask_2d, attention_mask_4d, flex_block_mask).
     """
+    # attention_mask: (b, l) or None
     if attention_mask is None:
         return None, None, None
 
@@ -720,14 +740,14 @@ def get_attention_mask(
             "attention_mask shape must match the input batch and sequence dimensions; "
             f"expected {expected_shape}, received {tuple(attention_mask.shape)}."
         )
-    attention_mask_2d = attention_mask.to(device=device, dtype=torch.bool)
+    attention_mask_2d = attention_mask.to(device=device, dtype=torch.bool)  # (b, l)
     if not bool(attention_mask_2d.any(dim=1).all()):
         raise ValueError("attention_mask must keep at least one valid key per batch row.")
 
     effective_backend = resolve_attention_backend(effective_backend)
 
     if effective_backend.is_flash:
-        return attention_mask_2d, None, None
+        return attention_mask_2d, None, None  # (b, l), None, None
 
     if effective_backend == AttentionBackend.FLEX_ATTENTION:
         if create_block_mask is None:
@@ -751,12 +771,12 @@ def get_attention_mask(
             mask_semantics=mask_semantics,
             mask_mod=mask_mod,
         )
-        return attention_mask_2d, None, flex_block_mask
+        return attention_mask_2d, None, flex_block_mask  # (b, l), None, BlockMask
 
     # SDPA/manual masks only keys. Padding queries still attend to real keys, so
     # their outputs stay finite instead of softmaxing over all -inf scores.
-    attention_mask_4d = attention_mask_2d[:, None, None, :]
-    return attention_mask_2d, attention_mask_4d, None
+    attention_mask_4d = attention_mask_2d[:, None, None, :]  # (b, 1, 1, l)
+    return attention_mask_2d, attention_mask_4d, None  # (b, l), (b, 1, 1, l), None
 
 
 def bool_to_additive_mask(
@@ -770,10 +790,11 @@ def bool_to_additive_mask(
     That silently drops the mask. Always allocate a float tensor first, then fill it.
     This helper is the sanctioned way to build an SDPA additive mask from a bool validity mask.
     """
+    # bool_mask: (...)
     if bool_mask.dtype != torch.bool:
         raise TypeError(
             f"bool_to_additive_mask requires a bool tensor, got dtype={bool_mask.dtype}"
         )
-    additive = torch.zeros_like(bool_mask, dtype=dtype)
+    additive = torch.zeros_like(bool_mask, dtype=dtype)  # (...)
     additive.masked_fill_(bool_mask.logical_not(), float("-inf"))
-    return additive
+    return additive  # (...)

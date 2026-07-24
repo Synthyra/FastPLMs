@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import subprocess
-from pathlib import Path
-
 import pytest
+from pathlib import Path
 
 from fastplms.models.e1 import retrieval
 

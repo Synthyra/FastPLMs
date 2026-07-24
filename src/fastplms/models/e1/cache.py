@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import torch
+from typing import Any
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
 
@@ -44,9 +43,9 @@ class DynamicCache:
             tuple[`torch.Tensor`, `torch.Tensor`]: Cached K and V, each with shape
             (b, l, h, d).
         """
-        # Lazy initialization
+        # key_states, value_states: (b, l_new, h, d)
         if len(self.key_cache) <= layer_idx:
-            # There may be skipped layers, fill them with empty lists
+            # Empty tensors preserve skipped layer indices until those layers receive state.
             for _ in range(len(self.key_cache), layer_idx):
                 self.key_cache.append(torch.tensor([]))
                 self.value_cache.append(torch.tensor([]))
@@ -60,12 +59,18 @@ class DynamicCache:
             self.key_cache[layer_idx] = key_states
             self.value_cache[layer_idx] = value_states
         else:
-            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=1)
-            self.value_cache[layer_idx] = torch.cat(
+            self.key_cache[layer_idx] = torch.cat(  # (b, l_cached + l_new, h, d)
+                [self.key_cache[layer_idx], key_states],
+                dim=1,
+            )
+            self.value_cache[layer_idx] = torch.cat(  # (b, l_cached + l_new, h, d)
                 [self.value_cache[layer_idx], value_states], dim=1
             )
 
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+        return (  # (b, l_total, h, d), (b, l_total, h, d)
+            self.key_cache[layer_idx],
+            self.value_cache[layer_idx],
+        )
 
     def get_seq_length(self, layer_idx: int = 0) -> int:
         """Return the cached sequence length for one layer."""
@@ -95,19 +100,22 @@ class DynamicCache:
         """Repeat the cache `repeats` times in the batch dimension. Used in contrastive search."""
         for layer_idx in range(len(self.key_cache)):
             if self.key_cache[layer_idx].numel():
+                # (b * repeats, l, h, d)
                 self.key_cache[layer_idx] = self.key_cache[layer_idx].repeat_interleave(
                     repeats, dim=0
                 )
                 self.value_cache[layer_idx] = self.value_cache[layer_idx].repeat_interleave(
                     repeats, dim=0
-                )
+                )  # (b * repeats, l, h, d)
 
-    def batch_select_indices(self, indices: torch.Tensor) -> None:
+    def batch_select_indices(self, indices: torch.Tensor | list[int]) -> None:
         """Keep selected rows of the cache batch dimension."""
         for layer_idx in range(len(self.key_cache)):
             if self.key_cache[layer_idx].numel():
-                self.key_cache[layer_idx] = self.key_cache[layer_idx][indices, ...]
-                self.value_cache[layer_idx] = self.value_cache[layer_idx][indices, ...]
+                self.key_cache[layer_idx] = self.key_cache[layer_idx][indices, ...]  # (n, l, h, d)
+                self.value_cache[layer_idx] = self.value_cache[layer_idx][
+                    indices, ...
+                ]  # (n, l, h, d)
 
 
 class KVCache:
@@ -158,7 +166,7 @@ class KVCache:
             )
             return
 
-        batch_size = batch["input_ids"].shape[0]
+        batch_size = batch["input_ids"].shape[0]  # b
 
         unique_context = contexts[0]
         unique_context_len = context_lens[0]
@@ -171,10 +179,10 @@ class KVCache:
         past_key_values = self.cache_dict[unique_context]
         batch["past_key_values"] = past_key_values
 
-        # Remove context from the input fields
+        # A cached prefix leaves only query-suffix tokens for the model call.
         for field_name in self.tensor_input_field_names:
             if batch.get(field_name) is not None:
-                batch[field_name] = batch[field_name][:, unique_context_len:]
+                batch[field_name] = batch[field_name][:, unique_context_len:]  # (b, l_suffix, ...)
 
     def after_forward(self, batch: dict[str, Any], outputs: ModelOutput) -> None:
         contexts = batch.get("context")
@@ -209,18 +217,21 @@ class KVCache:
             self.cache_dict[unique_context] = past_key_values
             self.cache_queue.append(unique_context)
 
-            # Remove context from the input fields
+            # The first uncached call returns the full sequence; expose its query suffix.
             for field_name in self.tensor_input_field_names:
                 if field_name in batch and batch[field_name] is not None:
-                    batch[field_name] = batch[field_name][:, unique_context_len:]
+                    batch[field_name] = batch[field_name][
+                        :, unique_context_len:
+                    ]  # (b, l_suffix, ...)
 
-            # Remove context from the output fields
             for field_name in self.tensor_output_field_names:
                 if field_name in outputs and outputs[field_name] is not None:
-                    outputs[field_name] = outputs[field_name][:, unique_context_len:]
+                    outputs[field_name] = outputs[field_name][
+                        :, unique_context_len:
+                    ]  # (b, l_suffix, ...)
             if "hidden_states" in outputs and outputs["hidden_states"] is not None:
                 hidden_states = outputs["hidden_states"]
-                sliced_hidden_states = tuple(
+                sliced_hidden_states = tuple(  # each: (b, l_suffix, d)
                     hidden_state[:, unique_context_len:] for hidden_state in hidden_states
                 )
                 outputs["hidden_states"] = sliced_hidden_states

@@ -5,16 +5,16 @@ from __future__ import annotations
 import contextlib
 import importlib
 import random
-from collections.abc import Sequence
-from typing import Any
-
 import pytest
 import torch
 import torch.nn.functional as F
 import transformers
+from collections.abc import Sequence
+from typing import Any
 
 from fastplms.registry import ModelSpec, get_model_registry
 from tests.conftest import CANONICAL_AAS, SEED
+
 
 REGISTRY = get_model_registry()
 SEQUENCE_SPECS = tuple(
@@ -35,11 +35,11 @@ def _parameter(spec: ModelSpec) -> Any:
 
 
 def _model_class(spec: ModelSpec) -> type[torch.nn.Module]:
-    """Resolve the installed package class declared by the model manifest.
+    """Resolve the repository source class declared by the model manifest.
 
-    Backend consistency is a package-source contract. Remote-code loading is
+    Backend consistency is a source contract. Remote-code loading is
     covered separately by the artifact suite, where the generated artifact
-    contains the same source revision as the candidate package.
+    contains the same source revision as the candidate checkout.
     """
 
     advertised = set(spec.auto_map)
@@ -104,14 +104,18 @@ def _prepare_inputs(
     else:
         encoded = tokenizer(list(sequences), **tokenize_kwargs)
     inputs = {name: value.to(device) for name, value in encoded.items() if torch.is_tensor(value)}
+    # input_ids: (b, l)
     input_ids = inputs["input_ids"]
+    # residue_mask: (b, l)
     residue_mask = inputs["attention_mask"].bool()
     for token_id in getattr(tokenizer, "all_special_ids", ()):
         residue_mask &= input_ids.ne(token_id)
     if spec.family.architecture == "ESMC":
+        # inputs['sequence_id']: (b, l)
         inputs["sequence_id"] = inputs["attention_mask"].bool()
     if getattr(model.config, "is_encoder_decoder", False):
         inputs["decoder_input_ids"] = input_ids
+        # inputs['decoder_attention_mask']: (b, l)
         inputs["decoder_attention_mask"] = inputs["attention_mask"]
     return inputs, residue_mask
 
@@ -135,9 +139,12 @@ def _assert_global_bf16_contract(
     *,
     has_logits: bool,
 ) -> None:
+    # candidate: (...), reference: (...), residue_mask: (b, l)
     assert candidate.shape == reference.shape
     assert candidate.ndim == 3
+    # candidate_f: (...)
     candidate_f = candidate.float()
+    # reference_f: (...)
     reference_f = reference.float()
     valid_candidate = candidate_f[residue_mask]
     valid_reference = reference_f[residue_mask]
@@ -149,11 +156,13 @@ def _assert_global_bf16_contract(
     relative_q999 = torch.quantile(difference.abs().reshape(-1), 0.999) / torch.quantile(
         valid_reference.abs().reshape(-1), 0.999
     ).clamp_min(tiny)
+    # residue_cosine_p01: ()
     residue_cosine_p01 = torch.quantile(
         F.cosine_similarity(valid_candidate, valid_reference, dim=-1),
         0.01,
     )
 
+    # M: (...)
     M = residue_mask.unsqueeze(-1).float()
     candidate_pooled = (candidate_f * M).sum(1) / M.sum(1).clamp_min(1)
     reference_pooled = (reference_f * M).sum(1) / M.sum(1).clamp_min(1)
@@ -166,11 +175,16 @@ def _assert_global_bf16_contract(
         f"{context}: per-sequence pooled cosine={pooled_cosine.tolist()}"
     )
     if has_logits:
+        # reference_probabilities: (...)
         reference_probabilities = reference_f.softmax(-1)
+        # confidence: (...), reference_top1: (...)
         confidence, reference_top1 = reference_probabilities.max(-1)
+        # confident_mask: (...)
         confident_mask = residue_mask & confidence.ge(0.5)
         assert bool(confident_mask.any()), f"{context}: no confident biological positions"
+        # candidate_top1: (...)
         candidate_top1 = candidate_f.argmax(-1)
+        # top1_agreement: ()
         top1_agreement = (
             (candidate_top1[confident_mask] == reference_top1[confident_mask]).float().mean()
         )

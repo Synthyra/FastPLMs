@@ -7,14 +7,13 @@ import socket
 import subprocess
 import sys
 import textwrap
-from pathlib import Path
-
 import huggingface_hub
 import huggingface_hub.file_download
 import pytest
 import safetensors.torch
 import torch
 import transformers
+from pathlib import Path
 
 from tests.cpu.resource_telemetry import aggregate_process_memory
 

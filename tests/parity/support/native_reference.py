@@ -19,12 +19,11 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import torch
+import torch.nn as nn
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
-
-import torch
-import torch.nn as nn
 from safetensors.torch import save_file
 
 from tests.parity.support.reference_adapters import (
@@ -43,6 +42,7 @@ from tools.remote.biohub_reference_environment import (
 from tools.remote.reference_source_attestation import (
     validate_reference_sources_evidence,
 )
+
 
 SCHEMA_VERSION = 1
 _ADAPTER_PREFIX = "tests.parity.support.reference_adapters."
@@ -64,6 +64,8 @@ _TOKENIZER_SETTINGS = (
 
 
 def _tensor_digest(tensor: torch.Tensor) -> dict[str, Any]:
+    # tensor: (...)
+    # value: (...)
     value = tensor.detach().cpu().contiguous()
     raw = value.view(torch.uint8).numpy().tobytes()
     return {
@@ -300,6 +302,7 @@ def _prepare_dplm2_inputs(
         raise RuntimeError("Official DPLM2 vocabulary omits structure token 50")
     track_length = max(map(len, sequences)) + 2
     pad_id = vocabulary["<pad>"]
+    # input_ids: (len(sequences), 2 * track_length)
     input_ids = torch.full(
         (len(sequences), 2 * track_length),
         pad_id,
@@ -319,8 +322,10 @@ def _prepare_dplm2_inputs(
             *(vocabulary[residue] for residue in sequence),
             vocabulary["<eos_aa>"],
         ]
+        # input_ids[row_index, :len(structure)]: (...)
         input_ids[row_index, : len(structure)] = torch.tensor(structure, device=device)
         aa_start = track_length
+        # input_ids[row_index, aa_start:aa_start + len(amino_acids)]: (...)
         input_ids[row_index, aa_start : aa_start + len(amino_acids)] = torch.tensor(
             amino_acids,
             device=device,
@@ -357,6 +362,7 @@ def _prepare_inputs(
         # They are data-loader outputs, not arguments to the public inference
         # computation, and therefore do not belong in a tensor golden.
         inputs = {name: prepared[name] for name in required}
+        # residue_mask: (b, l)
         residue_mask = inputs["sequence_ids"].ge(0)
         return inputs, residue_mask
     if request["family"] == "dplm2":
@@ -366,7 +372,9 @@ def _prepare_inputs(
         tokenizer(sequences, return_tensors="pt", padding=True),
         device,
     )
+    # input_ids: (b, l)
     input_ids = encoded["input_ids"]
+    # residue_mask: (b, l)
     residue_mask = encoded["attention_mask"].bool()
     for token_id in getattr(tokenizer, "all_special_ids", ()):
         residue_mask &= input_ids.ne(token_id)
@@ -374,6 +382,7 @@ def _prepare_inputs(
         name: value for name, value in encoded.items() if name in {"input_ids", "attention_mask"}
     }
     if request["architecture"] == "ESMC":
+        # inputs['sequence_id']: (b, l)
         inputs["sequence_id"] = encoded["attention_mask"].bool()
     return inputs, residue_mask
 
@@ -388,13 +397,17 @@ def _output_tensors(output: object) -> dict[str, torch.Tensor]:
     if not hidden_states:
         raise RuntimeError("Official inference omitted hidden states")
     for index, value in enumerate(hidden_states):
+        # tensors[f'output__hidden_{index:04d}']: (..., d)
         tensors[f"output__hidden_{index:04d}"] = value.detach().cpu().contiguous().clone()
     last_hidden = getattr(output, "last_hidden_state", None)
     if last_hidden is None:
+        # last_hidden: (..., d)
         last_hidden = hidden_states[-1]
+    # tensors['output__last_hidden_state']: (..., d)
     tensors["output__last_hidden_state"] = last_hidden.detach().cpu().contiguous().clone()
     logits = getattr(output, "logits", None)
     if logits is not None:
+        # tensors['output__logits']: (..., c)
         tensors["output__logits"] = logits.detach().cpu().contiguous().clone()
     return tensors
 
@@ -460,6 +473,7 @@ def _inference_tensors(
         f"input__{name}": value.detach().cpu().contiguous().clone()
         for name, value in inputs.items()
     }
+    # tensors['residue_mask']: (b, l)
     tensors["residue_mask"] = residue_mask.detach().cpu().contiguous().clone()
     tensors.update(_output_tensors(output))
     del output
@@ -512,6 +526,7 @@ def _ankh_generation_contract(
         )
         if not isinstance(decoder_start_token_id, int):
             raise RuntimeError("Official ANKH config omits decoder_start_token_id.")
+        # decoder_input_ids: (...)
         decoder_input_ids = torch.cat(
             (
                 prompt_ids.new_full((prompt_ids.shape[0], 1), decoder_start_token_id),
@@ -591,6 +606,7 @@ def _generation_contract(
     max_iter = 4
     if family == "dplm":
         encoded = tokenizer("ACDEFG", return_tensors="pt")
+        # input_tokens: (...)
         input_tokens = encoded["input_ids"].to(device)
         kwargs: dict[str, Any] = {
             "max_iter": max_iter,
@@ -611,6 +627,7 @@ def _generation_contract(
             raise RuntimeError(f"Official DPLM2 tokenizer omits generation tokens: {missing}")
         structure = [vocabulary["<cls_struct>"], 50, 50, 50, 50, vocabulary["<eos_struct>"]]
         amino_acids = [vocabulary["<cls_aa>"], *([vocabulary["A"]] * 4), vocabulary["<eos_aa>"]]
+        # input_tokens: (1, 12)
         input_tokens = torch.tensor([structure + amino_acids], device=device)
         kwargs = {
             "max_iter": max_iter,

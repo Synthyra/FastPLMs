@@ -34,10 +34,11 @@ def resolve_execution(device_name: str, dtype_name: str) -> tuple[Any, Any]:
 
 
 def _biological_mask(tokenizer: Any, batch: dict[str, Any]) -> Any:
-    mask = batch["attention_mask"].bool()
+    # batch input_ids/attention_mask: (b, l)
+    mask = batch["attention_mask"].bool()  # (b, l)
     for token_id in getattr(tokenizer, "all_special_ids", ()):
-        mask &= batch["input_ids"].ne(int(token_id))
-    return mask
+        mask &= batch["input_ids"].ne(int(token_id))  # (b, l)
+    return mask  # (b, l)
 
 
 def _loading_key(value: Any) -> str:
@@ -76,6 +77,7 @@ def _require_checkpoint_heads(
 def _require_finite_tensor(name: str, value: Any) -> None:
     import torch
 
+    # value: (...)
     if not bool(torch.isfinite(value).all().item()):
         raise RuntimeError(f"{name} contained non-finite values")
 
@@ -110,10 +112,14 @@ def run_task_heads(
         trust_remote_code=True,
         local_files_only=True,
     )
-    batch = tokenizer(sequences, padding=True, return_tensors="pt")
-    batch = {name: tensor.to(device) for name, tensor in batch.items()}
-    biological_mask = _biological_mask(tokenizer, batch)
-    if not biological_mask.any(dim=1).all():
+    batch = tokenizer(
+        sequences, padding=True, return_tensors="pt"
+    )  # each tensor: (b, l)
+    batch = {
+        name: tensor.to(device) for name, tensor in batch.items()
+    }  # each tensor: (b, l)
+    biological_mask = _biological_mask(tokenizer, batch)  # (b, l)
+    if not biological_mask.any(dim=1).all():  # (b,) -> ()
         raise ValueError("Every input sequence must contain at least one biological residue")
 
     masked_lm, loading_info = AutoModelForMaskedLM.from_pretrained(
@@ -123,8 +129,8 @@ def run_task_heads(
     )
     _require_checkpoint_heads(loading_info, ("lm_head.", "esm.contact_head."))
     masked_lm = masked_lm.to(device).eval()
-    masked_ids = batch["input_ids"].clone()
-    labels = torch.full_like(masked_ids, -100)
+    masked_ids = batch["input_ids"].clone()  # (b, l)
+    labels = torch.full_like(masked_ids, -100)  # (b, l)
     mask_token_id = getattr(tokenizer, "mask_token_id", None)
     if mask_token_id is None:
         raise ValueError("Masked-LM scoring requires a tokenizer mask token")
@@ -132,20 +138,20 @@ def run_task_heads(
     for row in range(masked_ids.shape[0]):
         position = int(torch.nonzero(biological_mask[row], as_tuple=False)[0, 0])
         scored_positions.append(position)
-        labels[row, position] = masked_ids[row, position]
-        masked_ids[row, position] = int(mask_token_id)
+        labels[row, position] = masked_ids[row, position]  # scalar assignment; (b, l)
+        masked_ids[row, position] = int(mask_token_id)  # scalar assignment; (b, l)
 
     with torch.inference_mode():
         mlm_output = masked_lm(
             input_ids=masked_ids,
             attention_mask=batch["attention_mask"],
             labels=labels,
-        )
+        )  # loss: (); logits: (b, l, v)
         contacts = masked_lm.predict_contacts(
             batch["input_ids"],
             batch["attention_mask"],
-        )
-    probabilities = mlm_output.logits.float().softmax(dim=-1)
+        )  # (b, r, r)
+    probabilities = mlm_output.logits.float().softmax(dim=-1)  # (b, l, v)
     residue_probabilities = [
         float(probabilities[row, position, labels[row, position]].item())
         for row, position in enumerate(scored_positions)
@@ -162,9 +168,13 @@ def run_task_heads(
         .to(device)
         .eval()
     )
-    sequence_labels = torch.zeros(len(sequences), dtype=torch.long, device=device)
+    sequence_labels = torch.zeros(
+        len(sequences), dtype=torch.long, device=device
+    )  # (b,)
     with torch.inference_mode():
-        sequence_output = sequence_model(**batch, labels=sequence_labels)
+        sequence_output = sequence_model(
+            **batch, labels=sequence_labels
+        )  # loss: (); logits: (b, c)
 
     token_model = (
         AutoModelForTokenClassification.from_pretrained(
@@ -175,10 +185,12 @@ def run_task_heads(
         .to(device)
         .eval()
     )
-    token_labels = torch.full_like(batch["input_ids"], -100)
-    token_labels[biological_mask] = 0
+    token_labels = torch.full_like(batch["input_ids"], -100)  # (b, l)
+    token_labels[biological_mask] = 0  # (b, l)
     with torch.inference_mode():
-        token_output = token_model(**batch, labels=token_labels)
+        token_output = token_model(
+            **batch, labels=token_labels
+        )  # loss: (); logits: (b, l, c)
 
     losses = {
         "masked_lm": float(mlm_output.loss.item()),

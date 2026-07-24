@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import re
-import tomllib
-from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from fastplms.registry import get_model_registry
+
 
 ROOT = Path(__file__).resolve().parents[2]
 _FLASH_PACKAGES = frozenset({"flash-attn", "flash_attn", "flashattention"})
@@ -26,45 +25,37 @@ def _normalized_package(requirement: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _dependency_strings(value: object) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, Mapping):
-        result: list[str] = []
-        for nested in value.values():
-            result.extend(_dependency_strings(nested))
-        return result
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        result = []
-        for nested in value:
-            result.extend(_dependency_strings(nested))
-        return result
-    return []
+def _requirements(path: Path) -> list[str]:
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
 
 
 def test_dependency_contract_contains_no_flash_attn_distribution() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    requirements = _dependency_strings(project.get("project", {}))
-    requirements.extend(_dependency_strings(project.get("dependency-groups", {})))
+    requirement_root = ROOT / "requirements"
+    dependency_files = sorted(requirement_root.rglob("*.in"))
+    dependency_files.extend(sorted(requirement_root.rglob("*.txt")))
+    requirements = [
+        requirement
+        for path in dependency_files
+        for requirement in _requirements(path)
+    ]
+
     assert not {
         requirement
         for requirement in requirements
         if _normalized_package(requirement) in _FLASH_PACKAGES
     }
-    assert project["project"]["optional-dependencies"]["flash"] == ["kernels>=0.15,<0.16"]
-
-    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
-    locked_names = {re.sub(r"[-_.]+", "-", package["name"]).lower() for package in lock["package"]}
-    assert locked_names.isdisjoint(_FLASH_PACKAGES)
-    assert "kernels" in locked_names
-    locked_kernels = [package for package in lock["package"] if package["name"] == "kernels"]
-    assert [package["version"] for package in locked_kernels] == ["0.15.2"]
-    locked_data = [package for package in lock["package"] if package["name"] == "kernels-data"]
-    assert [package["version"] for package in locked_data] == ["0.16.0"]
+    assert _requirements(requirement_root / "features" / "flash.in") == [
+        "kernels>=0.15,<0.16"
+    ]
 
 
 def test_no_docker_script_or_documentation_command_builds_source_flash_attn() -> None:
     roots = (
+        ROOT / "requirements",
         ROOT / "docker",
         ROOT / "tools",
         ROOT / "examples",
@@ -76,6 +67,7 @@ def test_no_docker_script_or_documentation_command_builds_source_flash_attn() ->
         ".bat",
         ".cmd",
         ".hcl",
+        ".in",
         ".md",
         ".ps1",
         ".py",
@@ -99,7 +91,7 @@ def test_no_docker_script_or_documentation_command_builds_source_flash_attn() ->
         for number, line in enumerate(lines, start=1):
             stripped = line.strip()
             if (
-                path.suffix.lower() == ".txt"
+                path.suffix.lower() in {".in", ".txt"}
                 and stripped
                 and not stripped.startswith("#")
                 and _normalized_package(stripped) in _FLASH_PACKAGES

@@ -9,6 +9,7 @@ import warnings
 from pathlib import Path
 from typing import Any
 
+
 FLASH_BACKENDS = frozenset({"flash_attention_2", "flash_attention_3"})
 DTYPE_NAMES = ("float32", "bfloat16")
 
@@ -48,10 +49,17 @@ def run_optimized_attention_example(
 
     import torch
 
-    batch = tokenizer(sequences, padding=True, return_tensors="pt")
-    batch = {name: tensor.to(model.device) for name, tensor in batch.items()}
+    batch = tokenizer(
+        sequences, padding=True, return_tensors="pt"
+    )  # each tensor: (b, l)
+    batch = {
+        name: tensor.to(model.device) for name, tensor in batch.items()
+    }  # each tensor: (b, l)
     with torch.inference_mode():
-        return model(**batch, output_attentions=False)
+        output = model(
+            **batch, output_attentions=False
+        )  # last_hidden_state: (b, l, d)
+    return output
 
 
 def run_attention_example(
@@ -61,12 +69,18 @@ def run_attention_example(
 ) -> tuple[Any, list[str]]:
     import torch
 
-    batch = tokenizer(sequences, padding=True, return_tensors="pt")
-    batch = {name: tensor.to(model.device) for name, tensor in batch.items()}
+    batch = tokenizer(
+        sequences, padding=True, return_tensors="pt"
+    )  # each tensor: (b, l)
+    batch = {
+        name: tensor.to(model.device) for name, tensor in batch.items()
+    }  # each tensor: (b, l)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", RuntimeWarning)
         with torch.inference_mode():
-            output = model(**batch, output_attentions=True)
+            output = model(
+                **batch, output_attentions=True
+            )  # last_hidden_state: (b, l, d); attentions: layer-wise (b, h, l, l)
     return output, [str(item.message) for item in caught]
 
 
@@ -170,14 +184,14 @@ def main(argv: list[str] | None = None) -> int:
         model,
         tokenizer,
         ["MSTNPKPQRKTKRNT", "MKTII"],
-    )
+    )  # last_hidden_state: (2, l, d)
     if attention_configuration_snapshot(model) != configured_state:
         raise RuntimeError("The optimized attention call mutated the configured backend")
     fallback_output, warning_messages = run_attention_example(
         model,
         tokenizer,
         ["MSTNPKPQRKTKRNT", "MKTII"],
-    )
+    )  # last_hidden_state: (2, l, d)
     if attention_configuration_snapshot(model) != configured_state:
         raise RuntimeError("The output_attentions eager fallback mutated the configured backend")
     print("optimized", tuple(optimized_output.last_hidden_state.shape))

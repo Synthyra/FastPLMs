@@ -3,22 +3,21 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
 import torch
 import torch.nn.functional as F
+from pathlib import Path
 from safetensors.torch import save_file
 
 from tools.debug.analyze_boltz_opm_projection import _PREFIX, main
 
 
 def test_opm_report_localizes_an_output_kernel_difference(tmp_path: Path) -> None:
-    X = torch.arange(8, dtype=torch.float32).reshape(1, 2, 4) / 10
-    W = torch.arange(12, dtype=torch.float32).reshape(3, 4) / 20
-    bias = torch.tensor([0.1, -0.2, 0.3], dtype=torch.float32)
-    candidate_output = F.linear(X, W, bias).to(torch.bfloat16)
-    reference_output = candidate_output.clone()
-    reference_output.reshape(-1)[0] += torch.tensor(0.125, dtype=torch.bfloat16)
+    X = torch.arange(8, dtype=torch.float32).reshape(1, 2, 4) / 10  # (b=1, l=2, d=4)
+    W = torch.arange(12, dtype=torch.float32).reshape(3, 4) / 20  # (d_out=3, d=4)
+    bias = torch.tensor([0.1, -0.2, 0.3], dtype=torch.float32)  # (d_out=3,)
+    candidate_output = F.linear(X, W, bias).to(torch.bfloat16)  # (b=1, l=2, d_out=3)
+    reference_output = candidate_output.clone()  # (b=1, l=2, d_out=3)
+    reference_output.reshape(-1)[0] += torch.tensor(0.125, dtype=torch.bfloat16)  # ()
 
     input_key = f"{_PREFIX}__call_000__args__0"
     output_key = f"{_PREFIX}__call_000__output"

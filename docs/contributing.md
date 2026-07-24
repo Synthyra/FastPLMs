@@ -6,16 +6,17 @@ audit trail. Do not commit or upload model weights as part of a source change.
 ## Setup
 
 ```bash
-uv lock --check
-uv sync --frozen --no-default-groups \
-  --group validation --extra cpu --extra dev --extra structure --extra train
+uv venv
+uv pip install \
+  -r requirements/profiles/cpu-validation.in \
+  -c requirements/constraints/validation.txt \
+  --torch-backend cpu
 python -m pytest tests/cpu -m cpu_contract -n auto --dist=loadscope
 ```
 
-The explicit `cpu` extra selects the locked PyTorch CPU index for this uv
-development environment. Do not use `--all-extras`: CUDA-only extras are
-intentionally incompatible with the CPU environment. Select only the feature
-extras needed by the validation lane.
+The CPU validation profile contains only the direct dependencies needed by that
+lane. `--torch-backend cpu` selects the CPU PyTorch index. CUDA-only
+cuEquivariance and FP8 profiles belong in separate environments.
 
 Official submodules are not required for routine CPU work. Initialize them only
 for a live compliance run with `git submodule update --init --recursive`. Run
@@ -60,7 +61,7 @@ licenses. Then:
 
 1. update `src/fastplms/models.toml` with immutable identities and a complete
    conversion record;
-2. implement or change package code without importing the official checkout;
+2. implement or change runtime source without importing the official checkout;
 3. update a public-API reference adapter in
    `tests/parity/support/reference_adapters`;
 4. add exact configuration, tokenizer, state, alias, FP32, BF16, feature, and

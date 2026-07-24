@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import replace
-from pathlib import Path
-
 import pytest
 import torch
+from dataclasses import replace
+from pathlib import Path
 from safetensors.torch import load_file, save_file
 
 from fastplms.registry import (
@@ -37,6 +36,7 @@ from tools.goldens import (
 )
 from tools.goldens.from_native import main as golden_main
 from tools.remote.prepare_references import MIXED_LENGTHS, prepare_reference_requests
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -443,6 +443,7 @@ def test_native_structure_converter_requires_reference_hash_contract(
     save_file(tensors, native / "bundle.safetensors")
 
     def raw_hash(T: torch.Tensor) -> str:
+        # T: (...)
         value = T.contiguous().view(torch.uint8).numpy().tobytes()
         return hashlib.sha256(value).hexdigest()
 

@@ -20,6 +20,8 @@ class _OfficialE1ForwardWrapper(nn.Module):
         attention_mask: torch.LongTensor | None = None,
         **kwargs,
     ):
+        # input_ids: (b, l); within_seq_position_ids: (b, l)
+        # global_position_ids: (b, l); sequence_ids: (b, l)
         del attention_mask, kwargs
         batch = {
             "input_ids": input_ids,

@@ -16,13 +16,12 @@ import json
 import os
 import platform
 import tempfile
+import torch
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Literal
-
-import torch
 from safetensors.torch import load_file, save_file
 
 from tests.structure.support.state_contract import (
@@ -31,6 +30,7 @@ from tests.structure.support.state_contract import (
     validate_exact_state_contract,
     validate_semantic_config_contract,
 )
+
 
 schema_version = 1
 reference_container = "reference-esmfold2"
@@ -99,6 +99,8 @@ def _request_fingerprint(request: Mapping[str, Any]) -> str:
 
 
 def _tensor_bytes(tensor: torch.Tensor) -> bytes:
+    # tensor: (...)
+    # value: (...)
     value = tensor.detach().cpu().contiguous()
     return value.view(torch.uint8).numpy().tobytes()
 
@@ -106,6 +108,7 @@ def _tensor_bytes(tensor: torch.Tensor) -> bytes:
 def tensor_sha256(tensor: torch.Tensor) -> str:
     """Return the content digest of one tensor without dtype coercion."""
 
+    # tensor: (...)
     return hashlib.sha256(_tensor_bytes(tensor)).hexdigest()
 
 
@@ -114,6 +117,7 @@ def tensor_set_sha256(tensors: Mapping[str, torch.Tensor]) -> str:
 
     digest = hashlib.sha256()
     for name in sorted(tensors):
+        # tensor: (...)
         tensor = tensors[name].detach().cpu().contiguous()
         digest.update(name.encode("utf-8"))
         digest.update(str(tensor.dtype).encode("ascii"))
@@ -320,10 +324,12 @@ def _run_fold(
         f"feature__{name}": tensor.detach().cpu().contiguous().clone()
         for name, tensor in cpu_features.items()
     }
+    # tensors['noise__initial_standard_normal']: (...)
     tensors["noise__initial_standard_normal"] = captured_noise[0]
     for name in (*_required_outputs, *_optional_outputs):
         value = output.get(name)
         if torch.is_tensor(value):
+            # tensors[f'output__{name}']: (...)
             tensors[f"output__{name}"] = value.detach().cpu().contiguous().clone()
     return tensors
 

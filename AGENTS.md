@@ -2,11 +2,11 @@
 
 ## Purpose
 
-FastPLMs provides Hugging Face-compatible protein language and structure models
-under `src/fastplms/`. Treat the repository as release software for scientific
-models. Changes must preserve biological conventions, Transformers behavior,
-reproducibility, legal provenance, and the evidence boundary of each model
-family.
+FastPLMs maintains the runtime source uploaded to Hugging Face protein language
+and structure model repositories. This repository is a source, test, artifact,
+and dependency workspace, not an installable Python distribution. Changes must
+preserve biological conventions, Transformers behavior, reproducibility, legal
+provenance, and the evidence boundary of each model family.
 
 Start with [README.md](README.md) for user-facing behavior and
 [docs/README.md](docs/README.md) for documentation routing.
@@ -17,7 +17,7 @@ Start with [README.md](README.md) for user-facing behavior and
   tokenizer modes, state transformations, backends, precision, licenses, and
   release tiers.
 - `src/fastplms/registry.py`: typed parsing and validation of the manifest.
-- `docs/architecture.md` and `docs/models.md`: package and model-family
+- `docs/architecture.md` and `docs/models.md`: runtime-source and model-family
   contracts.
 - `docs/embedding_api.md`: shared ordered embedding interface and persistence.
 - `docs/attention_backends.md`: backend names, dtype constraints, masks, and
@@ -30,7 +30,7 @@ unused code path when the manifest or current tests say otherwise.
 
 ## Repository boundaries
 
-- `src/fastplms/` contains installable runtime code.
+- `src/fastplms/` contains runtime source copied into Hugging Face artifacts.
 - `vendor/upstream/` contains pinned official repositories used as parity
   oracles. Runtime code must not import from this directory.
 - `tests/` contains unit, integration, parity, structure, and release checks.

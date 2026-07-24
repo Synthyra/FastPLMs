@@ -1,14 +1,13 @@
 import copy
 import inspect
 import random
+import numpy as np
+import torch
+import torch.nn as nn
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any, ClassVar
-
-import numpy as np
-import torch
-import torch.nn as nn
 from torch import Tensor
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
@@ -113,6 +112,7 @@ def _require_key(mapping: dict[str, Any], key: str) -> Any:
 
 
 def _state_dict_without_wrappers(state_dict: dict[str, Tensor]) -> dict[str, Tensor]:
+    # Every state tensor has its parameter-defined shape (...).
     cleaned: dict[str, Tensor] = {}
     for key, value in state_dict.items():
         if key.startswith("ema."):
@@ -122,13 +122,13 @@ def _state_dict_without_wrappers(state_dict: dict[str, Tensor]) -> dict[str, Ten
             new_key = new_key[len("model.") :]
         if new_key.startswith("module."):
             new_key = new_key[len("module.") :]
-        cleaned[new_key] = value
+        cleaned[new_key] = value  # (...)
     return cleaned
 
 
 def _to_cpu_detached(value: Any) -> Any:
     if torch.is_tensor(value):
-        return value.detach().cpu()
+        return value.detach().cpu()  # same shape (...)
     if isinstance(value, dict):
         out: dict[Any, Any] = {}
         for key, nested_value in value.items():
@@ -145,8 +145,8 @@ def _to_cpu_detached(value: Any) -> Any:
 class _RandomState:
     python: object
     numpy: tuple[Any, ...]
-    torch_cpu: Tensor
-    torch_cuda: list[Tensor] | None
+    torch_cpu: Tensor  # (n_cpu_rng_state,)
+    torch_cuda: list[Tensor] | None  # each: (n_cuda_rng_state,)
 
 
 @contextmanager
@@ -212,46 +212,46 @@ def _filtered_kwargs(target: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
 class Boltz2ModelOutput(ModelOutput):
     """Raw Boltz2 inference output with standard AutoModel controls."""
 
-    last_hidden_state: torch.Tensor | None = None
-    hidden_states: tuple[torch.Tensor, ...] | None = None
-    attentions: tuple[torch.Tensor, ...] | None = None
-    pdistogram: torch.Tensor | None = None
-    s: torch.Tensor | None = None
-    z: torch.Tensor | None = None
-    sample_atom_coords: torch.Tensor | None = None
-    diff_token_repr: torch.Tensor | None = None
-    s_conf: torch.Tensor | None = None
-    z_conf: torch.Tensor | None = None
-    pde_logits: torch.Tensor | None = None
-    plddt_logits: torch.Tensor | None = None
-    resolved_logits: torch.Tensor | None = None
-    pde: torch.Tensor | None = None
-    plddt: torch.Tensor | None = None
-    complex_plddt: torch.Tensor | None = None
-    complex_iplddt: torch.Tensor | None = None
-    complex_pde: torch.Tensor | None = None
-    complex_ipde: torch.Tensor | None = None
-    pae_logits: torch.Tensor | None = None
-    pae: torch.Tensor | None = None
-    ptm: torch.Tensor | None = None
-    iptm: torch.Tensor | None = None
-    ligand_iptm: torch.Tensor | None = None
-    protein_iptm: torch.Tensor | None = None
+    last_hidden_state: torch.Tensor | None = None  # (b, t, d_s) or None
+    hidden_states: tuple[torch.Tensor, ...] | None = None  # each shape traced at source
+    attentions: tuple[torch.Tensor, ...] | None = None  # unsupported; always None
+    pdistogram: torch.Tensor | None = None  # (b, t, t, n_distogram, n_bin) or None
+    s: torch.Tensor | None = None  # (b, t, d_s) or None
+    z: torch.Tensor | None = None  # (b, t, t, d_z) or None
+    sample_atom_coords: torch.Tensor | None = None  # (b * m, a, 3) or None
+    diff_token_repr: torch.Tensor | None = None  # (...) or None
+    s_conf: torch.Tensor | None = None  # (...) or None
+    z_conf: torch.Tensor | None = None  # (...) or None
+    pde_logits: torch.Tensor | None = None  # (...) or None
+    plddt_logits: torch.Tensor | None = None  # (...) or None
+    resolved_logits: torch.Tensor | None = None  # (...) or None
+    pde: torch.Tensor | None = None  # (...) or None
+    plddt: torch.Tensor | None = None  # (...) or None
+    complex_plddt: torch.Tensor | None = None  # (...) or None
+    complex_iplddt: torch.Tensor | None = None  # (...) or None
+    complex_pde: torch.Tensor | None = None  # (...) or None
+    complex_ipde: torch.Tensor | None = None  # (...) or None
+    pae_logits: torch.Tensor | None = None  # (...) or None
+    pae: torch.Tensor | None = None  # (...) or None
+    ptm: torch.Tensor | None = None  # (...) or None
+    iptm: torch.Tensor | None = None  # (...) or None
+    ligand_iptm: torch.Tensor | None = None  # (...) or None
+    protein_iptm: torch.Tensor | None = None  # (...) or None
     pair_chains_iptm: Any = None
 
 
 @dataclass
 class Boltz2StructureOutput(ModelOutput):
-    sample_atom_coords: torch.Tensor | None = None
-    atom_pad_mask: torch.Tensor | None = None
-    plddt: torch.Tensor | None = None
-    confidence_score: torch.Tensor | None = None
-    complex_plddt: torch.Tensor | None = None
-    iptm: torch.Tensor | None = None
-    ptm: torch.Tensor | None = None
+    sample_atom_coords: torch.Tensor | None = None  # (m, a_p, 3) or None
+    atom_pad_mask: torch.Tensor | None = None  # (a_p,) or None
+    plddt: torch.Tensor | None = None  # (m, a_p) or None
+    confidence_score: torch.Tensor | None = None  # (m,) or None
+    complex_plddt: torch.Tensor | None = None  # (m,) or None
+    iptm: torch.Tensor | None = None  # (m,) or None
+    ptm: torch.Tensor | None = None  # (m,) or None
     sequence: str | None = None
     structure_template: ProteinStructureTemplate | None = None
-    raw_output: dict[str, torch.Tensor] | None = None
+    raw_output: dict[str, torch.Tensor] | None = None  # values keep model-output shapes
     seed: int | None = None
 
 
@@ -573,41 +573,49 @@ class Boltz2InferenceCore(nn.Module):
         run_confidence_sequentially: bool = True,
         detach_confidence: bool = True,
     ) -> dict[str, Tensor]:
-        s_inputs = self.input_embedder(feats)
-        s_init = self.s_init(s_inputs)
+        # b is the batch size, t the token count, a the padded atom count,
+        # d_s the token width, d_z the pair width, and m the diffusion multiplicity.
+        s_inputs = self.input_embedder(feats)  # (b, t, d_s)
+        s_init = self.s_init(s_inputs)  # (b, t, d_s)
 
-        z_init = self.z_init_1(s_inputs)[:, :, None] + self.z_init_2(s_inputs)[:, None, :]
-        relative_position_encoding = self.rel_pos(feats)
-        z_init = z_init + relative_position_encoding
-        z_init = z_init + self.token_bonds(feats["token_bonds"].float())
+        z_init = (
+            self.z_init_1(s_inputs)[:, :, None] + self.z_init_2(s_inputs)[:, None, :]
+        )  # (b, t, t, d_z)
+        relative_position_encoding = self.rel_pos(feats)  # (b, t, t, d_z)
+        z_init = z_init + relative_position_encoding  # (b, t, t, d_z)
+        z_init = z_init + self.token_bonds(
+            feats["token_bonds"].float()
+        )  # (b, t, t, d_z)
         if self.bond_type_feature:
-            z_init = z_init + self.token_bonds_type(feats["type_bonds"].long())
-        z_init = z_init + self.contact_conditioning(feats)
+            z_init = z_init + self.token_bonds_type(
+                feats["type_bonds"].long()
+            )  # (b, t, t, d_z)
+        z_init = z_init + self.contact_conditioning(feats)  # (b, t, t, d_z)
 
-        s = torch.zeros_like(s_init)
-        z = torch.zeros_like(z_init)
-        mask = feats["token_pad_mask"].float()
-        pair_mask = mask[:, :, None] * mask[:, None, :]
+        s = torch.zeros_like(s_init)  # (b, t, d_s)
+        z = torch.zeros_like(z_init)  # (b, t, t, d_z)
+        mask = feats["token_pad_mask"].float()  # (b, t)
+        pair_mask = mask[:, :, None] * mask[:, None, :]  # (b, t, t)
 
         if self.run_trunk_and_structure:
             for _ in range(recycling_steps + 1):
-                s = s_init + self.s_recycle(self.s_norm(s))
-                z = z_init + self.z_recycle(self.z_norm(z))
+                s = s_init + self.s_recycle(self.s_norm(s))  # (b, t, d_s)
+                z = z_init + self.z_recycle(self.z_norm(z))  # (b, t, t, d_z)
                 z = z + self.msa_module(
                     z,
                     s_inputs,
                     feats,
                     use_kernels=self.use_kernels,
-                )
+                )  # (b, t, t, d_z)
                 s, z = self.pairformer_module(
                     s,
                     z,
                     mask=mask,
                     pair_mask=pair_mask,
                     use_kernels=self.use_kernels,
-                )
+                )  # (b, t, d_s), (b, t, t, d_z)
 
-        pdistogram = self.distogram_module(z)
+        pdistogram = self.distogram_module(z)  # (b, t, t, n_distogram, n_bin)
         output: dict[str, Tensor] = {
             "pdistogram": pdistogram,
             "s": s,
@@ -622,7 +630,7 @@ class Boltz2InferenceCore(nn.Module):
                     relative_position_encoding=relative_position_encoding,
                     feats=feats,
                 )
-            )
+            )  # q/c: (b, a, d_a); biases retain their attention-specific axes
             diffusion_conditioning = {
                 "q": q,
                 "c": c,
@@ -642,29 +650,31 @@ class Boltz2InferenceCore(nn.Module):
                     max_parallel_samples=max_parallel_samples,
                     steering_args=self.steering_args,
                     diffusion_conditioning=diffusion_conditioning,
-                )
+                )  # tensor values include sample_atom_coords: (b * m, a, 3)
             output.update(struct_out)
 
         if self.confidence_prediction:
             if self.skip_run_structure:
-                x_pred = feats["coords"].repeat_interleave(diffusion_samples, 0)
+                x_pred = feats["coords"].repeat_interleave(
+                    diffusion_samples, 0
+                )  # (b * m, ..., a, 3)
             else:
                 if "sample_atom_coords" not in output:
                     raise RuntimeError("Structure sampling did not produce sample_atom_coords.")
-                x_pred = output["sample_atom_coords"]
+                x_pred = output["sample_atom_coords"]  # (b * m, a, 3)
 
             if detach_confidence:
-                s_inputs_c = s_inputs.detach()
-                s_c = s.detach()
-                z_c = z.detach()
-                x_pred_c = x_pred.detach()
-                pdist_c = output["pdistogram"][:, :, :, 0].detach()
+                s_inputs_c = s_inputs.detach()  # (b, t, d_s)
+                s_c = s.detach()  # (b, t, d_s)
+                z_c = z.detach()  # (b, t, t, d_z)
+                x_pred_c = x_pred.detach()  # (b * m, ..., a, 3)
+                pdist_c = output["pdistogram"][:, :, :, 0].detach()  # (b, t, t, n_bin)
             else:
-                s_inputs_c = s_inputs
-                s_c = s
-                z_c = z
-                x_pred_c = x_pred
-                pdist_c = output["pdistogram"][:, :, :, 0]
+                s_inputs_c = s_inputs  # (b, t, d_s)
+                s_c = s  # (b, t, d_s)
+                z_c = z  # (b, t, t, d_z)
+                x_pred_c = x_pred  # (b * m, ..., a, 3)
+                pdist_c = output["pdistogram"][:, :, :, 0]  # (b, t, t, n_bin)
 
             output.update(
                 self.confidence_module(
@@ -680,7 +690,7 @@ class Boltz2InferenceCore(nn.Module):
                 )
             )
 
-        return output
+        return output  # named tensors retain the shapes traced above
 
 
 class Boltz2Model(PreTrainedModel):
@@ -698,6 +708,7 @@ class Boltz2Model(PreTrainedModel):
         return
 
     def _detied_state_dict(self) -> dict[str, Tensor]:
+        # Every state tensor has its parameter-defined shape (...).
         raw_state = self.state_dict()
         seen_ptrs: dict[int, str] = {}
         out: dict[str, Tensor] = {}
@@ -705,13 +716,13 @@ class Boltz2Model(PreTrainedModel):
             if torch.is_tensor(tensor):
                 ptr = tensor.untyped_storage().data_ptr()
                 if ptr in seen_ptrs:
-                    out[key] = tensor.clone()
+                    out[key] = tensor.clone()  # (...)
                 else:
                     seen_ptrs[ptr] = key
-                    out[key] = tensor
+                    out[key] = tensor  # (...)
             else:
-                out[key] = tensor
-        return out
+                out[key] = tensor  # (...)
+        return out  # each tensor: (...)
 
     def save_pretrained(self, save_directory: str, **kwargs: Any) -> None:
         if "safe_serialization" not in kwargs:
@@ -757,7 +768,7 @@ class Boltz2Model(PreTrainedModel):
             checkpoint_path,
             map_location=map_location,
             weights_only=False,
-        )
+        )  # mapping values include state tensors with parameter-defined shapes (...)
         if not isinstance(checkpoint, dict):
             raise TypeError("Checkpoint must deserialize to a dictionary.")
         _require_key(checkpoint, "hyper_parameters")
@@ -766,7 +777,7 @@ class Boltz2Model(PreTrainedModel):
         hparams = checkpoint["hyper_parameters"]
         if not isinstance(hparams, dict):
             raise TypeError("Checkpoint hyper_parameters must be a dictionary.")
-        state_dict = checkpoint["state_dict"]
+        state_dict = checkpoint["state_dict"]  # each tensor: (...)
         if not isinstance(state_dict, dict):
             raise TypeError("Checkpoint state_dict must be a dictionary.")
 
@@ -778,7 +789,7 @@ class Boltz2Model(PreTrainedModel):
             default_diffusion_samples=default_diffusion_samples,
         )
         model = cls(config)
-        cleaned = _state_dict_without_wrappers(state_dict)
+        cleaned = _state_dict_without_wrappers(state_dict)  # each tensor: (...)
         target_keys = set(model.core.state_dict().keys())
         for key in target_keys:
             if ".attention.norm_s." in key:
@@ -789,7 +800,7 @@ class Boltz2Model(PreTrainedModel):
         filtered: dict[str, Tensor] = {}
         for key, value in cleaned.items():
             if key in target_keys:
-                filtered[key] = value
+                filtered[key] = value  # (...)
 
         missing = sorted(target_keys.difference(filtered.keys()))
         if missing:
@@ -826,6 +837,7 @@ class Boltz2Model(PreTrainedModel):
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
     ) -> Boltz2ModelOutput | tuple[Any, ...]:
+        # Feature shapes follow build_boltz2_features; b and t are batch and token counts.
         output_attentions = (
             self.config.output_attentions if output_attentions is None else output_attentions
         )
@@ -854,9 +866,9 @@ class Boltz2Model(PreTrainedModel):
             max_parallel_samples=max_parallel_samples,
             run_confidence_sequentially=run_confidence_sequentially,
             detach_confidence=detach_confidence,
-        )
-        token_state = raw_output.get("s")
-        pair_state = raw_output.get("z")
+        )  # named tensors use the Boltz2InferenceCore.forward shapes
+        token_state = raw_output.get("s")  # (b, t, d_s) or None
+        pair_state = raw_output.get("z")  # (b, t, t, d_z) or None
         model_output = Boltz2ModelOutput(
             last_hidden_state=token_state,
             hidden_states=(token_state, pair_state)
@@ -871,16 +883,19 @@ class Boltz2Model(PreTrainedModel):
         feats: dict[str, Tensor],
         float_dtype: torch.dtype = torch.float32,
     ) -> dict[str, Tensor]:
+        # Each feature tensor keeps its existing shape (...).
         moved: dict[str, Tensor] = {}
         for key, value in feats.items():
             if torch.is_tensor(value):
                 if value.is_floating_point():
-                    moved[key] = value.to(device=self.device, dtype=float_dtype)
+                    moved[key] = value.to(
+                        device=self.device, dtype=float_dtype
+                    )  # same shape (...)
                 else:
-                    moved[key] = value.to(device=self.device)
+                    moved[key] = value.to(device=self.device)  # same shape (...)
             else:
-                moved[key] = value
-        return moved
+                moved[key] = value  # same shape (...)
+        return moved  # each tensor: same shape (...)
 
     def predict_structure(
         self,
@@ -914,8 +929,10 @@ class Boltz2Model(PreTrainedModel):
                 atoms_per_window_queries=(
                     self.core.input_embedder.atom_encoder.atoms_per_window_queries
                 ),
-            )
-            feats = self._to_model_device(feats, float_dtype=torch.float32)
+            )  # feature shapes are traced in build_boltz2_features
+            feats = self._to_model_device(
+                feats, float_dtype=torch.float32
+            )  # unchanged feature shapes
             autocast_context = (
                 torch.autocast(device_type="cuda", dtype=torch.bfloat16)
                 if self.device.type == "cuda"
@@ -930,32 +947,42 @@ class Boltz2Model(PreTrainedModel):
                     max_parallel_samples=max_parallel_samples,
                     run_confidence_sequentially=run_confidence_sequentially,
                     return_dict=True,
-                )
+                )  # named tensors use Boltz2InferenceCore.forward shapes
 
-        sample_atom_coords_value = output.get("sample_atom_coords")
+        sample_atom_coords_value = output.get(
+            "sample_atom_coords"
+        )  # (m, a_p, 3) or absent
         if not isinstance(sample_atom_coords_value, torch.Tensor):
             raise RuntimeError("Boltz2 structure sampling did not return coordinate tensors.")
-        sample_atom_coords = sample_atom_coords_value.detach().cpu()
-        non_finite_mask = torch.logical_not(torch.isfinite(sample_atom_coords))
+        sample_atom_coords = sample_atom_coords_value.detach().cpu()  # (m, a_p, 3)
+        non_finite_mask = torch.logical_not(
+            torch.isfinite(sample_atom_coords)
+        )  # (m, a_p, 3)
         if torch.any(non_finite_mask):
             raise RuntimeError(
                 "sample_atom_coords contains non-finite values. "
                 f"Non-finite count: {int(non_finite_mask.sum().item())}"
             )
-        atom_pad_mask = feats["atom_pad_mask"][0].detach().cpu()
-        plddt = output["plddt"].detach().cpu() if "plddt" in output else None
+        atom_pad_mask = feats["atom_pad_mask"][0].detach().cpu()  # (a_p,)
+        plddt = (
+            output["plddt"].detach().cpu() if "plddt" in output else None
+        )  # (m, a_p) or None
         complex_plddt = (
             output["complex_plddt"].detach().cpu() if "complex_plddt" in output else None
-        )
-        iptm = output["iptm"].detach().cpu() if "iptm" in output else None
-        ptm = output["ptm"].detach().cpu() if "ptm" in output else None
+        )  # (m,) or None
+        iptm = (
+            output["iptm"].detach().cpu() if "iptm" in output else None
+        )  # (m,) or None
+        ptm = (
+            output["ptm"].detach().cpu() if "ptm" in output else None
+        )  # (m,) or None
 
-        confidence_score = None
+        confidence_score = None  # (m,) or None
         if (complex_plddt is not None) and (iptm is not None) and (ptm is not None):
             if torch.allclose(iptm, torch.zeros_like(iptm)):
-                confidence_score = (4 * complex_plddt + ptm) / 5
+                confidence_score = (4 * complex_plddt + ptm) / 5  # (m,)
             else:
-                confidence_score = (4 * complex_plddt + iptm) / 5
+                confidence_score = (4 * complex_plddt + iptm) / 5  # (m,)
 
         return Boltz2StructureOutput(
             sample_atom_coords=sample_atom_coords,

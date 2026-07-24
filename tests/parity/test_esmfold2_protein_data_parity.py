@@ -7,16 +7,15 @@ import inspect
 import io
 import sys
 import types
+import numpy as np
+import pytest
+import torch
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
-import numpy as np
-import pytest
-import torch
 
 from fastplms.models.esmfold2 import esmfold2_affine3d as local_affine
 from fastplms.models.esmfold2 import esmfold2_aligner as local_aligner
@@ -32,6 +31,7 @@ from fastplms.models.esmfold2 import esmfold2_protein_complex as local_complex
 from fastplms.models.esmfold2 import esmfold2_protein_structure as local_structure
 from fastplms.models.esmfold2 import esmfold2_residue_constants as local_residues
 from fastplms.models.esmfold2 import esmfold2_utils_types as local_types
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
@@ -178,8 +178,10 @@ def _assert_complex_equal(actual: Any, expected: Any) -> None:
 
 
 def _atom37_coordinates(offset: float = 0.0) -> np.ndarray:
+    # X: (4, 37, 3)
     X = np.full((4, 37, 3), np.nan, dtype=np.float32)
     for residue_index in range(4):
+        # x: (...)
         x = offset + 3.8 * residue_index
         atoms = {
             "N": (x, 0.1, 0.0),

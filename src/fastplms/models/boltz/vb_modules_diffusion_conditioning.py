@@ -30,7 +30,10 @@ def _concatenate_biases(
     projections: nn.ModuleList,
     pair_features: torch.Tensor,
 ) -> torch.Tensor:
-    return torch.cat([projection(pair_features) for projection in projections], dim=-1)
+    # pair_features: (..., d_pair); each projection: (..., h).
+    return torch.cat(
+        [projection(pair_features) for projection in projections], dim=-1
+    )  # (..., depth * h)
 
 
 class DiffusionConditioning(nn.Module):
@@ -112,21 +115,26 @@ class DiffusionConditioning(nn.Module):
         order so downstream code can select them by layer.
         """
 
+        # b is batch size, t token count, a atom count, and k the atom-window count.
         z_conditioned = self.pairwise_conditioner(
             z_trunk,
             relative_position_encoding,
-        )
+        )  # (b, t, t, d_z)
         q, c, p, to_keys = self.atom_encoder(
             feats=feats,
             s_trunk=s_trunk,
             z=z_conditioned,
-        )
-        atom_encoder_bias = _concatenate_biases(self.atom_enc_proj_z, p)
-        atom_decoder_bias = _concatenate_biases(self.atom_dec_proj_z, p)
+        )  # q/c: (b, a, d_a); p: (b, k, w, h_k, d_p); to_keys: callable
+        atom_encoder_bias = _concatenate_biases(
+            self.atom_enc_proj_z, p
+        )  # (b, k, w, h_k, depth_enc * heads_enc)
+        atom_decoder_bias = _concatenate_biases(
+            self.atom_dec_proj_z, p
+        )  # (b, k, w, h_k, depth_dec * heads_dec)
         token_transformer_bias = _concatenate_biases(
             self.token_trans_proj_z,
             z_conditioned,
-        )
+        )  # (b, t, t, depth_token * heads_token)
         return (
             q,
             c,
@@ -134,4 +142,4 @@ class DiffusionConditioning(nn.Module):
             atom_encoder_bias,
             atom_decoder_bias,
             token_transformer_bias,
-        )
+        )  # tensor shapes are traced above; to_keys is the atom-key gatherer

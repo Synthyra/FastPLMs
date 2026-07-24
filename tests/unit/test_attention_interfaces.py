@@ -7,15 +7,15 @@ import inspect
 import json
 import sys
 import warnings
+import pytest
+import torch
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
-
-import pytest
-import torch
 from transformers import AttentionInterface
+
 
 _TRANSFORMERS_FLASH_HANDLERS = {
     name: AttentionInterface()[name] for name in ("flash_attention_2", "flash_attention_3")
@@ -55,6 +55,7 @@ from fastplms.models.esm2.modeling_fastesm import (  # noqa: E402
     FastEsmModel,
 )
 from fastplms.registry import get_model_registry  # noqa: E402
+
 
 FUNCTION_BACKENDS = (
     "sdpa",
@@ -117,7 +118,7 @@ class _SupportedFlashMixin(FastPLMsAttentionMixin, _RejectingTransformersBase):
     ),
 )
 def test_flash_backend_loads_only_its_hugging_face_kernel(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     implementation: str,
     repository: str,
     revision: str,
@@ -138,7 +139,9 @@ def test_flash_backend_loads_only_its_hugging_face_kernel(
     assert requested == [(repository, revision)]
 
 
-def test_flash_kernel_variant_mismatch_fails_closed(monkeypatch) -> None:
+def test_flash_kernel_variant_mismatch_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     requested: list[tuple[str, str]] = []
     flash_attention_3_kernel = SimpleNamespace(
         flash_attn_func=object(),
@@ -326,7 +329,9 @@ def test_locked_kernel_offline_rejects_unlocked_cached_variant(
         )
 
 
-def test_transformers_flash_hook_defers_binary_loading_until_execution(monkeypatch) -> None:
+def test_transformers_flash_hook_defers_binary_loading_until_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dependency_checks: list[None] = []
     monkeypatch.setattr(
         attention_interfaces,
@@ -376,7 +381,9 @@ def test_transformers_flash_hook_rejects_an_unadvertised_family() -> None:
         model._check_and_adjust_attn_implementation("flash_attention_2")
 
 
-def test_public_attention_setter_matches_transformers_513_kernel_policy(monkeypatch) -> None:
+def test_public_attention_setter_matches_transformers_513_kernel_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     signature = inspect.signature(FastPLMsAttentionMixin.set_attn_implementation)
     assert tuple(signature.parameters) == (
         "self",
@@ -580,17 +587,19 @@ def test_masked_flash_validates_padding_mask_shape_before_kernel_loading(
         )
 
 
-def test_flash_extra_has_no_source_build_path() -> None:
+def test_flash_dependency_profile_has_no_source_build_path() -> None:
     root = Path(__file__).resolve().parents[2]
-    dependency_files = (
-        root / "pyproject.toml",
-        root / "uv.lock",
-        root / "docker" / "Dockerfile",
-    )
+    dependency_files = [
+        path
+        for path in (root / "requirements").rglob("*")
+        if path.is_file()
+    ]
+    dependency_files.append(root / "docker" / "Dockerfile")
+
     for path in dependency_files:
         text = path.read_text(encoding="utf-8")
-        assert 'name = "flash-attn"' not in text
-        assert "flash-attn>=" not in text
+        assert "flash-attn" not in text
+        assert "flash_attn" not in text
         assert "no-build-isolation-package" not in text
         assert "extra-build-dependencies" not in text
 
@@ -1312,7 +1321,9 @@ def test_attention_mixin_preserves_explicit_transformers_override() -> None:
     assert config.attn_backend == "eager"
 
 
-def test_compiled_flex_cache_key_covers_execution_not_batch_contents(monkeypatch) -> None:
+def test_compiled_flex_cache_key_covers_execution_not_batch_contents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source = object()
     compiled: list[object] = []
 

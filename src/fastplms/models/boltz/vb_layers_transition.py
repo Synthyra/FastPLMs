@@ -40,19 +40,26 @@ class Transition(nn.Module):
     def _project_hidden_slice(self, normalized: Tensor, start: int, stop: int) -> Tensor:
         """Return one hidden-width contribution to the output projection."""
 
-        gate = self.silu(torch.matmul(normalized, self.fc1.weight[start:stop].T))
-        value = torch.matmul(normalized, self.fc2.weight[start:stop].T)
-        return torch.matmul(gate * value, self.fc3.weight[:, start:stop].T)
+        # normalized: (..., d); the selected hidden width is d_chunk.
+        gate = self.silu(
+            torch.matmul(normalized, self.fc1.weight[start:stop].T)
+        )  # (..., d_chunk)
+        value = torch.matmul(
+            normalized, self.fc2.weight[start:stop].T
+        )  # (..., d_chunk)
+        return torch.matmul(
+            gate * value, self.fc3.weight[:, start:stop].T
+        )  # (..., d_out)
 
     def forward(self, x: Tensor, chunk_size: int | None = None) -> Tensor:
         """Transform X, optionally accumulating the hidden dimension in chunks."""
 
         # X is the normalized input tensor with shape (..., d).
-        normalized = self.norm(x)
+        normalized = self.norm(x)  # (..., d)
         if chunk_size is None or self.training:
             # H is the gated hidden tensor with shape (..., d_hidden).
             hidden_states = self.silu(self.fc1(normalized)) * self.fc2(normalized)
-            return self.fc3(hidden_states)
+            return self.fc3(hidden_states)  # (..., d_out)
         if chunk_size <= 0:
             raise ValueError("chunk_size must be positive")
 
@@ -62,8 +69,10 @@ class Transition(nn.Module):
                 normalized,
                 start,
                 min(start + chunk_size, self.hidden),
-            )
-            output = contribution if output is None else output + contribution
+            )  # (..., d_out)
+            output = (
+                contribution if output is None else output + contribution
+            )  # (..., d_out)
         if output is None:  # hidden is normally positive; keep malformed configs explicit.
             raise ValueError("hidden must be positive")
-        return output
+        return output  # (..., d_out)

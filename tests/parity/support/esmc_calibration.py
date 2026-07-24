@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+
 FIXTURE_PATH = Path(__file__).parents[1] / "fixtures" / "esmc_biological_holdout.json"
 CASE_IDS = ("1crn-a", "1pga-a", "5pti-a", "1ubq-a", "1ema-a")
 ESMC_BOUNDARY_LENGTHS = (13, 15, 16, 17, 29, 31, 32, 33, 61, 127, 128, 129)

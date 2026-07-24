@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import sys
+import torch
+import torch.nn as nn
 from collections.abc import Sequence
 from pathlib import Path
 
-import torch
-import torch.nn as nn
-
 from tests.parity.support.reference_adapters import move_model, snapshot_path
 from tests.parity.support.reference_adapters.esm2 import _asset_field, _verified_asset
+
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _FAIR_ESM_SUBMODULE = _REPOSITORY_ROOT / "vendor" / "upstream" / "fair-esm"

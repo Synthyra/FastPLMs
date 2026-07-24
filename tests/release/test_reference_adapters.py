@@ -5,11 +5,11 @@ from __future__ import annotations
 import ast
 import json
 import re
+import pytest
 from pathlib import Path
 
-import pytest
-
 from fastplms.registry import get_model_registry
+
 
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTER_ROOT = ROOT / "tests" / "parity" / "support" / "reference_adapters"

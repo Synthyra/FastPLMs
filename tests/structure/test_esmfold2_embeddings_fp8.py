@@ -3,10 +3,9 @@ from __future__ import annotations
 import inspect
 import subprocess
 import sys
-from types import SimpleNamespace
-
 import pytest
 import torch
+from types import SimpleNamespace
 from torch import nn
 
 from fastplms.embeddings import EmbeddingBatch
@@ -33,7 +32,9 @@ from fastplms.registry import get_model_registry
 def test_language_model_projection_matches_original_operation() -> None:
     torch.manual_seed(0)
     shim = LanguageModelShim(d_z=7, d_model=11, num_layers=3)
+    # H: (2, 5, 4, 11)
     H = torch.randn(2, 5, 4, 11)
+    # M: (2, 5)
     M = torch.tensor([[True, True, True, False, False], [True, True, True, True, True]])
 
     projected_states = shim.base_z_linear(H)
@@ -62,7 +63,9 @@ def test_language_model_projection_matches_original_operation() -> None:
 
 def test_language_model_projection_preserves_single_residue_axis() -> None:
     shim = LanguageModelShim(d_z=7, d_model=11, num_layers=3)
+    # H: (2, 1, 4, 11)
     H = torch.randn(2, 1, 4, 11)
+    # M: (2, 1)
     M = torch.ones((2, 1), dtype=torch.bool)
 
     Z = shim.project_sequence(H, M)
@@ -72,6 +75,7 @@ def test_language_model_projection_preserves_single_residue_axis() -> None:
 
 def test_language_model_projection_matches_checkpoint_dtype() -> None:
     shim = LanguageModelShim(d_z=7, d_model=11, num_layers=3).to(dtype=torch.bfloat16)
+    # H: (2, 5, 4, 11)
     H = torch.randn(2, 5, 4, 11, dtype=torch.float32)
 
     Z = shim.project_sequence(H)
@@ -82,6 +86,7 @@ def test_language_model_projection_matches_checkpoint_dtype() -> None:
 
 def test_projection_validates_official_state_count() -> None:
     shim = LanguageModelShim()
+    # H: (1, 2, 80, 2560)
     H = torch.zeros(1, 2, 80, 2560)
     with pytest.raises(ValueError, match="expected 81"):
         shim.project_sequence(H)
@@ -110,8 +115,12 @@ class SyntheticESMFold2(ESMFold2EmbeddingMixin, nn.Module):
         mol_type: torch.Tensor,
         residue_mask: torch.Tensor,
     ) -> torch.Tensor:
+        # input_ids: (b, l); asym_id, residue_index, mol_type: (...)
+        # residue_mask: (b, l)
         del asym_id, residue_index, mol_type
+        # H: (*input_ids.shape, 81, 4)
         H = torch.zeros(*input_ids.shape, 81, 4)
+        # H[..., 0]: (...)
         H[..., 0] = input_ids.unsqueeze(-1)
         return H * residue_mask[..., None, None]
 
@@ -465,16 +474,19 @@ class RecordingESMC(nn.Module):
         del sequence_id, output_hidden_states
         b, sequence_length = input_ids.shape
         self.seen_l = sequence_length
+        # H: (81, b, sequence_length, 4)
         H = torch.zeros(81, b, sequence_length, 4)
-        H[:] = torch.arange(81).view(81, 1, 1, 1)
+        H[:] = torch.arange(81).view(81, 1, 1, 1)  # RHS broadcasts from (81, 1, 1, 1)
         return SimpleNamespace(hidden_states=H)
 
 
 def test_fp8_language_model_input_is_padded_to_multiple_of_16() -> None:
     esmc = RecordingESMC()
     sequence_length = 15
+    # input_ids: (1, sequence_length)
     input_ids = torch.full((1, sequence_length), 4, dtype=torch.long)
     asym_id = torch.zeros_like(input_ids)
+    # residue_index: (...)
     residue_index = torch.arange(sequence_length).unsqueeze(0)
     mol_type = torch.zeros_like(input_ids)
     M = torch.ones_like(input_ids, dtype=torch.bool)

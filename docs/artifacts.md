@@ -5,14 +5,17 @@ artifacts under `dist/hub/<model>/`. It operates only on an already downloaded,
 manifest-pinned checkpoint snapshot. It never authenticates, downloads, creates
 a Hub repository, uploads, deletes, commits, pushes, or opens a pull request.
 
-## Install
+## Dependencies
 
-Artifact tooling uses the FastPLMs 1.0 development environment: Python
-3.11-3.14, PyTorch 2.13, and Transformers 5.13. From a normal checkout, without
-official parity submodules, install the locked tooling before building:
+Artifact tooling uses Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
+From a normal checkout, without official parity submodules, install the
+artifact profile before building:
 
 ```bash
-uv sync --frozen --extra dev
+uv venv
+uv pip install \
+  -r requirements/profiles/artifact.in \
+  -c requirements/constraints/validation.txt
 ```
 
 Building an artifact is offline and does not require a GPU. Live compliance is
@@ -89,12 +92,11 @@ an ordinary writable temporary directory is required. This step performs no
 network access or compilation.
 
 Release validation runs each artifact in a fresh interpreter. Complementary
-family bundles from the same FastPLMs release can extend the loaded package in
-one interpreter, including after importing the installed wheel. Runtime files
-shared by two bundles must have identical hashes; an overlapping source
-conflict fails explicitly and leaves the first runtime intact. Isolate
-incompatible releases in separate Python processes. Production code never
-imports a submodule checkout.
+family bundles from the same FastPLMs release can extend the runtime loaded by
+an earlier artifact in one interpreter. Runtime files shared by two bundles
+must have identical hashes; an overlapping source conflict fails explicitly
+and leaves the first runtime intact. Isolate incompatible releases in separate
+Python processes. Production code never imports a submodule checkout.
 
 The release artifact tier selects the checkpoint source declared by the
 manifest. This matters for ANKH, where the artifact uses the official
@@ -161,7 +163,7 @@ checkpoint revision in `models.toml` identifies the input weights; it must not
 be reused as the revision of newly generated remote code.
 
 It loads every advertised AutoClass, performs inference, saves, reloads, and
-compares configuration, state and output against package source. Network access,
+compares configuration, state, and output against repository source. Network access,
 an undeclared import, a missing legal text, or a missing conversion record fails
 the tier.
 

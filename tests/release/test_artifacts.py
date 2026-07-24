@@ -7,12 +7,11 @@ import os
 import subprocess
 import sys
 import textwrap
+import pytest
+import torch
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
-import torch
 from safetensors.torch import load_file, save_file
 
 from fastplms.registry import (
@@ -46,11 +45,13 @@ from tools.artifacts.build import (
     _is_weight_file,
     _materialize_model_card,
     _provenance,
+    _render_artifact_requirements,
     _tokenizer_checkpoint,
     _validate_vendor_revisions,
     _validated_release_tool_snapshot,
     render_model_card,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -157,6 +158,38 @@ def test_shared_sources_are_in_runtime_artifacts() -> None:
             assert (package_root / relative_path).exists()
 
 
+@pytest.mark.parametrize(
+    ("model_id", "required", "excluded"),
+    (
+        ("esm2_8m", ("torch>=2.13,<2.14", "kernels>=0.15,<0.16"), ("biotite",)),
+        ("ankh_base", ("torch>=2.13,<2.14",), ("kernels", "biotite")),
+        ("boltz2", ("torch>=2.13,<2.14", "biotite>=1.4,<2"), ("kernels",)),
+    ),
+)
+def test_artifact_requirements_match_advertised_runtime(
+    model_id: str,
+    required: tuple[str, ...],
+    excluded: tuple[str, ...],
+) -> None:
+    payloads = {
+        relative_name: (ROOT / relative_name).read_bytes()
+        for relative_name in (
+            "requirements/core.in",
+            "requirements/features/flash.in",
+            "requirements/features/structure.in",
+        )
+    }
+    rendered = _render_artifact_requirements(get_model_registry()[model_id], payloads)
+
+    for requirement in required:
+        assert requirement in rendered
+    for requirement in excluded:
+        assert requirement not in rendered
+    assert "fastplms" not in "\n".join(
+        line for line in rendered.splitlines() if not line.startswith("#")
+    ).lower()
+
+
 def test_esmfold2_runtime_asset_provenance_records_trust_and_offline_boundary() -> None:
     registry = get_model_registry()
     provenance = _provenance(
@@ -226,6 +259,20 @@ def test_flash_artifact_build_embeds_the_kernel_lock(
 
 
 def _synthetic_registry(source_root: Path, checkpoint: Path) -> tuple[ModelRegistry, ModelSpec]:
+    requirements = source_root / "requirements"
+    (requirements / "features").mkdir(parents=True)
+    (requirements / "core.in").write_text(
+        "torch>=2.13,<2.14\ntransformers>=5.13,<5.14\n",
+        encoding="utf-8",
+    )
+    (requirements / "features" / "flash.in").write_text(
+        "kernels>=0.15,<0.16\n",
+        encoding="utf-8",
+    )
+    (requirements / "features" / "structure.in").write_text(
+        "biotite>=1.4,<2\n",
+        encoding="utf-8",
+    )
     package = source_root / "src" / "fastplms"
     (package / "models" / "toy").mkdir(parents=True)
     (package / "__init__.py").write_text("__version__ = '1.0.0'\n", encoding="utf-8")
@@ -430,6 +477,7 @@ def test_weight_snapshot_rejects_concurrent_replacement(
 ) -> None:
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
+    # weights: (...)
     weights = snapshot / "model.safetensors"
     save_file({"weight": torch.arange(8, dtype=torch.float32)}, weights)
     source = CheckpointSource(
@@ -826,6 +874,12 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
     )
     assert (first / "fastplms" / "models" / "toy" / "modeling_toy.py").is_file()
     assert (first / "fastplms_bundle.py").is_file()
+    assert (first / "requirements.txt").read_text(encoding="utf-8") == (
+        "# Direct runtime dependencies for Synthyra/ToyModel.\n"
+        "# FastPLMs source is embedded in this model repository.\n"
+        "torch>=2.13,<2.14\n"
+        "transformers>=5.13,<5.14\n"
+    )
     bridge = (first / "modeling_fastplms.py").read_text(encoding="utf-8")
     assert "from .fastplms_bundle import RUNTIME_DATA, RUNTIME_HASH" in bridge
     assert "from .fastplms." not in bridge
@@ -839,7 +893,7 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
     assert provenance["schema_version"] == 4
     assert provenance["generator"] == {
         "name": "tools.artifacts.build",
-        "version": 3,
+        "version": 4,
     }
     assert provenance["weights_license_status"] == "resolved"
     assert provenance["redistributable"] is True
@@ -864,6 +918,7 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
         "revision": spec.fast.revision,
     }
     assert "provenance.json" not in runtime_attestation["files"]
+    assert "requirements.txt" in runtime_attestation["files"]
     assert not any(_is_weight_file(path) for path in runtime_attestation["files"])
     assert provenance["bf16_execution"] == "static_parameters"
     assert provenance["canonical_weights"]["source_schema"] == "canonical"
@@ -932,8 +987,8 @@ def test_complete_artifact_rejects_self_attested_card_runtime_placeholder(
     readme = artifact / "README.md"
     readme.write_text(
         readme.read_text(encoding="utf-8").replace(
-            "FastPLMs.git",
-            "FastPLMs.git@<runtime-revision>",
+            "requirements.txt",
+            "requirements.txt@<runtime-revision>",
             1,
         ),
         encoding="utf-8",
@@ -1322,14 +1377,12 @@ def test_complementary_fastplms_artifacts_load_in_one_process(tmp_path: Path) ->
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_matching_installed_fastplms_runtime_is_reused(tmp_path: Path) -> None:
+def test_preloaded_non_artifact_fastplms_runtime_is_rejected(tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
     registry, spec = _synthetic_registry(source_root, checkpoint)
     source_package = source_root / "src" / "fastplms"
-    kernel_lock = source_package / "kernels.lock"
-    kernel_lock.write_text('[{"revision": "synthetic"}]\n', encoding="utf-8")
     artifact = build_artifact(
         spec,
         registry,
@@ -1338,26 +1391,7 @@ def test_matching_installed_fastplms_runtime_is_reused(tmp_path: Path) -> None:
         source_root,
         _allow_untracked_runtime_for_tests=True,
     )
-    kernel_lock.unlink()
-    distribution_root = tmp_path / "installed-distribution"
-    distribution_info = distribution_root / "fastplms-1.0.0.dist-info"
-    distribution_info.mkdir(parents=True)
-    (distribution_info / "METADATA").write_text(
-        "Metadata-Version: 2.4\nName: fastplms\nVersion: 1.0.0\n",
-        encoding="utf-8",
-    )
-    (distribution_info / "kernels.lock").write_text(
-        '[{"revision": "synthetic"}]\n',
-        encoding="utf-8",
-    )
-    (distribution_info / "RECORD").write_text(
-        "fastplms-1.0.0.dist-info/METADATA,,\n"
-        "fastplms-1.0.0.dist-info/kernels.lock,,\n"
-        "fastplms-1.0.0.dist-info/RECORD,,\n",
-        encoding="utf-8",
-    )
-
-    probe = tmp_path / "installed_runtime_probe.py"
+    probe = tmp_path / "external_runtime_probe.py"
     probe.write_text(
         textwrap.dedent(
             """\
@@ -1368,15 +1402,14 @@ def test_matching_installed_fastplms_runtime_is_reused(tmp_path: Path) -> None:
 
             source_package = Path(sys.argv[1])
             artifact = Path(sys.argv[2])
-            sys.path.insert(0, sys.argv[3])
-            installed_spec = importlib.util.spec_from_file_location(
+            external_spec = importlib.util.spec_from_file_location(
                 "fastplms",
                 source_package / "__init__.py",
                 submodule_search_locations=[str(source_package)],
             )
-            installed = importlib.util.module_from_spec(installed_spec)
-            sys.modules["fastplms"] = installed
-            installed_spec.loader.exec_module(installed)
+            external = importlib.util.module_from_spec(external_spec)
+            sys.modules["fastplms"] = external
+            external_spec.loader.exec_module(external)
 
             artifact_package = types.ModuleType("artifact")
             artifact_package.__package__ = "artifact"
@@ -1388,11 +1421,13 @@ def test_matching_installed_fastplms_runtime_is_reused(tmp_path: Path) -> None:
             )
             bridge = importlib.util.module_from_spec(bridge_spec)
             sys.modules["artifact.modeling_fastplms"] = bridge
-            bridge_spec.loader.exec_module(bridge)
-
-            assert sys.modules["fastplms"] is installed
-            assert bridge.ToyConfig().__class__ is bridge.ToyConfig
-            assert installed.__fastplms_artifact_installed_root__ == str(source_package.resolve())
+            try:
+                bridge_spec.loader.exec_module(bridge)
+            except RuntimeError as error:
+                if "non-artifact fastplms module" not in str(error):
+                    raise
+            else:
+                raise AssertionError("External FastPLMs source loaded into an artifact runtime")
             """
         ),
         encoding="utf-8",
@@ -1406,7 +1441,6 @@ def test_matching_installed_fastplms_runtime_is_reused(tmp_path: Path) -> None:
             str(probe),
             str(source_root / "src" / "fastplms"),
             str(artifact),
-            str(distribution_root),
         ],
         cwd=tmp_path,
         capture_output=True,
@@ -2242,6 +2276,7 @@ def test_artifact_rejects_self_attested_forged_canonical_weight(
 
     shard = next(artifact.glob("model-*.safetensors"))
     forged_state = load_file(shard)
+    # forged_state['linear.bias']: (...)
     forged_state["linear.bias"] = forged_state["linear.bias"].clone()
     forged_state["linear.bias"][0] += 1
     save_file(forged_state, shard, metadata={"format": "pt"})

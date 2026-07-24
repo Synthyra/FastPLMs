@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import math
-from typing import Literal
-
 import torch
+from typing import Literal
 from torch import Tensor
+
 
 FanMode = Literal["fan_in", "fan_out", "fan_avg"]
 
@@ -33,6 +33,7 @@ def trunc_normal_init_(
 ) -> None:
     """Fill W from a normal distribution truncated at two standard deviations."""
 
+    # weights: (d_out, d_in); initialization preserves this shape in place.
     variance = scale / max(1.0, _calculate_fan(weights.shape, fan))
     std = math.sqrt(variance)
     with torch.no_grad():
@@ -42,6 +43,7 @@ def trunc_normal_init_(
 def lecun_normal_init_(weights: Tensor) -> None:
     """Initialize W using fan-in-scaled truncated normal values."""
 
+    # weights: (d_out, d_in), mutated in place.
     trunc_normal_init_(weights)
 
 
@@ -58,6 +60,7 @@ def glorot_uniform_init_(weights: Tensor) -> None:
 
 
 def _fill_(tensor: Tensor, value: float) -> None:
+    # tensor: (...), mutated in place without changing shape.
     with torch.no_grad():
         tensor.fill_(value)
 
@@ -96,3 +99,11 @@ def ipa_point_weights_init_(weights: Tensor) -> None:
     """Initialize W so applying softplus yields one."""
 
     _fill_(weights, 0.541324854612918)
+    # weights: (d_out, d_in), mutated in place.
+    # weights: (d_out, d_in), mutated in place.
+    # weights: (...), mutated in place.
+    # weights: (...), mutated in place.
+    # bias: (...), mutated in place.
+    # bias: (...), mutated in place.
+    # weights: (d_out, d_in), mutated in place.
+    # weights: (...), mutated in place.

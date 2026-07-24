@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 import torch
+from pathlib import Path
+from types import SimpleNamespace
 
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.modeling_esmfold2 import ESMFold2Model
@@ -30,6 +29,7 @@ from tests.unit import test_structure_output_contracts as output_contracts
 from tests.unit.test_esmfold2_reimplemented_leaves import (
     test_experimental_top_level_kernel_backend_validates_before_zero_layer_dispatch as _kernel,
 )
+
 
 test_boltz_atom_confidence_is_finite_for_short_uneven_batches_and_multiplicity = _finite
 test_boltz_atom_confidence_mapping_preserves_batch_multiplicity_and_atom_order = _order
@@ -133,8 +133,11 @@ def test_public_binder_workflow_pads_heterogeneous_prepared_atoms_without_trunca
             self.prepared_sizes.append(count)
             return (
                 {
-                    "ref_pos": torch.full((1, count, 3), marker),
-                    "atom_attention_mask": torch.ones((1, count), dtype=torch.bool),
+                    "ref_pos": torch.full((1, count, 3), marker),  # (1, n_atom, xyz=3)
+                    "atom_attention_mask": torch.ones(  # (1, n_atom)
+                        (1, count),
+                        dtype=torch.bool,
+                    ),
                 },
                 [f"chain-{int(marker)}"],
             )
@@ -153,8 +156,8 @@ def test_public_binder_workflow_pads_heterogeneous_prepared_atoms_without_trunca
                 }
             )
             batch_size, token_count = res_type_soft.shape[:2]
-            marker = ref_pos[:, 0, 0]
-            logits = marker[:, None, None, None].expand(
+            marker = ref_pos[:, 0, 0]  # (b,)
+            logits = marker[:, None, None, None].expand(  # (b, l, l, bins=128)
                 batch_size,
                 token_count,
                 token_count,
@@ -166,7 +169,7 @@ def test_public_binder_workflow_pads_heterogeneous_prepared_atoms_without_trunca
             return self.forward(**inputs)
 
     model = FakeFoldModel()
-    design = torch.zeros((2, 2, binder.AA_DIMS), dtype=torch.float32)
+    design = torch.zeros((2, 2, binder.AA_DIMS), dtype=torch.float32)  # (b=2, l=2, aa)
     design[0, :, 0] = 1
     design[1, :, 1] = 1
     result = binder.fold_and_get_distogram(
@@ -197,7 +200,7 @@ def test_public_binder_workflow_pads_heterogeneous_prepared_atoms_without_trunca
 
 def test_binder_example_main_wires_explicit_offline_cli_arguments(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     from examples import binder_design_fastplms as binder
 
@@ -404,13 +407,15 @@ def _tiny_esmfold2_config(model_type: str) -> ESMFold2Config:
     ),
 )
 def test_esmfold2_advertised_models_tiny_init_backward_and_save_reload(
-    model_class,
-    model_type,
-    tmp_path,
+    model_class: type[ESMFold2Model] | type[ESMFold2ExperimentalModel],
+    model_type: str,
+    tmp_path: Path,
 ) -> None:
     model = model_class(_tiny_esmfold2_config(model_type))
-    pair_state = torch.randn(1, 2, 2, 8, requires_grad=True)
-    logits = model.distogram_head(pair_state + pair_state.transpose(1, 2))
+    pair_state = torch.randn(1, 2, 2, 8, requires_grad=True)  # (b=1, l=2, l, d_pair=8)
+    logits = model.distogram_head(  # (b, l, l, distogram_bins=8)
+        pair_state + pair_state.transpose(1, 2)
+    )
     logits.square().mean().backward()
 
     assert torch.isfinite(logits).all()

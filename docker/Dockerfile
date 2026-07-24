@@ -10,7 +10,6 @@ FROM ${CUDA13_IMAGE} AS python312
 ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/venv/bin:$PATH \
     LD_LIBRARY_PATH=/opt/venv/lib/python3.12/site-packages/nvidia/cudnn/lib:/usr/local/cuda/lib64:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
-    UV_PROJECT_ENVIRONMENT=/opt/venv \
     UV_CACHE_DIR=/root/.cache/uv \
     UV_COMPILE_BYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -37,35 +36,41 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 WORKDIR /opt/fastplms
 
-FROM python312 AS project-metadata
+FROM python312 AS dependency-files
 
 # Keep dependency-only layers independent from runtime source, tests, docs, and
-# legal text. A source edit must not rebuild the locked CUDA/Python environment.
-COPY pyproject.toml uv.lock kernels.lock ./
+# legal text. A source edit must not rebuild the CUDA/Python environment.
+COPY requirements ./requirements
+COPY kernels.lock ./
 
-FROM project-metadata AS source-dependencies
+FROM dependency-files AS source-dependencies
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --group validation
+    uv pip install --python /opt/venv/bin/python \
+        --requirement requirements/profiles/runtime.in \
+        --constraint requirements/constraints/validation.txt
 
 FROM source-dependencies AS source
 
 COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
 COPY LICENSES ./LICENSES
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --group validation --no-editable
+ENV PYTHONPATH=/opt/fastplms/src
 
-FROM project-metadata AS runtime-dependencies
+FROM dependency-files AS runtime-dependencies
 
 ARG FASTPLMS_RUNTIME_PROFILE=core
 RUN --mount=type=cache,target=/root/.cache/uv \
     case "${FASTPLMS_RUNTIME_PROFILE}" in \
         core) \
-            uv sync --frozen --no-install-project --no-dev --group validation ;; \
+            uv pip install --python /opt/venv/bin/python \
+                --requirement requirements/profiles/runtime.in \
+                --constraint requirements/constraints/validation.txt ;; \
         esmfold2-fp8) \
-            uv sync --frozen --no-install-project --no-dev --group validation \
-                --extra structure --extra fp8 ;; \
+            uv pip install --python /opt/venv/bin/python \
+                --requirement requirements/profiles/runtime-fp8.in \
+                --constraint requirements/constraints/validation.txt \
+                --overrides requirements/overrides/cuda.txt ;; \
         *) \
             echo "Unsupported FastPLMs runtime profile: ${FASTPLMS_RUNTIME_PROFILE}" >&2; \
             exit 64 ;; \
@@ -73,96 +78,81 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM runtime-dependencies AS runtime
 
-ARG FASTPLMS_RUNTIME_PROFILE=core
 COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
 COPY LICENSES ./LICENSES
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv \
-    case "${FASTPLMS_RUNTIME_PROFILE}" in \
-        core) \
-            uv sync --frozen --no-dev --group validation --no-editable ;; \
-        esmfold2-fp8) \
-            uv sync --frozen --no-dev --group validation --extra structure --extra fp8 \
-                --no-editable ;; \
-        *) \
-            echo "Unsupported FastPLMs runtime profile: ${FASTPLMS_RUNTIME_PROFILE}" >&2; \
-            exit 64 ;; \
-    esac
+ENV PYTHONPATH=/opt/fastplms/src
 WORKDIR /workspace
 CMD ["python"]
 
-FROM project-metadata AS candidate-dependencies
+FROM dependency-files AS candidate-dependencies
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --group validation --extra dev \
-        --extra flash --extra train
+    uv pip install --python /opt/venv/bin/python \
+        --requirement requirements/profiles/candidate.in \
+        --constraint requirements/constraints/validation.txt
 
 FROM candidate-dependencies AS candidate
 
 COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
 COPY LICENSES ./LICENSES
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --group validation --extra dev --extra flash --extra train \
-        --no-editable
 COPY tests /opt/fastplms/tests
 COPY benchmarks /opt/fastplms/benchmarks
 COPY tools /opt/fastplms/tools
-ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms
+ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms/src:/opt/fastplms
 WORKDIR /workspace
 CMD ["python", "-m", "pytest", "tests/unit", "tests/integration", "-m", "not gpu and not slow and not structure"]
 
-FROM project-metadata AS candidate-structure-dependencies
+FROM dependency-files AS candidate-structure-dependencies
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --group validation --extra dev \
-        --extra flash --extra structure --extra cueq --extra train
+    uv pip install --python /opt/venv/bin/python \
+        --requirement requirements/profiles/candidate-structure.in \
+        --constraint requirements/constraints/validation.txt
 
 FROM candidate-structure-dependencies AS candidate-structure
 
 COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
 COPY LICENSES ./LICENSES
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --group validation --extra dev --extra flash --extra structure \
-        --extra cueq --extra train --no-editable
 COPY tests /opt/fastplms/tests
 COPY benchmarks /opt/fastplms/benchmarks
 COPY tools /opt/fastplms/tools
-ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms
+ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms/src:/opt/fastplms
 WORKDIR /workspace
 CMD ["python", "-m", "pytest", "tests/structure", "-m", "structure"]
 
-FROM project-metadata AS candidate-fp8-dependencies
+FROM dependency-files AS candidate-fp8-dependencies
 
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev --group validation --extra dev \
-        --extra flash --extra structure --extra cueq --extra train --extra fp8
+    uv pip install --python /opt/venv/bin/python \
+        --requirement requirements/profiles/candidate-fp8.in \
+        --constraint requirements/constraints/validation.txt \
+        --overrides requirements/overrides/cuda.txt
 
 FROM candidate-fp8-dependencies AS candidate-fp8
 
 COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
 COPY LICENSES ./LICENSES
 COPY src ./src
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --group validation --extra dev --extra flash --extra structure \
-        --extra cueq --extra train --extra fp8 --no-editable
 COPY tests /opt/fastplms/tests
 COPY benchmarks /opt/fastplms/benchmarks
 COPY tools /opt/fastplms/tools
-ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms
+ENV PYTHONPATH=/workspace/src:/workspace:/opt/fastplms/src:/opt/fastplms
 WORKDIR /workspace
 CMD ["python", "-m", "pytest", "tests/structure", "-m", "gpu and structure"]
 
 # The artifact tier intentionally installs dependencies without FastPLMs. A
 # mounted `dist/hub/<model>` must therefore carry all remote-code sources it
-# needs, and the probe fails if an installed `fastplms` package is discoverable.
-FROM python312 AS candidate-artifact
+# needs, and the probe fails if an installed `fastplms` distribution is discoverable.
+FROM dependency-files AS candidate-artifact
 
-COPY pyproject.toml uv.lock kernels.lock README.md LICENSE ./
+COPY README.md LICENSE ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --group validation --extra dev \
-        --extra structure --extra flash
+    uv pip install --python /opt/venv/bin/python \
+        --requirement requirements/profiles/artifact.in \
+        --constraint requirements/constraints/validation.txt
 ENV PYTHONPATH=
 WORKDIR /workspace
 CMD ["python", "-m", "pytest", "tests/release/test_published_automodel.py", "-m", "artifact"]
@@ -187,7 +177,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     /opt/venv/bin/pip install --upgrade pip==26.1.1
 WORKDIR /workspace
 
-# The native oracle harness is independent of the FastPLMs package. Reference
+# The native oracle harness is independent of the FastPLMs source. Reference
 # stages receive this small protocol plus only their declared upstream source.
 FROM scratch AS reference-protocol
 

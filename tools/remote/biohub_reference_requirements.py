@@ -8,6 +8,7 @@ import tomllib
 from collections.abc import Sequence
 from pathlib import Path
 
+
 _PINNED_TRANSFORMERS_REQUIREMENT = (
     "transformers @ git+https://github.com/Biohub/transformers.git@main"
 )

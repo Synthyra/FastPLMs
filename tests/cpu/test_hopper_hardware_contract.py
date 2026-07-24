@@ -7,6 +7,7 @@ from tests.unit.test_hopper_hardware_contract import (
     test_release_hardware_rejects_non_hopper_or_incomplete_identity,
 )
 
+
 __all__ = [
     "test_comparisons_require_the_exact_same_hopper_device_fingerprint",
     "test_golden_comparison_rejects_cross_device_and_honors_new_identity_fields",

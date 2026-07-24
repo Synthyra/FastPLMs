@@ -6,10 +6,9 @@ import json
 import os
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 from typing import Any
-
-import pytest
 
 from fastplms.models.ankh.modeling_ankh import FastAnkhConfig
 from fastplms.models.boltz.modeling_boltz2 import Boltz2Config
@@ -33,6 +32,7 @@ from tools.artifacts.build import (
 )
 from tools.artifacts.offline_probe import _CPU_CONTRACT_MARKER, _runtime_site_packages
 from tools.artifacts.publish import _validate_publishable_non_weight_path
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _PROBE = _ROOT / "tools" / "artifacts" / "offline_probe.py"

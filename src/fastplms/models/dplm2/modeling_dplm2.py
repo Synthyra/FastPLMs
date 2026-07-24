@@ -6,12 +6,11 @@ from __future__ import annotations
 
 import contextlib
 import warnings
+import torch
+import torch.nn as nn
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
-
-import torch
-import torch.nn as nn
 from einops import rearrange
 from torch.nn import functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
@@ -43,6 +42,7 @@ from transformers.models.esm.modeling_esm import (
 from fastplms.models._diffusion_generation import generate_dplm2
 from fastplms.models._esm_rotary import RotaryEmbedding, apply_rotary_pos_emb
 from fastplms.models.dplm2.tokenization_dplm2 import DPLM2Tokenizer
+
 
 try:
     from fastplms.attention import (
@@ -360,7 +360,7 @@ class DPLM2PreTrainedModel(FastPLMsAttentionMixin, EsmPreTrainedModel):
 
 
 class ModifiedRotaryEmbedding(RotaryEmbedding):
-    def __init__(self, dim: int, aa_type: int, struct_type: int, pad_type: int):
+    def __init__(self, dim: int, aa_type: int, struct_type: int, pad_type: int) -> None:
         super().__init__(dim)
         self.aa_type = aa_type
         self.struct_type = struct_type
@@ -406,6 +406,7 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
         type_ids: torch.Tensor | None,
         seq_dimension: int = 2,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # x: (b, h, l, d)
         seq_len = x.shape[seq_dimension]
         if self._has_multimodal_tokens(type_ids):
             seq_len = seq_len // 2
@@ -419,15 +420,15 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
         )
         if cache_is_stale:
             self._seq_len_cached = seq_len
-            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)
-            freqs = torch.outer(t, self.inv_freq)
+            t = torch.arange(seq_len, device=x.device).type_as(self.inv_freq)  # (l,)
+            freqs = torch.outer(t, self.inv_freq)  # (l, d / 2)
             # Match the official DPLM2 operation order: rotary factors inherit
             # the frequency-buffer dtype. This keeps them in FP32 under BF16
             # autocast, while a model explicitly converted to BF16 still builds
             # BF16 factors and remains usable without autocast.
-            emb = torch.cat((freqs, freqs), dim=-1).to(device=x.device)
-            self._cos_cached = emb.cos()[None, None, :, :]
-            self._sin_cached = emb.sin()[None, None, :, :]
+            emb = torch.cat((freqs, freqs), dim=-1).to(device=x.device)  # (l, d)
+            self._cos_cached = emb.cos()[None, None, :, :]  # (1, 1, l, d)
+            self._sin_cached = emb.sin()[None, None, :, :]  # (1, 1, l, d)
 
         return self._cos_cached, self._sin_cached
 
@@ -437,6 +438,7 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
         k: torch.Tensor,
         type_ids: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # q, k: (b, h, l, d)
         self._cos_cached, self._sin_cached = self._update_cos_sin_tables(
             k,
             type_ids=type_ids,
@@ -444,8 +446,8 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
         )
 
         if self._has_multimodal_tokens(type_ids):
-            q_1, q_2 = q.chunk(2, dim=-2)
-            k_1, k_2 = k.chunk(2, dim=-2)
+            q_1, q_2 = q.chunk(2, dim=-2)  # each (b, h, l / 2, d)
+            k_1, k_2 = k.chunk(2, dim=-2)  # each (b, h, l / 2, d)
             q_1 = apply_rotary_pos_emb(q_1, self._cos_cached, self._sin_cached)
             q_2 = apply_rotary_pos_emb(q_2, self._cos_cached, self._sin_cached)
             k_1 = apply_rotary_pos_emb(k_1, self._cos_cached, self._sin_cached)
@@ -459,7 +461,7 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
 
 
 class ModifiedEsmSelfAttention(EsmSelfAttention):
-    def __init__(self, config, position_embedding_type=None):
+    def __init__(self, config, position_embedding_type=None) -> None:
         super().__init__(config, position_embedding_type)
         self.config = config
         self.scale = self.attention_head_size**-0.5
@@ -481,11 +483,12 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         type_ids: torch.Tensor | None = None,
         effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+        # hidden_states: (b, l, d)
         batch_size, seq_length = hidden_states.shape[:-1]
         hidden_shape = (batch_size, seq_length, -1, self.attention_head_size)
-        query_heads = self.query(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_heads = self.key(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_heads = self.value(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_heads = self.query(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
+        key_heads = self.key(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
+        value_heads = self.value(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
 
         query_heads = query_heads * self.scale
 
@@ -550,8 +553,9 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
     def _compute_s_max(
         self, query_heads: torch.Tensor, key_heads: torch.Tensor
     ) -> list[torch.Tensor]:
-        q_norm = torch.linalg.vector_norm(query_heads, dim=-1)
-        k_norm = torch.linalg.vector_norm(key_heads, dim=-1)
+        # query_heads, key_heads: (b, h, l, d_h)
+        q_norm = torch.linalg.vector_norm(query_heads, dim=-1)  # (b, h, l)
+        k_norm = torch.linalg.vector_norm(key_heads, dim=-1)  # (b, h, l)
         s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(dim=0).values
         return [s_max_bound[h] for h in range(self.num_attention_heads)]
 
@@ -563,14 +567,17 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         attention_mask_4d: torch.Tensor | None = None,
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
-        attn_weights = torch.matmul(query_heads, key_heads.transpose(-1, -2))
+        # query_heads, key_heads, value_heads: (b, h, l, d_h)
+        attn_weights = torch.matmul(
+            query_heads, key_heads.transpose(-1, -2)
+        )  # (b, h, l, l)
         if attention_mask_4d is not None:
             attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
         attn_weights = F.softmax(attn_weights, dim=-1)
         if self.dropout_prob > 0 and self.training:
             attn_weights = F.dropout(attn_weights, p=self.dropout_prob, training=self.training)
-        context_heads = torch.matmul(attn_weights, value_heads)
-        attn_output = rearrange(context_heads, "b h s d -> b s (h d)")
+        context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, l, d_h)
+        attn_output = rearrange(context_heads, "b h s d -> b s (h d)")  # (b, l, d)
         s_max = self._compute_s_max(query_heads, key_heads) if output_s_max else None
         return attn_output, attn_weights, s_max
 
@@ -581,6 +588,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         value_heads: torch.Tensor,
         attention_mask_4d: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, None]:
+        # query_heads, key_heads, value_heads: (b, h, l, d_h)
         # Pinned DPLM2 uses PyTorch's efficient SDPA kernel for its non-null
         # padding mask. Newer PyTorch releases otherwise select cuDNN on H100,
         # which exceeds the fixed deep-BF16 parity target. This is still the
@@ -598,12 +606,12 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
                 attn_mask=attention_mask_4d,
                 dropout_p=self.dropout_prob if self.training else 0.0,
                 scale=1.0,
-            )
+            )  # (b, h, l, d_h)
         return rearrange(context_heads, "b h s d -> b s (h d)"), None
 
 
 class ModifiedEsmAttention(EsmAttention):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         nn.Module.__init__(self)
         self.self = ModifiedEsmSelfAttention(config)
         self.output = EsmSelfOutput(config)
@@ -618,7 +626,8 @@ class ModifiedEsmAttention(EsmAttention):
         type_ids: torch.Tensor | None = None,
         effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
-        hidden_states_ln = self.LayerNorm(hidden_states)
+        # hidden_states: (b, l, d)
+        hidden_states_ln = self.LayerNorm(hidden_states)  # (b, l, d)
         attn_output, attn_weights, s_max = self.self(
             hidden_states_ln,
             attention_mask_4d=attention_mask_4d,
@@ -632,7 +641,7 @@ class ModifiedEsmAttention(EsmAttention):
 
 
 class ModifiedEsmLayer(EsmLayer):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         nn.Module.__init__(self)
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
@@ -650,6 +659,7 @@ class ModifiedEsmLayer(EsmLayer):
         type_ids: torch.Tensor | None = None,
         effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+        # hidden_states: (b, l, d)
         attention_output, attn_weights, s_max = self.attention(
             hidden_states,
             attention_mask_4d=attention_mask_4d,
@@ -663,7 +673,7 @@ class ModifiedEsmLayer(EsmLayer):
 
 
 class ModifiedEsmEncoder(EsmEncoder):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         nn.Module.__init__(self)
         self.config = config
         self.attention_backend = resolve_attention_backend(config.attn_backend)
@@ -682,6 +692,7 @@ class ModifiedEsmEncoder(EsmEncoder):
         output_s_max: bool = False,
         type_ids: torch.Tensor | None = None,
     ) -> DPLM2EncoderOutput:
+        # hidden_states: (b, l, d); attention_mask, type_ids: (b, l)
         first_parameter = next(self.parameters(), None)
         if (
             not self.training
@@ -709,7 +720,7 @@ class ModifiedEsmEncoder(EsmEncoder):
             attention_mask=attention_mask,
             dtype=hidden_states.dtype,
             mask_semantics="padding",
-        )
+        )  # attention_mask_4d: (b, 1, 1, l) or (b, 1, l, l)
 
         for layer_module in self.layer:
             if output_hidden_states:
@@ -759,7 +770,7 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
     so that the weight keys are prefixed with 'esm.' in the outer DPLM2Model,
     matching pretrained DPLM2 checkpoints."""
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, **kwargs) -> None:
         DPLM2PreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
         self.embeddings = EsmEmbeddings(config)

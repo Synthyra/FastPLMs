@@ -7,14 +7,13 @@ import io
 import json
 import sqlite3
 import struct
+import numpy as np
+import torch
 from bisect import bisect_right
 from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 from typing import Any, cast, overload
 from uuid import uuid4
-
-import numpy as np
-import torch
 from torch import Tensor
 
 from .types import (
@@ -22,6 +21,7 @@ from .types import (
     EmbeddingResult,
     LazyTensorReference,
 )
+
 
 _DTYPE_NAMES: dict[torch.dtype, str] = {
     torch.float16: "float16",
@@ -80,22 +80,24 @@ def _persistent_metadata(
 def _tensor_bytes(X: Tensor) -> bytes:
     """Return the exact contiguous byte representation of X."""
 
-    X = X.detach().cpu().contiguous()
+    # X: (...)
+    X = X.detach().cpu().contiguous()  # (...)
     return X.view(torch.uint8).numpy().tobytes()
 
 
 def _bounded_tensor_chunks(X: Tensor, max_bytes: int) -> Iterator[Tensor]:
     """Yield row-major CPU chunks without materializing one full byte string."""
 
-    flattened = X.detach().to(device="cpu").reshape(-1)
+    # X: (...)
+    flattened = X.detach().to(device="cpu").reshape(-1)  # (n,)
     if flattened.numel() == 0:
         return
     chunk_elements = max(1, max_bytes // flattened.element_size())
     for start in range(0, flattened.numel(), chunk_elements):
-        chunk = flattened[start : start + chunk_elements]
+        chunk = flattened[start : start + chunk_elements]  # (n_chunk,)
         if chunk.stride(0) != 1:
-            chunk = chunk.clone(memory_format=torch.contiguous_format)
-        yield chunk
+            chunk = chunk.clone(memory_format=torch.contiguous_format)  # (n_chunk,)
+        yield chunk  # (n_chunk,)
 
 
 def _tensor_hash_chunks(X: Tensor) -> Iterator[bytes]:
@@ -136,9 +138,9 @@ def _decode_tensor(dtype_name: str, shape_json: str, data: bytes) -> Tensor:
         raise ValueError(f"Unsupported stored dtype {dtype_name!r}.") from error
     shape = tuple(json.loads(shape_json))
     # uint8 is used only as a byte-level carrier, preserving BF16 bits exactly.
-    byte_array = np.frombuffer(data, dtype=np.uint8).copy()
-    X = torch.from_numpy(byte_array).view(dtype)
-    return X.reshape(shape).clone()
+    byte_array = np.frombuffer(data, dtype=np.uint8).copy()  # (n_bytes,)
+    X = torch.from_numpy(byte_array).view(dtype)  # (n_elements,)
+    return X.reshape(shape).clone()  # shape
 
 
 def _index_path(path: str | Path) -> Path:
@@ -651,7 +653,7 @@ class SafetensorsStreamWriter:
 
         for record in records:
             position = self._record_count + len(self._pending)
-            tensor = record.load_tensor().detach().cpu().contiguous()
+            tensor = record.load_tensor().detach().cpu().contiguous()  # (...)
             if tensor.dtype not in _DTYPE_NAMES:
                 raise TypeError(f"Unsupported tensor dtype {tensor.dtype}.")
             nbytes = tensor.numel() * tensor.element_size()
@@ -949,7 +951,7 @@ def save_sqlite_result(result: EmbeddingResult, path: str | Path) -> EmbeddingRe
             (run_id, metadata_json),
         )
         for position, record in enumerate(result):
-            X = record.load_tensor().detach().cpu().contiguous()
+            X = record.load_tensor().detach().cpu().contiguous()  # (...)
             dtype_name, shape_json, data = _encode_tensor(X)
             digest = tensor_sha256(X)
             connection.execute(
@@ -1053,7 +1055,7 @@ def append_sqlite_records(
             )
         for offset, record in enumerate(records):
             position = start_position + offset
-            X = record.load_tensor().detach().cpu().contiguous()
+            X = record.load_tensor().detach().cpu().contiguous()  # (...)
             dtype_name, shape_json, data = _encode_tensor(X)
             digest = tensor_sha256(X)
             connection.execute(
@@ -1414,6 +1416,7 @@ def load_legacy_pth(path: str | Path, *, allow_unsafe_pickle: bool = False) -> E
         raise ValueError("A legacy .pth embedding file must contain a mapping.")
     records: list[EmbeddingRecord] = []
     for position, (sequence, X) in enumerate(payload.items()):
+        # X: (...)
         if not isinstance(sequence, str) or not isinstance(X, Tensor):
             raise ValueError("Legacy embedding mappings must use str keys and Tensor values.")
         records.append(EmbeddingRecord(str(position), sequence, X.detach().cpu()))
@@ -1450,8 +1453,10 @@ def _decode_legacy_sqlite_blob(
         expected = int(np.prod(shape, dtype=np.int64)) * numpy_dtype.itemsize
         if len(data) - offset != expected:
             raise ValueError("Legacy compact embedding payload length does not match shape.")
-        array = np.frombuffer(data, dtype=numpy_dtype, offset=offset).copy().reshape(shape)
-        return torch.from_numpy(array).to(dtype=target_dtype)
+        array = (  # shape
+            np.frombuffer(data, dtype=numpy_dtype, offset=offset).copy().reshape(shape)
+        )
+        return torch.from_numpy(array).to(dtype=target_dtype)  # shape
 
     try:
         loaded = torch.load(io.BytesIO(data), map_location="cpu", weights_only=True)
@@ -1470,11 +1475,13 @@ def _decode_legacy_sqlite_blob(
                 raise ValueError(
                     "Legacy raw FP32 payload length does not match fallback_shape."
                 ) from safe_error
-            array = np.frombuffer(data, dtype=np.float32).copy().reshape(fallback_shape)
-            return torch.from_numpy(array)
+            array = np.frombuffer(data, dtype=np.float32).copy().reshape(  # fallback_shape
+                fallback_shape
+            )
+            return torch.from_numpy(array)  # fallback_shape
     if not isinstance(loaded, Tensor):
         raise ValueError("Legacy serialized embedding payload must contain one tensor.")
-    return loaded.detach().cpu()
+    return loaded.detach().cpu()  # (...)
 
 
 def convert_legacy_sqlite(

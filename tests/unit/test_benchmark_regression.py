@@ -8,6 +8,7 @@ from benchmarks.regression import (
     compare_reports,
 )
 
+
 ENVIRONMENT = {
     "python": "3.12.3",
     "platform": "Linux-test",

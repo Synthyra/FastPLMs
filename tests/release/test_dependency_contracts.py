@@ -2,69 +2,74 @@
 
 from __future__ import annotations
 
-import tomllib
-from pathlib import Path
-
 import pytest
+from pathlib import Path
 
 from tools.remote.runtime_import_closure import (
     RuntimeImportClosureError,
     inspect_runtime_import_closure,
 )
 
+
 ROOT = Path(__file__).resolve().parents[2]
+REQUIREMENTS = ROOT / "requirements"
 
 
-def test_uv_cpu_extra_is_explicit_locked_and_conflicts_with_cuda_extras() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    extras = project["project"]["optional-dependencies"]
-    uv = project["tool"]["uv"]
-
-    assert extras["cpu"] == ["torch==2.13.0"]
-    assert uv["sources"]["torch"] == [
-        {"index": "pytorch-cpu", "extra": "cpu"},
+def _requirements(relative_path: str) -> list[str]:
+    path = REQUIREMENTS / relative_path
+    return [
+        line.strip()
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
     ]
-    assert uv["index"] == [
-        {
-            "name": "pytorch-cpu",
-            "url": "https://download.pytorch.org/whl/cpu",
-            "explicit": True,
-        }
+
+
+def _package_name(requirement: str) -> str:
+    name = requirement.partition(";")[0]
+    for operator in ("==", ">="):
+        name = name.partition(operator)[0]
+    return name.strip()
+
+
+def test_core_dependencies_are_direct_and_bounded() -> None:
+    assert _requirements("core.in") == [
+        "torch>=2.13,<2.14",
+        "transformers>=5.13,<5.14",
+        "huggingface-hub>=0.34,<2",
+        "tokenizers>=0.22,<0.23",
+        "safetensors>=0.5,<1",
+        "numpy>=1.26,<3",
+        "einops>=0.8,<1",
+        "tqdm>=4.67,<5",
     ]
-    assert project["tool"]["uv"]["conflicts"] == [
-        [{"extra": "cpu"}, {"extra": "cueq"}],
-        [{"extra": "cpu"}, {"extra": "fp8"}],
+
+
+def test_cpu_validation_profile_is_explicit_and_cuda_free() -> None:
+    assert _requirements("features/cpu.in") == ["torch==2.13.0"]
+    assert _requirements("constraints/validation.txt") == [
+        "torch==2.13.0",
+        "transformers==5.13.0",
     ]
-    testing = (ROOT / "docs/testing.md").read_text(encoding="utf-8")
-    assert "--all-extras" in testing
-    assert "fails closed" in testing
-
-    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
-    torch_packages = [package for package in lock["package"] if package["name"] == "torch"]
-    cpu_torch = [
-        package
-        for package in torch_packages
-        if package["source"]["registry"] == "https://download.pytorch.org/whl/cpu"
+    assert _requirements("profiles/cpu-validation.in") == [
+        "-r ../core.in",
+        "-r ../features/cpu.in",
+        "-r ../features/dev.in",
+        "-r ../features/structure.in",
+        "-r ../features/train.in",
     ]
-    assert {package["version"] for package in cpu_torch} == {"2.13.0", "2.13.0+cpu"}
-    forbidden = ("cuda", "nvidia", "triton")
-    assert all(
-        not dependency["name"].startswith(forbidden)
-        for package in cpu_torch
-        for dependency in package.get("dependencies", [])
-    )
-    assert any(
-        package["source"]["registry"] == "https://pypi.org/simple" for package in torch_packages
-    )
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "| `cpu` | CPU-only PyTorch 2.13 selection" in readme
+    for profile in (REQUIREMENTS / "profiles").glob("*.in"):
+        declarations = profile.read_text(encoding="utf-8")
+        if "features/cpu.in" not in declarations:
+            continue
+        assert "features/cueq.in" not in declarations
+        assert "features/fp8.in" not in declarations
+    instructions = (REQUIREMENTS / "README.md").read_text(encoding="utf-8")
+    assert "--torch-backend cpu" in instructions
+    assert "requirements/constraints/validation.txt" in instructions
 
 
-def test_structure_extra_is_runtime_owned_or_documented_integration() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    structure = project["project"]["optional-dependencies"]["structure"]
-
-    assert structure == [
+def test_structure_dependencies_are_runtime_owned_or_documented_integrations() -> None:
+    assert _requirements("features/structure.in") == [
         "accelerate>=1.10,<2",  # Transformers device_map in the 6B quick start.
         "biopython>=1.85,<2",
         "biotite>=1.4,<2",
@@ -78,59 +83,39 @@ def test_structure_extra_is_runtime_owned_or_documented_integration() -> None:
     ]
 
 
-def test_binder_extra_is_bounded_locked_and_separate_from_structure() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    extras = project["project"]["optional-dependencies"]
-
-    assert extras["binder"] == [
+def test_binder_dependencies_are_bounded_and_separate_from_structure() -> None:
+    binder = _requirements("features/binder.in")
+    structure = _requirements("features/structure.in")
+    assert binder == [
         "abnumber==0.4.4",
         "anarcii==2.0.8",
         "pandas>=3.0,<3.1",
         "pyarrow>=25,<26",
     ]
-    binder_names = {
-        requirement.partition("==")[0].partition(">=")[0] for requirement in extras["binder"]
-    }
-    structure_names = {
-        requirement.partition("==")[0].partition(">=")[0] for requirement in extras["structure"]
-    }
-    assert binder_names.isdisjoint(structure_names)
-
-    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
-    locked_versions = {
-        package["name"]: package["version"]
-        for package in lock["package"]
-        if package["name"] in {"abnumber", "anarcii", "pandas", "pyarrow"}
-    }
-    assert locked_versions == {
-        "abnumber": "0.4.4",
-        "anarcii": "2.0.8",
-        "pandas": "3.0.3",
-        "pyarrow": "25.0.0",
-    }
-
-    for path in (ROOT / "README.md", ROOT / "docs" / "binder_design.md"):
-        text = path.read_text(encoding="utf-8")
-        assert "--extra binder" in text
-        assert "--with abnumber" not in text
-
-
-def test_cueq_backend_extra_is_version_aligned_cuda13_and_isolated() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    extras = project["project"]["optional-dependencies"]
-
-    assert extras["cueq"] == [
-        "cuequivariance==0.10.0; platform_system == 'Linux'",
-        "cuequivariance-torch==0.10.0; platform_system == 'Linux'",
-        "cuequivariance-ops-torch-cu13==0.10.0; platform_system == 'Linux'",
+    assert {_package_name(item) for item in binder}.isdisjoint(
+        {_package_name(item) for item in structure}
+    )
+    assert _requirements("profiles/binder.in") == [
+        "-r ../core.in",
+        "-r ../features/structure.in",
+        "-r ../features/binder.in",
     ]
-    assert not any("cuequivariance" in requirement for requirement in extras["structure"])
+
+
+def test_cueq_dependencies_are_version_aligned_cuda13_and_isolated() -> None:
+    cueq = _requirements("features/cueq.in")
+    structure = _requirements("features/structure.in")
+    assert cueq == [
+        'cuequivariance==0.10.0; platform_system == "Linux"',
+        'cuequivariance-torch==0.10.0; platform_system == "Linux"',
+        'cuequivariance-ops-torch-cu13==0.10.0; platform_system == "Linux"',
+    ]
+    assert not any("cuequivariance" in requirement for requirement in structure)
 
     source = (ROOT / "src/fastplms/models/esmfold2/modeling_esmfold2_common.py").read_text(
         encoding="utf-8"
     )
     assert 'find_spec("cuequivariance_ops_torch")' in source
-    assert "'structure,cueq' extras" in source
 
     kernel_sources = [
         source,
@@ -146,40 +131,32 @@ def test_cueq_backend_extra_is_version_aligned_cuda13_and_isolated() -> None:
     assert "cue_module.triangle_multiplicative_update" in source
     assert "cueq.triangle_multiplicative_update" in kernel_sources[1]
     assert "cueq.triangle_attention" in kernel_sources[2]
-
-    documentation = (ROOT / "docs/esmfold2.md").read_text(encoding="utf-8")
-    for contract in (
-        "fastplms[structure,cueq]",
-        "cuequivariance-torch==0.10.0",
-        "cuequivariance-ops-torch-cu13==0.10.0",
-        "Linux",
-        "CUDA 13",
-        "NVIDIA Software License Agreement",
-    ):
-        assert contract in documentation
+    assert _requirements("profiles/candidate-structure.in")[-2:] == [
+        "-r ../features/cueq.in",
+        "-r ../features/train.in",
+    ]
 
 
-def test_reporting_extra_is_separate_from_training_runtime() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    extras = project["project"]["optional-dependencies"]
-
-    assert extras["reporting"] == [
+def test_reporting_dependencies_are_separate_from_training_runtime() -> None:
+    reporting = _requirements("features/reporting.in")
+    training = _requirements("features/train.in")
+    assert reporting == [
         "matplotlib>=3.10,<4",
         "scikit-learn>=1.7,<2",
         "scipy>=1.15,<2",
         "seaborn>=0.13,<1",
     ]
-    train_names = {requirement.partition(">=")[0] for requirement in extras["train"]}
-    reporting_names = {requirement.partition(">=")[0] for requirement in extras["reporting"]}
-    assert train_names.isdisjoint(reporting_names)
+    assert {_package_name(item) for item in training}.isdisjoint(
+        {_package_name(item) for item in reporting}
+    )
 
 
-def test_manual_cpu_environment_consumes_the_checked_lock() -> None:
-    testing = (ROOT / "docs/testing.md").read_text(encoding="utf-8")
+def test_dependency_instructions_install_the_cpu_validation_profile() -> None:
+    instructions = (REQUIREMENTS / "README.md").read_text(encoding="utf-8")
 
-    assert "uv lock --check" in testing
-    assert "uv sync --frozen" in testing
-    assert "--group validation" in testing
+    assert "uv pip install" in instructions
+    assert "-r requirements/profiles/cpu-validation.in" in instructions
+    assert "-c requirements/constraints/validation.txt" in instructions
 
 
 def test_runtime_import_closure_rejects_undeclared_literal_dynamic_import(
@@ -196,7 +173,7 @@ def test_runtime_import_closure_rejects_undeclared_literal_dynamic_import(
         RuntimeImportClosureError,
         match="undeclared literal dynamic dependencies",
     ):
-        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+        inspect_runtime_import_closure(source_root, ROOT / "requirements")
 
 
 def test_runtime_import_closure_rejects_optional_extra_as_core_import(
@@ -210,7 +187,7 @@ def test_runtime_import_closure_rejects_optional_extra_as_core_import(
         RuntimeImportClosureError,
         match="Unconditional import dependency scope mismatch",
     ):
-        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+        inspect_runtime_import_closure(source_root, ROOT / "requirements")
 
 
 def test_runtime_import_closure_keeps_top_level_control_flow_import_time(
@@ -229,7 +206,7 @@ def test_runtime_import_closure_keeps_top_level_control_flow_import_time(
         RuntimeImportClosureError,
         match="Unconditional import dependency scope mismatch",
     ):
-        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+        inspect_runtime_import_closure(source_root, ROOT / "requirements")
 
 
 def test_runtime_import_closure_records_guarded_dependency_intended_extra(
@@ -244,7 +221,7 @@ def test_runtime_import_closure_records_guarded_dependency_intended_extra(
         encoding="utf-8",
     )
 
-    payload = inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+    payload = inspect_runtime_import_closure(source_root, ROOT / "requirements")
 
     assert payload["feature_gated_dynamic_imports"] == [
         {
@@ -273,7 +250,7 @@ def test_runtime_import_closure_uses_manifest_scope_for_feature_module(
     )
     (module_root / "module.py").write_text("import scipy\n", encoding="utf-8")
 
-    payload = inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+    payload = inspect_runtime_import_closure(source_root, ROOT / "requirements")
 
     assert payload["import_time_dependencies"] == [
         {
@@ -305,7 +282,7 @@ def test_runtime_import_closure_rejects_escaping_manifest_runtime_path(
         RuntimeImportClosureError,
         match="non-portable runtime path",
     ):
-        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+        inspect_runtime_import_closure(source_root, ROOT / "requirements")
 
 
 def test_runtime_import_closure_rejects_ambiguous_guarded_extra(
@@ -324,4 +301,4 @@ def test_runtime_import_closure_rejects_ambiguous_guarded_extra(
         RuntimeImportClosureError,
         match="does not map to one intended dependency scope",
     ):
-        inspect_runtime_import_closure(source_root, ROOT / "pyproject.toml")
+        inspect_runtime_import_closure(source_root, ROOT / "requirements")

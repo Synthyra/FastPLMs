@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import warnings
-from types import SimpleNamespace
-
 import pytest
 import torch
+from types import SimpleNamespace
 from transformers.models.esm.configuration_esm import EsmConfig
 
 import fastplms.models.ankh.modeling_ankh as ankh_module
@@ -130,8 +129,8 @@ def test_esmplusplus_rejects_empty_attention_rows_without_fallback_or_mutation()
 
 
 def _assert_masked_output_attentions_fallback(encoder: torch.nn.Module) -> None:
-    hidden_states = torch.randn(1, 4, 8)
-    attention_mask = torch.tensor([[1, 1, 0, 0]], dtype=torch.long)
+    hidden_states = torch.randn(1, 4, 8)  # (b=1, l=4, d=8)
+    attention_mask = torch.tensor([[1, 1, 0, 0]], dtype=torch.long)  # (b, l)
     configured_backend = encoder.attention_backend
     backend_name = configured_backend.value
 
@@ -206,8 +205,11 @@ def test_dplm2_output_attentions_fallback_is_call_scoped(
         attn_backend="sdpa",
     )
     encoder = DPLM2ModifiedEsmEncoder(config).eval()
-    hidden_states = torch.randn(2, 4, 8)
-    attention_mask = torch.tensor(((1, 1, 1, 0), (1, 1, 0, 0)), dtype=torch.long)
+    hidden_states = torch.randn(2, 4, 8)  # (b=2, l=4, d=8)
+    attention_mask = torch.tensor(  # (b, l)
+        ((1, 1, 1, 0), (1, 1, 0, 0)),
+        dtype=torch.long,
+    )
     configured_backend = encoder.attention_backend
     configured_layer_backends = tuple(layer.attention.self.attn_backend for layer in encoder.layer)
 
@@ -287,11 +289,11 @@ def test_e1_output_attentions_fallback_preserves_block_causal_mask_and_backend()
     attention = E1Attention(config, layer_idx=0).eval()
     assert attention.layer_type == E1AttentionLayerType.GLOBAL
     configured_backend = attention.attn_backend
-    sequence_ids = torch.tensor(((0, 0, 1, 1),), dtype=torch.long)
+    sequence_ids = torch.tensor(((0, 0, 1, 1),), dtype=torch.long)  # (b=1, l=4)
     attention_args = E1AttentionArgs(block_causal_mask_4d=build_block_causal_mask_4d(sequence_ids))
-    query = torch.randn(1, 4, 2, 4)
-    key = torch.randn(1, 4, 2, 4)
-    value = torch.randn(1, 4, 2, 4)
+    query = torch.randn(1, 4, 2, 4)  # (b, l, h=2, d_h=4)
+    key = torch.randn(1, 4, 2, 4)  # (b, l, h, d_h)
+    value = torch.randn(1, 4, 2, 4)  # (b, l, h, d_h)
 
     with pytest.warns(
         RuntimeWarning,
@@ -339,10 +341,16 @@ def test_e1_public_fallback_warns_once_masks_padding_and_preserves_flex(
     configured_layer_backends = tuple(
         layer.norm_attn_norm.self_attn.attn_backend for layer in model.layers
     )
-    inputs_embeds = torch.randn(2, 5, 8)
-    within_positions = torch.tensor(((0, 1, 0, 1, -1), (0, 1, 2, -1, -1)))
-    global_positions = torch.tensor(((0, 1, 2, 3, -1), (0, 1, 2, -1, -1)))
-    sequence_ids = torch.tensor(((0, 0, 1, 1, -1), (0, 0, 0, -1, -1)))
+    inputs_embeds = torch.randn(2, 5, 8)  # (b=2, l=5, d=8)
+    within_positions = torch.tensor(  # (b, l)
+        ((0, 1, 0, 1, -1), (0, 1, 2, -1, -1))
+    )
+    global_positions = torch.tensor(  # (b, l)
+        ((0, 1, 2, 3, -1), (0, 1, 2, -1, -1))
+    )
+    sequence_ids = torch.tensor(  # (b, l)
+        ((0, 0, 1, 1, -1), (0, 0, 0, -1, -1))
+    )
 
     with pytest.warns(
         RuntimeWarning,
@@ -436,8 +444,8 @@ def test_esm3_sdpa_fallback_is_call_scoped_and_preserves_padding_mask(
             attn_backend="sdpa",
         )
     ).eval()
-    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 2, 1, 1)))
-    attention_mask = input_ids.ne(1)
+    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 2, 1, 1)))  # (b=2, l=5)
+    attention_mask = input_ids.ne(1)  # (b, l)
     configured_stack_backend = model.esm3.transformer.attention_backend
     configured_layer_backends = tuple(
         block.attn.attn_backend for block in model.esm3.transformer.blocks
@@ -507,9 +515,11 @@ def test_esm3_sequence_id_grouping_combines_with_public_padding_mask() -> None:
             attn_backend="eager",
         )
     ).eval()
-    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 2, 1, 1)))
-    attention_mask = input_ids.ne(1)
-    sequence_id = torch.tensor(((0, 0, 1, 1, -1), (0, 1, 1, -1, -1)))
+    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 2, 1, 1)))  # (b=2, l=5)
+    attention_mask = input_ids.ne(1)  # (b, l)
+    sequence_id = torch.tensor(  # (b, l)
+        ((0, 0, 1, 1, -1), (0, 1, 1, -1, -1))
+    )
 
     output = model(
         input_ids=input_ids,
@@ -581,7 +591,9 @@ def test_dplm_sdpa_output_attentions_fallback_preserves_cross_attention_mask_and
     ).eval()
     cross_attention = encoder.layer[0].crossattention.self
     configured_backend = encoder.attention_backend
-    additive_encoder_mask = torch.tensor([[[[0.0, 0.0, -10_000.0, -10_000.0]]]])
+    additive_encoder_mask = torch.tensor(  # (b=1, 1, 1, l_k=4)
+        [[[[0.0, 0.0, -10_000.0, -10_000.0]]]]
+    )
     observed: dict[str, torch.Tensor] = {}
     original_manual_attention = cross_attention._manual_attn
 
@@ -646,7 +658,7 @@ def test_esmfold_flex_training_rejects_unimplemented_attention_dropout() -> None
             attn_backend="flex_attention",
         )
     ).train()
-    heads = torch.randn(1, 2, 3, 4)
+    heads = torch.randn(1, 2, 3, 4)  # (b=1, h=2, l=3, d_h=4)
 
     with pytest.raises(RuntimeError, match=r"inference-only.*dropout.*eager or SDPA"):
         attention._attn(heads, heads, heads)
@@ -712,9 +724,9 @@ def test_flash_attention_2_dense_and_varlen_use_autograd_wrappers(
         "_ensure_flash_kernels_loaded",
         lambda _implementation: (kernel, "flash_attn2"),
     )
-    query = torch.randn(1, 3, 2, 4, requires_grad=True)
-    key = torch.randn(1, 3, 2, 4, requires_grad=True)
-    value = torch.randn(1, 3, 2, 4, requires_grad=True)
+    query = torch.randn(1, 3, 2, 4, requires_grad=True)  # (b=1, l=3, h=2, d_h=4)
+    key = torch.randn(1, 3, 2, 4, requires_grad=True)  # (b, l, h, d_h)
+    value = torch.randn(1, 3, 2, 4, requires_grad=True)  # (b, l, h, d_h)
 
     dense_output = _core._kernels_flash_forward(
         query,
@@ -729,7 +741,7 @@ def test_flash_attention_2_dense_and_varlen_use_autograd_wrappers(
     flat_query = query.detach().reshape(3, 2, 4).requires_grad_()
     flat_key = key.detach().reshape(3, 2, 4).requires_grad_()
     flat_value = value.detach().reshape(3, 2, 4).requires_grad_()
-    cu_seqlens = torch.tensor([0, 3], dtype=torch.int32)
+    cu_seqlens = torch.tensor([0, 3], dtype=torch.int32)  # (b + 1,)
     varlen_output = _core._kernels_flash_varlen_forward(
         flat_query,
         flat_key,
@@ -788,7 +800,7 @@ def test_flash_attention_2_dense_and_varlen_preserve_lora_and_input_gradients(
             for _ in range(3)
         ]
     )
-    down_weights = torch.arange(1, 17, dtype=torch.float32).reshape(2, 8) / 16
+    down_weights = torch.arange(1, 17, dtype=torch.float32).reshape(2, 8) / 16  # (r=2, d=8)
     with torch.no_grad():
         for projection in projections:
             projection.linear.weight.copy_(torch.eye(8))
@@ -866,12 +878,12 @@ def test_flash_attention_3_preserves_internal_type_errors(
         "_ensure_flash_kernels_loaded",
         lambda _implementation: (kernel, "flash_attn3"),
     )
-    query = torch.randn(1, 3, 2, 4)
+    query = torch.randn(1, 3, 2, 4)  # (b=1, l=3, h=2, d_h=4)
 
     with pytest.raises(TypeError) as captured:
         if varlen:
             flat_query = query.reshape(3, 2, 4)
-            cu_seqlens = torch.tensor([0, 3], dtype=torch.int32)
+            cu_seqlens = torch.tensor([0, 3], dtype=torch.int32)  # (b + 1,)
             _core._kernels_flash_varlen_forward(
                 flat_query,
                 flat_query,
@@ -953,7 +965,7 @@ def test_ankh_output_attentions_eager_fallback_honors_attention_dropout(
         return tensor
 
     monkeypatch.setattr(ankh_module.F, "dropout", record_dropout)
-    hidden_states = torch.randn(1, 3, 8)
+    hidden_states = torch.randn(1, 3, 8)  # (b=1, l=3, d=8)
 
     with pytest.warns(RuntimeWarning, match="output_attentions=True"):
         output, attention_weights, _ = attention(
@@ -988,7 +1000,7 @@ def test_ankh_sdpa_receives_training_attention_dropout(
         return query
 
     monkeypatch.setattr(ankh_module.F, "scaled_dot_product_attention", record_sdpa)
-    heads = torch.randn(1, 2, 3, 4)
+    heads = torch.randn(1, 2, 3, 4)  # (b=1, h=2, l=3, d_h=4)
 
     output = attention._sdpa_attn(heads, heads, heads, None)
 
@@ -1040,7 +1052,7 @@ def test_esm2_flex_unavailability_raises_explicit_runtime_error(
     )
     attention.attn_backend = AttentionBackend.FLEX_ATTENTION
     monkeypatch.setattr(esm2_module, "flex_attention", None)
-    heads = torch.randn(1, 2, 3, 4)
+    heads = torch.randn(1, 2, 3, 4)  # (b=1, h=2, l=3, d_h=4)
 
     with pytest.raises(RuntimeError, match="Flex attention is not available"):
         attention._flex_attn(heads, heads, heads)
@@ -1056,7 +1068,7 @@ def test_esmplusplus_flex_unavailability_raises_explicit_runtime_error(
     )
     attention.attn_backend = AttentionBackend.FLEX_ATTENTION
     monkeypatch.setattr(esmpp_module, "flex_attention", None)
-    heads = torch.randn(1, 2, 3, 4)
+    heads = torch.randn(1, 2, 3, 4)  # (b=1, h=2, l=3, d_h=4)
 
     with pytest.raises(RuntimeError, match="Flex attention is not available"):
         attention._flex_attn(heads, heads, heads)

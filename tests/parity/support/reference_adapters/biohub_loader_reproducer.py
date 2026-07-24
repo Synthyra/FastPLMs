@@ -5,10 +5,9 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import torch
 from collections.abc import Sequence
 from pathlib import Path
-
-import torch
 
 from tests.parity.support.reference_adapters import (
     pinned_biohub_snapshot,
@@ -124,6 +123,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if device.type == "cuda":
         model = model.to(dtype=torch.bfloat16)
     token_ids = model.tokenizer.encode("MSTNPKPQ", add_special_tokens=True)
+    # sequence_tokens: (1,)
     sequence_tokens = torch.tensor([token_ids], device=device)
     with torch.inference_mode():
         output = model(sequence_tokens=sequence_tokens)

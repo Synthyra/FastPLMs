@@ -17,6 +17,7 @@ from typing import Any
 
 from fastplms.registry import ModelRegistry, ModelSpec, OfficialGolden
 
+
 _SCHEMA_VERSION = 1
 _HEX = frozenset("0123456789abcdef")
 
@@ -64,7 +65,8 @@ def _tensor_hash(tensor: Any) -> str:
 
     if not torch.is_tensor(tensor) or tensor.layout != torch.strided:
         raise GoldenError("Official golden entries must be strided Torch tensors.")
-    T = tensor.detach().to(device="cpu").contiguous()
+    # Golden tensors may have any rank; their exact shapes are metadata.
+    T = tensor.detach().to(device="cpu").contiguous()  # (...)
     shape = list(T.shape)
     dtype = str(T.dtype).removeprefix("torch.")
     raw = T.reshape(-1).view(torch.uint8).numpy().tobytes()
@@ -84,10 +86,10 @@ def _normalize_tensors(tensors: Mapping[str, Any]) -> dict[str, Any]:
     for name in sorted(tensors):
         if not isinstance(name, str) or not name:
             raise GoldenError(f"Invalid official golden tensor name: {name!r}.")
-        tensor = tensors[name]
+        tensor = tensors[name]  # (...)
         if not torch.is_tensor(tensor) or tensor.layout != torch.strided:
             raise GoldenError(f"Official golden entry {name!r} is not a strided tensor.")
-        normalized[name] = tensor.detach().to(device="cpu").contiguous().clone()
+        normalized[name] = tensor.detach().to(device="cpu").contiguous().clone()  # (...)
     return normalized
 
 
@@ -222,14 +224,14 @@ def write_golden_bundle(
     if not replace and (metadata_path.exists() or tensors_path.exists()):
         raise GoldenError("Official golden output already exists; pass replace=True explicitly.")
 
-    normalized = _normalize_tensors(tensors)
+    normalized = _normalize_tensors(tensors)  # values: (...)
     tensor_metadata = {
         name: {
             "dtype": str(T.dtype).removeprefix("torch."),
             "shape": list(T.shape),
             "sha256": _tensor_hash(T),
         }
-        for name, T in normalized.items()
+        for name, T in normalized.items()  # T: (...)
     }
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     temporary_tensors = tensors_path.with_name(f".{tensors_path.name}.{os.getpid()}.tmp")
@@ -399,13 +401,14 @@ def validate_golden_bundle(
     if not isinstance(tensor_records, dict) or not tensor_records:
         raise GoldenError(f"Official golden tensor records are invalid for {spec.id}.")
     try:
-        tensors = load_file(tensors_path, device="cpu")
+        tensors = load_file(tensors_path, device="cpu")  # values: (...)
     except Exception as error:
         raise GoldenError(f"Unable to load official golden tensors for {spec.id}.") from error
     if set(tensors) != set(tensor_records):
         raise GoldenError(f"Official golden tensor names mismatch for {spec.id}.")
     tensor_hashes: dict[str, str] = {}
     for name, T in tensors.items():
+        # T: (...)
         record = tensor_records[name]
         if (
             not isinstance(record, dict)

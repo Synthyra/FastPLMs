@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pytest
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
-
-import pytest
 
 from tools import typing_gate
 from tools.typing_gate import (
@@ -32,6 +31,7 @@ from tools.typing_gate import (
     main,
     parse_mypy_output,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = ROOT / "tools" / "typing-baselines" / "c240d8a.json"

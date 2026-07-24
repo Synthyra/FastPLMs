@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, ClassVar
-
 import torch
 import torch.nn as nn
+from dataclasses import dataclass
+from typing import Any, ClassVar
 from einops import rearrange
 from torch.nn import functional as F
 from transformers import EsmTokenizer, PretrainedConfig, PreTrainedModel
@@ -26,6 +25,7 @@ from transformers.models.esm.modeling_esm import (
 )
 
 from fastplms.models._esm_rotary import RotaryEmbedding
+
 
 try:
     from fastplms.attention import (
@@ -199,7 +199,7 @@ class FastEsmTokenizer(EsmTokenizer):
 
 
 class EsmSelfAttention(nn.Module):
-    def __init__(self, config, position_embedding_type: str | None = None):
+    def __init__(self, config, position_embedding_type: str | None = None) -> None:
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0:
             raise ValueError(
@@ -233,18 +233,22 @@ class EsmSelfAttention(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
+        # hidden_states: (b, l, d); masks: (b, l) and (b, 1, 1, l)
         batch_size, seq_length = hidden_states.shape[:-1]
         hidden_shape = (batch_size, seq_length, -1, self.attention_head_size)
-        query_heads = self.query(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_heads = self.key(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_heads = self.value(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_heads = self.query(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
+        key_heads = self.key(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
+        value_heads = self.value(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
 
-        query_heads = query_heads * self.scale
+        query_heads = query_heads * self.scale  # (b, h, l, d_h)
 
         if self.position_embedding_type == "rotary":
-            query_heads, key_heads = self.rotary_embeddings(query_heads, key_heads)
+            query_heads, key_heads = self.rotary_embeddings(  # both (b, h, l, d_h)
+                query_heads,
+                key_heads,
+            )
 
-        attn_output, attn_weights, s_max = self._attn(
+        attn_output, attn_weights, s_max = self._attn(  # (b, l, d), (b, h, l, l), heads
             query_heads,
             key_heads,
             value_heads,
@@ -254,7 +258,7 @@ class EsmSelfAttention(nn.Module):
             output_attentions=output_attentions,
             output_s_max=output_s_max,
         )
-        return attn_output, attn_weights, s_max
+        return attn_output, attn_weights, s_max  # (b, l, d), optional (b, h, l, l), heads
 
     def _attn(
         self,
@@ -313,10 +317,13 @@ class EsmSelfAttention(nn.Module):
     def _compute_s_max(
         self, query_heads: torch.Tensor, key_heads: torch.Tensor
     ) -> list[torch.Tensor]:
-        q_norm = torch.linalg.vector_norm(query_heads, dim=-1)
-        k_norm = torch.linalg.vector_norm(key_heads, dim=-1)
-        s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(dim=0).values
-        return [s_max_bound[h] for h in range(self.num_attention_heads)]
+        # query_heads, key_heads: (b, h, l, d_h)
+        q_norm = torch.linalg.vector_norm(query_heads, dim=-1)  # (b, h, l)
+        k_norm = torch.linalg.vector_norm(key_heads, dim=-1)  # (b, h, l)
+        s_max_bound = (  # (h,)
+            q_norm.max(dim=-1).values * k_norm.max(dim=-1).values
+        ).max(dim=0).values
+        return [s_max_bound[h] for h in range(self.num_attention_heads)]  # h scalars
 
     def _manual_attn(
         self,
@@ -326,16 +333,24 @@ class EsmSelfAttention(nn.Module):
         attention_mask_4d: torch.Tensor | None = None,
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
-        attn_weights = torch.matmul(query_heads, key_heads.transpose(-1, -2))
+        # query_heads, key_heads, value_heads: (b, h, l, d_h)
+        attn_weights = torch.matmul(query_heads, key_heads.transpose(-1, -2))  # (b, h, l, l)
         if attention_mask_4d is not None:
-            attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
-        attn_weights = F.softmax(attn_weights, dim=-1)
+            attn_weights = attn_weights.masked_fill(  # (b, h, l, l)
+                attention_mask_4d.logical_not(),
+                float("-inf"),
+            )
+        attn_weights = F.softmax(attn_weights, dim=-1)  # (b, h, l, l)
         if self.dropout_prob > 0 and self.training:
-            attn_weights = F.dropout(attn_weights, p=self.dropout_prob, training=self.training)
-        context_heads = torch.matmul(attn_weights, value_heads)
-        attn_output = rearrange(context_heads, "b h s d -> b s (h d)")
+            attn_weights = F.dropout(  # (b, h, l, l)
+                attn_weights,
+                p=self.dropout_prob,
+                training=self.training,
+            )
+        context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, l, d_h)
+        attn_output = rearrange(context_heads, "b h s d -> b s (h d)")  # (b, l, d)
         s_max = self._compute_s_max(query_heads, key_heads) if output_s_max else None
-        return attn_output, attn_weights, s_max
+        return attn_output, attn_weights, s_max  # (b, l, d), (b, h, l, l), heads
 
     def _kernels_flash_attn(
         self,
@@ -344,14 +359,14 @@ class EsmSelfAttention(nn.Module):
         value_heads: torch.Tensor,
         attention_mask_2d: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, None]:
-        query_tokens = query_heads.transpose(1, 2).contiguous()
-        key_tokens = key_heads.transpose(1, 2).contiguous()
-        value_tokens = value_heads.transpose(1, 2).contiguous()
+        query_tokens = query_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
+        key_tokens = key_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
+        value_tokens = value_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
         # Q has been pre-scaled by self.scale = 1/sqrt(head_dim) in forward().
         # Pass softmax_scale=1.0 to prevent the kernel from applying its default
         # 1/sqrt(head_dim) scale on top (which would yield effective scale
         # 1/head_dim and break parity vs sdpa).
-        attn_output = kernels_flash_attention_func(
+        attn_output = kernels_flash_attention_func(  # (b, l, h, d_h)
             query_states=query_tokens,
             key_states=key_tokens,
             value_states=value_tokens,
@@ -360,7 +375,7 @@ class EsmSelfAttention(nn.Module):
             softmax_scale=1.0,
             implementation=self.attn_backend.value,
         )
-        return rearrange(attn_output, "b s h d -> b s (h d)"), None
+        return rearrange(attn_output, "b s h d -> b s (h d)"), None  # (b, l, d), None
 
     def _flex_attn(
         self,
@@ -378,10 +393,10 @@ class EsmSelfAttention(nn.Module):
             shape=tuple(query_heads.shape),
             mask_semantics="padding",
         )
-        context_heads = fn(
+        context_heads = fn(  # (b, h, l, d_h)
             query_heads, key_heads, value_heads, block_mask=flex_block_mask, scale=1.0
         )
-        return rearrange(context_heads, "b h s d -> b s (h d)"), None
+        return rearrange(context_heads, "b h s d -> b s (h d)"), None  # (b, l, d), None
 
     def _sdpa_attn(
         self,
@@ -402,7 +417,7 @@ class EsmSelfAttention(nn.Module):
 
 
 class EsmAttention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         super().__init__()
         self.self = EsmSelfAttention(config)
         self.output = EsmSelfOutput(config)
@@ -417,8 +432,9 @@ class EsmAttention(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
-        hidden_states_ln = self.LayerNorm(hidden_states)
-        attn_output, attn_weights, s_max = self.self(
+        # hidden_states: (b, l, d)
+        hidden_states_ln = self.LayerNorm(hidden_states)  # (b, l, d)
+        attn_output, attn_weights, s_max = self.self(  # (b, l, d), optional (b, h, l, l), heads
             hidden_states_ln,
             attention_mask_2d=attention_mask_2d,
             attention_mask_4d=attention_mask_4d,
@@ -426,12 +442,12 @@ class EsmAttention(nn.Module):
             output_attentions=output_attentions,
             output_s_max=output_s_max,
         )
-        attention_output = self.output(attn_output, hidden_states)
-        return attention_output, attn_weights, s_max
+        attention_output = self.output(attn_output, hidden_states)  # (b, l, d)
+        return attention_output, attn_weights, s_max  # (b, l, d), optional weights, heads
 
 
 class EsmLayer(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         super().__init__()
         self.chunk_size_feed_forward = config.chunk_size_feed_forward
         self.seq_len_dim = 1
@@ -449,7 +465,7 @@ class EsmLayer(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
-        attention_output, attn_weights, s_max = self.attention(
+        attention_output, attn_weights, s_max = self.attention(  # (b, l, d), weights, heads
             hidden_states,
             attention_mask_2d=attention_mask_2d,
             attention_mask_4d=attention_mask_4d,
@@ -457,18 +473,19 @@ class EsmLayer(nn.Module):
             output_attentions=output_attentions,
             output_s_max=output_s_max,
         )
-        layer_output = self.feed_forward_chunk(attention_output)
-        return layer_output, attn_weights, s_max
+        layer_output = self.feed_forward_chunk(attention_output)  # (b, l, d)
+        return layer_output, attn_weights, s_max  # (b, l, d), weights, heads
 
-    def feed_forward_chunk(self, attention_output):
-        attention_output_ln = self.LayerNorm(attention_output)
-        intermediate_output = self.intermediate(attention_output_ln)
-        layer_output = self.output(intermediate_output, attention_output)
-        return layer_output
+    def feed_forward_chunk(self, attention_output: torch.Tensor) -> torch.Tensor:
+        # attention_output: (b, l, d)
+        attention_output_ln = self.LayerNorm(attention_output)  # (b, l, d)
+        intermediate_output = self.intermediate(attention_output_ln)  # (b, l, d_ff)
+        layer_output = self.output(intermediate_output, attention_output)  # (b, l, d)
+        return layer_output  # (b, l, d)
 
 
 class EsmEncoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         super().__init__()
         self.config = config
         self.attention_backend = resolve_attention_backend(config.attn_backend)
@@ -484,6 +501,7 @@ class EsmEncoder(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
     ) -> FastEsmEncoderOutput:
+        # hidden_states: (b, l, d); attention_mask: (b, l)
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
@@ -507,6 +525,7 @@ class EsmEncoder(nn.Module):
                 all_hidden_states = (*all_hidden_states, hidden_states)
 
             if self.gradient_checkpointing and self.training:
+                # hidden_states: (b, l, d)
                 hidden_states, attn_weights, s_max = self._gradient_checkpointing_func(
                     layer_module.__call__,
                     hidden_states,
@@ -517,7 +536,7 @@ class EsmEncoder(nn.Module):
                     output_s_max,
                 )
             else:
-                hidden_states, attn_weights, s_max = layer_module(
+                hidden_states, attn_weights, s_max = layer_module(  # (b, l, d), weights, heads
                     hidden_states,
                     attention_mask_2d=attention_mask_2d,
                     attention_mask_4d=attention_mask_4d,
@@ -532,7 +551,7 @@ class EsmEncoder(nn.Module):
                 full_s_max = (*full_s_max, s_max)
 
         if self.emb_layer_norm_after:
-            hidden_states = self.emb_layer_norm_after(hidden_states)
+            hidden_states = self.emb_layer_norm_after(hidden_states)  # (b, l, d)
 
         if output_hidden_states:
             all_hidden_states = (*all_hidden_states, hidden_states)
@@ -756,7 +775,7 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
 
 
 class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config, add_pooling_layer: bool | None = None, **kwargs):
+    def __init__(self, config, add_pooling_layer: bool | None = None, **kwargs) -> None:
         FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
         self.esm = FAST_ESM_ENCODER(config)
@@ -822,8 +841,8 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
             output_s_max=output_s_max,
             return_dict=True,
         )
-        sequence_output = outputs.last_hidden_state
-        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
+        sequence_output = outputs.last_hidden_state  # (b, l, d)
+        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None  # (b, d)
 
         result = FastEsmEncoderOutput(
             last_hidden_state=sequence_output,
@@ -836,7 +855,7 @@ class FastEsmModel(FastEsmPreTrainedModel, EmbeddingMixin):
 
 
 class FastEsmForMaskedLM(FastPLMTestTimeTrainingMixin, FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, **kwargs) -> None:
         FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
         self.lm_head = EsmLMHead(config)
@@ -913,13 +932,13 @@ class FastEsmForMaskedLM(FastPLMTestTimeTrainingMixin, FastEsmPreTrainedModel, E
             output_s_max=output_s_max,
             return_dict=True,
         )
-        sequence_output = outputs.last_hidden_state
-        prediction_scores = self.lm_head(sequence_output)
+        sequence_output = outputs.last_hidden_state  # (b, l, d)
+        prediction_scores = self.lm_head(sequence_output)  # (b, l, c)
 
         loss = None
         if labels is not None:
-            labels = labels.to(prediction_scores.device)
-            loss = self.loss_fct(
+            labels = labels.to(prediction_scores.device)  # (b, l)
+            loss = self.loss_fct(  # ()
                 prediction_scores.view(-1, self.config.vocab_size), labels.view(-1)
             )
 
@@ -935,7 +954,7 @@ class FastEsmForMaskedLM(FastPLMTestTimeTrainingMixin, FastEsmPreTrainedModel, E
 
 
 class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, **kwargs) -> None:
         FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.num_labels = config.num_labels
         self.config = config
@@ -994,12 +1013,12 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
             output_s_max=output_s_max,
             return_dict=True,
         )
-        sequence_output = outputs.last_hidden_state
-        logits = self.classifier(sequence_output)
+        sequence_output = outputs.last_hidden_state  # (b, l, d)
+        logits = self.classifier(sequence_output)  # (b, c)
 
         loss = None
         if labels is not None:
-            labels = labels.to(logits.device)
+            labels = labels.to(logits.device)  # (b,) or (b, c)
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
@@ -1012,13 +1031,13 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
 
             if self.config.problem_type == "regression":
                 if self.num_labels == 1:
-                    loss = self.mse(logits.squeeze(), labels.squeeze())
+                    loss = self.mse(logits.squeeze(), labels.squeeze())  # ()
                 else:
-                    loss = self.mse(logits, labels)
+                    loss = self.mse(logits, labels)  # ()
             elif self.config.problem_type == "single_label_classification":
-                loss = self.ce(logits.view(-1, self.num_labels), labels.view(-1))
+                loss = self.ce(logits.view(-1, self.num_labels), labels.view(-1))  # ()
             elif self.config.problem_type == "multi_label_classification":
-                loss = self.bce(logits, labels)
+                loss = self.bce(logits, labels)  # ()
 
         result = EsmSequenceClassifierOutput(
             loss=loss,
@@ -1031,7 +1050,7 @@ class FastEsmForSequenceClassification(FastEsmPreTrainedModel, EmbeddingMixin):
 
 
 class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, **kwargs) -> None:
         FastEsmPreTrainedModel.__init__(self, config, **kwargs)
         self.num_labels = config.num_labels
         self.esm = FAST_ESM_ENCODER(config, add_pooling_layer=False)
@@ -1088,14 +1107,14 @@ class FastEsmForTokenClassification(FastEsmPreTrainedModel, EmbeddingMixin):
             output_s_max=output_s_max,
             return_dict=True,
         )
-        sequence_output = outputs.last_hidden_state
-        sequence_output = self.dropout(sequence_output)
-        logits = self.classifier(sequence_output)
+        sequence_output = outputs.last_hidden_state  # (b, l, d)
+        sequence_output = self.dropout(sequence_output)  # (b, l, d)
+        logits = self.classifier(sequence_output)  # (b, l, c)
 
         loss = None
         if labels is not None:
-            labels = labels.to(logits.device)
-            loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            labels = labels.to(logits.device)  # (b, l)
+            loss = self.loss_fct(logits.view(-1, self.num_labels), labels.view(-1))  # ()
 
         result = EsmTokenClassifierOutput(
             loss=loss,

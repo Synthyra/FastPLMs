@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import torch
+from collections.abc import Mapping
 
 
 def assert_model_parameters_fp32(model: torch.nn.Module, model_name: str) -> None:
     non_fp32: list[dict[str, str]] = []
     parameter_count = 0
     for name, parameter in model.named_parameters():
+        # parameter: (...)
         parameter_count += 1
         if parameter.dtype != torch.float32:
             non_fp32.append({"name": name, "dtype": str(parameter.dtype)})
@@ -28,7 +28,7 @@ def assert_state_dict_floating_tensors_fp32(
 ) -> None:
     non_fp32: list[dict[str, str]] = []
     for tensor_name in sorted(state_dict.keys()):
-        tensor = state_dict[tensor_name]
+        tensor = state_dict[tensor_name]  # (...)
         if not torch.is_tensor(tensor):
             raise AssertionError(
                 f"{state_dict_name} state_dict entry must be a tensor. "
@@ -60,8 +60,8 @@ def assert_state_dict_equal(
     if unexpected:
         errors.append(f"unexpected keys: {unexpected[:max_report]}")
     for name in sorted(reference_keys & candidate_keys):
-        reference = reference_state_dict[name]
-        candidate = candidate_state_dict[name]
+        reference = reference_state_dict[name]  # (...)
+        candidate = candidate_state_dict[name]  # (...)
         if not torch.is_tensor(reference) or not torch.is_tensor(candidate):
             errors.append(f"{name}: both entries must be tensors")
             continue

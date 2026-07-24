@@ -6,10 +6,9 @@ import contextlib
 import gc
 import importlib
 import json
-from pathlib import Path
-
 import pytest
 import torch
+from pathlib import Path
 from safetensors.torch import load_file
 
 from fastplms.registry import ModelSpec, get_model_registry
@@ -21,6 +20,7 @@ from tests.parity.test_model_parity import (
 )
 from tests.structure.support.hardware import assert_recorded_hopper_device_matches
 from tools.goldens import validate_golden_bundle
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = get_model_registry()
@@ -99,6 +99,7 @@ def test_declared_sequence_golden_matches_candidate(spec: ModelSpec) -> None:
         for name, T in tensors.items()
         if name.startswith("input__")
     }
+    # residue_mask: (b, l)
     residue_mask = tensors["residue_mask"].to(device).bool()
     numeric_context = (
         torch.autocast(device_type="cuda", dtype=torch.bfloat16)

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+
 if __package__:
     from ._runtime import add_execution_arguments, resolve_execution
 else:
@@ -22,15 +23,18 @@ def configure_offline() -> None:
 def generate_dplm(model: Any, tokenizer: Any, length: int, steps: int, seed: int) -> Any:
     import torch
 
-    input_ids = tokenizer("A" * length, return_tensors="pt")["input_ids"].to(model.device)
+    input_ids = tokenizer("A" * length, return_tensors="pt")["input_ids"].to(
+        model.device
+    )  # (1, l_t)
     with torch.random.fork_rng(), torch.inference_mode():
         torch.manual_seed(seed)
-        return model.generate(
+        output_tokens = model.generate(
             input_ids,
             max_iter=steps,
             sampling_strategy="argmax",
             disable_resample=True,
-        )
+        )  # (1, l_t)
+    return output_tokens  # (1, l_t)
 
 
 def generate_dplm2(model: Any, tokenizer: Any, length: int, steps: int, seed: int) -> Any:
@@ -47,15 +51,18 @@ def generate_dplm2(model: Any, tokenizer: Any, length: int, steps: int, seed: in
         *([vocab["<mask_aa>"]] * length),
         vocab["<eos_aa>"],
     ]
-    input_ids = torch.tensor([structure + amino_acids], device=model.device)
+    input_ids = torch.tensor(
+        [structure + amino_acids], device=model.device
+    )  # (1, 2 * (l + 2))
     with torch.random.fork_rng(), torch.inference_mode():
         torch.manual_seed(seed)
-        return model.generate(
+        output_tokens = model.generate(
             input_ids,
             max_iter=steps,
             sampling_strategy="argmax",
             unmasking_strategy="deterministic",
-        )["output_tokens"]
+        )["output_tokens"]  # (1, 2 * (l + 2))
+    return output_tokens  # (1, 2 * (l + 2))
 
 
 def generate_esm3(model: Any, request: str | dict[str, Any], steps: int, seed: int) -> Any:
@@ -75,27 +82,33 @@ def build_esm3_multimodal_request(model: Any, prompt: str) -> dict[str, Any]:
     """
     import torch
 
-    encoded = model.encode(prompt, device=model.device)
-    sequence_tokens = encoded["input_ids"]
+    encoded = model.encode(
+        prompt, device=model.device
+    )  # input_ids/attention_mask: (b, l)
+    sequence_tokens = encoded["input_ids"]  # (b, l)
     shape = sequence_tokens.shape
     device = sequence_tokens.device
     return {
-        "sequence_tokens": sequence_tokens,
-        "attention_mask": encoded["attention_mask"],
-        "structure_tokens": torch.zeros(shape, dtype=torch.long, device=device),
-        "ss8_tokens": torch.zeros(shape, dtype=torch.long, device=device),
-        "sasa_tokens": torch.zeros(shape, dtype=torch.long, device=device),
-        "function_tokens": torch.zeros((*shape, 8), dtype=torch.long, device=device),
+        "sequence_tokens": sequence_tokens,  # (b, l)
+        "attention_mask": encoded["attention_mask"],  # (b, l)
+        "structure_tokens": torch.zeros(
+            shape, dtype=torch.long, device=device
+        ),  # (b, l)
+        "ss8_tokens": torch.zeros(shape, dtype=torch.long, device=device),  # (b, l)
+        "sasa_tokens": torch.zeros(shape, dtype=torch.long, device=device),  # (b, l)
+        "function_tokens": torch.zeros(
+            (*shape, 8), dtype=torch.long, device=device
+        ),  # (b, l, 8)
         "residue_annotation_tokens": torch.zeros(
             (*shape, 16), dtype=torch.long, device=device
-        ),
-        "average_plddt": torch.ones(shape, device=device),
-        "per_res_plddt": torch.zeros(shape, device=device),
+        ),  # (b, l, 16)
+        "average_plddt": torch.ones(shape, device=device),  # (b, l)
+        "per_res_plddt": torch.zeros(shape, device=device),  # (b, l)
         "structure_coords": torch.full(
             (*shape, 3, 3), float("nan"), device=device
-        ),
-        "chain_id": torch.zeros(shape, dtype=torch.long, device=device),
-        "sequence_id": torch.ones(shape, dtype=torch.bool, device=device),
+        ),  # (b, l, 3, 3)
+        "chain_id": torch.zeros(shape, dtype=torch.long, device=device),  # (b, l)
+        "sequence_id": torch.ones(shape, dtype=torch.bool, device=device),  # (b, l)
     }
 
 

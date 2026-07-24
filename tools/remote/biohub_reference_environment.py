@@ -22,6 +22,7 @@ from tools.remote.biohub_reference_lock import (
     verify_current_pip_check,
 )
 
+
 REFERENCE_ENVIRONMENT_SCHEMA_VERSION = 2
 BIOHUB_BUILD_TARGET = "biohub-biotraj-wheel"
 BIOHUB_REFERENCE_TARGETS = frozenset({"reference-biohub-esm", "reference-esmfold2"})

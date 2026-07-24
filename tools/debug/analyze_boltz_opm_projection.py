@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections.abc import Callable, Sequence
-from pathlib import Path
-
 import torch
 import torch.nn.functional as F
+from collections.abc import Callable, Sequence
+from pathlib import Path
 from safetensors.torch import load_file
+
 
 _PREFIX = "msa_module__layers__0__outer_product_mean__proj_o"
 
@@ -29,9 +29,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _comparison(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, object]:
-    difference = actual.float() - expected.float()
-    scale = torch.linalg.vector_norm(expected.float()).clamp_min(torch.finfo(torch.float32).tiny)
-    unequal = torch.ne(actual, expected)
+    # actual, expected: (...); both tensors have the same shape.
+    difference = actual.float() - expected.float()  # (...)
+    scale = torch.linalg.vector_norm(expected.float()).clamp_min(  # ()
+        torch.finfo(torch.float32).tiny
+    )
+    unequal = torch.ne(actual, expected)  # (...)
     return {
         "exact": bool(torch.equal(actual, expected)),
         "unequal_values": int(unequal.sum().item()),
@@ -46,11 +49,13 @@ def _chunked_linear(
     bias: torch.Tensor,
     chunk_size: int,
 ) -> torch.Tensor:
-    output = torch.zeros((*X.shape[:-1], W.shape[0]), device=X.device)
+    # X: (..., d_in); W: (d_out, d_in); bias: (d_out)
+    output = torch.zeros((*X.shape[:-1], W.shape[0]), device=X.device)  # (..., d_out)
     for start in range(0, X.shape[-1], chunk_size):
         stop = min(start + chunk_size, X.shape[-1])
-        output.add_(X[..., start:stop] @ W[:, start:stop].T)
-    return output + bias
+        # X[..., start:stop]: (..., d_chunk); W[:, start:stop].T: (d_chunk, d_out)
+        output.add_(X[..., start:stop] @ W[:, start:stop].T)  # (..., d_out)
+    return output + bias  # (..., d_out)
 
 
 def _autocast_linear(
@@ -60,6 +65,7 @@ def _autocast_linear(
     *,
     allow_reduced_bf16_reduction: bool,
 ) -> torch.Tensor:
+    # X: (..., d_in); W: (d_out, d_in); bias: (d_out)
     if not X.is_cuda:
         raise RuntimeError("The BF16 reduction-policy probe requires CUDA.")
     previous = torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction
@@ -68,7 +74,7 @@ def _autocast_linear(
             allow_reduced_bf16_reduction
         )
         with torch.autocast("cuda", dtype=torch.bfloat16):
-            return F.linear(X, W, bias)
+            return F.linear(X, W, bias)  # (..., d_out)
     finally:
         torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = previous
 
@@ -77,8 +83,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Report isolated projection errors against the native BF16 oracle."""
 
     arguments = _parser().parse_args(argv)
-    candidate = load_file(arguments.candidate, device="cpu")
-    reference = load_file(arguments.reference, device="cpu")
+    candidate = load_file(arguments.candidate, device="cpu")  # values: (...)
+    reference = load_file(arguments.reference, device="cpu")  # values: (...)
     input_key = f"{_PREFIX}__call_000__args__0"
     output_key = f"{_PREFIX}__call_000__output"
     weight_key = f"{_PREFIX}__parameter__weight"
@@ -98,15 +104,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         device = torch.device(arguments.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable.")
-    X = candidate[input_key].to(device)
-    W = candidate[weight_key].to(device)
-    bias = candidate[bias_key].to(device)
-    expected = reference[output_key]
+    # d_in and d_out are the projection input and output widths.
+    X = candidate[input_key].to(device)  # (..., d_in)
+    W = candidate[weight_key].to(device)  # (d_out, d_in)
+    bias = candidate[bias_key].to(device)  # (d_out)
+    expected = reference[output_key]  # (..., d_out)
     output_dtype = expected.dtype
-    X_bf16 = X.to(torch.bfloat16).float()
-    W_bf16 = W.to(torch.bfloat16).float()
-    bias_bf16 = bias.to(torch.bfloat16).float()
+    X_bf16 = X.to(torch.bfloat16).float()  # (..., d_in)
+    W_bf16 = W.to(torch.bfloat16).float()  # (d_out, d_in)
+    bias_bf16 = bias.to(torch.bfloat16).float()  # (d_out)
 
+    # Every variant returns (..., d_out).
     variants: dict[str, Callable[[], torch.Tensor]] = {
         "recorded_autocast_bf16": lambda: candidate[output_key].to(device),
         "fp32_linear": lambda: F.linear(X.float(), W.float(), bias.float()).to(output_dtype),

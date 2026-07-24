@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from functools import partial
-from typing import ClassVar
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from dataclasses import dataclass
+from functools import partial
+from typing import ClassVar
 from einops import rearrange
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
@@ -21,6 +20,7 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+
 
 try:
     from fastplms.attention import (
@@ -176,7 +176,7 @@ class RotaryEmbedding(torch.nn.Module):
         scaling_factor: float = 1.0,
         pos_idx_in_fp32: bool = True,
         device: torch.device | None = None,
-    ):
+    ) -> None:
         super().__init__()
         self.dim, self.base = dim, float(base)
         self.interleaved, self.scale_base = interleaved, scale_base
@@ -192,7 +192,7 @@ class RotaryEmbedding(torch.nn.Module):
         self._cos_k_cached: torch.Tensor | None = None
         self._sin_k_cached: torch.Tensor | None = None
 
-    def reset_parameters(self, device: torch.device | str | None = None):
+    def reset_parameters(self, device: torch.device | str | None = None) -> None:
         """Rebuild the non-persistent frequency buffers on ``device``."""
         if device is not None:
             buffer_device = torch.device(device)
@@ -250,14 +250,14 @@ class RotaryEmbedding(torch.nn.Module):
         device: torch.device | None,
     ) -> torch.Tensor:
         position_dtype = torch.float32 if self.pos_idx_in_fp32 else self.inv_freq.dtype
-        positions = torch.arange(token_count, device=device, dtype=position_dtype)
+        positions = torch.arange(token_count, device=device, dtype=position_dtype)  # (l,)
         positions.div_(self.scaling_factor)
         frequencies = (
             self.inv_freq.to(torch.float32)
             if self.pos_idx_in_fp32 and self.inv_freq.dtype != torch.float32
             else self.inv_freq
         )
-        return torch.outer(positions, frequencies)
+        return torch.outer(positions, frequencies)  # (l, d / 2)
 
     def _update_cos_sin_cache(
         self, seqlen: int, device: torch.device | None = None, dtype: torch.dtype | None = None
@@ -267,9 +267,9 @@ class RotaryEmbedding(torch.nn.Module):
             return
 
         self._seq_len_cached = seqlen
-        angles = self._rotary_angles(seqlen, device)
-        cos_angles = torch.cos(angles)
-        sin_angles = torch.sin(angles)
+        angles = self._rotary_angles(seqlen, device)  # (l, d / 2)
+        cos_angles = torch.cos(angles)  # (l, d / 2)
+        sin_angles = torch.sin(angles)  # (l, d / 2)
         if self.scale is None:
             self._cos_cached = cos_angles.to(dtype)
             self._sin_cached = sin_angles.to(dtype)
@@ -314,7 +314,6 @@ class RotaryEmbedding(torch.nn.Module):
         )
 
 
-### Feedforward Network Components
 def swiglu_correction_fn(expansion_ratio: float, d_model: int) -> int:
     """Compute corrected dimension for SwiGLU."""
     return int(((expansion_ratio * d_model) + 255) // 256 * 256)
@@ -323,7 +322,7 @@ def swiglu_correction_fn(expansion_ratio: float, d_model: int) -> int:
 class SwiGLU(nn.Module):
     """SwiGLU activation function."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -341,7 +340,6 @@ def swiglu_ln_ffn(d_model: int, expansion_ratio: float) -> nn.Sequential:
     )
 
 
-### Attention
 class MultiHeadAttention(nn.Module):
     """Multi-head attention with rotary embeddings and configurable backend.
 
@@ -356,7 +354,7 @@ class MultiHeadAttention(nn.Module):
         d_model: int,
         n_heads: int,
         attn_backend: str = "sdpa",
-    ):
+    ) -> None:
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
@@ -373,8 +371,9 @@ class MultiHeadAttention(nn.Module):
         self.rotary = RotaryEmbedding(d_model // n_heads)
 
     def _apply_rotary(self, q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        q = q.unflatten(-1, (self.n_heads, self.d_head))
-        k = k.unflatten(-1, (self.n_heads, self.d_head))
+        # q, k: (b, l, d)
+        q = q.unflatten(-1, (self.n_heads, self.d_head))  # (b, l, h, d_h)
+        k = k.unflatten(-1, (self.n_heads, self.d_head))  # (b, l, h, d_h)
         q, k = self.rotary(q, k)
         q = q.flatten(-2, -1)
         k = k.flatten(-2, -1)
@@ -389,7 +388,8 @@ class MultiHeadAttention(nn.Module):
         output_attentions: bool = False,
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
-        qkv = self.layernorm_qkv(x)
+        # x: (b, l, d)
+        qkv = self.layernorm_qkv(x)  # (b, l, 3 * d)
         query_sequence, key_sequence, value_sequence = torch.chunk(qkv, 3, dim=-1)
         query_sequence, key_sequence = (
             self.q_ln(query_sequence).to(query_sequence.dtype),
@@ -398,7 +398,7 @@ class MultiHeadAttention(nn.Module):
         query_sequence, key_sequence = self._apply_rotary(query_sequence, key_sequence)
         query_heads, key_heads, value_heads = map(
             self.reshaper, (query_sequence, key_sequence, value_sequence)
-        )
+        )  # each (b, h, l, d_h)
 
         attn_output, attn_weights, s_max = self._attn(
             query_heads,
@@ -461,8 +461,8 @@ class MultiHeadAttention(nn.Module):
     def _compute_s_max(
         self, query_heads: torch.Tensor, key_heads: torch.Tensor
     ) -> list[torch.Tensor]:
-        q_norm = torch.linalg.vector_norm(query_heads, dim=-1)
-        k_norm = torch.linalg.vector_norm(key_heads, dim=-1)
+        q_norm = torch.linalg.vector_norm(query_heads, dim=-1)  # (b, h, l)
+        k_norm = torch.linalg.vector_norm(key_heads, dim=-1)  # (b, h, l)
         s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(
             dim=0
         ).values * self.scale
@@ -476,12 +476,15 @@ class MultiHeadAttention(nn.Module):
         attention_mask_4d: torch.Tensor | None = None,
         output_s_max: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
-        attn_weights = torch.matmul(query_heads, key_heads.transpose(-2, -1)) * self.scale
+        # query_heads, key_heads, value_heads: (b, h, l, d_h)
+        attn_weights = (
+            torch.matmul(query_heads, key_heads.transpose(-2, -1)) * self.scale
+        )  # (b, h, l, l)
         if attention_mask_4d is not None:
             attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
         attn_weights = F.softmax(attn_weights, dim=-1)
-        context_heads = torch.matmul(attn_weights, value_heads)
-        attn_output = rearrange(context_heads, "b h s d -> b s (h d)")
+        context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, l, d_h)
+        attn_output = rearrange(context_heads, "b h s d -> b s (h d)")  # (b, l, d)
         s_max = self._compute_s_max(query_heads, key_heads) if output_s_max else None
         return attn_output, attn_weights, s_max
 
@@ -548,7 +551,6 @@ class MultiHeadAttention(nn.Module):
         return rearrange(context_heads, "b h s d -> b s (h d)"), None
 
 
-### Regression Head
 def RegressionHead(d_model: int, output_dim: int, hidden_dim: int | None = None) -> nn.Module:
     """Create a regression head with optional hidden dimension.
 
@@ -566,7 +568,6 @@ def RegressionHead(d_model: int, output_dim: int, hidden_dim: int | None = None)
     )
 
 
-### Transformer Block
 class UnifiedTransformerBlock(nn.Module):
     """Transformer block with attention and feedforward layers."""
 
@@ -578,7 +579,7 @@ class UnifiedTransformerBlock(nn.Module):
         expansion_ratio: float = 8 / 3,
         dropout: float = 0.0,
         attn_backend: str = "sdpa",
-    ):
+    ) -> None:
         super().__init__()
         self.attn = MultiHeadAttention(d_model=d_model, n_heads=n_heads, attn_backend=attn_backend)
         self.ffn = swiglu_ln_ffn(d_model, expansion_ratio)
@@ -607,7 +608,6 @@ class UnifiedTransformerBlock(nn.Module):
         return x, attn_weights, s_max
 
 
-### Model Outputs
 @dataclass
 class TransformerOutput(ModelOutput):
     """Output type for transformer encoder."""
@@ -640,7 +640,6 @@ class ESMplusplusTokenClassifierOutput(TokenClassifierOutput):
     s_max: tuple[list[torch.Tensor], ...] | None = None
 
 
-### Transformer Stack
 class TransformerStack(nn.Module):
     """Stack of transformer blocks."""
 
@@ -651,7 +650,7 @@ class TransformerStack(nn.Module):
         n_layers: int,
         dropout: float = 0.0,
         attn_backend: str = "sdpa",
-    ):
+    ) -> None:
         super().__init__()
         self.attention_backend = resolve_attention_backend(attn_backend)
         self.blocks = nn.ModuleList(
@@ -690,6 +689,7 @@ class TransformerStack(nn.Module):
         output_s_max: bool | None = False,
         esmfold2_hidden_states: bool = False,
     ) -> TransformerOutput:
+        # x: (b, l, d); attention_mask, sequence_id: (b, l)
         hidden_states = () if output_hidden_states else None
         attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
@@ -971,7 +971,7 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
 
     config_class = ESMplusplusConfig
 
-    def __init__(self, config: ESMplusplusConfig, **kwargs):
+    def __init__(self, config: ESMplusplusConfig, **kwargs) -> None:
         PreTrainedESMplusplusModel.__init__(self, config, **kwargs)
         self.config = config
         self.vocab_size = config.vocab_size
@@ -1089,7 +1089,7 @@ class ESMplusplusForMaskedLM(
 
     config_class = ESMplusplusConfig
 
-    def __init__(self, config: ESMplusplusConfig, **kwargs):
+    def __init__(self, config: ESMplusplusConfig, **kwargs) -> None:
         PreTrainedESMplusplusModel.__init__(self, config, **kwargs)
         self.config = config
         self.vocab_size = config.vocab_size
@@ -1215,7 +1215,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
     Extends the base ESM++ model with a classification head.
     """
 
-    def __init__(self, config: ESMplusplusConfig, **kwargs):
+    def __init__(self, config: ESMplusplusConfig, **kwargs) -> None:
         pooling_types = kwargs.pop("pooling_types", None)
         if pooling_types is None:
             pooling_types = config.classifier_pooling_types or ["mean", "var"]
@@ -1355,7 +1355,7 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
     Extends the base ESM++ model with a token classification head.
     """
 
-    def __init__(self, config: ESMplusplusConfig, **kwargs):
+    def __init__(self, config: ESMplusplusConfig, **kwargs) -> None:
         ESMplusplusForMaskedLM.__init__(self, config, **kwargs)
         self.config = config
         self.num_labels = config.num_labels
@@ -1526,7 +1526,7 @@ class EsmSequenceTokenizer(PreTrainedTokenizerFast):
             **kwargs,
         )
 
-    # These are a footgun, we never use the `bos` token anywhere so we're just overriding it here.
+    # ESMC does not use BOS, so expose the sequence-start token through the HF BOS fields.
     @property
     def bos_token(self):
         return self.cls_token

@@ -14,14 +14,13 @@ import re
 import subprocess
 import tempfile
 import warnings
+import pytest
+import torch
+import transformers
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
-import pytest
-import torch
-import transformers
 from safetensors.torch import load_file
 
 from fastplms.registry import ModelSpec, get_model_registry
@@ -68,6 +67,7 @@ from tools.remote.biohub_reference_environment import (
     validate_biohub_reference_environment_evidence,
 )
 from tools.remote.reference_source_attestation import validate_reference_sources_evidence
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.slow]
 REGISTRY = get_model_registry()
@@ -271,6 +271,7 @@ def _official_output(tensors: dict[str, torch.Tensor], device: torch.device) -> 
         "last_hidden_state": tensors["output__last_hidden_state"].to(device),
     }
     if "output__logits" in tensors:
+        # values['logits']: (..., c)
         values["logits"] = tensors["output__logits"].to(device)
     return SimpleNamespace(**values)
 
@@ -624,6 +625,7 @@ def _slice_output(output: object, index: int) -> SimpleNamespace:
     }
     logits = getattr(output, "logits", None)
     if logits is not None:
+        # values['logits']: (..., c)
         values["logits"] = logits[index : index + 1]
     return SimpleNamespace(**values)
 
@@ -636,6 +638,7 @@ def _case_metric_distributions(
     panel: Mapping[str, object],
     context: str,
 ) -> tuple[list[dict[str, object]], list[str]]:
+    # residue_mask: (b, l)
     cases = panel.get("cases")
     if not isinstance(cases, list) or residue_mask.ndim != 2:
         raise ValueError("ESMC panel cases and residue mask must be batch aligned")
@@ -657,6 +660,7 @@ def _case_metric_distributions(
             )
         candidate_case = _slice_output(candidate, index)
         official_case = _slice_output(official, index)
+        # case_mask: (...)
         case_mask = residue_mask[index : index + 1]
         records, logits = _collect_output_metrics(
             spec,
@@ -1287,6 +1291,7 @@ def _build_esmc_diagnostic_report(
     model: torch.nn.Module,
     reference_metadata: Mapping[str, object],
 ) -> dict[str, object]:
+    # residue_mask: (b, l)
     panel = validate_esmc_calibration_batch(calibration_batch)
     records, logits = _collect_output_metrics(
         spec,
@@ -1438,6 +1443,7 @@ def _record_esmc_diagnostic(
     reference_metadata: Mapping[str, object],
     warn_on_published_band: bool,
 ) -> dict[str, object]:
+    # residue_mask: (b, l)
     payload = _build_esmc_diagnostic_report(
         spec,
         candidate,
@@ -1477,6 +1483,7 @@ def _assert_and_record_esmc_diagnostic(
     model: torch.nn.Module,
     reference_metadata: Mapping[str, object],
 ) -> dict[str, object]:
+    # residue_mask: (b, l)
     return _record_esmc_diagnostic(
         spec,
         candidate,
@@ -1530,6 +1537,7 @@ def _run_native_inference(
         for name, value in tensors.items()
         if name.startswith("input__")
     }
+    # residue_mask: (b, l)
     residue_mask = tensors["residue_mask"].to(device).bool()
     if dtype == torch.float32:
         numeric_context = strict_fp32_matmul()
@@ -1737,7 +1745,7 @@ def test_esmc_bf16_calibration_and_biological_holdout(
     [_parameter(spec) for spec in SEQUENCE_SPECS if spec.id in {"dplm_150m", "dplm2_150m"}],
 )
 def test_native_dplm_package_source_fp32(spec: ModelSpec) -> None:
-    """Current package source matches native DPLM-family FP32 inference."""
+    """Current repository source matches native DPLM-family FP32 inference."""
 
     _, result_dir = _result(spec)
     _run_native_inference(
@@ -1760,7 +1768,7 @@ def test_native_dplm_package_source_fp32(spec: ModelSpec) -> None:
     ],
 )
 def test_native_dplm_package_source_bf16(spec: ModelSpec, backend: str) -> None:
-    """Current package source matches native DPLM BF16 on every supported backend."""
+    """Current repository source matches native DPLM BF16 on every supported backend."""
 
     _, result_dir = _result(spec)
     _run_native_inference(
@@ -1796,6 +1804,7 @@ def test_native_dplm_sdpa_uses_fp32_storage_and_meets_every_hidden_target(
         for name, value in tensors.items()
         if name.startswith("input__")
     }
+    # residue_mask: (b, l)
     residue_mask = tensors["residue_mask"].to(device).bool()
 
     with (
@@ -1834,6 +1843,7 @@ def test_native_dplm_generation(spec: ModelSpec) -> None:
     assert isinstance(contract, dict), f"{spec.id}: native result omits generation"
     device = torch.device("cuda")
     fast = _load_package_generation_model(spec, device)
+    # input_tokens: (...)
     input_tokens = torch.tensor(contract["input_tokens"], device=device)
     torch.manual_seed(int(contract["seed"]))
     torch.cuda.manual_seed_all(int(contract["seed"]))
@@ -1841,6 +1851,7 @@ def test_native_dplm_generation(spec: ModelSpec) -> None:
         generated = fast.generate(input_tokens=input_tokens, **contract["kwargs"])
     if isinstance(generated, dict):
         generated = generated["output_tokens"]
+    # expected: (...)
     expected = torch.tensor(contract["output_tokens"], device=device)
     assert torch.equal(generated, expected), f"{spec.id}: generated tokens differ"
     del fast, generated
@@ -1862,9 +1873,13 @@ def test_native_ankh_explicit_decoder_prompt_generation(spec: ModelSpec) -> None
     assert contract["decoder_prompt_contract"] == "explicit-task-prompt"
     device = torch.device("cuda")
     fast = _load_package_generation_model(spec, device)
+    # input_ids: (...)
     input_ids = torch.tensor(contract["input_ids"], device=device)
+    # attention_mask: (...)
     attention_mask = torch.tensor(contract["attention_mask"], device=device)
+    # decoder_input_ids: (...)
     decoder_input_ids = torch.tensor(contract["decoder_input_ids"], device=device)
+    # decoder_attention_mask: (...)
     decoder_attention_mask = torch.tensor(
         contract["decoder_attention_mask"],
         device=device,
@@ -1880,6 +1895,7 @@ def test_native_ankh_explicit_decoder_prompt_generation(spec: ModelSpec) -> None
             decoder_attention_mask=decoder_attention_mask,
             **contract["kwargs"],
         )
+    # expected: (...)
     expected = torch.tensor(contract["output_tokens"], device=device)
     assert torch.equal(generated, expected), f"{spec.id}: generated tokens differ"
     del fast, generated

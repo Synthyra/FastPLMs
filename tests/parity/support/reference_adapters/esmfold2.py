@@ -13,6 +13,7 @@ from tests.parity.support.reference_adapters.biohub_source import (
     reference_sources,
 )
 
+
 reference_environment = _reference_environment
 
 
@@ -33,6 +34,7 @@ class _OfficialESMFold2Wrapper(nn.Module):
     ) -> torch.Tensor:
         """Return Biohub's learned sequence summary before pair expansion."""
 
+        # hidden_states: (..., d)
         shim = self.model.language_model
         captured: list[torch.Tensor] = []
 

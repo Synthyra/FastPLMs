@@ -18,6 +18,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
 
+
 _HOST = "dl.fbaipublicfiles.com"
 _ROOT = f"https://{_HOST}/fair-esm"
 _MODEL_NAMES = (

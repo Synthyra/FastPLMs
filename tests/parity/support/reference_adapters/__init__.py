@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import os
 import sys
+import torch
+import torch.nn as nn
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-import torch
-import torch.nn as nn
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _ESM_SUBMODULE = _REPOSITORY_ROOT / "vendor" / "upstream" / "biohub-esm"

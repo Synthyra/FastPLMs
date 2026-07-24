@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import math
+import torch
+import torch.nn as nn
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from numbers import Real
 from typing import Any, ClassVar
-
-import torch
-import torch.nn as nn
 from tokenizers import pre_tokenizers
 from torch.nn import functional as F
 from transformers import (
@@ -22,6 +21,7 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+
 
 try:
     from fastplms.attention import (
@@ -405,13 +405,14 @@ def _biological_token_mask(
 class AnkhRMSNorm(nn.Module):
     """T5-style RMS layer norm: scales without mean subtraction or bias."""
 
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
+    def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        # hidden_states: (..., d)
+        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)  # (..., 1)
         hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
         return self.weight * hidden_states.to(self.weight.dtype)
 
@@ -425,7 +426,7 @@ def _gelu_new(x: torch.Tensor) -> torch.Tensor:
 class AnkhGatedFFN(nn.Module):
     """T5-style gated feed-forward: activation(wi_0(x)) * wi_1(x) -> wo."""
 
-    def __init__(self, config: FastAnkhConfig):
+    def __init__(self, config: FastAnkhConfig) -> None:
         super().__init__()
         self.wi_0 = nn.Linear(config.d_model, config.d_ff, bias=False)
         self.wi_1 = nn.Linear(config.d_model, config.d_ff, bias=False)
@@ -434,6 +435,7 @@ class AnkhGatedFFN(nn.Module):
         self.dropout = nn.Dropout(config.dropout_rate)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        # hidden_states: (b, l, d)
         hidden_states = self.act(self.wi_0(hidden_states)) * self.wi_1(hidden_states)
         return self.wo(self.dropout(hidden_states))
 
@@ -451,7 +453,11 @@ class AnkhSelfAttention(nn.Module):
     receive the precomputed bias through the forward call.
     """
 
-    def __init__(self, config: FastAnkhConfig, has_relative_attention_bias: bool = False):
+    def __init__(
+        self,
+        config: FastAnkhConfig,
+        has_relative_attention_bias: bool = False,
+    ) -> None:
         super().__init__()
         self.num_heads = config.num_heads
         self.d_kv = config.d_kv
@@ -515,8 +521,8 @@ class AnkhSelfAttention(nn.Module):
             num_buckets=self.relative_attention_num_buckets,
             max_distance=self.relative_attention_max_distance,
         )
-        values = self.relative_attention_bias(buckets)  # A has shape (q, k, h).
-        return values.permute(2, 0, 1).unsqueeze(0)  # A has shape (1, h, q, k).
+        values = self.relative_attention_bias(buckets)  # (q, k, h)
+        return values.permute(2, 0, 1).unsqueeze(0)  # (1, h, q, k)
 
     # ---- Forward ----
 
@@ -529,12 +535,13 @@ class AnkhSelfAttention(nn.Module):
         effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """Returns (attn_output, attn_weights_or_none, position_bias)."""
+        # hidden_states: (b, l, d)
         batch_size, seq_length = hidden_states.shape[:2]
         hidden_shape = (batch_size, seq_length, self.num_heads, self.d_kv)
 
-        query_heads = self.q(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_heads = self.k(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_heads = self.v(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_heads = self.q(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
+        key_heads = self.k(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
+        value_heads = self.v(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
 
         # The first layer computes the bias once; later layers reuse it.
         if position_bias is None and self.has_relative_attention_bias:
@@ -572,7 +579,7 @@ class AnkhSelfAttention(nn.Module):
         value_heads: torch.Tensor,
         position_bias: torch.Tensor | None,
     ) -> torch.Tensor:
-        # A is the additive position bias with shape (1, h, q, k), including padding.
+        # position_bias: (1, h, l, l), including padding
         # Never mutate torch.backends.cuda process-global reduction policy from
         # a model forward. Concurrent model requests must not change each
         # other's numerical behavior or restore a stale process setting.
@@ -583,7 +590,7 @@ class AnkhSelfAttention(nn.Module):
             attn_mask=position_bias,
             dropout_p=self.dropout_prob if self.training else 0.0,
             scale=self.scale,
-        )
+        )  # (b, h, l, d_h)
         return (
             context_heads.transpose(1, 2)
             .contiguous()
@@ -597,7 +604,10 @@ class AnkhSelfAttention(nn.Module):
         value_heads: torch.Tensor,
         position_bias: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        attn_weights = torch.matmul(query_heads, key_heads.transpose(-1, -2)) * self.scale
+        # query_heads, key_heads, value_heads: (b, h, l, d_h)
+        attn_weights = (
+            torch.matmul(query_heads, key_heads.transpose(-1, -2)) * self.scale
+        )  # (b, h, l, l)
         if position_bias is not None:
             attn_weights = attn_weights + position_bias
         attn_weights = F.softmax(attn_weights.float(), dim=-1).type_as(attn_weights)
@@ -607,7 +617,7 @@ class AnkhSelfAttention(nn.Module):
                 p=self.dropout_prob,
                 training=self.training,
             )
-        context_heads = torch.matmul(attn_weights, value_heads)
+        context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, l, d_h)
         attn_output = (
             context_heads.transpose(1, 2)
             .contiguous()
@@ -624,7 +634,11 @@ class AnkhSelfAttention(nn.Module):
 class AnkhSelfAttentionLayer(nn.Module):
     """Wraps AnkhSelfAttention + layer_norm to match T5Block.layer[0] key naming."""
 
-    def __init__(self, config: FastAnkhConfig, has_relative_attention_bias: bool = False):
+    def __init__(
+        self,
+        config: FastAnkhConfig,
+        has_relative_attention_bias: bool = False,
+    ) -> None:
         super().__init__()
         self.SelfAttention = AnkhSelfAttention(config, has_relative_attention_bias)
         self.layer_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
@@ -653,7 +667,7 @@ class AnkhSelfAttentionLayer(nn.Module):
 class AnkhFFLayer(nn.Module):
     """Wraps AnkhGatedFFN + layer_norm to match T5Block.layer[1] key naming."""
 
-    def __init__(self, config: FastAnkhConfig):
+    def __init__(self, config: FastAnkhConfig) -> None:
         super().__init__()
         self.DenseReluDense = AnkhGatedFFN(config)
         self.layer_norm = AnkhRMSNorm(config.d_model, eps=config.layer_norm_epsilon)
@@ -668,7 +682,11 @@ class AnkhFFLayer(nn.Module):
 class AnkhBlock(nn.Module):
     """Single transformer block with T5-compatible .layer ModuleList naming."""
 
-    def __init__(self, config: FastAnkhConfig, has_relative_attention_bias: bool = False):
+    def __init__(
+        self,
+        config: FastAnkhConfig,
+        has_relative_attention_bias: bool = False,
+    ) -> None:
         super().__init__()
         self.layer = nn.ModuleList(
             [
@@ -782,7 +800,7 @@ class FAST_ANKH_ENCODER(AnkhPreTrainedModel, EmbeddingMixin):
     block.{i}.layer.1.DenseReluDense.*, final_layer_norm.*.
     """
 
-    def __init__(self, config: FastAnkhConfig, **kwargs):
+    def __init__(self, config: FastAnkhConfig, **kwargs) -> None:
         AnkhPreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
 
@@ -965,7 +983,7 @@ class FastAnkhModel(AnkhPreTrainedModel, EmbeddingMixin):
         r"^lm_head\.",
     ]
 
-    def __init__(self, config: FastAnkhConfig, **kwargs):
+    def __init__(self, config: FastAnkhConfig, **kwargs) -> None:
         AnkhPreTrainedModel.__init__(self, config, **kwargs)
         self.config = config
         self.shared = nn.Embedding(config.vocab_size, config.d_model)
@@ -1029,7 +1047,7 @@ class FastAnkhForMaskedLMExtension(
     _tied_weights_keys: ClassVar[dict[str, str]] = {"encoder.embed_tokens.weight": "shared.weight"}
     _keys_to_ignore_on_load_unexpected: ClassVar[list[str]] = [r"^decoder\."]
 
-    def __init__(self, config: FastAnkhConfig, **kwargs):
+    def __init__(self, config: FastAnkhConfig, **kwargs) -> None:
         # The historical Synthyra extension stores an independent output head.
         config.tie_word_embeddings = False
         AnkhPreTrainedModel.__init__(self, config, **kwargs)
@@ -1156,7 +1174,7 @@ class FastAnkhForConditionalGeneration(
     embedding_unsupported_pooling = ("cls",)
     _fastplms_attention_implementations = ("eager",)
 
-    def __init__(self, config: FastAnkhConfig, **kwargs):
+    def __init__(self, config: FastAnkhConfig, **kwargs) -> None:
         requested_backend = getattr(config, "_attn_implementation", None) or config.attn_backend
         if requested_backend not in (None, "eager"):
             raise ValueError(
@@ -1448,7 +1466,7 @@ class FastAnkhForSequenceClassification(AnkhPreTrainedModel, EmbeddingMixin):
         r"^lm_head\.",
     ]
 
-    def __init__(self, config: FastAnkhConfig, **kwargs):
+    def __init__(self, config: FastAnkhConfig, **kwargs) -> None:
         AnkhPreTrainedModel.__init__(self, config, **kwargs)
         self.num_labels = config.num_labels
         self.config = config
@@ -1555,7 +1573,7 @@ class FastAnkhForTokenClassification(AnkhPreTrainedModel, EmbeddingMixin):
         r"^lm_head\.",
     ]
 
-    def __init__(self, config: FastAnkhConfig, **kwargs):
+    def __init__(self, config: FastAnkhConfig, **kwargs) -> None:
         AnkhPreTrainedModel.__init__(self, config, **kwargs)
         self.num_labels = config.num_labels
         self.shared = nn.Embedding(config.vocab_size, config.d_model)

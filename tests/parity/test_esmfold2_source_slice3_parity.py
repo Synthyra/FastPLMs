@@ -6,16 +6,15 @@ import importlib.util
 import io
 import sys
 import types
-from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path
-from typing import Any
-
 import biotite.structure as bs
 import numpy as np
 import pytest
 import torch
 import zstandard
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
 from fastplms.models.esmfold2 import esmfold2_affine3d as local_affine
 from fastplms.models.esmfold2 import esmfold2_misc as local_misc
@@ -28,6 +27,7 @@ from fastplms.models.esmfold2 import esmfold2_sequential_dataclass as local_sequ
 from fastplms.models.esmfold2 import esmfold2_system as local_system
 from fastplms.models.esmfold2 import esmfold2_utils_types as local_types
 from fastplms.models.esmfold2.esmfold2_constants_esm3 import CHAIN_BREAK_STR
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
@@ -130,6 +130,7 @@ def _official_mmcif() -> types.ModuleType:
 
 
 def _assert_tensor_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
+    # actual: (...), expected: (...)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
@@ -142,13 +143,16 @@ def test_misc_tensor_contracts_match_pinned_biohub(device: str) -> None:
     assert torch.cuda.is_available(), "the utility parity suite requires CUDA"
     official = _official_misc()
     torch.manual_seed(730)
+    # values: (2, 4)
     values = torch.randn((2, 4), device=device)
     _assert_tensor_equal(
         local_misc.rbf(values, -2.0, 3.0, 9),
         official.rbf(values, -2.0, 3.0, 9),
     )
 
+    # data: (2, 3, 5, 2)
     data = torch.arange(2 * 3 * 5 * 2, device=device).reshape(2, 3, 5, 2)
+    # indices: (2, 3, 2)
     indices = torch.tensor(
         [[[0, 3], [2, 1], [4, 0]], [[4, 1], [0, 2], [3, 3]]],
         device=device,
@@ -158,6 +162,7 @@ def test_misc_tensor_contracts_match_pinned_biohub(device: str) -> None:
         official.batched_gather(data, indices, dim=2, no_batch_dims=2),
     )
 
+    # coords: (2, 3, 3)
     coords = torch.tensor(
         [
             [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [float("nan"), 0.0, 0.0]],
@@ -165,8 +170,11 @@ def test_misc_tensor_contracts_match_pinned_biohub(device: str) -> None:
         ],
         device=device,
     )
+    # coord_mask: (2, 3)
     coord_mask = torch.tensor([[1, 1, 0], [1, 1, 1]], dtype=torch.bool, device=device)
+    # padding_mask: (2, 3)
     padding_mask = torch.tensor([[0, 0, 1], [0, 0, 0]], dtype=torch.bool, device=device)
+    # sequence_id: (2, 3)
     sequence_id = torch.tensor([[0, 0, 0], [0, 1, 1]], device=device)
     actual_edges = local_misc.knn_graph(
         coords,
@@ -190,7 +198,9 @@ def test_misc_tensor_contracts_match_pinned_biohub(device: str) -> None:
         local_misc.stack_variable_length_tensors(rows, -1),
         official.stack_variable_length_tensors(rows, -1),
     )
+    # packed: (5, 4, 2)
     packed = torch.arange(5 * 4 * 2, device=device).reshape(5, 4, 2)
+    # ids: (2, 4)
     ids = torch.tensor([[0, 0, 1, 1], [0, 1, 1, 2]], device=device)
     actual_bin = local_misc.binpack(packed, ids, -7)
     expected_bin = official.binpack(packed, ids, -7)
@@ -247,6 +257,7 @@ def test_misc_conversion_serialization_and_concat_match_pinned_biohub() -> None:
         local_misc.maybe_tensor(nested, convert_none_to_nan=True),
         official.maybe_tensor(nested, convert_none_to_nan=True),
     )
+    # values: (2, 2)
     values = torch.tensor([[1.0, float("nan")], [3.0, 4.0]])
     assert local_misc.maybe_list(values, convert_nan_to_none=True) == (
         official.maybe_list(values, convert_nan_to_none=True)
@@ -277,7 +288,9 @@ def test_affine_rotation_contracts_match_pinned_biohub(device: str) -> None:
     assert torch.cuda.is_available(), "the affine parity suite requires CUDA"
     official = _official_affine()
     generator = torch.Generator(device=device).manual_seed(2026)
+    # quaternions: (2, 5, 4)
     quaternions = torch.randn((2, 5, 4), generator=generator, device=device)
+    # points: (2, 5, 3)
     points = torch.randn((2, 5, 3), generator=generator, device=device)
 
     actual_quat = local_affine.RotationQuat(quaternions, normalized=True)
@@ -301,6 +314,7 @@ def test_affine_rotation_contracts_match_pinned_biohub(device: str) -> None:
         expected_matrix.compose(expected_matrix).tensor,
     )
 
+    # batched_points: (2, 7, 3)
     batched_points = torch.randn((2, 7, 3), generator=generator, device=device)
     actual_single = local_affine.RotationMatrix.identity((2, 1), device=device)
     expected_single = official.RotationMatrix.identity((2, 1), device=device)
@@ -314,8 +328,11 @@ def test_affine_frames_and_coordinate_fallback_match_pinned_biohub() -> None:
     assert torch.cuda.is_available(), "the affine parity suite requires CUDA"
     official = _official_affine()
     generator = torch.Generator(device="cuda").manual_seed(912)
+    # translation: (2, 4, 3)
     translation = torch.randn((2, 4, 3), generator=generator, device="cuda")
+    # quaternion: (2, 4, 4)
     quaternion = torch.randn((2, 4, 4), generator=generator, device="cuda")
+    # encoded: (...)
     encoded = torch.cat((quaternion, translation), dim=-1)
     actual = local_affine.Affine3D.from_tensor(encoded)
     expected = official.Affine3D.from_tensor(encoded)
@@ -325,6 +342,7 @@ def test_affine_frames_and_coordinate_fallback_match_pinned_biohub() -> None:
         actual.compose(actual).tensor,
         expected.compose(expected).tensor,
     )
+    # mask: (2, 4)
     mask = torch.tensor(
         [[1, 0, 1, 0], [0, 1, 1, 0]],
         dtype=torch.bool,
@@ -336,6 +354,7 @@ def test_affine_frames_and_coordinate_fallback_match_pinned_biohub() -> None:
         expected.mask(mask, with_zero=True).tensor,
     )
 
+    # coords: (2, 6, 3, 3)
     coords = torch.randn((2, 6, 3, 3), generator=generator, device="cuda")
     coords[0, 2] = torch.nan
     coords[1, 4] = 2e6
@@ -349,10 +368,15 @@ def test_affine_encodings_and_collection_operations_match_pinned_biohub() -> Non
     assert torch.cuda.is_available(), "the affine parity suite requires CUDA"
     official = _official_affine()
     generator = torch.Generator(device="cuda").manual_seed(661)
+    # translations: (2, 3)
     translations = torch.randn((2, 3), generator=generator, device="cuda")
+    # compact_quat: (2, 3)
     compact_quat = torch.randn((2, 3), generator=generator, device="cuda")
+    # full_quat: (2, 4)
     full_quat = torch.randn((2, 4), generator=generator, device="cuda")
+    # matrix: (...)
     matrix = torch.eye(3, device="cuda").expand(2, -1, -1)
+    # matrix4: (...)
     matrix4 = torch.eye(4, device="cuda").expand(2, -1, -1).clone()
     matrix4[..., :3, 3] = translations
     encodings = (
@@ -366,12 +390,16 @@ def test_affine_encodings_and_collection_operations_match_pinned_biohub() -> Non
         expected = official.Affine3D.from_tensor(encoded)
         _assert_tensor_equal(actual.tensor, expected.tensor)
 
+    # x_axis: (2, 3)
     x_axis = torch.randn((2, 3), generator=generator, device="cuda")
+    # origin: (2, 3)
     origin = torch.randn((2, 3), generator=generator, device="cuda")
+    # plane: (2, 3)
     plane = torch.randn((2, 3), generator=generator, device="cuda")
     actual = local_affine.Affine3D.from_graham_schmidt(x_axis, origin, plane)
     expected = official.Affine3D.from_graham_schmidt(x_axis, origin, plane)
     _assert_tensor_equal(actual.tensor, expected.tensor)
+    # points: (2, 3)
     points = torch.randn((2, 3), generator=generator, device="cuda")
     _assert_tensor_equal(actual.apply(points), expected.apply(points))
     _assert_tensor_equal(actual.scale(2.5).tensor, expected.scale(2.5).tensor)
@@ -441,7 +469,9 @@ def test_msa_composition_and_fast_representation_match_pinned_biohub() -> None:
     official = _official_msa()
     left_sequences = ["ACD", "A-D", "AC-"]
     right_sequences = ["EF", "E-", "-F"]
+    # left_deletions: (3, 3)
     left_deletions = np.arange(9, dtype=np.float32).reshape(3, 3)
+    # right_deletions: (3, 2)
     right_deletions = np.arange(6, dtype=np.float32).reshape(3, 2)
     actual_left = local_msa.MSA.from_state_dict(
         {"sequences": left_sequences, "deletions": left_deletions}
@@ -521,6 +551,7 @@ def _category(**columns):
 
 def _structure() -> bs.AtomArray:
     atoms = bs.AtomArray(7)
+    # coord: (7, 3)
     atoms.coord = np.arange(21, dtype=np.float32).reshape(7, 3)
     atoms.chain_id = np.asarray(["A", "A", "A", "B", "B", "L", "L"])
     atoms.res_id = np.asarray([10, 10, 11, 5, 6, 1, 1])

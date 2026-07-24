@@ -7,13 +7,13 @@ import io
 import json
 import subprocess
 import sys
-
 import torch
 
 from fastplms.models.esmfold2 import esmfold2_constants as molecular_schema
 from fastplms.models.esmfold2 import esmfold2_constants_esm3 as token_schema
 from fastplms.models.esmfold2.esmfold2_parsing import parse_fasta, read_sequences
 from fastplms.models.esmfold2.protein_utils import prepare_protein_features
+
 
 _OFFICIAL_FEATURE_DIGEST = "255bab0048c0c8984e03eb878b7a9c88dfa0ad083983e2641d6a4a0eb8e39fc5"
 _OFFICIAL_SCHEMA_DIGEST = "34b14af14c0f640034eec8174f80081234a98d617a5dbf9682a06a04465dc024"
@@ -124,6 +124,7 @@ def test_generated_schemas_match_pinned_official_semantic_digest() -> None:
 
 
 def test_protein_features_preserve_padding_and_unknown_residues() -> None:
+    # Feature dimensions are b=1, l=2 residues, a=32 reference atoms, xyz=3.
     features = prepare_protein_features("GX")
     assert features["res_type"].tolist() == [[9, 22]]
     assert features["input_ids"].tolist() == [[6, 3]]

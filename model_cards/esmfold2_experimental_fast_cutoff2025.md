@@ -16,16 +16,35 @@ Accepted inputs are raw amino-acid sequences or typed molecular-complex
 specifications; low-level forward accepts prepared feature tensors.
 Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 
+## Capabilities
+
+| Feature | Status |
+| --- | --- |
+| Sequence classification | Unavailable: no advertised AutoClass |
+| Token classification | Unavailable: no advertised AutoClass |
+| PEFT fine-tuning | Supported pattern: attach LoRA to the pretrained model |
+| Embeddings | Special: ESMC state mixture to 256-wide residue embeddings |
+| Test-time training | Unavailable for this experimental checkpoint |
+| Attention variants | Supported: `eager`, `sdpa`, `flex_attention` |
+| Compliance | Declared: exact release evidence is required |
+
+A supported interface is not a pretrained downstream predictor. Classification
+heads start untrained, and declared compliance metadata is not a claim that an
+arbitrary local build passed its release gate.
+
 ## Install and platform requirements
 
-Install the current FastPLMs package:
+Install the direct dependencies published with this model:
 
 ```bash
-python -m pip install \
-  "fastplms[structure] @ git+https://github.com/Synthyra/FastPLMs.git"
+python -m pip install -r \
+  "https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast-Cutoff2025/resolve/main/requirements.txt"
 ```
 
-Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Structure inference requires the `structure` extra and a CUDA device for the published execution contract. The current validated release target is the exact NVIDIA GH200 on Linux aarch64; Linux x86-64, CPU-only, Windows, and macOS structure runs are not current release evidence. The Hub quick start below requires network
+The FastPLMs implementation itself is embedded in the model repository and loaded
+by Transformers through `trust_remote_code=True`.
+
+Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The artifact requirements include the direct structure dependencies. The published execution contract requires a CUDA device. The current validated release target is the exact NVIDIA GH200 on Linux aarch64; Linux x86-64, CPU-only, Windows, and macOS structure runs are not current release evidence. The Hub quick start below requires network
 access on first download. For an air-gapped run, first build the manifest-pinned
 local artifact and use the offline form shown in the example.
 
@@ -38,22 +57,50 @@ model_id = "Synthyra/ESMFold2-Experimental-Fast-Cutoff2025"
 model = AutoModel.from_pretrained(
     model_id,
     trust_remote_code=True,
+    attn_implementation="sdpa",
 ).eval()
 ```
 
-This example uses the published Hub repository. For offline validation, build
-the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/ESMFold2-Experimental-Fast-Cutoff2025` path, then pass `local_files_only=True`.
+For offline validation, replace `model_id` with the manifest-built
+`dist/hub/ESMFold2-Experimental-Fast-Cutoff2025` path and pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default. Supported explicit
-choices are `eager`, `sdpa`, `flex_attention`.
-Pass the selected name through `attn_implementation`.
-When an optimized backend cannot return full attention tensors,
-`output_attentions=True` emits one explicit runtime warning and uses a correctly
-masked eager implementation for that call only. The warning identifies the
-configured backend, effective backend, and reason. Configuration and later
-calls are unchanged.
-For BF16 execution, this family uses FP32 parameters with CUDA BF16 autocast.
+## Attention and compliance
+
+The quick start selects `sdpa` explicitly. Declared variants are `eager`, `sdpa`, `flex_attention`. An unavailable
+requested backend raises instead of silently switching implementations.
+`output_attentions=True` may use the documented, one-call eager fallback solely
+to materialize attention tensors; the configured backend remains unchanged.
+
+This family declares the `compliance` tier. Release evidence binds the exact
+checkpoint, backend, dtype, hardware, inputs, and reference revision.
+
+## PEFT fine-tuning
+
+Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+
+```bash
+python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
+```
+
+```python
+from peft import LoraConfig, get_peft_model
+
+peft_model = get_peft_model(
+    model,
+    LoraConfig(
+        r=8,
+        lora_alpha=16,
+        target_modules="all-linear",
+    ),
+)
+```
+
+This checkpoint has no advertised classifier. Supply the task-specific
+objective and preserve any new head through `modules_to_save`.
+All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
+can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+support boundary. Record the target modules, base revision, data identity, and
+trainable parameter scope.
 
 ## Alignment-conditioning contract
 
@@ -117,9 +164,9 @@ biochemical activity.
 
 ## Learned representation and ESMC precision
 
-ESMFold2 combines the ordered 81 ESMC-6B states `H: (b, l, 81, 2560)` with the
-checkpoint's learned projection. Retrieve the resulting residue representation
-through the public embedding API:
+ESMFold2 applies its learned state mixture and projection as
+`H: (b, l, 81, 2560) -> Z: (b, l, 256)`. Retrieve `Z` through the public
+embedding API:
 
 ```python
 representations = model.embed_dataset(
@@ -178,6 +225,11 @@ its size and SHA-256, and unpickles only that loader-owned snapshot, closing
 path-replacement and in-place source-write races. Offline execution requires the
 exact cache object and never downloads a replacement.
 
+## Test-time training
+
+This experimental checkpoint does not expose folding TTT. Use the corresponding
+standard or Fast checkpoint when opt-in ESMC-backbone adaptation is required.
+
 ## Binder-design research example
 
 The FastPLMs binder-design workflow uses the experimental Fast Cutoff2025
@@ -209,7 +261,7 @@ signals, not experimental evidence of affinity or specificity. See the
 - Precision policies: `auto`, `fp32`, `bf16`, `fp8` (experimental)
 - BF16 execution: `fp32_parameters_autocast`
 - Generation contract: `not_applicable`
-- Optional dependency group: `structure`
+- Artifact dependency set: `core + structure`
 - Weight publication allowed: `true`
 - Weight license status: `resolved`
 - Redistributable: `true`
@@ -220,28 +272,22 @@ signals, not experimental evidence of affinity or specificity. See the
 - FastPLMs weights: `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
-- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 - Official checkpoint: `biohub/ESMFold2-Experimental-Fast-Cutoff2025`
 - Artifact source: `fast`
 - State transform: `identity`
-- BF16 execution: `fp32_parameters_autocast`
 - Pinned upstreams: `biohub-esm`, `biohub-transformers`, `protein-ttt`
-- Reference container: `reference-esmfold2`
 - Release tiers: `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The local artifact records exact file identities, conversion details, source
-revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
-release blocker.
+`provenance.json` records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks release.
 
 ## Validation boundary
 
-For tiers declared by the manifest, the release contract compares applicable
-semantic configuration, tokenizer behavior, state keys, shapes, dtypes,
-values, aliases, and representative inference with the pinned official
-implementation. This metadata does not by itself claim that a particular build
-passed, that one backend is faster, or that an output has biological or
-therapeutic validity.
+Declared tiers compare applicable configuration, tokenizer behavior, state,
+and representative inference with the pinned reference. Metadata alone does
+not claim a build passed, a backend is faster, or an output is biologically
+valid.
 
 ## License
 

@@ -18,6 +18,7 @@ from tests.parity.support.reference_adapters.dplm2 import (
     DPLM2_3B_GENERATION_LIMITATION,
 )
 
+
 SCHEMA_VERSION = 1
 SEED = ESMC_CALIBRATION_SEED
 CANONICAL_AAS = CANONICAL_AA_ALPHABET

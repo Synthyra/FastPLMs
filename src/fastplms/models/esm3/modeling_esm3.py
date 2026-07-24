@@ -16,22 +16,22 @@ import os
 import shutil
 import stat
 import tempfile
+import einops
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import ClassVar
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
-
-import einops
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from einops import rearrange
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
 from transformers import PretrainedConfig, PreTrainedModel, PreTrainedTokenizerFast
 from transformers.modeling_outputs import ModelOutput
+
 
 try:
     from fastplms.attention import (
@@ -944,6 +944,7 @@ class EsmSequenceTokenizer(PreTrainedTokenizerFast):
 
 
 def rbf(values: torch.Tensor, v_min: float, v_max: float, n_bins: int = 16) -> torch.Tensor:
+    # values: (...)
     centers = torch.linspace(
         v_min,
         v_max,
@@ -951,9 +952,9 @@ def rbf(values: torch.Tensor, v_min: float, v_max: float, n_bins: int = 16) -> t
         device=values.device,
         dtype=values.dtype,
     )
-    centers = centers.view([1] * len(values.shape) + [-1])
+    centers = centers.view([1] * len(values.shape) + [-1])  # (..., n)
     std = (v_max - v_min) / n_bins
-    z = (values.unsqueeze(-1) - centers) / std
+    z = (values.unsqueeze(-1) - centers) / std  # (..., n)
     return torch.exp(-(z**2))
 
 
@@ -1019,7 +1020,7 @@ class RotaryEmbedding(nn.Module):
         scaling_factor: float = 1.0,
         pos_idx_in_fp32: bool = True,
         device: torch.device | None = None,
-    ):
+    ) -> None:
         super().__init__()
         self.dim = dim
         self.base = float(base)
@@ -1067,14 +1068,16 @@ class RotaryEmbedding(nn.Module):
             # meta device. Recreate it deterministically on the first forward.
             self.inv_freq = self._compute_inv_freq(device)
             if self.pos_idx_in_fp32:
-                t = torch.arange(seqlen, device=device, dtype=torch.float32)
+                t = torch.arange(seqlen, device=device, dtype=torch.float32)  # (l,)
                 t /= self.scaling_factor
                 inv_freq = self.inv_freq
             else:
-                t = torch.arange(seqlen, device=device, dtype=self.inv_freq.dtype)
+                t = torch.arange(
+                    seqlen, device=device, dtype=self.inv_freq.dtype
+                )  # (l,)
                 t /= self.scaling_factor
                 inv_freq = self.inv_freq
-            freqs = torch.outer(t, inv_freq)
+            freqs = torch.outer(t, inv_freq)  # (l, d / 2)
 
             if self.scale is None:
                 self._cos_cached = torch.cos(freqs).to(dtype)
@@ -1088,6 +1091,7 @@ class RotaryEmbedding(nn.Module):
         k: torch.Tensor,
         seqlen_offset: int = 0,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # q, k: (b, l, h, d)
         self._update_cos_sin_cache(
             q.shape[1] + seqlen_offset,
             device=q.device,
@@ -1120,7 +1124,7 @@ def fp32_autocast_context(device_type: str):
 
 
 class RotationMatrix:
-    def __init__(self, rots: torch.Tensor):
+    def __init__(self, rots: torch.Tensor) -> None:
         if rots.ndim >= 1 and rots.shape[-1] == 9:
             rots = rots.unflatten(-1, (3, 3))
         if rots.ndim < 2 or tuple(rots.shape[-2:]) != (3, 3):
@@ -1258,11 +1262,12 @@ class Affine3D:
 
 
 def build_affine3d_from_coordinates(coords: torch.Tensor) -> tuple[Affine3D, torch.Tensor]:
+    # coords: (b, l, 3, 3)
     max_supported_distance = 1e6
     coord_mask = torch.all(
         torch.all(torch.isfinite(coords) & (coords < max_supported_distance), dim=-1),
         dim=-1,
-    )
+    )  # (b, l)
 
     def atom3_to_backbone_affine(bb_positions: torch.Tensor) -> Affine3D:
         n_atom, ca_atom, c_atom = bb_positions.unbind(dim=-2)
@@ -1272,7 +1277,7 @@ def build_affine3d_from_coordinates(coords: torch.Tensor) -> tuple[Affine3D, tor
     coords[~coord_mask] = 0
     average_per_n_ca_c = coords.masked_fill(~coord_mask[..., None, None], 0).sum(1) / (
         coord_mask.sum(-1)[..., None, None] + 1e-8
-    )
+    )  # (b, 3, 3)
     affine_from_average = atom3_to_backbone_affine(average_per_n_ca_c.float()).as_matrix()
 
     batch_size, seq_len, _, _ = coords.shape
@@ -1309,7 +1314,7 @@ class MultiHeadAttention(nn.Module):
         bias: bool = False,
         qk_layernorm: bool = True,
         attn_backend: str = "sdpa",
-    ):
+    ) -> None:
         super().__init__()
         self.d_model = d_model
         self.n_heads = n_heads
@@ -1334,8 +1339,9 @@ class MultiHeadAttention(nn.Module):
         q: torch.Tensor,
         k: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        q = q.unflatten(-1, (self.n_heads, self.d_head))
-        k = k.unflatten(-1, (self.n_heads, self.d_head))
+        # q, k: (b, l, d)
+        q = q.unflatten(-1, (self.n_heads, self.d_head))  # (b, l, h, d_h)
+        k = k.unflatten(-1, (self.n_heads, self.d_head))  # (b, l, h, d_h)
         q, k = self.rotary(q, k)
         q = q.flatten(-2, -1)
         k = k.flatten(-2, -1)
@@ -1349,7 +1355,8 @@ class MultiHeadAttention(nn.Module):
         output_attentions: bool = False,
         effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        qkv = self.layernorm_qkv(x)
+        # x: (b, l, d); seq_id, attention_mask: (b, l)
+        qkv = self.layernorm_qkv(x)  # (b, l, 3 * d)
         query, key, value = torch.chunk(qkv, 3, dim=-1)
         query = self.q_ln(query).to(query.dtype)
         key = self.k_ln(key).to(query.dtype)
@@ -1360,7 +1367,7 @@ class MultiHeadAttention(nn.Module):
             pattern="b s (h d) -> b h s d",
             h=self.n_heads,
         )
-        query, key, value = map(reshaper, (query, key, value))
+        query, key, value = map(reshaper, (query, key, value))  # each (b, h, l, d_h)
 
         mask = None
         if seq_id is not None:
@@ -1375,7 +1382,9 @@ class MultiHeadAttention(nn.Module):
                 output_attentions=output_attentions,
             )
         if output_attentions or effective_backend == AttentionBackend.EAGER:
-            attn_scores = torch.einsum("bhld,bhsd->bhls", query, key) * self.scale
+            attn_scores = (
+                torch.einsum("bhld,bhsd->bhls", query, key) * self.scale
+            )  # (b, h, l, l)
             if mask is not None:
                 attn_scores = attn_scores.masked_fill(
                     ~mask,
@@ -1384,7 +1393,9 @@ class MultiHeadAttention(nn.Module):
             attn_weights = torch.softmax(attn_scores, dim=-1)
             if mask is not None:
                 attn_weights = attn_weights.masked_fill(~mask, 0.0)
-            context = torch.einsum("bhls,bhsd->bhld", attn_weights, value)
+            context = torch.einsum(
+                "bhls,bhsd->bhld", attn_weights, value
+            )  # (b, h, l, d_h)
             if not output_attentions:
                 attn_weights = None
         else:
@@ -1428,7 +1439,7 @@ class MultiHeadAttention(nn.Module):
 
         if mask is not None:
             context = context.masked_fill(~mask.any(dim=-1, keepdim=True), 0.0)
-        context = einops.rearrange(context, "b h s d -> b s (h d)")
+        context = einops.rearrange(context, "b h s d -> b s (h d)")  # (b, l, d)
         return self.out_proj(context), attn_weights
 
     @staticmethod
@@ -1788,7 +1799,7 @@ class TransformerStack(nn.Module):
 
 
 class EncodeInputs(nn.Module):
-    def __init__(self, d_model: int, sequence_vocab_size: int = 64):
+    def __init__(self, d_model: int, sequence_vocab_size: int = 64) -> None:
         super().__init__()
 
         discrete_tracks = (
@@ -1887,7 +1898,7 @@ class ESM3CoreOutput:
 
 
 class OutputHeads(nn.Module):
-    def __init__(self, d_model: int, sequence_vocab_size: int = 64):
+    def __init__(self, d_model: int, sequence_vocab_size: int = 64) -> None:
         super().__init__()
         self.sequence_head = RegressionHead(d_model, sequence_vocab_size)
         self.structure_head = RegressionHead(d_model, 4096)
@@ -2159,7 +2170,7 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
     # Transformers writes a real AutoModel key instead of a null auto_map key.
     _auto_class = "AutoModel"
 
-    def __init__(self, config: FastESM3Config, **kwargs):
+    def __init__(self, config: FastESM3Config, **kwargs) -> None:
         super().__init__(config, **kwargs)
         self.esm3 = _build_esm3_core(config)
         self.post_init()

@@ -8,18 +8,18 @@ they do not replace or reconstruct any upstream computation.
 from __future__ import annotations
 
 import sys
+import torch
+import torch.nn as nn
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
-import torch
-import torch.nn as nn
 
 from tests.parity.support.reference_adapters import (
     install_byprot_sequence_namespace,
     move_model,
     snapshot_path,
 )
+
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _DPLM_SOURCE = _REPOSITORY_ROOT / "vendor" / "upstream" / "dplm" / "src"
@@ -52,6 +52,7 @@ class _OfficialDPLMForwardWrapper(nn.Module):
         attention_mask: torch.Tensor | None = None,
         **_kwargs: Any,
     ) -> SimpleNamespace:
+        # input_ids: (b, l)
         del attention_mask
         captured: list[torch.Tensor] = []
 
@@ -87,6 +88,7 @@ class _OfficialDPLMForwardWrapper(nn.Module):
     def generate(self, input_tokens: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         """Invoke the pinned implementation's public diffusion sampler."""
 
+        # input_tokens: (...)
         return self.oracle.generate(input_tokens=input_tokens, **kwargs)
 
 

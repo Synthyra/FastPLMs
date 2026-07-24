@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import importlib
 import math
+import torch
 from collections.abc import Callable, Sequence
 from importlib.util import find_spec
-
-import torch
 from torch import nn
 
 from . import vb_layers_initialize as initialize
@@ -27,6 +26,7 @@ def _initialize_weight(
     bias: torch.Tensor | None,
     method: str,
 ) -> None:
+    # weight: (d_out, d_in); bias: (d_out,) or None; both retain shape in place.
     initializers = {
         "default": initialize.lecun_normal_init_,
         "relu": initialize.he_normal_init_,
@@ -68,21 +68,28 @@ class Linear(nn.Linear):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         """Project ``input`` while preserving explicit precision policies."""
 
+        # input: (..., d_in); every branch returns (..., d_out).
         input_dtype = input.dtype
         if self.precision is not None:
             with torch.autocast("cuda", enabled=False):
-                bias = None if self.bias is None else self.bias.to(self.precision)
+                bias = (
+                    None if self.bias is None else self.bias.to(self.precision)
+                )  # (d_out,) or None
                 projected = nn.functional.linear(
                     input.to(self.precision),
                     self.weight.to(self.precision),
                     bias,
-                )
-            return projected.to(input_dtype)
+                )  # (..., d_out)
+            return projected.to(input_dtype)  # (..., d_out)
         if input_dtype is torch.bfloat16:
             with torch.autocast("cuda", enabled=False):
-                bias = None if self.bias is None else self.bias.to(input_dtype)
-                return nn.functional.linear(input, self.weight.to(input_dtype), bias)
-        return nn.functional.linear(input, self.weight, self.bias)
+                bias = (
+                    None if self.bias is None else self.bias.to(input_dtype)
+                )  # (d_out,) or None
+                return nn.functional.linear(
+                    input, self.weight.to(input_dtype), bias
+                )  # (..., d_out)
+        return nn.functional.linear(input, self.weight, self.bias)  # (..., d_out)
 
 
 class LayerNorm(nn.Module):
@@ -92,10 +99,11 @@ class LayerNorm(nn.Module):
         super().__init__()
         self.c_in = (c_in,)
         self.eps = eps
-        self.weight = nn.Parameter(torch.ones(c_in))
-        self.bias = nn.Parameter(torch.zeros(c_in))
+        self.weight = nn.Parameter(torch.ones(c_in))  # (c_in,)
+        self.bias = nn.Parameter(torch.zeros(c_in))  # (c_in,)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (..., c_in); normalization preserves shape.
         if x.dtype is torch.bfloat16:
             with torch.autocast("cuda", enabled=False):
                 return nn.functional.layer_norm(
@@ -126,11 +134,14 @@ def _attention(
 ) -> torch.Tensor:
     """Compute biased scaled attention after query scaling."""
 
-    scores = torch.matmul(query, permute_final_dims(key, (1, 0)))
+    # query/key/value: (..., h, n_q_or_k, d_h).
+    scores = torch.matmul(
+        query, permute_final_dims(key, (1, 0))
+    )  # (..., h, n_q, n_k)
     for bias in biases:
-        scores += bias
-    probabilities = softmax_no_cast(scores, dim=-1)
-    return torch.matmul(probabilities, value)
+        scores += bias  # (..., h, n_q, n_k)
+    probabilities = softmax_no_cast(scores, dim=-1)  # (..., h, n_q, n_k)
+    return torch.matmul(probabilities, value)  # (..., h, n_q, d_h)
 
 
 @torch.compiler.disable
@@ -144,6 +155,7 @@ def kernel_triangular_attn(
 ) -> torch.Tensor:
     """Call the optional cuEquivariance triangle-attention primitive."""
 
+    # q/k/v: (..., h, n, d_h); returned tensor uses the kernel's matching layout.
     if (
         find_spec("cuequivariance_torch") is None
         or find_spec("cuequivariance_ops_torch") is None
@@ -193,23 +205,32 @@ class Attention(nn.Module):
         """Project Q, K, and V to ``(..., h, n, d)`` tensors."""
 
         def split_heads(X: torch.Tensor) -> torch.Tensor:
-            return X.view(*X.shape[:-1], self.no_heads, -1).transpose(-2, -3)
+            # X: (..., n, h * d_h)
+            return X.view(*X.shape[:-1], self.no_heads, -1).transpose(
+                -2, -3
+            )  # (..., h, n, d_h)
 
-        q = split_heads(self.linear_q(q_x))
-        k = split_heads(self.linear_k(kv_x))
-        v = split_heads(self.linear_v(kv_x))
+        # q_x: (..., n_q, c_q); kv_x: (..., n_k, c_k).
+        q = split_heads(self.linear_q(q_x))  # (..., h, n_q, d_h)
+        k = split_heads(self.linear_k(kv_x))  # (..., h, n_k, d_h)
+        v = split_heads(self.linear_v(kv_x))  # (..., h, n_k, d_h)
         if apply_scale:
-            q /= math.sqrt(self.c_hidden)
-        return q, k, v
+            q /= math.sqrt(self.c_hidden)  # (..., h, n_q, d_h)
+        return q, k, v  # (..., h, n_q, d_h), two (..., h, n_k, d_h)
 
     def _wrap_up(self, output: torch.Tensor, q_x: torch.Tensor) -> torch.Tensor:
         """Apply the optional gate, merge heads, and project the update."""
 
+        # output: (..., n_q, h, d_h); q_x: (..., n_q, c_q).
         if self.linear_g is not None:
-            gate = self.sigmoid(self.linear_g(q_x))
-            gate = gate.view(*gate.shape[:-1], self.no_heads, -1)
-            output = output * gate
-        return self.linear_o(flatten_final_dims(output, 2))
+            gate = self.sigmoid(self.linear_g(q_x))  # (..., n_q, h * d_h)
+            gate = gate.view(
+                *gate.shape[:-1], self.no_heads, -1
+            )  # (..., n_q, h, d_h)
+            output = output * gate  # (..., n_q, h, d_h)
+        return self.linear_o(
+            flatten_final_dims(output, 2)
+        )  # (..., n_q, c_q)
 
     def forward(
         self,
@@ -222,7 +243,9 @@ class Attention(nn.Module):
     ) -> torch.Tensor:
         """Return a gated pair update with shape ``(..., n, c_q)``."""
 
-        q, k, v = self._prep_qkv(q_x, kv_x, apply_scale=not use_kernels)
+        q, k, v = self._prep_qkv(
+            q_x, kv_x, apply_scale=not use_kernels
+        )  # q: (..., h, n_q, d_h); k/v: (..., h, n_k, d_h)
         if use_kernels:
             output = kernel_triangular_attn(
                 q,
@@ -231,7 +254,12 @@ class Attention(nn.Module):
                 tri_bias=tri_bias,
                 mask=mask.bool(),
                 scale=1.0 / math.sqrt(self.c_hidden),
-            )
+            )  # (..., h, n_q, d_h)
         else:
-            output = _attention(q, k, v, (mask_bias, tri_bias))
-        return self._wrap_up(output.transpose(-2, -3), q_x)
+            output = _attention(
+                q, k, v, (mask_bias, tri_bias)
+            )  # (..., h, n_q, d_h)
+        return self._wrap_up(
+            output.transpose(-2, -3), q_x
+        )  # (..., n_q, c_q)
+    # tensor: (...); softmax preserves shape.

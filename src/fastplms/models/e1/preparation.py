@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import itertools
 import os
-from dataclasses import dataclass
-
 import torch
+from dataclasses import dataclass
 from tokenizers import Tokenizer
 from torch.nn.utils.rnn import pad_sequence
+
 
 PAD_TOKEN_ID = 0
 BOS_TOKEN_ID = 1
@@ -100,7 +100,7 @@ class E1BatchPreparer:
         revision: str | None = None,
         token: str | bool | None = None,
         preserve_context_labels: bool = False,
-    ):
+    ) -> None:
         self.tokenizer = tokenizer or get_tokenizer(
             tokenizer_source,
             local_files_only=local_files_only,
@@ -111,7 +111,7 @@ class E1BatchPreparer:
         self.data_prep_config = data_prep_config or DataPrepConfig()
         self.pad_token_id = self.tokenizer.token_to_id("<pad>")
         self.preserve_context_labels = preserve_context_labels
-        self.boundary_token_ids = torch.tensor(
+        self.boundary_token_ids = torch.tensor(  # (5,)
             [self.tokenizer.token_to_id(token) for token in ["<bos>", "<eos>", "1", "2", "<pad>"]]
         ).long()
         self.mask_token = "?"  # nosec
@@ -135,12 +135,11 @@ class E1BatchPreparer:
         device: torch.device | None = None,
         non_blocking: bool = False,
     ) -> dict[str, torch.Tensor | list[str] | list[int]]:
+        # Each sequence encoding contains aligned one-dimensional tensors of length l_i.
         device = torch.device("cpu") if device is None else device
         non_blocking = non_blocking and device.type == "cuda"
         padded_encodings = {}
-        # Note: We use -1 as the padding value for sequence and position ids because the 0 value
-        # is a valid value for sequence and position ids. -1 is then used to distinguish valid
-        # tokens from padding tokens, for example, when doing padding/unpadding for flash attention.
+        # Sequence and position ID zero is valid, so -1 unambiguously marks padding.
         for key, padding_value in {
             "input_ids": self.pad_token_id,
             "sequence_ids": -1,
@@ -148,7 +147,7 @@ class E1BatchPreparer:
             "global_position_ids": -1,
             "labels": self.pad_token_id,
         }.items():
-            padded_encodings[key] = pad_sequence(
+            padded_encodings[key] = pad_sequence(  # (b, l_max)
                 [enc[key] for enc in sequence_encodings],
                 batch_first=True,
                 padding_value=padding_value,
@@ -169,30 +168,33 @@ class E1BatchPreparer:
             )
 
         encodings = tuple(self.prepare_singleseq(item) for item in sequences)
-        token_counts = torch.tensor(
+        token_counts = torch.tensor(  # (n,)
             [encoding["input_ids"].numel() for encoding in encodings],
             dtype=torch.long,
         )
-        input_ids = torch.cat(tuple(encoding["input_ids"] for encoding in encodings))
-        labels = torch.cat(tuple(encoding["labels"] for encoding in encodings))
+        input_ids = torch.cat(tuple(encoding["input_ids"] for encoding in encodings))  # (t,)
+        labels = torch.cat(tuple(encoding["labels"] for encoding in encodings))  # (t,)
         positions = tuple(encoding["position_ids"] for encoding in encodings)
-        within_seq_position_ids = torch.cat(positions)
+        within_seq_position_ids = torch.cat(positions)  # (t,)
 
         # Offsets preserve gaps left by optional X-token removal.
-        position_spans = torch.tensor(
+        position_spans = torch.tensor(  # (n,)
             [int(position_ids[-1].item()) + 1 for position_ids in positions],
             dtype=torch.long,
         )
-        position_offsets = torch.cat(
+        position_offsets = torch.cat(  # (n,)
             (torch.zeros(1, dtype=torch.long), position_spans[:-1]),
         ).cumsum(dim=0)
-        global_position_ids = torch.cat(
+        global_position_ids = torch.cat(  # (t,)
             tuple(
                 position_ids + offset
                 for position_ids, offset in zip(positions, position_offsets, strict=True)
             )
         )
-        sequence_ids = torch.arange(len(encodings), dtype=torch.long).repeat_interleave(
+        sequence_ids = torch.arange(  # (t,)
+            len(encodings),
+            dtype=torch.long,
+        ).repeat_interleave(
             token_counts
         )
 
@@ -241,24 +243,30 @@ class E1BatchPreparer:
             )
 
         symbols = itertools.chain(("<bos>", "1"), sequence, ("2", "<eos>"))
-        tokens = torch.tensor(
+        tokens = torch.tensor(  # (l + 4,)
             [self.vocab[symbol] for symbol in symbols],
             dtype=torch.long,
         )
-        position_ids = torch.arange(tokens.numel(), dtype=torch.long)
+        position_ids = torch.arange(tokens.numel(), dtype=torch.long)  # (l + 4,)
 
         if self.data_prep_config.remove_X_tokens:
-            keep = tokens.ne(self.X_token_id)
-            tokens = tokens[keep]
-            position_ids = position_ids[keep]
+            keep = tokens.ne(self.X_token_id)  # (l + 4,)
+            tokens = tokens[keep]  # (t,)
+            position_ids = position_ids[keep]  # (t,)
 
-        return {"input_ids": tokens, "labels": tokens, "position_ids": position_ids}
+        return {  # Each tensor: (t,)
+            "input_ids": tokens,
+            "labels": tokens,
+            "position_ids": position_ids,
+        }
 
     def get_boundary_token_mask(self, tokens: torch.Tensor) -> torch.BoolTensor:
-        return torch.isin(tokens, self.boundary_token_ids.to(tokens.device))
+        # tokens: (...)
+        return torch.isin(tokens, self.boundary_token_ids.to(tokens.device))  # (...)
 
     def get_mask_positions_mask(self, tokens: torch.Tensor) -> torch.BoolTensor:
-        return tokens == self.mask_token_id
+        # tokens: (...)
+        return tokens == self.mask_token_id  # (...)
 
     def validate_sequence(self, sequence: str) -> bool:
         if not isinstance(sequence, str):

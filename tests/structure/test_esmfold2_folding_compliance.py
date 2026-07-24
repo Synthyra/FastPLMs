@@ -5,12 +5,11 @@ from __future__ import annotations
 import ast
 import inspect
 import os
-from collections.abc import Callable, Mapping
-from pathlib import Path
-
 import pytest
 import torch
 import torch.nn.functional as F
+from collections.abc import Callable, Mapping
+from pathlib import Path
 
 from fastplms.registry import ModelSpec, get_model_registry
 from tests.parity.support.reference_adapters.biohub_source import (
@@ -30,6 +29,7 @@ from tools.remote.biohub_reference_environment import (
     validate_biohub_reference_environment_evidence,
 )
 from tools.remote.reference_source_attestation import validate_reference_sources_evidence
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -178,8 +178,10 @@ def _assert_exact_inputs(
 
 
 def _first_coordinate_sample(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    # coordinates: (..., 3)
     coordinates = _output(tensors, "sample_atom_coords").float()
     if coordinates.ndim == 4:
+        # coordinates: (-1, coordinates.shape[-2], 3)
         coordinates = coordinates.reshape(-1, coordinates.shape[-2], 3)
     assert coordinates.ndim == 3 and coordinates.shape[-1] == 3
     return coordinates[0]
@@ -187,9 +189,12 @@ def _first_coordinate_sample(tensors: Mapping[str, torch.Tensor]) -> torch.Tenso
 
 def _ca_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
     features = _feature_tensors(tensors)
+    # encoded_ca: (4,)
     encoded_ca = torch.tensor([ord("C") - 32, ord("A") - 32, 0, 0])
     atom_names = features["ref_atom_name_chars"][0]
+    # atom_mask: (...)
     atom_mask = features["atom_attention_mask"][0].bool()
+    # mask: (...)
     mask = atom_names.eq(encoded_ca).all(dim=-1) & atom_mask
     token_ids = features["atom_to_token"][0, mask]
     valid_token_ids = features["token_attention_mask"][0].nonzero(as_tuple=True)[0]
@@ -204,10 +209,12 @@ def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
 
 
 def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    # actual: (...), expected: (...)
     actual_centered = actual.float() - actual.float().mean(dim=0, keepdim=True)
     expected_centered = expected.float() - expected.float().mean(dim=0, keepdim=True)
     covariance = actual_centered.T @ expected_centered
     left, _, right = torch.linalg.svd(covariance)
+    # correction: (3, 3)
     correction = torch.eye(3, dtype=torch.float32)
     correction[-1, -1] = torch.sign(torch.det(left @ right))
     rotation = left @ correction @ right
@@ -216,12 +223,15 @@ def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
 
 
 def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    # actual: (...), expected: (...)
     actual_distances = torch.cdist(actual.float(), actual.float())
     expected_distances = torch.cdist(expected.float(), expected.float())
+    # pair_mask: (...)
     pair_mask = expected_distances.lt(15.0)
     pair_mask.fill_diagonal_(False)
     assert pair_mask.any(), "No valid C-alpha pairs for lDDT."
     errors = (actual_distances - expected_distances).abs()
+    # score: (...)
     score = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
         dim=0
     )
@@ -257,8 +267,10 @@ def _structure_metrics(
     expected: Mapping[str, torch.Tensor],
 ) -> dict[str, float]:
     actual_features = _feature_tensors(actual)
+    # token_mask: (...)
     token_mask = actual_features["token_attention_mask"][0].bool()
     sequence_length = token_mask.numel()
+    # pair_mask: (...)
     pair_mask = token_mask[:, None] & token_mask[None, :]
     return {
         "ca_rmsd": _aligned_ca_rmsd(
@@ -303,6 +315,7 @@ def _probability_jsd(
     expected_logits: torch.Tensor,
     mask: torch.Tensor,
 ) -> torch.Tensor:
+    # actual_logits: (..., c), expected_logits: (..., c), mask: (...)
     actual_log_prob = F.log_softmax(actual_logits.float(), dim=-1)
     expected_log_prob = F.log_softmax(expected_logits.float(), dim=-1)
     actual_prob = actual_log_prob.exp()
@@ -314,6 +327,7 @@ def _probability_jsd(
         + (expected_prob * (expected_log_prob - log_mean_prob)).sum(dim=-1)
     )
     while mask.ndim < jsd.ndim:
+        # mask: (...)
         mask = mask.unsqueeze(0)
     mask = torch.broadcast_to(mask, jsd.shape)
     assert mask.any()
@@ -325,8 +339,11 @@ def _mean_probability_jsd(
     expected: Mapping[str, torch.Tensor],
 ) -> float:
     features = _feature_tensors(actual)
+    # atom_mask: (...)
     atom_mask = features["atom_attention_mask"].bool()
+    # token_mask: (...)
     token_mask = features["token_attention_mask"].bool()
+    # pair_mask: (...)
     pair_mask = token_mask[:, :, None] & token_mask[:, None, :]
     values = []
     for name in ("distogram_logits", "plddt_logits", "pae_logits", "pde_logits"):
@@ -346,12 +363,14 @@ def _assert_valid_geometry(
 ) -> None:
     features = _feature_tensors(tensors)
     coordinates = _first_coordinate_sample(tensors)
+    # atom_mask: (...)
     atom_mask = features["atom_attention_mask"][0].bool()
     assert torch.equal(
         _output(tensors, "atom_pad_mask").bool().reshape_as(atom_mask),
         atom_mask,
     )
     assert torch.isfinite(coordinates[atom_mask]).all(), f"{context}: non-finite coordinates"
+    # ca_coordinates: (..., 3)
     ca_coordinates = coordinates[_ca_mask(tensors)]
     ca_steps = torch.linalg.vector_norm(ca_coordinates[1:] - ca_coordinates[:-1], dim=-1)
     assert torch.isfinite(ca_steps).all(), f"{context}: non-finite C-alpha distances"
@@ -414,12 +433,16 @@ def test_structure_bundle_reference_path_has_no_fastplms_dependency() -> None:
 
 
 def test_structure_metric_helpers_are_exact_for_rigid_identity() -> None:
+    # expected: (4, 3)
     expected = torch.tensor([[0.0, 0.0, 0.0], [3.8, 0.0, 0.0], [7.2, 1.0, 0.0], [9.0, 4.0, 1.0]])
+    # rotation: (3, 3)
     rotation = torch.tensor([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
     actual = expected @ rotation + torch.tensor([4.0, -2.0, 7.0])
     assert _aligned_ca_rmsd(actual, expected) == pytest.approx(0.0, abs=1e-5)
     assert _lddt_ca(actual, expected) == pytest.approx(1.0)
+    # logits: (1, 2, 2)
     logits = torch.tensor([[[1.0, 2.0], [0.0, -1.0]]])
+    # mask: (1, 2)
     mask = torch.tensor([[True, True]])
     assert _probability_jsd(logits, logits, mask).item() == pytest.approx(0.0)
 

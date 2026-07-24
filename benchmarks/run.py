@@ -25,6 +25,7 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+
 CANONICAL_AAS = "ACDEFGHIKLMNPQRSTVWY"
 HOPPER_SM90_CAPABILITY = (9, 0)
 _HOPPER_PRODUCT_PATTERN = re.compile(r"(?<![A-Z0-9])(GH200|H200|H100)(?![A-Z0-9])")
@@ -230,13 +231,15 @@ def prepare_inputs(
     sequences = sequences_for_lengths(lengths)
     prep_tokens = getattr(getattr(model, "model", None), "prep_tokens", None)
     if prep_tokens is not None and hasattr(prep_tokens, "get_batch_kwargs"):
-        batch = prep_tokens.get_batch_kwargs(sequences, device=device)
+        batch = prep_tokens.get_batch_kwargs(
+            sequences, device=device
+        )  # tensor values: model-native packed shapes
         model_inputs = {
-            "input_ids": batch["input_ids"],
-            "within_seq_position_ids": batch["within_seq_position_ids"],
-            "global_position_ids": batch["global_position_ids"],
-            "sequence_ids": batch["sequence_ids"],
-            "attention_mask": (batch["sequence_ids"] != -1).long(),
+            "input_ids": batch["input_ids"],  # (...)
+            "within_seq_position_ids": batch["within_seq_position_ids"],  # (...)
+            "global_position_ids": batch["global_position_ids"],  # (...)
+            "sequence_ids": batch["sequence_ids"],  # (...)
+            "attention_mask": (batch["sequence_ids"] != -1).long(),  # (...)
         }
     else:
         tokenizer = getattr(model, "tokenizer", None)
@@ -259,17 +262,19 @@ def prepare_inputs(
                 max_length=max_length,
                 truncation=True,
             )
-        )
+        )  # each tensor: (b, l)
         model_inputs = {
             name: value.to(device, non_blocking=True) for name, value in model_inputs.items()
-        }
+        }  # each tensor: (b, l)
 
     parameters = inspect.signature(model.forward).parameters
     if "sequence_id" in parameters and "sequence_id" not in model_inputs:
-        attention_mask = model_inputs.get("attention_mask")
+        attention_mask = model_inputs.get("attention_mask")  # (b, l) or model-native (...)
         if attention_mask is None:
             raise RuntimeError("A model requiring sequence_id must expose an attention mask")
-        model_inputs["sequence_id"] = attention_mask.to(dtype=torch.bool)
+        model_inputs["sequence_id"] = attention_mask.to(
+            dtype=torch.bool
+        )  # (b, l) or model-native (...)
 
     if getattr(getattr(model, "config", None), "is_encoder_decoder", False):
         decoder_start_token_id = getattr(model.config, "decoder_start_token_id", None)
@@ -281,7 +286,7 @@ def prepare_inputs(
             decoder_start_token_id,
             device=device,
             dtype=torch.long,
-        )
+        )  # (b, 1)
 
     # Logical throughput counts biological residues. Attention masks also include
     # model-specific BOS, EOS, and other control tokens, so they cannot provide
@@ -463,9 +468,10 @@ def _measure_embedding(
 def _esmfold2_residue_mask(torch: Any, lengths: Sequence[int]) -> Any:
     if not lengths or any(length <= 0 for length in lengths):
         raise ValueError("ESMFold2 benchmark lengths must be positive")
-    length_tensor = torch.tensor(lengths, device="cuda", dtype=torch.long)
-    positions = torch.arange(max(lengths), device="cuda")
-    return positions.unsqueeze(0) < length_tensor.unsqueeze(1)
+    length_tensor = torch.tensor(lengths, device="cuda", dtype=torch.long)  # (b,)
+    positions = torch.arange(max(lengths), device="cuda")  # (l,)
+    residue_mask = positions.unsqueeze(0) < length_tensor.unsqueeze(1)  # (b, l)
+    return residue_mask  # (b, l)
 
 
 def _prepare_esmfold2_inputs(torch: Any, lengths: Sequence[int]) -> tuple[dict[str, Any], int, int]:
@@ -477,24 +483,28 @@ def _prepare_esmfold2_inputs(torch: Any, lengths: Sequence[int]) -> tuple[dict[s
         SEQUENCE_STANDARD_AA_MIN_TOKEN,
     )
 
-    residue_mask = _esmfold2_residue_mask(torch, lengths)
+    residue_mask = _esmfold2_residue_mask(torch, lengths)  # (b, l)
     b = len(lengths)
     sequence_length = max(lengths)
     input_ids = torch.full(
         (b, sequence_length), SEQUENCE_PAD_TOKEN, device="cuda", dtype=torch.long
-    )
+    )  # (b, l)
     n_residue_tokens = SEQUENCE_STANDARD_AA_MAX_TOKEN - SEQUENCE_STANDARD_AA_MIN_TOKEN
     for batch_index, length in enumerate(lengths):
         residues = (
             torch.arange(length, device="cuda", dtype=torch.long) + batch_index
-        ) % n_residue_tokens
-        input_ids[batch_index, :length] = residues + SEQUENCE_STANDARD_AA_MIN_TOKEN
+        ) % n_residue_tokens  # (l_i,)
+        input_ids[batch_index, :length] = (
+            residues + SEQUENCE_STANDARD_AA_MIN_TOKEN
+        )  # target slice: (l_i,)
     model_inputs = {
-        "input_ids": input_ids,
-        "asym_id": torch.zeros_like(input_ids),
-        "residue_index": torch.arange(sequence_length, device="cuda").expand(b, -1),
-        "mol_type": torch.zeros_like(input_ids),
-        "residue_mask": residue_mask,
+        "input_ids": input_ids,  # (b, l)
+        "asym_id": torch.zeros_like(input_ids),  # (b, l)
+        "residue_index": torch.arange(sequence_length, device="cuda").expand(
+            b, -1
+        ),  # (b, l)
+        "mol_type": torch.zeros_like(input_ids),  # (b, l)
+        "residue_mask": residue_mask,  # (b, l)
     }
     return model_inputs, sum(lengths), b * sequence_length
 
@@ -502,6 +512,7 @@ def _prepare_esmfold2_inputs(torch: Any, lengths: Sequence[int]) -> tuple[dict[s
 def _run_esmfold2_esmc_projection(model: Any, model_inputs: Mapping[str, Any]) -> Any:
     """Run preallocated residues through ESMC and the learned sequence projection."""
 
+    # model_inputs tensor values: (b, l)
     compute_hidden_states = getattr(model, "_compute_lm_hidden_states", None)
     project = getattr(model, "project_esmc_hidden_states", None)
     if compute_hidden_states is None or project is None:
@@ -514,8 +525,11 @@ def _run_esmfold2_esmc_projection(model: Any, model_inputs: Mapping[str, Any]) -
         model_inputs["residue_index"],
         model_inputs["mol_type"],
         model_inputs["residue_mask"],
-    )
-    return project(hidden_states, residue_mask=model_inputs["residue_mask"])
+    )  # (b, l, 81, 2560)
+    projected = project(
+        hidden_states, residue_mask=model_inputs["residue_mask"]
+    )  # (b, l, 256)
+    return projected  # (b, l, 256)
 
 
 def _measure_projection(
@@ -526,19 +540,19 @@ def _measure_projection(
     project = getattr(model, "project_esmc_hidden_states", None)
     if project is None:
         raise RuntimeError("Projection mode requires model.project_esmc_hidden_states")
-    residue_mask = _esmfold2_residue_mask(torch, lengths)
+    residue_mask = _esmfold2_residue_mask(torch, lengths)  # (b, l)
     batch_size = len(lengths)
     sequence_length = max(lengths)
-    # H contains all 81 ESMC states and has shape (b, l, 81, 2560).
     H = torch.randn(
         (batch_size, sequence_length, 81, 2560),
         device="cuda",
         dtype=torch.bfloat16,
-    )
+    )  # (b, l, 81, 2560)
 
     def operation() -> Any:
         with torch.inference_mode():
-            return project(H, residue_mask=residue_mask)
+            projected = project(H, residue_mask=residue_mask)  # (b, l, 256)
+        return projected  # (b, l, 256)
 
     first_forward_ms = cuda_sample_ms(torch, operation)
     warmup = warm_until_stable(torch, operation)
@@ -556,11 +570,16 @@ def _measure_esmc_projection(
     model: Any,
     lengths: Sequence[int],
 ) -> tuple[float, list[float], list[MeasurementBlock]]:
-    model_inputs, logical_tokens, padded_tokens = _prepare_esmfold2_inputs(torch, lengths)
+    model_inputs, logical_tokens, padded_tokens = _prepare_esmfold2_inputs(
+        torch, lengths
+    )  # each tensor: (b, l)
 
     def operation() -> Any:
         with torch.inference_mode():
-            return _run_esmfold2_esmc_projection(model, model_inputs)
+            projected = _run_esmfold2_esmc_projection(
+                model, model_inputs
+            )  # (b, l, 256)
+        return projected  # (b, l, 256)
 
     first_forward_ms = cuda_sample_ms(torch, operation)
     warmup = warm_until_stable(torch, operation)
@@ -706,7 +725,7 @@ def run_case(
             torch.device("cuda"),
             revision=load_revision,
             local_files_only=arguments.local_files_only,
-        )
+        )  # tensors: tokenizer (b, l) or model-native packed shapes
 
         def operation() -> Any:
             with torch.inference_mode(), _numeric_context(arguments, torch):

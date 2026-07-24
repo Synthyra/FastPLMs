@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import random
+import numpy as np
+import pytest
+import torch
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
-
-import numpy as np
-import pytest
-import torch
 
 from examples.binder_design_fastplms import compute_structure_losses
 from fastplms.models.boltz import modeling_boltz2, vb_modules_confidencev2
@@ -24,6 +23,7 @@ from fastplms.models.esmfold2.esmfold2_affine3d import Affine3D
 from fastplms.models.esmfold2.esmfold2_predicted_aligned_error import tm_loss
 from fastplms.models.esmfold2.protein_utils import prepare_protein_features
 from fastplms.models.esmfold2.reproducibility import seed_context
+
 
 pytestmark = pytest.mark.structure
 
@@ -235,6 +235,7 @@ def test_boltz_flat_bottom_potential_rejects_invalid_negation_masks(
     error_type: type[Exception],
     message: str,
 ) -> None:
+    # negation_mask: (...)
     with pytest.raises(error_type, match=message):
         FlatBottomPotential.compute_function(
             object(),
@@ -251,6 +252,7 @@ def _assert_boltz_atom_confidence_mapping(device: torch.device) -> None:
     multiplicity = 2
     token_count = 2
     slots_per_token = 3
+    # token_logits: (batch_size * multiplicity, token_count, slots_per_token, 1)
     token_logits = torch.empty(
         batch_size * multiplicity,
         token_count,
@@ -261,7 +263,9 @@ def _assert_boltz_atom_confidence_mapping(device: torch.device) -> None:
     for batch_sample in range(batch_size * multiplicity):
         for token in range(token_count):
             for slot in range(slots_per_token):
+                # A fully indexed token logit is scalar.
                 token_logits[batch_sample, token, slot, 0] = 100 * batch_sample + 10 * token + slot
+    # atom_to_token: (2, 4, 2)
     atom_to_token = torch.tensor(
         (
             ((0, 1), (1, 0), (0, 1), (0, 0)),
@@ -270,6 +274,7 @@ def _assert_boltz_atom_confidence_mapping(device: torch.device) -> None:
         dtype=torch.bool,
         device=device,
     )
+    # atom_pad_mask: (2, 4)
     atom_pad_mask = torch.tensor(
         ((1, 1, 1, 0), (1, 1, 1, 0)),
         dtype=torch.bool,
@@ -283,6 +288,7 @@ def _assert_boltz_atom_confidence_mapping(device: torch.device) -> None:
         multiplicity=multiplicity,
     )
 
+    # expected: (4, 4)
     expected = torch.tensor(
         (
             (10, 0, 11, 0),
@@ -323,12 +329,14 @@ def test_boltz_atom_confidence_is_finite_for_short_uneven_batches_and_multiplici
         num_pae_bins=4,
         token_level_confidence=False,
     )
+    # s: (batch_size * multiplicity, token_count, hidden_size)
     s = torch.randn(
         batch_size * multiplicity,
         token_count,
         hidden_size,
         requires_grad=True,
     )
+    # z: (batch_size * multiplicity, token_count, token_count, hidden_size)
     z = torch.randn(
         batch_size * multiplicity,
         token_count,
@@ -336,6 +344,7 @@ def test_boltz_atom_confidence_is_finite_for_short_uneven_batches_and_multiplici
         hidden_size,
         requires_grad=True,
     )
+    # atom_to_token: (2, 4, 2)
     atom_to_token = torch.tensor(
         (
             ((1, 0), (0, 0), (0, 0), (0, 0)),
@@ -343,6 +352,7 @@ def test_boltz_atom_confidence_is_finite_for_short_uneven_batches_and_multiplici
         ),
         dtype=torch.bool,
     )
+    # atom_pad_mask: (2, 4)
     atom_pad_mask = torch.tensor(
         ((1, 0, 0, 0), (1, 1, 1, 0)),
         dtype=torch.bool,
@@ -354,6 +364,7 @@ def test_boltz_atom_confidence_is_finite_for_short_uneven_batches_and_multiplici
         "asym_id": torch.tensor(((0, 0), (0, 1)), dtype=torch.long),
         "token_pad_mask": torch.tensor(((1, 0), (1, 1)), dtype=torch.float32),
     }
+    # zeros: (batch_size * multiplicity,)
     zeros = torch.zeros(batch_size * multiplicity)
     monkeypatch.setattr(
         vb_modules_confidencev2,
@@ -429,8 +440,10 @@ def test_boltz_real_features_flow_through_tiny_core_and_structure_loss() -> None
         features, template = build_boltz2_features("ACDE")
         tiny_core = torch.nn.Linear(3, 3, bias=False)
 
+    # reference_positions: (..., 3)
     reference_positions = features["ref_pos"]
     predicted_positions = tiny_core(reference_positions)
+    # atom_mask: (...)
     atom_mask = features["atom_pad_mask"].bool()
     loss = smooth_lddt_loss(
         predicted_positions,
@@ -518,6 +531,7 @@ def test_esmfold2_seed_context_restores_all_available_rng_streams(
 
 def test_esmfold2_real_features_flow_through_tiny_core_and_tm_loss() -> None:
     features = prepare_protein_features("ACDE")
+    # input_ids: (b, l)
     input_ids = features["input_ids"]
     sequence_length = input_ids.shape[1]
 
@@ -559,6 +573,7 @@ def test_esmfold2_real_features_flow_through_tiny_core_and_tm_loss() -> None:
 
 def test_binder_structure_loss_is_finite_and_differentiable() -> None:
     with seed_context(29):
+        # distogram_logits: (2, 16, 16, 128)
         distogram_logits = torch.randn((2, 16, 16, 128), requires_grad=True)
 
     losses = compute_structure_losses(distogram_logits, binder_length=12)

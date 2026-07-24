@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
-
 import pytest
 import torch
+from pathlib import Path
 
 from fastplms.registry import load_model_registry
 from tools.conversion import (
@@ -15,6 +14,7 @@ from tools.conversion import (
 )
 from tools.conversion.extract_esmfold2_geometry import extract_geometry
 from tools.conversion.state_validation import assert_state_dict_equal
+
 
 ROOT = Path(__file__).resolve().parents[2]
 

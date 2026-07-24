@@ -7,7 +7,7 @@ convention.
 ## Repository boundaries
 
 ```text
-src/fastplms/       installable package
+src/fastplms/       runtime source copied into Hugging Face artifacts
 tests/              unit, integration, parity, structure, and release tests
 benchmarks/         standalone, exact-device Hopper/SM90 performance harness
 docker/             candidate, runtime, and reference container definitions
@@ -18,11 +18,12 @@ LICENSES/           distributable third-party legal texts
 model_cards/        generated checkpoint cards
 ```
 
-Production modules live only under `src/fastplms`. They may use public Python
-dependencies declared in `pyproject.toml`, but they may not import code from
-`vendor`, alter `sys.path` to reach an official checkout, or download code at
-import time. A package import must not create a tokenizer, initialize a model,
-compile a kernel, log, change global Torch settings, or access the network.
+Production modules live only under `src/fastplms`. Their direct Python
+dependencies are declared under `requirements/`, but they may not import code
+from `vendor`, alter `sys.path` to reach an official checkout, or download code
+at import time. Importing runtime source must not create a tokenizer, initialize
+a model, compile a kernel, log, change global Torch settings, or access the
+network.
 
 Official repositories live under `vendor/upstream` as real Git submodules.
 Reference adapters call their public APIs and normalize outputs for comparison.
@@ -73,7 +74,7 @@ This flow keeps user loading simple without making the official checkout a
 runtime dependency. A local artifact under `dist/hub/<model>` and a published
 copy use the same Transformers interface.
 
-## Runtime package
+## Runtime source
 
 `fastplms.attention` owns backend names, mask construction, and explicit
 dispatch. Models use Transformers' `attn_implementation` and
@@ -96,8 +97,8 @@ compatible with existing checkpoints where possible. If a schema must change,
 `models.toml` names a deterministic converter and the release suite compares the
 converted key set, shape, dtype, and values exactly.
 
-`fastplms.runtime` reports package and runtime capabilities without mutating
-global state. Optional packages are imported only when their feature is
+`fastplms.runtime` reports source and runtime capabilities without mutating
+global state. Optional dependencies are imported only when their feature is
 requested.
 
 ## Checkpoint and artifact boundary
@@ -112,9 +113,9 @@ safetensors shards.
 An artifact is valid only if it loads in a fresh offline environment with
 FastPLMs absent from `sys.path`, `HF_HUB_OFFLINE=1`, `local_files_only=True`, and
 `trust_remote_code=True`. Every advertised AutoClass must load, run, save,
-reload, and match the package-source implementation.
+reload, and match the repository-source implementation.
 
-Runtime packaging uses tracked, clean regular files selected by path,
+Runtime bundling uses tracked, clean regular files selected by path,
 extension, and size allowlists. It rejects untracked inputs, symlinks,
 credentials, unknown binaries, and path escapes. Release records separate weight
 and runtime revisions, records source-tree and embedded-bundle digests plus

@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import json
 import xml.etree.ElementTree as ET
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 import benchmarks.suite as benchmark_suite
 from benchmarks.suite import benchmark_cases, bind_local_artifacts
 from fastplms.registry import ModelSpec, get_model_registry
+
 
 _RUNTIME_REVISION = "1" * 40
 _SOURCE_SHA256 = "2" * 64

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 import torch
+from typing import cast
 from torch import Tensor, nn
 
 from .vb_tri_attn_primitives import Attention, LayerNorm, Linear
@@ -44,6 +43,7 @@ class TriangleAttention(nn.Module):
     ) -> Tensor:
         """Evaluate attention in slices of the batch-like leading axes."""
 
+        # x: (..., l, l, d); biases/mask retain broadcastable triangular axes.
         def attention_call(**inputs: Tensor) -> Tensor:
             return cast(Tensor, self.mha(**inputs, use_kernels=use_kernels))
 
@@ -53,7 +53,7 @@ class TriangleAttention(nn.Module):
             "tri_bias": tri_bias,
             "mask_bias": mask_bias,
             "mask": mask,
-        }
+        }  # tensor values retain the input shapes above
         return cast(
             Tensor,
             chunk_layer(
@@ -74,6 +74,7 @@ class TriangleAttention(nn.Module):
         chunk_size: int | None,
         use_kernels: bool,
     ) -> Tensor:
+        # states: (..., l, l, d); returned tensor has the same shape.
         if chunk_size is not None and not use_kernels:
             return cast(
                 Tensor,
@@ -107,17 +108,19 @@ class TriangleAttention(nn.Module):
     ) -> Tensor:
         """Transform X with shape ``(..., l, l, d)`` under mask M."""
 
-        pair_mask = x.new_ones(x.shape[:-1]) if mask is None else mask
-        pair_states = x
+        pair_mask = x.new_ones(x.shape[:-1]) if mask is None else mask  # (..., l, l)
+        pair_states = x  # (..., l, l, d)
         if not self.starting:
-            pair_states = pair_states.transpose(-2, -3)
-            pair_mask = pair_mask.transpose(-1, -2)
+            pair_states = pair_states.transpose(-2, -3)  # (..., l, l, d)
+            pair_mask = pair_mask.transpose(-1, -2)  # (..., l, l)
 
-        normalized = self.layer_norm(pair_states)
-        expanded_mask = pair_mask[..., :, None, None, :]
-        mask_bias = self.inf * (expanded_mask - 1)
-        triangle_bias = permute_final_dims(self.linear(normalized), (2, 0, 1))
-        triangle_bias = triangle_bias.unsqueeze(-4)
+        normalized = self.layer_norm(pair_states)  # (..., l, l, d)
+        expanded_mask = pair_mask[..., :, None, None, :]  # (..., l, 1, 1, l)
+        mask_bias = self.inf * (expanded_mask - 1)  # (..., l, 1, 1, l)
+        triangle_bias = permute_final_dims(
+            self.linear(normalized), (2, 0, 1)
+        )  # (..., h, l, l)
+        triangle_bias = triangle_bias.unsqueeze(-4)  # (..., 1, h, l, l)
         output = self._run_attention(
             normalized,
             triangle_bias,
@@ -125,8 +128,10 @@ class TriangleAttention(nn.Module):
             expanded_mask,
             chunk_size,
             use_kernels,
-        )
-        return output if self.starting else output.transpose(-2, -3)
+        )  # (..., l, l, d)
+        return (
+            output if self.starting else output.transpose(-2, -3)
+        )  # (..., l, l, d)
 
 
 TriangleAttentionStartingNode = TriangleAttention

@@ -6,12 +6,11 @@ import subprocess
 import tarfile
 import time
 import urllib.error
+import pytest
+import torch
 from datetime import UTC, datetime, timedelta
 from email.message import Message
 from email.utils import format_datetime
-
-import pytest
-import torch
 
 from fastplms.embeddings import EmbeddingResult, load_sqlite_result
 from fastplms.models.e1 import retrieval as e1_retrieval
@@ -34,6 +33,7 @@ from fastplms.models.e1.modeling_e1 import (
     sample_multiple_contexts,
 )
 from fastplms.registry import load_model_registry
+
 
 E1_SAMPLING_GOLDEN_REVISION = "bfd2620a602248499f3d2583d85a7ecddf0b6e02"
 E1_SAMPLING_GOLDEN_PROVENANCE = {

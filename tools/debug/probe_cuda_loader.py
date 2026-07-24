@@ -6,6 +6,7 @@ import json
 import subprocess
 from pathlib import Path
 
+
 REQUIRED_SYMBOL = "cublasLtGroupedMatrixLayoutInit_internal"
 TE_LIBRARY = Path(
     "/opt/venv/lib/python3.12/site-packages/transformer_engine/wheel_lib/libtransformer_engine.so"

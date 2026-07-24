@@ -4,24 +4,27 @@ FastPLMs uses the Transformers attention interface. Callers select a backend at
 load time with `attn_implementation` or after loading with
 `set_attn_implementation()`.
 
-## Install and platform requirements
+## Dependencies and platform requirements
 
 FastPLMs supports Python 3.11 through 3.14. The release validation environment
-uses PyTorch 2.13 and Transformers 5.13. Eager, SDPA, and Flex Attention use the
-core install:
+uses PyTorch 2.13 and Transformers 5.13. Install the core dependencies directly;
+Transformers loads FastPLMs runtime source from the Hugging Face model:
 
 ```bash
 python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14"
 ```
 
-FlashAttention 2 and 3 require the `flash` extra, a compatible Linux CUDA
-device, BF16 execution, and the manifest-pinned Hugging Face kernel already in
-cache for offline use:
+FlashAttention 2 and 3 additionally require Hugging Face `kernels`, a
+compatible Linux CUDA device, BF16 execution, and the manifest-pinned kernel
+already in cache for offline use:
 
 ```bash
 python -m pip install \
-  "fastplms[flash] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14" \
+  "kernels>=0.15,<0.16"
 ```
 
 The Hub quick start below needs network access for the first model download.
@@ -91,8 +94,8 @@ for later calls.
 
 ## FlashAttention compatibility policy
 
-The `flash` extra installs Hugging Face `kernels`, not the `flash-attn` Python
-package. The adapters follow the
+The Flash dependency is Hugging Face `kernels`, not the `flash-attn` Python
+distribution. The adapters follow the
 [Transformers kernel-loading contract](https://huggingface.co/docs/transformers/v5.13.0/kernel_doc/loading_kernels)
 and resolve only the snapshot-pinned `kernels-community` repositories recorded
 in the manifest. The immutable snapshot revisions are
@@ -103,7 +106,7 @@ loader asks `kernels` to download and hash-validate the compatible variant
 before importing it. It never falls back to a branch, compiles source, imports
 the `flash_attn` package, or substitutes one FlashAttention version for another.
 
-After installing the `flash` extra, `kernels download .` may be used during
+After installing `kernels`, `kernels download .` may be used during
 image build or cache preparation to fetch both locked binaries. This command
 downloads precompiled artifacts only. It is not required when the runtime can
 populate its Hugging Face cache on first use.

@@ -13,6 +13,7 @@ import torch
 from fastplms.models.boltz.minimal_featurizer import build_boltz2_features
 from fastplms.models.boltz.minimal_structures import ProteinStructureTemplate
 
+
 pytestmark = pytest.mark.structure
 
 SEQUENCE = "ACDEFGHIKLMNPQRSTVWY"

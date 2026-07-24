@@ -33,7 +33,9 @@ def test_e1_fresh_pretrained_load_rebuilds_rotary_cache(tmp_path) -> None:
     rotary = reloaded.model.layers[0].norm_attn_norm.self_attn.rotary_emb
     assert rotary.inv_freq.numel() == 0
 
+    # input_ids: (1, 5)
     input_ids = torch.tensor([[1, 4, 5, 6, 2]])
+    # position_ids: (b, l)
     position_ids = torch.arange(5).unsqueeze(0)
     output = reloaded(
         input_ids=input_ids,
@@ -68,6 +70,7 @@ def test_esm3_fresh_pretrained_load_rebuilds_rotary_frequency(tmp_path) -> None:
     assert rotary._cos_cached is None
     assert rotary._sin_cached is None
 
+    # input_ids: (1, 5)
     input_ids = torch.tensor([[0, 5, 6, 7, 2]])
     output = reloaded(
         input_ids=input_ids,

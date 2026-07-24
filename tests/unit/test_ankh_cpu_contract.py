@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
+import pytest
+import torch
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Barrier, Lock
 from types import SimpleNamespace
 from typing import ClassVar
-
-import pytest
-import torch
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, processors
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -30,7 +30,7 @@ from fastplms.models.ankh.modeling_ankh import (
 )
 
 
-def _config(**overrides) -> FastAnkhConfig:
+def _config(**overrides: object) -> FastAnkhConfig:
     values = {
         "vocab_size": 16,
         "d_model": 8,
@@ -66,7 +66,9 @@ class _TinyTokenizer:
         alphabet = {"A": 2, "C": 3, "D": 4, "E": 5, "F": 6, "S": 7}
         rows = [[alphabet.get(character, 8) for character in value] + [1] for value in sequences]
         width = max(len(row) for row in rows)
-        input_ids = torch.tensor([row + [0] * (width - len(row)) for row in rows])
+        input_ids = torch.tensor(  # (b, l)
+            [row + [0] * (width - len(row)) for row in rows]
+        )
         return {
             "input_ids": input_ids,
             "attention_mask": input_ids.ne(0).to(dtype=torch.long),
@@ -126,7 +128,9 @@ def test_ankh_tokenization_rejects_empty_inputs_and_real_slow_tokenizers() -> No
         configure_ankh_tokenizer(SimpleNamespace(is_fast=False))
 
 
-def test_offline_auto_tokenizer_flags_and_seq2seq_generation_config(tmp_path) -> None:
+def test_offline_auto_tokenizer_flags_and_seq2seq_generation_config(
+    tmp_path: Path,
+) -> None:
     """Transformers 5.13 must resolve both tokenizer flags from local artifact bytes."""
 
     vocabulary = [
@@ -327,8 +331,8 @@ def test_ankh_custom_encoder_invokes_every_t5_stack_dropout_site() -> None:
 
 
 def test_ankh_dropout_is_eval_exact_and_seeded_in_training() -> None:
-    input_ids = torch.tensor([[2, 3, 4, 1], [5, 6, 1, 0]])
-    attention_mask = input_ids.ne(0)
+    input_ids = torch.tensor([[2, 3, 4, 1], [5, 6, 1, 0]])  # (b=2, l=4)
+    attention_mask = input_ids.ne(0)  # (b, l)
 
     torch.manual_seed(31)
     zero_dropout = FastAnkhModel(_config(dropout_rate=0.0)).eval()
@@ -379,7 +383,12 @@ def test_ankh_dropout_is_eval_exact_and_seeded_in_training() -> None:
 )
 @pytest.mark.parametrize("argument", ("use_cache", "decoder_input_ids", "misspelled_option"))
 def test_ankh_encoder_views_reject_every_unexpected_forward_argument(
-    model_class,
+    model_class: (
+        type[FastAnkhModel]
+        | type[FastAnkhForMaskedLMExtension]
+        | type[FastAnkhForSequenceClassification]
+        | type[FastAnkhForTokenClassification]
+    ),
     argument: str,
 ) -> None:
     model = model_class(_config(num_labels=3)).eval()
@@ -392,10 +401,10 @@ def test_seq2seq_embedding_selects_encoder_and_explicit_decoder_layers() -> None
     torch.manual_seed(7)
     model = FastAnkhForConditionalGeneration(_config()).eval()
     model.tokenizer = _TinyTokenizer()
-    input_ids = torch.tensor([[2, 3, 4, 1], [5, 6, 1, 0]])
-    attention_mask = input_ids.ne(0)
-    decoder_input_ids = torch.tensor([[2, 7, 1, 0], [3, 1, 0, 0]])
-    decoder_attention_mask = decoder_input_ids.ne(0)
+    input_ids = torch.tensor([[2, 3, 4, 1], [5, 6, 1, 0]])  # (b=2, l_enc=4)
+    attention_mask = input_ids.ne(0)  # (b, l_enc)
+    decoder_input_ids = torch.tensor([[2, 7, 1, 0], [3, 1, 0, 0]])  # (b, l_dec=4)
+    decoder_attention_mask = decoder_input_ids.ne(0)  # (b, l_dec)
 
     encoder_states = model._embed(
         input_ids,
@@ -444,7 +453,7 @@ def test_seq2seq_embedding_selects_encoder_and_explicit_decoder_layers() -> None
 
 def test_decoder_default_attention_mask_preserves_t5_start_and_masks_padding() -> None:
     model = FastAnkhForConditionalGeneration(_config()).eval()
-    decoder_input_ids = torch.tensor([[0, 5, 1, 0], [0, 6, 7, 1]])
+    decoder_input_ids = torch.tensor([[0, 5, 1, 0], [0, 6, 7, 1]])  # (b=2, l_dec=4)
 
     prepared_ids, prepared_mask, _ = model._prepare_decoder_embedding_inputs(
         batch_size=2,
@@ -474,7 +483,7 @@ def test_seq2seq_view_forces_eager_without_changing_encoder_backend_contract() -
 def test_decoder_embeddings_require_explicit_aligned_inputs() -> None:
     model = FastAnkhForConditionalGeneration(_config()).eval()
     model.tokenizer = _TinyTokenizer()
-    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])
+    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])  # (b=2, l=3)
 
     with pytest.raises(ValueError, match="requires exactly one"):
         model._embed(input_ids, hidden_state_source="decoder")
@@ -502,8 +511,8 @@ def test_decoder_embeddings_require_explicit_aligned_inputs() -> None:
 def test_decoder_embedding_batch_masks_start_eos_padding_and_sentinels() -> None:
     model = FastAnkhForConditionalGeneration(_config()).eval()
     tokenizer = _TinyTokenizer()
-    decoder_input_ids = torch.tensor([[2, 7, 1, 0], [3, 1, 0, 0]])
-    decoder_attention_mask = decoder_input_ids.ne(0)
+    decoder_input_ids = torch.tensor([[2, 7, 1, 0], [3, 1, 0, 0]])  # (b=2, l_dec=4)
+    decoder_attention_mask = decoder_input_ids.ne(0)  # (b, l_dec)
 
     batch = model._embedding_batch(
         ["ACD", "EF"],
@@ -535,8 +544,8 @@ def test_decoder_embedding_batch_masks_start_eos_padding_and_sentinels() -> None
 def test_decoder_embed_dataset_slices_aligned_inputs_and_records_provenance() -> None:
     model = FastAnkhForConditionalGeneration(_config()).eval()
     tokenizer = _TinyTokenizer()
-    decoder_input_ids = torch.tensor([[2, 7, 1, 0], [3, 1, 0, 0]])
-    decoder_attention_mask = decoder_input_ids.ne(0)
+    decoder_input_ids = torch.tensor([[2, 7, 1, 0], [3, 1, 0, 0]])  # (b=2, l_dec=4)
+    decoder_attention_mask = decoder_input_ids.ne(0)  # (b, l_dec)
 
     result = model.embed_dataset(
         ["ACD", "EF"],
@@ -574,8 +583,8 @@ def test_encoder_only_view_rejects_decoder_hidden_states() -> None:
 
 def test_sdpa_output_attentions_fallback_keeps_padding_mask_and_backend() -> None:
     model = FastAnkhModel(_config(attn_backend="sdpa")).eval()
-    input_ids = torch.tensor([[2, 3, 1, 0], [4, 1, 0, 0]])
-    attention_mask = input_ids.ne(0)
+    input_ids = torch.tensor([[2, 3, 1, 0], [4, 1, 0, 0]])  # (b=2, l=4)
+    attention_mask = input_ids.ne(0)  # (b, l)
 
     with pytest.warns(
         RuntimeWarning,
@@ -605,10 +614,17 @@ def test_sdpa_output_attentions_fallback_keeps_padding_mask_and_backend() -> Non
         FastAnkhForTokenClassification,
     ),
 )
-def test_encoder_auto_classes_honor_tuple_and_dict_outputs(model_class) -> None:
+def test_encoder_auto_classes_honor_tuple_and_dict_outputs(
+    model_class: (
+        type[FastAnkhModel]
+        | type[FastAnkhForMaskedLMExtension]
+        | type[FastAnkhForSequenceClassification]
+        | type[FastAnkhForTokenClassification]
+    ),
+) -> None:
     model = model_class(_config(num_labels=3)).eval()
-    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])
-    attention_mask = input_ids.ne(0)
+    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])  # (b=2, l=3)
+    attention_mask = input_ids.ne(0)  # (b, l)
 
     dictionary_output = model(
         input_ids=input_ids,
@@ -642,7 +658,14 @@ def test_encoder_auto_classes_honor_tuple_and_dict_outputs(model_class) -> None:
         FastAnkhForTokenClassification,
     ),
 )
-def test_encoder_auto_classes_resize_shared_input_embeddings(model_class) -> None:
+def test_encoder_auto_classes_resize_shared_input_embeddings(
+    model_class: (
+        type[FastAnkhModel]
+        | type[FastAnkhForMaskedLMExtension]
+        | type[FastAnkhForSequenceClassification]
+        | type[FastAnkhForTokenClassification]
+    ),
+) -> None:
     model = model_class(_config(num_labels=3))
     assert model.shared is model.get_input_embeddings()
     assert model.encoder.embed_tokens is model.shared
@@ -674,9 +697,16 @@ def test_encoder_auto_classes_resize_shared_input_embeddings(model_class) -> Non
         ),
     ),
 )
-def test_encoder_task_heads_produce_finite_loss_and_gradients(model_class, labels) -> None:
+def test_encoder_task_heads_produce_finite_loss_and_gradients(
+    model_class: (
+        type[FastAnkhForMaskedLMExtension]
+        | type[FastAnkhForSequenceClassification]
+        | type[FastAnkhForTokenClassification]
+    ),
+    labels: torch.Tensor,
+) -> None:
     model = model_class(_config(num_labels=3)).train()
-    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])
+    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])  # (b=2, l=3)
     output = model(
         input_ids=input_ids,
         attention_mask=input_ids.ne(0),
@@ -692,7 +722,7 @@ def test_encoder_task_heads_produce_finite_loss_and_gradients(model_class, label
 
 def test_seq2seq_head_produces_finite_loss_and_gradients() -> None:
     model = FastAnkhForConditionalGeneration(_config()).train()
-    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])
+    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])  # (b=2, l=3)
     output = model(
         input_ids=input_ids,
         attention_mask=input_ids.ne(0),
@@ -706,7 +736,9 @@ def test_seq2seq_head_produces_finite_loss_and_gradients() -> None:
     assert torch.isfinite(model.shared.weight.grad).all()
 
 
-def test_complete_t5_checkpoint_loads_clean_encoder_and_seq2seq_views(tmp_path) -> None:
+def test_complete_t5_checkpoint_loads_clean_encoder_and_seq2seq_views(
+    tmp_path: Path,
+) -> None:
     torch.manual_seed(11)
     full = FastAnkhForConditionalGeneration(_config()).eval()
     full.save_pretrained(tmp_path, safe_serialization=True)

@@ -1,11 +1,11 @@
 import math
-
 import numpy as np
 import torch
 from torch.nn.functional import one_hot
 
 from . import vb_const as const
 from .minimal_structures import ProteinStructureTemplate
+
 
 _ELEMENT_TO_Z = {
     "H": 1,
@@ -75,7 +75,7 @@ def _atom_name_to_codes(atom_name: str) -> torch.Tensor:
     vals = [ord(ch) - 32 for ch in clipped]
     while len(vals) < 4:
         vals.append(0)
-    out = torch.tensor(vals, dtype=torch.long)
+    out = torch.tensor(vals, dtype=torch.long)  # (4,)
     if not (torch.all(out >= 0) and torch.all(out < 64)):
         raise ValueError(f"Invalid atom-name encoding for '{atom_name}'.")
     return out
@@ -309,7 +309,7 @@ def _get_atom_position(res_name: str, atom_name: str, atom_idx: int) -> np.ndarr
     to a simple geometric placement for unknown residue/atom combinations.
     """
     if res_name in _RDKIT_CONFORMERS and atom_name in _RDKIT_CONFORMERS[res_name]:
-        return np.array(_RDKIT_CONFORMERS[res_name][atom_name], dtype=np.float32)
+        return np.array(_RDKIT_CONFORMERS[res_name][atom_name], dtype=np.float32)  # (3,)
     # Fallback for unknown atoms (should not happen for canonical AAs)
     angle = (atom_idx + 1) * 0.7
     radius = 1.4 + 0.03 * atom_idx
@@ -320,7 +320,7 @@ def _get_atom_position(res_name: str, atom_name: str, atom_idx: int) -> np.ndarr
             0.1 * ((atom_idx % 5) - 2),
         ],
         dtype=np.float32,
-    )
+    )  # (3,)
 
 
 def _build_template(
@@ -340,7 +340,7 @@ def _build_template(
     atom_elements: list[str] = []
     atom_residue_index: list[int] = []
     atom_chain_id: list[str] = []
-    atom_positions: list[np.ndarray] = []
+    atom_positions: list[np.ndarray] = []  # each: (3,)
     residue_center_atom_idx: list[int] = []
     residue_disto_atom_idx: list[int] = []
     residue_frame_atom_idx: list[int] = []
@@ -370,7 +370,7 @@ def _build_template(
             atom_residue_index.append(res_idx)
             atom_chain_id.append("A")
 
-            atom_pos = _get_atom_position(token_name, atom_name, local_idx)
+            atom_pos = _get_atom_position(token_name, atom_name, local_idx)  # (3,)
             atom_positions.append(atom_pos)
 
             if atom_name == center_atom_name:
@@ -422,14 +422,14 @@ def _build_template(
 
 def _random_rotation_matrix() -> torch.Tensor:
     """Sample a uniform random 3x3 rotation matrix (Algorithm 19 from AF2/Boltz)."""
-    quaternion = torch.randn((1, 4), dtype=torch.float32)
-    squared_norm = (quaternion * quaternion).sum(dim=1)
-    norm = torch.sqrt(squared_norm)
-    signed_norm = torch.where(quaternion[:, 0] < 0, -norm, norm)
-    quaternion = quaternion / signed_norm[:, None]
+    quaternion = torch.randn((1, 4), dtype=torch.float32)  # (1, 4)
+    squared_norm = (quaternion * quaternion).sum(dim=1)  # (1,)
+    norm = torch.sqrt(squared_norm)  # (1,)
+    signed_norm = torch.where(quaternion[:, 0] < 0, -norm, norm)  # (1,)
+    quaternion = quaternion / signed_norm[:, None]  # (1, 4)
 
-    real, i, j, k = torch.unbind(quaternion, dim=-1)
-    two_s = 2.0 / (quaternion * quaternion).sum(dim=-1)
+    real, i, j, k = torch.unbind(quaternion, dim=-1)  # each: (1,)
+    two_s = 2.0 / (quaternion * quaternion).sum(dim=-1)  # (1,)
     rotation = torch.stack(
         (
             1 - two_s * (j * j + k * k),
@@ -443,8 +443,8 @@ def _random_rotation_matrix() -> torch.Tensor:
             1 - two_s * (i * i + j * j),
         ),
         dim=-1,
-    )
-    return rotation.reshape(1, 3, 3)[0]
+    )  # (1, 9)
+    return rotation.reshape(1, 3, 3)[0]  # (3, 3)
 
 
 def _center_and_augment_atoms_per_residue(
@@ -457,25 +457,30 @@ def _center_and_augment_atoms_per_residue(
     The pinned implementation intentionally excludes the final residue because
     it iterates to the maximum reference-space identifier rather than through it.
     """
-    result = atom_positions.clone()
-    residue_index_tensor = torch.tensor(atom_residue_index, dtype=torch.long)
+    # atom_positions: (a, 3), where a is the unpadded atom count.
+    result = atom_positions.clone()  # (a, 3)
+    residue_index_tensor = torch.tensor(atom_residue_index, dtype=torch.long)  # (a,)
     for residue_idx in range(max(num_residues - 1, 0)):
-        residue_mask = residue_index_tensor == residue_idx
+        residue_mask = residue_index_tensor == residue_idx  # (a,)
         if not torch.any(residue_mask):
             raise RuntimeError(f"Residue index {residue_idx} has no atoms.")
-        residue_coords = result[residue_mask][None]
+        residue_coords = result[residue_mask][None]  # (1, a_r, 3)
         resolved_mask = torch.ones(
             residue_coords.shape[:2], dtype=torch.bool, device=residue_coords.device
-        )
+        )  # (1, a_r)
         residue_center = torch.sum(
             residue_coords * resolved_mask[:, :, None], dim=1, keepdim=True
-        ) / torch.sum(resolved_mask[:, :, None], dim=1, keepdim=True)
-        residue_coords = residue_coords - residue_center
-        rotation = _random_rotation_matrix()[None]
-        residue_coords = torch.einsum("bmd,bds->bms", residue_coords, rotation)
-        residue_coords = residue_coords + torch.randn_like(residue_coords[:, 0:1, :])
-        result[residue_mask] = residue_coords[0]
-    return result
+        ) / torch.sum(resolved_mask[:, :, None], dim=1, keepdim=True)  # (1, 1, 3)
+        residue_coords = residue_coords - residue_center  # (1, a_r, 3)
+        rotation = _random_rotation_matrix()[None]  # (1, 3, 3)
+        residue_coords = torch.einsum(
+            "bmd,bds->bms", residue_coords, rotation
+        )  # (1, a_r, 3)
+        residue_coords = (
+            residue_coords + torch.randn_like(residue_coords[:, 0:1, :])
+        )  # (1, a_r, 3)
+        result[residue_mask] = residue_coords[0]  # (a_r, 3)
+    return result  # (a, 3)
 
 
 def build_boltz2_features(
@@ -499,39 +504,44 @@ def build_boltz2_features(
     if num_tokens <= 0 or num_atoms <= 0:
         raise RuntimeError("Boltz2 feature construction produced an empty protein template.")
 
-    atom_positions = torch.tensor(np.asarray(atom_positions_np), dtype=torch.float32)
+    # t is the token count, a is the unpadded atom count, and a_p is the padded atom count.
+    atom_positions = torch.tensor(
+        np.asarray(atom_positions_np), dtype=torch.float32
+    )  # (a, 3)
     atom_positions = _center_and_augment_atoms_per_residue(
         atom_positions=atom_positions,
         atom_residue_index=template.atom_residue_index,
         num_residues=num_tokens,
-    )
+    )  # (a, 3)
 
-    token_index = torch.arange(num_tokens, dtype=torch.long).unsqueeze(0)
-    residue_index = torch.arange(num_tokens, dtype=torch.long).unsqueeze(0)
-    asym_id = torch.zeros((1, num_tokens), dtype=torch.long)
-    entity_id = torch.zeros((1, num_tokens), dtype=torch.long)
-    sym_id = torch.zeros((1, num_tokens), dtype=torch.long)
+    token_index = torch.arange(num_tokens, dtype=torch.long).unsqueeze(0)  # (1, t)
+    residue_index = torch.arange(num_tokens, dtype=torch.long).unsqueeze(0)  # (1, t)
+    asym_id = torch.zeros((1, num_tokens), dtype=torch.long)  # (1, t)
+    entity_id = torch.zeros((1, num_tokens), dtype=torch.long)  # (1, t)
+    sym_id = torch.zeros((1, num_tokens), dtype=torch.long)  # (1, t)
     mol_type = torch.full(
         (1, num_tokens),
         fill_value=const.chain_type_ids["PROTEIN"],
         dtype=torch.long,
-    )
+    )  # (1, t)
 
-    res_type_ids = torch.tensor(residue_token_ids, dtype=torch.long)
-    res_type = one_hot(res_type_ids, num_classes=const.num_tokens).unsqueeze(0)
+    res_type_ids = torch.tensor(residue_token_ids, dtype=torch.long)  # (t,)
+    res_type = one_hot(
+        res_type_ids, num_classes=const.num_tokens
+    ).unsqueeze(0)  # (1, t, n_res_type)
 
     # token_bonds encodes explicit covalent cross-links from structure bonds,
     # NOT backbone peptide bonds (those are implicit via residue_index + asym_id).
     # For a standard single-chain protein without cross-links, this is all zeros.
     # This matches the official Boltz2 featurizer (featurizerv2.py lines 696-705).
-    token_bonds = torch.zeros((num_tokens, num_tokens), dtype=torch.float32)
-    type_bonds = torch.zeros((num_tokens, num_tokens), dtype=torch.long)
-    token_bonds = token_bonds.unsqueeze(0).unsqueeze(-1)
-    type_bonds = type_bonds.unsqueeze(0)
+    token_bonds = torch.zeros((num_tokens, num_tokens), dtype=torch.float32)  # (t, t)
+    type_bonds = torch.zeros((num_tokens, num_tokens), dtype=torch.long)  # (t, t)
+    token_bonds = token_bonds.unsqueeze(0).unsqueeze(-1)  # (1, t, t, 1)
+    type_bonds = type_bonds.unsqueeze(0)  # (1, t, t)
 
-    token_pad_mask = torch.ones((1, num_tokens), dtype=torch.float32)
-    token_resolved_mask = torch.ones((1, num_tokens), dtype=torch.float32)
-    token_disto_mask = torch.ones((1, num_tokens), dtype=torch.float32)
+    token_pad_mask = torch.ones((1, num_tokens), dtype=torch.float32)  # (1, t)
+    token_resolved_mask = torch.ones((1, num_tokens), dtype=torch.float32)  # (1, t)
+    token_disto_mask = torch.ones((1, num_tokens), dtype=torch.float32)  # (1, t)
 
     num_contact_classes = len(const.contact_conditioning_info)
     unspecified_id = const.contact_conditioning_info["UNSPECIFIED"]
@@ -539,12 +549,14 @@ def build_boltz2_features(
         (num_tokens, num_tokens),
         fill_value=unspecified_id,
         dtype=torch.long,
-    )
+    )  # (t, t)
     contact_conditioning = one_hot(
         contact_ids,
         num_classes=num_contact_classes,
-    ).unsqueeze(0)
-    contact_threshold = torch.zeros((1, num_tokens, num_tokens), dtype=torch.float32)
+    ).unsqueeze(0)  # (1, t, t, n_contact)
+    contact_threshold = torch.zeros(
+        (1, num_tokens, num_tokens), dtype=torch.float32
+    )  # (1, t, t)
 
     if "x-ray diffraction" not in const.method_types_ids:
         raise RuntimeError("Boltz2 method metadata omits x-ray diffraction.")
@@ -552,20 +564,22 @@ def build_boltz2_features(
         (1, num_tokens),
         fill_value=const.method_types_ids["x-ray diffraction"],
         dtype=torch.long,
-    )
-    modified = torch.zeros((1, num_tokens), dtype=torch.long)
-    cyclic_period = torch.zeros((1, num_tokens), dtype=torch.float32)
-    affinity_token_mask = torch.zeros((1, num_tokens), dtype=torch.float32)
+    )  # (1, t)
+    modified = torch.zeros((1, num_tokens), dtype=torch.long)  # (1, t)
+    cyclic_period = torch.zeros((1, num_tokens), dtype=torch.float32)  # (1, t)
+    affinity_token_mask = torch.zeros((1, num_tokens), dtype=torch.float32)  # (1, t)
 
-    ref_pos = atom_positions.unsqueeze(0)
-    atom_pad_mask = torch.ones((1, num_atoms), dtype=torch.float32)
-    atom_resolved_mask = torch.ones((1, num_atoms), dtype=torch.bool)
+    ref_pos = atom_positions.unsqueeze(0)  # (1, a, 3)
+    atom_pad_mask = torch.ones((1, num_atoms), dtype=torch.float32)  # (1, a)
+    atom_resolved_mask = torch.ones((1, num_atoms), dtype=torch.bool)  # (1, a)
 
     atom_name_codes = torch.stack(
         [_atom_name_to_codes(atom_name) for atom_name in template.atom_names],
         dim=0,
-    )
-    ref_atom_name_chars = one_hot(atom_name_codes, num_classes=64).unsqueeze(0)
+    )  # (a, 4)
+    ref_atom_name_chars = one_hot(
+        atom_name_codes, num_classes=64
+    ).unsqueeze(0)  # (1, a, 4, 64)
 
     atomic_numbers = []
     for element in template.atom_elements:
@@ -578,7 +592,7 @@ def build_boltz2_features(
     ref_element = one_hot(
         torch.tensor(atomic_numbers, dtype=torch.long),
         num_classes=const.num_elements,
-    ).unsqueeze(0)
+    ).unsqueeze(0)  # (1, a, n_element)
 
     ref_charge_values = []
     ref_chirality_values = []
@@ -592,23 +606,27 @@ def build_boltz2_features(
         ref_chirality_values.append(
             2 if atom_name in _CHIRAL_ATOMS.get(residue_name, frozenset()) else 0
         )
-    ref_charge = torch.tensor(ref_charge_values, dtype=torch.float32).unsqueeze(0)
-    ref_chirality = torch.tensor(ref_chirality_values, dtype=torch.long).unsqueeze(0)
-    ref_space_uid = torch.tensor(template.atom_residue_index, dtype=torch.long).unsqueeze(0)
+    ref_charge = torch.tensor(ref_charge_values, dtype=torch.float32).unsqueeze(0)  # (1, a)
+    ref_chirality = torch.tensor(
+        ref_chirality_values, dtype=torch.long
+    ).unsqueeze(0)  # (1, a)
+    ref_space_uid = torch.tensor(
+        template.atom_residue_index, dtype=torch.long
+    ).unsqueeze(0)  # (1, a)
 
     atom_to_token = one_hot(
         torch.tensor(template.atom_residue_index, dtype=torch.long),
         num_classes=num_tokens,
-    ).unsqueeze(0)
+    ).unsqueeze(0)  # (1, a, t)
     token_to_rep_atom = one_hot(
         torch.tensor(residue_disto_atom_idx, dtype=torch.long),
         num_classes=num_atoms,
-    ).unsqueeze(0)
+    ).unsqueeze(0)  # (1, t, a)
     token_to_center_atom = one_hot(
         torch.tensor(residue_center_atom_idx, dtype=torch.long),
         num_classes=num_atoms,
-    ).unsqueeze(0)
-    r_set_to_rep_atom = token_to_center_atom.clone()
+    ).unsqueeze(0)  # (1, t, a)
+    r_set_to_rep_atom = token_to_center_atom.clone()  # (1, t, a)
 
     num_backbone_classes = (
         1 + len(const.protein_backbone_atom_index) + len(const.nucleic_backbone_atom_index)
@@ -622,17 +640,17 @@ def build_boltz2_features(
     atom_backbone_feat = one_hot(
         torch.tensor(backbone_ids, dtype=torch.long),
         num_classes=num_backbone_classes,
-    ).unsqueeze(0)
+    ).unsqueeze(0)  # (1, a, n_backbone)
 
     # X contains no observed coordinates for sequence-only inference.
-    coords = torch.zeros((1, 1, num_atoms, 3), dtype=torch.float32)
+    coords = torch.zeros((1, 1, num_atoms, 3), dtype=torch.float32)  # (1, 1, a, 3)
     disto_coords_ensemble = torch.zeros(
         (1, 1, num_tokens, 3),
         dtype=torch.float32,
-    )
+    )  # (1, 1, t, 3)
 
-    bfactor = torch.zeros((1, num_atoms), dtype=torch.float32)
-    atom_plddt = torch.ones((1, num_atoms), dtype=torch.float32)
+    bfactor = torch.zeros((1, num_atoms), dtype=torch.float32)  # (1, a)
+    atom_plddt = torch.ones((1, num_atoms), dtype=torch.float32)  # (1, a)
 
     if atoms_per_window_queries <= 0:
         raise ValueError("atoms_per_window_queries must be positive.")
@@ -640,60 +658,86 @@ def build_boltz2_features(
         (num_atoms - 1) // atoms_per_window_queries + 1
     ) * atoms_per_window_queries - num_atoms
     if pad_atoms > 0:
-        ref_pos = torch.nn.functional.pad(ref_pos, (0, 0, 0, pad_atoms), value=0.0)
-        atom_pad_mask = torch.nn.functional.pad(atom_pad_mask, (0, pad_atoms), value=0.0)
+        ref_pos = torch.nn.functional.pad(
+            ref_pos, (0, 0, 0, pad_atoms), value=0.0
+        )  # (1, a_p, 3)
+        atom_pad_mask = torch.nn.functional.pad(
+            atom_pad_mask, (0, pad_atoms), value=0.0
+        )  # (1, a_p)
         atom_resolved_mask = torch.nn.functional.pad(
             atom_resolved_mask,
             (0, pad_atoms),
             value=0.0,
-        )
+        )  # (1, a_p)
         ref_atom_name_chars = torch.nn.functional.pad(
             ref_atom_name_chars,
             (0, 0, 0, 0, 0, pad_atoms),
             value=0.0,
-        )
-        ref_element = torch.nn.functional.pad(ref_element, (0, 0, 0, pad_atoms), value=0.0)
-        ref_charge = torch.nn.functional.pad(ref_charge, (0, pad_atoms), value=0.0)
-        ref_chirality = torch.nn.functional.pad(ref_chirality, (0, pad_atoms), value=0)
+        )  # (1, a_p, 4, 64)
+        ref_element = torch.nn.functional.pad(
+            ref_element, (0, 0, 0, pad_atoms), value=0.0
+        )  # (1, a_p, n_element)
+        ref_charge = torch.nn.functional.pad(
+            ref_charge, (0, pad_atoms), value=0.0
+        )  # (1, a_p)
+        ref_chirality = torch.nn.functional.pad(
+            ref_chirality, (0, pad_atoms), value=0
+        )  # (1, a_p)
         atom_backbone_feat = torch.nn.functional.pad(
             atom_backbone_feat,
             (0, 0, 0, pad_atoms),
             value=0.0,
-        )
-        ref_space_uid = torch.nn.functional.pad(ref_space_uid, (0, pad_atoms), value=0)
-        coords = torch.nn.functional.pad(coords, (0, 0, 0, pad_atoms), value=0.0)
-        atom_to_token = torch.nn.functional.pad(atom_to_token, (0, 0, 0, pad_atoms), value=0.0)
+        )  # (1, a_p, n_backbone)
+        ref_space_uid = torch.nn.functional.pad(
+            ref_space_uid, (0, pad_atoms), value=0
+        )  # (1, a_p)
+        coords = torch.nn.functional.pad(
+            coords, (0, 0, 0, pad_atoms), value=0.0
+        )  # (1, 1, a_p, 3)
+        atom_to_token = torch.nn.functional.pad(
+            atom_to_token, (0, 0, 0, pad_atoms), value=0.0
+        )  # (1, a_p, t)
         token_to_rep_atom = torch.nn.functional.pad(
             token_to_rep_atom,
             (0, pad_atoms),
             value=0.0,
-        )
+        )  # (1, t, a_p)
         token_to_center_atom = torch.nn.functional.pad(
             token_to_center_atom,
             (0, pad_atoms),
             value=0.0,
-        )
+        )  # (1, t, a_p)
         r_set_to_rep_atom = torch.nn.functional.pad(
             r_set_to_rep_atom,
             (0, pad_atoms),
             value=0.0,
-        )
-        bfactor = torch.nn.functional.pad(bfactor, (0, pad_atoms), value=0.0)
-        atom_plddt = torch.nn.functional.pad(atom_plddt, (0, pad_atoms), value=0.0)
+        )  # (1, t, a_p)
+        bfactor = torch.nn.functional.pad(
+            bfactor, (0, pad_atoms), value=0.0
+        )  # (1, a_p)
+        atom_plddt = torch.nn.functional.pad(
+            atom_plddt, (0, pad_atoms), value=0.0
+        )  # (1, a_p)
 
     frames_idx = torch.tensor(
         residue_frame_atom_idx_flat,
         dtype=torch.long,
-    ).reshape(num_tokens, 3)
-    frames_idx = frames_idx.unsqueeze(0).unsqueeze(1)
-    frame_resolved_mask = torch.zeros((1, 1, num_tokens), dtype=torch.bool)
+    ).reshape(num_tokens, 3)  # (t, 3)
+    frames_idx = frames_idx.unsqueeze(0).unsqueeze(1)  # (1, 1, t, 3)
+    frame_resolved_mask = torch.zeros(
+        (1, 1, num_tokens), dtype=torch.bool
+    )  # (1, 1, t)
 
-    msa = torch.tensor(residue_token_ids, dtype=torch.long).unsqueeze(0).unsqueeze(0)
-    msa_paired = torch.ones((1, 1, num_tokens), dtype=torch.float32)
-    deletion_value = torch.zeros((1, 1, num_tokens), dtype=torch.float32)
-    has_deletion = torch.zeros((1, 1, num_tokens), dtype=torch.bool)
-    msa_mask = torch.ones((1, 1, num_tokens), dtype=torch.long)
-    deletion_mean = torch.zeros((1, num_tokens), dtype=torch.float32)
+    msa = (
+        torch.tensor(residue_token_ids, dtype=torch.long).unsqueeze(0).unsqueeze(0)
+    )  # (1, 1, t)
+    msa_paired = torch.ones((1, 1, num_tokens), dtype=torch.float32)  # (1, 1, t)
+    deletion_value = torch.zeros(
+        (1, 1, num_tokens), dtype=torch.float32
+    )  # (1, 1, t)
+    has_deletion = torch.zeros((1, 1, num_tokens), dtype=torch.bool)  # (1, 1, t)
+    msa_mask = torch.ones((1, 1, num_tokens), dtype=torch.long)  # (1, 1, t)
+    deletion_mean = torch.zeros((1, num_tokens), dtype=torch.float32)  # (1, t)
     profile = (
         one_hot(
             torch.tensor(residue_token_ids, dtype=torch.long),
@@ -701,28 +745,48 @@ def build_boltz2_features(
         )
         .float()
         .unsqueeze(0)
-    )
+    )  # (1, t, n_res_type)
 
     template_restype = one_hot(
         torch.zeros((1, 1, num_tokens), dtype=torch.long),
         num_classes=const.num_tokens,
-    )
-    template_frame_rot = torch.zeros((1, 1, num_tokens, 3, 3), dtype=torch.float32)
-    template_frame_t = torch.zeros((1, 1, num_tokens, 3), dtype=torch.float32)
-    template_cb = torch.zeros((1, 1, num_tokens, 3), dtype=torch.float32)
-    template_ca = torch.zeros((1, 1, num_tokens, 3), dtype=torch.float32)
-    template_mask_cb = torch.zeros((1, 1, num_tokens), dtype=torch.float32)
-    template_mask_frame = torch.zeros((1, 1, num_tokens), dtype=torch.float32)
-    template_mask = torch.zeros((1, 1, num_tokens), dtype=torch.float32)
-    query_to_template = torch.zeros((1, 1, num_tokens), dtype=torch.long)
-    visibility_ids = torch.zeros((1, 1, num_tokens), dtype=torch.float32)
+    )  # (1, 1, t, n_res_type)
+    template_frame_rot = torch.zeros(
+        (1, 1, num_tokens, 3, 3), dtype=torch.float32
+    )  # (1, 1, t, 3, 3)
+    template_frame_t = torch.zeros(
+        (1, 1, num_tokens, 3), dtype=torch.float32
+    )  # (1, 1, t, 3)
+    template_cb = torch.zeros(
+        (1, 1, num_tokens, 3), dtype=torch.float32
+    )  # (1, 1, t, 3)
+    template_ca = torch.zeros(
+        (1, 1, num_tokens, 3), dtype=torch.float32
+    )  # (1, 1, t, 3)
+    template_mask_cb = torch.zeros(
+        (1, 1, num_tokens), dtype=torch.float32
+    )  # (1, 1, t)
+    template_mask_frame = torch.zeros(
+        (1, 1, num_tokens), dtype=torch.float32
+    )  # (1, 1, t)
+    template_mask = torch.zeros(
+        (1, 1, num_tokens), dtype=torch.float32
+    )  # (1, 1, t)
+    query_to_template = torch.zeros(
+        (1, 1, num_tokens), dtype=torch.long
+    )  # (1, 1, t)
+    visibility_ids = torch.zeros(
+        (1, 1, num_tokens), dtype=torch.float32
+    )  # (1, 1, t)
 
     disto_target = torch.zeros(
         (1, num_tokens, num_tokens, 1, num_bins),
         dtype=torch.float32,
-    )
-    disto_target[..., 0] = 1.0
-    disto_center = torch.zeros((1, num_tokens, 3), dtype=torch.float32)
+    )  # (1, t, t, 1, n_bin)
+    disto_target[..., 0] = 1.0  # (1, t, t, 1)
+    disto_center = torch.zeros(
+        (1, num_tokens, 3), dtype=torch.float32
+    )  # (1, t, 3)
 
     features: dict[str, torch.Tensor] = {
         "token_index": token_index,
@@ -783,4 +847,4 @@ def build_boltz2_features(
         "visibility_ids": visibility_ids,
     }
 
-    return features, template
+    return features, template  # each feature shape is traced at its binding above

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import torch
+from pathlib import Path
 
 from fastplms.attention import _core
 from fastplms.models.dplm.modeling_dplm import DPLMConfig, DPLMForMaskedLM
@@ -22,6 +21,7 @@ from tests.integration.test_ttt import (
     DummyPretrainedTTTConfig,
     DummyPretrainedTTTModel,
 )
+
 
 pytestmark = pytest.mark.gpu
 
@@ -57,6 +57,7 @@ def test_seeded_generation_trace_executes_deterministically_on_cuda(
             DPLMConfig(**_diffusion_config(33)),
             dropout=0.0,
         ).train().cuda()
+        # inputs: (1, 5)
         inputs = torch.tensor([[0, 6, 32, 8, 2]], device="cuda")
 
         def run() -> torch.Tensor:
@@ -67,6 +68,7 @@ def test_seeded_generation_trace_executes_deterministically_on_cuda(
             DPLM2Config(**_diffusion_config(64)),
             dropout=0.0,
         ).train().cuda()
+        # inputs: (1, 8)
         inputs = torch.tensor(
             [[33, 50, 50, 34, 0, 6, 6, 2]],
             device="cuda",
@@ -124,6 +126,7 @@ def test_generation_restores_mixed_training_state_after_cuda_forward_failure(
             DPLMConfig(**_diffusion_config(33)),
             dropout=0.2,
         ).train().cuda()
+        # inputs: (1, 5)
         inputs = torch.tensor([[0, 6, 32, 8, 2]], device="cuda")
 
         def run():
@@ -134,6 +137,7 @@ def test_generation_restores_mixed_training_state_after_cuda_forward_failure(
             DPLM2Config(**_diffusion_config(64)),
             dropout=0.2,
         ).train().cuda()
+        # inputs: (1, 8)
         inputs = torch.tensor([[33, 50, 50, 34, 0, 6, 6, 2]], device="cuda")
 
         def run():
@@ -176,6 +180,7 @@ def test_esmplusplus_flex_sequence_masks_reuse_on_cuda_and_match_sdpa(
     sdpa = TransformerStack(32, 2, 1, attn_backend="sdpa").cuda().to(torch.bfloat16)
     flex = TransformerStack(32, 2, 1, attn_backend="flex_attention").cuda().to(torch.bfloat16)
     flex.load_state_dict(sdpa.state_dict())
+    # pattern: (2, 5)
     pattern = torch.tensor(
         ((True, True, True, False, False), (True, True, False, True, False)),
         device="cuda",
@@ -204,6 +209,7 @@ def test_esmplusplus_flex_sequence_masks_reuse_on_cuda_and_match_sdpa(
     torch.testing.assert_close(flex_input.grad, sdpa_input.grad, rtol=3e-2, atol=3e-2)
     assert torch.isfinite(flex_input.grad).all()
 
+    # chain_pattern: (2, 5)
     chain_pattern = torch.tensor(
         ((0, 0, 1, -1, -1), (0, 1, 1, 2, -1)),
         device="cuda",
@@ -239,6 +245,7 @@ def test_eager_sdpa_and_flex_match_forward_and_backward_on_cuda() -> None:
         name: tensor.detach().clone()
         for name, tensor in initial.state_dict().items()
     }
+    # input_ids: (2, 17)
     input_ids = torch.tensor(
         (
             (0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 2, 1, 1, 1, 1),
@@ -246,6 +253,7 @@ def test_eager_sdpa_and_flex_match_forward_and_backward_on_cuda() -> None:
         ),
         device="cuda",
     )
+    # attention_mask: (b, l)
     attention_mask = input_ids.ne(1)
     outputs: dict[str, torch.Tensor] = {}
     parameter_gradients: dict[str, dict[str, torch.Tensor]] = {}
@@ -259,6 +267,7 @@ def test_eager_sdpa_and_flex_match_forward_and_backward_on_cuda() -> None:
                 input_ids=input_ids,
                 attention_mask=attention_mask,
             ).last_hidden_state
+            # loss: ()
             loss = output[attention_mask].float().square().mean()
             assert loss.is_cuda
             assert torch.isfinite(loss)
@@ -272,6 +281,7 @@ def test_eager_sdpa_and_flex_match_forward_and_backward_on_cuda() -> None:
             assert all(
                 torch.isfinite(gradient).all() for gradient in gradients.values()
             )
+            # outputs[backend]: (...)
             outputs[backend] = output.detach()
             parameter_gradients[backend] = gradients
 

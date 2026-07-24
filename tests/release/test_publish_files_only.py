@@ -6,14 +6,13 @@ import io
 import json
 import shutil
 import subprocess
+import pytest
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
-
-import pytest
 from huggingface_hub import CommitOperationAdd, CommitOperationDelete
 
 from fastplms.registry import FileDigest, ModelSpec, get_model_registry
@@ -25,6 +24,7 @@ from tools.artifacts.build import (
     _checkpoint_identity_hash,
     _expected_registry_provenance,
     _materialize_model_card,
+    _render_artifact_requirements,
     _validated_release_tool_snapshot,
     _validated_runtime_snapshot,
     _write_bootstrap,
@@ -44,6 +44,7 @@ from tools.artifacts.publish import (
     publish_complete,
     publish_files_only,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -75,6 +76,7 @@ def _clean_publication_source(
         "src/fastplms",
         "model_cards",
         "LICENSES",
+        "requirements",
         "tools/artifacts",
         "tools/conversion",
     ):
@@ -85,7 +87,6 @@ def _clean_publication_source(
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",
         "kernels.lock",
-        "pyproject.toml",
         "tools/remote/biohub_reference_environment.py",
         "tools/source_provenance.py",
     ):
@@ -267,6 +268,9 @@ def _files_only_artifact(root: Path, spec: ModelSpec) -> Path:
     artifact = root / spec.fast.repo_id.split("/", maxsplit=1)[1]
     registry = get_model_registry()
     card_source = ROOT / "model_cards" / f"{spec.id}.md"
+    release_tool_revision, release_tool_sha256, release_tool_payloads = (
+        _validated_release_tool_snapshot(ROOT)
+    )
     safe_files: dict[str, str | bytes] = {
         "README.md": (
             card_source.read_bytes()
@@ -276,6 +280,7 @@ def _files_only_artifact(root: Path, spec: ModelSpec) -> Path:
         "config.json": "{}\n",
         "fastplms_bundle.py": "",
         "modeling_fastplms.py": "",
+        "requirements.txt": _render_artifact_requirements(spec, release_tool_payloads),
         "THIRD_PARTY_NOTICES.md": _canonical_release_bytes(
             ROOT / "THIRD_PARTY_NOTICES.md"
         ),
@@ -293,7 +298,7 @@ def _files_only_artifact(root: Path, spec: ModelSpec) -> Path:
         if isinstance(contents, bytes):
             path.write_bytes(contents)
         else:
-            path.write_text(contents, encoding="utf-8")
+            path.write_text(contents, encoding="utf-8", newline="\n")
 
     source_revision, runtime_payloads, source_tree_sha256 = _validated_runtime_snapshot(
         ROOT,
@@ -310,9 +315,6 @@ def _files_only_artifact(root: Path, spec: ModelSpec) -> Path:
     runtime_bundle_sha256 = _write_runtime_bundle(
         artifact / "fastplms_bundle.py",
         artifact / "fastplms",
-    )
-    release_tool_revision, release_tool_sha256, _release_tool_payloads = (
-        _validated_release_tool_snapshot(ROOT)
     )
     card_template = (
         card_source.read_text(encoding="utf-8")
@@ -457,6 +459,7 @@ def test_files_only_plan_excludes_weights_and_complete_artifact_attestations(
     assert "README.md" in plan.files
     assert "config.json" in plan.files
     assert "fastplms/__init__.py" in plan.files
+    assert "requirements.txt" in plan.files
     assert "runtime-attestation.json" in plan.files
     assert "artifact-manifest.json" not in plan.files
     assert "provenance.json" not in plan.files
@@ -514,6 +517,22 @@ def test_files_only_plan_rejects_self_attested_stale_release_text(
         )
 
 
+def test_files_only_plan_rejects_self_attested_dependency_change(tmp_path: Path) -> None:
+    spec = get_model_registry()["esm2_8m"]
+    artifact = _files_only_artifact(tmp_path, spec)
+    requirements = artifact / "requirements.txt"
+    requirements.write_text("fastplms @ git+https://example.invalid/fastplms.git\n")
+    _self_attest_runtime_mutation(artifact, ("requirements.txt",))
+
+    with pytest.raises(ArtifactError, match="direct dependency contract"):
+        prepare_files_only_plan(
+            spec,
+            artifact_root=tmp_path,
+            revision="main",
+            api=FakeApi(spec),  # type: ignore[arg-type]
+        )
+
+
 def test_files_only_plan_rejects_self_attested_card_runtime_placeholder(
     tmp_path: Path,
 ) -> None:
@@ -522,7 +541,7 @@ def test_files_only_plan_rejects_self_attested_card_runtime_placeholder(
     readme = artifact / "README.md"
     text = readme.read_text(encoding="utf-8")
     readme.write_text(
-        text.replace("FastPLMs.git", "FastPLMs.git@<runtime-revision>", 1),
+        text.replace("requirements.txt", "requirements.txt@<runtime-revision>", 1),
         encoding="utf-8",
         newline="\n",
     )

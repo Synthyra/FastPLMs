@@ -6,7 +6,9 @@ import os
 import re
 import subprocess
 import sys
+import pytest
 from pathlib import Path
+from typing import Any, Self
 from urllib.parse import unquote, urlsplit
 
 from tools.artifacts.generate_docs import (
@@ -25,6 +27,7 @@ from tools.debug.check_notation import (
     scan_repository,
     violations_in_text,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MARKDOWN_ROOTS = (
@@ -401,11 +404,13 @@ def test_curated_offline_examples_expose_executable_help() -> None:
 
 def test_routine_setup_avoids_parity_submodules_and_documents_manual_cpu_gate() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    install = readme.split("## Installation", maxsplit=1)[1].split("## Quick start", maxsplit=1)[0]
+    dependencies = readme.split("## Dependencies", maxsplit=1)[1].split(
+        "## Quick start", maxsplit=1
+    )[0]
     validation = readme.split("## Validation and reproducibility", maxsplit=1)[1]
-    assert "git clone --recurse-submodules" not in install
-    assert "git submodule update --init --recursive" not in install
-    assert "Official reference repositories are not runtime" in install
+    assert "git clone --recurse-submodules" not in dependencies
+    assert "git submodule update --init --recursive" not in dependencies
+    assert "Official reference repositories are not runtime" in dependencies
     assert "git submodule update --init --recursive" in validation
     assert "does not use GitHub Actions" in validation
     assert "tests/cpu" in validation
@@ -439,7 +444,7 @@ def test_hub_quick_starts_follow_install_and_platform_contracts() -> None:
         text = path.read_text(encoding="utf-8")
         loading = text.index(".from_pretrained(")
         prefix = text[:loading]
-        assert "pip install" in prefix or "uv sync" in prefix, path.relative_to(ROOT)
+        assert "pip install" in prefix, path.relative_to(ROOT)
         assert re.search(r"Python 3\.11(?:-| through )3\.14", prefix), path.relative_to(ROOT)
         assert "PyTorch 2.13" in prefix, path.relative_to(ROOT)
         assert "Transformers 5.13" in prefix, path.relative_to(ROOT)
@@ -554,6 +559,9 @@ def test_generated_cards_put_installation_before_hub_quick_start() -> None:
             continue
         text = path.read_text(encoding="utf-8")
         assert text.index("## Install and platform requirements") < text.index("## Quick start")
+        assert "resolve/main/requirements.txt" in text
+        assert "fastplms @ git+" not in text
+        assert "implementation itself is embedded in the model repository" in text
 
     for name in (
         "boltz2.md",
@@ -729,12 +737,12 @@ def test_python_documentation_fences_compile() -> None:
     assert not failures, "\n" + "\n".join(failures)
 
 
-def test_readme_embedding_snippet_executes(monkeypatch) -> None:
+def test_readme_embedding_snippet_executes(monkeypatch: pytest.MonkeyPatch) -> None:
     import fastplms
 
     observed: dict[str, object] = {}
 
-    def fake_embed_dataset(model, inputs, **kwargs):
+    def fake_embed_dataset(model: object, inputs: object, **kwargs: Any) -> object:
         observed.update(model=model, inputs=inputs, kwargs=kwargs)
         return object()
 
@@ -752,18 +760,20 @@ def test_readme_embedding_snippet_executes(monkeypatch) -> None:
     }
 
 
-def test_readme_automodel_snippet_executes_without_network(monkeypatch) -> None:
+def test_readme_automodel_snippet_executes_without_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import transformers
 
     observed: dict[str, object] = {}
 
     class FakeAutoModel:
         @classmethod
-        def from_pretrained(cls, model_id, **kwargs):
+        def from_pretrained(cls, model_id: str, **kwargs: Any) -> Self:
             observed.update(model_id=model_id, kwargs=kwargs)
             return cls()
 
-        def eval(self):
+        def eval(self) -> Self:
             return self
 
     monkeypatch.setattr(transformers, "AutoModel", FakeAutoModel)

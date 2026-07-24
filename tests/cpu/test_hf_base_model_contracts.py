@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from pathlib import Path
-
 import pytest
 import torch
+from collections.abc import Callable
+from pathlib import Path
 from transformers import PretrainedConfig, PreTrainedModel
 
 from fastplms.models.ankh.modeling_ankh import FastAnkhConfig, FastAnkhModel
@@ -192,8 +191,8 @@ _BASE_MODEL_CASES: tuple[
 
 
 def _assert_exact_state(actual: torch.nn.Module, expected: torch.nn.Module) -> None:
-    actual_state = actual.state_dict()
-    expected_state = expected.state_dict()
+    actual_state = actual.state_dict()  # parameter name -> checkpoint-shaped tensor
+    expected_state = expected.state_dict()  # parameter name -> checkpoint-shaped tensor
     assert actual_state.keys() == expected_state.keys()
     for name, expected_tensor in expected_state.items():
         torch.testing.assert_close(
@@ -289,7 +288,7 @@ def test_package_models_use_hf_local_semantics_across_save_resave(
 
 def test_dplm_rejects_mixed_batch_attention_mask_broadcasting() -> None:
     model = DPLMModel(_dplm_config()).eval()
-    input_ids = torch.tensor([[0, 6, 2, 1], [0, 7, 8, 2]])
+    input_ids = torch.tensor([[0, 6, 2, 1], [0, 7, 8, 2]])  # (b=2, l=4)
 
     for malformed_mask in (
         torch.ones(1, 4, dtype=torch.long),
@@ -330,7 +329,7 @@ def test_dplm2_legacy_cache_config_warns_once_and_new_artifacts_disable_cache(
 
 
 def test_dplm2_public_forwards_reject_cache_and_cross_attention_arguments() -> None:
-    input_ids = torch.tensor([[0, 6, 7, 2]])
+    input_ids = torch.tensor([[0, 6, 7, 2]])  # (b=1, l=4)
     for model_class in (
         DPLM2Model,
         DPLM2ForMaskedLM,
@@ -349,12 +348,15 @@ def test_dplm2_public_forwards_reject_cache_and_cross_attention_arguments() -> N
 
 def test_esmc_sequence_id_is_authoritative_for_chain_and_padding_masks() -> None:
     model = ESMplusplusModel(_esmc_config()).eval()
-    input_ids = torch.tensor([[0, 3, 4, 5, 1, 1]])
-    sequence_id = torch.tensor([[0, 0, 1, 1, -1, -1]])
+    input_ids = torch.tensor([[0, 3, 4, 5, 1, 1]])  # (b=1, l=6)
+    sequence_id = torch.tensor([[0, 0, 1, 1, -1, -1]])  # (b, l)
 
     with torch.inference_mode():
-        expected = model(input_ids=input_ids, sequence_id=sequence_id).last_hidden_state
-        actual = model(
+        expected = model(  # (b, l, d=8)
+            input_ids=input_ids,
+            sequence_id=sequence_id,
+        ).last_hidden_state
+        actual = model(  # (b, l, d)
             input_ids=input_ids,
             sequence_id=sequence_id,
             # The official Biohub contract ignores this mask whenever
@@ -368,7 +370,7 @@ def test_esmc_sequence_id_is_authoritative_for_chain_and_padding_masks() -> None
         batch_size=1,
         seq_len=6,
         device=input_ids.device,
-    )
+    )  # (b, l), (b, 1, l, l), None for eager attention
     assert torch.equal(mask_2d, sequence_id.ge(0))
     assert torch.equal(
         mask_4d,

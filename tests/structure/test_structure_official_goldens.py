@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import gc
 import json
-from pathlib import Path
-
 import pytest
 import torch
+from pathlib import Path
 from safetensors.torch import load_file
 
 from fastplms.registry import ModelSpec, get_model_registry
@@ -21,6 +20,7 @@ from tests.structure import test_esmfold_folding_compliance as esmfold_metrics
 from tests.structure.support import esmfold2_bundle, esmfold_bundle
 from tests.structure.support.hardware import assert_recorded_hopper_device_matches
 from tools.goldens import validate_golden_bundle
+
 
 ROOT = Path(__file__).resolve().parents[2]
 REGISTRY = get_model_registry()

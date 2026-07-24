@@ -13,15 +13,14 @@ import importlib
 import os
 import random
 import warnings
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
-
 import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 from transformers import AutoModel, AutoModelForMaskedLM
 
 from fastplms.registry import ModelSpec, get_model_registry
@@ -36,6 +35,7 @@ from tests.parity.support.state_transforms import (
     transform_preserves_aliases,
     transform_state,
 )
+
 
 _semantic_config = semantic_config
 
@@ -336,7 +336,9 @@ def _assert_state_equal(spec: ModelSpec, fast: nn.Module, reference: nn.Module) 
         f"only_official={sorted(set(official_state) - set(fast_state))[:20]}"
     )
     for name in sorted(fast_state):
+        # candidate: (...)
         candidate = fast_state[name].detach().cpu()
+        # official: (...)
         official = official_state[name].detach().cpu()
         assert candidate.shape == official.shape, (
             f"{spec.id}:{name}: shape {tuple(candidate.shape)} != {tuple(official.shape)}"
@@ -452,10 +454,13 @@ def _prepare_inputs(
             assert torch.equal(fast_batch[name], official_batch[name]), (
                 f"{spec.id}: sequence-adapter tensor {name!r} differs"
             )
+        # residue_mask: (b, l)
         residue_mask = fast_batch["sequence_ids"].ge(0)
         fast_inputs = dict(fast_batch)
         official_inputs = dict(official_batch)
+        # fast_inputs['attention_mask']: (b, l)
         fast_inputs["attention_mask"] = residue_mask.long()
+        # official_inputs['attention_mask']: (b, l)
         official_inputs["attention_mask"] = residue_mask.long()
         return fast_inputs, official_inputs, residue_mask
 
@@ -474,7 +479,9 @@ def _prepare_inputs(
             f"{spec.id}: tokenized tensor {name!r} differs"
         )
 
+    # input_ids: (b, l)
     input_ids = fast_encoded["input_ids"]
+    # residue_mask: (b, l)
     residue_mask = fast_encoded["attention_mask"].bool()
     for token_id in getattr(fast_tokenizer, "all_special_ids", ()):
         residue_mask &= input_ids.ne(token_id)
@@ -483,6 +490,7 @@ def _prepare_inputs(
     fast_inputs = {name: value for name, value in fast_encoded.items() if name in allowed}
     official_inputs = {name: value for name, value in official_encoded.items() if name in allowed}
     if spec.family.architecture == "ESMC":
+        # sequence_id: (b, l)
         sequence_id = fast_encoded["attention_mask"].bool()
         fast_inputs["sequence_id"] = sequence_id
         official_inputs["sequence_id"] = sequence_id
@@ -514,28 +522,38 @@ def tensor_metrics(
 ) -> TensorMetrics:
     """Compute normalized errors and cosine metrics on valid residues."""
 
+    # candidate: (...), official: (...), residue_mask: (b, l)
     assert candidate.shape == official.shape
     assert candidate.ndim == 3
     valid_candidate = candidate.float()[residue_mask]
     valid_official = official.float()[residue_mask]
     assert valid_candidate.numel() > 0, "Parity batch contains no biological residues"
     difference = valid_candidate - valid_official
+    # denominator: (...)
     denominator = torch.linalg.vector_norm(valid_official).clamp_min(
         torch.finfo(torch.float32).tiny
     )
     relative_l2 = torch.linalg.vector_norm(difference) / denominator
+    # reference_q999: (...)
     reference_q999 = torch.quantile(valid_official.abs().reshape(-1), 0.999)
+    # difference_q999: ()
     difference_q999 = torch.quantile(difference.abs().reshape(-1), 0.999)
     relative_q999 = difference_q999 / reference_q999.clamp_min(torch.finfo(torch.float32).tiny)
     residue_cosines = F.cosine_similarity(valid_candidate, valid_official, dim=-1)
+    # residue_cosine_p01: ()
     residue_cosine_p01 = torch.quantile(residue_cosines, 0.01)
 
+    # mask: (...)
     mask = residue_mask.unsqueeze(-1)
+    # denominator: (...)
     denominator = mask.sum(1).clamp_min(1)
+    # candidate_values: (...)
     candidate_values = candidate.float()
+    # official_values: (...)
     official_values = official.float()
     candidate_pooled = torch.where(mask, candidate_values, 0.0).sum(1) / denominator
     official_pooled = torch.where(mask, official_values, 0.0).sum(1) / denominator
+    # pooled_cosine_min: ()
     pooled_cosine_min = F.cosine_similarity(candidate_pooled, official_pooled, dim=-1).min()
     return TensorMetrics(
         relative_l2=float(relative_l2),
@@ -562,6 +580,7 @@ def _assert_tensor_contract(
     contract: NumericContract,
     context: str,
 ) -> None:
+    # candidate: (...), official: (...), residue_mask: (b, l)
     metrics = tensor_metrics(candidate, official, residue_mask)
     _assert_tensor_metrics(metrics, contract, context)
 
@@ -652,14 +671,21 @@ def _logits_metrics(
 ) -> LogitsMetrics:
     """Collect logits semantics before any numeric threshold is asserted."""
 
+    # candidate: (...), official: (...), residue_mask: (b, l)
+    # official_probabilities: (...)
     official_probabilities = official.float().softmax(-1)
+    # candidate_probabilities: (...)
     candidate_probabilities = candidate.float().softmax(-1)
+    # confidence: (...), official_top1: (...)
     confidence, official_top1 = official_probabilities.max(-1)
+    # confident_mask: (...)
     confident_mask = residue_mask & confidence.ge(0.5)
     assert bool(confident_mask.any()), (
         f"{context}: no positions meet the fixed confidence threshold"
     )
+    # candidate_top1: (...)
     candidate_top1 = candidate_probabilities.argmax(-1)
+    # top1_agreement: ()
     top1_agreement = (
         (candidate_top1[confident_mask] == official_top1[confident_mask]).float().mean()
     )
@@ -685,6 +711,7 @@ def _assert_logits_contract(
     contract: NumericContract,
     context: str,
 ) -> None:
+    # candidate: (...), official: (...), residue_mask: (b, l)
     _assert_tensor_contract(candidate, official, residue_mask, contract, context)
     metrics = _logits_metrics(candidate, official, residue_mask, context)
     _assert_lower(
@@ -712,6 +739,7 @@ def _collect_output_metrics(
 ) -> tuple[list[TensorMetricRecord], LogitsMetrics | None]:
     """Validate output structure/finite values and collect every parity metric."""
 
+    # residue_mask: (b, l)
     fast_hidden = _hidden_state_tuple(fast_output)
     official_hidden = _hidden_state_tuple(official_output)
     assert len(fast_hidden) == len(official_hidden), (
@@ -774,6 +802,7 @@ def _assert_outputs(
     contract: NumericContract,
     context: str,
 ) -> None:
+    # residue_mask: (b, l)
     metric_records, logits_metrics = _collect_output_metrics(
         spec,
         fast_output,
@@ -810,6 +839,7 @@ def _assert_esmc_alternate_backend_outputs(
 ) -> None:
     """Warn on published-band drift while retaining catastrophic hard gates."""
 
+    # residue_mask: (b, l)
     records, logits = _collect_output_metrics(
         spec,
         fast_output,

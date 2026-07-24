@@ -11,16 +11,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import torch
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
-
-import torch
 from safetensors.torch import load_file
 
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
 from tools.goldens.bundle import GoldenBundleRecord, GoldenError, write_golden_bundle
+
 
 NativeResultKind = Literal["sequence", "structure"]
 _SEQUENCE_REQUIRED_TENSORS = frozenset(
@@ -230,10 +230,12 @@ def _sha256_file(path: Path) -> str:
 
 
 def _tensor_bytes(T: torch.Tensor) -> bytes:
+    # T: (...)
     return T.detach().to(device="cpu").contiguous().view(torch.uint8).numpy().tobytes()
 
 
 def _raw_tensor_sha256(T: torch.Tensor) -> str:
+    # T: (...)
     return hashlib.sha256(_tensor_bytes(T)).hexdigest()
 
 
@@ -242,7 +244,7 @@ def _tensor_set_fingerprint(tensors: Mapping[str, torch.Tensor]) -> str:
         raise GoldenError("A native golden input fingerprint requires tensors.")
     digest = hashlib.sha256()
     for name in sorted(tensors):
-        T = tensors[name].detach().to(device="cpu").contiguous()
+        T = tensors[name].detach().to(device="cpu").contiguous()  # (...)
         digest.update(
             _canonical_json(
                 {"dtype": str(T.dtype), "name": name, "shape": list(T.shape)}
@@ -255,6 +257,7 @@ def _tensor_set_fingerprint(tensors: Mapping[str, torch.Tensor]) -> str:
 
 
 def _ensure_compact(tensors: Mapping[str, torch.Tensor], *, model_id: str) -> None:
+    # tensors[name]: (...)
     size = sum(T.numel() * T.element_size() for T in tensors.values())
     if size > _MAX_GOLDEN_TENSOR_BYTES:
         raise GoldenError(
@@ -379,7 +382,7 @@ def _load_sequence_result(
     if not tensors_path.is_file():
         raise GoldenError(f"{spec.id}: native BF16 result is missing: {tensors_path}.")
     try:
-        tensors = load_file(tensors_path, device="cpu")
+        tensors = load_file(tensors_path, device="cpu")  # values: (...)
     except Exception as error:
         raise GoldenError(f"{spec.id}: unable to load native BF16 tensors.") from error
     precision_keys = metadata.get("precision_tensor_keys")
@@ -400,11 +403,11 @@ def _load_sequence_result(
     ]
     if "output__logits" in tensors:
         selected_names.append("output__logits")
-    selected = {name: tensors[name] for name in selected_names}
+    selected = {name: tensors[name] for name in selected_names}  # values: (...)
     input_tensors = {
-        name: selected[name]
+        name: selected[name]  # (...)
         for name in (*input_names, "residue_mask")
-    }
+    }  # values: (...)
     return (
         selected,
         _environment(metadata.get("environment"), model_id=spec.id),
@@ -433,13 +436,14 @@ def _load_structure_result(
     if not tensors_path.is_file():
         raise GoldenError(f"{spec.id}: native structure bundle is missing: {tensors_path}.")
     try:
-        tensors = load_file(tensors_path, device="cpu")
+        tensors = load_file(tensors_path, device="cpu")  # values: (...)
     except Exception as error:
         raise GoldenError(f"{spec.id}: unable to load native structure tensors.") from error
     if metadata.get("tensor_keys") != sorted(tensors):
         raise GoldenError(f"{spec.id}: native structure tensor-key contract mismatch.")
     observed_hashes = {
-        name: _raw_tensor_sha256(T) for name, T in sorted(tensors.items())
+        name: _raw_tensor_sha256(T)  # T: (...)
+        for name, T in sorted(tensors.items())
     }
     if metadata.get("tensor_hashes") != observed_hashes:
         raise GoldenError(f"{spec.id}: native structure tensor hash mismatch.")
@@ -489,7 +493,9 @@ def convert_native_result(
     else:
         if spec.family.tokenizer_mode != "structure":
             raise GoldenError(f"{spec.id}: structure native result used for a sequence model.")
-        tensors, environment, input_fingerprint = _load_structure_result(result_dir, spec)
+        tensors, environment, input_fingerprint = _load_structure_result(  # values: (...)
+            result_dir, spec
+        )
         limitations = ()
     _ensure_compact(tensors, model_id=spec.id)
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Literal, overload
-
 from torch import Tensor
 
 
@@ -39,7 +38,7 @@ class LazyTensorReference:
 
         if not isinstance(verify, bool):
             raise TypeError("verify must be a boolean.")
-        X = self._loader()
+        X = self._loader()  # self.shape
         if not isinstance(X, Tensor):
             raise TypeError(f"Stored tensor loader for {self.key!r} must return a Tensor.")
         if tuple(X.shape) != self.shape:
@@ -57,7 +56,7 @@ class LazyTensorReference:
             digest = tensor_sha256(X)
             if digest != self.sha256:
                 raise ValueError(f"Stored tensor {self.key!r} failed SHA-256 verification.")
-        return X
+        return X  # self.shape
 
 
 TensorValue = Tensor | LazyTensorReference
@@ -85,8 +84,8 @@ class EmbeddingRecord:
         if not isinstance(verify, bool):
             raise TypeError("verify must be a boolean.")
         if isinstance(self.tensor, LazyTensorReference):
-            return self.tensor.load(verify=verify)
-        return self.tensor
+            return self.tensor.load(verify=verify)  # (...)
+        return self.tensor  # (...)
 
 
 class EmbeddingResult(Sequence[EmbeddingRecord]):

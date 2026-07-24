@@ -6,13 +6,12 @@ import hashlib
 import io
 import os
 import pickle
-from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, BinaryIO
-
 import pytest
 import torch
 import zstandard
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, BinaryIO
 
 from fastplms.models.esmfold2 import esmfold2_conformers as conformers
 from fastplms.models.esmfold2.esmfold2_misc import deserialize_tensors
@@ -217,10 +216,10 @@ def test_tensor_deserialization_rejects_arbitrary_pickle_globals() -> None:
 
 def test_tensor_deserialization_accepts_tensor_mappings() -> None:
     buffer = io.BytesIO()
-    expected = {"X": torch.arange(6).reshape(2, 3)}
+    expected = {"X": torch.arange(6).reshape(2, 3)}  # (n=2, d=3)
     torch.save(expected, buffer)
     compressed = zstandard.ZstdCompressor().compress(buffer.getvalue())
 
-    actual = deserialize_tensors(compressed)
+    actual = deserialize_tensors(compressed)  # actual["X"]: (n=2, d=3)
     assert actual.keys() == expected.keys()
     assert torch.equal(actual["X"], expected["X"])

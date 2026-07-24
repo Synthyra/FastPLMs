@@ -7,12 +7,11 @@ import json
 import platform
 import sqlite3
 import tempfile
+import torch
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, overload
-
-import torch
 from torch import Tensor
 
 from .pooling import Pooler
@@ -35,6 +34,7 @@ from .types import (
     LazyTensorReference,
 )
 
+
 _MAX_PARTI_RESIDUES = 2_048
 _RUN_FINGERPRINT_SCHEMA_VERSION = 3
 _MODEL_STATE_HASH_CHUNK_BYTES = 16 * 1024**2
@@ -45,6 +45,7 @@ _SUPPORTED_STORAGE_FORMATS = frozenset({"safetensors", "sqlite"})
 def _validate_parti_length(M: Tensor) -> None:
     """Reject an oversized attention graph before model inference."""
 
+    # M: (b, l)
     n_residues = int(M.to(dtype=torch.int64).sum(dim=1).max().item())
     if n_residues > _MAX_PARTI_RESIDUES:
         raise ValueError(f"parti supports at most {_MAX_PARTI_RESIDUES:,} biological residues.")
@@ -58,16 +59,17 @@ def select_hidden_state_embeddings(
     store_all_hidden_states: bool = False,
 ) -> Tensor:
     """Select one hidden state or stack every state without changing values."""
+    # last_hidden_state and each hidden_states entry: (b, l, d)
     if store_all_hidden_states:
         if not hidden_states:
             raise ValueError("store_all_hidden_states requires model hidden states.")
         # H has shape (b, n, l, d), where n follows the model's output order.
-        return torch.stack(hidden_states, dim=1)
+        return torch.stack(hidden_states, dim=1)  # (b, n, l, d)
     if hidden_state_index == -1:
-        return last_hidden_state
+        return last_hidden_state  # (b, l, d)
     if not hidden_states:
         raise ValueError("hidden_state_index requires model hidden states.")
-    return hidden_states[hidden_state_index]
+    return hidden_states[hidden_state_index]  # (b, l, d)
 
 
 def iter_fasta(path: str | Path) -> Iterator[EmbeddingInput]:
@@ -508,12 +510,17 @@ def _biological_residue_mask(
 ) -> Tensor:
     """Remove padding and tokenizer-declared special tokens from M."""
 
-    M = attention_mask.to(dtype=torch.bool)
+    # input_ids, attention_mask: (b, l)
+    M = attention_mask.to(dtype=torch.bool)  # (b, l)
     special_ids = tuple(int(token_id) for token_id in getattr(tokenizer, "all_special_ids", ()))
     if special_ids:
-        specials = torch.tensor(special_ids, device=input_ids.device, dtype=input_ids.dtype)
-        M = M & ~torch.isin(input_ids, specials)
-    return M
+        specials = torch.tensor(  # (n_special,)
+            special_ids,
+            device=input_ids.device,
+            dtype=input_ids.dtype,
+        )
+        M = M & ~torch.isin(input_ids, specials)  # (b, l)
+    return M  # (b, l)
 
 
 def _generic_embedding_batch(
@@ -535,20 +542,23 @@ def _generic_embedding_batch(
         output = model._embed(sequences, return_attention_mask=True, **model_kwargs)
         if not isinstance(output, tuple) or len(output) != 2:
             raise TypeError("E1 _embed must return (X, residue_mask).")
-        X, M = output
+        X, M = output  # (b, l, d), (b, l)
         preparer = getattr(model, "prep_tokens", None)
         if preparer is not None and hasattr(preparer, "get_batch_kwargs"):
             prepared = preparer.get_batch_kwargs(sequences, device=X.device)
-            input_ids = prepared["input_ids"]
-            boundary_ids = preparer.boundary_token_ids.to(
+            input_ids = prepared["input_ids"]  # (b, l)
+            boundary_ids = preparer.boundary_token_ids.to(  # (n_boundary,)
                 device=input_ids.device, dtype=input_ids.dtype
             )
             # E1 wraps each raw sequence in BOS, context-label, terminal-label,
             # and EOS tokens. Only amino-acid rows are biological residues.
-            M = M.to(dtype=torch.bool) & ~torch.isin(input_ids, boundary_ids)
+            M = M.to(dtype=torch.bool) & ~torch.isin(input_ids, boundary_ids)  # (b, l)
         if need_attentions:
             raise ValueError("parti is not available for tokenizer-free E1 embedding.")
-        return EmbeddingBatch(X=X, residue_mask=M.to(dtype=torch.bool))
+        return EmbeddingBatch(  # X: (b, l, d); residue_mask: (b, l)
+            X=X,
+            residue_mask=M.to(dtype=torch.bool),
+        )
     if tokenizer is None:
         raise ValueError("A tokenizer is required for this model's embedding path.")
 
@@ -572,14 +582,17 @@ def _generic_embedding_batch(
     else:
         encoded = tokenizer(sequences, **tokenize_kwargs)
     device = _model_device(model)
-    input_ids = encoded["input_ids"].to(device)
-    attention_mask = encoded.get("attention_mask", input_ids.new_ones(input_ids.shape)).to(device)
-    M = _biological_residue_mask(input_ids, attention_mask, tokenizer)
+    input_ids = encoded["input_ids"].to(device)  # (b, l)
+    attention_mask = encoded.get(  # (b, l)
+        "attention_mask",
+        input_ids.new_ones(input_ids.shape),
+    ).to(device)
+    M = _biological_residue_mask(input_ids, attention_mask, tokenizer)  # (b, l)
     if need_attentions:
         # Validate l before either the backbone or its quadratic attention graph
         # is materialized. M has shape (b, l).
         _validate_parti_length(M)
-    X = model._embed(input_ids, attention_mask, **model_kwargs)
+    X = model._embed(input_ids, attention_mask, **model_kwargs)  # (b, l, d)
     attentions = None
     if need_attentions:
         output = model(
@@ -588,10 +601,14 @@ def _generic_embedding_batch(
             output_attentions=True,
             return_dict=True,
         )
-        attentions = getattr(output, "attentions", None)
+        attentions = getattr(output, "attentions", None)  # each: (b, h, l, l)
         if attentions is None:
             raise ValueError("The model did not return attentions required by parti.")
-    return EmbeddingBatch(X=X, residue_mask=M, attentions=attentions)
+    return EmbeddingBatch(  # X: (b, l, d); M: (b, l)
+        X=X,
+        residue_mask=M,
+        attentions=attentions,
+    )
 
 
 def _first_metadata_value(*values: Any) -> Any:
@@ -638,6 +655,7 @@ def _model_identity_metadata(model: Any) -> dict[str, Any]:
 def _bounded_tensor_chunks(X: Tensor, max_elements: int) -> Iterable[Tensor]:
     """Yield X in logical row-major order without materializing a full copy."""
 
+    # X: (...)
     if X.numel() == 0:
         return
     if X.ndim == 0:
@@ -649,7 +667,7 @@ def _bounded_tensor_chunks(X: Tensor, max_elements: int) -> Iterable[Tensor]:
     if trailing_elements <= max_elements:
         rows_per_chunk = max(1, max_elements // trailing_elements)
         for start in range(0, X.shape[0], rows_per_chunk):
-            yield X[start : start + rows_per_chunk]
+            yield X[start : start + rows_per_chunk]  # (chunk_rows, ...)
         return
     for row in X:
         yield from _bounded_tensor_chunks(row, max_elements)
@@ -685,7 +703,7 @@ def _model_state_sha256(model: Any) -> str:
         digest.update(header)
         max_elements = max(1, _MODEL_STATE_HASH_CHUNK_BYTES // value.element_size())
         for chunk in _bounded_tensor_chunks(value.detach(), max_elements):
-            cpu_chunk = chunk.to(device="cpu").contiguous()
+            cpu_chunk = chunk.to(device="cpu").contiguous()  # chunk.shape
             digest.update(cpu_chunk.reshape(-1).view(torch.uint8).numpy().tobytes())
     return digest.hexdigest()
 
@@ -1306,22 +1324,24 @@ def embed_dataset(
                             normalized_decoder_inputs[position] for position in batch_positions
                         ]
                     if decoder_input_ids is not None:
-                        indices = torch.tensor(
+                        # decoder_input_ids: (n_records, l_decoder)
+                        indices = torch.tensor(  # (b,)
                             batch_positions,
                             device=decoder_input_ids.device,
                             dtype=torch.long,
                         )
-                        batch_model_kwargs["decoder_input_ids"] = decoder_input_ids.index_select(
-                            0, indices
+                        batch_model_kwargs["decoder_input_ids"] = (  # (b, l_decoder)
+                            decoder_input_ids.index_select(0, indices)
                         )
                     if decoder_attention_mask is not None:
-                        indices = torch.tensor(
+                        # decoder_attention_mask: (n_records, l_decoder)
+                        indices = torch.tensor(  # (b,)
                             batch_positions,
                             device=decoder_attention_mask.device,
                             dtype=torch.long,
                         )
                         batch_model_kwargs["decoder_attention_mask"] = (
-                            decoder_attention_mask.index_select(0, indices)
+                            decoder_attention_mask.index_select(0, indices)  # (b, l_decoder)
                         )
                 custom_batch = _embedding_batch_fn or getattr(model, "_embedding_batch", None)
                 if custom_batch is not None:
@@ -1348,8 +1368,8 @@ def embed_dataset(
                         need_attentions=need_attentions,
                         model_kwargs=batch_model_kwargs,
                     )
-                X = batch.X
-                raw_mask = batch.residue_mask
+                X = batch.X  # (b, l, d) or (b, n_states, l, d)
+                raw_mask = batch.residue_mask  # (b, l)
                 if not isinstance(X, Tensor) or not isinstance(raw_mask, Tensor):
                     raise TypeError("Embedding batches must provide Tensor X and residue_mask.")
                 if X.is_meta or raw_mask.is_meta:
@@ -1360,7 +1380,7 @@ def embed_dataset(
                     raise ValueError("Embedding residue_mask must contain finite binary values.")
                 if not bool(((raw_mask == 0) | (raw_mask == 1)).all()):
                     raise ValueError("Embedding residue_mask must contain finite binary values.")
-                M = raw_mask.to(device=X.device, dtype=torch.bool)
+                M = raw_mask.to(device=X.device, dtype=torch.bool)  # (b, l)
                 valid_X_shape = (
                     X.ndim == 3
                     and X.shape[0] == len(batch_records)
@@ -1384,7 +1404,7 @@ def embed_dataset(
                     )
                 if not bool(M.any(dim=1).all()):
                     raise ValueError("Every embedding sample must contain a biological residue.")
-                finite_selected = (
+                finite_selected = (  # X.shape
                     torch.isfinite(X) | ~M.unsqueeze(-1)
                     if X.ndim == 3
                     else torch.isfinite(X) | ~M[:, None, :, None]
@@ -1395,28 +1415,32 @@ def embed_dataset(
                     # Validate the biological graph only after mask integrity is established.
                     _validate_parti_length(M)
                 if dtype is not None:
-                    X = X.to(dtype=dtype)
+                    X = X.to(dtype=dtype)  # unchanged shape
 
                 if full_embeddings:
                     if X.ndim == 4:
                         values = [
-                            X_i[:, M_i, :].detach().cpu() for X_i, M_i in zip(X, M, strict=True)
+                            X_i[:, M_i, :].detach().cpu()  # (n_states, r_i, d)
+                            for X_i, M_i in zip(X, M, strict=True)
                         ]
                     else:
-                        values = [X_i[M_i].detach().cpu() for X_i, M_i in zip(X, M, strict=True)]
+                        values = [
+                            X_i[M_i].detach().cpu()  # (r_i, d)
+                            for X_i, M_i in zip(X, M, strict=True)
+                        ]
                 else:
                     if pooler is None:
                         raise RuntimeError(
                             "Pooled embedding output was requested without an initialized pooler."
                         )
-                    Y = pooler(
+                    Y = pooler(  # (b, n_poolers * d)
                         X,
                         M,
                         attentions=batch.attentions,
                         attention_backend=attention_backend,
                     )
                     pool_slices = pooler.output_slices(X.shape[-1])
-                    values = list(Y.detach().cpu().unbind(0))
+                    values = list(Y.detach().cpu().unbind(0))  # each: (n_poolers * d,)
                 for position, record, value in zip(
                     batch_positions, batch_records, values, strict=True
                 ):

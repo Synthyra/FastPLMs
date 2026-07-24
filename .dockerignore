@@ -4,13 +4,13 @@
 
 !.dockerignore
 !.gitmodules
-!pyproject.toml
-!uv.lock
 !kernels.lock
 !README.md
 !LICENSE
 !THIRD_PARTY_NOTICES.md
 
+!requirements/
+!requirements/**
 !LICENSES/
 !LICENSES/**
 !src/

@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+
 SCHEMA_VERSION = 1
 BASELINE_REVISION = "c240d8a85eabcf5f73d7cf2618c4191295f1df5b"
 BASELINE_PYTHON_VERSION = "3.12.13"

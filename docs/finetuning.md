@@ -3,25 +3,28 @@
 FastPLMs models follow Transformers `PreTrainedModel` conventions, so
 compatible family and task-head combinations can use Trainer, Accelerate,
 distributed, and adapter workflows. Core training dependencies are isolated in
-the `train` extra. FastPLMs 1.0 supports Python 3.11-3.14 with PyTorch 2.13 and
+`requirements/features/train.in`. FastPLMs 1.0 supports Python 3.11-3.14 with PyTorch 2.13 and
 Transformers 5.13. CPU is suitable for tiny contract runs; practical checkpoint
 fine-tuning normally requires a CUDA accelerator whose memory fits the selected
 model, optimizer state, and batch.
 
 ```bash
-uv sync --extra train
+uv pip install \
+  -r requirements/core.in \
+  -r requirements/features/train.in \
+  -c requirements/constraints/validation.txt
 ```
 
 The runnable classification and regression example currently targets ESM2,
 whose artifacts advertise `AutoModelForSequenceClassification`. Plotting is
-disabled by default, so a normal run needs only the `train` extra. To request
-plots, add the separate reporting dependency and `--plot-results`:
+disabled by default, so a normal run needs only the training dependencies. To
+request plots, install the reporting profile and pass `--plot-results`:
 
 ```bash
-uv run \
-  --extra train \
-  --extra reporting \
-  python examples/fine_tuning.py \
+uv pip install \
+  -r requirements/profiles/reporting.in \
+  -c requirements/constraints/validation.txt
+PYTHONPATH=src python examples/fine_tuning.py \
   --task classification \
   --model_path Synthyra/ESM2-8M \
   --model-revision 185ecbd45665d050a8dae326d91886d330c5f9d0 \
@@ -36,7 +39,8 @@ uv run \
   --plot-results
 ```
 
-Omit `--extra reporting` and `--plot-results` for the default plot-free run.
+Install only `requirements/core.in` and `requirements/features/train.in`, then
+omit `--plot-results`, for the default plot-free run.
 Generated plots are saved at 300 dpi as
 `<task-output>/classification_results.png` or
 `<task-output>/regression_results.png`. Existing plot files are never replaced.
@@ -44,9 +48,7 @@ Generated plots are saved at 300 dpi as
 Regression uses three independently pinned dataset snapshots:
 
 ```bash
-uv run \
-  --extra train \
-  python examples/fine_tuning.py \
+PYTHONPATH=src python examples/fine_tuning.py \
   --task regression \
   --model_path Synthyra/ESM2-8M \
   --model-revision 185ecbd45665d050a8dae326d91886d330c5f9d0 \

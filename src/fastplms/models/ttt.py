@@ -3,12 +3,13 @@ from __future__ import annotations
 import contextlib
 import math
 import numbers
-import typing as T
-from dataclasses import asdict, dataclass, fields
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from collections.abc import Iterator, Mapping
+from dataclasses import asdict, dataclass, fields
+from typing import Any
+
 
 _STANDARD_AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWY"
 _TTT_SERIALIZATION_VERSION = 1
@@ -42,7 +43,7 @@ class TTTConfig:
         self.verify()
 
     @classmethod
-    def from_kwargs(cls, **kwargs: T.Any) -> TTTConfig:
+    def from_kwargs(cls, **kwargs: Any) -> TTTConfig:
         valid_names = {field.name for field in fields(cls)}
         unknown_names = set(kwargs) - valid_names
         if unknown_names:
@@ -53,7 +54,7 @@ class TTTConfig:
             kwargs["lora_target_modules"] = tuple(kwargs["lora_target_modules"])
         return cls(**kwargs)
 
-    def merged(self, overrides: T.Mapping[str, T.Any] | TTTConfig | None) -> TTTConfig:
+    def merged(self, overrides: Mapping[str, Any] | TTTConfig | None) -> TTTConfig:
         if overrides is None:
             return self
         if isinstance(overrides, TTTConfig):
@@ -65,7 +66,7 @@ class TTTConfig:
             values[name] = value
         return TTTConfig(**values)
 
-    def to_dict(self) -> dict[str, T.Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
     def verify(self) -> None:
@@ -224,9 +225,12 @@ class LoraInjectedLinear(nn.Module):
         return self.linear._parameters["bias"]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        base = self.linear(x)
-        delta = self.lora_up(self.lora_down(x.to(dtype=torch.float32))) * self.scale
-        return base + delta.to(dtype=base.dtype)
+        # x: (..., d_in)
+        base = self.linear(x)  # (..., d_out)
+        delta = (  # (..., d_out)
+            self.lora_up(self.lora_down(x.to(dtype=torch.float32))) * self.scale
+        )
+        return base + delta.to(dtype=base.dtype)  # (..., d_out)
 
     def reset_lora_parameters(self) -> None:
         with torch.no_grad():
@@ -235,7 +239,7 @@ class LoraInjectedLinear(nn.Module):
 
 
 class FastPLMTestTimeTrainingMixin:
-    def init_ttt(self, ttt_config: TTTConfig | T.Mapping[str, T.Any] | None = None) -> None:
+    def init_ttt(self, ttt_config: TTTConfig | Mapping[str, Any] | None = None) -> None:
         base_config = self.__dict__.get("_ttt_cfg")
         if base_config is None:
             base_config = TTTConfig()
@@ -245,7 +249,7 @@ class FastPLMTestTimeTrainingMixin:
         serialized = getattr(getattr(self, "config", None), "fastplms_ttt", None)
         serialized_initialized = False
         if serialized is not None:
-            if not isinstance(serialized, T.Mapping):
+            if not isinstance(serialized, Mapping):
                 raise ValueError("config.fastplms_ttt must be a mapping.")
             version = serialized.get("version")
             if version != _TTT_SERIALIZATION_VERSION:
@@ -254,7 +258,7 @@ class FastPLMTestTimeTrainingMixin:
                     f"{version!r}; expected {_TTT_SERIALIZATION_VERSION}."
                 )
             serialized_config = serialized.get("config")
-            if not isinstance(serialized_config, T.Mapping):
+            if not isinstance(serialized_config, Mapping):
                 raise ValueError("Serialized FastPLMs TTT state is missing its config mapping.")
             configured = TTTConfig.from_kwargs(**dict(serialized_config))
             initialized_value = serialized.get("initialized", False)
@@ -285,15 +289,15 @@ class FastPLMTestTimeTrainingMixin:
         self,
         seq: str | list[str] | None = None,
         input_ids: torch.Tensor | None = None,
-        **kwargs: T.Any,
+        **kwargs: Any,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         del kwargs
         if input_ids is not None:
-            return input_ids
+            return input_ids  # (b, l)
         if seq is None:
             raise ValueError("Pass either seq or input_ids for TTT.")
         tokenized = self.tokenizer(seq, return_tensors="pt", padding=True)
-        return tokenized["input_ids"]
+        return tokenized["input_ids"]  # (b, l)
 
     def _ttt_mask_token(self) -> int:
         return int(self.tokenizer.mask_token_id)
@@ -302,6 +306,7 @@ class FastPLMTestTimeTrainingMixin:
         return int(self.tokenizer.pad_token_id)
 
     def _ttt_replacement_tokens(self, input_ids: torch.Tensor) -> torch.Tensor:
+        # input_ids: (b, l)
         tokenizer = self.tokenizer
         special_ids = set(tokenizer.all_special_ids)
         vocab_size = int(self.config.vocab_size)
@@ -309,13 +314,13 @@ class FastPLMTestTimeTrainingMixin:
         if unknown_id is not None:
             special_ids.add(int(unknown_id))
 
-        vocab: T.Mapping[str, T.Any] = {}
+        vocab: Mapping[str, Any] = {}
         get_vocab = getattr(tokenizer, "get_vocab", None)
         if callable(get_vocab):
             vocab = get_vocab()
-        elif isinstance(getattr(tokenizer, "vocab", None), T.Mapping):
+        elif isinstance(getattr(tokenizer, "vocab", None), Mapping):
             vocab = tokenizer.vocab
-        elif isinstance(getattr(tokenizer, "_token_to_id", None), T.Mapping):
+        elif isinstance(getattr(tokenizer, "_token_to_id", None), Mapping):
             vocab = tokenizer._token_to_id
 
         ids: list[int] = []
@@ -334,20 +339,20 @@ class FastPLMTestTimeTrainingMixin:
                 "TTT could not resolve any canonical amino-acid token IDs from the tokenizer; "
                 "refusing to sample arbitrary or reserved vocabulary entries."
             )
-        return torch.tensor(ids, device=input_ids.device, dtype=input_ids.dtype)
+        return torch.tensor(ids, device=input_ids.device, dtype=input_ids.dtype)  # (c_aa,)
 
     def _ttt_predict_logits(
         self,
         batch: torch.Tensor | dict[str, torch.Tensor],
-        **kwargs: T.Any,
+        **kwargs: Any,
     ) -> torch.Tensor:
         del kwargs
         if isinstance(batch, dict):
             output = self(**batch)
-            return output.logits
-        attention_mask = batch.ne(self._ttt_padding_token())
+            return output.logits  # (b, l, c)
+        attention_mask = batch.ne(self._ttt_padding_token())  # (b, l)
         output = self(input_ids=batch, attention_mask=attention_mask)
-        return output.logits
+        return output.logits  # (b, l, c)
 
     def _ttt_eval_step(
         self,
@@ -355,8 +360,8 @@ class FastPLMTestTimeTrainingMixin:
         loss: float,
         seq: str | list[str] | None = None,
         input_ids: torch.Tensor | None = None,
-        **kwargs: T.Any,
-    ) -> tuple[dict[str, T.Any], float | None]:
+        **kwargs: Any,
+    ) -> tuple[dict[str, Any], float | None]:
         del step, loss, seq, input_ids, kwargs
         return {}, None
 
@@ -443,8 +448,8 @@ class FastPLMTestTimeTrainingMixin:
         for module in self._ttt_lora_modules():
             snapshot.append(
                 {
-                    "lora_down.weight": module.lora_down.weight.detach().clone(),
-                    "lora_up.weight": module.lora_up.weight.detach().clone(),
+                    "lora_down.weight": module.lora_down.weight.detach().clone(),  # (r, d_in)
+                    "lora_up.weight": module.lora_up.weight.detach().clone(),  # (d_out, r)
                 }
             )
         if not snapshot:
@@ -473,14 +478,14 @@ class FastPLMTestTimeTrainingMixin:
         for module in self._ttt_lora_modules():
             module.reset_lora_parameters()
 
-    def _ttt_serialized_contract(self) -> dict[str, T.Any]:
+    def _ttt_serialized_contract(self) -> dict[str, Any]:
         return {
             "version": _TTT_SERIALIZATION_VERSION,
             "initialized": bool(self._ttt_initialized),
             "config": self.ttt_config.to_dict(),
         }
 
-    def save_pretrained(self, save_directory: T.Any, *args: T.Any, **kwargs: T.Any) -> T.Any:
+    def save_pretrained(self, save_directory: Any, *args: Any, **kwargs: Any) -> Any:
         """Save initialized adapters, their reset baseline, and the TTT config.
 
         Adapter injection changes the module tree, so the serialized config must
@@ -523,16 +528,16 @@ class FastPLMTestTimeTrainingMixin:
         device: torch.device,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         if isinstance(batch, dict):
-            return {name: tensor.to(device) for name, tensor in batch.items()}
-        return batch.to(device)
+            return {name: tensor.to(device) for name, tensor in batch.items()}  # unchanged shapes
+        return batch.to(device)  # unchanged shape
 
     def _ttt_input_ids_from_batch(
         self,
         batch: torch.Tensor | dict[str, torch.Tensor],
     ) -> torch.Tensor:
         if isinstance(batch, dict):
-            return batch["input_ids"]
-        return batch
+            return batch["input_ids"]  # (b, l)
+        return batch  # (b, l)
 
     def _ttt_set_input_ids(
         self,
@@ -541,13 +546,14 @@ class FastPLMTestTimeTrainingMixin:
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         if isinstance(batch, dict):
             updated = dict(batch)
-            updated["input_ids"] = input_ids
+            updated["input_ids"] = input_ids  # (b, l)
             return updated
-        return input_ids
+        return input_ids  # (b, l)
 
     def _ttt_non_special_mask(self, input_ids: torch.Tensor) -> torch.Tensor:
-        residue_ids = self._ttt_replacement_tokens(input_ids)
-        return torch.isin(input_ids, residue_ids)
+        # input_ids: (b, l)
+        residue_ids = self._ttt_replacement_tokens(input_ids)  # (c_aa,)
+        return torch.isin(input_ids, residue_ids)  # (b, l)
 
     def _ttt_validate_tokenized_batch(
         self,
@@ -570,12 +576,14 @@ class FastPLMTestTimeTrainingMixin:
                     "DPLM2 TTT could not resolve the structure-token boundary safely."
                 )
             pad_token = self._ttt_padding_token()
-            generic_aa_special_ids = torch.tensor(
+            generic_aa_special_ids = torch.tensor(  # (4,)
                 [int(self.config.vocab_size) + offset for offset in range(4)],
                 device=input_ids.device,
                 dtype=input_ids.dtype,
             )
-            is_structure = input_ids.ge(int(struct_boundary)) & input_ids.ne(pad_token)
+            is_structure = input_ids.ge(int(struct_boundary)) & input_ids.ne(  # (b, l)
+                pad_token
+            )
             is_structure &= ~torch.isin(input_ids, generic_aa_special_ids)
             if bool(is_structure.any()):
                 raise ValueError(
@@ -584,8 +592,11 @@ class FastPLMTestTimeTrainingMixin:
                 )
 
             if isinstance(batch, dict) and "type_ids" in batch:
-                type_ids = batch["type_ids"]
-                attention_mask = batch.get("attention_mask", input_ids.ne(pad_token)).bool()
+                type_ids = batch["type_ids"]  # (b, l)
+                attention_mask = batch.get(  # (b, l)
+                    "attention_mask",
+                    input_ids.ne(pad_token),
+                ).bool()
                 if bool(((type_ids == int(self.config.struct_type)) & attention_mask).any()):
                     raise ValueError(
                         "DPLM2 TTT currently supports amino-acid-only inputs; structure "
@@ -607,13 +618,15 @@ class FastPLMTestTimeTrainingMixin:
         cfg = self.ttt_config
         if input_ids.shape[1] <= cfg.crop_size:
             return batch
-        position_has_residue = self._ttt_non_special_mask(input_ids).any(dim=0).to(torch.int64)
-        prefix = F.pad(position_has_residue.cumsum(dim=0), (1, 0))
-        window_counts = prefix[cfg.crop_size :] - prefix[: -cfg.crop_size]
-        valid_starts = torch.where(window_counts > 0)[0]
+        position_has_residue = (  # (l,)
+            self._ttt_non_special_mask(input_ids).any(dim=0).to(torch.int64)
+        )
+        prefix = F.pad(position_has_residue.cumsum(dim=0), (1, 0))  # (l + 1,)
+        window_counts = prefix[cfg.crop_size :] - prefix[: -cfg.crop_size]  # (l-crop+1,)
+        valid_starts = torch.where(window_counts > 0)[0]  # (n_valid,)
         if valid_starts.numel() == 0:
             raise ValueError("TTT could not find a crop containing a biological residue token.")
-        selected = torch.randint(
+        selected = torch.randint(  # (1,)
             valid_starts.numel(),
             (1,),
             generator=generator,
@@ -625,11 +638,11 @@ class FastPLMTestTimeTrainingMixin:
             cropped = {}
             for name, tensor in batch.items():
                 if tensor.ndim >= 2 and tensor.shape[1] == input_ids.shape[1]:
-                    cropped[name] = tensor[:, start:end]
+                    cropped[name] = tensor[:, start:end]  # (b, crop_size, ...)
                 else:
                     cropped[name] = tensor
             return cropped
-        return input_ids[:, start:end]
+        return input_ids[:, start:end]  # (b, crop_size)
 
     def _ttt_sample_batch(
         self,
@@ -638,69 +651,69 @@ class FastPLMTestTimeTrainingMixin:
     ) -> tuple[torch.Tensor | dict[str, torch.Tensor], torch.Tensor]:
         cfg = self.ttt_config
         batch = self._ttt_sample_crop(tokenized, generator)
-        input_ids = self._ttt_input_ids_from_batch(batch)
-        row_has_residue = self._ttt_non_special_mask(input_ids).any(dim=1)
-        eligible_rows = torch.where(row_has_residue)[0]
+        input_ids = self._ttt_input_ids_from_batch(batch)  # (b, l)
+        row_has_residue = self._ttt_non_special_mask(input_ids).any(dim=1)  # (b,)
+        eligible_rows = torch.where(row_has_residue)[0]  # (n_eligible,)
         if eligible_rows.numel() == 0:
             raise ValueError(
                 "TTT sampled batch contains no trainable biological residue tokens."
             )
-        sampled_row_indices = torch.randint(
+        sampled_row_indices = torch.randint(  # (b_sample,)
             eligible_rows.numel(),
             (cfg.batch_size,),
             generator=generator,
             device=input_ids.device,
         )
-        rows = eligible_rows[sampled_row_indices]
+        rows = eligible_rows[sampled_row_indices]  # (b_sample,)
         if isinstance(batch, dict):
             sampled: torch.Tensor | dict[str, torch.Tensor] = {}
             for name, tensor in batch.items():
                 if tensor.ndim >= 1 and tensor.shape[0] == input_ids.shape[0]:
-                    sampled[name] = tensor.index_select(0, rows)
+                    sampled[name] = tensor.index_select(0, rows)  # (b_sample, ...)
                 else:
                     sampled[name] = tensor
         else:
-            sampled = input_ids.index_select(0, rows)
+            sampled = input_ids.index_select(0, rows)  # (b_sample, l)
 
-        sampled_ids = self._ttt_input_ids_from_batch(sampled)
-        labels = sampled_ids.clone()
-        non_special = self._ttt_non_special_mask(sampled_ids)
-        label_mask = torch.zeros_like(non_special)
+        sampled_ids = self._ttt_input_ids_from_batch(sampled)  # (b_sample, l)
+        labels = sampled_ids.clone()  # (b_sample, l)
+        non_special = self._ttt_non_special_mask(sampled_ids)  # (b_sample, l)
+        label_mask = torch.zeros_like(non_special)  # (b_sample, l)
         for row_idx in range(sampled_ids.shape[0]):
-            candidate_positions = torch.where(non_special[row_idx])[0]
+            candidate_positions = torch.where(non_special[row_idx])[0]  # (n_candidates,)
             if candidate_positions.numel() == 0:
                 continue
             num_mask = max(1, round(candidate_positions.numel() * cfg.mask_ratio))
-            order = torch.randperm(
+            order = torch.randperm(  # (n_candidates,)
                 candidate_positions.numel(),
                 generator=generator,
                 device=sampled_ids.device,
             )
-            chosen = candidate_positions[order[:num_mask]]
+            chosen = candidate_positions[order[:num_mask]]  # (n_mask,)
             label_mask[row_idx, chosen] = True
-        labels = labels.masked_fill(~label_mask, -100)
+        labels = labels.masked_fill(~label_mask, -100)  # (b_sample, l)
 
-        masked_ids = sampled_ids.clone()
-        chosen_positions = torch.where(label_mask)
+        masked_ids = sampled_ids.clone()  # (b_sample, l)
+        chosen_positions = torch.where(label_mask)  # two (n_chosen,) tensors
         if chosen_positions[0].numel() > 0:
-            random_values = torch.rand(
+            random_values = torch.rand(  # (n_chosen,)
                 chosen_positions[0].shape,
                 generator=generator,
                 device=sampled_ids.device,
             )
-            leave = random_values < cfg.bert_leave_prob
-            replace = (random_values >= cfg.bert_leave_prob) & (
+            leave = random_values < cfg.bert_leave_prob  # (n_chosen,)
+            replace = (random_values >= cfg.bert_leave_prob) & (  # (n_chosen,)
                 random_values < cfg.bert_leave_prob + cfg.bert_replace_prob
             )
-            mask = ~(leave | replace)
+            mask = ~(leave | replace)  # (n_chosen,)
             if mask.any():
                 masked_ids[
                     chosen_positions[0][mask],
                     chosen_positions[1][mask],
                 ] = self._ttt_mask_token()
             if replace.any():
-                replacement_tokens = self._ttt_replacement_tokens(sampled_ids)
-                replacement_idx = torch.randint(
+                replacement_tokens = self._ttt_replacement_tokens(sampled_ids)  # (c_aa,)
+                replacement_idx = torch.randint(  # (n_replace,)
                     replacement_tokens.shape[0],
                     (int(replace.sum().item()),),
                     generator=generator,
@@ -711,10 +724,10 @@ class FastPLMTestTimeTrainingMixin:
                     chosen_positions[1][replace],
                 ] = replacement_tokens[replacement_idx]
 
-        return self._ttt_set_input_ids(sampled, masked_ids), labels
+        return self._ttt_set_input_ids(sampled, masked_ids), labels  # batch, (b_sample, l)
 
     @contextlib.contextmanager
-    def _ttt_seed_scope(self, seed: int | None) -> T.Iterator[None]:
+    def _ttt_seed_scope(self, seed: int | None) -> Iterator[None]:
         if seed is None:
             yield
             return
@@ -736,9 +749,9 @@ class FastPLMTestTimeTrainingMixin:
         self,
         seq: str | list[str] | None = None,
         input_ids: torch.Tensor | None = None,
-        ttt_config: TTTConfig | T.Mapping[str, T.Any] | None = None,
-        **kwargs: T.Any,
-    ) -> dict[str, T.Any]:
+        ttt_config: TTTConfig | Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         if ttt_config is not None:
             if "_ttt_initialized" in self.__dict__ and self._ttt_initialized:
                 next_cfg = self.ttt_config.merged(ttt_config)
@@ -788,7 +801,7 @@ class FastPLMTestTimeTrainingMixin:
         module_modes = {module: module.training for module in self.modules()}
         requires_grad = {param: param.requires_grad for param in self.parameters()}
         losses: list[float] = []
-        step_metrics: list[dict[str, T.Any]] = []
+        step_metrics: list[dict[str, Any]] = []
         best_state: list[dict[str, torch.Tensor]] | None = None
         best_metric: float | None = None
         best_step = 0
@@ -805,14 +818,17 @@ class FastPLMTestTimeTrainingMixin:
                 optimizer.zero_grad(set_to_none=True)
                 total_micro_steps = cfg.steps * cfg.ags
                 for micro_step in range(total_micro_steps):
-                    batch, labels = self._ttt_sample_batch(tokenized, generator)
+                    batch, labels = self._ttt_sample_batch(  # batch, (b_sample, l)
+                        tokenized,
+                        generator,
+                    )
                     if not bool(labels.ne(-100).any()):
                         raise RuntimeError(
                             "TTT produced an all-ignored label batch; refusing a NaN update."
                         )
-                    logits = self._ttt_predict_logits(batch, **kwargs)
-                    labels = labels.to(device=logits.device)
-                    loss = F.cross_entropy(
+                    logits = self._ttt_predict_logits(batch, **kwargs)  # (b_sample, l, c)
+                    labels = labels.to(device=logits.device)  # (b_sample, l)
+                    loss = F.cross_entropy(  # ()
                         logits.reshape(-1, logits.shape[-1]),
                         labels.reshape(-1),
                         ignore_index=-100,

@@ -61,19 +61,27 @@ def test_advertised_heads_accept_host_labels_with_cuda_logits(family: str) -> No
 
     if family == "esmc_mlm":
         model = ESMplusplusForMaskedLM(_esmc_config()).to(device).train()
+        # input_ids: (2, 4)
         input_ids = torch.tensor(((0, 4, 5, 2), (0, 6, 2, 1)), device=device)
+        # attention_mask: (b, l)
         attention_mask = input_ids.ne(1)
+        # labels: (b, l)
         labels = input_ids.cpu().masked_fill(~attention_mask.cpu(), -100)
         output = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
     elif family == "esmc_token":
         model = ESMplusplusForTokenClassification(_esmc_config()).to(device).train()
+        # input_ids: (2, 4)
         input_ids = torch.tensor(((0, 4, 5, 2), (0, 6, 2, 1)), device=device)
+        # attention_mask: (b, l)
         attention_mask = input_ids.ne(1)
+        # labels: (b, l)
         labels = input_ids.cpu().remainder(3).masked_fill(~attention_mask.cpu(), -100)
         output = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
     elif family == "e1_token":
         model = E1ForTokenClassification(_e1_config()).to(device).train()
+        # input_ids: (1, 4)
         input_ids = torch.tensor(((1, 5, 6, 2),), device=device)
+        # positions: (..., 3)
         positions = torch.arange(input_ids.shape[1], device=device).unsqueeze(0)
         labels = input_ids.cpu().remainder(3)
         output = model(
@@ -85,8 +93,11 @@ def test_advertised_heads_accept_host_labels_with_cuda_logits(family: str) -> No
         )
     else:
         model = FastESM3Model(_esm3_config()).to(device).train()
+        # input_ids: (2, 4)
         input_ids = torch.tensor(((0, 4, 5, 2), (0, 6, 2, 1)), device=device)
+        # attention_mask: (b, l)
         attention_mask = input_ids.ne(1)
+        # labels: (b, l)
         labels = input_ids.cpu().masked_fill(~attention_mask.cpu(), -100)
         output = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
 

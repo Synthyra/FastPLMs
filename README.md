@@ -2,20 +2,24 @@
 
 <img width="2816" height="1536" alt="FastPLMs Hero Image" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
 
-FastPLMs provides Hugging Face-compatible protein language and structure
-models. It keeps the familiar Transformers interface while making attention,
-embedding, generation, folding, and validation behavior explicit.
+FastPLMs maintains the runtime code published with Hugging Face protein
+language and structure models. This repository is the source, test, and
+dependency workspace for those model repositories. It is not an installable
+Python distribution.
 
-The runtime package does not import an official model checkout. Each supported
+Published models keep the familiar Transformers interface while making
+attention, embedding, generation, folding, and validation behavior explicit.
+Their runtime code does not import an official model checkout. Each supported
 family instead has a pinned upstream source under `vendor/upstream/`, an
 immutable checkpoint identity, and a declared state transformation. Release
-workflows compare the resulting FastPLMs artifact against that official source.
+workflows compare the resulting Hugging Face artifact against that official
+source.
 
 ## Contents
 
 - [Why FastPLMs](#why-fastplms)
 - [Supported models](#supported-models)
-- [Installation](#installation)
+- [Dependencies](#dependencies)
 - [Quick start](#quick-start)
 - [Usage examples](#usage-examples)
 - [Attention backends](#attention-backends)
@@ -73,45 +77,52 @@ checkpoints. `AutoModel` loads the encoder view, and
 `AutoModelForSeq2SeqLM` loads the decoder, cross-attention, and language-model
 head from the same repository.
 
-## Installation
+## Dependencies
 
-FastPLMs 1.0 requires Python 3.11 through 3.14 and PyTorch 2.13. The compatible
-Transformers requirement is Transformers 5.13. For a development checkout:
+Published FastPLMs model repositories require Python 3.11 through 3.14,
+PyTorch 2.13, and Transformers 5.13. Install those runtime dependencies
+directly, then load the model from Hugging Face:
+
+```bash
+python -m pip install \
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14"
+```
+
+For a source checkout used to build or validate artifacts, install the named
+dependency profile and put `src` on `PYTHONPATH` when running repository code:
 
 ```bash
 git clone https://github.com/Synthyra/FastPLMs.git
 cd FastPLMs
-uv sync --extra dev
+uv venv
+uv pip install \
+  -r requirements/profiles/cpu-validation.in \
+  -c requirements/constraints/validation.txt \
+  --torch-backend cpu
+PYTHONPATH=src python -m pytest tests/cpu -m cpu_contract
 ```
 
 Official reference repositories are not runtime or routine-development
 dependencies. Initialize them only for a live release-candidate compliance run,
 as described under [Validation and reproducibility](#validation-and-reproducibility).
 
-Install a pinned Git revision when only the runtime package is needed:
+Direct dependency declarations live under `requirements/`. Profiles compose
+the combinations exercised by local and container validation:
 
-```bash
-python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<revision>"
-```
-
-Optional dependency groups are isolated by purpose:
-
-| Extra | Purpose |
+| Dependency file or profile | Purpose |
 | --- | --- |
-| `cpu` | CPU-only PyTorch 2.13 selection through uv's explicit PyTorch CPU index; incompatible with the CUDA-only `cueq` and `fp8` extras |
-| `structure` | ESMFold2 and Boltz2 runtime dependencies, including Accelerate for memory-safe 6B `device_map` loading and OmegaConf for trusted official Lightning checkpoint deserialization |
-| `binder` | Bounded AbNumber 0.4.4, ANARCII 2.0.8, pandas, and PyArrow dependencies used only by the binder-design research workflow; combine with `structure` |
-| `cueq` | Optional ESMFold2 cuEquivariance kernels on the locked Linux CUDA 13 release stack; installs the separately licensed NVIDIA CUDA runtime |
-| `flash` | Pinned precompiled Hugging Face FlashAttention kernels |
-| `fp8` | Experimental ESMFold2 ESMC FP8 inference |
-| `train` | Trainer, Accelerate, datasets, and PEFT workflows |
-| `reporting` | Fine-tuning and research-example plots and statistical reports |
-| `dev` | Tests, type checking, linting, and package builds |
+| `profiles/runtime.in` | Core dependencies embedded model code can import |
+| `profiles/cpu-validation.in` | CPU-only tests, linting, typing, structure preparation, and training contracts |
+| `profiles/candidate.in` | CUDA candidate validation with FlashAttention support |
+| `profiles/candidate-structure.in` | CUDA structure and binder validation |
+| `profiles/candidate-fp8.in` | Experimental ESMFold2 ESMC FP8 validation |
+| `features/binder.in` | AbNumber, ANARCII, pandas, and PyArrow for binder design |
+| `features/cueq.in` | Optional cuEquivariance frontend and CUDA 13 kernels |
+| `features/reporting.in` | Plots and statistical reports |
 
-Core installation contains Torch, Transformers, Hugging Face Hub, tokenizers,
-safetensors, NumPy, einops, and tqdm. Official reference implementations are
-not installed into the runtime environment.
+See [`requirements/README.md`](requirements/README.md) for the complete profile
+layout. Official reference implementations are never runtime dependencies.
 
 ## Quick start
 
@@ -162,9 +173,14 @@ level token tensors.
 
 ## Usage examples
 
+Calls made directly on a model loaded with `trust_remote_code=True` use the
+runtime bundled in its Hugging Face repository. Examples that import
+`fastplms` modules are contributor workflows and require `PYTHONPATH=src`.
+
 ### Ordered sequence embeddings
 
-The package function and model method share the same implementation:
+The model method is available from the Hugging Face artifact. The source-level
+function shown here is for repository work run with `PYTHONPATH=src`:
 
 ```python
 from fastplms import EmbeddingInput, embed_dataset
@@ -614,18 +630,19 @@ ESMFold2 structural objectives and an ESM++ sequence prior:
 
 ![FastPLMs EGFR minibinder design](docs/assets/egfr_fastplms_binder_design.png)
 
-Run it with the `structure` extra and the example-only table and antibody
-dependencies. The published workflow requires Python 3.11-3.14, PyTorch 2.13,
+Install the `binder` dependency profile, which includes the structure runtime
+and the example-only table and antibody dependencies. The published workflow
+requires Python 3.11-3.14, PyTorch 2.13,
 Transformers 5.13, the verified ESMFold2 runtime assets, and a CUDA device. The
 current release evidence target is the exact containerized Linux aarch64
 environment on the NVIDIA GH200 workstation. CPU-only, x86-64, Windows, macOS,
 H100, and H200 binder runs do not substitute for that evidence.
 
 ```bash
-uv run --frozen \
-  --extra structure \
-  --extra binder \
-  python examples/binder_design_fastplms.py \
+uv pip install \
+  -r requirements/profiles/binder.in \
+  -c requirements/constraints/validation.txt
+PYTHONPATH=src python examples/binder_design_fastplms.py \
   --target-name pd-l1 \
   --binder-name minibinder \
   --batch-size 4 \
@@ -643,14 +660,13 @@ marks an incomplete run. See the [binder-design guide](docs/binder_design.md).
 ### Fine-tuning
 
 FastPLMs follows `PreTrainedModel` conventions for Trainer, Accelerate, and
-PEFT workflows. Training needs the `train` extra. Plotting is opt-in; add the
-`reporting` extra and `--plot-results` when requested:
+PEFT workflows. Install the `reporting` profile for training with plots:
 
 ```bash
-uv run \
-  --extra train \
-  --extra reporting \
-  python examples/fine_tuning.py \
+uv pip install \
+  -r requirements/profiles/reporting.in \
+  -c requirements/constraints/validation.txt
+PYTHONPATH=src python examples/fine_tuning.py \
   --task classification \
   --model_path Synthyra/ESM2-8M \
   --model-revision 185ecbd45665d050a8dae326d91886d330c5f9d0 \
@@ -672,8 +688,9 @@ trees are not accepted. The example writes
 `run_manifest.json` with ordered post-filter hashes of the rows and columns
 actually consumed by training. It atomically publishes `final_model`, reloads
 it against the same immutable base, and verifies the persisted adapter and
-classifier tensor hashes. Omit `--extra reporting` and `--plot-results` for the
-default plot-free run. See the
+classifier tensor hashes. For the default plot-free run, install
+`requirements/features/train.in` with `requirements/core.in` and omit
+`--plot-results`. See the
 [fine-tuning guide](docs/finetuning.md).
 
 ## Attention backends
@@ -701,8 +718,9 @@ It does not change model configuration or later calls. Leaving
 Transformers choose its standard default. Explicit requests either run the
 declared implementation or raise.
 
-The `flash` extra installs Hugging Face `kernels`, not the `flash-attn` source
-package. FastPLMs resolves immutable FlashAttention 2 and 3 snapshots recorded
+The Flash dependency file installs Hugging Face `kernels`, not the
+`flash-attn` source distribution. FastPLMs resolves immutable FlashAttention 2
+and 3 snapshots recorded
 in `kernels.lock`, validates the compatible binary, and never compiles a source
 fallback. See the [attention guide](docs/attention_backends.md) for exact
 family, dtype, padding, and numerical contracts.

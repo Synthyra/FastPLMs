@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, ClassVar
-
 import pytest
 import torch
+from pathlib import Path
+from typing import Any, ClassVar
 
 from fastplms.embeddings import embed_dataset, load_sqlite_result
 from fastplms.models.ankh.modeling_ankh import FastAnkhModel
@@ -26,6 +25,7 @@ from tests.cpu.test_sequence_autoclass_contracts import (
 from tests.unit import test_embeddings_api as contracts
 from tests.unit.test_ankh_cpu_contract import _config as _ankh_config
 from tests.unit.test_e1_cache_contract import _tiny_e1_config
+
 
 test_all_hidden_state_embeddings_trim_token_axis_and_round_trip = (
     contracts.test_all_hidden_state_embeddings_trim_token_axis_and_round_trip
@@ -244,7 +244,17 @@ class _TinyProteinTokenizer:
         }
 
 
-def _real_family_model(family: str):
+def _real_family_model(
+    family: str,
+) -> (
+    FastEsmModel
+    | ESMplusplusModel
+    | DPLMModel
+    | DPLM2Model
+    | FastAnkhModel
+    | FastESM3Model
+    | E1Model
+):
     tokenizer = _TinyProteinTokenizer()
     if family == "esm2":
         model = FastEsmModel(_esm2_config())
@@ -308,7 +318,7 @@ def test_every_real_sequence_family_uses_ordered_biological_embedding_path(
     sequences = ["ACD", "G", "ACD"]
     output = tmp_path / "real-family.sqlite" if persist else None
 
-    result = model.embed_dataset(
+    result = model.embed_dataset(  # record tensors: (l_i, d)
         sequences,
         batch_size=3,
         full_embeddings=True,
@@ -343,7 +353,7 @@ def test_generator_inputs_are_consumed_once_and_keep_stable_order() -> None:
             consumed.append(sequence)
             yield sequence
 
-    result = embed_dataset(
+    result = embed_dataset(  # pooled record tensors: (d,)
         contracts.SyntheticEmbeddingModel(),
         sequences(),
         batch_size=2,

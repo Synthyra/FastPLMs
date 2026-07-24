@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+import torch
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
-import pytest
-import torch
 
 from examples import fine_tuning
 from fastplms.models.esm2.modeling_fastesm import (
@@ -15,6 +14,7 @@ from fastplms.models.esm2.modeling_fastesm import (
     FastEsmForSequenceClassification,
 )
 from tests.unit import test_fine_tuning_example as fine_tuning_contracts
+
 
 test_pair_collator_enforces_longest_first_tokenizer_limit = (
     fine_tuning_contracts.test_pair_collator_enforces_longest_first_tokenizer_limit
@@ -487,11 +487,17 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
 ) -> None:
     torch.manual_seed(7)
     template = FastEsmForSequenceClassification(_tiny_config())
-    base_state = {name: tensor.detach().clone() for name, tensor in template.state_dict().items()}
+    base_state = {  # parameter name -> checkpoint-shaped tensor
+        name: tensor.detach().clone()
+        for name, tensor in template.state_dict().items()
+    }
     tokenizer = _OfflineProteinTokenizer()
     loader_calls: list[tuple[str, dict[str, Any]]] = []
 
-    def load_tiny_model(model_name: str, **kwargs: Any):
+    def load_tiny_model(
+        model_name: str,
+        **kwargs: Any,
+    ) -> FastEsmForSequenceClassification:
         loader_calls.append((model_name, dict(kwargs)))
         model = FastEsmForSequenceClassification(
             _tiny_config(attn_backend=kwargs["attn_implementation"])
@@ -528,12 +534,15 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
     ]
     assert "classifier" in adapter.peft_config["default"].modules_to_save
 
-    batch = fine_tuning.SequenceCollator(
+    batch = fine_tuning.SequenceCollator(  # token tensors: (b=2, l)
         tokenizer,
         regression=False,
         max_length=8,
     )([("ACD", 0), ("EFG", 1)])
-    before = {name: parameter.detach().clone() for name, parameter in adapter.named_parameters()}
+    before = {  # parameter name -> parameter-shaped tensor
+        name: parameter.detach().clone()
+        for name, parameter in adapter.named_parameters()
+    }
     trainable = {name for name, parameter in adapter.named_parameters() if parameter.requires_grad}
     assert trainable
     assert all("lora_" in name or "classifier" in name for name in trainable)
@@ -555,7 +564,7 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
         (parameter for parameter in adapter.parameters() if parameter.requires_grad),
         lr=0.5,
     )
-    output = adapter(**batch)
+    output = adapter(**batch)  # logits: (b=2, c=2); loss: ()
     assert len(sdpa_calls) == 1
     assert output.loss is not None and torch.isfinite(output.loss)
     output.loss.backward()
@@ -576,10 +585,14 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
     assert any("lora_" in name for name in changed)
     assert any("classifier" in name for name in changed)
 
-    inference_inputs = {key: value for key, value in batch.items() if key != "labels"}
+    inference_inputs = {  # token tensors: (b, l)
+        key: value
+        for key, value in batch.items()
+        if key != "labels"
+    }
     adapter.eval()
     with torch.inference_mode():
-        expected = adapter(**inference_inputs).logits
+        expected = adapter(**inference_inputs).logits  # (b, c)
 
     verification_rows = [("ACD", 0), ("EFG", 1)]
     verification_collator = fine_tuning.SequenceCollator(
@@ -605,7 +618,9 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
             }
             self.model.eval()
             with torch.inference_mode():
-                logits = self.model(**prediction_inputs).logits.detach().cpu().numpy()
+                logits = (  # (b, c)
+                    self.model(**prediction_inputs).logits.detach().cpu().numpy()
+                )
             return SimpleNamespace(predictions=logits)
 
         def save_model(self, save_directory: str | Path) -> None:
@@ -650,5 +665,5 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
         },
     )
     with torch.inference_mode():
-        observed = adapter(**inference_inputs).logits
+        observed = adapter(**inference_inputs).logits  # (b, c)
     torch.testing.assert_close(observed, expected, rtol=0.0, atol=0.0)

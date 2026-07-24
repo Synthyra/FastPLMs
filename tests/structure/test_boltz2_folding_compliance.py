@@ -6,12 +6,11 @@ import ast
 import copy
 import inspect
 import os
-from collections.abc import Mapping
-from pathlib import Path
-
 import pytest
 import torch
 import torch.nn.functional as F
+from collections.abc import Mapping
+from pathlib import Path
 
 from fastplms.models.boltz.modeling_boltz2 import Boltz2Config
 from fastplms.registry import get_model_registry
@@ -22,6 +21,7 @@ from tests.structure.support.hardware import (
     hopper_sm90_fingerprint,
 )
 from tests.structure.support.state_contract import semantic_config_contract
+
 
 bf16_targets = {
     "ca_rmsd": 0.10,
@@ -152,12 +152,14 @@ def _assert_exact_features(
     expected = _features(expected_tensors)
     assert actual.keys() == expected.keys() == set(boltz2_bundle._feature_names)
     for name in boltz2_bundle._exact_features:
+        # X: (...)
         X = actual[name]
         X_ref = expected[name]
         assert X.dtype == X_ref.dtype, f"{name}: dtype"
         assert X.shape == X_ref.shape, f"{name}: shape"
         assert torch.equal(X, X_ref), f"{name}: values"
     for name in set(actual).difference(boltz2_bundle._exact_features):
+        # X: (...)
         X = actual[name]
         X_ref = expected[name]
         assert X.dtype == X_ref.dtype, f"{name}: dtype"
@@ -174,21 +176,28 @@ def _assert_exact_features(
 
 
 def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    # actual: (...), expected: (...)
     difference = torch.linalg.vector_norm(actual.float() - expected.float())
+    # scale: (...)
     scale = torch.linalg.vector_norm(expected.float()).clamp_min(torch.finfo(torch.float32).tiny)
     return (difference / scale).item()
 
 
 def _first_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    # X: (...)
     X = _output(tensors, "sample_atom_coords").float()
     return X.reshape(-1, X.shape[-2], 3)[0]
 
 
 def _ca_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
     features = _features(tensors)
+    # encoded: (4,)
     encoded = torch.tensor([ord("C") - 32, ord("A") - 32, 0, 0])
+    # atom_names: (...)
     atom_names = features["ref_atom_name_chars"][0].argmax(dim=-1)
+    # atom_mask: (...)
     atom_mask = features["atom_pad_mask"][0].bool()
+    # ca_mask: (...)
     ca_mask = atom_names.eq(encoded).all(dim=-1) & atom_mask
     assert ca_mask.sum().item() == len(boltz2_bundle.fold_sequence)
     return ca_mask
@@ -199,10 +208,13 @@ def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
 
 
 def _aligned_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    # actual: (...), expected: (...)
+    # X: (...)
     X = actual.float() - actual.float().mean(dim=0, keepdim=True)
     X_ref = expected.float() - expected.float().mean(dim=0, keepdim=True)
     covariance = X.T @ X_ref
     U, _, Vh = torch.linalg.svd(covariance)
+    # correction: (3, 3)
     correction = torch.eye(3)
     correction[-1, -1] = torch.sign(torch.det(U @ Vh))
     rotation = U @ correction @ Vh
@@ -211,12 +223,15 @@ def _aligned_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
 
 
 def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
+    # actual: (...), expected: (...)
     actual_distances = torch.cdist(actual.float(), actual.float())
     expected_distances = torch.cdist(expected.float(), expected.float())
+    # pair_mask: (...)
     pair_mask = expected_distances.lt(15.0)
     pair_mask.fill_diagonal_(False)
     assert pair_mask.any()
     errors = (actual_distances - expected_distances).abs()
+    # scores: (...)
     scores = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
         dim=0
     )
@@ -228,6 +243,7 @@ def _probability_jsd(
     expected_logits: torch.Tensor,
     mask: torch.Tensor,
 ) -> torch.Tensor:
+    # actual_logits: (..., c), expected_logits: (..., c), mask: (...)
     actual_log_prob = F.log_softmax(actual_logits.float(), dim=-1)
     expected_log_prob = F.log_softmax(expected_logits.float(), dim=-1)
     actual_prob = actual_log_prob.exp()
@@ -239,6 +255,7 @@ def _probability_jsd(
         + (expected_prob * (expected_log_prob - log_mean_prob)).sum(dim=-1)
     )
     while mask.ndim < divergence.ndim:
+        # mask: (...)
         mask = mask.unsqueeze(0)
     mask = torch.broadcast_to(mask, divergence.shape)
     return divergence[mask].mean()
@@ -249,7 +266,9 @@ def _metrics(
     expected: Mapping[str, torch.Tensor],
 ) -> tuple[dict[str, float], dict[str, float]]:
     features = _features(actual)
+    # token_mask: (...)
     token_mask = features["token_pad_mask"].bool()
+    # pair_mask: (...)
     pair_mask = token_mask[:, :, None] & token_mask[:, None, :]
     plddt_actual = _output(actual, "plddt").float().reshape_as(token_mask)
     plddt_expected = _output(expected, "plddt").float().reshape_as(token_mask)
@@ -305,6 +324,7 @@ def _metrics(
 
 def _assert_valid_outputs(tensors: Mapping[str, torch.Tensor], *, context: str) -> None:
     features = _features(tensors)
+    # atom_mask: (...)
     atom_mask = features["atom_pad_mask"][0].bool()
     coordinates = _first_coordinates(tensors)
     assert torch.isfinite(coordinates[atom_mask]).all(), f"{context}: coordinates"
@@ -368,9 +388,12 @@ def test_boltz2_portable_noise_never_reads_pytorch_rng(
         torch.manual_seed(global_seed)
         with boltz2_bundle._portable_random_draws(17) as captured:
             # N0 and N1 cover both stochastic interfaces used by Boltz2.
+            # N0: (2, 3)
             N0 = torch.randn((2, 3), dtype=torch.float32)
             N1 = torch.randn_like(torch.empty(4, dtype=torch.bfloat16))
+            # out: (2,)
             out = torch.empty(2, dtype=torch.float64)
+            # N2: (2,)
             N2 = torch.randn(2, dtype=torch.float64, out=out)
         assert torch.randn is forbidden_random_draw
         assert torch.randn_like is forbidden_random_draw

@@ -18,13 +18,33 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`,
 `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
 
+## Capabilities
+
+| Feature | Status |
+| --- | --- |
+| Sequence classification | Supported: base weights with an untrained task head |
+| Token classification | Supported: base weights with an untrained task head |
+| PEFT fine-tuning | Supported pattern: preserve the separately trained `classifier` |
+| Embeddings | Special: encoder or explicitly prepared decoder states |
+| Test-time training | Supported: low-rank masked-residue adaptation |
+| Attention variants | Supported: `eager`, `sdpa` |
+| Compliance | Declared: exact release evidence is required |
+
+A supported interface is not a pretrained downstream predictor. Classification
+heads start untrained, and declared compliance metadata is not a claim that an
+arbitrary local build passed its release gate.
+
 ## Install and platform requirements
 
-Install the current FastPLMs package:
+Install the direct dependencies published with this model:
 
 ```bash
-python -m pip install "fastplms @ git+https://github.com/Synthyra/FastPLMs.git"
+python -m pip install -r \
+  "https://huggingface.co/Synthyra/ANKH3_xl/resolve/main/requirements.txt"
 ```
+
+The FastPLMs implementation itself is embedded in the model repository and loaded
+by Transformers through `trust_remote_code=True`.
 
 Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The declared CPU gate covers tiny offline contracts; published checkpoint throughput and parity require the documented device tier. The Hub quick start below requires network
 access on first download. For an air-gapped run, first build the manifest-pinned
@@ -39,22 +59,22 @@ model_id = "Synthyra/ANKH3_xl"
 model = AutoModel.from_pretrained(
     model_id,
     trust_remote_code=True,
+    attn_implementation="sdpa",
 ).eval()
 ```
 
-This example uses the published Hub repository. For offline validation, build
-the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/ANKH3_xl` path, then pass `local_files_only=True`.
+For offline validation, replace `model_id` with the manifest-built
+`dist/hub/ANKH3_xl` path and pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default. Supported explicit
-choices are `eager`, `sdpa`.
-Pass the selected name through `attn_implementation`.
-When an optimized backend cannot return full attention tensors,
-`output_attentions=True` emits one explicit runtime warning and uses a correctly
-masked eager implementation for that call only. The warning identifies the
-configured backend, effective backend, and reason. Configuration and later
-calls are unchanged.
-For BF16 execution, this family uses parameters loaded directly in BF16.
+## Attention and compliance
+
+The quick start selects `sdpa` explicitly. Declared variants are `eager`, `sdpa`. An unavailable requested backend raises
+instead of silently switching implementations.
+`output_attentions=True` may use the documented, one-call eager fallback solely
+to materialize attention tensors; the configured backend remains unchanged.
+
+This family declares the `compliance` tier. Release evidence binds the exact
+checkpoint, backend, dtype, hardware, inputs, and reference revision.
 
 ## Tokenization and forward inference
 
@@ -85,8 +105,8 @@ print(output.last_hidden_state.shape)
 
 ## Dataset embeddings
 
-Dataset embeddings default to the encoder's final hidden state. Layer indices
-use the selected stack's native hidden-state order:
+Dataset embeddings default to the encoder final state. Select a native encoder
+layer directly:
 
 ```python
 encoder_result = model.embed_dataset(
@@ -95,20 +115,11 @@ encoder_result = model.embed_dataset(
     hidden_state_index=-1,
     full_embeddings=True,
 )
-all_encoder_layers = model.embed_dataset(
-    ["MSTNPKPQRKTKRNT"],
-    hidden_state_source="encoder",
-    store_all_hidden_states=True,
-    full_embeddings=True,
-)
+print(encoder_result[0].tensor.shape)  # (l, d)
 ```
 
 Decoder representations require `AutoModelForSeq2SeqLM` and exactly one
-explicit, aligned `decoder_inputs` sequence or `decoder_input_ids` tensor. ANKH
-does not infer a shifted source sequence because official tasks use prompts,
-sentinel tokens, or generated tokens that depend on the task. Protein inputs
-remain raw residue strings and sentinel prompts remain tight, as in
-`M<extra_id_0>`:
+aligned decoder input. ANKH does not invent a shifted target:
 
 ```python
 from transformers import AutoModelForSeq2SeqLM
@@ -124,12 +135,105 @@ decoder_result = seq2seq.embed_dataset(
     decoder_inputs=["M<extra_id_0>"],
     full_embeddings=True,
 )
+print(decoder_result[0].tensor.shape)  # (decoder_length, d)
 ```
 
-`decoder_attention_mask` is accepted only with `decoder_input_ids`. Decoder
-pooling excludes start, EOS, padding, sentinel, and other tokenizer-special
-positions. Persisted results record the selected stack and layer, decoder input
-and mask fingerprints, input-position alignment, and biological-mask policy.
+Pooling excludes boundary, padding, sentinel, and other non-biological
+positions. Persisted results record the selected stack, layer, inputs, masks,
+and alignment policy.
+
+## Downstream classification
+
+Both downstream AutoClasses reuse the checkpoint backbone and initialize a new,
+untrained `classifier`. Sequence labels have shape `(b,)`; residue labels have
+shape `(b, l)` and use `-100` outside biological positions:
+
+```python
+import torch
+from transformers import AutoTokenizer
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoModelForTokenClassification,
+)
+
+model_id = "Synthyra/ANKH3_xl"
+sequence_model = AutoModelForSequenceClassification.from_pretrained(
+    model_id, num_labels=2, trust_remote_code=True
+).eval()
+token_model = AutoModelForTokenClassification.from_pretrained(
+    model_id, num_labels=3, trust_remote_code=True
+).eval()
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
+batch = tokenizer(sequences, padding=True, return_tensors="pt")
+biological = batch["attention_mask"].bool()
+for special_id in tokenizer.all_special_ids:
+    biological &= batch["input_ids"].ne(special_id)
+
+sequence_labels = torch.zeros(len(sequences), dtype=torch.long)
+token_labels = torch.full_like(batch["input_ids"], -100)
+token_labels[biological] = 0
+
+with torch.inference_mode():
+    sequence_output = sequence_model(**batch, labels=sequence_labels)
+    token_output = token_model(**batch, labels=token_labels)
+print(sequence_output.logits.shape)  # (b, 2)
+print(token_output.logits.shape)     # (b, l, 3)
+```
+
+## PEFT fine-tuning
+
+Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+
+```bash
+python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
+```
+
+```python
+from peft import LoraConfig, TaskType, get_peft_model
+
+peft_model = get_peft_model(
+    sequence_model,
+    LoraConfig(
+        task_type=TaskType.SEQ_CLS,
+        r=8,
+        lora_alpha=16,
+        target_modules="all-linear",
+        modules_to_save=["classifier"],
+    ),
+)
+```
+
+This checkpoint advertises a classification head, so the separately trained
+`classifier` is saved with the adapter.
+All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
+can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+support boundary. Record the target modules, base revision, data identity, and
+trainable parameter scope.
+
+## Test-time training
+
+TTT samples masked views of one protein and updates only injected low-rank
+adapters. Base checkpoint weights remain frozen:
+
+```python
+from transformers import AutoModelForMaskedLM
+
+ttt_model = AutoModelForMaskedLM.from_pretrained(
+    "Synthyra/ANKH3_xl",
+    trust_remote_code=True,
+)
+metrics = ttt_model.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 3, "batch_size": 1, "seed": 7},
+)
+ttt_model.save_pretrained("adapted", safe_serialization=True)
+ttt_model.ttt_reset()
+print(metrics)
+```
+
+Persisted adapters retain their deterministic reset state. TTT adds latency
+and memory, can worsen an output, and does not establish biological function.
 
 ## Encoder and sequence-to-sequence use
 
@@ -178,7 +282,7 @@ source shard directly and writes a new canonical safetensors index.
 - Precision policies: `default`
 - BF16 execution: `static_parameters`
 - Generation contract: `required`
-- Optional dependency group: `core`
+- Artifact dependency set: `core`
 - Weight publication allowed: `true`
 - Weight license status: `resolved`
 - Redistributable: `true`
@@ -189,30 +293,24 @@ source shard directly and writes a new canonical safetensors index.
 - FastPLMs weights: `Synthyra/ANKH3_xl`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
-- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 - Canonical transformed state SHA-256: `dd2188e0d2ca65232135714eef6de394239734d843ddae4928c7398685d858e7`
 - Conversion equality attestation: recorded in `provenance.json`
 - Official checkpoint: `ElnaggarLab/ankh3-xl`
 - Artifact source: `official`
 - State transform: `ankh_t5_to_fastplms_v1`
-- BF16 execution: `static_parameters`
 - Pinned upstreams: `ankh`
-- Reference container: `reference-ankh`
 - Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The local artifact records exact file identities, conversion details, source
-revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
-release blocker.
+`provenance.json` records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks release.
 
 ## Validation boundary
 
-For tiers declared by the manifest, the release contract compares applicable
-semantic configuration, tokenizer behavior, state keys, shapes, dtypes,
-values, aliases, and representative inference with the pinned official
-implementation. This metadata does not by itself claim that a particular build
-passed, that one backend is faster, or that an output has biological or
-therapeutic validity.
+Declared tiers compare applicable configuration, tokenizer behavior, state,
+and representative inference with the pinned reference. Metadata alone does
+not claim a build passed, a backend is faster, or an output is biologically
+valid.
 
 ## License
 

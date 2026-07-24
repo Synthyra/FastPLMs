@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import copy
 import json
+import pytest
+import torch
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
-import torch
 
 from fastplms.registry import get_model_registry
 from tests.parity import test_native_results as diagnostics
@@ -20,6 +19,7 @@ from tests.parity.support.esmc_calibration import (
 )
 from tests.unit.test_biohub_reference_lock import _reference_environment_payload
 from tools.remote.prepare_references import _esmc_calibration_batches
+
 
 SPEC = get_model_registry()["esmc_small"]
 ADVERTISED_BF16_BACKENDS = tuple(
@@ -84,10 +84,10 @@ def _panel_tensors(
     batch = _batch(kind)
     cases = batch["cases"]
     assert isinstance(cases, list)
-    lengths = torch.tensor([int(case["sequence_length"]) for case in cases])
+    lengths = torch.tensor([int(case["sequence_length"]) for case in cases])  # (b,)
     maximum = int(lengths.max().item())
-    residue_mask = torch.arange(maximum).unsqueeze(0) < lengths.unsqueeze(1)
-    reference = torch.ones(len(cases), maximum, 4)
+    residue_mask = torch.arange(maximum).unsqueeze(0) < lengths.unsqueeze(1)  # (b, l)
+    reference = torch.ones(len(cases), maximum, 4)  # (b, l, d=4)
     candidate = reference * candidate_scale
     return batch, candidate, reference, residue_mask
 
@@ -577,7 +577,7 @@ def test_esmc_catastrophic_disagreement_remains_a_hard_failure(
         kind,
         candidate_scale=1.0,
     )
-    candidate = torch.zeros_like(reference)
+    candidate = torch.zeros_like(reference)  # (b, l, d)
 
     with pytest.raises(AssertionError, match="relative_l2"):
         diagnostics._assert_and_record_esmc_diagnostic(

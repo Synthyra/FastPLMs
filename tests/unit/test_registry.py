@@ -6,17 +6,16 @@ import os
 import re
 import subprocess
 import sys
-import tomllib
+import pytest
 from pathlib import Path
 
-import pytest
-
 from fastplms.registry import FileDigest, RegistryError, load_model_registry
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_package_manifest_is_complete_and_typed() -> None:
+def test_model_manifest_is_complete_and_typed() -> None:
     registry = load_model_registry()
 
     assert registry.schema_version == 1
@@ -280,8 +279,10 @@ def test_attention_kernel_lock_matches_manifest_and_h100_variants() -> None:
         variant_lock = locked[repository]["variants"][variant]
         assert variant_lock == {"hash": digest, "hash_type": "git_lfs_concat"}
 
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["tool"]["kernels"]["dependencies"] == {
+    assert {
+        kernel.repository: kernel.version
+        for kernel in registry.attention_kernels.values()
+    } == {
         "kernels-community/flash-attn2": 2,
         "kernels-community/flash-attn3": 1,
     }

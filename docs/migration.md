@@ -6,20 +6,32 @@ contracts. There are no compatibility imports or silent keyword aliases. Run
 the snippets in this guide in the offline CPU documentation job whenever this
 contract changes.
 
-## Installation and package layout
+## Dependencies and source layout
 
 FastPLMs 1.0 requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
-Install the core runtime or an explicit optional group from an immutable source
-revision:
+The project is no longer installed as a Python distribution. Published models
+carry their runtime source in the Hugging Face repository and load it with
+`trust_remote_code=True`. Install dependencies directly:
 
 ```bash
 python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
-python -m pip install \
-  "fastplms[train] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14"
 ```
 
-Source now follows the standard `src` layout:
+Repository tools and source-level APIs run with `PYTHONPATH=src`. Their
+dependencies are composed under `requirements/` rather than distribution
+metadata:
+
+```bash
+uv pip install \
+  -r requirements/profiles/cpu-validation.in \
+  -c requirements/constraints/validation.txt \
+  --torch-backend cpu
+PYTHONPATH=src python -m pytest tests/cpu -m cpu_contract
+```
+
+Source remains under `src`:
 
 | Pre-1.0 path/import | FastPLMs 1.0 |
 | --- | --- |
@@ -270,9 +282,9 @@ declared multichain and multimolecule inputs when every protein chain uses
 
 `esmc_precision="auto"` resolves to BF16. FP8 is an explicit, experimental,
 inference-only request and raises when the validated Transformer Engine path is
-unavailable. General structure dependencies live in the `structure` extra;
-reporting and binder-example packages are installed separately for those
-workflows.
+unavailable. General structure dependencies live in
+`requirements/features/structure.in`; reporting and binder dependencies remain
+separate.
 
 ## Commands and validation tiers
 
@@ -283,7 +295,7 @@ git submodule update --init --recursive
 python -m tools.remote --host user@gpu-host --identity /path/to/key --suite compliance
 ```
 
-Routine pull requests use the offline CPU contract and static/package checks:
+Routine pull requests use the offline CPU contract and static/source checks:
 
 ```bash
 python -m pytest tests/cpu -m cpu_contract -n auto --dist=loadscope \

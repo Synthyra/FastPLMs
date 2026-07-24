@@ -5,14 +5,13 @@ from __future__ import annotations
 import importlib.util
 import sys
 import types
+import numpy as np
+import pytest
+import torch
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-
-import numpy as np
-import pytest
-import torch
 
 from fastplms.models.esmfold2 import esmfold2_conformers as local_conformers
 from fastplms.models.esmfold2 import esmfold2_constants as local_constants
@@ -24,6 +23,7 @@ from fastplms.models.esmfold2 import esmfold2_prepare_input as local_prepare
 from fastplms.models.esmfold2 import esmfold2_protein_complex as local_protein_complex
 from fastplms.models.esmfold2 import esmfold2_residue_constants as local_residues
 from fastplms.models.esmfold2 import esmfold2_types as local_types
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
@@ -299,7 +299,9 @@ def test_smiles_topology_matches_pinned_biohub() -> None:
 def _protein_fixture() -> local_protein_complex.ProteinComplex:
     sequence = "AC|GG"
     n_positions = len(sequence)
+    # positions: (n_positions, 37, 3)
     positions = np.full((n_positions, 37, 3), np.nan, dtype=np.float32)
+    # mask: (n_positions, 37)
     mask = np.zeros((n_positions, 37), dtype=bool)
     atom_names = ("N", "CA", "C", "O", "CB", "SG")
     for sequence_index in (0, 1, 3, 4):

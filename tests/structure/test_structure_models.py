@@ -10,6 +10,7 @@ from transformers import AutoConfig, AutoModel
 
 from fastplms.registry import get_model_registry
 
+
 REGISTRY = get_model_registry()
 BOLTZ2 = REGISTRY["boltz2"]
 ESMFOLD = REGISTRY["esmfold"]
@@ -130,6 +131,7 @@ def test_esmfold_forward() -> None:
         output = model.infer(sequence)
 
     assert "plddt" in output
+    # plddt: (...)
     plddt = output["plddt"]
     assert not torch.isnan(plddt).any(), "NaN in pLDDT"
 

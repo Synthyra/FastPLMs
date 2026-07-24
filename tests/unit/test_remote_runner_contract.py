@@ -5,9 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from pathlib import Path
-
 import pytest
+from pathlib import Path
 
 from tools.remote.run import (
     REMOTE_CLEANUP_SCRIPT,
@@ -106,7 +105,7 @@ def test_remote_runner_retrieves_the_complete_artifact_tree() -> None:
     ),
 )
 def test_remote_staging_failures_are_reported_and_cleaned(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     failure_phase: str,
     failing_command: str,
@@ -188,7 +187,10 @@ def test_remote_staging_failures_are_reported_and_cleaned(
     assert report["remote_cleanup"] == "succeeded"
 
 
-def test_remote_runner_rejects_a_dirty_exact_head(monkeypatch, tmp_path: Path) -> None:
+def test_remote_runner_rejects_a_dirty_exact_head(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     def dirty_status(*args, **kwargs):
         del args, kwargs
         return subprocess.CompletedProcess([], 0, stdout="?? scratch.py\n")

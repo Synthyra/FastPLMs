@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import importlib
+import torch
 from importlib.util import find_spec
 from typing import Literal
-
-import torch
 from torch import Tensor, nn
 
 from . import vb_layers_initialize as init
+
 
 TriangleDirection = Literal["incoming", "outgoing"]
 
@@ -31,6 +31,7 @@ def kernel_triangular_mult(
 ) -> Tensor:
     """Dispatch the optional cuEquivariance triangle primitive lazily."""
 
+    # x: (b, l, l, d); mask: (b, l, l); returned tensor: (b, l, l, d).
     if (
         find_spec("cuequivariance_torch") is None
         or find_spec("cuequivariance_ops_torch") is None
@@ -81,6 +82,7 @@ class _TriangleMultiplication(nn.Module):
         init.gating_init_(self.g_out.weight)
 
     def _kernel_forward(self, pair_states: Tensor, mask: Tensor) -> Tensor:
+        # pair_states: (b, l, l, d); mask: (b, l, l).
         return kernel_triangular_mult(
             pair_states,
             direction=self.direction,
@@ -94,7 +96,7 @@ class _TriangleMultiplication(nn.Module):
             p_out_weight=self.p_out.weight,
             g_out_weight=self.g_out.weight,
             eps=1e-5,
-        )
+        )  # (b, l, l, d)
 
     def forward(self, x: Tensor, mask: Tensor, use_kernels: bool = False) -> Tensor:
         """Transform pair tensor X with shape ``(b, l, l, d)``."""
@@ -103,12 +105,16 @@ class _TriangleMultiplication(nn.Module):
             return self._kernel_forward(x, mask)
 
         # X_norm is the normalized pair tensor used by the output gate.
-        normalized = self.norm_in(x)
-        projected = self.p_in(normalized) * self.g_in(normalized).sigmoid()
-        projected = projected * mask.unsqueeze(-1)
-        left, right = torch.chunk(projected.float(), 2, dim=-1)
-        combined = torch.einsum(self.equation, left, right)
-        return self.p_out(self.norm_out(combined)) * self.g_out(normalized).sigmoid()
+        normalized = self.norm_in(x)  # (b, l, l, d)
+        projected = (
+            self.p_in(normalized) * self.g_in(normalized).sigmoid()
+        )  # (b, l, l, 2 * d)
+        projected = projected * mask.unsqueeze(-1)  # (b, l, l, 2 * d)
+        left, right = torch.chunk(projected.float(), 2, dim=-1)  # each: (b, l, l, d)
+        combined = torch.einsum(self.equation, left, right)  # (b, l, l, d)
+        return (
+            self.p_out(self.norm_out(combined)) * self.g_out(normalized).sigmoid()
+        )  # (b, l, l, d)
 
 
 class TriangleMultiplicationOutgoing(_TriangleMultiplication):

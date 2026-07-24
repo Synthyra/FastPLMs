@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 import pytest
 import torch
+from pathlib import Path
+from typing import Any
 from torch import nn
 
 from fastplms.models.boltz import modeling_boltz2
@@ -18,7 +17,7 @@ class _TinyCore(nn.Module):
 
     def __init__(self, width: int = 2) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.zeros(width))
+        self.weight = nn.Parameter(torch.zeros(width))  # (d=width,)
 
 
 def _install_tiny_core(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,7 +64,7 @@ def test_lightning_checkpoint_load_requires_and_honors_explicit_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_tiny_core(monkeypatch)
-    expected = torch.tensor([1.25, -2.5])
+    expected = torch.tensor([1.25, -2.5])  # (d=2,)
     load_call: dict[str, Any] = {}
 
     def _load(
@@ -81,7 +80,7 @@ def test_lightning_checkpoint_load_requires_and_honors_explicit_opt_in(
         )
         return {
             "hyper_parameters": {},
-            "state_dict": {"model.weight": expected.clone()},
+            "state_dict": {"model.weight": expected.clone()},  # (d=2,)
         }
 
     def _config_from_hyperparameters(
@@ -145,7 +144,7 @@ def test_save_pretrained_defaults_to_safetensors_and_round_trips(
 ) -> None:
     _install_tiny_core(monkeypatch)
     source = Boltz2Model(Boltz2Config(core_kwargs={"width": 3}))
-    source.core.weight.data.copy_(torch.tensor([0.25, -1.5, 3.0]))
+    source.core.weight.data.copy_(torch.tensor([0.25, -1.5, 3.0]))  # (d=3,)
 
     source.save_pretrained(tmp_path)
 
@@ -161,12 +160,12 @@ def test_floating_features_default_to_fp32_parameter_storage(
     _install_tiny_core(monkeypatch)
     model = Boltz2Model(Boltz2Config(core_kwargs={"width": 3}))
     features = {
-        "positions": torch.randn(2, 3, dtype=torch.bfloat16),
-        "indices": torch.tensor((1, 2), dtype=torch.int64),
-        "mask": torch.tensor((True, False)),
+        "positions": torch.randn(2, 3, dtype=torch.bfloat16),  # (n=2, xyz=3)
+        "indices": torch.tensor((1, 2), dtype=torch.int64),  # (n=2,)
+        "mask": torch.tensor((True, False)),  # (n=2,)
     }
 
-    moved = model._to_model_device(features)
+    moved = model._to_model_device(features)  # shapes unchanged
 
     assert moved["positions"].dtype == torch.float32
     assert moved["indices"].dtype == torch.int64

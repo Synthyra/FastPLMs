@@ -8,6 +8,8 @@ import struct
 import sys
 import tokenize
 import types
+import numpy as np
+import pytest
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -16,11 +18,9 @@ from io import StringIO
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import pytest
-
 from fastplms.models.esmfold2 import configuration_esmfold2 as local_config
 from fastplms.models.esmfold2 import esmfold2_residue_constants as local_residues
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 

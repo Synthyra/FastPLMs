@@ -2,7 +2,7 @@
 
 The reference producer uses the pinned Boltz public parser, tokenizer,
 featurizer, checkpoint constructor, and forward method. The candidate producer
-uses the installed FastPLMs package. They communicate only through a
+uses the FastPLMs repository source. They communicate only through a
 manifest-derived JSON request and hash-verified safetensors bundles.
 """
 
@@ -18,13 +18,12 @@ import platform
 import shutil
 import tarfile
 import tempfile
+import torch
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
-
-import torch
 from safetensors.torch import load_file, save_file
 
 from tests.structure.support.state_contract import (
@@ -33,6 +32,7 @@ from tests.structure.support.state_contract import (
     validate_exact_state_contract,
     validate_semantic_config_contract,
 )
+
 
 schema_version = 2
 model_id = "boltz2"
@@ -192,6 +192,8 @@ def _request_fingerprint(request: Mapping[str, Any]) -> str:
 
 
 def _tensor_bytes(tensor: torch.Tensor) -> bytes:
+    # tensor: (...)
+    # value: (...)
     value = tensor.detach().cpu().contiguous()
     return value.reshape(-1).view(torch.uint8).numpy().tobytes()
 
@@ -199,6 +201,7 @@ def _tensor_bytes(tensor: torch.Tensor) -> bytes:
 def tensor_sha256(tensor: torch.Tensor) -> str:
     """Return the exact byte digest of one tensor."""
 
+    # tensor: (...)
     return hashlib.sha256(_tensor_bytes(tensor)).hexdigest()
 
 
@@ -207,6 +210,7 @@ def tensor_set_sha256(tensors: Mapping[str, torch.Tensor]) -> str:
 
     digest = hashlib.sha256()
     for name in sorted(tensors):
+        # tensor: (...)
         tensor = tensors[name].detach().cpu().contiguous()
         digest.update(name.encode("utf-8"))
         digest.update(str(tensor.dtype).encode("ascii"))
@@ -446,6 +450,7 @@ def _normalize_features(features: Mapping[str, object]) -> dict[str, torch.Tenso
         value = features[name]
         if not torch.is_tensor(value):
             raise TypeError(f"Boltz2 feature {name!r} is not a tensor.")
+        # tensors[f'feature__{name}']: (...)
         tensors[f"feature__{name}"] = value.detach().cpu().contiguous().clone()
     return tensors
 
@@ -654,7 +659,9 @@ def _portable_random_draws(seed: int):
 
     def portable_draw(template: torch.Tensor) -> torch.Tensor:
         # N is the portable normal tensor with shape matching the sampler draw.
+        # template: (...)
         N = portable_rng.standard_normal(tuple(template.shape), dtype=np.float32)
+        # result: (...)
         result = torch.from_numpy(N).to(device=template.device, dtype=template.dtype)
         result.requires_grad_(template.requires_grad)
         captured.append(result.detach().cpu().contiguous().clone())
@@ -663,10 +670,12 @@ def _portable_random_draws(seed: int):
     def recording_randn(*args: Any, **kwargs: Any) -> torch.Tensor:
         out = kwargs.pop("out", None)
         kwargs.pop("generator", None)
+        # template: (*args,)
         template = torch.empty(*args, **kwargs)
         result = portable_draw(template)
         if out is not None:
             out.copy_(result)
+            # captured[-1]: (...)
             captured[-1] = out.detach().cpu().contiguous().clone()
             return out
         return result
@@ -718,6 +727,7 @@ def _run_model(
     if missing:
         raise RuntimeError(f"Boltz2 forward omitted required outputs: {missing}")
     tensors = {f"feature__{name}": tensor for name, tensor in features.items()}
+    # tensors['noise__initial_standard_normal']: (...)
     tensors["noise__initial_standard_normal"] = captured_noise[0]
     for index, tensor in enumerate(captured_noise):
         tensors[f"noise__draw_{index:03d}"] = tensor
@@ -725,6 +735,7 @@ def _run_model(
         value = output[name]
         if not torch.is_tensor(value):
             raise TypeError(f"Boltz2 output {name!r} is not a tensor.")
+        # tensors[f'output__{name}']: (...)
         tensors[f"output__{name}"] = value.detach().cpu().contiguous().clone()
     return tensors
 
@@ -1007,7 +1018,7 @@ def produce_reference(request_path: Path, output_dir: Path) -> None:
 
 
 def produce_candidate(request_path: Path, output_dir: Path) -> None:
-    """Run the installed FastPLMs Boltz2 feature and model APIs."""
+    """Run the FastPLMs Boltz2 feature and model APIs from repository source."""
 
     request = load_request(request_path)
     if not torch.cuda.is_available():

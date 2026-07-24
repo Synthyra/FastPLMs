@@ -7,10 +7,9 @@ import hashlib
 import json
 import shutil
 import subprocess
+import pytest
 from dataclasses import asdict
 from pathlib import Path
-
-import pytest
 
 import tools.remote.biohub_reference_lock as biohub_reference_lock
 from tools.remote.biohub_reference_environment import (
@@ -26,6 +25,7 @@ from tools.remote.biohub_reference_lock import (
     verify_biohub_reference_lock_contract,
     verify_current_pip_check,
 )
+
 
 _ROOT = Path(__file__).parents[2]
 _CONTRACT = _ROOT / "docker/constraints/biohub-reference-lock.json"

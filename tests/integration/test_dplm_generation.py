@@ -30,6 +30,7 @@ from fastplms.models.dplm2.modeling_dplm2 import (
     ModifiedRotaryEmbedding,
 )
 
+
 pytestmark = pytest.mark.feature
 
 
@@ -69,7 +70,9 @@ def _assert_nested_close(actual, expected) -> None:
 def test_dplm_argmax_generation_preserves_fixed_positions() -> None:
     torch.manual_seed(13)
     model = DPLMForMaskedLM(DPLMConfig(**_common_config(33)), dropout=0.0).eval()
+    # input_tokens: (1, 6)
     input_tokens = torch.tensor([[0, 6, 7, 8, 2, 1]])
+    # fixed: (1, 6)
     fixed = torch.tensor([[False, True, False, False, False, False]])
 
     output_tokens = model.generate(
@@ -89,6 +92,7 @@ def test_dplm_argmax_generation_preserves_fixed_positions() -> None:
 
 def test_dplm_vanilla_default_is_zero_temperature() -> None:
     model = DPLMForMaskedLM(DPLMConfig(**_common_config(33)), dropout=0.0).eval()
+    # input_tokens: (1, 5)
     input_tokens = torch.tensor([[0, 6, 7, 8, 2]])
 
     torch.manual_seed(29)
@@ -130,6 +134,7 @@ def test_dplm_families_reject_static_bf16_inference(
         .to(dtype=torch.bfloat16)
         .eval()
     )
+    # X: (1, 4)
     X = torch.tensor([[0, 6, 7, 2]])
 
     with pytest.raises(RuntimeError, match="FP32-resident parameters"):
@@ -175,6 +180,7 @@ def test_masked_lm_resize_updates_input_and_output_projections(
 ) -> None:
     model = model_class(config_class(**_common_config(vocab_size))).eval()
     resized_vocab_size = vocab_size + 5
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 6, 7, 2]])
     with torch.inference_mode():
         original_logits = model(input_ids=input_ids).logits
@@ -243,7 +249,9 @@ def test_dplm_task_heads_honor_config_and_explicit_return_dict(
 ) -> None:
     config = config_class(**_common_config(vocab_size), num_labels=3, return_dict=False)
     model = model_class(config).eval()
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 6, 7, 2]])
+    # label_tensor: (...)
     label_tensor = torch.tensor(labels)
 
     with torch.inference_mode():
@@ -312,6 +320,7 @@ def test_dplm2_base_and_mlm_preserve_full_structured_tuple_contract(
     expected_keys: tuple[str, ...],
 ) -> None:
     model = model_class(DPLM2Config(**_common_config(64))).eval()
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 6, 7, 2]])
     call_kwargs = {
         "input_ids": input_ids,
@@ -379,6 +388,7 @@ def test_dplm2_public_models_require_exactly_one_input_representation(
     model_class: type[torch.nn.Module],
 ) -> None:
     model = model_class(DPLM2Config(**_common_config(64))).eval()
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 6, 7, 2]])
     inputs_embeds = model.get_input_embeddings()(input_ids)
 
@@ -401,6 +411,7 @@ def test_dplm2_public_models_validate_mask_and_type_shapes_before_forward(
     argument: str,
     value: torch.Tensor,
 ) -> None:
+    # value: (...)
     model = model_class(DPLM2Config(**_common_config(64))).eval()
 
     with pytest.raises(ValueError, match=rf"{argument} must have shape \(1, 4\)"):
@@ -421,7 +432,9 @@ def test_dplm_masked_lm_rejects_decoder_and_cross_attention_arguments(
     argument: str,
     value: torch.Tensor,
 ) -> None:
+    # value: (...)
     model = DPLMForMaskedLM(DPLMConfig(**_common_config(33)), dropout=0.0).eval()
+    # input_ids: (1, 3)
     input_ids = torch.tensor([[0, 6, 2]])
 
     with pytest.raises(ValueError, match=argument):
@@ -441,6 +454,7 @@ def test_dplm_automodel_rejects_decoder_cache_contracts(
     value: object,
 ) -> None:
     model = DPLMModel(DPLMConfig(**_common_config(33))).eval()
+    # input_ids: (1, 3)
     input_ids = torch.tensor([[0, 6, 2]])
 
     with pytest.raises(ValueError, match=argument):
@@ -452,6 +466,7 @@ def test_dplm2_rotary_cache_follows_frequency_buffer_dtype() -> None:
     # Q and K are query and key tensors with shape (b, h, l, d).
     query = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
     key = torch.randn_like(query)
+    # type_ids: (1, 4)
     type_ids = torch.ones(1, 4, dtype=torch.long)
 
     rotary(query, key, type_ids)
@@ -495,14 +510,19 @@ def test_dplm2_automodel_infers_official_multimodal_types_and_returns_pooling() 
     model = object.__new__(DPLM2Model)
     torch.nn.Module.__init__(model)
     model.config = DPLM2Config(**_common_config(64))
+    # input_ids: (1, 8)
     input_ids = torch.tensor([[33, 50, 34, 1, 0, 6, 2, 1]])
+    # expected_mask: (...)
     expected_mask = input_ids.ne(model.config.pad_token_id)
+    # expected_types: (1, 8)
     expected_types = torch.tensor([[0, 0, 0, 2, 1, 1, 1, 2]])
     observed: dict[str, torch.Tensor] = {}
 
     class CapturingEncoder(torch.nn.Module):
         def forward(self, **kwargs: object) -> DPLM2EncoderOutput:
+            # observed['attention_mask']: (b, l)
             observed["attention_mask"] = kwargs["attention_mask"].detach().clone()
+            # observed['type_ids']: (...)
             observed["type_ids"] = kwargs["type_ids"].detach().clone()
             return DPLM2EncoderOutput(
                 last_hidden_state=torch.zeros(
@@ -523,11 +543,14 @@ def test_dplm2_automodel_infers_official_multimodal_types_and_returns_pooling() 
 
 def test_dplm2_predict_contacts_derives_padding_mask_when_omitted() -> None:
     model = DPLM2ForMaskedLM(DPLM2Config(**_common_config(64)), dropout=0.0).eval()
+    # input_ids: (1, 5)
     input_ids = torch.tensor([[0, 6, 7, 2, 1]])
+    # expected_mask: (...)
     expected_mask = input_ids.ne(model.config.pad_token_id)
     observed: dict[str, torch.Tensor] = {}
 
     def capture_modality_type(input_ids, attention_mask):
+        # observed['attention_mask']: (b, l)
         observed["attention_mask"] = attention_mask.detach().clone()
         return torch.ones_like(input_ids)
 
@@ -544,7 +567,9 @@ def test_dplm2_argmax_generation_preserves_modalities_and_fixed_positions() -> N
     model = DPLM2ForMaskedLM(DPLM2Config(**_common_config(64)), dropout=0.0).eval()
     # X packs the structure track first and the amino-acid track second, as in
     # the official DPLM2 co-generation utility.
+    # input_tokens: (1, 8)
     input_tokens = torch.tensor([[33, 50, 50, 34, 0, 6, 6, 2]])
+    # fixed: (1, 8)
     fixed = torch.tensor([[False, True, False, False, False, True, False, False]])
     model_inputs: list[torch.Tensor] = []
 
@@ -553,6 +578,7 @@ def test_dplm2_argmax_generation_preserves_modalities_and_fixed_positions() -> N
         _args: tuple[object, ...],
         kwargs: dict[str, object],
     ) -> None:
+        # input_tensor: (...)
         input_tensor = kwargs["input_ids"]
         assert torch.is_tensor(input_tensor)
         model_inputs.append(input_tensor.detach().clone())
@@ -587,10 +613,12 @@ def test_dplm2_argmax_generation_preserves_modalities_and_fixed_positions() -> N
 def test_seeded_stochastic_generation_is_repeatable(family: str) -> None:
     if family == "dplm":
         model = DPLMForMaskedLM(DPLMConfig(**_common_config(33)), dropout=0.0).eval()
+        # X: (1, 5)
         X = torch.tensor([[0, 6, 7, 8, 2]])
         kwargs: dict[str, object] = {"max_iter": 2}
     else:
         model = DPLM2ForMaskedLM(DPLM2Config(**_common_config(64)), dropout=0.0).eval()
+        # X: (1, 8)
         X = torch.tensor([[33, 50, 50, 34, 0, 6, 6, 2]])
         kwargs = {"max_iter": 2}
 
@@ -619,9 +647,11 @@ def test_generation_rejects_invalid_controls(
 ) -> None:
     if family == "dplm":
         model = DPLMForMaskedLM(DPLMConfig(**_common_config(33)), dropout=0.0).eval()
+        # X: (1, 3)
         X = torch.tensor([[0, 32, 2]])
     else:
         model = DPLM2ForMaskedLM(DPLM2Config(**_common_config(64)), dropout=0.0).eval()
+        # X: (1, 6)
         X = torch.tensor([[33, 36, 34, 0, 32, 2]])
     with pytest.raises(ValueError, match=message):
         model.generate(X, **arguments)

@@ -24,8 +24,10 @@ def build_esmfold2_conditioned_complex(types: Any) -> Any:
 
     protein = "MSTNPKPQRKTKRNT"
     msa = types.MSA.from_sequences([protein, "MSTNPKPQRKTKRNS"])
-    distances = np.full((len(protein), len(protein)), 8.0, dtype=np.float32)
-    np.fill_diagonal(distances, 0.0)
+    distances = np.full(
+        (len(protein), len(protein)), 8.0, dtype=np.float32
+    )  # (l, l)
+    np.fill_diagonal(distances, 0.0)  # (l, l)
     return types.StructurePredictionInput(
         sequences=[
             types.ProteinInput(id="A", sequence=protein, msa=msa),

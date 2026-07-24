@@ -1,0 +1,8 @@
+torch>=2.13,<2.14
+transformers>=5.13,<5.14
+huggingface-hub>=0.34,<2
+tokenizers>=0.22,<0.23
+safetensors>=0.5,<1
+numpy>=1.26,<3
+einops>=0.8,<1
+tqdm>=4.67,<5

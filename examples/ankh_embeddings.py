@@ -8,10 +8,12 @@ import os
 from pathlib import Path
 from typing import Any
 
+
 if __package__:
     from ._runtime import add_execution_arguments, resolve_execution
 else:
     from _runtime import add_execution_arguments, resolve_execution
+
 
 def configure_offline() -> None:
     os.environ["HF_HUB_OFFLINE"] = "1"
@@ -70,14 +72,14 @@ def generate_ankh_task(
         tokenizer,
         sequence,
         return_tensors="pt",
-    )
+    )  # input_ids/attention_mask: (1, l_s)
     prompt = tokenize_ankh_decoder_prompts(
         tokenizer,
         decoder_prompt,
         return_tensors="pt",
         add_special_tokens=False,
-    )
-    prompt_ids = prompt["input_ids"]
+    )  # input_ids: (1, l_p)
+    prompt_ids = prompt["input_ids"]  # (1, l_p)
     decoder_start_token_id = getattr(model.config, "decoder_start_token_id", None)
     if not isinstance(decoder_start_token_id, int):
         raise RuntimeError("The ANKH artifact does not declare decoder_start_token_id.")
@@ -87,23 +89,28 @@ def generate_ankh_task(
             prompt_ids,
         ),
         dim=1,
-    )
+    )  # (1, l_p + 1)
     device = model.device
     generation_inputs = {
-        "input_ids": encoded["input_ids"].to(device),
-        "decoder_input_ids": decoder_input_ids.to(device),
-        "decoder_attention_mask": torch.ones_like(decoder_input_ids, device=device),
+        "input_ids": encoded["input_ids"].to(device),  # (1, l_s)
+        "decoder_input_ids": decoder_input_ids.to(device),  # (1, l_p + 1)
+        "decoder_attention_mask": torch.ones_like(
+            decoder_input_ids, device=device
+        ),  # (1, l_p + 1)
     }
     if "attention_mask" in encoded:
-        generation_inputs["attention_mask"] = encoded["attention_mask"].to(device)
+        generation_inputs["attention_mask"] = encoded["attention_mask"].to(
+            device
+        )  # (1, l_s)
     with torch.inference_mode():
-        return model.generate(
+        generated = model.generate(
             **generation_inputs,
             do_sample=False,
             num_beams=1,
             use_cache=True,
             max_new_tokens=max_new_tokens,
-        )
+        )  # (1, l_o)
+    return generated  # (1, l_o)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -153,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
         arguments.sequence,
         arguments.decoder_prompt,
         max_new_tokens=arguments.max_new_tokens,
-    )
+    )  # (1, l_o)
     print("generated", tokenizer.decode(generated[0], skip_special_tokens=True))
     return 0
 

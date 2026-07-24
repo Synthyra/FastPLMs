@@ -3,20 +3,20 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from collections import defaultdict
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, ClassVar, TypedDict
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from tqdm.auto import tqdm
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
+
 
 try:
     from fastplms.attention import (
@@ -282,7 +282,7 @@ class RotaryPositionalEmbedding(nn.Module):
         max_position_embeddings: int = 2048,
         base: int = 10000,
         device: torch.device | None = None,
-    ):
+    ) -> None:
         super().__init__()
 
         self.dim = dim
@@ -311,11 +311,11 @@ class RotaryPositionalEmbedding(nn.Module):
         self.max_seq_len_cached = seq_len
         inv_freq = self.base ** -(
             torch.arange(0, self.dim, 2, dtype=torch.float32, device=device) / self.dim
-        )
+        )  # (d / 2,)
         self.inv_freq = inv_freq
-        t = torch.arange(seq_len, device=device, dtype=torch.float32)
-        angles = torch.outer(t, inv_freq)
-        angles = torch.cat((angles, angles), dim=1)
+        t = torch.arange(seq_len, device=device, dtype=torch.float32)  # (l,)
+        angles = torch.outer(t, inv_freq)  # (l, d / 2)
+        angles = torch.cat((angles, angles), dim=1)  # (l, d)
         self.cos_cached = angles.cos()
         self.sin_cached = angles.sin()
 
@@ -326,18 +326,17 @@ class RotaryPositionalEmbedding(nn.Module):
         position_ids: torch.LongTensor,
         seq_len: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Q and K have shape (b, l, h, d).
+        # q, k: (b, l, h, d)
         device, dtype = q.device, q.dtype
         seq_len = position_ids.max().item() + 1 if seq_len is None else seq_len
 
         if seq_len > self.max_seq_len_cached:
             self._set_sin_cos_cache(seq_len=seq_len, device=device)
 
-        # Selecting by position gives C and S shape (b, l, d). Insert a head
-        # axis so they broadcast over Q and K with shape (b, l, h, d).
+        # Selecting by position inserts a head axis for broadcasting.
         idxs = position_ids.to(device)
-        cos = self.cos_cached.to(device=device, dtype=dtype).unsqueeze(-2)[idxs]
-        sin = self.sin_cached.to(device=device, dtype=dtype).unsqueeze(-2)[idxs]
+        cos = self.cos_cached.to(device=device, dtype=dtype).unsqueeze(-2)[idxs]  # (b, l, 1, d)
+        sin = self.sin_cached.to(device=device, dtype=dtype).unsqueeze(-2)[idxs]  # (b, l, 1, d)
 
         # Apply the real and imaginary parts of the rotary transform to Q and K.
         # Both halves reuse C and S, so rotate_half supplies the cross terms.
@@ -349,7 +348,7 @@ class RotaryPositionalEmbedding(nn.Module):
 class Attention(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper."""
 
-    def __init__(self, config: E1Config, layer_idx: int):
+    def __init__(self, config: E1Config, layer_idx: int) -> None:
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -407,14 +406,21 @@ class Attention(nn.Module):
         past_key_value: DynamicCache | None = None,
         use_cache: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        # hidden_states: (b, l, d); position_ids: (b, l)
         bsz, q_len, _ = hidden_states.size()
         query_states: torch.Tensor = self.q_proj(hidden_states)
         key_states: torch.Tensor = self.k_proj(hidden_states)
         val_states: torch.Tensor = self.v_proj(hidden_states)
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim)
-        key_states = key_states.view(bsz, q_len, self.num_kv_heads, self.head_dim)
-        val_states = val_states.view(bsz, q_len, self.num_kv_heads, self.head_dim)
+        query_states = query_states.view(
+            bsz, q_len, self.num_heads, self.head_dim
+        )  # (b, l, h, d_h)
+        key_states = key_states.view(
+            bsz, q_len, self.num_kv_heads, self.head_dim
+        )  # (b, l, h_kv, d_h)
+        val_states = val_states.view(
+            bsz, q_len, self.num_kv_heads, self.head_dim
+        )  # (b, l, h_kv, d_h)
 
         if self.clip_qkv is not None:
             query_states = query_states.clamp(-self.clip_qkv, self.clip_qkv)
@@ -456,6 +462,7 @@ class Attention(nn.Module):
         use_cache: bool = False,
         effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
+        # hidden_states: (b, l, d); position and sequence IDs: (b, l)
         is_cache_prefilled = (
             use_cache
             and past_key_value is not None
@@ -586,12 +593,12 @@ class Attention(nn.Module):
         query_states: torch.Tensor,  # Q has shape (b, l, h, d).
         key_states: torch.Tensor,  # K has shape (b, l, h_kv, d).
     ) -> list[torch.Tensor]:
-        query_heads = query_states.transpose(1, 2).contiguous()
-        key_heads = key_states.transpose(1, 2).contiguous()
+        query_heads = query_states.transpose(1, 2).contiguous()  # (b, h, l, d_h)
+        key_heads = key_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
         key_heads = repeat_kv(key_heads, self.num_key_value_groups)
         scale = 1.0 / (self.head_dim**0.5)
-        q_norm = torch.linalg.vector_norm(query_heads, dim=-1)
-        k_norm = torch.linalg.vector_norm(key_heads, dim=-1)
+        q_norm = torch.linalg.vector_norm(query_heads, dim=-1)  # (b, h, l)
+        k_norm = torch.linalg.vector_norm(key_heads, dim=-1)  # (b, h, l)
         s_max_bound = (q_norm.max(dim=-1).values * k_norm.max(dim=-1).values).max(
             dim=0
         ).values * scale
@@ -763,14 +770,14 @@ class Attention(nn.Module):
         else:
             attention_mask_4d = None
 
-        query_heads = query_states.transpose(1, 2).contiguous()
-        key_heads = key_states.transpose(1, 2).contiguous()
-        value_heads = val_states.transpose(1, 2).contiguous()
+        query_heads = query_states.transpose(1, 2).contiguous()  # (b, h, l, d_h)
+        key_heads = key_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
+        value_heads = val_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
         key_heads = repeat_kv(key_heads, self.num_key_value_groups)
         value_heads = repeat_kv(value_heads, self.num_key_value_groups)
         context_heads = F.scaled_dot_product_attention(
             query_heads, key_heads, value_heads, attn_mask=attention_mask_4d
-        )
+        )  # (b, h, l, d_h)
         attn_output = (
             context_heads.transpose(1, 2).reshape(bsz, q_len, self.hidden_size).contiguous()
         )
@@ -807,13 +814,15 @@ class Attention(nn.Module):
         else:
             attention_mask_4d = None
 
-        query_heads = query_states.transpose(1, 2).contiguous()
-        key_heads = key_states.transpose(1, 2).contiguous()
-        value_heads = val_states.transpose(1, 2).contiguous()
+        query_heads = query_states.transpose(1, 2).contiguous()  # (b, h, l, d_h)
+        key_heads = key_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
+        value_heads = val_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
         key_heads = repeat_kv(key_heads, self.num_key_value_groups)
         value_heads = repeat_kv(value_heads, self.num_key_value_groups)
         scale = 1.0 / (self.head_dim**0.5)
-        attn_weights = torch.matmul(query_heads, key_heads.transpose(-2, -1)) * scale
+        attn_weights = (
+            torch.matmul(query_heads, key_heads.transpose(-2, -1)) * scale
+        )  # (b, h, l, l)
         if attention_mask_4d is not None:
             attention_mask_4d = attention_mask_4d.to(dtype=torch.bool)
             attn_weights = attn_weights.masked_fill(
@@ -823,7 +832,7 @@ class Attention(nn.Module):
         attn_weights = F.softmax(attn_weights, dim=-1)
         if attention_mask_4d is not None:
             attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), 0.0)
-        context_heads = torch.matmul(attn_weights, value_heads)
+        context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, l, d_h)
         attn_output = (
             context_heads.transpose(1, 2).reshape(bsz, q_len, self.hidden_size).contiguous()
         )
@@ -832,7 +841,7 @@ class Attention(nn.Module):
 
 
 class MLP(nn.Module):
-    def __init__(self, config: E1Config):
+    def __init__(self, config: E1Config) -> None:
         super().__init__()
         self.ffn_dim = config.intermediate_size
         self.hidden_dim = config.hidden_size
@@ -845,7 +854,7 @@ class MLP(nn.Module):
 
 
 class GLUMLP(nn.Module):
-    def __init__(self, config: E1Config):
+    def __init__(self, config: E1Config) -> None:
         super().__init__()
         self.ffn_dim = config.intermediate_size
         self.hidden_dim = config.hidden_size
@@ -861,7 +870,7 @@ class GLUMLP(nn.Module):
 
 
 class FFN(nn.Module):
-    def __init__(self, config: E1Config):
+    def __init__(self, config: E1Config) -> None:
         super().__init__()
         mlp_cls = GLUMLP if config.gated_mlp else MLP
         self.mlp = mlp_cls(config)
@@ -927,7 +936,7 @@ class E1TokenClassificationOutputWithPast(ModelOutput):
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
+    def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
@@ -941,7 +950,7 @@ class RMSNorm(nn.Module):
 
 
 class NormAttentionNorm(nn.Module):
-    def __init__(self, config: E1Config, layer_idx: int):
+    def __init__(self, config: E1Config, layer_idx: int) -> None:
         super().__init__()
         self.self_attn = Attention(config, layer_idx)
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -988,7 +997,7 @@ class NormAttentionNorm(nn.Module):
 
 
 class DecoderLayer(nn.Module):
-    def __init__(self, config: E1Config, layer_idx: int):
+    def __init__(self, config: E1Config, layer_idx: int) -> None:
         super().__init__()
         self.initializer_range = config.initializer_range
         self.hidden_size = config.hidden_size
@@ -1179,7 +1188,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
     config_class = E1Config
     _is_internal_encoder = True
 
-    def __init__(self, config: E1Config, **kwargs):
+    def __init__(self, config: E1Config, **kwargs) -> None:
         E1PreTrainedModel.__init__(self, config, **kwargs)
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -1540,7 +1549,7 @@ class E1Model(E1PreTrainedModel, EmbeddingMixin):
     config: E1Config
     config_class = E1Config
 
-    def __init__(self, config: E1Config, **kwargs):
+    def __init__(self, config: E1Config, **kwargs) -> None:
         E1PreTrainedModel.__init__(self, config, **kwargs)
         self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
         self.post_init()
@@ -1589,7 +1598,7 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
     config: E1Config
     config_class = E1Config
 
-    def __init__(self, config: E1Config, **kwargs):
+    def __init__(self, config: E1Config, **kwargs) -> None:
         E1PreTrainedModel.__init__(self, config, **kwargs)
         self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
         self.vocab_size = config.vocab_size
@@ -2092,7 +2101,7 @@ class E1ForSequenceClassification(E1PreTrainedModel, EmbeddingMixin):
     config: E1Config
     config_class = E1Config
 
-    def __init__(self, config: E1Config, **kwargs):
+    def __init__(self, config: E1Config, **kwargs) -> None:
         pooling_types = kwargs.pop("pooling_types", None)
         if pooling_types is None:
             pooling_types = ["mean", "var"]
@@ -2227,7 +2236,7 @@ class E1ForTokenClassification(E1PreTrainedModel, EmbeddingMixin):
     config: E1Config
     config_class = E1Config
 
-    def __init__(self, config: E1Config, **kwargs):
+    def __init__(self, config: E1Config, **kwargs) -> None:
         E1PreTrainedModel.__init__(self, config, **kwargs)
         self.model: FAST_E1_ENCODER = FAST_E1_ENCODER(config, **kwargs)
         self.vocab_size = config.vocab_size

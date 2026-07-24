@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
-from threading import Barrier
-from typing import Any
-
 import pytest
 import torch
 import torch.nn.functional as F
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from pathlib import Path
+from threading import Barrier
+from typing import Any
 from transformers import PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
@@ -38,7 +38,7 @@ class _CacheableE1Output(ModelOutput):
 
 def _dynamic_cache(sequence_length: int) -> DynamicCache:
     cache = DynamicCache()
-    states = torch.arange(sequence_length * 2, dtype=torch.float32).reshape(
+    states = torch.arange(sequence_length * 2, dtype=torch.float32).reshape(  # (b=1, l, h=1, d_h=2)
         1, sequence_length, 1, 2
     )
     cache.update(states, states + 1, layer_idx=0)
@@ -109,7 +109,9 @@ def test_e1_cache_hit_does_not_slice_target_outputs_twice() -> None:
     assert hit_outputs.last_hidden_state.shape[1] == 2
 
 
-def test_e1_from_pretrained_tokenizer_context_is_thread_local(monkeypatch) -> None:
+def test_e1_from_pretrained_tokenizer_context_is_thread_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Concurrent loads must not exchange source, revision, cache, or token settings."""
 
     barrier = Barrier(2)
@@ -161,7 +163,9 @@ def test_e1_from_pretrained_tokenizer_context_is_thread_local(monkeypatch) -> No
         }
 
 
-def test_e1_lazy_tokenizer_uses_resolved_weight_commit_per_instance(monkeypatch) -> None:
+def test_e1_lazy_tokenizer_uses_resolved_weight_commit_per_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Moving weight revisions must resolve to the tokenizer's immutable commit."""
 
     load_barrier = Barrier(2)
@@ -258,7 +262,7 @@ def _tiny_e1_batch() -> dict[str, torch.Tensor]:
     }
 
 
-def test_e1_config_round_trip_preserves_cache_policy(tmp_path) -> None:
+def test_e1_config_round_trip_preserves_cache_policy(tmp_path: Path) -> None:
     config = _tiny_e1_config()
 
     config.save_pretrained(tmp_path)
@@ -306,7 +310,9 @@ def _assert_nested_output_close(actual: Any, expected: Any) -> None:
     "model_class",
     [E1Model, E1ForMaskedLM, E1ForSequenceClassification, E1ForTokenClassification],
 )
-def test_e1_public_models_honor_config_output_flags_and_return_dict(model_class) -> None:
+def test_e1_public_models_honor_config_output_flags_and_return_dict(
+    model_class: type[PreTrainedModel],
+) -> None:
     model = model_class(_tiny_e1_config()).eval()
     batch = _tiny_e1_batch()
 
@@ -327,7 +333,9 @@ def test_e1_public_models_honor_config_output_flags_and_return_dict(model_class)
     "model_class",
     [E1ForMaskedLM, E1ForSequenceClassification, E1ForTokenClassification],
 )
-def test_e1_loss_bearing_head_tuples_start_with_loss_then_logits(model_class) -> None:
+def test_e1_loss_bearing_head_tuples_start_with_loss_then_logits(
+    model_class: type[PreTrainedModel],
+) -> None:
     model = model_class(_tiny_e1_config()).eval()
     batch = _tiny_e1_batch()
     if model_class is E1ForSequenceClassification:
@@ -359,7 +367,9 @@ def test_e1_loss_bearing_head_tuples_start_with_loss_then_logits(model_class) ->
     "model_class",
     [E1Model, E1ForMaskedLM, E1ForSequenceClassification, E1ForTokenClassification],
 )
-def test_e1_public_forwards_reject_unknown_arguments(model_class) -> None:
+def test_e1_public_forwards_reject_unknown_arguments(
+    model_class: type[PreTrainedModel],
+) -> None:
     model = model_class(_tiny_e1_config()).eval()
     with pytest.raises(TypeError, match="unexpected_argument"):
         model(**_tiny_e1_batch(), unexpected_argument=True)
@@ -481,7 +491,7 @@ def test_e1_cached_sdpa_preserves_layer_attention_semantics(
     ),
 )
 def test_e1_cached_flex_dispatch_keeps_or_discards_context_by_layer(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     layer_type: AttentionLayerType,
     expected_path: str,
     expected_kv_length: int,

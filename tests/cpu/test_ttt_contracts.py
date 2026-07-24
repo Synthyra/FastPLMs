@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 import torch
+from pathlib import Path
+from types import SimpleNamespace
 
 from fastplms.models.ankh.modeling_ankh import FastAnkhForMaskedLMExtension
 from fastplms.models.dplm.modeling_dplm import DPLMConfig, DPLMForMaskedLM
@@ -22,6 +21,7 @@ from fastplms.models.ttt import LoraInjectedLinear
 from tests.integration import test_ttt as contracts
 from tests.unit.test_ankh_cpu_contract import _config as _ankh_config
 from tests.unit.test_e1_cache_contract import _tiny_e1_batch, _tiny_e1_config
+
 
 test_ttt_first_call_mapping_preserves_explicit_target_override = (
     contracts.test_ttt_first_call_mapping_preserves_explicit_target_override
@@ -183,7 +183,18 @@ _EXPECTED_TARGET_CLASS = {
 }
 
 
-def _family_model_and_inputs(family: str):
+def _family_model_and_inputs(
+    family: str,
+) -> tuple[
+    FastEsmForMaskedLM
+    | ESMplusplusForMaskedLM
+    | FastESM3Model
+    | FastAnkhForMaskedLMExtension
+    | DPLMForMaskedLM
+    | DPLM2ForMaskedLM
+    | E1ForMaskedLM,
+    dict[str, torch.Tensor],
+]:
     if family == "esm2":
         from tests.cpu.test_sequence_autoclass_contracts import _esm2_config
 
@@ -256,7 +267,7 @@ def test_each_sequence_family_first_call_ttt_is_scoped_and_reloadable(
     tmp_path: Path,
 ) -> None:
     model, model_inputs = _family_model_and_inputs(family)
-    original_parameters = {
+    original_parameters = {  # parameter identity -> checkpoint-shaped tensor
         id(parameter): parameter.detach().clone()
         for parameter in model.parameters()
     }
@@ -307,12 +318,12 @@ def test_each_sequence_family_first_call_ttt_is_scoped_and_reloadable(
         if isinstance(module, LoraInjectedLinear)
     )
     assert reloaded_adapters == adapters
-    source_state = {
+    source_state = {  # LoRA parameter name -> checkpoint-shaped tensor
         name: tensor
         for name, tensor in model.state_dict().items()
         if ".lora_" in name
     }
-    reloaded_state = {
+    reloaded_state = {  # LoRA parameter name -> checkpoint-shaped tensor
         name: tensor
         for name, tensor in reloaded.state_dict().items()
         if ".lora_" in name

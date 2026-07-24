@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 import torch
 import transformers
+from pathlib import Path
+from types import SimpleNamespace
 
 from benchmarks.run import (
     _load_model,
@@ -40,11 +39,11 @@ def test_prepare_inputs_counts_residues_not_special_tokens() -> None:
             assert truncation
             assert [len(sequence) for sequence in sequences] == [6, 3]
 
-            input_ids = torch.zeros((2, max_length), dtype=torch.long)
-            attention_mask = torch.zeros_like(input_ids)
+            input_ids = torch.zeros((2, max_length), dtype=torch.long)  # (b=2, l=8)
+            attention_mask = torch.zeros_like(input_ids)  # (b=2, l=8)
             # Both sequences receive BOS and EOS control tokens.
-            attention_mask[0, :8] = 1
-            attention_mask[1, :5] = 1
+            attention_mask[0, :8] = 1  # (l=8,)
+            attention_mask[1, :5] = 1  # (l=5,)
             return {"input_ids": input_ids, "attention_mask": attention_mask}
 
     class FakeModel:
@@ -55,8 +54,9 @@ def test_prepare_inputs_counts_residues_not_special_tokens() -> None:
             input_ids: torch.Tensor,
             attention_mask: torch.Tensor,
         ) -> torch.Tensor:
+            # input_ids: (b, l); attention_mask: (b, l)
             del attention_mask
-            return input_ids
+            return input_ids  # (b, l)
 
     model_inputs, logical_tokens, padded_tokens, sequences = prepare_inputs(
         FakeModel(),
@@ -133,8 +133,8 @@ def test_local_artifact_tokenizer_load_omits_hub_revision(
         def __call__(self, sequences: list[str], **kwargs: object) -> dict[str, torch.Tensor]:
             del sequences, kwargs
             return {
-                "input_ids": torch.zeros((1, 4), dtype=torch.long),
-                "attention_mask": torch.ones((1, 4), dtype=torch.long),
+                "input_ids": torch.zeros((1, 4), dtype=torch.long),  # (b=1, l=4)
+                "attention_mask": torch.ones((1, 4), dtype=torch.long),  # (b=1, l=4)
             }
 
     class FakeAutoTokenizer:
@@ -151,8 +151,9 @@ def test_local_artifact_tokenizer_load_omits_hub_revision(
             input_ids: torch.Tensor,
             attention_mask: torch.Tensor,
         ) -> torch.Tensor:
+            # input_ids: (b, l); attention_mask: (b, l)
             del attention_mask
-            return input_ids
+            return input_ids  # (b, l)
 
     monkeypatch.setattr(transformers, "AutoTokenizer", FakeAutoTokenizer)
     prepare_inputs(
@@ -236,11 +237,11 @@ def test_cuda_event_benchmark_smoke() -> None:
     """Exercise event timing and block accounting without benchmarking a model."""
 
     assert torch.cuda.is_available()
-    X = torch.randn((64, 64), device="cuda", dtype=torch.bfloat16)
-    W = torch.randn((64, 64), device="cuda", dtype=torch.bfloat16)
+    X = torch.randn((64, 64), device="cuda", dtype=torch.bfloat16)  # (n=64, d=64)
+    W = torch.randn((64, 64), device="cuda", dtype=torch.bfloat16)  # (d=64, d=64)
 
     def operation() -> torch.Tensor:
-        return X @ W
+        return X @ W  # (n=64, d=64)
 
     warmup = warm_until_stable(
         torch,
@@ -284,21 +285,25 @@ def test_esmfold2_esmc_projection_path_smoke() -> None:
             mol_type: torch.Tensor,
             residue_mask: torch.Tensor,
         ) -> torch.Tensor:
+            # Each input tensor has shape (b, l).
             del asym_id, residue_index, mol_type
-            # H represents ordered ESMC states with shape (b, l, 81, d_model).
-            H = input_ids.to(torch.bfloat16)[..., None, None].expand(-1, -1, 81, 4)
-            return H * residue_mask[..., None, None]
+            H = input_ids.to(torch.bfloat16)[..., None, None].expand(  # (b, l, 81, d=4)
+                -1, -1, 81, 4
+            )
+            return H * residue_mask[..., None, None]  # (b, l, 81, d=4)
 
         def project_esmc_hidden_states(
             self,
             hidden_states: torch.Tensor,
             residue_mask: torch.Tensor,
         ) -> torch.Tensor:
-            # Z is the learned-summary stand-in with shape (b, l, d_projection).
-            Z = hidden_states.mean(dim=2)
-            return Z * residue_mask[..., None]
+            # hidden_states: (b, l, 81, d); residue_mask: (b, l)
+            Z = hidden_states.mean(dim=2)  # (b, l, d)
+            return Z * residue_mask[..., None]  # (b, l, d)
 
-    model_inputs, logical_tokens, padded_tokens = _prepare_esmfold2_inputs(torch, (7, 3))
+    model_inputs, logical_tokens, padded_tokens = _prepare_esmfold2_inputs(
+        torch, (7, 3)
+    )  # tensor values: (b=2, l=7)
     assert logical_tokens == 10
     assert padded_tokens == 14
     assert model_inputs["residue_mask"].sum().item() == 10
@@ -308,10 +313,10 @@ def test_esmfold2_esmc_projection_path_smoke() -> None:
 
     def operation() -> torch.Tensor:
         with torch.inference_mode():
-            return _run_esmfold2_esmc_projection(model, model_inputs)
+            return _run_esmfold2_esmc_projection(model, model_inputs)  # (b=2, l=7, d=4)
 
     elapsed_ms = cuda_sample_ms(torch, operation)
-    Z = operation()
+    Z = operation()  # (b=2, l=7, d=4)
     assert elapsed_ms >= 0.0
     assert Z.shape == (2, 7, 4)
     assert torch.count_nonzero(Z[1, 3:]) == 0

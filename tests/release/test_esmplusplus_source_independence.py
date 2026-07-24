@@ -5,17 +5,17 @@ from __future__ import annotations
 import ast
 import copy
 import importlib.util
+import pytest
+import torch
 from difflib import SequenceMatcher
 from pathlib import Path
 from types import ModuleType
-
-import pytest
-import torch
 
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import PreTrainedESMplusplusModel
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     RotaryEmbedding as FastRotaryEmbedding,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCAL_MODEL = ROOT / "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
@@ -23,7 +23,7 @@ UPSTREAM_ROTARY = ROOT / "vendor/upstream/biohub-esm/esm/layers/rotary.py"
 UPSTREAM_TOKENIZER = ROOT / "vendor/upstream/biohub-esm/esm/tokenization/sequence_tokenizer.py"
 MAX_FUNCTION_SIMILARITY = 0.75
 
-# These functions implement the same public contracts, but the package source
+# These functions implement the same public contracts, but the repository source
 # must remain independently maintained. Function-level comparisons prevent
 # unrelated model code from diluting a copied implementation's similarity.
 SOURCE_PAIRS = (
@@ -142,7 +142,9 @@ def test_reimplemented_rotary_is_exact(dtype: torch.dtype, interleaved: bool) ->
     upstream = upstream_class(dim=8, interleaved=interleaved).eval()
 
     generator = torch.Generator().manual_seed(13)
+    # q: (2, 17, 3, 8)
     q = torch.randn((2, 17, 3, 8), generator=generator, dtype=dtype)
+    # k: (2, 17, 3, 8)
     k = torch.randn((2, 17, 3, 8), generator=generator, dtype=dtype)
     local_q, local_k = local(q, k)
     upstream_q, upstream_k = upstream(q, k)
@@ -173,13 +175,16 @@ def test_reimplemented_scaled_rotary_cache_is_exact(dtype: torch.dtype) -> None:
 def test_reimplemented_rotary_matches_transformers_cuda_policy() -> None:
     assert torch.cuda.is_available(), "ESM++ rotary parity requires CUDA"
     upstream_class = _load_upstream_rotary().RotaryEmbedding
+    # local: (...)
     local = FastRotaryEmbedding(dim=64).eval().to("cuda")
+    # upstream: (...)
     upstream = upstream_class(dim=64).eval().to("cuda")
 
     # The original Biohub SDK migrates CPU-computed frequencies. The pinned
     # Biohub Transformers oracle instead recomputes them on CUDA after a device
     # move. Reproduce that public AutoModel policy on the independent upstream
     # rotary implementation before comparing outputs.
+    # cpu_migrated: (...)
     cpu_migrated = upstream.inv_freq.clone()
     cuda_native = upstream._compute_inv_freq(torch.device("cuda"))
     assert not torch.equal(cpu_migrated, cuda_native)
@@ -189,7 +194,9 @@ def test_reimplemented_rotary_matches_transformers_cuda_policy() -> None:
     upstream._sin_cached = None
 
     generator = torch.Generator(device="cuda").manual_seed(29)
+    # q: (3, 65, 8, 64)
     q = torch.randn((3, 65, 8, 64), generator=generator, device="cuda", dtype=torch.bfloat16)
+    # k: (3, 65, 8, 64)
     k = torch.randn((3, 65, 8, 64), generator=generator, device="cuda", dtype=torch.bfloat16)
     local_q, local_k = local(q, k)
     upstream_q, upstream_k = upstream(q, k)

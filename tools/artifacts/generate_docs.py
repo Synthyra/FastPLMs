@@ -25,6 +25,7 @@ from tools.remote.biohub_reference_environment import (
     validate_biohub_reference_environment_evidence,
 )
 
+
 GENERATED_MARKER = "<!-- Generated from src/fastplms/models.toml. Do not edit. -->"
 BINDER_IMAGE_URL = (
     "https://raw.githubusercontent.com/Synthyra/FastPLMs/main/"
@@ -62,6 +63,29 @@ AUTO_CLASS_STATUS = {
     "AutoModelForSeq2SeqLM": "pretrained",
     "AutoModelForSequenceClassification": "base weights + untrained task head",
     "AutoModelForTokenClassification": "base weights + untrained task head",
+}
+
+EMBEDDING_FAMILIES = frozenset(
+    {
+        "ankh",
+        "dplm",
+        "dplm2",
+        "e1",
+        "esm2",
+        "esm3",
+        "esm_plusplus",
+        "esmfold2",
+    }
+)
+
+SEQUENCE_TTT_AUTO_CLASSES = {
+    "ankh": "AutoModelForMaskedLM",
+    "dplm": "AutoModelForMaskedLM",
+    "dplm2": "AutoModelForMaskedLM",
+    "e1": "AutoModelForMaskedLM",
+    "esm2": "AutoModelForMaskedLM",
+    "esm3": "AutoModel",
+    "esm_plusplus": "AutoModelForMaskedLM",
 }
 
 
@@ -854,14 +878,6 @@ def _hub_license_label(family: ModelFamily) -> str:
     return label
 
 
-def _bf16_execution_description(family: ModelFamily) -> str:
-    if family.bf16_execution == "static_parameters":
-        return "parameters loaded directly in BF16"
-    if family.bf16_execution == "fp32_parameters_autocast":
-        return "FP32 parameters with CUDA BF16 autocast"
-    raise ValueError(f"Unsupported BF16 execution policy: {family.bf16_execution!r}")
-
-
 def _tokenizer_class_label(family: ModelFamily) -> str:
     if family.tokenizer_class is None:
         return "`n/a`"
@@ -879,25 +895,21 @@ def _auto_class_status(family: ModelFamily, auto_class: str) -> str:
         raise ValueError(f"No model-card weight status is defined for {auto_class!r}.") from error
 
 
-def _install_extra(family: ModelFamily) -> str:
-    if family.extra == "core":
-        return ""
-    return f"[{family.extra}]"
-
-
 def _platform_requirements(family: ModelFamily) -> str:
     requirements = ["Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required."]
     if family.tokenizer_mode == "structure":
         requirements.append(
-            "Structure inference requires the `structure` extra and a CUDA device "
-            "for the published execution contract. The current validated release "
-            "target is the exact NVIDIA GH200 on Linux aarch64; Linux x86-64, "
-            "CPU-only, Windows, and macOS structure runs are not current release evidence."
+            "The artifact requirements include the direct structure dependencies. "
+            "The published execution contract requires a CUDA device. The current "
+            "validated release target is the exact NVIDIA GH200 on Linux aarch64; "
+            "Linux x86-64, CPU-only, Windows, and macOS structure runs are not "
+            "current release evidence."
         )
     elif any(name.startswith("flash_attention_") for name in family.attention):
         requirements.append(
-            "Eager, SDPA, and Flex use the core install. FlashAttention requires "
-            "the `flash` extra, compatible CUDA hardware, and BF16 execution."
+            "The artifact requirements include the direct FlashAttention loader "
+            "dependency. FlashAttention also requires compatible CUDA hardware and "
+            "BF16 execution."
         )
     else:
         requirements.append(
@@ -907,19 +919,21 @@ def _platform_requirements(family: ModelFamily) -> str:
     return " ".join(requirements)
 
 
-def _installation_section(family: ModelFamily) -> str:
-    extra = _install_extra(family)
+def _installation_section(spec: ModelSpec) -> str:
     return f"""\
 ## Install and platform requirements
 
-Install the current FastPLMs package:
+Install the direct dependencies published with this model:
 
 ```bash
-python -m pip install \\
-  "fastplms{extra} @ git+https://github.com/Synthyra/FastPLMs.git"
+python -m pip install -r \\
+  "https://huggingface.co/{spec.fast.repo_id}/resolve/main/requirements.txt"
 ```
 
-{_platform_requirements(family)} The Hub quick start below requires network
+The FastPLMs implementation itself is embedded in the model repository and loaded
+by Transformers through `trust_remote_code=True`.
+
+{_platform_requirements(spec.family)} The Hub quick start below requires network
 access on first download. For an air-gapped run, first build the manifest-pinned
 local artifact and use the offline form shown in the example.
 
@@ -2872,6 +2886,275 @@ def _preferred_auto_class(spec: ModelSpec) -> str:
     return sorted(spec.auto_map)[0]
 
 
+def _feature_statuses(spec: ModelSpec) -> tuple[tuple[str, str], ...]:
+    """Return concise, checkpoint-specific public capability statuses."""
+
+    family_id = spec.family.id
+    sequence_head = "AutoModelForSequenceClassification" in spec.auto_map
+    token_head = "AutoModelForTokenClassification" in spec.auto_map
+
+    if family_id == "esmfold2":
+        embedding = "Special: ESMC state mixture to 256-wide residue embeddings"
+    elif family_id == "ankh":
+        embedding = "Special: encoder or explicitly prepared decoder states"
+    elif family_id == "e1":
+        embedding = "Special: tokenizer-free raw-sequence preparation"
+    elif family_id in EMBEDDING_FAMILIES:
+        embedding = "Supported: shared ordered embedding API"
+    else:
+        embedding = "Unavailable for this structure-only checkpoint"
+
+    if family_id in SEQUENCE_TTT_AUTO_CLASSES:
+        ttt = "Supported: low-rank masked-residue adaptation"
+    elif family_id == "esmfold2" and "experimental" not in spec.id:
+        ttt = "Special: opt-in folding TTT on the ESMC backbone"
+    elif family_id == "esmfold":
+        ttt = "Unavailable: the checkpoint has no trained MLM head"
+    elif family_id == "esmfold2":
+        ttt = "Unavailable for this experimental checkpoint"
+    else:
+        ttt = "Unavailable for this inference-only checkpoint"
+
+    if spec.family.id == "esm_plusplus":
+        attention = "Special: SDPA fidelity path; alternate backends have explicit bands"
+    else:
+        attention = f"Supported: {_code(spec.family.attention)}"
+
+    compliance = (
+        "Declared: exact release evidence is required"
+        if "compliance" in spec.family.test_tiers
+        else "Unavailable: this provisional family has no compliance tier"
+    )
+
+    return (
+        (
+            "Sequence classification",
+            "Supported: base weights with an untrained task head"
+            if sequence_head
+            else "Unavailable: no advertised AutoClass",
+        ),
+        (
+            "Token classification",
+            "Supported: base weights with an untrained task head"
+            if token_head
+            else "Unavailable: no advertised AutoClass",
+        ),
+        (
+            "PEFT fine-tuning",
+            "Supported pattern: preserve the separately trained `classifier`"
+            if sequence_head
+            else "Supported pattern: attach LoRA to the pretrained model",
+        ),
+        ("Embeddings", embedding),
+        ("Test-time training", ttt),
+        ("Attention variants", attention),
+        ("Compliance", compliance),
+    )
+
+
+def _capability_summary(spec: ModelSpec) -> str:
+    lines = [
+        "## Capabilities",
+        "",
+        "| Feature | Status |",
+        "| --- | --- |",
+    ]
+    lines.extend(f"| {feature} | {status} |" for feature, status in _feature_statuses(spec))
+    lines.extend(
+        (
+            "",
+            "A supported interface is not a pretrained downstream predictor. Classification",
+            "heads start untrained, and declared compliance metadata is not a claim that an",
+            "arbitrary local build passed its release gate.",
+            "",
+        )
+    )
+    return "\n".join(lines)
+
+
+def _task_head_usage(spec: ModelSpec) -> str:
+    if not {
+        "AutoModelForSequenceClassification",
+        "AutoModelForTokenClassification",
+    }.issubset(spec.auto_map):
+        return ""
+
+    model_id = spec.fast.repo_id
+    if spec.family.id == "e1":
+        preparation = """\
+sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
+batch = sequence_model.prep_tokens.get_batch_kwargs(
+    sequences,
+    device=sequence_model.device,
+)
+biological = batch["sequence_ids"].ne(-1)
+"""
+    else:
+        preparation = f"""\
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
+batch = tokenizer(sequences, padding=True, return_tensors="pt")
+biological = batch["attention_mask"].bool()
+for special_id in tokenizer.all_special_ids:
+    biological &= batch["input_ids"].ne(special_id)
+"""
+
+    tokenizer_import = (
+        "" if spec.family.id == "e1" else "from transformers import AutoTokenizer\n"
+    )
+    return f"""\
+## Downstream classification
+
+Both downstream AutoClasses reuse the checkpoint backbone and initialize a new,
+untrained `classifier`. Sequence labels have shape `(b,)`; residue labels have
+shape `(b, l)` and use `-100` outside biological positions:
+
+```python
+import torch
+{tokenizer_import}\
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoModelForTokenClassification,
+)
+
+model_id = "{model_id}"
+sequence_model = AutoModelForSequenceClassification.from_pretrained(
+    model_id, num_labels=2, trust_remote_code=True
+).eval()
+token_model = AutoModelForTokenClassification.from_pretrained(
+    model_id, num_labels=3, trust_remote_code=True
+).eval()
+{preparation}
+sequence_labels = torch.zeros(len(sequences), dtype=torch.long)
+token_labels = torch.full_like(batch["input_ids"], -100)
+token_labels[biological] = 0
+
+with torch.inference_mode():
+    sequence_output = sequence_model(**batch, labels=sequence_labels)
+    token_output = token_model(**batch, labels=token_labels)
+print(sequence_output.logits.shape)  # (b, 2)
+print(token_output.logits.shape)     # (b, l, 3)
+```
+
+"""
+
+
+def _peft_usage(spec: ModelSpec) -> str:
+    has_classifier = "AutoModelForSequenceClassification" in spec.auto_map
+    if has_classifier:
+        model_name = "sequence_model"
+        task_import = ", TaskType"
+        task_type = "        task_type=TaskType.SEQ_CLS,\n"
+        modules_to_save = '        modules_to_save=["classifier"],\n'
+        persistence = (
+            "This checkpoint advertises a classification head, so the separately "
+            "trained `classifier` is saved with the adapter."
+        )
+    else:
+        model_name = "model"
+        task_import = ""
+        task_type = ""
+        modules_to_save = ""
+        persistence = (
+            "This checkpoint has no advertised classifier. Supply the task-specific "
+            "objective and preserve any new head through `modules_to_save`."
+        )
+    return f"""\
+## PEFT fine-tuning
+
+Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+
+```bash
+python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
+```
+
+```python
+from peft import LoraConfig{task_import}, get_peft_model
+
+peft_model = get_peft_model(
+    {model_name},
+    LoraConfig(
+{task_type}\
+        r=8,
+        lora_alpha=16,
+        target_modules="all-linear",
+{modules_to_save}\
+    ),
+)
+```
+
+{textwrap.fill(persistence, width=79)}
+All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
+can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+support boundary. Record the target modules, base revision, data identity, and
+trainable parameter scope.
+
+"""
+
+
+def _sequence_ttt_usage(spec: ModelSpec) -> str:
+    auto_class = SEQUENCE_TTT_AUTO_CLASSES.get(spec.family.id)
+    if auto_class is None:
+        return ""
+    return f"""\
+## Test-time training
+
+TTT samples masked views of one protein and updates only injected low-rank
+adapters. Base checkpoint weights remain frozen:
+
+```python
+from transformers import {auto_class}
+
+ttt_model = {auto_class}.from_pretrained(
+    "{spec.fast.repo_id}",
+    trust_remote_code=True,
+)
+metrics = ttt_model.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={{"steps": 3, "batch_size": 1, "seed": 7}},
+)
+ttt_model.save_pretrained("adapted", safe_serialization=True)
+ttt_model.ttt_reset()
+print(metrics)
+```
+
+Persisted adapters retain their deterministic reset state. TTT adds latency
+and memory, can worsen an output, and does not establish biological function.
+
+"""
+
+
+def _attention_usage(spec: ModelSpec) -> str:
+    recommended = "sdpa" if "sdpa" in spec.family.attention else spec.family.attention[0]
+    declared = textwrap.fill(
+        f"Declared variants are {_code(spec.family.attention)}. An unavailable "
+        "requested backend raises instead of silently switching implementations.",
+        width=79,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    if "compliance" in spec.family.test_tiers:
+        compliance = (
+            "This family declares the `compliance` tier. Release evidence binds the exact "
+            "checkpoint, backend, dtype, hardware, inputs, and reference revision."
+        )
+    else:
+        compliance = (
+            "This family does not declare the `compliance` tier. Boltz2 remains "
+            "provisional and its structure checks must not be broadened into parity claims."
+        )
+    return f"""\
+## Attention and compliance
+
+The quick start selects `{recommended}` explicitly. {declared}
+`output_attentions=True` may use the documented, one-call eager fallback solely
+to materialize attention tensors; the configured backend remains unchanged.
+
+{textwrap.fill(compliance, width=79)}
+
+"""
+
+
 def _sequence_forward_usage(spec: ModelSpec) -> str:
     if spec.family.id not in {"esm2", "esm_plusplus", "dplm", "ankh"}:
         return ""
@@ -2936,22 +3219,14 @@ print(output.last_hidden_state.shape)
 
 
 def _embedding_usage(spec: ModelSpec) -> str:
-    if spec.family.id not in {
-        "ankh",
-        "dplm",
-        "dplm2",
-        "e1",
-        "esm2",
-        "esm3",
-        "esm_plusplus",
-    }:
+    if spec.family.id not in EMBEDDING_FAMILIES or spec.family.id == "esmfold2":
         return ""
     if spec.family.id == "ankh":
         return f"""\
 ## Dataset embeddings
 
-Dataset embeddings default to the encoder's final hidden state. Layer indices
-use the selected stack's native hidden-state order:
+Dataset embeddings default to the encoder final state. Select a native encoder
+layer directly:
 
 ```python
 encoder_result = model.embed_dataset(
@@ -2960,20 +3235,11 @@ encoder_result = model.embed_dataset(
     hidden_state_index=-1,
     full_embeddings=True,
 )
-all_encoder_layers = model.embed_dataset(
-    ["MSTNPKPQRKTKRNT"],
-    hidden_state_source="encoder",
-    store_all_hidden_states=True,
-    full_embeddings=True,
-)
+print(encoder_result[0].tensor.shape)  # (l, d)
 ```
 
 Decoder representations require `AutoModelForSeq2SeqLM` and exactly one
-explicit, aligned `decoder_inputs` sequence or `decoder_input_ids` tensor. ANKH
-does not infer a shifted source sequence because official tasks use prompts,
-sentinel tokens, or generated tokens that depend on the task. Protein inputs
-remain raw residue strings and sentinel prompts remain tight, as in
-`M<extra_id_0>`:
+aligned decoder input. ANKH does not invent a shifted target:
 
 ```python
 from transformers import AutoModelForSeq2SeqLM
@@ -2989,54 +3255,37 @@ decoder_result = seq2seq.embed_dataset(
     decoder_inputs=["M<extra_id_0>"],
     full_embeddings=True,
 )
+print(decoder_result[0].tensor.shape)  # (decoder_length, d)
 ```
 
-`decoder_attention_mask` is accepted only with `decoder_input_ids`. Decoder
-pooling excludes start, EOS, padding, sentinel, and other tokenizer-special
-positions. Persisted results record the selected stack and layer, decoder input
-and mask fingerprints, input-position alignment, and biological-mask policy.
+Pooling excludes boundary, padding, sentinel, and other non-biological
+positions. Persisted results record the selected stack, layer, inputs, masks,
+and alignment policy.
 
 """
     return """\
 ## Dataset embeddings
 
-The shared embedding API accepts sequences, `(id, sequence)` pairs,
-`EmbeddingInput` records, insertion-ordered `{id: sequence}` mappings, or a
-FASTA path. Results preserve order and duplicate identifiers:
+The shared embedding mixin preserves input order and biological-position
+masking. It accepts sequences, identified records, mappings, or a FASTA path:
 
 ```python
-result = model.embed_dataset(
+pooled = model.embed_dataset(
     ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
     batch_size=2,
     pooling=("mean", "std"),
 )
-
-for record in result:
-    print(record.id, record.sequence, record.tensor.shape)
-```
-
-Set `full_embeddings=True` for one residue tensor with shape `(l, d)` per
-sequence. Set `output` to a directory for bounded-memory, transactional
-safetensors with ordered-prefix resume, or choose `format="sqlite"` for
-batch-level database commits and exact resume. Pooling excludes boundary,
-padding, and other non-biological positions.
-
-For a long FASTA run, stream completed batches into SQLite:
-
-```python
-persisted = model.embed_dataset(
-    "proteins.fasta",
-    batch_size=64,
-    pooling=("mean",),
-    output="protein-embeddings.sqlite",
-    format="sqlite",
-    resume=True,
+residues = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    full_embeddings=True,
 )
+print(pooled[0].tensor.shape)   # (2 * d,)
+print(residues[0].tensor.shape) # (l, d)
 ```
 
-Resume verifies the input order, model state, tokenizer policy, backend, dtype,
-and pooling configuration. It never appends incompatible records to an
-existing run.
+Set `output` and `format="safetensors"` or `"sqlite"` for transactional,
+bounded-memory persistence. Resume verifies input order, model state, tokenizer
+policy, backend, dtype, and pooling configuration before appending.
 
 """
 
@@ -3450,10 +3699,19 @@ print(adapted.ttt_metrics)
 
 Entering a gradient-enabled path reloads canonical BF16 ESMC weights. TTT adds
 latency and memory, can worsen a prediction, and does not calibrate confidence
-or establish biological validity.
+or establish biological validity. Folding TTT is result-scoped: its transient
+ESMC adapter modules are excluded from checkpoint state, so it is not a generic
+`save_pretrained` adapter-persistence path.
 
 """
         else:
+            ttt_note = """\
+## Test-time training
+
+This experimental checkpoint does not expose folding TTT. Use the corresponding
+standard or Fast checkpoint when opt-in ESMC-backbone adaptation is required.
+
+"""
             binder_note = f"""\
 ## Binder-design research example
 
@@ -3529,9 +3787,9 @@ biochemical activity.
 
 ## Learned representation and ESMC precision
 
-ESMFold2 combines the ordered 81 ESMC-6B states `H: (b, l, 81, 2560)` with the
-checkpoint's learned projection. Retrieve the resulting residue representation
-through the public embedding API:
+ESMFold2 applies its learned state mixture and projection as
+`H: (b, l, 81, 2560) -> Z: (b, l, 256)`. Retrieve `Z` through the public
+embedding API:
 
 ```python
 representations = model.embed_dataset(
@@ -3602,8 +3860,13 @@ def render_model_card(
     canonical_state_provenance = ""
     tokenizer_provenance = ""
     notes = ""
+    capability_summary = _capability_summary(spec)
+    attention_usage = _attention_usage(spec)
     sequence_forward = _sequence_forward_usage(spec)
     embedding_usage = _embedding_usage(spec)
+    task_head_usage = _task_head_usage(spec)
+    peft_usage = _peft_usage(spec)
+    sequence_ttt_usage = _sequence_ttt_usage(spec)
     family_usage = _family_usage_notes(
         spec,
         allow_generic=allow_generic_family,
@@ -3619,14 +3882,8 @@ def render_model_card(
         f"Supported Transformers entry points are {_code(sorted(spec.auto_map))}.",
         width=79,
     )
-    attention_intro = textwrap.fill(
-        "Leave attention unspecified for the Transformers default. Supported "
-        f"explicit choices are {_code(spec.family.attention)}.",
-        width=79,
-    )
-    bf16_intro = textwrap.fill(
-        f"For BF16 execution, this family uses {_bf16_execution_description(spec.family)}.",
-        width=79,
+    recommended_attention = (
+        "sdpa" if "sdpa" in spec.family.attention else spec.family.attention[0]
     )
     if spec.family.tokenizer_class is not None:
         tokenizer_provenance = f"- Tokenizer class: `{spec.family.tokenizer_class}`\n"
@@ -3672,7 +3929,8 @@ This checkpoint packages the FastPLMs `{spec.family.architecture}` implementatio
 {public_input_intro}
 {auto_class_intro}
 
-{_installation_section(spec.family)}## Quick start
+{capability_summary}
+{_installation_section(spec)}## Quick start
 
 ```python
 from transformers import {auto_class}
@@ -3681,23 +3939,15 @@ model_id = "{spec.fast.repo_id}"
 model = {auto_class}.from_pretrained(
     model_id,
     trust_remote_code=True,
+    attn_implementation="{recommended_attention}",
 ).eval()
 ```
 
-This example uses the published Hub repository. For offline validation, build
-the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/{local_artifact}` path, then pass `local_files_only=True`.
+For offline validation, replace `model_id` with the manifest-built
+`dist/hub/{local_artifact}` path and pass `local_files_only=True`.
 
-{attention_intro}
-Pass the selected name through `attn_implementation`.
-When an optimized backend cannot return full attention tensors,
-`output_attentions=True` emits one explicit runtime warning and uses a correctly
-masked eager implementation for that call only. The warning identifies the
-configured backend, effective backend, and reason. Configuration and later
-calls are unchanged.
-{bf16_intro}
-
-{sequence_forward}{embedding_usage}{family_usage}{notes}## Runtime contract
+{attention_usage}{sequence_forward}{embedding_usage}{task_head_usage}{peft_usage}\
+{sequence_ttt_usage}{family_usage}{notes}## Runtime contract
 
 - Public input: {spec.family.public_input}
 - Advertised AutoClasses: {_code(sorted(spec.auto_map))}
@@ -3706,7 +3956,7 @@ calls are unchanged.
 - Precision policies: {_precision_contract(spec.family)}
 - BF16 execution: `{spec.family.bf16_execution}`
 - Generation contract: `{spec.generation_contract}`
-- Optional dependency group: `{spec.family.extra}`
+- Artifact dependency set: `{"core + structure" if spec.family.extra == "structure" else "core"}`
 - Weight publication allowed: `{weights_allowed}`
 - Weight license status: `{weights_license_status}`
 - Redistributable: `{weights_allowed}`
@@ -3717,29 +3967,23 @@ calls are unchanged.
 - FastPLMs weights: `{spec.fast.repo_id}`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
-- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 {canonical_state_provenance}\
 - Official checkpoint: `{spec.official.repo_id}`
 - Artifact source: `{spec.artifact_source}`
 - State transform: `{spec.family.state_transform}`
-- BF16 execution: `{spec.family.bf16_execution}`
 {tokenizer_provenance}- Pinned upstreams: {_code(spec.family.upstreams)}
-- Reference container: `{spec.family.reference_container}`
 - Release tiers: {_code(spec.family.test_tiers)}
 - Unresolved required file identities: `{unresolved}`
 
-The local artifact records exact file identities, conversion details, source
-revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
-release blocker.
+`provenance.json` records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks release.
 
 ## Validation boundary
 
-For tiers declared by the manifest, the release contract compares applicable
-semantic configuration, tokenizer behavior, state keys, shapes, dtypes,
-values, aliases, and representative inference with the pinned official
-implementation. This metadata does not by itself claim that a particular build
-passed, that one backend is faster, or that an output has biological or
-therapeutic validity.
+Declared tiers compare applicable configuration, tokenizer behavior, state,
+and representative inference with the pinned reference. Metadata alone does
+not claim a build passed, a backend is faster, or an output is biologically
+valid.
 
 ## License
 

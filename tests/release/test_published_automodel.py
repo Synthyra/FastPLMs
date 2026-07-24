@@ -9,12 +9,11 @@ import os
 import subprocess
 import sys
 import tomllib
+import pytest
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar
-
-import pytest
+from typing import Any, ClassVar, Self
 
 from tools.artifacts.offline_probe import (
     ProbeCase,
@@ -29,6 +28,7 @@ from tools.artifacts.offline_probe import (
     _semantic_config,
     probe_many,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = tomllib.loads((ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8"))
@@ -150,7 +150,7 @@ def _run_probe(
             command.extend(("--expected-missing-key-prefix", prefix))
         for prefix in expected_unexpected_key_prefixes:
             command.extend(("--expected-unexpected-key-prefix", prefix))
-    if implementation == "package":
+    if implementation == "source":
         command.extend(("--source-root", str(ROOT / "src")))
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
@@ -168,7 +168,7 @@ def _run_probe(
 
 @pytest.mark.artifact
 def test_generated_flash_artifacts_resolve_their_embedded_kernel_lock() -> None:
-    """Remote code must not depend on a checkout or installed FastPLMs wheel."""
+    """Remote code must not depend on FastPLMs source outside the artifact."""
 
     expected = (ROOT / "kernels.lock").read_bytes()
     repository_names = ("ESM2-8M", "ESMplusplus_small", "DPLM-150M")
@@ -448,7 +448,7 @@ def test_structure_probe_runs_prediction_inside_bf16_autocast(tmp_path: Path) ->
     assert not state["autocast_enabled"]
 
 
-def test_package_probe_uses_unmodified_remote_code_save(
+def test_source_probe_uses_unmodified_remote_code_save(
     tmp_path: Path,
 ) -> None:
     class FakeModel:
@@ -464,12 +464,12 @@ def test_package_probe_uses_unmodified_remote_code_save(
             self.observed.append(self.is_remote_code())
 
     model = FakeModel()
-    _save_model_for_probe(model, tmp_path, "package")
+    _save_model_for_probe(model, tmp_path, "source")
     assert model.observed == [True]
     assert model.is_remote_code()
 
 
-def test_package_probe_propagates_unmodified_save_failure(
+def test_source_probe_propagates_unmodified_save_failure(
     tmp_path: Path,
 ) -> None:
     class FakeModel:
@@ -487,13 +487,13 @@ def test_package_probe_propagates_unmodified_save_failure(
 
     model = FakeModel()
     with pytest.raises(RuntimeError, match="synthetic save failure"):
-        _save_model_for_probe(model, tmp_path, "package")
+        _save_model_for_probe(model, tmp_path, "source")
 
     assert model.observed == [True]
     assert model.is_remote_code()
 
 
-def test_package_class_uses_transformers_autoclass_registration(
+def test_source_class_uses_transformers_autoclass_registration(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeClass:
@@ -507,7 +507,7 @@ def test_package_class_uses_transformers_autoclass_registration(
         "tools.artifacts.offline_probe.importlib.import_module",
         lambda _name: SimpleNamespace(FakeClass=FakeClass),
     )
-    assert _load_class("package", "AutoModel", "fake.module.FakeClass") is FakeClass
+    assert _load_class("source", "AutoModel", "fake.module.FakeClass") is FakeClass
     assert FakeClass._auto_class == "AutoModel"
 
 
@@ -536,11 +536,15 @@ def test_encoder_only_exercise_does_not_invent_decoder_inputs(
     observed: dict[str, object] = {}
 
     class _Tensor:
-        def to(self, *_args, **_kwargs):
+        def to(self, *_args: object, **_kwargs: object) -> Self:
             return self
 
     class _Tokenizer:
-        def __call__(self, _sequences, **_kwargs):
+        def __call__(
+            self,
+            _sequences: object,
+            **_kwargs: object,
+        ) -> dict[str, _Tensor]:
             return {
                 "input_ids": _Tensor(),
                 "attention_mask": _Tensor(),
@@ -549,7 +553,7 @@ def test_encoder_only_exercise_does_not_invent_decoder_inputs(
     class _EncoderOnly:
         config = SimpleNamespace(is_encoder_decoder=True)
 
-        def __call__(self, **kwargs):
+        def __call__(self, **kwargs: object) -> object:
             observed.update(kwargs)
             return kwargs["input_ids"]
 
@@ -637,7 +641,7 @@ def test_local_artifact_offline_autoclass_parity(
     artifact = ROOT / "dist" / "hub" / repository_name
     assert artifact.is_dir(), f"Missing required built artifact for {model_id}: {artifact}"
     artifact_output = tmp_path / "artifact.json"
-    package_output = tmp_path / "package.json"
+    source_output = tmp_path / "source.json"
 
     isolated = _run_probe(
         artifact=artifact,
@@ -647,19 +651,19 @@ def test_local_artifact_offline_autoclass_parity(
         output=artifact_output,
     )
     assert isolated.returncode == 0, isolated.stdout + isolated.stderr
-    package = _run_probe(
+    source = _run_probe(
         artifact=artifact,
         family=family,
         auto_classes=auto_classes,
-        implementation="package",
-        output=package_output,
+        implementation="source",
+        output=source_output,
     )
-    assert package.returncode == 0, package.stdout + package.stderr
+    assert source.returncode == 0, source.stdout + source.stderr
     artifact_results = json.loads(artifact_output.read_text(encoding="utf-8"))
-    package_results = json.loads(package_output.read_text(encoding="utf-8"))
+    source_results = json.loads(source_output.read_text(encoding="utf-8"))
     expected_classes = {str(case["auto_class"]) for case in auto_classes}
     assert set(artifact_results) == expected_classes
-    assert artifact_results == package_results
+    assert artifact_results == source_results
 
 
 @pytest.mark.parametrize(
@@ -705,7 +709,7 @@ def test_local_artifact_locked_flash_backend(
 
     artifact = ROOT / "dist" / "hub" / repository_name
     artifact_output = tmp_path / "artifact.json"
-    package_output = tmp_path / "package.json"
+    source_output = tmp_path / "source.json"
     common = {
         "artifact": artifact,
         "family": family,
@@ -727,12 +731,12 @@ def test_local_artifact_locked_flash_backend(
         output=artifact_output,
     )
     assert isolated.returncode == 0, isolated.stdout + isolated.stderr
-    package = _run_probe(
+    source = _run_probe(
         **common,
-        implementation="package",
-        output=package_output,
+        implementation="source",
+        output=source_output,
     )
-    assert package.returncode == 0, package.stdout + package.stderr
+    assert source.returncode == 0, source.stdout + source.stderr
     assert json.loads(artifact_output.read_text(encoding="utf-8")) == json.loads(
-        package_output.read_text(encoding="utf-8")
+        source_output.read_text(encoding="utf-8")
     )

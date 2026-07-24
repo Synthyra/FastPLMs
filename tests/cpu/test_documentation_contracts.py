@@ -7,13 +7,12 @@ import json
 import sqlite3
 import struct
 import sys
-from pathlib import Path
-from types import ModuleType, SimpleNamespace
-from typing import Any
-
 import pytest
 import torch
 import transformers
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from typing import Any
 
 from examples import (
     _runtime,
@@ -41,6 +40,7 @@ from tests.integration import test_ttt as ttt_contracts
 from tests.unit import test_ankh_cpu_contract as ankh_contracts
 from tests.unit import test_e1_cache_contract as e1_contracts
 from tests.unit import test_embeddings_api as embedding_contracts
+
 
 _ROOT = Path(__file__).resolve().parents[2]
 _CURATED_EXAMPLE_CPU_CASES: dict[str, tuple[str, ...]] = {
@@ -133,10 +133,16 @@ class _TinyTokenizer:
     vocab_size = 16
     name_or_path = "cpu-doc-tokenizer"
 
-    def __call__(self, sequences, **_kwargs):
+    def __call__(
+        self,
+        sequences: list[str],
+        **_kwargs: object,
+    ) -> dict[str, torch.Tensor]:
         rows = [[2 + (ord(character) % 10) for character in value] + [1] for value in sequences]
         width = max(map(len, rows))
-        input_ids = torch.tensor([row + [0] * (width - len(row)) for row in rows])
+        input_ids = torch.tensor(  # (b, l)
+            [row + [0] * (width - len(row)) for row in rows]
+        )
         return {
             "input_ids": input_ids,
             "attention_mask": input_ids.ne(0).long(),
@@ -151,7 +157,9 @@ def _python_blocks(path: Path) -> list[str]:
     return blocks
 
 
-def test_embedding_and_retrieval_example_executes_with_ordered_sqlite(tmp_path) -> None:
+def test_embedding_and_retrieval_example_executes_with_ordered_sqlite(
+    tmp_path: Path,
+) -> None:
     model = embedding_contracts.SyntheticEmbeddingModel()
     model.embed_dataset = lambda inputs, **kwargs: embed_dataset(  # type: ignore[attr-defined]
         model, inputs, **kwargs
@@ -186,7 +194,7 @@ def test_embedding_and_retrieval_example_executes_with_ordered_sqlite(tmp_path) 
     ),
 )
 def test_embedding_retrieval_selection_requires_sqlite_output(
-    tmp_path,
+    tmp_path: Path,
     retrieval_arguments: tuple[str, ...],
 ) -> None:
     artifact = tmp_path / "artifact"
@@ -210,7 +218,10 @@ def test_embedding_retrieval_selection_requires_sqlite_output(
         (ttt, ["artifact", "adapted"]),
     ),
 )
-def test_sequence_examples_share_explicit_device_dtype_contract(module, arguments) -> None:
+def test_sequence_examples_share_explicit_device_dtype_contract(
+    module: ModuleType,
+    arguments: list[str],
+) -> None:
     parsed = module.build_parser().parse_args([*arguments, "--device", "cpu", "--dtype", "float32"])
     assert parsed.device == "cpu"
     assert parsed.dtype == "float32"
@@ -220,7 +231,7 @@ def test_sequence_examples_share_explicit_device_dtype_contract(module, argument
 
 
 def test_attention_switching_main_executes_optimized_and_masked_fallback(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -299,7 +310,7 @@ def test_attention_switching_main_executes_optimized_and_masked_fallback(
 
 
 def test_attention_example_detects_and_does_not_repair_fallback_mutation(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = ankh_contracts.FastAnkhModel(ankh_contracts._config(attn_backend="sdpa")).eval()
@@ -317,7 +328,7 @@ def test_attention_example_detects_and_does_not_repair_fallback_mutation(
         def from_pretrained(cls, *_args: Any, **_kwargs: Any) -> Any:
             return object()
 
-    output = SimpleNamespace(last_hidden_state=torch.zeros((2, 3, 8)))
+    output = SimpleNamespace(last_hidden_state=torch.zeros((2, 3, 8)))  # (b=2, l=3, d=8)
     monkeypatch.setattr(
         attention_switching,
         "run_optimized_attention_example",
@@ -347,7 +358,7 @@ def test_attention_example_detects_and_does_not_repair_fallback_mutation(
 @pytest.mark.parametrize("backend", ("flash_attention_2", "flash_attention_3"))
 def test_attention_switching_flash_contract_fails_before_model_loading(
     backend: str,
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = tmp_path / "artifact"
@@ -389,7 +400,7 @@ def test_attention_switching_flash_contract_fails_before_model_loading(
 
 
 def test_task_head_example_executes_all_advertised_heads_offline(
-    tmp_path,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -423,12 +434,18 @@ def test_task_head_example_executes_all_advertised_heads_offline(
         all_special_ids = (0, 1, 2, 5)
         mask_token_id = 5
 
-        def __call__(self, sequences, **_kwargs):
+        def __call__(
+            self,
+            sequences: list[str],
+            **_kwargs: object,
+        ) -> dict[str, torch.Tensor]:
             available = (3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
             alphabet = dict(zip("ACDEFGHIKLMN", available, strict=True))
             rows = [[0, *(alphabet[residue] for residue in sequence), 2] for sequence in sequences]
             width = max(map(len, rows))
-            input_ids = torch.tensor([row + [1] * (width - len(row)) for row in rows])
+            input_ids = torch.tensor(  # (b, l)
+                [row + [1] * (width - len(row)) for row in rows]
+            )
             return {
                 "input_ids": input_ids,
                 "attention_mask": input_ids.ne(1).long(),
@@ -688,7 +705,9 @@ def test_generation_example_preserves_every_esm3_multimodal_track() -> None:
         torch.testing.assert_close(observed[0][name], expected, equal_nan=True)
 
 
-def test_e1_rag_example_executes_local_msa_and_shared_persistence(tmp_path) -> None:
+def test_e1_rag_example_executes_local_msa_and_shared_persistence(
+    tmp_path: Path,
+) -> None:
     sequence = "ACDEFG"
     a3m_path = tmp_path / "query.a3m"
     a3m_path.write_text(">query\nACDEFG\n>near\nACDEYG\n", encoding="utf-8")
@@ -711,7 +730,7 @@ def test_e1_rag_example_executes_local_msa_and_shared_persistence(tmp_path) -> N
     assert [record.id for record in load_sqlite_result(output)] == ["0", "1"]
 
 
-def test_ttt_example_executes_seeded_adapt_save_and_reset(tmp_path) -> None:
+def test_ttt_example_executes_seeded_adapt_save_and_reset(tmp_path: Path) -> None:
     model = ttt_contracts.DummyPretrainedTTTModel(ttt_contracts.DummyPretrainedTTTConfig())
     metrics = ttt.adapt_and_save(model, "ACDE", tmp_path / "adapted", seed=7)
 
@@ -722,7 +741,7 @@ def test_ttt_example_executes_seeded_adapt_save_and_reset(tmp_path) -> None:
         ttt.adapt_and_save(model, "ACDE", tmp_path / "adapted", seed=7)
 
 
-def test_ttt_example_resets_after_a_mutating_adaptation_failure(tmp_path) -> None:
+def test_ttt_example_resets_after_a_mutating_adaptation_failure(tmp_path: Path) -> None:
     class FailingModel:
         def __init__(self) -> None:
             self.mutated = False
@@ -746,7 +765,7 @@ def test_ttt_example_resets_after_a_mutating_adaptation_failure(tmp_path) -> Non
     assert not list(tmp_path.glob(".failed-*"))
 
 
-def test_ttt_example_cleans_staging_even_when_reset_fails(tmp_path) -> None:
+def test_ttt_example_cleans_staging_even_when_reset_fails(tmp_path: Path) -> None:
     class ResetFailingModel:
         def ttt(self, **_kwargs: Any) -> None:
             raise RuntimeError("adaptation failure")
@@ -766,7 +785,7 @@ def test_ttt_example_cleans_staging_even_when_reset_fails(tmp_path) -> None:
     assert not list(tmp_path.glob(".failed-reset-*"))
 
 
-def test_ttt_example_refuses_source_and_existing_destinations(tmp_path) -> None:
+def test_ttt_example_refuses_source_and_existing_destinations(tmp_path: Path) -> None:
     artifact = tmp_path / "source"
     artifact.mkdir()
     (artifact / "config.json").write_text("{}\n", encoding="utf-8")
@@ -828,7 +847,7 @@ def test_structure_preparation_example_executes_each_public_branch() -> None:
     assert "Pocket conditioning" in rejection
 
 
-def test_artifact_loading_example_executes_local_only_autoconfig(tmp_path) -> None:
+def test_artifact_loading_example_executes_local_only_autoconfig(tmp_path: Path) -> None:
     config = transformers.BertConfig(
         vocab_size=16,
         hidden_size=8,
@@ -844,8 +863,8 @@ def test_artifact_loading_example_executes_local_only_autoconfig(tmp_path) -> No
 
 
 def test_migration_python_snippets_execute_against_tiny_offline_objects(
-    monkeypatch,
-    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     blocks = _python_blocks(_ROOT / "docs" / "migration.md")
     assert len(blocks) == 6

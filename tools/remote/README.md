@@ -39,7 +39,7 @@ with the checked-in sequence and structure goldens. It does not build local Hub
 artifacts, download attention kernels, or build/import a live official
 reference implementation. Artifact construction remains in `artifact`,
 `nightly`, and `release`.
-The repository does not use GitHub Actions. Run CPU, package, reference, and GPU
+The repository does not use GitHub Actions. Run CPU, source, reference, and GPU
 validation explicitly on the workstation before merge or release.
 
 `gpu-golden-smoke` is the conditional Hopper/SM90 tier. The current release run
@@ -91,8 +91,8 @@ only their pinned upstream sources, the normalization protocol, and required
 license notices.
 
 The `feature` suite uses the BF16 structure candidate. It does not install the
-FP8 extra because test-time training and all gradient-enabled paths are required
-to remain BF16.
+FP8 dependency profile because test-time training and all gradient-enabled paths
+are required to remain BF16.
 
 `benchmark` is intentionally gated: it requires the tracked immutable
 `benchmarks/baselines/h100.json` and fails before remote work if that baseline is
@@ -134,13 +134,13 @@ Run validation tiers directly through `python -m tools.remote` against the
 GH200 Linux aarch64 workstation. Bind release evidence to the exact candidate
 revision and keep only one accelerator-heavy suite active at a time.
 
-## Python package-support matrix
+## Python source-support matrix
 
 Python 3.12 remains the canonical GPU validation environment. Before release,
-build and smoke one Python 3.12 wheel. The explicit remote `python-matrix`
-suite runs the non-canonical 3.11, 3.13, and 3.14 members concurrently. It
-builds one wheel, then installs that exact wheel with Torch 2.13.0 and
-Transformers 5.13.0 into a separate CPU-only environment for each interpreter:
+the explicit remote `python-matrix` suite runs the non-canonical 3.11, 3.13,
+and 3.14 members concurrently. It creates a separate CPU-only environment for
+each interpreter and installs `requirements/profiles/runtime.in` with the
+validation constraints:
 
 ```bash
 python -m tools.remote \
@@ -149,11 +149,10 @@ python -m tools.remote \
   --suite python-matrix
 ```
 
-Each environment installs the core wheel without optional extras. Its offline,
-CPU-only smoke verifies the wheel RECORD, imports every
-advertised runtime class, compiles the installed package, parses the model
-registry, constructs a small ESM2 encoder, and runs one finite forward. The
-suite writes `artifacts/python-matrix.json` and
-`artifacts/junit/python-matrix.xml`. Raw installer output is represented only by
-byte counts and SHA-256 digests, never copied into reports. A missing interpreter
-wheel or dependency wheel is a package-support failure, not a skip.
+Each environment imports from the explicit repository source root. Its
+offline, CPU-only smoke imports every advertised runtime class, compiles the
+runtime source, parses the model registry, constructs a small ESM2 encoder, and
+runs one finite forward. The suite writes `artifacts/python-matrix.json` and
+`artifacts/junit/python-matrix.xml`. Raw installer output is represented only
+by byte counts and SHA-256 digests, never copied into reports. A missing
+interpreter or dependency wheel is a source-support failure, not a skip.

@@ -6,11 +6,11 @@ import inspect
 import json
 from importlib.metadata import version
 from pathlib import Path
-
 from kernels import get_kernel_variants, has_kernel
 
 from fastplms.attention._kernel_lock import load_locked_kernel
 from fastplms.registry import get_model_registry
+
 
 API_NAMES = (
     "fwd",

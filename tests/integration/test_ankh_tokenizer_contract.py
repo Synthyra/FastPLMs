@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import os
-from pathlib import Path
-
 import pytest
 import torch
+from pathlib import Path
 from transformers import AutoTokenizer
 
 from examples.ankh_embeddings import generate_ankh_task
@@ -20,6 +19,7 @@ from fastplms.models.ankh.modeling_ankh import (
     tokenize_ankh_sequences,
 )
 from fastplms.registry import FileDigest, get_model_registry
+
 
 pytestmark = [pytest.mark.compliance, pytest.mark.network, pytest.mark.reference]
 _SNAPSHOT_ENVIRONMENT = "FASTPLMS_ANKH_TOKENIZER_SNAPSHOT"

@@ -6,13 +6,13 @@ and attribution records are retained in ``THIRD_PARTY_NOTICES.md``.
 
 from __future__ import annotations
 
+import torch
 from collections.abc import Iterable, Mapping, Sequence
 from functools import partial
 from typing import Any
-
-import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
+
 
 LinearNoBias = partial(nn.Linear, bias=False)
 
@@ -32,19 +32,23 @@ def default(value: Any, fallback: Any) -> Any:
 def log(tensor: Tensor, eps: float = 1e-20) -> Tensor:
     """Compute a finite logarithm by applying a scalar lower bound."""
 
-    return torch.log(tensor.clamp(min=eps))
+    # tensor: (...).
+    return torch.log(tensor.clamp(min=eps))  # (...)
 
 
 class SwiGLU(nn.Module):
     """Split X in half and apply a SiLU-gated linear unit."""
 
     def forward(self, x: Tensor) -> Tensor:
-        values, gates = x.chunk(2, dim=-1)
-        return F.silu(gates) * values
+        # x: (..., 2 * d).
+        values, gates = x.chunk(2, dim=-1)  # each: (..., d)
+        return F.silu(gates) * values  # (..., d)
 
 
 def _masked_center(coordinates: Tensor, mask: Tensor) -> Tensor:
-    weights = mask[:, :, None]
+    # coordinates: (b, n_atom, 3); mask: (b, n_atom).
+    weights = mask[:, :, None]  # (b, n_atom, 1)
+    # (b, 1, 3)
     return (coordinates * weights).sum(dim=1, keepdim=True) / weights.sum(
         dim=1,
         keepdim=True,
@@ -54,21 +58,24 @@ def _masked_center(coordinates: Tensor, mask: Tensor) -> Tensor:
 def center(atom_coords: Tensor, atom_mask: Tensor) -> Tensor:
     """Center coordinate tensor X with shape ``(b, n_atoms, 3)``."""
 
-    return atom_coords - _masked_center(atom_coords, atom_mask)
+    # atom_coords: (b, n_atom, 3); atom_mask: (b, n_atom).
+    return atom_coords - _masked_center(atom_coords, atom_mask)  # (b, n_atom, 3)
 
 
 def _copysign(magnitudes: Tensor, signs: Tensor) -> Tensor:
     """Apply the elementwise sign of S to magnitude tensor M."""
 
-    return torch.where((magnitudes < 0) != (signs < 0), -magnitudes, magnitudes)
+    # magnitudes, signs: broadcast-compatible (...).
+    return torch.where((magnitudes < 0) != (signs < 0), -magnitudes, magnitudes)  # (...)
 
 
 def quaternion_to_matrix(quaternions: Tensor) -> Tensor:
     """Convert real-first quaternion tensor Q from ``(..., 4)`` to ``(..., 3, 3)``."""
 
-    real, i_axis, j_axis, k_axis = torch.unbind(quaternions, dim=-1)
-    scale = 2.0 / (quaternions * quaternions).sum(dim=-1)
-    entries = (
+    # quaternions: (..., 4).
+    real, i_axis, j_axis, k_axis = torch.unbind(quaternions, dim=-1)  # each: (...)
+    scale = 2.0 / (quaternions * quaternions).sum(dim=-1)  # (...)
+    entries = (  # nine tensors, each (...)
         1 - scale * (j_axis * j_axis + k_axis * k_axis),
         scale * (i_axis * j_axis - k_axis * real),
         scale * (i_axis * k_axis + j_axis * real),
@@ -79,6 +86,7 @@ def quaternion_to_matrix(quaternions: Tensor) -> Tensor:
         scale * (j_axis * k_axis + i_axis * real),
         1 - scale * (i_axis * i_axis + j_axis * j_axis),
     )
+    # (..., 3, 3)
     return torch.stack(entries, dim=-1).reshape((*quaternions.shape[:-1], 3, 3))
 
 
@@ -90,10 +98,10 @@ def random_quaternions(
     """Draw ``n`` uniformly distributed unit quaternions with nonnegative real part."""
 
     resolved_device = torch.device(device) if isinstance(device, str) else device
-    samples = torch.randn((n, 4), dtype=dtype, device=resolved_device)
-    squared_norm = (samples * samples).sum(dim=1)
-    signed_norm = _copysign(torch.sqrt(squared_norm), samples[:, 0])
-    return samples / signed_norm[:, None]
+    samples = torch.randn((n, 4), dtype=dtype, device=resolved_device)  # (n, 4)
+    squared_norm = (samples * samples).sum(dim=1)  # (n,)
+    signed_norm = _copysign(torch.sqrt(squared_norm), samples[:, 0])  # (n,)
+    return samples / signed_norm[:, None]  # (n, 4)
 
 
 def random_rotations(
@@ -103,6 +111,7 @@ def random_rotations(
 ) -> Tensor:
     """Draw rotation tensor R with shape ``(n, 3, 3)``."""
 
+    # (n, 3, 3)
     return quaternion_to_matrix(random_quaternions(n, dtype=dtype, device=device))
 
 
@@ -114,8 +123,8 @@ def compute_random_augmentation(
 ) -> tuple[Tensor, Tensor]:
     """Draw independent rotations R and translations T for a replicated batch."""
 
-    rotations = random_rotations(multiplicity, dtype=dtype, device=device)
-    translations = (
+    rotations = random_rotations(multiplicity, dtype=dtype, device=device)  # (m, 3, 3)
+    translations = (  # (m, 1, 3)
         torch.randn(
             (multiplicity, 1, 3),
             dtype=dtype,
@@ -123,7 +132,7 @@ def compute_random_augmentation(
         )
         * s_trans
     )
-    return rotations, translations
+    return rotations, translations  # (m, 3, 3), (m, 1, 3)
 
 
 def randomly_rotate(
@@ -133,14 +142,15 @@ def randomly_rotate(
 ) -> Tensor | tuple[Tensor, Tensor | None]:
     """Rotate X and optionally Y using the same sampled rotation tensor R."""
 
-    rotations = random_rotations(len(coords), coords.dtype, coords.device)
-    rotated = torch.einsum("bmd,bds->bms", coords, rotations)
+    # coords: (b, n, 3); second_coords: (b, n_second, 3) or None.
+    rotations = random_rotations(len(coords), coords.dtype, coords.device)  # (b, 3, 3)
+    rotated = torch.einsum("bmd,bds->bms", coords, rotations)  # (b, n, 3)
     if not return_second_coords:
-        return rotated
-    rotated_second = (
+        return rotated  # (b, n, 3)
+    rotated_second = (  # (b, n_second, 3) or None
         None if second_coords is None else torch.einsum("bmd,bds->bms", second_coords, rotations)
     )
-    return rotated, rotated_second
+    return rotated, rotated_second  # (b, n, 3), (b, n_second, 3) or None
 
 
 def center_random_augmentation(
@@ -154,25 +164,28 @@ def center_random_augmentation(
 ) -> Tensor | tuple[Tensor, Tensor | None]:
     """Center and rigidly augment coordinate tensors X and optional Y."""
 
-    primary = atom_coords
-    secondary = second_coords
+    # atom_coords: (b, n_atom, 3); atom_mask: (b, n_atom).
+    # second_coords: (b, n_second, 3) or None.
+    primary = atom_coords  # (b, n_atom, 3)
+    secondary = second_coords  # (b, n_second, 3) or None
     if centering:
-        centroid = _masked_center(primary, atom_mask)
-        primary = primary - centroid
+        centroid = _masked_center(primary, atom_mask)  # (b, 1, 3)
+        primary = primary - centroid  # (b, n_atom, 3)
         if secondary is not None:
-            secondary = secondary - centroid
+            secondary = secondary - centroid  # (b, n_second, 3)
 
     if augmentation:
-        primary, secondary = randomly_rotate(
+        primary, secondary = randomly_rotate(  # (b, n_atom, 3), (b, n_second, 3) or None
             primary,
             return_second_coords=True,
             second_coords=secondary,
         )
-        translation = torch.randn_like(primary[:, 0:1, :]) * s_trans
-        primary = primary + translation
+        translation = torch.randn_like(primary[:, 0:1, :]) * s_trans  # (b, 1, 3)
+        primary = primary + translation  # (b, n_atom, 3)
         if secondary is not None:
-            secondary = secondary + translation
+            secondary = secondary + translation  # (b, n_second, 3)
 
+    # (b, n_atom, 3), optionally paired with (b, n_second, 3) or None.
     return (primary, secondary) if return_second_coords else primary
 
 
@@ -185,21 +198,24 @@ class ExponentialMovingAverage:
         decay: float,
         use_num_updates: bool = True,
     ) -> None:
+        # parameters: one independently shaped tensor (...) per trainable parameter.
         if not 0.0 <= decay <= 1.0:
             raise ValueError("decay must lie in [0, 1]")
         self.decay = decay
         self.num_updates: int | None = 0 if use_num_updates else None
-        self.shadow_params = [
+        self.shadow_params = [  # each: same shape as one trainable parameter, (...)
             parameter.clone().detach() for parameter in parameters if parameter.requires_grad
         ]
         self.collected_params: list[Tensor] = []
 
     @staticmethod
     def _trainable(parameters: Iterable[nn.Parameter]) -> list[nn.Parameter]:
+        # Each item is one trainable parameter with an independently varying shape (...).
         return [parameter for parameter in parameters if parameter.requires_grad]
 
     def update(self, parameters: Iterable[nn.Parameter]) -> None:
-        trainable = self._trainable(parameters)
+        # parameters: one independently shaped tensor (...) per trainable parameter.
+        trainable = self._trainable(parameters)  # each: one trainable parameter, (...)
         if len(trainable) != len(self.shadow_params):
             raise ValueError("EMA parameter count changed")
         decay = self.decay
@@ -209,34 +225,40 @@ class ExponentialMovingAverage:
         update_weight = 1.0 - decay
         with torch.no_grad():
             for shadow, parameter in zip(self.shadow_params, trainable, strict=True):
-                shadow.sub_(update_weight * (shadow - parameter))
+                shadow.sub_(update_weight * (shadow - parameter))  # (...) unchanged in place
 
     def compatible(self, parameters: Sequence[Tensor]) -> bool:
         """Return whether parameter count and tensor shapes match the EMA state."""
 
+        # Each shadow and corresponding parameter has an independently varying shape (...).
         return len(self.shadow_params) == len(parameters) and all(
             shadow.shape == parameter.shape
             for shadow, parameter in zip(self.shadow_params, parameters, strict=True)
         )
 
     def copy_to(self, parameters: Iterable[nn.Parameter]) -> None:
-        trainable = self._trainable(parameters)
+        # parameters: one independently shaped tensor (...) per trainable parameter.
+        trainable = self._trainable(parameters)  # each: one trainable parameter, (...)
         if len(trainable) != len(self.shadow_params):
             raise ValueError("EMA parameter count changed")
         for shadow, parameter in zip(self.shadow_params, trainable, strict=True):
-            parameter.data.copy_(shadow.data)
+            parameter.data.copy_(shadow.data)  # (...) unchanged in place
 
     def store(self, parameters: Iterable[nn.Parameter]) -> None:
+        # parameters: one independently shaped tensor (...) per parameter.
+        # Each clone has the same shape (...) as its corresponding parameter.
         self.collected_params = [parameter.clone() for parameter in parameters]
 
     def restore(self, parameters: Iterable[nn.Parameter]) -> None:
-        current = list(parameters)
+        # parameters: one independently shaped tensor (...) per parameter.
+        current = list(parameters)  # each: one parameter, (...)
         if len(current) != len(self.collected_params):
             raise ValueError("stored EMA parameter count changed")
         for collected, parameter in zip(self.collected_params, current, strict=True):
-            parameter.data.copy_(collected.data)
+            parameter.data.copy_(collected.data)  # (...) unchanged in place
 
     def state_dict(self) -> dict[str, Any]:
+        # shadow_params contains independently shaped tensors (...).
         return {
             "decay": self.decay,
             "num_updates": self.num_updates,
@@ -248,10 +270,13 @@ class ExponentialMovingAverage:
         state_dict: Mapping[str, Any],
         device: torch.device | str,
     ) -> None:
+        # state_dict["shadow_params"] contains independently shaped tensors (...).
         self.decay = float(state_dict["decay"])
         updates = state_dict["num_updates"]
         self.num_updates = None if updates is None else int(updates)
+        # Each tensor retains its shape (...).
         self.shadow_params = [tensor.to(device) for tensor in state_dict["shadow_params"]]
 
     def to(self, device: torch.device | str) -> None:
+        # Each shadow parameter retains its independently varying shape (...).
         self.shadow_params = [tensor.to(device) for tensor in self.shadow_params]

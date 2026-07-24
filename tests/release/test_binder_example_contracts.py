@@ -7,8 +7,8 @@ import os
 import subprocess
 import sys
 import textwrap
-import tomllib
 from pathlib import Path
+
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "binder_design_fastplms.py"
@@ -27,30 +27,28 @@ def test_binder_example_has_no_optimized_away_or_private_validation() -> None:
     assert "use_anarcii=True" in source
 
 
-def test_binder_example_uses_project_python_and_dependency_metadata() -> None:
+def test_binder_example_uses_the_binder_dependency_profile() -> None:
     source = EXAMPLE.read_text(encoding="utf-8")
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     guide = GUIDE.read_text(encoding="utf-8")
+    profile = (ROOT / "requirements" / "profiles" / "binder.in").read_text(
+        encoding="utf-8"
+    )
 
     assert "# /// script" not in source
     assert "requires-python" not in source
-    assert project["requires-python"] == ">=3.11,<3.15"
+    assert profile.splitlines() == [
+        "-r ../core.in",
+        "-r ../features/structure.in",
+        "-r ../features/binder.in",
+    ]
     assert "Python 3.11-3.14" in guide
     assert "no standalone PEP 723 dependency block" in guide
     for fragment in (
-        "uv run",
-        "--extra structure",
-        "--extra binder",
-        "python examples/binder_design_fastplms.py",
+        "requirements/profiles/binder.in",
+        "requirements/constraints/validation.txt",
+        "PYTHONPATH=src python examples/binder_design_fastplms.py",
     ):
         assert fragment in guide
-    for fragment in (
-        "--with abnumber",
-        "--with anarcii",
-        "--with pandas",
-        "--with pyarrow",
-    ):
-        assert fragment not in guide
 
 
 def test_binder_validation_survives_python_optimized_mode() -> None:

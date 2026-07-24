@@ -11,14 +11,14 @@ import re
 import shutil
 import sys
 import tempfile
+import numpy as np
+import pytest
 from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, ClassVar
 
-import numpy as np
-import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "fine_tuning.py"
@@ -245,7 +245,10 @@ def test_pair_collator_enforces_longest_first_tokenizer_limit() -> None:
             del seqs_a, seqs_b
             self.kwargs = kwargs
             return {
-                "input_ids": torch.zeros((2, kwargs["max_length"]), dtype=torch.long),
+                "input_ids": torch.zeros(  # (b=2, l=max_length)
+                    (2, kwargs["max_length"]),
+                    dtype=torch.long,
+                ),
                 "attention_mask": torch.ones((2, kwargs["max_length"]), dtype=torch.long),
             }
 
@@ -532,7 +535,7 @@ def test_persisted_hash_scope_covers_full_state_or_only_lora_payload() -> None:
             self.classifier = torch.nn.Linear(2, 1)
             self.lora_A = torch.nn.Parameter(torch.ones(1, 2))
             self.modules_to_save = torch.nn.Linear(2, 1)
-            self.register_buffer("running_state", torch.tensor([3.0]))
+            self.register_buffer("running_state", torch.tensor([3.0]))  # (1,)
 
     model = FakeModel()
     hashes = namespace["_persisted_parameter_hashes"]
@@ -594,13 +597,13 @@ def test_atomic_final_artifact_reload_preserves_trainer_and_held_out_logits(
 
     model = TinyModel().eval()
     with torch.no_grad():
-        model.projection.weight.copy_(torch.tensor([[0.25, -0.5]]))
+        model.projection.weight.copy_(torch.tensor([[0.25, -0.5]]))  # (c=1, d=2)
 
     def collate(rows: list[tuple[torch.Tensor, float]]) -> dict[str, torch.Tensor]:
         inputs, labels = zip(*rows, strict=True)
         return {
             "input_ids": torch.stack(inputs),
-            "labels": torch.tensor(labels),
+            "labels": torch.tensor(labels),  # (b,)
         }
 
     class TinyTrainer:
@@ -612,7 +615,7 @@ def test_atomic_final_artifact_reload_preserves_trainer_and_held_out_logits(
         def predict(self, rows: Any) -> Any:
             batch = collate(rows)
             with torch.inference_mode():
-                logits = self.model(**batch).logits.numpy()
+                logits = self.model(**batch).logits.numpy()  # (b, c)
             return SimpleNamespace(predictions=logits)
 
         def save_model(self, directory: str | Path) -> None:
@@ -702,18 +705,18 @@ def test_lora_adapter_save_reload_preserves_trained_classifier_logits(
             parameter.add_(0.25)
 
     inputs = {
-        "input_ids": torch.tensor([[0, 3, 4, 2]], dtype=torch.long),
+        "input_ids": torch.tensor([[0, 3, 4, 2]], dtype=torch.long),  # (b=1, l=4)
         "attention_mask": torch.ones((1, 4), dtype=torch.long),
     }
     adapter.eval()
     with torch.inference_mode():
-        expected = adapter(**inputs).logits
+        expected = adapter(**inputs).logits  # (b, c)
     adapter.save_pretrained(tmp_path)
 
     restored_base = FastEsmForSequenceClassification(config)
     restored_base.load_state_dict(base_state)
     restored = peft.PeftModel.from_pretrained(restored_base, tmp_path).eval()
     with torch.inference_mode():
-        observed = restored(**inputs).logits
+        observed = restored(**inputs).logits  # (b, c)
 
     torch.testing.assert_close(observed, expected, rtol=0.0, atol=0.0)

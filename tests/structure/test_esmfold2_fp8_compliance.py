@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import gc
 import importlib
-
 import pytest
 import torch
 
 from fastplms.registry import ModelSpec, get_model_registry
+
 
 SEQUENCES = (
     "MSTNPKPQRKTKRNTNR",

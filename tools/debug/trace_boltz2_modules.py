@@ -5,15 +5,15 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import torch
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
-
-import torch
 from safetensors.torch import load_file, save_file
 
 from tests.structure.support import boltz2_bundle
+
 
 _MSA_LAYER_PATHS = tuple(
     f"msa_module.layers.{layer_index}.{module_name}"
@@ -79,7 +79,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def _tensor_leaves(value: Any, path: str = "value") -> dict[str, torch.Tensor]:
     if torch.is_tensor(value):
-        return {path: value.detach().cpu().contiguous().clone()}
+        return {path: value.detach().cpu().contiguous().clone()}  # value: (...)
     if isinstance(value, Mapping):
         leaves: dict[str, torch.Tensor] = {}
         for key in sorted(value, key=str):
@@ -107,13 +107,15 @@ def _register_trace_hooks(
             continue
 
         for parameter_name, parameter in module.named_parameters(recurse=False):
+            # parameter: (...)
             key = f"{module_path}__parameter__{parameter_name}".replace(".", "__")
             if key not in traces:
-                traces[key] = parameter.detach().cpu().contiguous().clone()
+                traces[key] = parameter.detach().cpu().contiguous().clone()  # (...)
         for buffer_name, buffer in module.named_buffers(recurse=False):
+            # buffer: (...)
             key = f"{module_path}__buffer__{buffer_name}".replace(".", "__")
             if key not in traces:
-                traces[key] = buffer.detach().cpu().contiguous().clone()
+                traces[key] = buffer.detach().cpu().contiguous().clone()  # (...)
 
         def hook(
             _module: torch.nn.Module,
@@ -130,8 +132,9 @@ def _register_trace_hooks(
                 **_tensor_leaves(args, "args"),
                 **_tensor_leaves(kwargs, "kwargs"),
                 **_tensor_leaves(output, "output"),
-            }
+            }  # values[path]: (...)
             for value_path, X in values.items():
+                # X: (...)
                 key = f"{prefix}__{value_path}".replace(".", "__")
                 if key in traces:
                     raise RuntimeError(f"Duplicate trace tensor key: {key}")
@@ -152,10 +155,12 @@ def _load(
         )
         checkpoint = boltz2_bundle._download_official_file(request, "boltz2_conf.ckpt")
         molecule_dir = boltz2_bundle._extract_molecules(archive, str(request["sequence"]))
-        features = boltz2_bundle._prepare_reference_features(request, molecule_dir)
+        features = boltz2_bundle._prepare_reference_features(  # values: (...)
+            request, molecule_dir
+        )
         model = boltz2_bundle._load_reference_model(request, checkpoint)
     else:
-        features = boltz2_bundle._prepare_candidate_features(request)
+        features = boltz2_bundle._prepare_candidate_features(request)  # values: (...)
         model = boltz2_bundle._load_candidate_model(request)
     return model, features
 
@@ -173,21 +178,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         / f"{boltz2_bundle.model_id}.json"
     )
     request = boltz2_bundle.load_request(request_path)
-    model, features = _load(producer, request)
+    model, features = _load(producer, request)  # features values: (...)
     if arguments.feature_bundle is not None:
-        stored = load_file(arguments.feature_bundle, device="cpu")
+        stored = load_file(arguments.feature_bundle, device="cpu")  # values: (...)
         features = {
-            name.removeprefix("feature__"): X
+            name.removeprefix("feature__"): X  # (...)
             for name, X in stored.items()
             if name.startswith("feature__")
-        }
+        }  # values: (...)
         if set(features) != set(boltz2_bundle._feature_names):
             raise RuntimeError("Feature override does not match the Boltz2 contract.")
     core = model.core if hasattr(model, "core") else model
     traces: dict[str, torch.Tensor] = {}
     handles = _register_trace_hooks(core, traces)
     try:
-        bundle = boltz2_bundle._run_model(model, features, request)
+        bundle = boltz2_bundle._run_model(model, features, request)  # values: (...)
     finally:
         for handle in handles:
             handle.remove()
@@ -196,8 +201,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         torch.cuda.empty_cache()
 
     for name, X in bundle.items():
+        # X: (...)
         if name.startswith(("noise__", "output__")):
-            traces[f"bundle__{name}"] = X.detach().cpu().contiguous().clone()
+            traces[f"bundle__{name}"] = X.detach().cpu().contiguous().clone()  # (...)
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     save_file(dict(sorted(traces.items())), arguments.output)
     metadata = {

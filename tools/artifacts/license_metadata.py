@@ -7,10 +7,10 @@ import re
 from collections.abc import Mapping
 from typing import cast
 from urllib.parse import urlparse
-
 from huggingface_hub import ModelCard
 
 from fastplms.registry import HUB_LICENSE_IDENTIFIERS, ModelFamily
+
 
 _HUB_LICENSE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9.-]*$")
 

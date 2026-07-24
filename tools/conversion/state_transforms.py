@@ -9,12 +9,15 @@ repository. Artifact assembly and safetensors sharding remain centralized in
 from __future__ import annotations
 
 import re
+import torch
 from collections.abc import Callable, Iterable, Mapping
 
-import torch
 
 StateDict = dict[str, torch.Tensor]
 Transform = Callable[[Mapping[str, torch.Tensor], frozenset[str] | None], StateDict]
+
+# Checkpoint entries are heterogeneous tensors. ``(...)`` denotes the
+# arbitrary rank retained by every value unless a transform changes only dtype.
 
 
 class StateTransformError(RuntimeError):
@@ -24,7 +27,7 @@ class StateTransformError(RuntimeError):
 def _clone_tensor(key: str, value: object) -> torch.Tensor:
     if not torch.is_tensor(value):
         raise StateTransformError(f"State entry {key!r} is not a tensor.")
-    return value.detach().cpu().clone()
+    return value.detach().cpu().clone()  # (...)
 
 
 def _validate_expected(state: StateDict, expected_keys: frozenset[str] | None) -> None:
@@ -45,6 +48,7 @@ def _map_state(
     key_mapper: Callable[[str], str | None],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
+    # state[key]: (...)
     if not state:
         raise StateTransformError("A checkpoint state dictionary cannot be empty.")
     transformed: StateDict = {}
@@ -56,7 +60,7 @@ def _map_state(
             continue
         if mapped in transformed:
             raise StateTransformError(f"State-key collision while mapping {key!r} to {mapped!r}.")
-        transformed[mapped] = _clone_tensor(key, state[key])
+        transformed[mapped] = _clone_tensor(key, state[key])  # (...)
     _validate_expected(transformed, expected_keys)
     return transformed
 
@@ -73,9 +77,10 @@ def _cast_floating(
     expected_keys: frozenset[str] | None,
     dtype: torch.dtype,
 ) -> StateDict:
-    transformed = _identity(state, expected_keys)
+    # state[key]: (...)
+    transformed = _identity(state, expected_keys)  # transformed[key]: (...)
     return {
-        key: value.to(dtype=dtype) if value.is_floating_point() else value
+        key: value.to(dtype=dtype) if value.is_floating_point() else value  # (...)
         for key, value in transformed.items()
     }
 
@@ -97,6 +102,7 @@ def _esm2(
 ) -> StateDict:
     """Map pinned fair-esm ESM2 names to the canonical FastPLMs schema."""
 
+    # state[key]: (...)
     if not state:
         raise StateTransformError("A checkpoint state dictionary cannot be empty.")
     keys = frozenset(state)
@@ -118,7 +124,7 @@ def _esm2(
             raise StateTransformError(
                 f"State-key collision while mapping {source_key!r} to {target_key!r}."
             )
-        transformed[target_key] = _clone_tensor(source_key, state[source_key])
+        transformed[target_key] = _clone_tensor(source_key, state[source_key])  # (...)
 
     projection_names = {"q_proj": "query", "k_proj": "key", "v_proj": "value"}
     for key in sorted(state):
@@ -205,13 +211,14 @@ def _esm3(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
-    transformed = _map_state(
+    # state[key]: (...)
+    transformed = _map_state(  # transformed[key]: (...)
         state,
         lambda key: key if key.startswith("esm3.") else f"esm3.{key}",
         expected_keys,
     )
     return {
-        key: value.to(dtype=torch.float32) if value.is_floating_point() else value
+        key: value.to(dtype=torch.float32) if value.is_floating_point() else value  # (...)
         for key, value in transformed.items()
     }
 
@@ -254,6 +261,7 @@ def _boltz2(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
+    # state[key]: (...)
     if expected_keys is None:
         raise StateTransformError(
             "boltz2_inference_core_v1 requires the expected FastPLMs core keys."
@@ -279,7 +287,7 @@ def _boltz2(
             raise StateTransformError(
                 f"State-key collision while mapping {source_key!r} to {canonical!r}."
             )
-        transformed[canonical] = _clone_tensor(source_key, state[source_key])
+        transformed[canonical] = _clone_tensor(source_key, state[source_key])  # (...)
     if unsupported:
         raise StateTransformError(
             f"Boltz2 checkpoint contains undeclared non-inference parameters: {unsupported[:20]}."
@@ -305,6 +313,7 @@ def _esmfold(
 ) -> StateDict:
     """Map native Meta ESMFold and prior canonical mirrors to package state."""
 
+    # state[key]: (...)
     if not state:
         raise StateTransformError("ESMFold checkpoint state cannot be empty.")
     canonical = any(key.startswith("esm.encoder.") for key in state)
@@ -316,7 +325,7 @@ def _esmfold(
                 if key not in _ESMFOLD_DERIVED_BUFFERS
                 and not key.startswith(("mlm_head.", "esm.contact_head."))
             )
-        transformed = _map_state(
+        transformed = _map_state(  # transformed[key]: (...)
             state,
             lambda key: (
                 None
@@ -338,14 +347,14 @@ def _esmfold(
             inner = key.removeprefix("esm.")
             if inner.startswith(("lm_head.", "contact_head.")):
                 continue
-            native_esm[inner] = _clone_tensor(key, state[key])
+            native_esm[inner] = _clone_tensor(key, state[key])  # (...)
             continue
-        folding[key] = _clone_tensor(key, state[key])
-    mapped_esm = _esm2(native_esm, None)
+        folding[key] = _clone_tensor(key, state[key])  # (...)
+    mapped_esm = _esm2(native_esm, None)  # mapped_esm[key]: (...)
     overlap = sorted(set(folding).intersection(mapped_esm))
     if overlap:
         raise StateTransformError(f"ESMFold state-key collision: {overlap[:20]}.")
-    transformed = {**folding, **mapped_esm}
+    transformed = {**folding, **mapped_esm}  # transformed[key]: (...)
     _validate_expected(transformed, expected_keys)
     return transformed
 
@@ -378,6 +387,7 @@ def apply_state_transform(
 ) -> StateDict:
     """Apply one manifest-declared transform without mutating ``state``."""
 
+    # state[key]: (...)
     try:
         transform = _TRANSFORMS[transform_id]
     except KeyError as error:

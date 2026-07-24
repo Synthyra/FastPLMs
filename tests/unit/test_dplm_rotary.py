@@ -22,7 +22,7 @@ def test_dplm_initializes_the_checkpoint_compatible_rotary_buffer() -> None:
 
     assert isinstance(attention.rotary_embeddings, RotaryEmbedding)
     assert set(attention.rotary_embeddings.state_dict()) == {"inv_freq"}
-    expected = 1.0 / (
+    expected = 1.0 / (  # (d_h / 2=8,)
         10_000
         ** (
             torch.arange(0, attention.attention_head_size, 2).float()
@@ -43,11 +43,11 @@ def test_dplm_rotary_forward_is_finite() -> None:
         attn_backend="sdpa",
     )
     attention = ModifiedEsmSelfAttention(config).eval()
-    hidden_states = torch.randn(2, 11, config.hidden_size)
+    hidden_states = torch.randn(2, 11, config.hidden_size)  # (b=2, l=11, d=64)
     output, weights, s_max = attention(
         hidden_states,
-        attention_mask_2d=torch.ones(2, 11, dtype=torch.bool),
-    )
+        attention_mask_2d=torch.ones(2, 11, dtype=torch.bool),  # (b=2, l=11)
+    )  # output: (b=2, l=11, d=64); weights: None; s_max: None
 
     assert output.shape == hidden_states.shape
     assert torch.isfinite(output).all()

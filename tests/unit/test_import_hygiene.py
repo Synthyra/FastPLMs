@@ -7,6 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+
 MODEL_MODULES = (
     "fastplms.models.ankh.modeling_ankh",
     "fastplms.models.boltz.modeling_boltz2",

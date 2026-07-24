@@ -2,8 +2,8 @@
 
 `examples/binder_design_fastplms.py` is a research workflow that
 optimizes a soft binder sequence against ESMFold2 structural objectives and an
-ESM++ sequence prior. It is an example, not a package runtime service and not a
-claim that a designed sequence binds experimentally.
+ESM++ sequence prior. It is a source-level example, not a published model
+service or a claim that a designed sequence binds experimentally.
 
 ## Input, transformation, and output
 
@@ -33,23 +33,23 @@ sequence or rounded downward, so dense binder batches cannot truncate atoms.
 
 ## Run
 
-Run inside the project environment with the `structure` extra and the example's
-analysis dependencies. The published workflow requires Python 3.11-3.14,
+Run from a source checkout with the `binder` dependency profile. The published
+workflow requires Python 3.11-3.14,
 PyTorch 2.13, Transformers 5.13, verified ESMFold2 runtime assets, and CUDA. The
 current release evidence target is the exact containerized Linux aarch64
 environment on the NVIDIA GH200 workstation. CPU-only, x86-64, Windows, macOS,
 H100, and H200 binder runs do not substitute for that evidence.
 
-The script intentionally has no standalone PEP 723 dependency block. The
-project's `pyproject.toml` and `uv.lock` remain authoritative. The separate
-`binder` extra locks AbNumber 0.4.4, its ANARCII 2.0.8 backend, pandas, and
-PyArrow without adding them to the general structure installation:
+The script intentionally has no standalone PEP 723 dependency block.
+`requirements/profiles/binder.in` composes the core, structure, and bounded
+binder-design dependencies. Its binder feature pins AbNumber 0.4.4 and ANARCII
+2.0.8, plus pandas and PyArrow:
 
 ```bash
-uv run --frozen \
-  --extra structure \
-  --extra binder \
-  python examples/binder_design_fastplms.py \
+uv pip install \
+  -r requirements/profiles/binder.in \
+  -c requirements/constraints/validation.txt
+PYTHONPATH=src python examples/binder_design_fastplms.py \
   --target-name pd-l1 \
   --binder-name minibinder \
   --batch-size 4 \
@@ -81,7 +81,7 @@ Custom repositories require an explicit immutable commit for every model
 (replace the example 40-character values below):
 
 ```bash
-python examples/binder_design_fastplms.py \
+PYTHONPATH=src python examples/binder_design_fastplms.py \
   --inversion-model lab/esmfold2-inversion \
   --critic-model lab/esmfold2-critic \
   --lm-model lab/esmplusplus \

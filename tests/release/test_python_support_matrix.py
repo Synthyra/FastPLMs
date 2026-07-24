@@ -1,44 +1,35 @@
-"""Contracts for the non-canonical Python package-support matrix."""
+"""Contracts for the non-canonical Python source-support matrix."""
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
 
 from tools.remote.python_matrix import (
     CANONICAL_GPU_PYTHON,
-    LOCKED_RUNTIME_REQUIREMENTS,
     OFFLINE_SMOKE_ENVIRONMENT,
     PYTHON_SUPPORT_VERSIONS,
+    build_dependency_install_command,
     build_smoke_environment,
-    build_wheel_install_command,
 )
 from tools.remote.run import SUITES
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_python_support_metadata_matches_the_executed_matrix() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    classifiers = set(project["classifiers"])
-
-    assert project["requires-python"] == ">=3.11,<3.15"
+def test_python_support_versions_match_the_executed_matrix() -> None:
     assert CANONICAL_GPU_PYTHON == "3.12"
     assert PYTHON_SUPPORT_VERSIONS == ("3.11", "3.13", "3.14")
     assert (ROOT / ".python-version").read_text(encoding="utf-8").strip() == "3.12.3"
-    assert {
-        f"Programming Language :: Python :: {python}" for python in ("3.11", "3.12", "3.13", "3.14")
-    }.issubset(classifiers)
 
 
-def test_matrix_installs_one_built_wheel_with_the_locked_cpu_runtime() -> None:
-    command = build_wheel_install_command(
+def test_matrix_installs_declared_source_dependencies_with_cpu_constraints() -> None:
+    command = build_dependency_install_command(
         "uv",
         Path("/environment/bin/python"),
-        Path("/wheel/fastplms-1.0.0-py3-none-any.whl"),
+        ROOT,
     )
 
-    assert LOCKED_RUNTIME_REQUIREMENTS == ("torch==2.13.0", "transformers==5.13.0")
     assert command == (
         "uv",
         "pip",
@@ -46,9 +37,10 @@ def test_matrix_installs_one_built_wheel_with_the_locked_cpu_runtime() -> None:
         "--python",
         "/environment/bin/python",
         "--torch-backend=cpu",
-        "torch==2.13.0",
-        "transformers==5.13.0",
-        "/wheel/fastplms-1.0.0-py3-none-any.whl",
+        "-r",
+        str(ROOT / "requirements/profiles/runtime.in"),
+        "-c",
+        str(ROOT / "requirements/constraints/validation.txt"),
     )
 
 
@@ -71,7 +63,7 @@ def test_matrix_smoke_is_offline_cpu_only_and_source_isolated() -> None:
     assert set(OFFLINE_SMOKE_ENVIRONMENT).issubset(environment)
 
 
-def test_remote_matrix_runs_members_in_parallel_without_raw_subprocess_logs() -> None:
+def test_remote_matrix_runs_source_members_in_parallel_without_raw_logs() -> None:
     source = (ROOT / "tools/remote/python_matrix.py").read_text(encoding="utf-8")
 
     assert "ThreadPoolExecutor" in source
@@ -79,9 +71,11 @@ def test_remote_matrix_runs_members_in_parallel_without_raw_subprocess_logs() ->
     assert "_output_fingerprint" in source
     assert '"stdout": _output_fingerprint' in source
     assert '"stderr": _output_fingerprint' in source
-    assert 'shared_stage = "wheel-build"' in source
-    assert 'shared_stage = "wheel-inventory"' in source
+    assert 'stage = "dependency-install"' in source
+    assert 'stage = "offline-cpu-source-smoke"' in source
     assert 'str(python),\n                "-I",' in source
+    assert "uv build" not in source
+    assert ".whl" not in source
 
 
 def test_remote_matrix_reuses_the_single_candidate_image() -> None:

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import torch
+from pathlib import Path
 from transformers.modeling_outputs import ModelOutput
 
 from fastplms.models.esm2.modeling_fastesm import (
@@ -45,8 +44,8 @@ def _esm2_config() -> FastEsmConfig:
 
 
 def _inputs() -> tuple[torch.Tensor, torch.Tensor]:
-    input_ids = torch.tensor([[0, 3, 4, 2, 1], [0, 6, 2, 1, 1]])
-    return input_ids, input_ids.ne(1)
+    input_ids = torch.tensor([[0, 3, 4, 2, 1], [0, 6, 2, 1, 1]])  # (b=2, l=5)
+    return input_ids, input_ids.ne(1)  # (b, l), (b, l)
 
 
 def _dplm_config_values(vocab_size: int) -> dict[str, object]:
@@ -121,7 +120,12 @@ def test_dplm2_multimodal_wrappers_require_types_with_precomputed_embeddings(
         )
 
 
-def _assert_nested_output_close(actual, expected, *, exact: bool = False) -> None:
+def _assert_nested_output_close(
+    actual: object,
+    expected: object,
+    *,
+    exact: bool = False,
+) -> None:
     if torch.is_tensor(expected):
         assert torch.is_tensor(actual)
         if exact:
@@ -157,9 +161,12 @@ def _assert_nested_output_close(actual, expected, *, exact: bool = False) -> Non
     assert actual == expected
 
 
-def _assert_exact_state_round_trip(model, reloaded) -> None:
-    source_state = model.state_dict()
-    restored_state = reloaded.state_dict()
+def _assert_exact_state_round_trip(
+    model: torch.nn.Module,
+    reloaded: torch.nn.Module,
+) -> None:
+    source_state = model.state_dict()  # parameter name -> checkpoint-shaped tensor
+    restored_state = reloaded.state_dict()  # parameter name -> checkpoint-shaped tensor
     assert set(restored_state) == set(source_state)
     for name, tensor in source_state.items():
         torch.testing.assert_close(
@@ -170,7 +177,11 @@ def _assert_exact_state_round_trip(model, reloaded) -> None:
         )
 
 
-def _assert_exact_output_round_trip(model, reloaded, **model_inputs) -> None:
+def _assert_exact_output_round_trip(
+    model: torch.nn.Module,
+    reloaded: torch.nn.Module,
+    **model_inputs: torch.Tensor,
+) -> None:
     forward_controls = {
         "output_attentions": True,
         "output_hidden_states": True,
@@ -480,8 +491,8 @@ def test_dplm_advertised_models_forward_loss_backward_resize_and_reload(
         return_dict=True,
     )
     model = model_class(config).eval()
-    input_ids = torch.tensor([[0, 6, 7, 2, 1], [0, 8, 2, 1, 1]])
-    attention_mask = input_ids.ne(1)
+    input_ids = torch.tensor([[0, 6, 7, 2, 1], [0, 8, 2, 1, 1]])  # (b=2, l=5)
+    attention_mask = input_ids.ne(1)  # (b, l)
     structured = model(
         input_ids=input_ids,
         attention_mask=attention_mask,

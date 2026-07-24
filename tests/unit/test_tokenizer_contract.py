@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import json
 import shutil
+import pytest
+import torch
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
-
-import pytest
-import torch
-from transformers import AutoModelForMaskedLM, AutoTokenizer, EsmTokenizer
+from transformers import AutoModelForMaskedLM, AutoTokenizer, EsmTokenizer, PretrainedConfig
 
 from fastplms.models.ankh.modeling_ankh import (
     FastAnkhConfig,
@@ -45,6 +45,7 @@ from fastplms.models.esm3.modeling_esm3 import (
 )
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import EsmSequenceTokenizer
 from tests.conftest import CANONICAL_AAS, FULL_MODEL_REGISTRY, mark_by_size
+
 
 TOKENIZER_REFERENCE_KEYS = [
     key
@@ -210,7 +211,10 @@ def test_esm_tokenizer_loaders_reject_missing_checkpoint_provenance(
         model_class.tokenizer.fget(owner)
 
 
-def _tiny_esm_family_config(config_class: type, vocab_size: int):
+def _tiny_esm_family_config(
+    config_class: type[PretrainedConfig],
+    vocab_size: int,
+) -> PretrainedConfig:
     kwargs = {
         "vocab_size": vocab_size,
         "hidden_size": 8,
@@ -359,7 +363,7 @@ def _tiny_ankh_config(
     return config
 
 
-def _fast_tokenizer(config: dict):
+def _fast_tokenizer(config: dict[str, Any]) -> Any:
     if config["model_type"] == "ANKH":
         # ANKH artifacts are built from the manifest's pinned official source,
         # including its byte-exact tokenizer assets.
@@ -380,7 +384,7 @@ def _fast_tokenizer(config: dict):
     )
 
 
-def _reference_tokenizer(config: dict):
+def _reference_tokenizer(config: dict[str, Any]) -> Any:
     if config["model_type"] == "ANKH":
         return _load_ankh_tokenizer(
             _tiny_ankh_config(config["official_path"], config["official_revision"])
@@ -399,15 +403,15 @@ def _reference_tokenizer(config: dict):
     )
 
 
-def _token_ids(tokenizer, sequence: str) -> torch.Tensor:
+def _token_ids(tokenizer: Any, sequence: str) -> torch.Tensor:
     encoded = tokenizer(
         sequence,
         return_tensors="pt",
     )
-    return encoded["input_ids"]
+    return encoded["input_ids"]  # (b=1, l)
 
 
-def _special_token_ids(tokenizer) -> dict[str, int | None]:
+def _special_token_ids(tokenizer: Any) -> dict[str, int | None]:
     return {
         "pad_token_id": tokenizer.pad_token_id,
         "cls_token_id": tokenizer.cls_token_id,

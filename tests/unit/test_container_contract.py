@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import re
-import tomllib
 from pathlib import Path
 
 from fastplms.registry import get_model_registry
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = ROOT / "docker" / "Dockerfile"
 BAKE_FILE = ROOT / "docker" / "docker-bake.hcl"
 COMPOSE_FILE = ROOT / "docker" / "compose.yaml"
 DOCKERIGNORE = ROOT / ".dockerignore"
+REQUIREMENTS = ROOT / "requirements"
 
 
 def _stages(text: str) -> dict[str, str]:
@@ -236,30 +237,33 @@ def test_reference_protocol_only_copies_existing_repository_paths() -> None:
     assert "src/fastplms" not in protocol
 
 
-def test_candidate_dependencies_are_cached_before_project_source() -> None:
+def test_candidate_dependencies_are_cached_before_source() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    metadata = _stage_section(dockerfile, "project-metadata")
-    assert "COPY pyproject.toml uv.lock kernels.lock ./" in metadata
-    assert "COPY src" not in metadata
-    assert "COPY tests" not in metadata
+    dependency_files = _stage_section(dockerfile, "dependency-files")
+    assert "COPY requirements ./requirements" in dependency_files
+    assert "COPY kernels.lock ./" in dependency_files
+    assert "COPY src" not in dependency_files
+    assert "COPY tests" not in dependency_files
 
-    for dependencies, final in (
-        ("source-dependencies", "source"),
-        ("runtime-dependencies", "runtime"),
-        ("candidate-dependencies", "candidate"),
-        ("candidate-structure-dependencies", "candidate-structure"),
-        ("candidate-fp8-dependencies", "candidate-fp8"),
-    ):
+    expected_profiles = {
+        "source-dependencies": "runtime.in",
+        "candidate-dependencies": "candidate.in",
+        "candidate-structure-dependencies": "candidate-structure.in",
+        "candidate-fp8-dependencies": "candidate-fp8.in",
+    }
+    for dependencies, profile in expected_profiles.items():
         dependency_section = _stage_section(dockerfile, dependencies)
-        assert "uv sync --frozen" in dependency_section
-        assert "--no-install-project" in dependency_section
+        assert "uv pip install --python /opt/venv/bin/python" in dependency_section
+        assert f"--requirement requirements/profiles/{profile}" in dependency_section
+        assert "--constraint requirements/constraints/validation.txt" in dependency_section
         assert "COPY src" not in dependency_section
         assert "COPY tests" not in dependency_section
 
+    for final in ("source", "runtime", "candidate", "candidate-structure", "candidate-fp8"):
         final_section = _stage_section(dockerfile, final)
-        source_copy = final_section.index("COPY src ./src")
-        project_sync = final_section.index("uv sync --frozen", source_copy)
-        assert "--no-install-project" not in final_section[project_sync:]
+        assert "COPY src ./src" in final_section
+        assert "uv pip install" not in final_section
+        assert "PYTHONPATH=" in final_section
 
 
 def test_reference_protocol_and_legal_text_do_not_invalidate_dependency_layers() -> None:
@@ -299,16 +303,18 @@ def test_runtime_is_one_fail_closed_parameterized_stage() -> None:
         "runtime-dependencies",
         "runtime",
     }
-    for stage in ("runtime-dependencies", "runtime"):
-        runtime = sections[stage]
-        assert "ARG FASTPLMS_RUNTIME_PROFILE=core" in runtime
-        assert "core)" in runtime
-        assert "esmfold2-fp8)" in runtime
-        assert "--extra structure --extra fp8" in runtime
-        assert "Unsupported FastPLMs runtime profile" in runtime
-        assert "exit 64" in runtime
-    assert "--no-install-project" in sections["runtime-dependencies"]
-    assert "--no-install-project" not in sections["runtime"]
+    runtime_dependencies = sections["runtime-dependencies"]
+    assert "ARG FASTPLMS_RUNTIME_PROFILE=core" in runtime_dependencies
+    assert "core)" in runtime_dependencies
+    assert "requirements/profiles/runtime.in" in runtime_dependencies
+    assert "esmfold2-fp8)" in runtime_dependencies
+    assert "requirements/profiles/runtime-fp8.in" in runtime_dependencies
+    assert "Unsupported FastPLMs runtime profile" in runtime_dependencies
+    assert "exit 64" in runtime_dependencies
+
+    runtime = sections["runtime"]
+    assert "uv pip install" not in runtime
+    assert "ENV PYTHONPATH=/opt/fastplms/src" in runtime
 
     bake = BAKE_FILE.read_text(encoding="utf-8")
     runtime_targets = {
@@ -339,44 +345,63 @@ def test_fp8_dependency_is_confined_to_fp8_container_targets() -> None:
             flags=re.MULTILINE | re.IGNORECASE,
         )
     }
-    assert "--extra fp8" in sections["runtime"]
-    assert "--extra fp8" in sections["candidate-fp8"]
-    for stage in ("candidate", "candidate-structure", "candidate-artifact"):
-        assert "--extra fp8" not in sections[stage]
+    assert "requirements/profiles/runtime-fp8.in" in sections["runtime-dependencies"]
+    assert "requirements/profiles/candidate-fp8.in" in sections[
+        "candidate-fp8-dependencies"
+    ]
+    assert "requirements/overrides/cuda.txt" in sections["runtime-dependencies"]
+    assert "requirements/overrides/cuda.txt" in sections["candidate-fp8-dependencies"]
+    for stage in (
+        "source-dependencies",
+        "candidate-dependencies",
+        "candidate-structure-dependencies",
+        "candidate-artifact",
+    ):
+        assert "profiles/runtime-fp8.in" not in sections[stage]
+        assert "profiles/candidate-fp8.in" not in sections[stage]
+        assert "requirements/overrides/cuda.txt" not in sections[stage]
 
 
 def test_cueq_dependency_is_confined_to_structure_validation_targets() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    sections = {
-        name: section
-        for name, section in re.findall(
-            r"^FROM\s+\S+\s+AS\s+(\S+)\s*$([\s\S]*?)(?=^FROM\s+|\Z)",
-            dockerfile,
-            flags=re.MULTILINE | re.IGNORECASE,
-        )
-    }
-    for stage in ("candidate-structure", "candidate-fp8"):
-        assert "--extra cueq" in sections[stage]
-    for stage in ("runtime", "candidate", "candidate-artifact"):
-        assert "--extra cueq" not in sections[stage]
+    assert "requirements/profiles/candidate-structure.in" in _stage_section(
+        dockerfile, "candidate-structure-dependencies"
+    )
+    assert "requirements/profiles/candidate-fp8.in" in _stage_section(
+        dockerfile, "candidate-fp8-dependencies"
+    )
+
+    structure_profile = (
+        REQUIREMENTS / "profiles" / "candidate-structure.in"
+    ).read_text(encoding="utf-8")
+    fp8_profile = (REQUIREMENTS / "profiles" / "candidate-fp8.in").read_text(
+        encoding="utf-8"
+    )
+    assert "-r ../features/cueq.in" in structure_profile
+    assert "-r candidate-structure.in" in fp8_profile
+
+    for profile in ("runtime.in", "candidate.in", "artifact.in"):
+        profile_text = (REQUIREMENTS / "profiles" / profile).read_text(encoding="utf-8")
+        assert "cueq.in" not in profile_text
 
 
 def test_kernel_lock_is_available_to_source_and_artifact_images() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    assert "COPY pyproject.toml uv.lock kernels.lock ./" in _stage_section(
-        dockerfile, "project-metadata"
-    )
-    assert "COPY pyproject.toml uv.lock kernels.lock README.md LICENSE ./" in _stage_section(
-        dockerfile, "candidate-artifact"
-    )
+    assert "COPY kernels.lock ./" in _stage_section(dockerfile, "dependency-files")
+    assert "FROM dependency-files AS candidate-artifact" in dockerfile
     assert "!kernels.lock" in DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
+    assert "!requirements/" in DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
 
 
-def test_candidate_validation_extra_supports_transformers_device_map() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    dev = project["project"]["optional-dependencies"]["dev"]
+def test_candidate_profile_supports_transformers_device_map() -> None:
+    dev = (REQUIREMENTS / "features" / "dev.in").read_text(encoding="utf-8").splitlines()
     assert "accelerate>=1.10,<2" in dev
 
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
-    assert "--extra dev" in _stage_section(dockerfile, "candidate-dependencies")
-    assert "--extra dev" in _stage_section(dockerfile, "candidate")
+    candidate_profile = (REQUIREMENTS / "profiles" / "candidate.in").read_text(
+        encoding="utf-8"
+    )
+    assert "-r ../features/dev.in" in candidate_profile
+    assert "requirements/profiles/candidate.in" in _stage_section(
+        dockerfile, "candidate-dependencies"
+    )

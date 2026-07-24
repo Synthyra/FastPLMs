@@ -13,6 +13,7 @@ from tools.remote.reference_source_attestation import (
     verify_reference_source,
 )
 
+
 BIOHUB_ESM_REVISION = "82ee35553d39169d678f784c8d3f8712ffd7d2c4"
 BIOHUB_ESM_TREE_SHA256 = (
     "c5489f1fc58de200978803de2c38e1a78f769cb183a2ee90be833f0f4a0212e8"

@@ -1,7 +1,6 @@
-from types import SimpleNamespace
-
 import pytest
 import torch.nn as nn
+from types import SimpleNamespace
 
 from tests.parity.support.semantic_config import SEMANTIC_PATHS, semantic_config
 

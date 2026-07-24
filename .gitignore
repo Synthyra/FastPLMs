@@ -8,7 +8,6 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
-*.egg-info/
 
 # Build and run outputs
 build/

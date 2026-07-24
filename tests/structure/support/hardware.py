@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+
 HOPPER_SM90_CAPABILITY = (9, 0)
 HOPPER_PRODUCT_NAMES = ("H100", "H200", "GH200")
 _HOPPER_PRODUCT_PATTERN = re.compile(r"(?<![A-Z0-9])(GH200|H200|H100)(?![A-Z0-9])")

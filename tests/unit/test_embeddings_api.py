@@ -4,11 +4,10 @@ import hashlib
 import json
 import sqlite3
 import struct
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 import torch
+from pathlib import Path
+from types import SimpleNamespace
 from torch import nn
 
 from fastplms.embeddings import (
@@ -201,7 +200,7 @@ def test_bounded_length_bucketing_restores_input_order() -> None:
     assert result.metadata["batching"]["ordering"] == ("bounded-length-bucketed-stable-output")
 
 
-def test_invalid_storage_and_pooling_fail_before_input_consumption(tmp_path) -> None:
+def test_invalid_storage_and_pooling_fail_before_input_consumption(tmp_path: Path) -> None:
     consumed = False
 
     def inputs():
@@ -311,7 +310,10 @@ def test_full_embeddings_contain_biological_residues_only() -> None:
 
 
 @pytest.mark.parametrize("format", ("safetensors", "sqlite"))
-def test_all_hidden_state_embeddings_trim_token_axis_and_round_trip(tmp_path, format: str) -> None:
+def test_all_hidden_state_embeddings_trim_token_axis_and_round_trip(
+    tmp_path: Path,
+    format: str,
+) -> None:
     output = tmp_path / ("all-states.sqlite" if format == "sqlite" else "all-states")
     result = embed_dataset(
         SyntheticAllStatesModel(),
@@ -365,7 +367,9 @@ def test_embedding_fingerprint_records_loaded_esmc_identity() -> None:
     assert changed.metadata["run_fingerprint"] != result.metadata["run_fingerprint"]
 
 
-def test_embedding_fingerprint_binds_persisted_parameters_and_buffers(tmp_path) -> None:
+def test_embedding_fingerprint_binds_persisted_parameters_and_buffers(
+    tmp_path: Path,
+) -> None:
     model = SyntheticEmbeddingModel()
     model.register_buffer("running_value", torch.tensor([3.0]))
     initial = embed_dataset(model, ["ACD"], output=tmp_path / "initial")
@@ -389,7 +393,9 @@ def test_embedding_fingerprint_binds_persisted_parameters_and_buffers(tmp_path) 
     assert initial.metadata["model_state_fingerprint_source"] == "computed"
 
 
-def test_model_state_fingerprint_rehashes_data_and_storage_alias_mutations(tmp_path) -> None:
+def test_model_state_fingerprint_rehashes_data_and_storage_alias_mutations(
+    tmp_path: Path,
+) -> None:
     model = SyntheticEmbeddingModel()
     original_path = tmp_path / "original"
     original = embed_dataset(model, ["ACD"], output=original_path)
@@ -783,14 +789,17 @@ def test_torch_pagerank_handles_dangling_rows() -> None:
     assert bool((w > 0).all())
 
 
-def test_fasta_preserves_headers_order_and_duplicates(tmp_path) -> None:
+def test_fasta_preserves_headers_order_and_duplicates(tmp_path: Path) -> None:
     path = tmp_path / "proteins.fasta"
     path.write_text(">a description\nACD\n>a\nGG\n", encoding="utf-8")
     records = parse_fasta(path)
     assert records == [EmbeddingInput("a", "ACD"), EmbeddingInput("a", "GG")]
 
 
-def test_fasta_parser_streams_without_path_read_text(monkeypatch, tmp_path) -> None:
+def test_fasta_parser_streams_without_path_read_text(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "stream.fasta"
     path.write_text(">p1\nAC\nD\n>p2\nGG\n", encoding="utf-8")
 
@@ -908,7 +917,7 @@ def test_large_streaming_inputs_use_bounded_disk_windows(
         assert source_liveness["live"] == 0
 
 
-def test_sqlite_round_trip_is_lazy_and_bf16_lossless(tmp_path) -> None:
+def test_sqlite_round_trip_is_lazy_and_bf16_lossless(tmp_path: Path) -> None:
     source = embed_dataset(SyntheticEmbeddingModel(), ["ACD", "GG"])
     source = EmbeddingResult(
         [
@@ -925,7 +934,7 @@ def test_sqlite_round_trip_is_lazy_and_bf16_lossless(tmp_path) -> None:
     assert loaded[0].load_tensor().dtype == torch.bfloat16
 
 
-def test_sqlite_tensor_corruption_is_detected_on_materialization(tmp_path) -> None:
+def test_sqlite_tensor_corruption_is_detected_on_materialization(tmp_path: Path) -> None:
     path = tmp_path / "corrupt.sqlite"
     source = EmbeddingResult(
         [EmbeddingRecord("protein", "AC", torch.tensor([1.0, 2.0]))],
@@ -969,7 +978,9 @@ def test_sqlite_loading_and_lazy_tensor_reads_use_read_only_connections(
     assert all(kwargs.get("uri") is True for _, kwargs in observed)
 
 
-def test_sqlite_filtered_retrieval_preserves_selector_order_and_duplicates(tmp_path) -> None:
+def test_sqlite_filtered_retrieval_preserves_selector_order_and_duplicates(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "selection.sqlite"
     result = EmbeddingResult(
         [
@@ -995,7 +1006,9 @@ def test_sqlite_filtered_retrieval_preserves_selector_order_and_duplicates(tmp_p
     assert [record.id for record in by_sequence] == ["y", "x", "x"]
 
 
-def test_legacy_sqlite_converter_accepts_compact_blobs_without_pickle(tmp_path) -> None:
+def test_legacy_sqlite_converter_accepts_compact_blobs_without_pickle(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "legacy.sqlite"
     output = tmp_path / "converted.sqlite"
     tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
@@ -1026,7 +1039,7 @@ def test_legacy_sqlite_converter_accepts_compact_blobs_without_pickle(tmp_path) 
         convert_legacy_sqlite(source, source)
 
 
-def test_sqlite_streaming_resumes_an_ordered_prefix(tmp_path) -> None:
+def test_sqlite_streaming_resumes_an_ordered_prefix(tmp_path: Path) -> None:
     path = tmp_path / "stream.sqlite"
     inputs = ["ACD", "GG", "M"]
     with pytest.raises(RuntimeError, match="simulated interruption"):
@@ -1142,7 +1155,9 @@ def test_interrupted_sqlite_overwrite_retains_prior_run_and_resumable_prefix(
     ]
 
 
-def test_sqlite_first_batch_publication_is_atomic_and_hidden_run_resumes(tmp_path) -> None:
+def test_sqlite_first_batch_publication_is_atomic_and_hidden_run_resumes(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "first-batch-atomic.sqlite"
     original = embed_dataset(
         InterruptibleEmbeddingModel(fail_on_call=None),
@@ -1184,7 +1199,9 @@ def test_sqlite_first_batch_publication_is_atomic_and_hidden_run_resumes(tmp_pat
     )
 
 
-def test_sqlite_same_run_replacement_is_deferred_until_first_batch_commit(tmp_path) -> None:
+def test_sqlite_same_run_replacement_is_deferred_until_first_batch_commit(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "same-run-atomic.sqlite"
     inputs = ["AC", "GG"]
     original = embed_dataset(
@@ -1229,7 +1246,9 @@ def test_sqlite_same_run_replacement_is_deferred_until_first_batch_commit(tmp_pa
     assert [record.sequence for record in replacement] == inputs
 
 
-def test_sqlite_prepublication_schema_remains_readable_and_migrates(tmp_path) -> None:
+def test_sqlite_prepublication_schema_remains_readable_and_migrates(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "pre-publication-schema.sqlite"
     original = embed_dataset(
         SyntheticEmbeddingModel(),
@@ -1266,7 +1285,7 @@ def test_sqlite_prepublication_schema_remains_readable_and_migrates(tmp_path) ->
     ]
 
 
-def test_safetensors_round_trip_is_lazy(tmp_path) -> None:
+def test_safetensors_round_trip_is_lazy(tmp_path: Path) -> None:
     source = embed_dataset(SyntheticEmbeddingModel(), ["ACD", "GG"])
     output = tmp_path / "safe"
     with pytest.raises(ValueError, match="cannot fit"):
@@ -1303,7 +1322,9 @@ def test_safetensors_round_trip_is_lazy(tmp_path) -> None:
     assert torch.equal(loaded[1].load_tensor(), source[1].load_tensor())
 
 
-def test_safetensors_descriptor_shards_have_a_bounded_record_count(tmp_path) -> None:
+def test_safetensors_descriptor_shards_have_a_bounded_record_count(
+    tmp_path: Path,
+) -> None:
     output = tmp_path / "bounded-descriptors"
     source = EmbeddingResult(
         [
@@ -1323,7 +1344,9 @@ def test_safetensors_descriptor_shards_have_a_bounded_record_count(tmp_path) -> 
     assert "outputs" not in generation["metadata"]
 
 
-def test_safetensors_tensor_corruption_is_detected_on_materialization(tmp_path) -> None:
+def test_safetensors_tensor_corruption_is_detected_on_materialization(
+    tmp_path: Path,
+) -> None:
     from safetensors.torch import save_file
 
     output = tmp_path / "corrupt-safe"
@@ -1343,7 +1366,7 @@ def test_safetensors_tensor_corruption_is_detected_on_materialization(tmp_path) 
         load_safetensors_result(output)[0].load_tensor()
 
 
-def test_safetensors_streaming_resumes_an_ordered_prefix(tmp_path) -> None:
+def test_safetensors_streaming_resumes_an_ordered_prefix(tmp_path: Path) -> None:
     path = tmp_path / "stream-safe"
     inputs = ["ACD", "GG", "M"]
     with pytest.raises(RuntimeError, match="simulated interruption"):
@@ -1399,7 +1422,7 @@ def test_persistent_resume_metadata_records_true_commit_granularity(
     assert result.metadata["batching"]["resume_commit_granularity"] == (expected_granularity)
 
 
-def test_safetensors_streaming_packs_batches_into_shards(tmp_path) -> None:
+def test_safetensors_streaming_packs_batches_into_shards(tmp_path: Path) -> None:
     output = tmp_path / "packed"
     embed_dataset(
         SyntheticEmbeddingModel(),
@@ -1413,7 +1436,7 @@ def test_safetensors_streaming_packs_batches_into_shards(tmp_path) -> None:
     assert len(list(output.glob("*.safetensors"))) == 1
 
 
-def test_safetensors_manifest_rejects_shard_path_traversal(tmp_path) -> None:
+def test_safetensors_manifest_rejects_shard_path_traversal(tmp_path: Path) -> None:
     output = tmp_path / "safe"
     save_safetensors_result(
         EmbeddingResult(
@@ -1454,7 +1477,9 @@ def test_pooler_rejects_duplicate_operations() -> None:
         Pooler(("mean", "mean"))
 
 
-def test_failed_safetensors_overwrite_preserves_previous_valid_generation(tmp_path) -> None:
+def test_failed_safetensors_overwrite_preserves_previous_valid_generation(
+    tmp_path: Path,
+) -> None:
     output = tmp_path / "safe"
     original = EmbeddingResult(
         [EmbeddingRecord("old", "AC", torch.tensor([1.0, 2.0]))],
@@ -1480,7 +1505,7 @@ def test_failed_safetensors_overwrite_preserves_previous_valid_generation(tmp_pa
     assert torch.equal(loaded[0].load_tensor(), torch.tensor([1.0, 2.0]))
 
 
-def test_open_safetensors_reader_survives_successful_overwrite(tmp_path) -> None:
+def test_open_safetensors_reader_survives_successful_overwrite(tmp_path: Path) -> None:
     output = tmp_path / "retained"
     save_safetensors_result(
         EmbeddingResult(
@@ -1523,7 +1548,9 @@ def test_open_safetensors_reader_survives_successful_overwrite(tmp_path) -> None
     assert torch.equal(old_reader[0].load_tensor(), torch.tensor([1.0, 2.0]))
 
 
-def test_safetensors_generation_gc_is_dry_run_and_explicitly_exclusive(tmp_path) -> None:
+def test_safetensors_generation_gc_is_dry_run_and_explicitly_exclusive(
+    tmp_path: Path,
+) -> None:
     output = tmp_path / "retained"
     save_safetensors_result(
         EmbeddingResult(
@@ -1569,7 +1596,9 @@ def test_safetensors_generation_gc_is_dry_run_and_explicitly_exclusive(tmp_path)
     assert torch.equal(current[0].load_tensor(), torch.tensor([3.0, 4.0]))
 
 
-def test_interrupted_embedding_overwrite_preserves_previous_generation(tmp_path) -> None:
+def test_interrupted_embedding_overwrite_preserves_previous_generation(
+    tmp_path: Path,
+) -> None:
     output = tmp_path / "safe"
     original = embed_dataset(
         SyntheticEmbeddingModel(),
@@ -1634,7 +1663,7 @@ def test_interrupted_metadata_publish_recovers_last_committed_generation(
     assert torch.equal(loaded[0].load_tensor(), torch.tensor([1.0, 2.0]))
 
 
-def test_named_safetensors_outputs_do_not_share_shards(tmp_path) -> None:
+def test_named_safetensors_outputs_do_not_share_shards(tmp_path: Path) -> None:
     first_source = embed_dataset(SyntheticEmbeddingModel(), ["ACD"])
     second_source = embed_dataset(SyntheticEmbeddingModel(), ["GGG"])
     first_path = tmp_path / "first.safetensors"
@@ -1691,7 +1720,7 @@ def test_resume_recovers_from_authoritative_manifest_when_index_is_missing(
     assert resumed.metadata["run_fingerprint"] == original.metadata["run_fingerprint"]
 
 
-def test_resume_requires_matching_fingerprint(tmp_path) -> None:
+def test_resume_requires_matching_fingerprint(tmp_path: Path) -> None:
     output = tmp_path / "resume"
     first = embed_dataset(SyntheticEmbeddingModel(), ["ACD"], output=output)
     resumed = embed_dataset(SyntheticEmbeddingModel(), ["ACD"], output=output)
@@ -1701,7 +1730,7 @@ def test_resume_requires_matching_fingerprint(tmp_path) -> None:
         embed_dataset(SyntheticEmbeddingModel(), ["GG"], output=output)
 
 
-def test_resume_rejects_legacy_fingerprint_schema(tmp_path) -> None:
+def test_resume_rejects_legacy_fingerprint_schema(tmp_path: Path) -> None:
     output = tmp_path / "legacy-schema.sqlite"
     embed_dataset(
         SyntheticEmbeddingModel(),
@@ -1729,7 +1758,7 @@ def test_resume_rejects_legacy_fingerprint_schema(tmp_path) -> None:
         )
 
 
-def test_legacy_pth_import_requires_explicit_unsafe_opt_in(tmp_path) -> None:
+def test_legacy_pth_import_requires_explicit_unsafe_opt_in(tmp_path: Path) -> None:
     path = tmp_path / "legacy.pth"
     torch.save({"ACD": torch.ones(3)}, path)
     with pytest.raises(ValueError, match="allow_unsafe_pickle=True"):
@@ -1738,7 +1767,7 @@ def test_legacy_pth_import_requires_explicit_unsafe_opt_in(tmp_path) -> None:
     assert torch.equal(loaded[0].load_tensor(), torch.ones(3))
 
 
-def test_new_api_never_writes_pth(tmp_path) -> None:
+def test_new_api_never_writes_pth(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="not supported"):
         embed_dataset(
             SyntheticEmbeddingModel(),

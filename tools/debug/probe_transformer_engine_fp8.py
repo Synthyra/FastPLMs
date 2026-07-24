@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import json
-from importlib.metadata import version
-
 import torch
+from importlib.metadata import version
 
 
 def main() -> None:
@@ -15,7 +14,7 @@ def main() -> None:
         raise RuntimeError("CUDA is required for the Transformer Engine FP8 probe.")
     torch.manual_seed(17)
     device = torch.device("cuda")
-    X = torch.randn(32, 16, device=device, dtype=torch.bfloat16)
+    X = torch.randn(32, 16, device=device, dtype=torch.bfloat16)  # (n=32, d=16)
     linear = te.Linear(
         16,
         32,
@@ -27,7 +26,7 @@ def main() -> None:
     if autocast is None:
         autocast = te.fp8_autocast
     with torch.inference_mode(), autocast(enabled=True):
-        Z = linear(X)
+        Z = linear(X)  # (n=32, d_out=32)
     torch.cuda.synchronize()
     if Z.shape != (32, 32) or not torch.isfinite(Z).all():
         raise RuntimeError("Transformer Engine FP8 linear output is invalid.")

@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterable
 from pathlib import Path
-
 from huggingface_hub import snapshot_download
 
 from benchmarks.suite import benchmark_artifact_model_ids
@@ -37,13 +36,12 @@ def build_all_artifacts(
     registry = get_model_registry()
     if model_ids is not None and benchmark_suite:
         raise ValueError("model_ids and benchmark_suite are mutually exclusive")
-    selected = (
-        tuple(model_ids)
-        if model_ids is not None
-        else benchmark_artifact_model_ids()
-        if benchmark_suite
-        else tuple(registry)
-    )
+    if model_ids is not None:
+        selected = tuple(model_ids)
+    elif benchmark_suite:
+        selected = benchmark_artifact_model_ids()
+    else:
+        selected = tuple(registry)
     unknown = sorted(set(selected).difference(registry))
     if unknown:
         raise ValueError(f"Unknown model IDs: {unknown}")

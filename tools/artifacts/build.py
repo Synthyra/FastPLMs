@@ -45,6 +45,7 @@ from tools.source_provenance import (
     validate_archived_submodule,
 )
 
+
 _MAX_SHARD_BYTES = 5 * 1024**3
 _IGNORED_PARTS = frozenset({".cache", ".git", "__pycache__"})
 _WEIGHT_SUFFIXES = frozenset({".bin", ".ckpt", ".pt", ".pth", ".safetensors"})
@@ -52,7 +53,7 @@ _WEIGHT_INDEX = "model.safetensors.index.json"
 _SHARD_NAME_RE = re.compile(r"^model-(\d{5})-of-(\d{5})\.safetensors$")
 _BF16_EXECUTION_POLICIES = frozenset({"static_parameters", "fp32_parameters_autocast"})
 _PROVENANCE_SCHEMA_VERSION = 4
-_ARTIFACT_GENERATOR_VERSION = 3
+_ARTIFACT_GENERATOR_VERSION = 4
 _CANONICAL_STATE_SCHEMA_VERSION = 1
 _CANONICAL_STATE_DOMAIN = b"fastplms-canonical-state-v1\0"
 _CANONICAL_TENSOR_DOMAIN = b"fastplms-canonical-tensor-v1\0"
@@ -66,8 +67,13 @@ _MODEL_CARD_RUNTIME_PROVENANCE = (
 _MODEL_CARD_DIGEST_PROVENANCE = (
     "- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`"
 )
+_ARTIFACT_REQUIREMENT_INPUTS = (
+    "requirements/core.in",
+    "requirements/features/flash.in",
+    "requirements/features/structure.in",
+)
 _RELEASE_TOOL_SCOPE_PATHS = (
-    "pyproject.toml",
+    *_ARTIFACT_REQUIREMENT_INPUTS,
     "src/fastplms/__init__.py",
     "src/fastplms/models.toml",
     "src/fastplms/registry.py",
@@ -88,7 +94,7 @@ _RELEASE_TOOL_SCOPE_PATHS = (
     "tools/source_provenance.py",
 )
 _RELEASE_TOOL_SCOPE_ROOTS = (
-    "pyproject.toml",
+    *_ARTIFACT_REQUIREMENT_INPUTS,
     "src/fastplms/__init__.py",
     "src/fastplms/models.toml",
     "src/fastplms/registry.py",
@@ -104,6 +110,7 @@ _GENERATED_RUNTIME_UPDATE_PATHS = frozenset(
         "config.json",
         "fastplms_bundle.py",
         "modeling_fastplms.py",
+        "requirements.txt",
         "THIRD_PARTY_NOTICES.md",
         _RUNTIME_ATTESTATION_NAME,
     }
@@ -687,7 +694,7 @@ def _iter_files(root: Path) -> Iterable[Path]:
 
 
 def _iter_runtime_source_files(root: Path) -> Iterable[Path]:
-    """Yield only bounded, distributable package sources from one runtime scope."""
+    """Yield only bounded runtime sources from one artifact scope."""
 
     if root.is_symlink():
         raise ArtifactError(f"Symlinks are not allowed in runtime sources: {root}")
@@ -925,7 +932,13 @@ def _validated_release_tool_snapshot(
     source_root = source_root.resolve()
     payloads: dict[str, bytes]
     if _allow_untracked_for_tests:
-        payloads = {"test-only-release-tool-scope": b"untracked test fixture"}
+        payloads = {
+            relative_name: source_root.joinpath(
+                *PurePosixPath(relative_name).parts
+            ).read_bytes()
+            for relative_name in _ARTIFACT_REQUIREMENT_INPUTS
+        }
+        payloads["test-only-release-tool-scope"] = b"untracked test fixture"
         tool_digest = _release_tool_scope_digest(payloads)
         return f"release-tools-sha256:{tool_digest}", tool_digest, payloads
     git_metadata = source_root / ".git"
@@ -1051,6 +1064,67 @@ def _validated_release_tool_snapshot(
     raise ArtifactError(
         "Artifact release tools require either a clean verifiable Git worktree "
         "or a content-attested tracked remote source archive."
+    )
+
+
+def _requirement_lines(payload: bytes, source_name: str) -> tuple[str, ...]:
+    """Parse one direct dependency declaration used by Hub artifacts."""
+
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ArtifactError(f"Artifact dependency input is not UTF-8: {source_name}") from error
+
+    requirements: list[str] = []
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        requirement = raw_line.strip()
+        if not requirement or requirement.startswith("#"):
+            continue
+        if requirement.startswith(("-", "--")):
+            raise ArtifactError(
+                f"Artifact dependency input must contain direct requirements only: "
+                f"{source_name}:{line_number}"
+            )
+        requirements.append(requirement)
+    if not requirements:
+        raise ArtifactError(f"Artifact dependency input is empty: {source_name}")
+    return tuple(requirements)
+
+
+def _artifact_requirement_paths(spec: ModelSpec) -> tuple[str, ...]:
+    paths = ["requirements/core.in"]
+    if spec.family.extra == "structure":
+        paths.append("requirements/features/structure.in")
+    if any(name.startswith("flash_attention_") for name in spec.family.attention):
+        paths.append("requirements/features/flash.in")
+    return tuple(paths)
+
+
+def _render_artifact_requirements(
+    spec: ModelSpec,
+    release_tool_payloads: Mapping[str, bytes],
+) -> str:
+    """Render the direct dependencies shipped beside one Hub model."""
+
+    requirements: list[str] = []
+    for source_name in _artifact_requirement_paths(spec):
+        try:
+            payload = release_tool_payloads[source_name]
+        except KeyError as error:
+            raise ArtifactError(
+                f"Release-tool snapshot is missing artifact dependencies: {source_name}"
+            ) from error
+        for requirement in _requirement_lines(payload, source_name):
+            if requirement not in requirements:
+                requirements.append(requirement)
+
+    return "\n".join(
+        (
+            f"# Direct runtime dependencies for {spec.fast.repo_id}.",
+            "# FastPLMs source is embedded in this model repository.",
+            *requirements,
+            "",
+        )
     )
 
 
@@ -1671,7 +1745,7 @@ def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
         module_name, class_name = class_path.rsplit(".", maxsplit=1)
         grouped.setdefault(module_name, []).append(class_name)
     lines = [
-        '"""Generated bridge to the unchanged FastPLMs package sources."""',
+        '"""Generated bridge to the embedded FastPLMs runtime sources."""',
         "",
         "import base64",
         "import hashlib",
@@ -1679,7 +1753,6 @@ def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
         "import importlib.util",
         "import sys",
         "import tempfile",
-        "from importlib.metadata import PackageNotFoundError, distribution",
         "from io import BytesIO",
         "from pathlib import Path",
         "from zipfile import ZIP_DEFLATED, ZipFile",
@@ -1756,24 +1829,6 @@ def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
         "        result[relative.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()",
         "    return result",
         "",
-        "def _installed_runtime_digest(installed_root, relative):",
-        "    candidate = installed_root / relative",
-        "    if candidate.is_file():",
-        "        return hashlib.sha256(candidate.read_bytes()).hexdigest()",
-        '    if relative != "kernels.lock":',
-        "        return None",
-        "    try:",
-        '        installed_distribution = distribution("fastplms")',
-        "    except PackageNotFoundError:",
-        "        return None",
-        "    for entry in installed_distribution.files or ():",
-        '        normalized = str(entry).replace("\\\\", "/")',
-        '        if normalized.endswith(".dist-info/kernels.lock"):',
-        "            lock_path = Path(installed_distribution.locate_file(entry))",
-        "            if lock_path.is_file():",
-        "                return hashlib.sha256(lock_path.read_bytes()).hexdigest()",
-        "    return None",
-        "",
         "def _extend_loaded_package_paths(package_root):",
         "    for name, module in list(sys.modules.items()):",
         '        if name != "fastplms" and not name.startswith("fastplms."):',
@@ -1787,29 +1842,14 @@ def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
         "        if candidate.is_dir() and candidate_text not in paths:",
         "            paths.append(candidate_text)",
         "",
-        "def _merge_runtime(installed, package_root):",
+        "def _merge_runtime(package, package_root):",
         "    incoming = _runtime_file_hashes(package_root)",
-        '    known = dict(getattr(installed, "__fastplms_artifact_runtime_files__", {}))',
-        "    installed_root_text = getattr(",
-        '        installed, "__fastplms_artifact_installed_root__", None',
-        "    )",
-        "    if not known:",
-        '        installed_file = getattr(installed, "__file__", None)',
-        "        if installed_file is None:",
-        "            raise RuntimeError(",
-        '                "The loaded fastplms package has no source path and cannot be verified "',
-        '                "against the embedded artifact runtime."',
-        "            )",
-        "        installed_root = Path(installed_file).resolve().parent",
-        "        for relative, digest in incoming.items():",
-        "            if _installed_runtime_digest(installed_root, relative) != digest:",
-        "                raise RuntimeError(",
-        '                    "The installed FastPLMs runtime differs from this artifact at "',
-        "                    f\"{relative!r}. Install the artifact's matching FastPLMs release \"",
-        '                    "or use a separate Python process."',
-        "                )",
-        "        installed_root_text = str(installed_root)",
-        '        installed.__fastplms_artifact_installed_root__ = installed_root_text',
+        '    known = getattr(package, "__fastplms_artifact_runtime_files__", None)',
+        "    if not isinstance(known, dict):",
+        "        raise RuntimeError(",
+        '            "A non-artifact fastplms module is already loaded. Load the Hub artifact "',
+        '            "in a separate Python process."',
+        "        )",
         "    conflicts = sorted(",
         "        relative",
         "        for relative, digest in incoming.items()",
@@ -1821,35 +1861,25 @@ def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
         '            + ", ".join(repr(path) for path in conflicts[:5])',
         '            + ". Load incompatible releases in separate Python processes."',
         "        )",
-        "    if installed_root_text is not None:",
-        "        installed_root = Path(installed_root_text)",
-        "        for relative, digest in incoming.items():",
-        "            if relative in known:",
-        "                continue",
-        "            if _installed_runtime_digest(installed_root, relative) != digest:",
-        "                raise RuntimeError(",
-        '                    "The installed FastPLMs runtime differs from this artifact at "',
-        "                    f\"{relative!r}. Install the artifact's matching FastPLMs release \"",
-        '                    "or use a separate Python process."',
-        "                )",
+        "    known = dict(known)",
         "    known.update(incoming)",
-        '    installed.__fastplms_artifact_runtime_files__ = known',
-        '    roots = list(getattr(installed, "__fastplms_artifact_runtime_roots__", ()))',
+        '    package.__fastplms_artifact_runtime_files__ = known',
+        '    roots = list(getattr(package, "__fastplms_artifact_runtime_roots__", ()))',
         "    if str(package_root) not in roots:",
         "        roots.append(str(package_root))",
-        '    installed.__fastplms_artifact_runtime_roots__ = tuple(roots)',
+        '    package.__fastplms_artifact_runtime_roots__ = tuple(roots)',
         "    temporaries = list(",
-        '        getattr(installed, "__fastplms_artifact_runtime_temporaries__", ())',
+        '        getattr(package, "__fastplms_artifact_runtime_temporaries__", ())',
         "    )",
         "    for temporary in _RUNTIME_TEMPORARIES:",
         "        if temporary not in temporaries:",
         "            temporaries.append(temporary)",
-        '    installed.__fastplms_artifact_runtime_temporaries__ = tuple(temporaries)',
-        '    hashes = set(getattr(installed, "__fastplms_artifact_runtime_hashes__", ()))',
+        '    package.__fastplms_artifact_runtime_temporaries__ = tuple(temporaries)',
+        '    hashes = set(getattr(package, "__fastplms_artifact_runtime_hashes__", ()))',
         "    hashes.add(RUNTIME_HASH)",
-        '    installed.__fastplms_artifact_runtime_hashes__ = frozenset(hashes)',
+        '    package.__fastplms_artifact_runtime_hashes__ = frozenset(hashes)',
         "    _extend_loaded_package_paths(package_root)",
-        "    return installed",
+        "    return package",
         "",
         "def _import_without_bytecode(module_name):",
         "    previous = sys.dont_write_bytecode",
@@ -1860,13 +1890,13 @@ def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
         "        sys.dont_write_bytecode = previous",
         "",
         "def _install_runtime():",
-        '    installed = sys.modules.get("fastplms")',
-        '    hashes = getattr(installed, "__fastplms_artifact_runtime_hashes__", ())',
+        '    package = sys.modules.get("fastplms")',
+        '    hashes = getattr(package, "__fastplms_artifact_runtime_hashes__", ())',
         "    if RUNTIME_HASH in hashes:",
-        "        return installed",
+        "        return package",
         "    package_root = _ensure_runtime()",
-        "    if installed is not None:",
-        "        return _merge_runtime(installed, package_root)",
+        "    if package is not None:",
+        "        return _merge_runtime(package, package_root)",
         "    spec = importlib.util.spec_from_file_location(",
         '        "fastplms",',
         '        package_root / "__init__.py",',
@@ -2945,7 +2975,7 @@ def build_artifact(
                 _allow_untracked_for_tests=_allow_untracked_runtime_for_tests,
             )
         )
-        release_tool_revision, release_tool_sha256, _release_tool_payloads = (
+        release_tool_revision, release_tool_sha256, release_tool_payloads = (
             _validated_release_tool_snapshot(
                 source_root,
                 _allow_untracked_for_tests=_allow_untracked_runtime_for_tests,
@@ -3019,6 +3049,11 @@ def build_artifact(
             runtime_revision=runtime_revision,
             source_tree_sha256=source_tree_sha256,
             runtime_bundle_sha256=runtime_hash,
+        )
+        (temporary / "requirements.txt").write_text(
+            _render_artifact_requirements(spec, release_tool_payloads),
+            encoding="utf-8",
+            newline="\n",
         )
         (temporary / "README.md").write_text(
             card_text,
@@ -3125,6 +3160,7 @@ def validate_artifact(
         "README.md",
         "config.json",
         "provenance.json",
+        "requirements.txt",
         _RUNTIME_ATTESTATION_NAME,
         "THIRD_PARTY_NOTICES.md",
         "LICENSES/FastPLMs-Apache-2.0.txt",

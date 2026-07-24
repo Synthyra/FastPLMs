@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import torch
 from collections.abc import Mapping
 from functools import partial
 from typing import Any
-
-import torch
 from transformers import AttentionInterface, AttentionMaskInterface
 
 from ._core import (
@@ -36,6 +35,7 @@ def _kernels_attention_forward(
     FastPLMs kernel adapter uses the latter layout internally.
     """
 
+    # query, key, value: (b, h, l, d); attention_mask: (b, l) or None
     dropout = float(kwargs.get("dropout", 0.0) or 0.0)
     if module.training and dropout:
         raise RuntimeError(
@@ -45,15 +45,15 @@ def _kernels_attention_forward(
     causal = bool(kwargs.get("is_causal", getattr(module, "is_causal", False)))
     softmax_scale = kwargs.get("scaling")
     output = kernels_flash_attention_func(
-        query_states=query.transpose(1, 2).contiguous(),
-        key_states=key.transpose(1, 2).contiguous(),
-        value_states=value.transpose(1, 2).contiguous(),
+        query_states=query.transpose(1, 2).contiguous(),  # (b, l, h, d)
+        key_states=key.transpose(1, 2).contiguous(),  # (b, l, h, d)
+        value_states=value.transpose(1, 2).contiguous(),  # (b, l, h, d)
         attention_mask_2d=attention_mask,
         causal=causal,
         softmax_scale=softmax_scale,
         implementation=implementation,
-    )
-    return output, None
+    )  # (b, l, h, d)
+    return output, None  # (b, l, h, d), None
 
 
 # Keep FastPLMs' kernels-only adapters local to this registry instance.

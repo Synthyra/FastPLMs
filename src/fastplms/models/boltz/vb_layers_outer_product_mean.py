@@ -25,19 +25,25 @@ class OuterProductMean(nn.Module):
     def _pair_counts(mask: Tensor) -> Tensor:
         """Count valid MSA observations for each residue pair."""
 
+        # mask: (b, s, l, 1)
         counts: Tensor | None = None
         for start in range(0, mask.shape[1], 64):
-            mask_slice = mask[:, start : start + 64]
-            contribution = (mask_slice[:, :, None, :] * mask_slice[:, :, :, None]).sum(dim=1)
-            counts = contribution if counts is None else counts + contribution
+            mask_slice = mask[:, start : start + 64]  # (b, s_chunk, l, 1)
+            contribution = (
+                mask_slice[:, :, None, :] * mask_slice[:, :, :, None]
+            ).sum(dim=1)  # (b, l, l, 1)
+            counts = (
+                contribution if counts is None else counts + contribution
+            )  # (b, l, l, 1)
         if counts is None:
             raise ValueError("MSA depth must be positive")
-        return counts.clamp(min=1)
+        return counts.clamp(min=1)  # (b, l, l, 1)
 
     @staticmethod
     def _outer_product(left: Tensor, right: Tensor, counts: Tensor) -> Tensor:
-        outer = torch.einsum("bsic,bsjd->bijcd", left, right)
-        return outer.reshape(*outer.shape[:3], -1) / counts
+        # left/right: (b, s, l, d_h); counts: (b, l, l, 1).
+        outer = torch.einsum("bsic,bsjd->bijcd", left, right)  # (b, l, l, d_h, d_h)
+        return outer.reshape(*outer.shape[:3], -1) / counts  # (b, l, l, d_h**2)
 
     def _chunked_projection(
         self,
@@ -47,32 +53,38 @@ class OuterProductMean(nn.Module):
         chunk_size: int,
         target: Tensor,
     ) -> Tensor:
+        # left/right: (b, s, l, d_h); counts: (b, l, l, 1).
         output: Tensor | None = None
         for start in range(0, self.c_hidden, chunk_size):
             stop = min(start + chunk_size, self.c_hidden)
-            outer = self._outer_product(left[..., start:stop], right, counts)
+            outer = self._outer_product(
+                left[..., start:stop], right, counts
+            )  # (b, l, l, d_chunk * d_h)
             weight = self.proj_o.weight[
                 :,
                 start * self.c_hidden : stop * self.c_hidden,
-            ]
-            contribution = outer.to(target) @ weight.T
-            output = contribution if output is None else output + contribution
+            ]  # (d_z, d_chunk * d_h)
+            contribution = outer.to(target) @ weight.T  # (b, l, l, d_z)
+            output = (
+                contribution if output is None else output + contribution
+            )  # (b, l, l, d_z)
         if output is None:
             raise ValueError("c_hidden must be positive")
-        return output + self.proj_o.bias
+        return output + self.proj_o.bias  # (b, l, l, d_z)
 
     def forward(self, m: Tensor, mask: Tensor, chunk_size: int | None = None) -> Tensor:
         """Return pair tensor Z with shape ``(b, l, l, d_z)``."""
 
-        expanded_mask = mask.unsqueeze(-1).to(m)
-        normalized = self.norm(m)
-        left = self.proj_a(normalized) * expanded_mask
-        right = self.proj_b(normalized) * expanded_mask
+        # m: (b, s, l, d_m); mask: (b, s, l).
+        expanded_mask = mask.unsqueeze(-1).to(m)  # (b, s, l, 1)
+        normalized = self.norm(m)  # (b, s, l, d_m)
+        left = self.proj_a(normalized) * expanded_mask  # (b, s, l, d_h)
+        right = self.proj_b(normalized) * expanded_mask  # (b, s, l, d_h)
 
         if chunk_size is not None and not self.training:
             if chunk_size <= 0:
                 raise ValueError("chunk_size must be positive")
-            counts = self._pair_counts(expanded_mask)
+            counts = self._pair_counts(expanded_mask)  # (b, l, l, 1)
             return self._chunked_projection(
                 left,
                 right,
@@ -81,7 +93,11 @@ class OuterProductMean(nn.Module):
                 normalized,
             )
 
-        pair_mask = expanded_mask[:, :, None, :] * expanded_mask[:, :, :, None]
-        counts = pair_mask.sum(dim=1).clamp(min=1)
-        outer = self._outer_product(left.float(), right.float(), counts)
-        return self.proj_o(outer.to(normalized))
+        pair_mask = (
+            expanded_mask[:, :, None, :] * expanded_mask[:, :, :, None]
+        )  # (b, s, l, l, 1)
+        counts = pair_mask.sum(dim=1).clamp(min=1)  # (b, l, l, 1)
+        outer = self._outer_product(
+            left.float(), right.float(), counts
+        )  # (b, l, l, d_h**2)
+        return self.proj_o(outer.to(normalized))  # (b, l, l, d_z)

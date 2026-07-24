@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import inspect
 import sys
+import torch
+import torch.nn as nn
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol, cast
-
-import torch
-import torch.nn as nn
 
 from tests.parity.support.reference_adapters import (
     OfficialGenerationUnavailable,
@@ -22,6 +21,7 @@ from tests.parity.support.reference_adapters import (
     move_model,
     snapshot_path,
 )
+
 
 DPLM2_3B_GENERATION_LIMITATION = {
     "status": "official_unavailable",
@@ -157,6 +157,7 @@ def _call_checkpoint_forward(
     is modified.
     """
 
+    # input_ids: (b, l)
     target = oracle if _accepts_type_ids(network) else network
     return target(input_ids=input_ids, **kwargs)
 
@@ -176,6 +177,7 @@ def _call_checkpoint_generate(
     Other DPLM2 checkpoints retain the multimodal wrapper's public sampler.
     """
 
+    # input_tokens: (...)
     oracle_generate = cast(_DPLM2Generative, oracle).generate
     generate = getattr(network, "generate", None)
     if _accepts_type_ids(network) or not callable(generate):
@@ -224,6 +226,7 @@ class _OfficialDPLM2ForwardWrapper(nn.Module):
         attention_mask: torch.Tensor | None = None,
         **kwargs: Any,
     ) -> SimpleNamespace:
+        # input_ids: (b, l)
         del attention_mask
         captured: list[torch.Tensor] = []
 
@@ -271,6 +274,7 @@ class _OfficialDPLM2ForwardWrapper(nn.Module):
     def generate(self, input_tokens: torch.Tensor, **kwargs: Any) -> Any:
         """Invoke the checkpoint-selected implementation's public sampler."""
 
+        # input_tokens: (...)
         return _call_checkpoint_generate(
             self.oracle,
             self.model,

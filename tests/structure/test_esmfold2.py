@@ -7,10 +7,9 @@ Official parity is exercised only through the isolated bundles in
 from __future__ import annotations
 
 import importlib
-from types import SimpleNamespace
-
 import pytest
 import torch
+from types import SimpleNamespace
 from transformers.modeling_utils import PreTrainedModel
 
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
@@ -29,6 +28,7 @@ from fastplms.models.esmfold2.modeling_esmfold2_common import (
     maybe_subsample_msa,
 )
 from fastplms.registry import ModelSpec, get_model_registry
+
 
 REGISTRY = get_model_registry()
 ESMFOLD2_MODEL_KEYS = tuple(spec.id for spec in REGISTRY.by_family("esmfold2"))
@@ -76,7 +76,9 @@ def test_esmplusplus_sequence_id_masks_cross_chain_attention() -> None:
         attn_backend="sdpa",
     )
     model = ESMplusplusModel(config).eval()
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 3, 4, 2]], dtype=torch.long)
+    # sequence_id: (1, 4)
     sequence_id = torch.tensor([[0, 0, 1, 1]], dtype=torch.long)
 
     with torch.no_grad():
@@ -125,6 +127,7 @@ def test_esmplusplus_esmfold2_hidden_state_layout() -> None:
         attn_backend="sdpa",
     )
     model = ESMplusplusModel(config).eval()
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 3, 4, 2]], dtype=torch.long)
 
     with torch.no_grad():
@@ -172,7 +175,9 @@ def test_esmplusplus_boolean_padding_keeps_eager_outputs_finite() -> None:
         attn_backend="eager",
     )
     model = ESMplusplusModel(config).eval()
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 3, 1, 1]], dtype=torch.long)
+    # sequence_id: (1, 4)
     sequence_id = torch.tensor([[True, True, False, False]])
 
     with torch.no_grad():
@@ -190,6 +195,7 @@ def test_esmplusplus_masked_lm_can_skip_logits() -> None:
         attn_backend="sdpa",
     )
     model = ESMplusplusForMaskedLM(config).eval()
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 3, 4, 2]], dtype=torch.long)
 
     with torch.no_grad():
@@ -233,7 +239,9 @@ def test_esmfold2_loads_shared_esmplusplus_adapter(tmp_path) -> None:
         device=torch.device("cpu"),
         dtype=torch.float32,
     )
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 3, 4, 2]], dtype=torch.long)
+    # sequence_id: (1, 4)
     sequence_id = torch.tensor([[0, 0, 1, 1]], dtype=torch.long)
 
     with torch.no_grad():
@@ -460,10 +468,13 @@ def test_compute_lm_hidden_states_pads_and_masks_non_special_tokens() -> None:
 
         def forward(self, input_ids, sequence_id, output_hidden_states):
             assert output_hidden_states is True
+            # input_ids: (b, l)
             self.input_ids = input_ids.detach().clone()
+            # sequence_id: (b, l)
             self.sequence_id = sequence_id.detach().clone()
             num_layers = 2
             hidden_size = 3
+            # hidden_states: (num_layers, *input_ids.shape, hidden_size)
             hidden_states = torch.arange(
                 num_layers * input_ids.numel() * hidden_size,
                 dtype=torch.float32,
@@ -471,8 +482,11 @@ def test_compute_lm_hidden_states_pads_and_masks_non_special_tokens() -> None:
             return SimpleNamespace(hidden_states=hidden_states)
 
     esmc = CapturingEsmc()
+    # input_ids: (1, 3)
     input_ids = torch.tensor([[5, 6, 7]], dtype=torch.long)
+    # asym_id: (1, 3)
     asym_id = torch.tensor([[0, 0, 0]], dtype=torch.long)
+    # residue_index: (1, 3)
     residue_index = torch.tensor([[0, 1, 2]], dtype=torch.long)
     mol_type = torch.zeros_like(input_ids)
     token_mask = torch.ones_like(input_ids, dtype=torch.bool)
@@ -497,9 +511,13 @@ def test_compute_lm_hidden_states_pads_and_masks_non_special_tokens() -> None:
 
 
 def test_msa_subsample_keeps_query_row() -> None:
+    # msa: (1, 5, 4)
     msa = torch.arange(20, dtype=torch.long).reshape(1, 5, 4)
+    # msa_attention_mask: (1, 5, 4)
     msa_attention_mask = torch.ones(1, 5, 4, dtype=torch.bool)
+    # has_deletion: (1, 5, 4)
     has_deletion = torch.zeros(1, 5, 4, dtype=torch.bool)
+    # deletion_value: (1, 5, 4)
     deletion_value = torch.zeros(1, 5, 4)
 
     torch.manual_seed(0)
@@ -523,6 +541,7 @@ def test_msa_subsample_keeps_query_row() -> None:
 
 
 def test_msa_column_masking_keeps_query_row() -> None:
+    # msa_attention_mask: (2, 3, 4)
     msa_attention_mask = torch.ones(2, 3, 4, dtype=torch.bool)
 
     masked = maybe_apply_msa_column_masking(msa_attention_mask, rate=1.0)

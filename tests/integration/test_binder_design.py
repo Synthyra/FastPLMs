@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 import os
 import random
+import pytest
+import torch
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-import torch
-
 from examples import binder_design_fastplms as binder
+
 
 APPROVED_CRITIC = "ESMFold2-Experimental-Fast-Cutoff2025"
 
@@ -52,17 +52,23 @@ def _fake_fold(
     calculate_confidence: bool = False,
     seed: int | None = None,
 ) -> dict[str, Any]:
+    # target_one_hot: (...), design: (...)
     del model, num_loops, num_sampling_steps, calculate_confidence, seed
     b, binder_length, d = design.shape
     target_length = target_one_hot.size(1)
+    # aa_weight: (n,)
     aa_weight = torch.linspace(-1.0, 1.0, d, device=design.device)
+    # binder_signal: (...)
     binder_signal = (design * aa_weight).sum(dim=-1)
+    # token_signal: (...)
     token_signal = torch.cat(
         (torch.zeros(b, target_length, device=design.device), binder_signal),
         dim=1,
     )
     pair_signal = token_signal[:, :, None] + token_signal[:, None, :]
+    # bin_basis: (n,)
     bin_basis = torch.linspace(-1.0, 1.0, 128, device=design.device)
+    # distogram_logits: (..., c)
     distogram_logits = pair_signal.unsqueeze(-1) * bin_basis
     sequences = [f"{target_seq}|{'A' * binder_length}" for _ in range(b)]
     return {
@@ -85,6 +91,7 @@ def _fake_pseudoperplexity(
     n_passes: int = 4,
     mask_fraction: float = binder.DEFAULT_ESMC_MASK_FRACTION,
 ) -> torch.Tensor:
+    # binder_design: (...), score_mask: (...)
     del lm_model, score_mask, batch_size, n_passes, mask_fraction
     return binder_design.square().mean(dim=(1, 2))
 
@@ -463,6 +470,7 @@ def test_selected_sequence_loss_and_logits_share_the_same_optimization_step(
         calculate_confidence: bool = False,
         seed: int | None = None,
     ) -> dict[str, Any]:
+        # target_one_hot: (...), design: (...)
         result = _fake_fold(
             model,
             target_seq,
@@ -478,6 +486,7 @@ def test_selected_sequence_loss_and_logits_share_the_same_optimization_step(
             optimization_designs.append(design.detach().clone())
             residue = "A" if optimization_step == 0 else "D"
             result["seq_list"] = [f"{target_seq}|{residue * design.size(1)}"]
+            # result['iptm']: (design.size(0),)
             result["iptm"] = torch.full(
                 (design.size(0),),
                 0.95 if optimization_step == 0 else 0.20,

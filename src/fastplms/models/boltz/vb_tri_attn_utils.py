@@ -7,21 +7,21 @@ the public function names expected by converted checkpoints.
 
 from __future__ import annotations
 
+import torch
 from collections.abc import Callable, Sequence
 from functools import partial
 from math import prod
 from typing import Any
 
-import torch
-
 
 def add(left: torch.Tensor, right: torch.Tensor, inplace: bool) -> torch.Tensor:
     """Add ``right`` to ``left``, optionally reusing ``left`` storage."""
 
+    # left/right: broadcast-compatible shapes; result has their broadcast shape.
     if inplace:
-        left += right
-        return left
-    return left + right
+        left += right  # same shape as left
+        return left  # same shape as left
+    return left + right  # broadcast shape
 
 
 def permute_final_dims(tensor: torch.Tensor, inds: Sequence[int]) -> torch.Tensor:
@@ -30,7 +30,7 @@ def permute_final_dims(tensor: torch.Tensor, inds: Sequence[int]) -> torch.Tenso
     final_count = len(inds)
     leading = list(range(tensor.ndim - final_count))
     final = [tensor.ndim - final_count + index for index in inds]
-    return tensor.permute(leading + final)
+    return tensor.permute(leading + final)  # (..., d_0, ..., d_n)
 
 
 def is_fp16_enabled() -> bool:
@@ -73,7 +73,8 @@ tensor_tree_map = partial(tree_map, leaf_type=torch.Tensor)
 def flatten_final_dims(tensor: torch.Tensor, no_dims: int) -> torch.Tensor:
     """Collapse the final ``no_dims`` axes into one axis."""
 
-    return tensor.reshape(*tensor.shape[:-no_dims], -1)
+    # tensor: (..., d_0, ..., d_n)
+    return tensor.reshape(*tensor.shape[:-no_dims], -1)  # (..., prod(final dims))
 
 
 def _fetch_dims(tree: Any) -> list[torch.Size]:
@@ -194,9 +195,13 @@ def _chunk_slice(
     batch_shape = tuple(tensor.shape[:no_batch_dims])
     start = _flat_idx_to_idx(flat_start, batch_shape)
     end = _flat_idx_to_idx(flat_end - 1, batch_shape)
-    pieces = [tensor[item] for item in _get_minimal_slice_set(start, end, batch_shape)]
+    pieces = [
+        tensor[item] for item in _get_minimal_slice_set(start, end, batch_shape)
+    ]  # each: (*covered_batch_shape, *feature_shape)
     feature_shape = tuple(tensor.shape[no_batch_dims:])
-    return torch.cat([piece.reshape(-1, *feature_shape) for piece in pieces])
+    return torch.cat(
+        [piece.reshape(-1, *feature_shape) for piece in pieces]
+    )  # (flat_end - flat_start, *feature_shape)
 
 
 def _prepare_input(
@@ -206,12 +211,15 @@ def _prepare_input(
     *,
     low_mem: bool,
 ) -> torch.Tensor:
+    # tensor: (*input_batch_shape, *feature_shape)
     feature_shape = tuple(tensor.shape[no_batch_dims:])
     if low_mem:
-        return tensor.expand(batch_shape + feature_shape)
+        return tensor.expand(batch_shape + feature_shape)  # (*batch_shape, *feature_shape)
     if any(size != 1 for size in tensor.shape[:no_batch_dims]):
-        tensor = tensor.expand(batch_shape + feature_shape)
-    return tensor.reshape(-1, *feature_shape)
+        tensor = tensor.expand(
+            batch_shape + feature_shape
+        )  # (*batch_shape, *feature_shape)
+    return tensor.reshape(-1, *feature_shape)  # (flat_batch, *feature_shape)
 
 
 def _write_chunk(
@@ -245,9 +253,9 @@ def _write_chunk(
     if not isinstance(source, torch.Tensor):
         raise ValueError(f"output type {type(source)!r} is not supported")
     if add_into_out:
-        destination[start:stop] += source
+        destination[start:stop] += source  # (stop - start, *feature_shape)
     else:
-        destination[start:stop] = source
+        destination[start:stop] = source  # (stop - start, *feature_shape)
 
 
 def chunk_layer(
@@ -274,14 +282,16 @@ def chunk_layer(
         no_batch_dims=no_batch_dims,
         low_mem=low_mem,
     )
-    prepared_inputs = tensor_tree_map(prepare, inputs)
+    prepared_inputs = tensor_tree_map(
+        prepare, inputs
+    )  # each tensor: (flat_batch, *feature_shape), or broadcast batch in low-memory mode
 
     output = None
     if _out is not None:
         output = tensor_tree_map(
             lambda tensor: tensor.reshape(-1, *tensor.shape[no_batch_dims:]),
             _out,
-        )
+        )  # each tensor: (flat_batch, *feature_shape)
 
     flat_batch_size = prod(batch_shape)
     for start in range(0, flat_batch_size, chunk_size):
@@ -302,14 +312,18 @@ def chunk_layer(
             ) -> torch.Tensor:
                 return tensor if tensor.shape[0] == 1 else tensor[start:stop]
 
-        input_chunk = tensor_tree_map(select, prepared_inputs)
-        output_chunk = layer(**input_chunk)
+        input_chunk = tensor_tree_map(
+            select, prepared_inputs
+        )  # each tensor: (chunk, *feature_shape)
+        output_chunk = layer(
+            **input_chunk
+        )  # each output tensor: (chunk, *output_feature_shape)
 
         if output is None:
             output = tensor_tree_map(
                 lambda tensor: tensor.new_zeros((flat_batch_size, *tensor.shape[1:])),
                 output_chunk,
-            )
+            )  # each tensor: (flat_batch, *output_feature_shape)
         _write_chunk(
             output,
             output_chunk,
@@ -321,4 +335,6 @@ def chunk_layer(
     return tensor_tree_map(
         lambda tensor: tensor.reshape(batch_shape + tuple(tensor.shape[1:])),
         output,
-    )
+    )  # each tensor: (*batch_shape, *output_feature_shape)
+    # tensor: (..., d_0, ..., d_n); only the named final dimensions are reordered.
+    # tensor: (*batch_shape, *feature_shape)

@@ -1,9 +1,8 @@
 """Mandatory attention dispatch, masking, fallback, and cache contracts."""
 
-from collections import OrderedDict
-
 import pytest
 import torch
+from collections import OrderedDict
 
 import fastplms.attention.interfaces as attention_interfaces
 import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module
@@ -16,6 +15,7 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
 from tests.unit import test_attention_interfaces as interface_contracts
 from tests.unit import test_attention_regressions as contracts
 from tests.unit import test_esmc_diagnostics as esmc_contracts
+
 
 test_flash_backend_loads_only_its_hugging_face_kernel = (
     interface_contracts.test_flash_backend_loads_only_its_hugging_face_kernel
@@ -252,10 +252,10 @@ def test_esmc_flex_dispatch_is_compiled_once_and_receives_exact_padding_mask(
     )
 
     model = _tiny_esmc("flex_attention")
-    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 2, 1, 1)))
-    attention_mask = input_ids.ne(1)
-    first = model(input_ids=input_ids, attention_mask=attention_mask)
-    second = model(input_ids=input_ids, attention_mask=attention_mask)
+    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 2, 1, 1)))  # (b=2, l=5)
+    attention_mask = input_ids.ne(1)  # (b, l)
+    first = model(input_ids=input_ids, attention_mask=attention_mask)  # hidden: (b, l, d=8)
+    second = model(input_ids=input_ids, attention_mask=attention_mask)  # hidden: (b, l, d)
 
     assert first.last_hidden_state.shape == (2, 5, 8)
     assert second.last_hidden_state.shape == first.last_hidden_state.shape
@@ -316,7 +316,7 @@ def test_esmc_fake_fa3_dispatch_receives_exact_mask_and_returns_finite_shape(
         key = kwargs["key_states"]
         value = kwargs["value_states"]
         attention_mask = kwargs["attention_mask_2d"]
-        masked_output = value.masked_fill(
+        masked_output = value.masked_fill(  # (b, l, h, d_h)
             attention_mask[:, :, None, None].logical_not(),
             0.0,
         )
@@ -341,9 +341,9 @@ def test_esmc_fake_fa3_dispatch_receives_exact_mask_and_returns_finite_shape(
     monkeypatch.setattr(attention_interfaces, "require_kernels_package", lambda: None)
 
     model = _tiny_esmc("flash_attention_3")
-    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 2, 1, 1)))
-    attention_mask = input_ids.ne(1)
-    output = model(input_ids=input_ids, attention_mask=attention_mask)
+    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 2, 1, 1)))  # (b=2, l=5)
+    attention_mask = input_ids.ne(1)  # (b, l)
+    output = model(input_ids=input_ids, attention_mask=attention_mask)  # hidden: (b, l, d=8)
 
     assert output.last_hidden_state.shape == (2, 5, 8)
     assert torch.isfinite(output.last_hidden_state).all()
@@ -368,8 +368,8 @@ def test_eager_and_sdpa_match_for_dense_and_mixed_padding_with_gradients() -> No
     eager = _tiny_esm2("eager").eval()
     sdpa = _tiny_esm2("sdpa").eval()
     sdpa.load_state_dict(eager.state_dict())
-    input_ids = torch.tensor([[0, 3, 4, 2, 1], [0, 6, 2, 1, 1]])
-    masks = (torch.ones_like(input_ids), input_ids.ne(1))
+    input_ids = torch.tensor([[0, 3, 4, 2, 1], [0, 6, 2, 1, 1]])  # (b=2, l=5)
+    masks = (torch.ones_like(input_ids), input_ids.ne(1))  # each (b, l)
 
     for attention_mask in masks:
         eager.zero_grad(set_to_none=True)
@@ -404,7 +404,7 @@ def test_eager_and_sdpa_match_for_dense_and_mixed_padding_with_gradients() -> No
                 atol=2e-6,
             )
 
-        valid = attention_mask.bool().unsqueeze(-1)
+        valid = attention_mask.bool().unsqueeze(-1)  # (b, l, 1)
         # A squared norm after the final LayerNorm is nearly constant and
         # produces cancellation-dominated gradients.  Project each hidden
         # coordinate onto a distinct fixed coefficient so this parity gate
@@ -415,7 +415,7 @@ def test_eager_and_sdpa_match_for_dense_and_mixed_padding_with_gradients() -> No
             eager_output.last_hidden_state.shape[-1],
             dtype=eager_output.last_hidden_state.dtype,
             device=eager_output.last_hidden_state.device,
-        ).view(1, 1, -1)
+        ).view(1, 1, -1)  # (1, 1, d)
         (eager_output.last_hidden_state * valid * gradient_probe).sum().backward()
         (sdpa_output.last_hidden_state * valid * gradient_probe).sum().backward()
         eager_gradients = {

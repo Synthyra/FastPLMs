@@ -23,7 +23,6 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO
-
 from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi
 
 from fastplms.registry import FileDigest, ModelRegistry, ModelSpec, get_model_registry
@@ -37,6 +36,7 @@ from tools.artifacts.build import (
     _checkpoint_identity_hash,
     _is_runtime_update_path,
     _materialize_model_card,
+    _render_artifact_requirements,
     _resolve_artifact_manifest_path,
     _tree_sha256,
     _validate_bootstrap,
@@ -49,6 +49,7 @@ from tools.artifacts.build import (
     validate_artifact,
 )
 
+
 _COMPLETE_ATTESTATION_FILES = frozenset({"artifact-manifest.json", "provenance.json"})
 _REQUIRED_FILES_ONLY_PATHS = frozenset(
     {
@@ -56,6 +57,7 @@ _REQUIRED_FILES_ONLY_PATHS = frozenset(
         "config.json",
         "fastplms_bundle.py",
         "modeling_fastplms.py",
+        "requirements.txt",
         "THIRD_PARTY_NOTICES.md",
         "LICENSES/FastPLMs-Apache-2.0.txt",
         _RUNTIME_ATTESTATION_NAME,
@@ -67,6 +69,7 @@ _GENERATED_RUNTIME_PATHS = frozenset(
         "config.json",
         "fastplms_bundle.py",
         "modeling_fastplms.py",
+        "requirements.txt",
         "THIRD_PARTY_NOTICES.md",
         _RUNTIME_ATTESTATION_NAME,
     }
@@ -738,11 +741,11 @@ def _assert_current_runtime_source(
 
 def _assert_current_release_tool_source(
     provenance: Mapping[str, Any],
-) -> tuple[str, str]:
+) -> tuple[str, str, dict[str, bytes]]:
     """Bind one artifact to the current immutable release-tool scope."""
 
     source_root = Path(__file__).resolve().parents[2]
-    tool_revision, tool_sha256, _payloads = _validated_release_tool_snapshot(source_root)
+    tool_revision, tool_sha256, payloads = _validated_release_tool_snapshot(source_root)
     if provenance.get("release_tool_revision") != tool_revision:
         raise ArtifactError(
             "Artifact release-tool revision differs from the current clean tool scope; "
@@ -753,7 +756,26 @@ def _assert_current_release_tool_source(
             "Artifact release-tool digest differs from the current clean tool scope; "
             "rebuild it."
         )
-    return tool_revision, tool_sha256
+    return tool_revision, tool_sha256, payloads
+
+
+def _assert_artifact_requirements(
+    artifact_path: Path,
+    spec: ModelSpec,
+    release_tool_payloads: Mapping[str, bytes],
+) -> None:
+    expected = _render_artifact_requirements(spec, release_tool_payloads).encode("utf-8")
+    path = artifact_path / "requirements.txt"
+    try:
+        actual = path.read_bytes()
+    except OSError as error:
+        raise ArtifactError(f"Artifact requirements are missing: {path}") from error
+    if len(actual) > _MAX_RELEASE_TEXT_BYTES:
+        raise ArtifactError("Artifact requirements exceed the release-text size limit.")
+    if actual != expected:
+        raise ArtifactError(
+            "Artifact requirements differ from the current direct dependency contract."
+        )
 
 
 def _revalidate_plan_runtime_source(
@@ -1139,9 +1161,12 @@ def _validate_files_only_artifact(
         registry,
         provenance,
     )
-    release_tool_revision, release_tool_sha256 = _assert_current_release_tool_source(
-        provenance
-    )
+    (
+        release_tool_revision,
+        release_tool_sha256,
+        release_tool_payloads,
+    ) = _assert_current_release_tool_source(provenance)
+    _assert_artifact_requirements(artifact_path, spec, release_tool_payloads)
     return (
         tuple(selected),
         tuple(payloads),
@@ -1390,9 +1415,12 @@ def prepare_complete_plan(
         registry,
         provenance,
     )
-    release_tool_revision, release_tool_sha256 = _assert_current_release_tool_source(
-        provenance
-    )
+    (
+        release_tool_revision,
+        release_tool_sha256,
+        release_tool_payloads,
+    ) = _assert_current_release_tool_source(provenance)
+    _assert_artifact_requirements(artifact_path, spec, release_tool_payloads)
     runtime_bundle_sha256 = provenance.get("runtime_bundle_sha256")
     if not isinstance(runtime_bundle_sha256, str):
         raise ArtifactError("Complete artifact lacks a runtime-bundle identity.")

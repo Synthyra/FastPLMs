@@ -7,12 +7,13 @@ allowlist used by the required status check.
 
 import pytest
 import torch
+from pathlib import Path
 from transformers.utils import ModelOutput
 
 from tests.unit import test_ankh_cpu_contract as contracts
 
 
-def _assert_nested_output_close(actual, expected) -> None:
+def _assert_nested_output_close(actual: object, expected: object) -> None:
     if torch.is_tensor(expected):
         assert torch.is_tensor(actual)
         torch.testing.assert_close(actual, expected)
@@ -26,7 +27,16 @@ def _assert_nested_output_close(actual, expected) -> None:
     assert actual == expected
 
 
-def _encoder_labels(model_class, input_ids, attention_mask):
+def _encoder_labels(
+    model_class: (
+        type[contracts.FastAnkhModel]
+        | type[contracts.FastAnkhForMaskedLMExtension]
+        | type[contracts.FastAnkhForSequenceClassification]
+        | type[contracts.FastAnkhForTokenClassification]
+    ),
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+) -> torch.Tensor | None:
     if model_class is contracts.FastAnkhForMaskedLMExtension:
         return input_ids.masked_fill(~attention_mask, -100)
     if model_class is contracts.FastAnkhForSequenceClassification:
@@ -108,11 +118,19 @@ test_tokenizer_load_context_is_isolated_during_concurrent_first_access = (
         contracts.FastAnkhForTokenClassification,
     ),
 )
-def test_ankh_encoder_views_backward_and_save_reload(model_class, tmp_path) -> None:
+def test_ankh_encoder_views_backward_and_save_reload(
+    model_class: (
+        type[contracts.FastAnkhModel]
+        | type[contracts.FastAnkhForMaskedLMExtension]
+        | type[contracts.FastAnkhForSequenceClassification]
+        | type[contracts.FastAnkhForTokenClassification]
+    ),
+    tmp_path: Path,
+) -> None:
     model = model_class(contracts._config(num_labels=3)).eval()
-    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])
-    attention_mask = input_ids.ne(0)
-    labels = _encoder_labels(model_class, input_ids, attention_mask)
+    input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])  # (b=2, l=3)
+    attention_mask = input_ids.ne(0)  # (b, l)
+    labels = _encoder_labels(model_class, input_ids, attention_mask)  # (b, ...) or None
     model_arguments = {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
@@ -144,8 +162,10 @@ def test_ankh_encoder_views_backward_and_save_reload(model_class, tmp_path) -> N
             unexpected_cpu_contract=True,
         )
 
-    tensor = output.last_hidden_state if model_class is contracts.FastAnkhModel else output.logits
-    loss = output.loss if labels is not None else tensor.square().mean()
+    tensor = (  # (b, l, d) for the base model; otherwise task-head logits
+        output.last_hidden_state if model_class is contracts.FastAnkhModel else output.logits
+    )
+    loss = output.loss if labels is not None else tensor.square().mean()  # ()
     assert loss is not None and torch.isfinite(loss)
     loss.backward()
     assert model.shared.weight.grad is not None
@@ -167,10 +187,10 @@ def test_ankh_encoder_views_backward_and_save_reload(model_class, tmp_path) -> N
 
 def test_ankh_seq2seq_view_honors_tuple_output_and_resize() -> None:
     model = contracts.FastAnkhForConditionalGeneration(contracts._config()).eval()
-    input_ids = torch.tensor([[2, 3, 1, 0], [4, 1, 0, 0]])
-    attention_mask = input_ids.ne(0)
-    decoder_input_ids = torch.tensor([[0, 5, 1, 0], [0, 6, 7, 1]])
-    decoder_attention_mask = torch.tensor([[1, 1, 1, 0], [1, 1, 1, 1]])
+    input_ids = torch.tensor([[2, 3, 1, 0], [4, 1, 0, 0]])  # (b=2, l_enc=4)
+    attention_mask = input_ids.ne(0)  # (b, l_enc)
+    decoder_input_ids = torch.tensor([[0, 5, 1, 0], [0, 6, 7, 1]])  # (b, l_dec=4)
+    decoder_attention_mask = torch.tensor([[1, 1, 1, 0], [1, 1, 1, 1]])  # (b, l_dec)
     structured = model(
         input_ids=input_ids,
         attention_mask=attention_mask,
@@ -199,7 +219,7 @@ def test_ankh_seq2seq_view_honors_tuple_output_and_resize() -> None:
     assert structured.decoder_attentions is not None
     assert structured.cross_attentions is not None
     assert structured.encoder_attentions is not None
-    causal_future = torch.triu(torch.ones(4, 4, dtype=torch.bool), diagonal=1)
+    causal_future = torch.triu(torch.ones(4, 4, dtype=torch.bool), diagonal=1)  # (l_dec, l_dec)
     for decoder_attention in structured.decoder_attentions:
         assert torch.count_nonzero(decoder_attention.masked_select(causal_future)) == 0
         assert torch.count_nonzero(decoder_attention[0, :, :, 3]) == 0
@@ -209,7 +229,7 @@ def test_ankh_seq2seq_view_honors_tuple_output_and_resize() -> None:
     _assert_nested_output_close(tuple_output, structured.to_tuple())
     torch.testing.assert_close(tuple_output[0], structured.logits)
 
-    labels = torch.tensor([[5, 1, -100, -100], [6, 7, 1, -100]])
+    labels = torch.tensor([[5, 1, -100, -100], [6, 7, 1, -100]])  # (b, l_dec)
     loss_output = model(
         input_ids=input_ids,
         attention_mask=attention_mask,

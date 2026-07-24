@@ -1,0 +1,6 @@
+line-length = 100
+target-version = "py311"
+exclude = ["vendor/upstream"]
+
+[lint]
+select = ["E", "F", "UP", "B", "SIM", "RUF"]

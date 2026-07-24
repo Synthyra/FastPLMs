@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
-
 import torch
+from typing import Any, cast
 from torch import Tensor, nn
 from torch.utils.checkpoint import checkpoint
 
@@ -34,37 +33,42 @@ def _pair_update(
 ) -> Tensor:
     """Apply multiplicative, attention, and transition updates to pair tensor Z."""
 
+    # pair_states: (b, l, l, d_z); pair_mask: (b, l, l).
     multiplication_kernel = use_kernels or use_cuequiv_mul
     attention_kernel = use_kernels or use_cuequiv_attn
-    output = pair_states
+    output = pair_states  # (b, l, l, d_z)
     for update in (modules.tri_mul_out, modules.tri_mul_in):
-        dropout = get_dropout_mask(modules.dropout, output, modules.training)
+        dropout = get_dropout_mask(
+            modules.dropout, output, modules.training
+        )  # broadcastable to (b, l, l, d_z)
         output = output + dropout * update(
             output,
             mask=pair_mask,
             use_kernels=multiplication_kernel,
-        )
+        )  # (b, l, l, d_z)
 
-    dropout = get_dropout_mask(modules.dropout, output, modules.training)
+    dropout = get_dropout_mask(
+        modules.dropout, output, modules.training
+    )  # broadcastable to (b, l, l, d_z)
     output = output + dropout * modules.tri_att_start(
         output,
         mask=pair_mask,
         chunk_size=chunk_size,
         use_kernels=attention_kernel,
-    )
+    )  # (b, l, l, d_z)
     dropout = get_dropout_mask(
         modules.dropout,
         output,
         modules.training,
         columnwise=True,
-    )
+    )  # broadcastable to (b, l, l, d_z)
     output = output + dropout * modules.tri_att_end(
         output,
         mask=pair_mask,
         chunk_size=chunk_size,
         use_kernels=attention_kernel,
-    )
-    return cast(Tensor, output + modules.transition_z(output))
+    )  # (b, l, l, d_z)
+    return cast(Tensor, output + modules.transition_z(output))  # (b, l, l, d_z)
 
 
 def _triangle_chunk_size(pair_states: Tensor, training: bool) -> int | None:
@@ -134,18 +138,22 @@ class PairformerLayer(nn.Module):
             use_kernels,
             use_cuequiv_mul,
             use_cuequiv_attn,
-        )
+        )  # (b, l, l, d_z)
         with torch.autocast("cuda", enabled=False):
-            normalized = self.pre_norm_s(s.float())
+            normalized = self.pre_norm_s(s.float())  # (b, l, d_s)
             sequence_output = s.float() + self.attention(
                 s=normalized,
                 z=pair_output.float(),
                 mask=mask.float(),
                 k_in=normalized,
-            )
-            sequence_output = sequence_output + self.transition_s(sequence_output)
-            sequence_output = cast(Tensor, self.s_post_norm(sequence_output))
-        return sequence_output, pair_output
+            )  # (b, l, d_s)
+            sequence_output = (
+                sequence_output + self.transition_s(sequence_output)
+            )  # (b, l, d_s)
+            sequence_output = cast(
+                Tensor, self.s_post_norm(sequence_output)
+            )  # (b, l, d_s)
+        return sequence_output, pair_output  # (b, l, d_s), (b, l, l, d_z)
 
 
 class PairformerModule(nn.Module):
@@ -199,8 +207,9 @@ class PairformerModule(nn.Module):
     ) -> tuple[Tensor, Tensor]:
         """Return S and Z after every configured pairformer block."""
 
+        # s: (b, l, d_s); z: (b, l, l, d_z).
         chunk_size = _triangle_chunk_size(z, self.training)
-        sequence_output, pair_output = s, z
+        sequence_output, pair_output = s, z  # (b, l, d_s), (b, l, l, d_z)
         for layer in self.layers:
             if self.activation_checkpointing:
                 sequence_output, pair_output = checkpoint(
@@ -212,7 +221,7 @@ class PairformerModule(nn.Module):
                     chunk_size,
                     use_kernels,
                     use_reentrant=False,
-                )
+                )  # (b, l, d_s), (b, l, l, d_z)
             else:
                 sequence_output, pair_output = layer(
                     sequence_output,
@@ -221,8 +230,8 @@ class PairformerModule(nn.Module):
                     pair_mask,
                     chunk_size,
                     use_kernels,
-                )
-        return sequence_output, pair_output
+                )  # (b, l, d_s), (b, l, l, d_z)
+        return sequence_output, pair_output  # (b, l, d_s), (b, l, l, d_z)
 
 
 class PairformerNoSeqLayer(nn.Module):
@@ -320,8 +329,9 @@ class PairformerNoSeqModule(nn.Module):
     ) -> Tensor:
         """Return Z after every configured pair-only block."""
 
+        # z: (b, l, l, d_z); pair_mask: (b, l, l).
         chunk_size = _triangle_chunk_size(z, self.training)
-        output = z
+        output = z  # (b, l, l, d_z)
         for layer in self.layers:
             if self.activation_checkpointing:
                 output = checkpoint(
@@ -331,7 +341,9 @@ class PairformerNoSeqModule(nn.Module):
                     chunk_size,
                     use_kernels,
                     use_reentrant=False,
-                )
+                )  # (b, l, l, d_z)
             else:
-                output = layer(output, pair_mask, chunk_size, use_kernels)
-        return output
+                output = layer(
+                    output, pair_mask, chunk_size, use_kernels
+                )  # (b, l, l, d_z)
+        return output  # (b, l, l, d_z)

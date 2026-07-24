@@ -205,6 +205,7 @@ def add_model_specific_inputs(
 ) -> dict[str, torch.Tensor]:
     """Add model-specific extra inputs (e.g. sequence_id for ESMC)."""
     if model_type == "ESMC":
+        # model_inputs["sequence_id"]: (b, l)
         model_inputs["sequence_id"] = model_inputs["attention_mask"].to(dtype=torch.bool)
     return model_inputs
 

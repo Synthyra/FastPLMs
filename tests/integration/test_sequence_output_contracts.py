@@ -117,7 +117,9 @@ def test_sequence_models_honor_config_and_explicit_output_controls(
     output_class: type[ModelOutput],
 ) -> None:
     model = model_class(config_factory()).eval()
+    # input_ids: (2, 5)
     input_ids = torch.tensor([[0, 3, 4, 2, 1], [0, 6, 2, 1, 1]])
+    # attention_mask: (b, l)
     attention_mask = input_ids.ne(1)
     labels = {
         "base": None,
@@ -197,6 +199,7 @@ def test_sequence_models_reject_unexpected_forward_arguments(
 
 def test_esm2_resize_preserves_existing_logits_and_bias_contract() -> None:
     model = FastEsmForMaskedLM(_esm2_config()).eval()
+    # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 3, 4, 2]])
     with torch.inference_mode():
         original_logits = model(input_ids=input_ids, return_dict=True).logits

@@ -16,13 +16,12 @@ import json
 import os
 import platform
 import tempfile
+import torch
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
-
-import torch
 from safetensors.torch import load_file, save_file
 
 from tests.parity.support.state_transforms import transform_parameter_names
@@ -32,6 +31,7 @@ from tests.structure.support.state_contract import (
     validate_exact_state_contract,
     validate_semantic_config_contract,
 )
+
 
 schema_version = 1
 model_id = "esmfold"
@@ -93,6 +93,8 @@ def _request_fingerprint(request: Mapping[str, Any]) -> str:
 
 
 def _tensor_bytes(tensor: torch.Tensor) -> bytes:
+    # tensor: (...)
+    # value: (...)
     value = tensor.detach().cpu().contiguous()
     return value.reshape(-1).view(torch.uint8).numpy().tobytes()
 
@@ -100,6 +102,7 @@ def _tensor_bytes(tensor: torch.Tensor) -> bytes:
 def tensor_sha256(tensor: torch.Tensor) -> str:
     """Return the exact byte digest for one tensor."""
 
+    # tensor: (...)
     return hashlib.sha256(_tensor_bytes(tensor)).hexdigest()
 
 
@@ -291,6 +294,7 @@ def _normalize_output(output: object) -> dict[str, torch.Tensor]:
         value = output[name]
         if not torch.is_tensor(value):
             raise TypeError(f"ESMFold output {name!r} is not a tensor.")
+        # tensors[f'output__{name}']: (...)
         tensors[f"output__{name}"] = value.detach().cpu().contiguous().clone()
     return tensors
 

@@ -1,4 +1,4 @@
-"""Statically attest the declared dependency closure of installable runtime source."""
+"""Statically attest the declared dependency closure of FastPLMs runtime source."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+
 _REQUIREMENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
 _DISTRIBUTION_IMPORT_NAMES = {
     "biopython": "Bio",
@@ -26,7 +27,7 @@ _DISTRIBUTION_IMPORT_NAMES = {
 
 
 class RuntimeImportClosureError(RuntimeError):
-    """Installable source contains an undeclared import-time dependency."""
+    """Runtime source contains an undeclared import-time dependency."""
 
 
 @dataclass(frozen=True)
@@ -50,28 +51,37 @@ def _import_name(distribution: str) -> str:
     return _DISTRIBUTION_IMPORT_NAMES.get(distribution, distribution.replace("-", "_"))
 
 
-def _declared_import_scopes(project: Mapping[str, object]) -> dict[str, list[str]]:
-    metadata = project.get("project")
-    if not isinstance(metadata, dict):
-        raise RuntimeImportClosureError("pyproject.toml is missing [project]")
-    scoped_requirements: dict[str, object] = {"core": metadata.get("dependencies", [])}
-    extras = metadata.get("optional-dependencies", {})
-    if not isinstance(extras, dict):
-        raise RuntimeImportClosureError("[project.optional-dependencies] must be a table")
-    scoped_requirements.update({f"extra:{name}": value for name, value in extras.items()})
+def _read_direct_requirements(path: Path) -> list[str]:
+    if not path.is_file():
+        raise RuntimeImportClosureError(f"Missing direct dependency declaration: {path}")
+    requirements: list[str] = []
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+        requirement = raw_line.partition("#")[0].strip()
+        if not requirement:
+            continue
+        if requirement.startswith(("-", "--")):
+            raise RuntimeImportClosureError(
+                f"Direct dependency file may not compose other files: {path}:{line_number}"
+            )
+        requirements.append(requirement)
+    return requirements
+
+
+def _declared_import_scopes(requirements_root: Path) -> dict[str, list[str]]:
+    scoped_requirements = {
+        "core": _read_direct_requirements(requirements_root / "core.in"),
+    }
+    features_root = requirements_root / "features"
+    if not features_root.is_dir():
+        raise RuntimeImportClosureError(
+            f"Missing feature dependency declarations: {features_root}"
+        )
+    for path in sorted(features_root.glob("*.in")):
+        scoped_requirements[f"extra:{path.stem}"] = _read_direct_requirements(path)
 
     scopes: defaultdict[str, set[str]] = defaultdict(set)
     for scope, requirements in scoped_requirements.items():
-        if not isinstance(requirements, list):
-            raise RuntimeImportClosureError(f"Dependency scope {scope!r} must be a string list")
-        typed_requirements: list[str] = []
         for requirement in requirements:
-            if not isinstance(requirement, str):
-                raise RuntimeImportClosureError(
-                    f"Dependency scope {scope!r} must be a string list"
-                )
-            typed_requirements.append(requirement)
-        for requirement in typed_requirements:
             distribution = _normalized_distribution(requirement)
             scopes[_import_name(distribution)].add(scope)
     return {name: sorted(values) for name, values in sorted(scopes.items())}
@@ -137,7 +147,7 @@ def _family_runtime_scopes(source_root: Path) -> dict[str, tuple[str, ...]]:
             ):
                 raise RuntimeImportClosureError(
                     f"models.toml family {family_name!r} has a runtime path "
-                    "outside the installable source root"
+                    "outside the runtime source root"
                 )
             scopes[raw_path].add(scope)
     return {path: tuple(sorted(values)) for path, values in sorted(scopes.items())}
@@ -335,17 +345,16 @@ def _resolved_record(
 
 def inspect_runtime_import_closure(
     source_root: Path,
-    pyproject: Path,
+    requirements_root: Path,
 ) -> dict[str, object]:
     """Return deterministic, scope-aware closure evidence or fail closed."""
 
-    project = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    scopes = _declared_import_scopes(project)
+    scopes = _declared_import_scopes(requirements_root)
     runtime_scopes = _family_runtime_scopes(source_root)
     records: list[_ImportRecord] = []
     source_files = sorted(source_root.rglob("*.py"))
     if not source_files:
-        raise RuntimeImportClosureError(f"No installable Python source found under {source_root}")
+        raise RuntimeImportClosureError(f"No Python runtime source found under {source_root}")
 
     for path in source_files:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -366,7 +375,7 @@ def inspect_runtime_import_closure(
     )
     if undeclared_static:
         raise RuntimeImportClosureError(
-            "Installable source has undeclared import-time dependencies: "
+            "Runtime source has undeclared import-time dependencies: "
             f"{undeclared_static}"
         )
     undeclared_dynamic = sorted({
@@ -376,7 +385,7 @@ def inspect_runtime_import_closure(
     })
     if undeclared_dynamic:
         raise RuntimeImportClosureError(
-            "Installable source has undeclared literal dynamic dependencies: "
+            "Runtime source has undeclared literal dynamic dependencies: "
             f"{undeclared_dynamic}"
         )
 
@@ -469,7 +478,7 @@ def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-root", type=Path, default=Path("src/fastplms"))
-    parser.add_argument("--pyproject", type=Path, default=Path("pyproject.toml"))
+    parser.add_argument("--requirements-root", type=Path, default=Path("requirements"))
     parser.add_argument(
         "--output",
         type=Path,
@@ -482,7 +491,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     payload = inspect_runtime_import_closure(
         arguments.source_root.resolve(),
-        arguments.pyproject.resolve(),
+        arguments.requirements_root.resolve(),
     )
     _atomic_json(arguments.output, payload)
     print(arguments.output)

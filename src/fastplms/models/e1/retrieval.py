@@ -19,6 +19,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import numpy as np
+import torch
 from collections import defaultdict, namedtuple
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -26,17 +28,14 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING, Any, TypedDict
-
-import numpy as np
-import torch
 from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 from transformers.utils import logging
 
 from fastplms.embeddings import Pooler
-
 from .cache import KVCache
 from .preparation import DataPrepConfig, E1BatchPreparer, get_context
+
 
 if TYPE_CHECKING:
     from .modeling_e1 import E1MaskedLMOutputWithPast
@@ -259,19 +258,22 @@ def convert_to_tensor(
             "MSA rows must have equal aligned lengths after removing insertions: "
             f"{sorted(lengths)}"
         )
-    array = np.vstack(
+    array = np.vstack(  # (n, l)
         [np.frombuffer(byte_sequence, dtype=np.uint8) for byte_sequence in byte_sequences]
     )
-    return torch.from_numpy(array).to(device)
+    return torch.from_numpy(array).to(device)  # (n, l)
 
 
 def get_num_neighbors(byte_seqs: torch.ByteTensor, sim_threshold: float = 0.8) -> list[int]:
+    # byte_seqs: (n, l)
     gap_token_id = np.frombuffer(b"-", np.uint8)[0].item()
-    seq_lens = (byte_seqs != gap_token_id).sum(dim=1)
+    seq_lens = (byte_seqs != gap_token_id).sum(dim=1)  # (n,)
     num_neighbors: list[int] = []
     for i in range(byte_seqs.shape[0]):
-        query_non_gaps = byte_seqs[i] != gap_token_id
-        seqs_sim = (byte_seqs[:, query_non_gaps] == byte_seqs[i, query_non_gaps]).sum(
+        query_non_gaps = byte_seqs[i] != gap_token_id  # (l,)
+        seqs_sim = (  # (n,)
+            byte_seqs[:, query_non_gaps] == byte_seqs[i, query_non_gaps]
+        ).sum(
             dim=1
         ) / seq_lens
         num_neighbors.append(int((seqs_sim >= sim_threshold).sum().item()))
@@ -279,7 +281,8 @@ def get_num_neighbors(byte_seqs: torch.ByteTensor, sim_threshold: float = 0.8) -
 
 
 def get_similarity_to_query(byte_seqs: torch.ByteTensor) -> torch.FloatTensor:
-    return (byte_seqs == byte_seqs[0, :]).sum(dim=1) / byte_seqs.shape[1]
+    # byte_seqs: (n, l)
+    return (byte_seqs == byte_seqs[0, :]).sum(dim=1) / byte_seqs.shape[1]  # (n,)
 
 
 def sample_context(
@@ -296,19 +299,19 @@ def sample_context(
     cache_num_neighbors_path: str | None = None,
 ) -> tuple[str, list[str]]:
     msa_sequences = parse_msa(msa_path)
-    msa_as_byte_tensor = convert_to_tensor(msa_sequences, device)
+    msa_as_byte_tensor = convert_to_tensor(msa_sequences, device)  # (n, l)
     if cache_num_neighbors_path is not None and os.path.exists(cache_num_neighbors_path):
-        num_neighbors = np.load(cache_num_neighbors_path)
+        num_neighbors = np.load(cache_num_neighbors_path)  # (n,)
     else:
-        num_neighbors = np.array(
+        num_neighbors = np.array(  # (n,)
             get_num_neighbors(msa_as_byte_tensor, neighbor_similarity_lower_bound)
         )
         if cache_num_neighbors_path is not None:
             np.save(cache_num_neighbors_path, num_neighbors)
 
-    sampling_weights = 1.0 / num_neighbors
-    query_similarity = get_similarity_to_query(msa_as_byte_tensor)
-    filtered_mask = (query_similarity <= max_query_similarity) & (
+    sampling_weights = 1.0 / num_neighbors  # (n,)
+    query_similarity = get_similarity_to_query(msa_as_byte_tensor)  # (n,)
+    filtered_mask = (query_similarity <= max_query_similarity) & (  # (n,)
         query_similarity >= min_query_similarity
     )
     if int(filtered_mask.sum()) < 1:
@@ -317,8 +320,12 @@ def sample_context(
             f"{min_query_similarity} <= query_similarity <= {max_query_similarity}."
         )
 
-    filtered_weights = np.where(filtered_mask.cpu().numpy(), sampling_weights, 0.0)
-    sampled_indices = np.random.default_rng(seed).choice(
+    filtered_weights = np.where(  # (n,)
+        filtered_mask.cpu().numpy(),
+        sampling_weights,
+        0.0,
+    )
+    sampled_indices = np.random.default_rng(seed).choice(  # (n_sampled,)
         len(filtered_weights),
         size=min(max_num_samples, int(filtered_mask.sum())),
         p=filtered_weights / filtered_weights.sum(),
@@ -380,7 +387,9 @@ def sample_multiple_contexts(
                 max_token_length=context_specification.max_token_length,
                 max_query_similarity=context_specification.max_query_similarity,
                 min_query_similarity=context_specification.min_query_similarity,
-                neighbor_similarity_lower_bound=context_specification.neighbor_similarity_lower_bound,
+                neighbor_similarity_lower_bound=(
+                    context_specification.neighbor_similarity_lower_bound
+                ),
                 use_full_sequences_in_context=use_full_sequences_in_context,
                 full_sequences_path=full_sequences_path,
                 seed=seed + i,
@@ -633,16 +642,17 @@ class ContextCache:
 
 
 def compute_ppll(logits: torch.Tensor, token_ids: torch.Tensor) -> float:
+    # logits: (l, c); token_ids: (l,)
     if token_ids.numel() == 0:
         raise ValueError("Cannot score an empty token sequence")
     if token_ids.device != logits.device:
-        token_ids = token_ids.to(logits.device)
+        token_ids = token_ids.to(logits.device)  # (l,)
     if logits.shape[0] != token_ids.shape[0]:
         raise ValueError(
             f"Logits length {logits.shape[0]} != token_ids length {token_ids.shape[0]}"
         )
-    probs = logits.softmax(dim=-1)
-    token_probs = probs.gather(dim=1, index=token_ids.unsqueeze(1)).squeeze(1)
+    probs = logits.softmax(dim=-1)  # (l, c)
+    token_probs = probs.gather(dim=1, index=token_ids.unsqueeze(1)).squeeze(1)  # (l,)
     return float(token_probs.mean().item())
 
 
@@ -716,12 +726,14 @@ class _E1ContextPredictor:
         self, sequences: list[str], sequence_metadata: list[dict[str, str | int]]
     ) -> list[E1Prediction]:
         outputs = self.predict_batch_padded(sequences)
-        outputs["logits"] = outputs["logits"].float()
-        outputs["embeddings"] = outputs["embeddings"].float()
+        outputs["logits"] = outputs["logits"].float()  # (b, l, c)
+        outputs["embeddings"] = outputs["embeddings"].float()  # (b, l, d)
 
-        token_mask = outputs["non_boundary_token_mask"] & outputs["last_sequence_mask"]
+        token_mask = (  # (b, l)
+            outputs["non_boundary_token_mask"] & outputs["last_sequence_mask"]
+        )
         if self.save_masked_positions_only:
-            token_mask = token_mask & outputs["mask_positions_mask"]
+            token_mask = token_mask & outputs["mask_positions_mask"]  # (b, l)
 
         predictions: list[E1Prediction] = []
         for i in range(len(sequences)):
@@ -729,17 +741,21 @@ class _E1ContextPredictor:
             if "context_id" in sequence_metadata[i]:
                 pred["context_id"] = sequence_metadata[i]["context_id"]
             if "logits" in self.fields_to_save:
-                pred["logits"] = outputs["logits"][i, token_mask[i]]
+                pred["logits"] = outputs["logits"][i, token_mask[i]]  # (r_i, c)
                 if not self.keep_predictions_in_gpu:
-                    pred["logits"] = pred["logits"].to("cpu")
+                    pred["logits"] = pred["logits"].to("cpu")  # (r_i, c)
             if "token_embeddings" in self.fields_to_save:
-                pred["token_embeddings"] = outputs["embeddings"][i, token_mask[i]]
+                pred["token_embeddings"] = outputs["embeddings"][i, token_mask[i]]  # (r_i, d)
                 if not self.keep_predictions_in_gpu:
-                    pred["token_embeddings"] = pred["token_embeddings"].to("cpu")
+                    pred["token_embeddings"] = pred["token_embeddings"].to("cpu")  # (r_i, d)
             if "mean_token_embeddings" in self.fields_to_save:
-                pred["mean_token_embeddings"] = outputs["embeddings"][i, token_mask[i]].mean(dim=0)
+                pred["mean_token_embeddings"] = outputs["embeddings"][
+                    i, token_mask[i]
+                ].mean(dim=0)  # (d,)
                 if not self.keep_predictions_in_gpu:
-                    pred["mean_token_embeddings"] = pred["mean_token_embeddings"].to("cpu")
+                    pred["mean_token_embeddings"] = pred["mean_token_embeddings"].to(  # (d,)
+                        "cpu"
+                    )
             predictions.append(pred)
         return predictions
 
@@ -767,12 +783,16 @@ class _E1ContextPredictor:
             if self.kv_cache is not None:
                 self.kv_cache.after_forward(batch, output)
 
-            padding_mask = batch["input_ids"] == self.batch_preparer.pad_token_id
-            last_sequence_mask = (
+            padding_mask = batch["input_ids"] == self.batch_preparer.pad_token_id  # (b, l)
+            last_sequence_mask = (  # (b, l)
                 batch["sequence_ids"] == batch["sequence_ids"].max(dim=1).values[:, None]
             )
-            boundary_token_mask = self.batch_preparer.get_boundary_token_mask(batch["input_ids"])
-            mask_positions_mask = self.batch_preparer.get_mask_positions_mask(batch["input_ids"])
+            boundary_token_mask = self.batch_preparer.get_boundary_token_mask(  # (b, l)
+                batch["input_ids"]
+            )
+            mask_positions_mask = self.batch_preparer.get_mask_positions_mask(  # (b, l)
+                batch["input_ids"]
+            )
             return {
                 "logits": output.logits,
                 "embeddings": output.last_hidden_state,
@@ -817,17 +837,18 @@ def _pool_hidden_states(
     pooling_types: list[str],
     device: torch.device,
 ) -> torch.Tensor:
+    # Each hidden_list entry: (l_i, d)
     pooler = Pooler(pooling_types)
     max_len = max(hidden.shape[0] for hidden in hidden_list)
     hidden_dim = hidden_list[0].shape[1]
     batch_size = len(hidden_list)
-    padded = torch.zeros(batch_size, max_len, hidden_dim, device=device)
-    attention_mask = torch.zeros(batch_size, max_len, device=device)
+    padded = torch.zeros(batch_size, max_len, hidden_dim, device=device)  # (b, l_max, d)
+    attention_mask = torch.zeros(batch_size, max_len, device=device)  # (b, l_max)
     for i, hidden in enumerate(hidden_list):
         seq_len = hidden.shape[0]
         padded[i, :seq_len] = hidden
         attention_mask[i, :seq_len] = 1.0
-    return pooler(padded, attention_mask)
+    return pooler(padded, attention_mask)  # (b, n_poolers * d)
 
 
 def _forward_for_embedding(

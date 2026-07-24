@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
-
 import pytest
 import torch
 import torch.nn as nn
+from collections.abc import Callable
 
 from tests.structure.support.state_contract import (
     exact_state_contract,
@@ -21,10 +20,10 @@ from tests.structure.support.state_contract import (
 class SharedParameterModel(nn.Module):
     def __init__(self) -> None:
         super().__init__()
-        parameter = nn.Parameter(torch.tensor([[1.0, 2.0]], dtype=torch.float32))
+        parameter = nn.Parameter(torch.tensor([[1.0, 2.0]], dtype=torch.float32))  # (1, 2)
         self.left = parameter
         self.right = parameter
-        self.register_buffer("counter", torch.tensor(3, dtype=torch.int64))
+        self.register_buffer("counter", torch.tensor(3, dtype=torch.int64))  # ()
 
 
 def test_exact_state_contract_covers_scalars_hashes_and_aliases() -> None:

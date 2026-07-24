@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import platform
-from importlib.metadata import PackageNotFoundError, version
-
 import torch
+from importlib.metadata import PackageNotFoundError, version
 
 
 def _package_version(name: str) -> str | None:

@@ -19,6 +19,9 @@ import random
 import re
 import secrets
 import sys
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -26,10 +29,6 @@ from functools import cache
 from importlib import metadata
 from pathlib import Path
 from typing import Any
-
-import torch
-import torch.nn.functional as F
-import torch.optim as optim
 from tqdm.auto import tqdm
 from transformers import AutoModel, AutoModelForMaskedLM
 
@@ -41,6 +40,7 @@ from fastplms.models.esmfold2.esmfold2_constants import (
     PROTEIN_3TO1,
     RES_TYPE_TO_CCD,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -278,14 +278,16 @@ def _record_model_load_identity(
 
 def build_initial_soft_sequence_logits(sequence: str, batch_size: int) -> torch.Tensor:
     if all(aa == MUTABLE_TOKEN for aa in sequence):
-        logits = 0.01 * torch.randn([batch_size, len(sequence), AA_DIMS])
-        logits[:, :, CYS_IDX] = -1e6
+        logits = 0.01 * torch.randn(
+            [batch_size, len(sequence), AA_DIMS]
+        )  # (b, l, a)
+        logits[:, :, CYS_IDX] = -1e6  # (b, l, a)
     else:
-        logits = torch.zeros([batch_size, len(sequence), AA_DIMS])
+        logits = torch.zeros([batch_size, len(sequence), AA_DIMS])  # (b, l, a)
         for i, aa in enumerate(sequence):
             if aa == MUTABLE_TOKEN:
-                logits[:, i, :] = 0.01 * torch.randn(batch_size, AA_DIMS)
-                logits[:, i, CYS_IDX] = -1e6
+                logits[:, i, :] = 0.01 * torch.randn(batch_size, AA_DIMS)  # (b, a)
+                logits[:, i, CYS_IDX] = -1e6  # (b,)
             else:
                 if aa not in PROTEIN_1TO3:
                     raise ValueError(
@@ -293,50 +295,59 @@ def build_initial_soft_sequence_logits(sequence: str, batch_size: int) -> torch.
                         "use an uppercase canonical amino acid or '#'."
                     )
                 token_id = TOKEN_IDS[PROTEIN_1TO3[aa]]
-                logits[:, i, token_id - 2] = 10.0
-    return logits.requires_grad_(True)
+                logits[:, i, token_id - 2] = 10.0  # (b,)
+    return logits.requires_grad_(True)  # (b, l, a)
 
 
 def build_gradient_mask(sequence: str, batch_size: int) -> torch.Tensor:
-    mask = torch.ones([batch_size, len(sequence), AA_DIMS])
+    mask = torch.ones([batch_size, len(sequence), AA_DIMS])  # (b, l, a)
     fixed_positions = [i for i, aa in enumerate(sequence) if aa != MUTABLE_TOKEN]
-    mask[:, fixed_positions, :] = 0.0
-    mask[:, :, CYS_IDX] = 0.0
-    return mask
+    mask[:, fixed_positions, :] = 0.0  # (b, l, a)
+    mask[:, :, CYS_IDX] = 0.0  # (b, l, a)
+    return mask  # (b, l, a)
 
 
 def sequence_to_one_hot(sequence: str, device: torch.device | str = "cuda") -> torch.Tensor:
     target_index = [TOKEN_IDS[PROTEIN_1TO3[letter]] for letter in sequence]
-    one_hot = F.one_hot(torch.tensor(target_index), num_classes=len(TOKENS))
-    return one_hot.to(device).unsqueeze(0).float()
+    one_hot = F.one_hot(
+        torch.tensor(target_index), num_classes=len(TOKENS)
+    )  # (l, v_f)
+    return one_hot.to(device).unsqueeze(0).float()  # (1, l, v_f)
 
 
 def get_mid_points() -> torch.Tensor:
-    boundaries = torch.linspace(2, 52.0, 127)
-    lower = torch.tensor([1.0])
-    upper = torch.tensor([57.0])
-    exp_boundaries = torch.cat((lower, boundaries, upper))
-    return (exp_boundaries[:-1] + exp_boundaries[1:]) / 2
+    boundaries = torch.linspace(2, 52.0, 127)  # (127,)
+    lower = torch.tensor([1.0])  # (1,)
+    upper = torch.tensor([57.0])  # (1,)
+    exp_boundaries = torch.cat((lower, boundaries, upper))  # (129,)
+    return (exp_boundaries[:-1] + exp_boundaries[1:]) / 2  # (z=128,)
 
 
 def binned_entropy(dgram: torch.Tensor, bin_distance: torch.Tensor, cutoff: float) -> torch.Tensor:
-    bin_mask = ~(bin_distance < cutoff)
-    masked_dgram = dgram - (1e7 * bin_mask)
-    px = torch.softmax(masked_dgram, dim=-1)
-    log_px = torch.log_softmax(dgram, dim=-1)
-    return -(px * log_px).sum(-1)
+    # dgram: (..., z); bin_distance: (z,)
+    bin_mask = ~(bin_distance < cutoff)  # (z,)
+    masked_dgram = dgram - (1e7 * bin_mask)  # (..., z)
+    px = torch.softmax(masked_dgram, dim=-1)  # (..., z)
+    log_px = torch.log_softmax(dgram, dim=-1)  # (..., z)
+    return -(px * log_px).sum(-1)  # (...)
 
 
 def masked_min_k(x: torch.Tensor, mask: torch.Tensor, k: int) -> torch.Tensor:
-    mask = mask.bool()
-    y = torch.sort(torch.where(mask, x, float("nan")))[0]
-    k_mask = (torch.arange(y.shape[-1]).to(y.device) < k) & (~torch.isnan(y))
-    return torch.where(k_mask, y, 0).sum(-1) / (k_mask.sum(-1) + 1e-8)
+    # x/mask: (..., n)
+    mask = mask.bool()  # (..., n)
+    y = torch.sort(torch.where(mask, x, float("nan")))[0]  # (..., n)
+    k_mask = (torch.arange(y.shape[-1]).to(y.device) < k) & (
+        ~torch.isnan(y)
+    )  # (..., n)
+    return torch.where(k_mask, y, 0).sum(-1) / (k_mask.sum(-1) + 1e-8)  # (...)
 
 
 def masked_average(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    mask = mask.bool()
-    return torch.where(mask, x, 0).sum(-1) / (torch.where(mask, 1, 0).sum(-1) + 1e-8)
+    # x/mask: (..., n)
+    mask = mask.bool()  # (..., n)
+    return torch.where(mask, x, 0).sum(-1) / (
+        torch.where(mask, 1, 0).sum(-1) + 1e-8
+    )  # (...)
 
 
 def compute_contact_loss(
@@ -348,24 +359,32 @@ def compute_contact_loss(
     chain_mask: torch.Tensor,
     binder_mask: torch.Tensor,
 ) -> torch.Tensor:
-    con_loss = binned_entropy(distogram_logits, bin_distance, cutoff)
-    position = torch.arange(distogram_logits.shape[1])
-    p_dist = position[:, None] - position[None, :]
+    # distogram_logits: (b, l, l, z); bin_distance: (z,)
+    # chain_mask/binder_mask: (l,) or broadcast-compatible with (b, l, l)
+    con_loss = binned_entropy(distogram_logits, bin_distance, cutoff)  # (b, l, l)
+    position = torch.arange(distogram_logits.shape[1])  # (l,)
+    p_dist = position[:, None] - position[None, :]  # (l, l)
     if min_sep > 0:
-        separation_mask = (torch.abs(p_dist) >= min_sep).to(distogram_logits.device)
-        binder_mask = torch.logical_and(separation_mask, binder_mask)
+        separation_mask = (torch.abs(p_dist) >= min_sep).to(
+            distogram_logits.device
+        )  # (l, l)
+        binder_mask = torch.logical_and(
+            separation_mask, binder_mask
+        )  # (l, l)
     per_residue = masked_min_k(con_loss, mask=binder_mask, k=num_contacts).to(
         distogram_logits.device
-    )
-    return masked_average(per_residue, mask=chain_mask).to(distogram_logits.device)
+    )  # (b, l)
+    return masked_average(per_residue, mask=chain_mask).to(
+        distogram_logits.device
+    )  # (b,)
 
 
 def compute_intra_contact_loss(
     distogram_logits: torch.Tensor, binder_length: int, bin_distance: torch.Tensor
 ) -> torch.Tensor:
     full_len = distogram_logits.shape[1]
-    is_binder = torch.ones(full_len, device=distogram_logits.device)
-    is_binder[:-binder_length] *= 0.0
+    is_binder = torch.ones(full_len, device=distogram_logits.device)  # (L,)
+    is_binder[:-binder_length] *= 0.0  # (L,)
     return compute_contact_loss(
         distogram_logits,
         bin_distance,
@@ -381,8 +400,8 @@ def compute_inter_contact_loss(
     distogram_logits: torch.Tensor, binder_length: int, bin_distance: torch.Tensor
 ) -> torch.Tensor:
     full_len = distogram_logits.shape[1]
-    is_binder = torch.ones(full_len, device=distogram_logits.device)
-    is_binder[:-binder_length] *= 0.0
+    is_binder = torch.ones(full_len, device=distogram_logits.device)  # (L,)
+    is_binder[:-binder_length] *= 0.0  # (L,)
     return compute_contact_loss(
         distogram_logits,
         bin_distance,
@@ -397,46 +416,57 @@ def compute_inter_contact_loss(
 def compute_globularity_loss(
     distogram_logits: torch.Tensor, binder_length: int, bin_distance: torch.Tensor
 ) -> torch.Tensor:
-    binder_disto = distogram_logits[:, -binder_length:, -binder_length:, :]
+    # distogram_logits: (b, l, l, z)
+    binder_disto = distogram_logits[
+        :, -binder_length:, -binder_length:, :
+    ]  # (b, l, l, z)
     n = binder_disto.shape[1]
-    disto_probs = torch.softmax(binder_disto, dim=-1)
-    bin_distance = bin_distance.clamp(max=27)
-    e_sq_dist = torch.sum(disto_probs * torch.square(bin_distance), dim=-1)
-    sum_sq_dist = torch.sum(torch.tril(e_sq_dist, diagonal=-1), dim=(1, 2))
-    rg_term = torch.sqrt(sum_sq_dist / (n * n))
+    disto_probs = torch.softmax(binder_disto, dim=-1)  # (b, l, l, z)
+    bin_distance = bin_distance.clamp(max=27)  # (z,)
+    e_sq_dist = torch.sum(
+        disto_probs * torch.square(bin_distance), dim=-1
+    )  # (b, l, l)
+    sum_sq_dist = torch.sum(
+        torch.tril(e_sq_dist, diagonal=-1), dim=(1, 2)
+    )  # (b,)
+    rg_term = torch.sqrt(sum_sq_dist / (n * n))  # (b,)
     rg_th = 2.38 * (n**0.365)
-    return F.elu(rg_term - rg_th)
+    return F.elu(rg_term - rg_th)  # (b,)
 
 
 def compute_structure_losses(
     distogram_logits: torch.Tensor, binder_length: int
 ) -> dict[str, torch.Tensor]:
-    bin_distance = get_mid_points().to(distogram_logits.device)
+    # distogram_logits: (b, l, l, z)
+    bin_distance = get_mid_points().to(distogram_logits.device)  # (z,)
     losses: dict[str, torch.Tensor] = {}
     losses["intra_contact_loss"] = compute_intra_contact_loss(
         distogram_logits, binder_length, bin_distance
-    )
+    )  # (b,)
     losses["inter_contact_loss"] = compute_inter_contact_loss(
         distogram_logits, binder_length, bin_distance
-    )
-    losses["glob_loss"] = compute_globularity_loss(distogram_logits, binder_length, bin_distance)
+    )  # (b,)
+    losses["glob_loss"] = compute_globularity_loss(
+        distogram_logits, binder_length, bin_distance
+    )  # (b,)
     batch = distogram_logits.size(0)
-    total = torch.tensor([0.0] * batch, device=distogram_logits.device)
-    total = total + LOSS_WEIGHTS["intra_contact"] * losses["intra_contact_loss"]
-    total = total + LOSS_WEIGHTS["inter_contact"] * losses["inter_contact_loss"]
-    total = total + LOSS_WEIGHTS["glob"] * losses["glob_loss"]
-    losses["total_loss"] = total
+    total = torch.tensor([0.0] * batch, device=distogram_logits.device)  # (b,)
+    total = total + LOSS_WEIGHTS["intra_contact"] * losses["intra_contact_loss"]  # (b,)
+    total = total + LOSS_WEIGHTS["inter_contact"] * losses["inter_contact_loss"]  # (b,)
+    total = total + LOSS_WEIGHTS["glob"] * losses["glob_loss"]  # (b,)
+    losses["total_loss"] = total  # (b,)
     return losses
 
 
 def _binding_confidence_entropy(
     dgram: torch.Tensor, bin_distance: torch.Tensor, cutoff: float
 ) -> torch.Tensor:
-    probs = torch.softmax(dgram, dim=-1)
-    cutoff_mask = bin_distance < cutoff
-    p_cut = probs[..., cutoff_mask]
-    p_cut = p_cut / (p_cut.sum(-1, keepdim=True) + 1e-8)
-    return -(p_cut * torch.log(p_cut + 1e-10)).sum(-1)
+    # dgram: (..., z); bin_distance: (z,)
+    probs = torch.softmax(dgram, dim=-1)  # (..., z)
+    cutoff_mask = bin_distance < cutoff  # (z,)
+    p_cut = probs[..., cutoff_mask]  # (..., z_c)
+    p_cut = p_cut / (p_cut.sum(-1, keepdim=True) + 1e-8)  # (..., z_c)
+    return -(p_cut * torch.log(p_cut + 1e-10)).sum(-1)  # (...)
 
 
 def _entropy_to_confidence(mean_entropy: float) -> float:
@@ -485,8 +515,9 @@ def compute_distogram_iptm_proxy(
     is_antibody: bool,
     cdr_indices: list[int] | None = None,
 ) -> dict[str, float]:
+    # distogram_logits: (b, l, l, z) or (l, l, z)
     if distogram_logits.ndim == 4:
-        distogram_logits = distogram_logits[0]
+        distogram_logits = distogram_logits[0]  # (l, l, z)
     binder_length = len(binder_sequence)
     expected_length = target_length + binder_length
     if distogram_logits.ndim != 3 or distogram_logits.shape[:2] != (
@@ -499,17 +530,18 @@ def compute_distogram_iptm_proxy(
             f"{tuple(distogram_logits.shape)}."
         )
 
-    bin_distance = get_mid_points().to(distogram_logits.device)
+    bin_distance = get_mid_points().to(distogram_logits.device)  # (z,)
     binder_start = target_length
 
     def _mean_lowest_k(entropies: torch.Tensor, k: int) -> float:
-        sorted_entropies, _ = torch.sort(entropies.reshape(-1))
+        # entropies: (...)
+        sorted_entropies, _ = torch.sort(entropies.reshape(-1))  # (n,)
         k = min(k, sorted_entropies.numel())
         return float(sorted_entropies[:k].mean())
 
     binder_to_target_entropy = _binding_confidence_entropy(
         distogram_logits[binder_start:, :target_length, :], bin_distance, cutoff=22.0
-    )
+    )  # (l_b, l_t)
     distogram_iptm_proxy = _entropy_to_confidence(
         _mean_lowest_k(binder_to_target_entropy, k=binder_length)
     )
@@ -522,7 +554,7 @@ def compute_distogram_iptm_proxy(
         cdr_rows = [binder_start + i for i in cdr_indices]
         cdr_to_target_entropy = _binding_confidence_entropy(
             distogram_logits[cdr_rows, :target_length, :], bin_distance, cutoff=22.0
-        )
+        )  # (l_cdr, l_t)
         cdr_distogram_iptm_proxy = _entropy_to_confidence(
             _mean_lowest_k(cdr_to_target_entropy, k=len(cdr_indices))
         )
@@ -546,6 +578,7 @@ _ATOM_FEATURE_DIMS = {
 
 
 def _resize_tensor(tensor: torch.Tensor, *, dim: int, size: int) -> torch.Tensor:
+    # tensor: (..., n_dim, ...)
     current = tensor.shape[dim]
     if current > size:
         raise ValueError(
@@ -556,8 +589,10 @@ def _resize_tensor(tensor: torch.Tensor, *, dim: int, size: int) -> torch.Tensor
         return tensor
     pad_shape = list(tensor.shape)
     pad_shape[dim] = size - current
-    pad = torch.zeros(pad_shape, dtype=tensor.dtype, device=tensor.device)
-    return torch.cat((tensor, pad), dim=dim)
+    pad = torch.zeros(
+        pad_shape, dtype=tensor.dtype, device=tensor.device
+    )  # (..., size - n_dim, ...)
+    return torch.cat((tensor, pad), dim=dim)  # (..., size, ...)
 
 
 def _prepared_atom_count(features: dict[str, torch.Tensor]) -> int:
@@ -580,10 +615,12 @@ def _pad_prepared_atom_features(
     max_atoms = ((largest + 31) // 32) * 32
     padded: list[tuple[dict[str, torch.Tensor], list[Any]]] = []
     for features, chain_infos in prepared:
-        resized = dict(features)
+        resized = dict(features)  # tensor values retain model-defined feature shapes
         for key, dim in _ATOM_FEATURE_DIMS.items():
             if key in resized:
-                resized[key] = _resize_tensor(resized[key], dim=dim, size=max_atoms)
+                resized[key] = _resize_tensor(
+                    resized[key], dim=dim, size=max_atoms
+                )  # atom axis -> max_atoms
         padded.append((resized, chain_infos))
     return padded
 
@@ -594,11 +631,15 @@ def prepare_esmfold2_tensors(
     max_atoms: int | None = None,
     seed: int | None = None,
 ) -> tuple[dict[str, torch.Tensor], list[Any]]:
-    features, chain_infos = model.prepare_structure_input(input_data, seed=seed)
+    features, chain_infos = model.prepare_structure_input(
+        input_data, seed=seed
+    )  # tensor values: model-defined feature shapes
     if max_atoms is not None:
         for key, dim in _ATOM_FEATURE_DIMS.items():
             if key in features:
-                features[key] = _resize_tensor(features[key], dim=dim, size=max_atoms)
+                features[key] = _resize_tensor(
+                    features[key], dim=dim, size=max_atoms
+                )  # atom axis -> max_atoms
     return features, chain_infos
 
 
@@ -625,10 +666,13 @@ def fold_and_get_distogram(
     calculate_confidence: bool = False,
     seed: int | None = None,
 ) -> dict[str, Any]:
+    # target_one_hot: (1, l_t, v_f); design: (b, l_b, a)
     padding = (2, 11)
-    padded_design = F.pad(design, padding, mode="constant", value=0)
+    padded_design = F.pad(
+        design, padding, mode="constant", value=0
+    )  # (b, l_b, v_f)
 
-    token_lists = torch.argmax(padded_design, dim=-1)
+    token_lists = torch.argmax(padded_design, dim=-1)  # (b, l_b)
     designed_seq = [
         [PROTEIN_3TO1[TOKENS[int(tkn.item())]] for tkn in token_list] for token_list in token_lists
     ]
@@ -645,17 +689,19 @@ def fold_and_get_distogram(
         )
         prepared_inputs.append(prepare_esmfold2_tensors(model, inputs_raw, seed=seed))
 
-    prepared_inputs = _pad_prepared_atom_features(prepared_inputs)
+    prepared_inputs = _pad_prepared_atom_features(
+        prepared_inputs
+    )  # tensor values share a padded atom axis
     inputs_list = [features for features, _ in prepared_inputs]
     chain_info_list = [chain_infos for _, chain_infos in prepared_inputs]
 
     inputs = {
         key: torch.cat([inp[key] for inp in inputs_list], dim=0).to(design.device)
         for key in inputs_list[0]
-    }
+    }  # tensor values: (b, ...) with model-defined trailing feature shapes
     inputs["res_type_soft"] = torch.cat(
         (target_one_hot.repeat(design.size(0), 1, 1), padded_design), dim=1
-    )
+    )  # (b, l_t + l_b, v_f)
 
     forward_kwargs: dict[str, torch.Tensor | int | bool | None] = dict(inputs)
     forward_kwargs.update(
@@ -669,7 +715,9 @@ def fold_and_get_distogram(
     )
 
     with seed_context(seed):
-        output = model(**_filter_model_forward_kwargs(model, forward_kwargs))
+        output = model(
+            **_filter_model_forward_kwargs(model, forward_kwargs)
+        )  # distogram_logits: (b, l_t + l_b, l_t + l_b, z)
 
     result: dict[str, Any] = {
         "distogram_logits": output["distogram_logits"],
@@ -692,19 +740,23 @@ def _folding_trunk_to_lm_aa_vocab_matrix(device: torch.device) -> torch.Tensor:
     tokenizer = EsmSequenceTokenizer()
     lm_vocab = sorted(tokenizer.vocab.items(), key=lambda x: x[1])
     lm_aas = [lm_vocab[i][0] for i in range(4, 24)]
-    ft_to_lm_aa_matrix = torch.zeros(20, 20)
+    ft_to_lm_aa_matrix = torch.zeros(20, 20)  # (a, a)
     for ft_idx, ft_aa in enumerate(ft_aas):
         lm_idx = lm_aas.index(ft_aa)
-        ft_to_lm_aa_matrix[ft_idx, lm_idx] = 1
-    return ft_to_lm_aa_matrix.to(device=device)
+        ft_to_lm_aa_matrix[ft_idx, lm_idx] = 1  # scalar assignment; (a, a)
+    return ft_to_lm_aa_matrix.to(device=device)  # (a, a)
 
 
 def _one_hot_from_probs(probs: torch.Tensor) -> torch.Tensor:
-    return F.one_hot(torch.argmax(probs, dim=-1), num_classes=probs.size(-1)).to(probs.dtype)
+    # probs: (..., a)
+    return F.one_hot(torch.argmax(probs, dim=-1), num_classes=probs.size(-1)).to(
+        probs.dtype
+    )  # (..., a)
 
 
 def _straight_through(discrete: torch.Tensor, continuous: torch.Tensor) -> torch.Tensor:
-    return continuous + (discrete - continuous).detach()
+    # discrete/continuous: (..., a)
+    return continuous + (discrete - continuous).detach()  # (..., a)
 
 
 def compute_fastplms_pseudoperplexity_nll(
@@ -715,58 +767,75 @@ def compute_fastplms_pseudoperplexity_nll(
     n_passes: int = 4,
     mask_fraction: float = DEFAULT_ESMC_MASK_FRACTION,
 ) -> torch.Tensor:
+    # binder_design: (b, l, a); score_mask: (b, l) or (l,)
     device = binder_design.device
     lm_vocab_size = lm_model.config.vocab_size
     model_dtype = lm_model.embed.weight.dtype
 
-    target_esm = binder_design @ _folding_trunk_to_lm_aa_vocab_matrix(device)
-    input_esm = _straight_through(_one_hot_from_probs(target_esm), target_esm)
+    target_esm = binder_design @ _folding_trunk_to_lm_aa_vocab_matrix(
+        device
+    )  # (b, l, a)
+    input_esm = _straight_through(
+        _one_hot_from_probs(target_esm), target_esm
+    )  # (b, l, a)
     input_ids = torch.zeros(
         (binder_design.size(0), binder_design.size(1) + 2, lm_vocab_size),
         dtype=model_dtype,
         device=device,
-    )
+    )  # (b, l + 2, v)
     tokenizer = lm_model.tokenizer
-    input_ids[:, 0, tokenizer.cls_token_id] = 1
-    input_ids[:, -1, tokenizer.eos_token_id] = 1
-    input_ids[:, 1:-1, 4:24] = input_esm.to(model_dtype)
+    input_ids[:, 0, tokenizer.cls_token_id] = 1  # (b, l + 2, v)
+    input_ids[:, -1, tokenizer.eos_token_id] = 1  # (b, l + 2, v)
+    input_ids[:, 1:-1, 4:24] = input_esm.to(model_dtype)  # (b, l, a)
 
     if score_mask.ndim == 1:
-        score_mask = score_mask.unsqueeze(0).expand(binder_design.size(0), -1)
+        score_mask = score_mask.unsqueeze(0).expand(
+            binder_design.size(0), -1
+        )  # (b, l)
     elif score_mask.shape != binder_design.shape[:2]:
         raise ValueError(
             f"Expected score_mask with shape {(binder_design.size(0), binder_design.size(1))}, "
             f"got {tuple(score_mask.shape)}"
         )
-    score_mask = score_mask.to(device=device, dtype=torch.bool)
+    score_mask = score_mask.to(device=device, dtype=torch.bool)  # (b, l)
 
-    mask_token = torch.zeros(lm_vocab_size, dtype=model_dtype, device=device)
-    mask_token[tokenizer.mask_token_id] = 1
+    mask_token = torch.zeros(lm_vocab_size, dtype=model_dtype, device=device)  # (v,)
+    mask_token[tokenizer.mask_token_id] = 1  # (v,)
     losses = []
     for batch_idx in range(binder_design.size(0)):
-        position_indices = score_mask[batch_idx].nonzero(as_tuple=False).flatten()
+        position_indices = (
+            score_mask[batch_idx].nonzero(as_tuple=False).flatten()
+        )  # (n,)
         num_positions = int(position_indices.numel())
         if num_positions == 0:
             raise ValueError("Pseudoperplexity score mask selected zero positions.")
 
         num_masked = max(1, math.ceil(mask_fraction * num_positions))
-        random_scores = torch.rand((n_passes, num_positions), device=device)
-        masked_offsets = random_scores.topk(num_masked, dim=-1, largest=False).indices
-        pass_masks = torch.zeros((n_passes, binder_design.size(1)), dtype=torch.bool, device=device)
+        random_scores = torch.rand((n_passes, num_positions), device=device)  # (p, n)
+        masked_offsets = random_scores.topk(
+            num_masked, dim=-1, largest=False
+        ).indices  # (p, m)
+        pass_masks = torch.zeros(
+            (n_passes, binder_design.size(1)), dtype=torch.bool, device=device
+        )  # (p, l)
         pass_masks[
             torch.arange(n_passes, device=device)[:, None],
             position_indices[masked_offsets],
-        ] = True
+        ] = True  # (p, m) selected within (p, l)
 
-        masked_sequences = input_ids[batch_idx : batch_idx + 1].repeat(n_passes, 1, 1)
-        mask_rows, mask_cols = pass_masks.nonzero(as_tuple=True)
-        masked_sequences[mask_rows, mask_cols + 1] = mask_token
+        masked_sequences = input_ids[batch_idx : batch_idx + 1].repeat(
+            n_passes, 1, 1
+        )  # (p, l + 2, v)
+        mask_rows, mask_cols = pass_masks.nonzero(
+            as_tuple=True
+        )  # each: (p * m,)
+        masked_sequences[mask_rows, mask_cols + 1] = mask_token  # (p * m, v)
 
-        target_weights = target_esm[batch_idx]
+        target_weights = target_esm[batch_idx]  # (l, a)
         masked_nlls = []
         for start in range(0, n_passes, batch_size):
             stop = min(start + batch_size, n_passes)
-            chunk = masked_sequences[start:stop]
+            chunk = masked_sequences[start:stop]  # (p_c, l + 2, v)
             with torch.autocast(
                 device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"
             ):
@@ -775,27 +844,31 @@ def compute_fastplms_pseudoperplexity_nll(
                     attention_mask=None,
                     output_hidden_states=False,
                     output_attentions=False,
-                ).last_hidden_state
-                logits = lm_model.sequence_head(hidden)
-            log_probs = logits.log_softmax(dim=-1)[:, 1:-1, 4:24]
-            nlls = -(log_probs * target_weights.to(log_probs.dtype).unsqueeze(0)).sum(dim=-1)
-            masked_nlls.append(nlls[pass_masks[start:stop]])
-        losses.append(torch.cat(masked_nlls, dim=0).mean())
-    return torch.stack(losses, dim=0)
+                ).last_hidden_state  # (p_c, l + 2, d)
+                logits = lm_model.sequence_head(hidden)  # (p_c, l + 2, v)
+            log_probs = logits.log_softmax(dim=-1)[:, 1:-1, 4:24]  # (p_c, l, a)
+            nlls = -(
+                log_probs * target_weights.to(log_probs.dtype).unsqueeze(0)
+            ).sum(dim=-1)  # (p_c, l)
+            masked_nlls.append(nlls[pass_masks[start:stop]])  # (p_c * m,)
+        losses.append(torch.cat(masked_nlls, dim=0).mean())  # ()
+    return torch.stack(losses, dim=0)  # (b,)
 
 
 def normalized_gradient_tensor(grad: torch.Tensor, gradient_mask: torch.Tensor) -> torch.Tensor:
-    masked_grad = grad * gradient_mask
-    index_has_nonzero_grad = torch.square(masked_grad).sum(-1) > 0
-    eff_l = index_has_nonzero_grad.sum(-1)
-    grad_norm = torch.linalg.norm(masked_grad, axis=(-1, -2))
+    # grad/gradient_mask: (b, l, a)
+    masked_grad = grad * gradient_mask  # (b, l, a)
+    index_has_nonzero_grad = torch.square(masked_grad).sum(-1) > 0  # (b, l)
+    eff_l = index_has_nonzero_grad.sum(-1)  # (b,)
+    grad_norm = torch.linalg.norm(masked_grad, axis=(-1, -2))  # (b,)
     normalized_grad = (masked_grad / (grad_norm[:, None, None] + 1e-7)) * torch.sqrt(
         eff_l[:, None, None]
-    )
-    return normalized_grad * gradient_mask
+    )  # (b, l, a)
+    return normalized_grad * gradient_mask  # (b, l, a)
 
 
 def _tensor_mean_float(tensor: torch.Tensor) -> float:
+    # tensor: (...)
     return float(tensor.detach().float().mean().cpu().item())
 
 
@@ -806,6 +879,7 @@ def _metric_float(output: dict[str, Any], key: str) -> float | None:
     if value is None:
         return None
     if isinstance(value, torch.Tensor):
+        # value: (...)
         return float(value.detach().float().mean().cpu().item())
     return float(value)
 
@@ -928,13 +1002,19 @@ def design_binder(
     mutable_binder_indices = [i for i, aa in enumerate(binder_sequence) if aa == MUTABLE_TOKEN]
     binder_length = len(binder_sequence)
     result_dir = _reserve_output_directory(output_dir)
-    target_one_hot = sequence_to_one_hot(target_sequence, device=device)
+    target_one_hot = sequence_to_one_hot(
+        target_sequence, device=device
+    )  # (1, l_t, v_f)
 
     with seed_context(seed), torch.device(device):
-        logits = build_initial_soft_sequence_logits(binder_sequence, batch_size=batch_size)
-        gradient_mask = build_gradient_mask(binder_sequence, batch_size=batch_size)
-    logits = logits.to(device)
-    gradient_mask = gradient_mask.to(device)
+        logits = build_initial_soft_sequence_logits(
+            binder_sequence, batch_size=batch_size
+        )  # (b, l_b, a)
+        gradient_mask = build_gradient_mask(
+            binder_sequence, batch_size=batch_size
+        )  # (b, l_b, a)
+    logits = logits.to(device)  # (b, l_b, a)
+    gradient_mask = gradient_mask.to(device)  # (b, l_b, a)
 
     trajectory: dict[int, dict[str, torch.Tensor]] = {}
     optimizer = optim.SGD([logits], lr=learning_rate)
@@ -954,7 +1034,7 @@ def design_binder(
 
         replicate_choice = random.Random(seed + step).randint(0, len(model_names) - 1)
         inversion_model = inversion_models[model_names[replicate_choice]]
-        design = F.softmax(logits / temperature, dim=-1)
+        design = F.softmax(logits / temperature, dim=-1)  # (b, l_b, a)
         calculate_confidence = temperature < 0.05
 
         fold_result = fold_and_get_distogram(
@@ -968,12 +1048,16 @@ def design_binder(
             seed=seed + step,
         )
         sequences: list[str] = fold_result["seq_list"]
-        losses = compute_structure_losses(fold_result["distogram_logits"], binder_length)
-        structure_loss = losses["total_loss"]
-        structure_grad = torch.autograd.grad(structure_loss.mean(), logits)[0]
+        losses = compute_structure_losses(
+            fold_result["distogram_logits"], binder_length
+        )  # each tensor: (b,)
+        structure_loss = losses["total_loss"]  # (b,)
+        structure_grad = torch.autograd.grad(
+            structure_loss.mean(), logits
+        )[0]  # (b, l_b, a)
 
-        design = F.softmax(logits / temperature, dim=-1)
-        score_mask = gradient_mask.sum(dim=-1) > 0
+        design = F.softmax(logits / temperature, dim=-1)  # (b, l_b, a)
+        score_mask = gradient_mask.sum(dim=-1) > 0  # (b, l_b)
         with seed_context(seed + step):
             plm_loss = compute_fastplms_pseudoperplexity_nll(
                 lm_model=lm_model,
@@ -981,23 +1065,27 @@ def design_binder(
                 score_mask=score_mask,
                 batch_size=4,
                 n_passes=4,
-            )
-        plm_grad = torch.autograd.grad(plm_loss.mean(), logits)[0]
-        candidate_logits = logits.detach().clone()
+            )  # (b,)
+        plm_grad = torch.autograd.grad(plm_loss.mean(), logits)[0]  # (b, l_b, a)
+        candidate_logits = logits.detach().clone()  # (b, l_b, a)
 
         logits.grad = normalized_gradient_tensor(structure_grad, gradient_mask) + (
             0.05 if is_antibody else 0.15
-        ) * normalized_gradient_tensor(plm_grad, gradient_mask)
+        ) * normalized_gradient_tensor(plm_grad, gradient_mask)  # (b, l_b, a)
         for group in optimizer.param_groups:
             group["lr"] = learning_rate * temperature
         optimizer.step()
 
-        step_losses = {key: value.detach().cpu() for key, value in losses.items()}
-        step_losses["plm_loss"] = plm_loss.detach().cpu()
-        step_losses["total_loss"] = (structure_loss + plm_loss).detach().cpu()
+        step_losses = {
+            key: value.detach().cpu() for key, value in losses.items()
+        }  # each tensor: (b,)
+        step_losses["plm_loss"] = plm_loss.detach().cpu()  # (b,)
+        step_losses["total_loss"] = (
+            structure_loss + plm_loss
+        ).detach().cpu()  # (b,)
         trajectory[step] = step_losses
 
-        iptm = fold_result.get("iptm")
+        iptm = fold_result.get("iptm")  # (b,) or None
         for batch_idx in range(batch_size):
             current_loss = float(step_losses["total_loss"][batch_idx].item())
             if iptm is not None and iptm[batch_idx] is not None:
@@ -1006,12 +1094,16 @@ def design_binder(
                     best_iptm[batch_idx] = current_iptm
                     best_sequences[batch_idx] = sequences[batch_idx]
                     best_loss[batch_idx] = current_loss
-                    best_logits[batch_idx] = candidate_logits[batch_idx].cpu()
+                    best_logits[batch_idx] = candidate_logits[
+                        batch_idx
+                    ].cpu()  # (l_b, a)
                     best_steps[batch_idx] = step
             elif current_loss < best_loss[batch_idx]:
                 best_sequences[batch_idx] = sequences[batch_idx]
                 best_loss[batch_idx] = current_loss
-                best_logits[batch_idx] = candidate_logits[batch_idx].cpu()
+                best_logits[batch_idx] = candidate_logits[
+                    batch_idx
+                ].cpu()  # (l_b, a)
                 best_steps[batch_idx] = step
 
         if step % log_interval == 0:
@@ -1038,7 +1130,9 @@ def design_binder(
     target_length = len(target_sequence.replace("|", ""))
     for batch_idx, best_seq in enumerate(best_sequences):
         binder_seq = best_seq.split("|")[-1]
-        binder_design = sequence_to_one_hot(binder_seq, device=device)[..., 2:22]
+        binder_design = sequence_to_one_hot(
+            binder_seq, device=device
+        )[..., 2:22]  # (1, l_b, a)
         for critic_name, critic_model in critic_models.items():
             final_fold = fold_and_get_distogram(
                 critic_model,
@@ -1051,7 +1145,9 @@ def design_binder(
                 seed=seed,
             )
             final_output = final_fold["output"]
-            final_inputs = final_fold["inputs"]
+            final_inputs = final_fold[
+                "inputs"
+            ]  # tensor values: (1, ...) with model-defined feature shapes
             chain_infos = final_fold["chain_info_list"][0]
             complex_result = critic_model.input_builder.decode(
                 final_output,
@@ -1137,7 +1233,9 @@ def _write_trajectory(path: Path, trajectory: dict[int, dict[str, torch.Tensor]]
         for step, losses in trajectory.items():
             row = {"step": step}
             for key, value in losses.items():
-                row[key] = [float(x) for x in value.reshape(-1).tolist()]
+                row[key] = [
+                    float(x) for x in value.reshape(-1).tolist()
+                ]  # (b,) -> b scalars
             handle.write(json.dumps(row) + "\n")
 
 

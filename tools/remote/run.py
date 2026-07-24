@@ -31,6 +31,7 @@ from tools.source_provenance import (
     tracked_tree_digest,
 )
 
+
 HOST_PATTERN = re.compile(r"^[A-Za-z0-9_.@:\-]+$")
 RUN_PATTERN = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$")
 GIT_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")

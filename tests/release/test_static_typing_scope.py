@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path, PurePosixPath
 
+
 ROOT = Path(__file__).resolve().parents[2]
 SCOPE_PATH = ROOT / "tools" / "typing-critical-files.txt"
 DIAGNOSTIC_SCOPE_PATH = ROOT / "tools" / "typing-diagnostic-files.txt"

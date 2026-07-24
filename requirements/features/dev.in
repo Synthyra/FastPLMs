@@ -1,0 +1,5 @@
+accelerate>=1.10,<2
+mypy>=1.18,<2
+pytest>=9,<10
+pytest-xdist>=3.8,<4
+ruff>=0.14,<1

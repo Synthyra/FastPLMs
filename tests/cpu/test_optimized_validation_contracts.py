@@ -7,11 +7,10 @@ import os
 import subprocess
 import sys
 import textwrap
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 import torch
+from pathlib import Path
+from types import SimpleNamespace
 
 from fastplms.models.dplm.modeling_dplm import FAST_DPLM_ENCODER
 from fastplms.models.dplm2.modeling_dplm2 import (
@@ -211,7 +210,7 @@ def test_sequence_model_public_validations_use_explicit_exceptions(
         )
     )
     monkeypatch.setattr(modeling_fast_esmfold, "flex_attention", None)
-    attention_heads = torch.zeros(1, 2, 3, 4)
+    attention_heads = torch.zeros(1, 2, 3, 4)  # (b=1, h=2, l=3, d_h=4)
     with pytest.raises(RuntimeError, match="Flex attention is not available"):
         fold_attention._flex_attn(
             attention_heads,
@@ -219,9 +218,9 @@ def test_sequence_model_public_validations_use_explicit_exceptions(
             attention_heads,
         )
 
-    query_layer = torch.zeros(1, 3, 2, 4)
-    key_layer = torch.zeros(1, 3, 2, 4)
-    value_layer = torch.zeros(1, 3, 2, 4)
+    query_layer = torch.zeros(1, 3, 2, 4)  # (b=1, l_q=3, h=2, d_h=4)
+    key_layer = torch.zeros(1, 3, 2, 4)  # (b, l_k=3, h, d_h)
+    value_layer = torch.zeros(1, 3, 2, 4)  # (b, l_k, h, d_h)
     with pytest.raises(
         ValueError,
         match="Shape mismatch between query layer and query sequence ids",
@@ -276,7 +275,7 @@ def test_ttt_and_e1_public_state_validations_use_explicit_exceptions() -> None:
         E1ForMaskedLM._ttt_predict_logits(SimpleNamespace(), torch.tensor([[1]]))
 
     class EmptyContexts:
-        def sample_msa_contexts(self, **_kwargs):
+        def sample_msa_contexts(self, **_kwargs: object) -> dict[str, object]:
             return {}
 
     with pytest.raises(ValueError, match="sampled MSA context"):

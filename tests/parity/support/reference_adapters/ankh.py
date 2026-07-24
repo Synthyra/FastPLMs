@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import torch
+import torch.nn as nn
 from pathlib import Path
 from typing import Any
 
-import torch
-import torch.nn as nn
-
 from tests.parity.support.reference_adapters import move_model, snapshot_path
+
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _ANKH_SUBMODULE = _REPOSITORY_ROOT / "vendor" / "upstream" / "ankh" / "src"
@@ -28,6 +28,7 @@ class _OfficialAnkhForwardWrapper(nn.Module):
         attention_mask: torch.Tensor,
         **_kwargs: Any,
     ) -> Any:
+        # input_ids: (b, l), attention_mask: (b, l)
         return self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,

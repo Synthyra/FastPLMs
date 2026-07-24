@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -15,50 +14,35 @@ def require_kernels_package() -> None:
         import kernels  # noqa: F401
     except ImportError as error:
         raise RuntimeError(
-            "Precompiled FlashAttention requires the FastPLMs 'flash' extra."
+            "Precompiled FlashAttention requires requirements/features/flash.in."
         ) from error
 
 
 def _kernel_lock_path() -> Path:
-    """Return the lock from an artifact, checkout, or installed distribution."""
+    """Return the kernel lock from a Hub artifact or source checkout."""
     source_path = Path(__file__).resolve()
-    candidates = [
+    for candidate in (
         source_path.parents[1] / "kernels.lock",
         source_path.parents[3] / "kernels.lock",
-    ]
-    try:
-        import fastplms
-
-        candidates.extend(Path(root) / "kernels.lock" for root in fastplms.__path__)
-    except (ImportError, AttributeError):
-        pass
-    for candidate in candidates:
+    ):
         if candidate.is_file():
             return candidate
 
-    try:
-        distribution = importlib.metadata.distribution("fastplms")
-    except importlib.metadata.PackageNotFoundError as error:
-        raise RuntimeError("FastPLMs was installed without kernels.lock.") from error
-    for relative in distribution.files or ():
-        if relative.name != "kernels.lock":
-            continue
-        candidate = Path(distribution.locate_file(relative))
-        if candidate.is_file():
-            return candidate
-    raise RuntimeError("The installed FastPLMs distribution does not contain kernels.lock.")
+    raise RuntimeError(
+        "kernels.lock is missing from the Hugging Face artifact or source checkout."
+    )
 
 
 def _locked_entry(lock_path: Path, repository: str) -> dict[str, Any]:
     try:
-        data = json.loads(lock_path.read_text(encoding="utf-8"))
+        lock_entries = json.loads(lock_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Unable to read the packaged kernel lock: {lock_path}") from error
-    if not isinstance(data, list):
+        raise RuntimeError(f"Unable to read the kernel lock: {lock_path}") from error
+    if not isinstance(lock_entries, list):
         raise RuntimeError("kernels.lock must contain a JSON list.")
-    if any(not isinstance(entry, dict) for entry in data):
+    if any(not isinstance(entry, dict) for entry in lock_entries):
         raise RuntimeError("Every kernels.lock entry must be a JSON object.")
-    matches = [entry for entry in data if entry.get("repo_id") == repository]
+    matches = [entry for entry in lock_entries if entry.get("repo_id") == repository]
     if len(matches) != 1:
         raise RuntimeError(
             f"kernels.lock must contain exactly one entry for {repository!r}; found {len(matches)}."
@@ -125,11 +109,11 @@ def _load_offline_locked_kernel(
         from kernels.variants import get_variants_local, resolve_variants
     except ImportError as error:
         raise RuntimeError(
-            "Precompiled FlashAttention requires the FastPLMs 'flash' extra."
+            "Precompiled FlashAttention requires requirements/features/flash.in."
         ) from error
 
-    parsed = get_variants_local(build_root)
-    parsed_names = {variant.variant_str for variant in parsed}
+    cached_variants = get_variants_local(build_root)
+    parsed_names = {variant.variant_str for variant in cached_variants}
     invalid = sorted(set(cached_names).difference(parsed_names))
     if invalid:
         raise RuntimeError(
@@ -137,7 +121,7 @@ def _load_offline_locked_kernel(
             f"{', '.join(invalid)}"
         )
 
-    compatible, _ = resolve_variants(parsed)
+    compatible, _ = resolve_variants(cached_variants)
     if len(compatible) != 1:
         names = ", ".join(variant.variant_str for variant in compatible) or "none"
         raise RuntimeError(
@@ -165,7 +149,7 @@ def load_locked_kernel(repository: str, revision: str) -> object:
         from kernels.lockfile import KernelLock
     except ImportError as error:
         raise RuntimeError(
-            "Precompiled FlashAttention requires the FastPLMs 'flash' extra."
+            "Precompiled FlashAttention requires requirements/features/flash.in."
         ) from error
 
     lock_path = _kernel_lock_path()

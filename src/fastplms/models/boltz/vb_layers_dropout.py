@@ -36,5 +36,7 @@ def get_dropout_mask(
 
     probability = float(dropout) if training else 0.0
     sample_shape = _broadcast_mask_shape(z, columnwise=columnwise)
-    keep = torch.rand(sample_shape, dtype=torch.float32, device=z.device) >= probability
-    return keep * (1.0 / (1.0 - probability))
+    keep = (
+        torch.rand(sample_shape, dtype=torch.float32, device=z.device) >= probability
+    )  # (b, 1, n, 1) or (b, n, 1, 1)
+    return keep * (1.0 / (1.0 - probability))  # same broadcast-mask shape

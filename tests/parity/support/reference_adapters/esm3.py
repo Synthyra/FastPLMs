@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import torch
 import torch.nn as nn
+from typing import Any
 
 from tests.parity.support.reference_adapters import (
     move_model,
@@ -18,6 +17,7 @@ from tests.parity.support.reference_adapters.biohub_source import (
 from tests.parity.support.reference_adapters.biohub_source import (
     reference_sources,
 )
+
 
 reference_environment = _reference_environment
 
@@ -67,6 +67,7 @@ class _OfficialESM3ForwardWrapper(nn.Module):
         if sequence_tokens is None:
             sequence_tokens = input_ids
         if sequence_id is None and attention_mask is not None:
+            # sequence_id: (b, l)
             sequence_id = attention_mask.to(dtype=torch.bool)
 
         captured: dict[str, tuple[torch.Tensor, ...]] = {}

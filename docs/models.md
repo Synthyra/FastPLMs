@@ -5,15 +5,16 @@ families, checkpoints, AutoClasses, backends, precisions, licenses, and release
 tiers. It is produced from `src/fastplms/models.toml`; edit the manifest, not the
 table.
 
-## Install and platform requirements
+## Dependencies and platform requirements
 
 FastPLMs 1.0 sequence models require Python 3.11-3.14, PyTorch 2.13, and
-Transformers 5.13. Install an immutable runtime revision before loading a Hub
-checkpoint:
+Transformers 5.13. Install those dependencies directly. The runtime source is
+loaded from the pinned Hugging Face model repository:
 
 ```bash
 python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14"
 ```
 
 Eager and SDPA are portable CPU or CUDA paths. Optimized backends and structure
@@ -355,8 +356,9 @@ storage.
 Boltz2 accepts a raw amino-acid sequence through its protein helper or prepared
 model features through its lower-level interface. It preserves trunk,
 diffusion, confidence, and export behavior. Its larger scientific dependency
-set is isolated in the `structure` extra and structure candidate image. No
-chemistry or plotting dependency enters the core package.
+set is isolated in `requirements/features/structure.in` and the structure
+candidate image. Chemistry and plotting dependencies are not part of the core
+runtime requirements.
 
 Boltz2 retains FP32 parameters and runs supported CUDA BF16 structure inference
 inside autocast. Static BF16 parameter loading is not its declared compliance

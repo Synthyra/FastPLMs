@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import sys
+import pytest
+import torch
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-import pytest
-import torch
-
 from tests.structure.support.hardware import hopper_sm90_fingerprint
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,5 +63,6 @@ def test_release_hopper_sm90_gpu_is_available_without_running_a_model() -> None:
             "cuda_total_memory": int(properties.total_memory),
         }
     )
+    # probe: (1,)
     probe = torch.ones(1, device="cuda")
     assert probe.item() == 1.0

@@ -6,6 +6,7 @@ import importlib
 
 from fastplms.registry import get_model_registry
 
+
 _CPU_FAMILIES = {
     "ankh",
     "boltz2",

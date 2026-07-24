@@ -8,7 +8,6 @@ does not import an upstream runtime package.
 from __future__ import annotations
 
 import warnings
-
 import torch
 import torch.nn.functional as functional
 from einops import einsum
@@ -18,10 +17,11 @@ def _weighted_centroid(
     coordinates: torch.Tensor,
     weights: torch.Tensor,
 ) -> torch.Tensor:
+    # coordinates: (..., n, 3); weights: (..., n, 1).
     return (coordinates * weights).sum(dim=-2, keepdim=True) / weights.sum(
         dim=-2,
         keepdim=True,
-    )
+    )  # (..., 1, 3)
 
 
 def _warn_if_alignment_is_ambiguous(
@@ -62,25 +62,25 @@ def weighted_rigid_align(
 
     output_shape = torch.broadcast_shapes(true_coords.shape, pred_coords.shape)
     *batch_shape, num_points, coordinate_dim = output_shape
-    point_weights = (mask * weights).unsqueeze(-1)
+    point_weights = (mask * weights).unsqueeze(-1)  # (..., n, 1)
 
-    true_centroid = _weighted_centroid(true_coords, point_weights)
-    pred_centroid = _weighted_centroid(pred_coords, point_weights)
-    true_centered = true_coords - true_centroid
-    pred_centered = pred_coords - pred_centroid
+    true_centroid = _weighted_centroid(true_coords, point_weights)  # (..., 1, 3)
+    pred_centroid = _weighted_centroid(pred_coords, point_weights)  # (..., 1, 3)
+    true_centered = true_coords - true_centroid  # (..., n, 3)
+    pred_centered = pred_coords - pred_centroid  # (..., n, 3)
 
     covariance = einsum(
         point_weights * pred_centered,
         true_centered,
         "... n i, ... n j -> ... i j",
-    )
+    )  # (..., 3, 3)
     original_dtype = covariance.dtype
-    covariance_fp32 = covariance.to(torch.float32)
+    covariance_fp32 = covariance.to(torch.float32)  # (..., 3, 3)
     left_vectors, singular_values, right_vectors_h = torch.linalg.svd(
         covariance_fp32,
         driver="gesvd" if covariance_fp32.is_cuda else None,
-    )
-    right_vectors = right_vectors_h.mH
+    )  # left/right: (..., 3, 3); singular_values: (..., 3)
+    right_vectors = right_vectors_h.mH  # (..., 3, 3)
     _warn_if_alignment_is_ambiguous(
         mask,
         singular_values,
@@ -92,23 +92,25 @@ def weighted_rigid_align(
         "... i j, ... k j -> ... i k",
         left_vectors,
         right_vectors,
-    ).to(torch.float32)
+    ).to(torch.float32)  # (..., 3, 3)
     orientation = torch.eye(
         coordinate_dim,
         dtype=covariance_fp32.dtype,
         device=covariance.device,
-    )[None].repeat(*batch_shape, 1, 1)
-    orientation[..., -1, -1] = torch.det(preliminary_rotation)
+    )[None].repeat(*batch_shape, 1, 1)  # (..., 3, 3)
+    orientation[..., -1, -1] = torch.det(preliminary_rotation)  # (...)
     rotation = einsum(
         left_vectors,
         orientation,
         right_vectors,
         "... i j, ... j k, ... l k -> ... i l",
-    ).to(original_dtype)
+    ).to(original_dtype)  # (..., 3, 3)
 
-    aligned = einsum(true_centered, rotation, "... n i, ... j i -> ... n j") + pred_centroid
+    aligned = (
+        einsum(true_centered, rotation, "... n i, ... j i -> ... n j") + pred_centroid
+    )  # (..., n, 3)
     aligned.detach_()
-    return aligned
+    return aligned  # (..., n, 3)
 
 
 def _smooth_lddt_for_example(
@@ -120,33 +122,38 @@ def _smooth_lddt_for_example(
     nucleic_acid_cutoff: float,
     other_cutoff: float,
 ) -> torch.Tensor:
-    true_distances = torch.cdist(true_coords, true_coords)
-    nucleotide_rows = is_nucleotide.bool().unsqueeze(-1).expand_as(true_distances)
+    # pred_coords/true_coords: (n, 3); is_nucleotide/coords_mask: (n,).
+    true_distances = torch.cdist(true_coords, true_coords)  # (n, n)
+    nucleotide_rows = is_nucleotide.bool().unsqueeze(-1).expand_as(
+        true_distances
+    )  # (n, n)
     pair_mask = torch.where(
         nucleotide_rows,
         true_distances < nucleic_acid_cutoff,
         true_distances < other_cutoff,
-    )
+    )  # (n, n)
     pair_mask &= ~torch.eye(
         pred_coords.shape[0],
         dtype=torch.bool,
         device=pred_coords.device,
-    )
-    coordinate_rows = coords_mask.bool()
-    pair_mask &= coordinate_rows.unsqueeze(-1)
-    pair_mask &= coordinate_rows.unsqueeze(-2)
+    )  # (n, n)
+    coordinate_rows = coords_mask.bool()  # (n,)
+    pair_mask &= coordinate_rows.unsqueeze(-1)  # (n, n)
+    pair_mask &= coordinate_rows.unsqueeze(-2)  # (n, n)
 
-    pair_indices = pair_mask.nonzero()
-    true_pair_distances = true_distances[pair_indices[:, 0], pair_indices[:, 1]]
+    pair_indices = pair_mask.nonzero()  # (n_pair, 2)
+    true_pair_distances = true_distances[
+        pair_indices[:, 0], pair_indices[:, 1]
+    ]  # (n_pair,)
     pred_pair_distances = functional.pairwise_distance(
         pred_coords[pair_indices[:, 0]],
         pred_coords[pair_indices[:, 1]],
-    )
-    distance_error = torch.abs(true_pair_distances - pred_pair_distances)
+    )  # (n_pair,)
+    distance_error = torch.abs(true_pair_distances - pred_pair_distances)  # (n_pair,)
     smooth_agreement = (
         sum(torch.sigmoid(threshold - distance_error) for threshold in (0.5, 1.0, 2.0, 4.0)) / 4.0
-    )
-    return smooth_agreement.sum() / (pair_indices.shape[0] + 1e-5)
+    )  # (n_pair,)
+    return smooth_agreement.sum() / (pair_indices.shape[0] + 1e-5)  # ()
 
 
 def smooth_lddt_loss(
@@ -174,5 +181,5 @@ def smooth_lddt_loss(
             other_cutoff=other_cutoff,
         )
         for index in range(true_coords.shape[0])
-    ]
-    return 1.0 - torch.stack(agreements).mean(dim=0)
+    ]  # each: ()
+    return 1.0 - torch.stack(agreements).mean(dim=0)  # ()

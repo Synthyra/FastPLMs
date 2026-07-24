@@ -5,13 +5,12 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import sys
-from difflib import SequenceMatcher
-from pathlib import Path
-from types import ModuleType
-
 import numpy as np
 import pytest
 import torch
+from difflib import SequenceMatcher
+from pathlib import Path
+from types import ModuleType
 
 from fastplms.models.boltz import vb_const
 from fastplms.models.boltz import vb_layers_attention as pair_attention
@@ -34,6 +33,7 @@ from fastplms.models.boltz import vb_tri_attn_attention as triangle_attention
 from fastplms.models.boltz import vb_tri_attn_primitives as primitives
 from fastplms.models.boltz import vb_tri_attn_utils as attention_utils
 from fastplms.models.boltz.minimal_featurizer import build_boltz2_features
+
 
 pytestmark = pytest.mark.structure
 
@@ -207,6 +207,7 @@ def test_dropout_mask_matches_upstream(
     columnwise: bool,
     training: bool,
 ) -> None:
+    # pair: (2, 5, 7, 3)
     pair = torch.empty(2, 5, 7, 3)
     torch.manual_seed(917)
     expected = upstream_dropout.get_dropout_mask(0.2, pair, training, columnwise)
@@ -236,6 +237,7 @@ def test_chunk_layer_matches_upstream(
     }
 
     def layer(left: torch.Tensor, right: torch.Tensor) -> dict[str, torch.Tensor]:
+        # left: (...), right: (...)
         return {"sum": left + right, "product": left * right}
 
     expected = upstream_attention_utils.chunk_layer(
@@ -265,6 +267,7 @@ def test_low_memory_flat_slice_matches_upstream(
     start: int,
     stop: int,
 ) -> None:
+    # tensor: (2, 3, 4, 5)
     tensor = torch.arange(2 * 3 * 4 * 5).reshape(2, 3, 4, 5)
     expected = upstream_attention_utils._chunk_slice(tensor, start, stop, 3)
     actual = attention_utils._chunk_slice(tensor, start, stop, 3)
@@ -273,9 +276,13 @@ def test_low_memory_flat_slice_matches_upstream(
 
 def test_rigid_alignment_matches_upstream(upstream_diffusion_loss: ModuleType) -> None:
     generator = torch.Generator().manual_seed(761)
+    # true_coords: (2, 8, 3)
     true_coords = torch.randn(2, 8, 3, generator=generator)
+    # pred_coords: (2, 8, 3)
     pred_coords = torch.randn(2, 8, 3, generator=generator)
+    # weights: (2, 8)
     weights = torch.rand(2, 8, generator=generator)
+    # mask: (2, 8)
     mask = torch.ones(2, 8)
     expected = upstream_diffusion_loss.weighted_rigid_align(
         true_coords,
@@ -294,9 +301,13 @@ def test_rigid_alignment_matches_upstream(upstream_diffusion_loss: ModuleType) -
 
 def test_smooth_lddt_matches_upstream(upstream_diffusion_loss: ModuleType) -> None:
     generator = torch.Generator().manual_seed(177)
+    # pred_coords: (2, 10, 3)
     pred_coords = torch.randn(2, 10, 3, generator=generator)
+    # true_coords: (2, 10, 3)
     true_coords = torch.randn(2, 10, 3, generator=generator)
+    # is_nucleotide: (2, 10)
     is_nucleotide = torch.tensor([[0.0] * 5 + [1.0] * 5] * 2)
+    # coords_mask: (2, 10)
     coords_mask = torch.ones(2, 10)
     expected = upstream_diffusion_loss.smooth_lddt_loss(
         pred_coords,
@@ -316,12 +327,15 @@ def test_smooth_lddt_matches_upstream(upstream_diffusion_loss: ModuleType) -> No
 def test_confidence_scalar_helpers_match_upstream(upstream_package: ModuleType) -> None:
     del upstream_package
     reference = importlib.import_module("boltz.model.layers.confidence_utils")
+    # logits: (2, 4, 50)
     logits = torch.randn(2, 4, 50, generator=torch.Generator().manual_seed(93))
     expected = reference.compute_aggregated_metric(logits)
     actual = confidence.compute_aggregated_metric(logits)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
+    # distances: (n,)
     distances = torch.linspace(0, 32, 17)
+    # residues: (2, 1)
     residues = torch.tensor([[25.0], [300.0]])
     expected_tm = reference.tm_function(distances, residues)
     actual_tm = confidence.tm_function(distances, residues)
@@ -343,10 +357,15 @@ def test_attention_state_and_forward_match_upstream(
         assert torch.equal(local.state_dict()[name], tensor), name
 
     generator = torch.Generator().manual_seed(33)
+    # query: (2, 5, 8)
     query = torch.randn(2, 5, 8, generator=generator)
+    # key_value: (2, 7, 8)
     key_value = torch.randn(2, 7, 8, generator=generator)
+    # triangle_bias: (2, 2, 5, 7)
     triangle_bias = torch.randn(2, 2, 5, 7, generator=generator)
+    # mask_bias: (2, 2, 5, 7)
     mask_bias = torch.zeros(2, 2, 5, 7)
+    # mask: (2, 5, 7)
     mask = torch.ones(2, 5, 7)
     expected = reference(query, key_value, triangle_bias, mask_bias, mask)
     actual = local(query, key_value, triangle_bias, mask_bias, mask)
@@ -365,6 +384,7 @@ def test_transition_state_and_dense_or_chunked_forward_match_upstream(
     assert reference.state_dict().keys() == local.state_dict().keys()
 
     # X is a deterministic transition input with shape (b, l, d).
+    # input_tensor: (2, 5, 8)
     input_tensor = torch.randn(2, 5, 8, generator=torch.Generator().manual_seed(271))
     for chunk_size in (None, 4, 16):
         expected = reference(input_tensor, chunk_size=chunk_size)
@@ -391,8 +411,11 @@ def test_pair_biased_attention_matches_upstream_and_cache_contract(
     reference.load_state_dict(local.state_dict(), strict=True)
 
     generator = torch.Generator().manual_seed(283)
+    # sequence_states: (2, 5, 8)
     sequence_states = torch.randn(2, 5, 8, generator=generator)
+    # pair_states: (2, 5, 5, 4)
     pair_states = torch.randn(2, 5, 5, 4, generator=generator)
+    # mask: (2, 5)
     mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]], dtype=torch.float32)
     expected_cache: dict[str, torch.Tensor] = {}
     actual_cache: dict[str, torch.Tensor] = {}
@@ -401,6 +424,7 @@ def test_pair_biased_attention_matches_upstream_and_cache_contract(
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
     torch.testing.assert_close(actual_cache["z"], expected_cache["z"], rtol=0, atol=0)
 
+    # replacement_pairs: (2, 5, 5, 4)
     replacement_pairs = torch.randn(2, 5, 5, 4, generator=generator)
     expected_cached = reference(
         sequence_states,
@@ -437,10 +461,14 @@ def test_pair_biased_cross_attention_matches_upstream(
     reference.load_state_dict(local.state_dict(), strict=True)
 
     generator = torch.Generator().manual_seed(307)
+    # query_states: (2, 3, 8)
     query_states = torch.randn(2, 3, 8, generator=generator)
+    # key_states: (2, 5, 8)
     key_states = torch.randn(2, 5, 8, generator=generator)
     pair_width = 4 if compute_pair_bias else 2
+    # pair_states: (2, 3, 5, pair_width)
     pair_states = torch.randn(2, 3, 5, pair_width, generator=generator)
+    # mask: (2, 5)
     mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]], dtype=torch.float32)
     expected = reference(query_states, pair_states, mask, key_states)
     actual = local(query_states, pair_states, mask, key_states)
@@ -461,7 +489,9 @@ def test_outer_product_mean_dense_and_chunked_match_upstream(
     reference.load_state_dict(local.state_dict(), strict=True)
 
     generator = torch.Generator().manual_seed(313)
+    # msa_states: (2, 3, 4, 5)
     msa_states = torch.randn(2, 3, 4, 5, generator=generator)
+    # mask: (2, 3, 4)
     mask = torch.tensor(
         [
             [[1, 1, 1, 1], [1, 1, 1, 0], [1, 1, 0, 0]],
@@ -492,8 +522,11 @@ def test_pair_weighted_averaging_matches_upstream(
     reference.load_state_dict(local.state_dict(), strict=True)
 
     generator = torch.Generator().manual_seed(331)
+    # msa_states: (2, 3, 4, 6)
     msa_states = torch.randn(2, 3, 4, 6, generator=generator)
+    # pair_states: (2, 4, 4, 5)
     pair_states = torch.randn(2, 4, 4, 5, generator=generator)
+    # mask: (2, 4, 4)
     mask = torch.tensor(
         [
             [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 0], [1, 1, 0, 0]],
@@ -535,7 +568,9 @@ def test_triangular_multiplication_matches_upstream(
     reference = reference_class(dim=4).eval()
     reference.load_state_dict(local.state_dict(), strict=True)
 
+    # pair_states: (2, 3, 3, 4)
     pair_states = torch.randn(2, 3, 3, 4, generator=torch.Generator().manual_seed(347))
+    # mask: (2, 3, 3)
     mask = torch.tensor(
         [
             [[1, 1, 1], [1, 1, 1], [1, 1, 0]],
@@ -577,7 +612,9 @@ def test_triangle_attention_dense_and_chunked_match_upstream(
     reference = reference_class(c_in=8, c_hidden=4, no_heads=2).eval()
     reference.load_state_dict(local.state_dict(), strict=True)
 
+    # pair_states: (2, 3, 3, 8)
     pair_states = torch.randn(2, 3, 3, 8, generator=torch.Generator().manual_seed(353))
+    # mask: (2, 3, 3)
     mask = torch.tensor(
         [
             [[1, 1, 1], [1, 1, 1], [1, 1, 0]],
@@ -611,9 +648,13 @@ def test_conditioned_diffusion_transformer_matches_upstream(
     assert reference.state_dict().keys() == local.state_dict().keys()
 
     generator = torch.Generator().manual_seed(367)
+    # activations: (2, 4, 8)
     activations = torch.randn(2, 4, 8, generator=generator)
+    # conditioning_states: (2, 4, 6)
     conditioning_states = torch.randn(2, 4, 6, generator=generator)
+    # pair_bias: (2, 4, 4, 4)
     pair_bias = torch.randn(2, 4, 4, 4, generator=generator)
+    # mask: (2, 4)
     mask = torch.tensor([[1, 1, 1, 1], [1, 1, 1, 0]], dtype=torch.float32)
     expected = reference(activations, conditioning_states, pair_bias, mask)
     actual = local(activations, conditioning_states, pair_bias, mask)
@@ -633,8 +674,11 @@ def test_rotation_and_coordinate_augmentation_utilities_match_upstream(
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
     generator = torch.Generator().manual_seed(379)
+    # coordinates: (2, 5, 3)
     coordinates = torch.randn(2, 5, 3, generator=generator)
+    # second: (2, 5, 3)
     second = torch.randn(2, 5, 3, generator=generator)
+    # mask: (2, 5)
     mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]], dtype=torch.float32)
     torch.manual_seed(383)
     expected = reference.center_random_augmentation(
@@ -711,9 +755,13 @@ def test_joint_and_pair_only_pairformer_layers_match_upstream(
     assert reference_joint.state_dict().keys() == local_joint.state_dict().keys()
 
     generator = torch.Generator().manual_seed(397)
+    # sequence_states: (2, 3, 8)
     sequence_states = torch.randn(2, 3, 8, generator=generator)
+    # pair_states: (2, 3, 3, 4)
     pair_states = torch.randn(2, 3, 3, 4, generator=generator)
+    # mask: (2, 3)
     mask = torch.tensor([[1, 1, 1], [1, 1, 0]], dtype=torch.float32)
+    # pair_mask: (...)
     pair_mask = mask[:, :, None] * mask[:, None, :]
     expected_s, expected_z = reference_joint(
         sequence_states,
@@ -806,6 +854,7 @@ def test_encoder_components_match_upstream_on_gpu(
     local_fourier = encoders.FourierEmbedding(8).to(device)
     reference_fourier = reference_module.FourierEmbedding(8).to(device)
     _load_local_state(reference_fourier, local_fourier)
+    # times: (2,)
     times = torch.tensor([0.1, 0.7], device=device)
     torch.testing.assert_close(
         local_fourier(times),
@@ -853,7 +902,9 @@ def test_encoder_components_match_upstream_on_gpu(
     ).to(device)
     _load_local_state(reference_single, local_single)
     generator = torch.Generator(device=device).manual_seed(401)
+    # s_trunk: (2, 5, 4)
     s_trunk = torch.randn(2, 5, 4, device=device, generator=generator)
+    # s_inputs: (2, 5, 4)
     s_inputs = torch.randn(2, 5, 4, device=device, generator=generator)
     local_single_output = local_single(times, s_trunk, s_inputs)
     reference_single_output = reference_single(times, s_trunk, s_inputs)
@@ -877,7 +928,9 @@ def test_encoder_components_match_upstream_on_gpu(
         num_transitions=2,
     ).to(device)
     _load_local_state(reference_pair, local_pair)
+    # pair_trunk: (2, 5, 5, 6)
     pair_trunk = torch.randn(2, 5, 5, 6, device=device, generator=generator)
+    # relative_pair: (2, 5, 5, 3)
     relative_pair = torch.randn(2, 5, 5, 3, device=device, generator=generator)
     torch.testing.assert_close(
         local_pair(pair_trunk, relative_pair),
@@ -889,6 +942,7 @@ def test_encoder_components_match_upstream_on_gpu(
     local_index = encoders.get_indexing_matrix(3, 4, 8, device)
     reference_index = reference_module.get_indexing_matrix(3, 4, 8, device)
     assert torch.equal(local_index, reference_index)
+    # single: (2, 12, 5)
     single = torch.randn(2, 12, 5, device=device, generator=generator)
     torch.testing.assert_close(
         encoders.single_to_keys(single, local_index, 4, 8),
@@ -922,7 +976,9 @@ def test_atom_encoder_matches_upstream_on_gpu(upstream_package: ModuleType) -> N
     _load_local_state(reference, local)
     generator = torch.Generator(device=device).manual_seed(812)
     num_tokens = features["token_index"].shape[1]
+    # s_trunk: (1, num_tokens, 8)
     s_trunk = torch.randn(1, num_tokens, 8, device=device, generator=generator)
+    # z_trunk: (1, num_tokens, num_tokens, 6)
     z_trunk = torch.randn(
         1,
         num_tokens,
@@ -935,6 +991,7 @@ def test_atom_encoder_matches_upstream_on_gpu(upstream_package: ModuleType) -> N
     reference_output = reference(features, s_trunk=s_trunk, z=z_trunk)
     for local_tensor, reference_tensor in zip(local_output[:3], reference_output[:3], strict=True):
         torch.testing.assert_close(local_tensor, reference_tensor, rtol=0, atol=0)
+    # probe: (1, features['ref_pos'].shape[1], 3)
     probe = torch.randn(
         1,
         features["ref_pos"].shape[1],
@@ -976,7 +1033,9 @@ def test_atom_attention_encoder_and_decoder_match_upstream_on_gpu(
         "structure_prediction": True,
     }
     atom_encoder = encoders.AtomEncoder(**atom_kwargs).to(device)
+    # s_trunk: (1, num_tokens, 8)
     s_trunk = torch.randn(1, num_tokens, 8, device=device, generator=generator)
+    # z_trunk: (1, num_tokens, num_tokens, 6)
     z_trunk = torch.randn(
         1,
         num_tokens,
@@ -986,6 +1045,7 @@ def test_atom_attention_encoder_and_decoder_match_upstream_on_gpu(
         generator=generator,
     )
     q, c, _, to_keys = atom_encoder(features, s_trunk=s_trunk, z=z_trunk)
+    # atom_bias: (1, num_atoms // 32, 32, 128, 2)
     atom_bias = torch.randn(
         1,
         num_atoms // 32,
@@ -1008,6 +1068,7 @@ def test_atom_attention_encoder_and_decoder_match_upstream_on_gpu(
     local_encoder = encoders.AtomAttentionEncoder(**encoder_kwargs).to(device)
     reference_encoder = reference_module.AtomAttentionEncoder(**encoder_kwargs).to(device)
     _load_local_state(reference_encoder, local_encoder)
+    # coordinates: (1, num_atoms, 3)
     coordinates = torch.randn(1, num_atoms, 3, device=device, generator=generator)
     local_encoded = local_encoder(
         features,
@@ -1043,6 +1104,7 @@ def test_atom_attention_encoder_and_decoder_match_upstream_on_gpu(
     local_decoder = encoders.AtomAttentionDecoder(**decoder_kwargs).to(device)
     reference_decoder = reference_module.AtomAttentionDecoder(**decoder_kwargs).to(device)
     _load_local_state(reference_decoder, local_decoder)
+    # token_update: (1, num_tokens, 16)
     token_update = torch.randn(
         1,
         num_tokens,
@@ -1095,8 +1157,10 @@ def test_potential_geometry_and_gradients_match_upstream_on_gpu(
     reference_module = importlib.import_module("boltz.model.potentials.potentials")
     device = torch.device("cuda")
     generator = torch.Generator(device=device).manual_seed(1211)
+    # coordinates: (2, 9, 3)
     coordinates = torch.randn(2, 9, 3, device=device, generator=generator)
 
+    # pair_index: (2, 3)
     pair_index = torch.tensor([[0, 2, 4], [1, 5, 8]], device=device)
     for local, reference, is_distance in (
         (
@@ -1132,9 +1196,13 @@ def test_potential_geometry_and_gradients_match_upstream_on_gpu(
             reference.compute_variable(coordinates, index, compute_gradient=True),
         )
 
+    # values: (1, 3)
     values = torch.tensor([[-2.0, 0.5, 4.0]], device=device)
+    # k: (3,)
     k = torch.tensor([1.0, 2.0, 3.0], device=device)
+    # lower: (3,)
     lower = torch.tensor([-1.0, 0.0, 1.0], device=device)
+    # upper: (3,)
     upper = torch.tensor([1.0, 2.0, 3.0], device=device)
     _assert_tree_equal(
         potentials.FlatBottomPotential.compute_function(
@@ -1200,6 +1268,7 @@ def test_potential_argument_builders_match_upstream_on_gpu(
         dtype=torch.float32,
         device=device,
     )[None]
+    # ref_element: (1, 8, 128)
     ref_element = torch.zeros(1, 8, 128, device=device)
     ref_element[..., 6] = 1
     features = {

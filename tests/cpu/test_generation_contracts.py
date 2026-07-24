@@ -9,6 +9,7 @@ from fastplms.models.esm3.modeling_esm3 import FastESM3Config, FastESM3Model
 from tests.integration import test_dplm_generation as dplm_contracts
 from tests.integration import test_esm3 as esm3_contracts
 
+
 _integration_dplm_config = dplm_contracts._common_config
 
 
@@ -143,10 +144,13 @@ test_esm3_uses_hugging_face_initialization_and_only_retains_requested_states = (
 
 def test_esm3_sequence_only_forward() -> None:
     model = _cpu_small_esm3_model()
-    batch = model.tokenize_sequences(["MKTAYIAKQ", "GGGG"], device=model.device)
+    batch = model.tokenize_sequences(  # each token track: (b=2, l)
+        ["MKTAYIAKQ", "GGGG"],
+        device=model.device,
+    )
 
     with torch.inference_mode():
-        output = model(**batch)
+        output = model(**batch)  # sequence logits: (b, l, vocab)
 
     assert output.logits is not None
     assert output.logits.shape == (*batch["input_ids"].shape, model.config.vocab_size)
@@ -164,9 +168,9 @@ def test_esm3_sequence_only_forward() -> None:
 
 def test_esm3_advertised_model_logits_backward() -> None:
     model = esm3_contracts._small_model().train()
-    batch = model.tokenize_sequences(["MKT", "GG"], device=model.device)
-    output = model(**batch, return_dict=True)
-    loss = output.sequence_logits.float().square().mean()
+    batch = model.tokenize_sequences(["MKT", "GG"], device=model.device)  # tracks: (b=2, l)
+    output = model(**batch, return_dict=True)  # sequence logits: (b, l, vocab)
+    loss = output.sequence_logits.float().square().mean()  # ()
 
     assert torch.isfinite(loss)
     loss.backward()

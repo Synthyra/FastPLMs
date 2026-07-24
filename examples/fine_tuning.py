@@ -19,15 +19,14 @@ import shutil
 import sys
 import tempfile
 import uuid
+import numpy as np
+import torch
 from collections.abc import Callable, Iterator, Mapping
 from functools import wraps
 from importlib import metadata
 from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, ParamSpec, TypeVar, cast
-
-import numpy as np
-import torch
 from datasets import load_dataset
 from peft import LoraConfig, PeftModel, get_peft_model
 from torch.utils.data import Dataset as TorchDataset
@@ -39,6 +38,7 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
+
 
 DEFAULT_MODEL = "Synthyra/ESM2-8M"
 DEFAULT_MODEL_REVISION = "185ecbd45665d050a8dae326d91886d330c5f9d0"
@@ -66,7 +66,6 @@ _PINNED_DEFAULT_REVISIONS = {
     ("dataset", DEFAULT_REGRESSION_TEST_DATASET): DEFAULT_REGRESSION_TEST_DATASET_REVISION,
 }
 
-# Shared arguments for the trainer
 BASE_TRAINER_KWARGS = {
     "warmup_steps": 500,
     "weight_decay": 0.01,
@@ -187,7 +186,6 @@ def _ensure_classifier_persistence(lora_config: Any) -> Any:
     return lora_config
 
 
-# Dataset classes
 class PairDatasetHF(TorchDataset):
     """
     Dataset class for protein pair data (e.g., protein-protein interactions).
@@ -283,7 +281,7 @@ def _encoded_length(tokenizer: Any, sequence: str, pair: str | None = None) -> i
         truncation=False,
         return_attention_mask=False,
     )
-    input_ids = encoded["input_ids"]
+    input_ids = encoded["input_ids"]  # (l,) or (1, l) when returned as a tensor
     if isinstance(input_ids, torch.Tensor):
         return int(input_ids.shape[-1])
     if input_ids and isinstance(input_ids[0], list):
@@ -325,17 +323,17 @@ class PairCollator:
 
     def __call__(self, batch: list[tuple[str, str, float | int]]) -> dict[str, torch.Tensor]:
         seqs_a, seqs_b, labels = zip(*batch, strict=True)
-        labels = torch.tensor(labels)
-        labels = labels.float() if self.regression else labels.long()
+        labels = torch.tensor(labels)  # (b,)
+        labels = labels.float() if self.regression else labels.long()  # (b,)
         tokenized = self.tokenizer(
             seqs_a,
             seqs_b,
             **_tokenization_kwargs(self.max_length, pair=True),
-        )
+        )  # input_ids/attention_mask: (b, l)
         return {
-            "input_ids": tokenized["input_ids"],
-            "attention_mask": tokenized["attention_mask"],
-            "labels": labels,
+            "input_ids": tokenized["input_ids"],  # (b, l)
+            "attention_mask": tokenized["attention_mask"],  # (b, l)
+            "labels": labels,  # (b,)
         }
 
 
@@ -361,16 +359,16 @@ class SequenceCollator:
 
     def __call__(self, batch: list[tuple[str, float | int]]) -> dict[str, torch.Tensor]:
         seqs, labels = zip(*batch, strict=True)
-        labels = torch.tensor(labels)
-        labels = labels.float() if self.regression else labels.long()
+        labels = torch.tensor(labels)  # (b,)
+        labels = labels.float() if self.regression else labels.long()  # (b,)
         tokenized = self.tokenizer(
             seqs,
             **_tokenization_kwargs(self.max_length, pair=False),
-        )
+        )  # input_ids/attention_mask: (b, l)
         return {
-            "input_ids": tokenized["input_ids"],
-            "attention_mask": tokenized["attention_mask"],
-            "labels": labels,
+            "input_ids": tokenized["input_ids"],  # (b, l)
+            "attention_mask": tokenized["attention_mask"],  # (b, l)
+            "labels": labels,  # (b,)
         }
 
 
@@ -604,7 +602,6 @@ def _effective_attention_backend(model: Any) -> str | None:
     return None
 
 
-# Get the model ready, with or without LoRA
 def initialize_model(
     model_name: str,
     num_labels: int,
@@ -646,7 +643,6 @@ def initialize_model(
         {"revision": source_identity["revision"]} if source_identity["kind"] == "hub" else {}
     )
 
-    # Load base model
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
         trust_remote_code=True,
@@ -662,9 +658,7 @@ def initialize_model(
         )
     tokenizer = model.tokenizer
 
-    # Apply LoRA if requested
     if use_lora:
-        # Default LoRA configuration if none provided
         if lora_config is None:
             # Target modules for the ESM2 sequence-classification artifacts.
             target_modules = ["layernorm_qkv.1", "out_proj", "query", "key", "value", "dense"]
@@ -683,10 +677,8 @@ def initialize_model(
         # checkpoint and restore an untrained head after reload.
         lora_config = _ensure_classifier_persistence(lora_config)
 
-        # Apply LoRA to the model
         model = get_peft_model(model, lora_config)
 
-        # Print parameter statistics
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         non_trainable_params = total_params - trainable_params
@@ -831,7 +823,7 @@ def _write_training_manifest(
 
     config = model.config
     model_configuration = _json_safe(config.to_dict())
-    parameter = next(iter(model.parameters()), None)
+    parameter = next(iter(model.parameters()), None)  # model-defined parameter shape
     attention_backend = _effective_attention_backend(model)
     adapter_configuration = {
         str(name): _json_safe(adapter_config.to_dict())
@@ -956,7 +948,8 @@ def _write_training_manifest(
 
 
 def _tensor_sha256(tensor: torch.Tensor) -> str:
-    value = tensor.detach().cpu().contiguous()
+    # tensor: (...)
+    value = tensor.detach().cpu().contiguous()  # (...)
     return hashlib.sha256(value.view(torch.uint8).numpy().tobytes()).hexdigest()
 
 
@@ -981,13 +974,13 @@ def _persisted_parameter_hashes(model: Any, *, use_lora: bool) -> dict[str, str]
 def _primary_prediction_tensor(predictions: Any) -> torch.Tensor:
     """Normalize Trainer and model prediction containers to a CPU tensor."""
 
-    value = predictions[0] if isinstance(predictions, tuple) else predictions
+    value = predictions[0] if isinstance(predictions, tuple) else predictions  # (...)
     if not isinstance(value, (np.ndarray, torch.Tensor)):
         raise TypeError(
             "Held-out verification expected logits as a NumPy array or Torch tensor, "
             f"got {type(value).__name__}."
         )
-    return torch.as_tensor(value).detach().cpu()
+    return torch.as_tensor(value).detach().cpu()  # (...)
 
 
 def _held_out_reload_verification(
@@ -1007,7 +1000,7 @@ def _held_out_reload_verification(
     prediction_values = getattr(prediction_output, "predictions", None)
     if prediction_values is None:
         prediction_values = prediction_output[0]
-    expected = _primary_prediction_tensor(prediction_values)
+    expected = _primary_prediction_tensor(prediction_values)  # (b_v, c)
 
     batch = data_collator(held_out_rows)
     if not isinstance(batch, Mapping):
@@ -1016,7 +1009,7 @@ def _held_out_reload_verification(
     prepared_batch = {
         key: value.to(device) if isinstance(value, torch.Tensor) else value
         for key, value in batch.items()
-    }
+    }  # input_ids/attention_mask: (b_v, l); labels: (b_v,)
     reloaded_model = reloaded_model.to(device).eval()
     use_bf16 = bool(getattr(trainer.args, "bf16", False))
     use_fp16 = bool(getattr(trainer.args, "fp16", False))
@@ -1027,11 +1020,13 @@ def _held_out_reload_verification(
         autocast_dtype = torch.float16
     with torch.inference_mode():
         if autocast_dtype is None:
-            output = reloaded_model(**prepared_batch)
+            output = reloaded_model(**prepared_batch)  # logits: (b_v, c)
         else:
             with torch.autocast(device_type=device.type, dtype=autocast_dtype):
-                output = reloaded_model(**prepared_batch)
-    observed = _primary_prediction_tensor(output.logits if hasattr(output, "logits") else output[0])
+                output = reloaded_model(**prepared_batch)  # logits: (b_v, c)
+    observed = _primary_prediction_tensor(
+        output.logits if hasattr(output, "logits") else output[0]
+    )  # (b_v, c)
     if observed.shape != expected.shape:
         raise RuntimeError(
             "Final model reload changed held-out prediction shape: "
@@ -1043,8 +1038,8 @@ def _held_out_reload_verification(
         rtol, atol = 1e-3, 1e-3
     else:
         rtol, atol = 1e-5, 1e-6
-    expected_float = expected.float()
-    observed_float = observed.float()
+    expected_float = expected.float()  # (b_v, c)
+    observed_float = observed.float()  # (b_v, c)
     try:
         torch.testing.assert_close(
             observed_float,
@@ -1057,8 +1052,8 @@ def _held_out_reload_verification(
             "Final model reload changed held-out logits beyond the configured "
             f"dtype tolerance (rtol={rtol}, atol={atol})."
         ) from error
-    absolute_error = (observed_float - expected_float).abs()
-    relative_error = absolute_error / expected_float.abs().clamp_min(atol)
+    absolute_error = (observed_float - expected_float).abs()  # (b_v, c)
+    relative_error = absolute_error / expected_float.abs().clamp_min(atol)  # (b_v, c)
     return {
         "rows": len(held_out_rows),
         "shape": list(expected.shape),
@@ -1197,37 +1192,40 @@ def _save_reload_verify_final_artifact(
     }
 
 
-# For computing performance metrics, it's fairly straightforward to add more metrics here
 def _rankdata(values: np.ndarray) -> np.ndarray:
     """Return average ranks for ties without requiring the reporting extra."""
 
-    flattened = np.asarray(values).reshape(-1)
-    order = np.argsort(flattened, kind="mergesort")
-    sorted_values = flattened[order]
-    ranks = np.empty(flattened.size, dtype=np.float64)
+    # values: (...)
+    flattened = np.asarray(values).reshape(-1)  # (n,)
+    order = np.argsort(flattened, kind="mergesort")  # (n,)
+    sorted_values = flattened[order]  # (n,)
+    ranks = np.empty(flattened.size, dtype=np.float64)  # (n,)
     start = 0
     while start < flattened.size:
         stop = start + 1
         while stop < flattened.size and sorted_values[stop] == sorted_values[start]:
             stop += 1
-        ranks[order[start:stop]] = (start + stop - 1) / 2 + 1
+        ranks[order[start:stop]] = (start + stop - 1) / 2 + 1  # (stop - start,)
         start = stop
-    return ranks
+    return ranks  # (n,)
 
 
 def _spearman_correlation(predictions: np.ndarray, labels: np.ndarray) -> float:
-    prediction_ranks = _rankdata(predictions)
-    label_ranks = _rankdata(labels)
+    # predictions/labels: same-size arrays of arbitrary rank
+    prediction_ranks = _rankdata(predictions)  # (n,)
+    label_ranks = _rankdata(labels)  # (n,)
     if prediction_ranks.size < 2:
         return float("nan")
-    correlation = np.corrcoef(prediction_ranks, label_ranks)[0, 1]
+    correlation = np.corrcoef(prediction_ranks, label_ranks)[0, 1]  # ()
     return float(correlation)
 
 
 def compute_metrics_regression(p: EvalPrediction) -> dict[str, float]:
     """Compute Spearman correlation for regression tasks."""
-    predictions, labels = p.predictions, p.label_ids
-    predictions = predictions[0] if isinstance(predictions, tuple) else predictions
+    predictions, labels = p.predictions, p.label_ids  # predictions: (...); labels: (...)
+    predictions = (
+        predictions[0] if isinstance(predictions, tuple) else predictions
+    )  # (...)
     return {
         "spearman_correlation": _spearman_correlation(
             predictions,
@@ -1238,16 +1236,17 @@ def compute_metrics_regression(p: EvalPrediction) -> dict[str, float]:
 
 def compute_metrics_classification(p: EvalPrediction) -> dict[str, float]:
     """Compute accuracy for classification tasks"""
-    predictions, labels = p.predictions, p.label_ids
-    predictions = predictions[0] if isinstance(predictions, tuple) else predictions
-    predictions = np.argmax(predictions, axis=-1)
+    predictions, labels = p.predictions, p.label_ids  # predictions: (n, c); labels: (n,)
+    predictions = (
+        predictions[0] if isinstance(predictions, tuple) else predictions
+    )  # (n, c)
+    predictions = np.argmax(predictions, axis=-1)  # (n,)
 
-    accuracy = (predictions.flatten() == labels.flatten()).mean()
+    accuracy = (predictions.flatten() == labels.flatten()).mean()  # ()
 
     return {"accuracy": accuracy}
 
 
-# For plotting the results, it's fairly straightforward to add more plots here
 def _save_figure_exclusive(figure: Any, output_path: str | Path) -> Path:
     """Save one PNG without replacing an existing report artifact."""
 
@@ -1291,21 +1290,18 @@ def plot_regression_results(
     import seaborn as sns
     from scipy.stats import spearmanr
 
-    # Calculate Spearman correlation
+    # preds/labels: (n,)
     correlation, p_value = spearmanr(preds, labels)
 
-    # Create scatter plot
     figure, axis = plt.subplots(figsize=(10, 8))
     sns.scatterplot(x=labels, y=preds, alpha=0.6, ax=axis)
 
-    # Add regression line
     sns.regplot(x=labels, y=preds, scatter=False, color="red", ax=axis)
 
     axis.set_title(f"{task_name} - Spearman Correlation: {correlation:.3f} (p={p_value:.3e})")
     axis.set_xlabel("True Values")
     axis.set_ylabel("Predicted Values")
 
-    # Add correlation text
     axis.annotate(
         f"rho = {correlation:.3f}",
         xy=(0.05, 0.95),
@@ -1343,18 +1339,16 @@ def plot_classification_results(
     import matplotlib.pyplot as plt
     from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 
-    # Get predictions
-    predictions, labels, _ = trainer.predict(test_dataset)
-    preds = predictions[0] if isinstance(predictions, tuple) else predictions
-    pred_values = np.argmax(preds, axis=1)
+    predictions, labels, _ = trainer.predict(
+        test_dataset
+    )  # predictions: (n, c); labels: (n,)
+    preds = predictions[0] if isinstance(predictions, tuple) else predictions  # (n, c)
+    pred_values = np.argmax(preds, axis=1)  # (n,)
 
-    # Calculate accuracy
-    accuracy = (pred_values == labels).mean()
+    accuracy = (pred_values == labels).mean()  # ()
 
-    # Create confusion matrix
-    cm = confusion_matrix(labels, pred_values)
+    cm = confusion_matrix(labels, pred_values)  # (c, c)
 
-    # Plot confusion matrix
     figure, axis = plt.subplots(figsize=(10, 8))
     disp = ConfusionMatrixDisplay(confusion_matrix=cm)
     disp.plot(cmap=plt.cm.Blues, ax=axis)
@@ -1369,7 +1363,6 @@ def plot_classification_results(
     return accuracy
 
 
-# Training functions
 @_guard_training_output(
     lora_default="./results_regression_lora",
     full_default="./results_regression",
@@ -1490,15 +1483,12 @@ def train_regression_model(
         },
     }
 
-    # Create datasets
     train_dataset = PairDatasetHF(train_data, "SeqA", "SeqB", "labels", max_length=max_length)
     valid_dataset = PairDatasetHF(valid_data, "SeqA", "SeqB", "labels", max_length=max_length)
     test_dataset = PairDatasetHF(test_data, "SeqA", "SeqB", "labels", max_length=max_length)
 
-    # Create data collator
     data_collator = PairCollator(tokenizer, regression=True, max_length=max_length)
 
-    # Define training arguments
     if output_dir is None:
         raise RuntimeError("The output reservation guard did not supply a directory.")
     output_dir = str(Path(output_dir))
@@ -1518,7 +1508,6 @@ def train_regression_model(
         **BASE_TRAINER_KWARGS,
     )
 
-    # Create trainer
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -1569,11 +1558,12 @@ def train_regression_model(
         requested_attention_backend=attn_backend,
     )
 
-    # Evaluate and visualize results
     print("Evaluating and visualizing results...")
-    predictions, labels, _prediction_metrics = trainer.predict(test_dataset)
-    preds = predictions[0] if isinstance(predictions, tuple) else predictions
-    label_values = cast(np.ndarray, labels)
+    predictions, labels, _prediction_metrics = trainer.predict(
+        test_dataset
+    )  # predictions: (n, 1); labels: (n,)
+    preds = predictions[0] if isinstance(predictions, tuple) else predictions  # (n, 1)
+    label_values = cast(np.ndarray, labels)  # (n,)
     if plot_results:
         correlation = plot_regression_results(
             preds.flatten(),
@@ -1655,7 +1645,6 @@ def train_classification_model(
     def _filter_by_length(example: Any) -> bool:
         return _fits_token_budget(tokenizer, example["seqs"], None, max_length)
 
-    # Load datasets
     train_data = data["train"].filter(_filter_by_length)
     valid_data = data["valid"].filter(_filter_by_length)
     test_data = data["test"].filter(_filter_by_length)
@@ -1683,15 +1672,12 @@ def train_classification_model(
         )
     }
 
-    # Create datasets
     train_dataset = SequenceDatasetHF(train_data, "seqs", "labels", max_length=max_length)
     valid_dataset = SequenceDatasetHF(valid_data, "seqs", "labels", max_length=max_length)
     test_dataset = SequenceDatasetHF(test_data, "seqs", "labels", max_length=max_length)
 
-    # Create data collator
     data_collator = SequenceCollator(tokenizer, regression=False, max_length=max_length)
 
-    # Define training arguments
     if output_dir is None:
         raise RuntimeError("The output reservation guard did not supply a directory.")
     output_dir = str(Path(output_dir))
@@ -1711,7 +1697,6 @@ def train_classification_model(
         **BASE_TRAINER_KWARGS,
     )
 
-    # Create trainer
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -1762,7 +1747,6 @@ def train_classification_model(
         requested_attention_backend=attn_backend,
     )
 
-    # Evaluate and visualize results
     print("Evaluating and visualizing results...")
     if plot_results:
         accuracy = plot_classification_results(
@@ -1772,10 +1756,17 @@ def train_classification_model(
             "Protein Solubility",
         )
     else:
-        predictions, labels, _ = trainer.predict(test_dataset)
-        preds = predictions[0] if isinstance(predictions, tuple) else predictions
-        label_values = cast(np.ndarray, labels)
-        accuracy = float((np.argmax(preds, axis=-1).reshape(-1) == label_values.reshape(-1)).mean())
+        predictions, labels, _ = trainer.predict(
+            test_dataset
+        )  # predictions: (n, c); labels: (n,)
+        preds = predictions[0] if isinstance(predictions, tuple) else predictions  # (n, c)
+        label_values = cast(np.ndarray, labels)  # (n,)
+        accuracy = float(
+            (
+                np.argmax(preds, axis=-1).reshape(-1)
+                == label_values.reshape(-1)
+            ).mean()
+        )  # ()
     print(f"Final accuracy on test set: {accuracy:.3f}")
 
     return trainer
@@ -1907,7 +1898,6 @@ def main(argv: list[str] | None = None) -> int:
         )
     _ensure_output_paths_available(planned_output_dirs)
 
-    # Print training configuration
     print("\n" + "=" * 50)
     print("TRAINING CONFIGURATION")
     print("=" * 50)
@@ -1926,7 +1916,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Full determinism: {args.full_determinism}")
     print("=" * 50 + "\n")
 
-    # Train regression model if required
     if args.task in ["regression", "both"]:
         print("\n" + "=" * 50)
         print("TRAINING REGRESSION MODEL")
@@ -1954,7 +1943,6 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=(args.output_dir / ("regression_lora" if args.use_lora else "regression")),
         )
 
-    # Train classification model if required
     if args.task in ["classification", "both"]:
         print("\n" + "=" * 50)
         print("TRAINING CLASSIFICATION MODEL")

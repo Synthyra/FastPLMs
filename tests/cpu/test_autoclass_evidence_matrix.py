@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
-
 import pytest
+from dataclasses import dataclass
 from transformers import PretrainedConfig
 
 from fastplms.registry import get_model_registry

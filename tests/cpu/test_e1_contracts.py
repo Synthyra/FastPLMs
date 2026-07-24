@@ -2,9 +2,12 @@
 
 import pytest
 import torch
+from pathlib import Path
+from typing import Literal
 
 from fastplms.embeddings import EmbeddingResult, load_sqlite_result
 from tests.unit import test_e1_cache_contract as contracts
+
 
 test_e1_cache_hit_does_not_slice_target_outputs_twice = (
     contracts.test_e1_cache_hit_does_not_slice_target_outputs_twice
@@ -51,7 +54,10 @@ test_e1_encoder_embedding_filters_training_only_preparer_fields = (
 
 
 @pytest.mark.parametrize("pooling", ("mean", "cls"))
-def test_e1_msa_embeddings_use_ordered_shared_sqlite_persistence(tmp_path, pooling) -> None:
+def test_e1_msa_embeddings_use_ordered_shared_sqlite_persistence(
+    tmp_path: Path,
+    pooling: Literal["mean", "cls"],
+) -> None:
     model = contracts.E1ForMaskedLM(contracts._tiny_e1_config()).eval()
     output = tmp_path / f"e1-msa-{pooling}.sqlite"
 
@@ -90,17 +96,21 @@ def test_e1_msa_embeddings_use_ordered_shared_sqlite_persistence(tmp_path, pooli
 def test_e1_mlm_loss_excludes_hf_ignore_and_padding_labels_from_normalization() -> None:
     model = contracts.E1ForMaskedLM(contracts._tiny_e1_config()).eval()
     batch = contracts._tiny_e1_batch()
-    labels = torch.tensor(
+    labels = torch.tensor(  # (b=1, l=4)
         [[-100, 5, model.model.padding_idx, -100]],
         dtype=torch.long,
     )
 
     output = model(**batch, labels=labels, return_dict=True)
     assert output.loss is not None
-    valid = labels.ne(-100) & labels.ne(model.model.padding_idx)
-    expected = torch.nn.functional.cross_entropy(output.logits[valid], labels[valid])
+    valid = labels.ne(-100) & labels.ne(model.model.padding_idx)  # (b, l)
+    expected = torch.nn.functional.cross_entropy(output.logits[valid], labels[valid])  # ()
 
     torch.testing.assert_close(output.loss, expected)
-    actual_gradient = torch.autograd.grad(output.loss, output.logits, retain_graph=True)[0]
-    expected_gradient = torch.autograd.grad(expected, output.logits)[0]
+    actual_gradient = torch.autograd.grad(  # (b, l, vocab)
+        output.loss,
+        output.logits,
+        retain_graph=True,
+    )[0]
+    expected_gradient = torch.autograd.grad(expected, output.logits)[0]  # (b, l, vocab)
     torch.testing.assert_close(actual_gradient, expected_gradient)

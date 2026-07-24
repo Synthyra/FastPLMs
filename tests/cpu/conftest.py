@@ -24,6 +24,7 @@ from tests.cpu.resource_telemetry import (
     select_concurrent_memory_gate,
 )
 
+
 if os.environ.get("FASTPLMS_CPU_BOOTSTRAPPED") != "1" or not getattr(
     builtins,
     "_fastplms_cpu_process_bootstrapped",

@@ -6,10 +6,10 @@ inside isolated official-reference containers and candidate containers.
 
 from __future__ import annotations
 
-from typing import Any
-
 import torch
 import torch.nn as nn
+from typing import Any
+
 
 SEMANTIC_PATHS: dict[str, tuple[str, ...]] = {
     "vocab_size": (

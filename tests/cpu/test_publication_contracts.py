@@ -2,12 +2,11 @@
 
 import hashlib
 import json
+import pytest
+import torch
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
-
-import pytest
-import torch
 from huggingface_hub import CommitOperationAdd, CommitOperationDelete
 from safetensors.torch import save_file
 
@@ -30,6 +29,7 @@ from tools.artifacts.build import (
     validate_artifact,
     validate_weight_artifact,
 )
+
 
 # Register the release module's immutable source fixture when these contracts are
 # collected through this CPU-only allowlist module.
@@ -274,12 +274,12 @@ def test_complete_ankh_multishard_inventory_is_published_atomically(
     prepared_weights.mkdir()
     shard_states = (
         {
-            "shared.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
-            "encoder.block.0.layer.0.SelfAttention.q.weight": torch.ones(4, 4),
+            "shared.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),  # (vocab, d)
+            "encoder.block.0.layer.0.SelfAttention.q.weight": torch.ones(4, 4),  # (d, d)
         },
         {
-            "decoder.block.0.layer.1.EncDecAttention.q.weight": torch.ones(4, 4),
-            "lm_head.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
+            "decoder.block.0.layer.1.EncDecAttention.q.weight": torch.ones(4, 4),  # (d, d)
+            "lm_head.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),  # (vocab, d)
         },
     )
     tokenizer_payloads = {

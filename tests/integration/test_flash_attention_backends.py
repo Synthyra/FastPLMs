@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import pytest
+import torch
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-
-import pytest
-import torch
 from torch.nn import functional as F
 
 from fastplms.attention import _core
@@ -26,6 +25,7 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
 from fastplms.registry import get_model_registry
 from tools.debug.probe_flash_attention_forward import _model_results, _shared_results
 from tools.debug.probe_flash_checkpoint_forward import _run_checkpoint
+
 
 _FLASH_BACKENDS = ("flash_attention_2", "flash_attention_3")
 _ESMC_FLASH_BACKENDS = _FLASH_BACKENDS
@@ -62,9 +62,11 @@ def _tiny_model_spec(family_id: str) -> tuple[type[torch.nn.Module], Any]:
 
 
 def _assert_close(actual: torch.Tensor, expected: torch.Tensor) -> None:
+    # actual: (...), expected: (...)
     relative_l2 = torch.linalg.vector_norm(
         actual.float() - expected.float()
     ) / torch.linalg.vector_norm(expected.float()).clamp_min(1e-12)
+    # minimum_cosine: ()
     minimum_cosine = F.cosine_similarity(actual.float(), expected.float(), dim=-1).min()
     assert relative_l2.item() <= 1e-2
     assert minimum_cosine.item() >= 0.999
@@ -97,6 +99,7 @@ def test_explicit_flash_from_pretrained_uses_only_pinned_kernels(
     torch.manual_seed(29)
     model_class(config).save_pretrained(model_path)
 
+    # input_ids: (2, 17)
     input_ids = torch.tensor(
         (
             (0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 2, 1, 1, 1, 1),
@@ -104,7 +107,9 @@ def test_explicit_flash_from_pretrained_uses_only_pinned_kernels(
         ),
         device="cuda",
     )
+    # attention_mask: (b, l)
     attention_mask = input_ids.ne(1)
+    # reference: (...)
     reference = (
         model_class.from_pretrained(
             model_path,
@@ -171,6 +176,7 @@ def test_precompiled_flash_attention_2_dense_and_varlen_backward(
 
     assert torch.cuda.is_available(), "FlashAttention integration requires CUDA."
     torch.manual_seed(31)
+    # query: (2, 17, 4, 16)
     query = torch.randn(
         (2, 17, 4, 16),
         device="cuda",
@@ -181,6 +187,7 @@ def test_precompiled_flash_attention_2_dense_and_varlen_backward(
     value = torch.randn_like(query, requires_grad=True)
     attention_mask = None
     if mixed_padding:
+        # attention_mask: (2, 17)
         attention_mask = torch.tensor(
             (
                 (1,) * 13 + (0,) * 4,
@@ -250,6 +257,7 @@ def test_flash_attention_2_mixed_padding_lora_step_and_reload(
     ).to("cuda").train()
     model.base_model.model.set_attn_implementation("flash_attention_2")
 
+    # input_ids: (2, 17)
     input_ids = torch.tensor(
         (
             (0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 2, 1, 1, 1, 1),
@@ -257,7 +265,9 @@ def test_flash_attention_2_mixed_padding_lora_step_and_reload(
         ),
         device="cuda",
     )
+    # attention_mask: (b, l)
     attention_mask = input_ids.ne(1)
+    # labels: (b, l)
     labels = input_ids.masked_fill(~attention_mask, -100)
     before = {
         name: parameter.detach().clone()
@@ -337,6 +347,7 @@ def test_precompiled_flash_accepts_fp32_storage_only_under_cuda_bf16_autocast(
     backend: str,
 ) -> None:
     assert torch.cuda.is_available(), "FlashAttention integration requires CUDA."
+    # X: (2, 17, 4, 16)
     X = torch.randn((2, 17, 4, 16), device="cuda", dtype=torch.float32)
 
     with pytest.raises(RuntimeError, match=r"bfloat16.*received float32"):
@@ -389,6 +400,7 @@ def test_dplm_tiny_flash_attention_3_forward_parity_and_backward(
     )
     torch.manual_seed(37)
     model = DPLMModel(config).to(device="cuda", dtype=torch.float32)
+    # input_ids: (2, 17)
     input_ids = torch.tensor(
         (
             (0, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 2, 1, 1, 1, 1),
@@ -422,6 +434,7 @@ def test_dplm_tiny_flash_attention_3_forward_parity_and_backward(
             input_ids=input_ids,
             attention_mask=attention_mask,
         ).last_hidden_state
+        # loss: ()
         loss = output[attention_mask].float().square().mean()
     loss.backward()
     gradients = [

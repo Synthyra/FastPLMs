@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import json
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
-
-import pytest
 
 import benchmarks.suite as benchmark_suite
 from benchmarks.run import (
@@ -33,6 +32,7 @@ from benchmarks.suite import (
     exhaustive_benchmark_cases,
 )
 from fastplms.registry import ModelSpec, get_model_registry
+
 
 _RUNTIME_REVISION = "a" * 40
 _SOURCE_SHA256 = "b" * 64

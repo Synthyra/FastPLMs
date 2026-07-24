@@ -8,11 +8,10 @@ import stat
 import subprocess
 import sys
 import textwrap
-from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
-
 import pytest
 import torch
+from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 from transformers import AutoModel
 
 import fastplms.models.esm3.modeling_esm3 as esm3_module
@@ -134,7 +133,7 @@ def _run_isolated_bridge_probe(
             class BlockInstalledFastPLMs(importlib.abc.MetaPathFinder):
                 def find_spec(self, fullname, path=None, target=None):
                     if fullname == "fastplms":
-                        raise ModuleNotFoundError("installed FastPLMs is blocked")
+                        raise ModuleNotFoundError("external FastPLMs source is blocked")
                     return None
 
 
@@ -255,6 +254,7 @@ def test_esm3_uses_hugging_face_initialization_and_only_retains_requested_states
             continue
         torch.testing.assert_close(actual, expected)
 
+    # labels: (b, l)
     labels = batch["input_ids"].clone()
     with torch.inference_mode():
         labeled_output = model(
@@ -326,6 +326,7 @@ def test_esm3_resize_updates_sequence_input_and_output_embeddings() -> None:
 def test_esm3_accepts_function_tokens_argument() -> None:
     model = _small_model()
     batch = model.tokenize_sequences(["MKTAYIAKQ"], device=model.device)
+    # function_tokens: (...)
     function_tokens = batch["input_ids"].new_zeros((*batch["input_ids"].shape, 8))
 
     with torch.inference_mode():
@@ -337,12 +338,14 @@ def test_esm3_accepts_function_tokens_argument() -> None:
 
 def test_esm3_rejects_attention_mask_row_without_a_valid_key() -> None:
     model = _small_model()
+    # input_ids: (2, 3)
     input_ids = torch.tensor(
         [
             [SEQUENCE_BOS_TOKEN, 4, SEQUENCE_EOS_TOKEN],
             [SEQUENCE_BOS_TOKEN, 5, SEQUENCE_EOS_TOKEN],
         ]
     )
+    # attention_mask: (2, 3)
     attention_mask = torch.tensor([[1, 1, 1], [0, 0, 0]])
 
     with pytest.raises(
@@ -627,6 +630,7 @@ def test_esm3_generation_none_num_steps_uses_mask_count() -> None:
 
 def test_esm3_generation_preserves_every_supported_conditioning_track() -> None:
     model = _small_model()
+    # input_ids: (1, 3)
     input_ids = torch.tensor([[SEQUENCE_BOS_TOKEN, SEQUENCE_MASK_TOKEN, SEQUENCE_EOS_TOKEN]])
     shape = input_ids.shape
     conditioning = {
@@ -665,6 +669,7 @@ def test_esm3_generation_preserves_every_supported_conditioning_track() -> None:
 
 def test_esm3_generation_rejects_unknown_or_ambiguous_inputs() -> None:
     model = _small_model()
+    # input_ids: (1, 3)
     input_ids = torch.tensor([[SEQUENCE_BOS_TOKEN, SEQUENCE_MASK_TOKEN, SEQUENCE_EOS_TOKEN]])
 
     with pytest.raises(TypeError, match="Unsupported ESM3 generation inputs: labels"):
@@ -694,7 +699,7 @@ def test_esm3_saved_model_loads_without_installed_fastplms(tmp_path: Path) -> No
         class BlockInstalledFastPLMs(importlib.abc.MetaPathFinder):
             def find_spec(self, fullname, path=None, target=None):
                 if fullname == "fastplms":
-                    raise ModuleNotFoundError("installed FastPLMs is blocked")
+                    raise ModuleNotFoundError("external FastPLMs source is blocked")
                 return None
 
         sys.modules.pop("fastplms", None)

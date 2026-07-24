@@ -16,6 +16,7 @@ from typing import Any
 
 from tools.source_provenance import actual_tree_paths, tracked_tree_digest
 
+
 _SCHEMA_VERSION = 1
 REFERENCE_SOURCE_EVIDENCE_SCHEMA_VERSION = 1
 _HEX_REVISION_LENGTH = 40

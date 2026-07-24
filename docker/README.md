@@ -3,20 +3,20 @@
 `docker/Dockerfile` is the only maintained Dockerfile. Its candidate stages
 pin Python 3.12, CUDA 13.0, PyTorch 2.13.0, and Transformers 5.13.0. The runtime
 stage contains FastPLMs source but never contains `vendor/upstream/`. Candidate
-dependencies are installed from the checked-in `uv.lock` with `uv sync
---frozen`. Constraint files are reserved for incompatible upstream reference
-environments.
+dependencies are installed with `uv pip install` from the named profiles under
+`requirements/profiles/` and the validation constraint. FastPLMs itself is not
+installed. Candidate and runtime stages load the copied or mounted source
+through `PYTHONPATH`.
 
 The single runtime stage accepts `FASTPLMS_RUNTIME_PROFILE=core` by default or
 `FASTPLMS_RUNTIME_PROFILE=esmfold2-fp8` for ESMFold2 serving. Any other value
 fails the image build. Bake exposes `runtime` and `runtime-fp8` names that both
 point to this stage with the corresponding profile. The FP8 profile and the
-`candidate-fp8` stage install the FP8 extra. `candidate-structure` and
-`candidate-fp8` install the separate `cueq` extra so named ESMFold2 and Boltz2
-kernel paths can be validated against the locked CUDA 13 runtime; this does not
-add cuEquivariance to the general `structure` extra or production runtime
-profiles. Ordinary candidate, structure, and artifact images retain the
-canonical PyTorch CUDA dependency graph and do not import Transformer Engine.
+`candidate-fp8` stage install Transformer Engine. The
+`candidate-structure` and `candidate-fp8` profiles install cuEquivariance so
+named ESMFold2 and Boltz2 kernel paths can be validated against the CUDA 13
+runtime. The ordinary candidate, structure, and artifact profiles retain the
+canonical PyTorch CUDA dependency graph and do not install Transformer Engine.
 
 Reference targets are intentionally isolated because the official projects use
 incompatible dependency stacks. They copy only their named submodule from the

@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 import torch
+from types import SimpleNamespace
 
 from fastplms.models.esmfold2.esmfold2_constants import (
     MOL_TYPE_NONPOLYMER,
@@ -16,6 +15,7 @@ from fastplms.models.esmfold2.esmfold2_output import (
     build_molecular_complex_from_features,
 )
 from fastplms.models.esmfold2.modeling_esmfold2_common import LanguageModelShim
+
 
 pytestmark = pytest.mark.structure
 
@@ -66,7 +66,9 @@ def test_feature_output_groups_modified_residues_and_ligand_atoms() -> None:
             tokens=ligand_tokens,
         ),
     ]
+    # X: (6, 3)
     X = torch.arange(18, dtype=torch.float32).reshape(6, 3)
+    # atom_names: (...)
     atom_names = torch.tensor([_encoded_name(name) for name in ("N", "CA", "C", "O", "C1", "N1")])
 
     complex_record = build_molecular_complex_from_features(
@@ -105,7 +107,9 @@ def test_learned_sequence_projection_matches_explicit_cuda_operation() -> None:
     shim = LanguageModelShim(d_z=7, d_model=11, num_layers=3).to(
         device=device, dtype=torch.bfloat16
     )
+    # H: (2, 17, 4, 11)
     H = torch.randn((2, 17, 4, 11), device=device, dtype=torch.bfloat16)
+    # M: (2, 17)
     M = torch.tensor([[True] * 13 + [False] * 4, [True] * 17], device=device, dtype=torch.bool)
 
     projected_states = shim.base_z_linear(H)

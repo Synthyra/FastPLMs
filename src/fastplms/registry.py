@@ -18,6 +18,7 @@ from types import MappingProxyType
 from typing import Any, Literal, cast
 from urllib.parse import urlparse
 
+
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _HUB_LICENSE_NAME_RE = re.compile(r"[^a-z0-9.]+")
@@ -559,20 +560,20 @@ def _require_str_list(table: Mapping[str, Any], key: str, context: str) -> tuple
     value = table.get(key)
     if not isinstance(value, list) or not value or any(not isinstance(item, str) for item in value):
         raise RegistryError(f"{context}.{key} must be a non-empty string array.")
-    result = tuple(value)
-    if len(set(result)) != len(result):
+    strings = tuple(value)
+    if len(set(strings)) != len(strings):
         raise RegistryError(f"{context}.{key} contains duplicate values.")
-    return result
+    return strings
 
 
 def _optional_str_list(table: Mapping[str, Any], key: str, context: str) -> tuple[str, ...]:
     value = table.get(key, [])
     if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
         raise RegistryError(f"{context}.{key} must be a string array.")
-    result = tuple(value)
-    if len(set(result)) != len(result):
+    strings = tuple(value)
+    if len(set(strings)) != len(strings):
         raise RegistryError(f"{context}.{key} contains duplicate values.")
-    return result
+    return strings
 
 
 def _optional_str(table: Mapping[str, Any], key: str, context: str) -> str | None:
@@ -657,11 +658,11 @@ def _require_digest_list(
     table: Mapping[str, Any], key: str, context: str
 ) -> tuple[FileDigest, ...]:
     encoded = _require_str_list(table, key, context)
-    result = tuple(FileDigest.parse(value) for value in encoded)
-    paths = [item.path for item in result]
+    digests = tuple(FileDigest.parse(value) for value in encoded)
+    paths = [item.path for item in digests]
     if len(paths) != len(set(paths)):
         raise RegistryError(f"{context}.{key} contains duplicate paths.")
-    return result
+    return digests
 
 
 def _validate_revision(revision: str, context: str) -> None:
@@ -701,7 +702,7 @@ def _parse_oracle_assets(table: Mapping[str, Any], context: str) -> tuple[Oracle
     raw = table.get("oracle_assets", [])
     if not isinstance(raw, list):
         raise RegistryError(f"{context}.oracle_assets must be an array of tables.")
-    result: list[OracleAsset] = []
+    assets: list[OracleAsset] = []
     for index, value in enumerate(raw):
         asset_context = f"{context}.oracle_assets[{index}]"
         if not isinstance(value, dict):
@@ -736,7 +737,7 @@ def _parse_oracle_assets(table: Mapping[str, Any], context: str) -> tuple[Oracle
         size = value.get("size")
         if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
             raise RegistryError(f"{asset_context}.size must be a positive byte count.")
-        result.append(
+        assets.append(
             OracleAsset(
                 role=role,
                 path=path,
@@ -745,16 +746,16 @@ def _parse_oracle_assets(table: Mapping[str, Any], context: str) -> tuple[Oracle
                 size=size,
             )
         )
-    roles = [asset.role for asset in result]
-    paths = [asset.path for asset in result]
-    urls = [asset.url for asset in result]
+    roles = [asset.role for asset in assets]
+    paths = [asset.path for asset in assets]
+    urls = [asset.url for asset in assets]
     if (
         len(roles) != len(set(roles))
         or len(paths) != len(set(paths))
         or len(urls) != len(set(urls))
     ):
         raise RegistryError(f"{context}.oracle_assets contains duplicate identities.")
-    return tuple(result)
+    return tuple(assets)
 
 
 def _parse_official_golden(
@@ -789,7 +790,7 @@ def _parse_official_golden(
 def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
     if not isinstance(raw, list) or not raw:
         raise RegistryError("The manifest must contain [[attention_kernels]] entries.")
-    result: dict[str, AttentionKernelSpec] = {}
+    kernels: dict[str, AttentionKernelSpec] = {}
     expected_variants = {
         "flash_attention_2": "flash_attn2",
         "flash_attention_3": "flash_attn3",
@@ -812,7 +813,7 @@ def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
         implementation = _require_str(value, "implementation", context)
         if implementation not in expected_variants:
             raise RegistryError(f"Unsupported attention kernel {implementation!r}.")
-        if implementation in result:
+        if implementation in kernels:
             raise RegistryError(f"Duplicate attention kernel {implementation!r}.")
         repository = _require_str(value, "repository", context)
         if _REPOSITORY_ID_RE.fullmatch(repository) is None:
@@ -834,7 +835,7 @@ def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
         dtypes = _require_str_list(value, "dtypes", context)
         if not set(dtypes).issubset(_ALLOWED_DTYPES):
             raise RegistryError(f"{context}.dtypes contains unsupported dtypes.")
-        result[implementation] = AttentionKernelSpec(
+        kernels[implementation] = AttentionKernelSpec(
             implementation=implementation,
             repository=repository,
             revision=revision,
@@ -842,15 +843,15 @@ def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
             expected_variant=expected_variant,
             dtypes=cast(tuple[DtypeName, ...], dtypes),
         )
-    if set(result) != set(expected_variants):
+    if set(kernels) != set(expected_variants):
         raise RegistryError("The manifest must pin both FlashAttention kernel versions.")
-    return result
+    return kernels
 
 
 def _parse_upstreams(raw: object) -> dict[str, UpstreamSource]:
     if not isinstance(raw, list) or not raw:
         raise RegistryError("The manifest must contain at least one [[upstreams]] entry.")
-    result: dict[str, UpstreamSource] = {}
+    upstreams: dict[str, UpstreamSource] = {}
     paths: set[str] = set()
     for index, value in enumerate(raw):
         context = f"upstreams[{index}]"
@@ -860,7 +861,7 @@ def _parse_upstreams(raw: object) -> dict[str, UpstreamSource]:
         source_id = _require_str(value, "id", context)
         if _IDENTIFIER_RE.fullmatch(source_id) is None:
             raise RegistryError(f"Invalid upstream ID: {source_id!r}")
-        if source_id in result:
+        if source_id in upstreams:
             raise RegistryError(f"Duplicate upstream ID: {source_id!r}")
         revision = _require_str(value, "revision", context)
         _validate_revision(revision, f"{context}.revision")
@@ -913,7 +914,7 @@ def _parse_upstreams(raw: object) -> dict[str, UpstreamSource]:
             missing_e1 = sorted(required_e1.difference(distribution_map))
             if missing_e1:
                 raise RegistryError(f"{context} is missing E1 legal files: {missing_e1}")
-        result[source_id] = UpstreamSource(
+        upstreams[source_id] = UpstreamSource(
             id=source_id,
             path=path,
             url=url,
@@ -923,7 +924,7 @@ def _parse_upstreams(raw: object) -> dict[str, UpstreamSource]:
             license_digests=license_digests,
             distribution_files=distribution_files,
         )
-    return result
+    return upstreams
 
 
 def _parse_families(
@@ -932,7 +933,7 @@ def _parse_families(
 ) -> dict[str, ModelFamily]:
     if not isinstance(raw, dict) or not raw:
         raise RegistryError("The manifest must contain [families.<id>] tables.")
-    result: dict[str, ModelFamily] = {}
+    families: dict[str, ModelFamily] = {}
     for family_id, value in raw.items():
         context = f"families.{family_id}"
         if _IDENTIFIER_RE.fullmatch(family_id) is None or not isinstance(value, dict):
@@ -1068,7 +1069,7 @@ def _parse_families(
                 f"{context}.conversion_provenance must identify {state_transform!r} and "
                 f"contain mechanism-first sections; missing {missing_sections}."
             )
-        result[family_id] = ModelFamily(
+        families[family_id] = ModelFamily(
             id=family_id,
             architecture=_require_str(value, "architecture", context),
             upstreams=source_ids,
@@ -1099,7 +1100,7 @@ def _parse_families(
             conversion_provenance=conversion_provenance,
             backbone_model=backbone_model,
         )
-    return result
+    return families
 
 
 def _parse_runtime_assets(
@@ -1108,7 +1109,7 @@ def _parse_runtime_assets(
 ) -> dict[str, RuntimeAsset]:
     if not isinstance(raw, list) or not raw:
         raise RegistryError("The manifest must contain at least one [[runtime_assets]] entry.")
-    result: dict[str, RuntimeAsset] = {}
+    runtime_assets: dict[str, RuntimeAsset] = {}
     identities: set[tuple[str, str, str]] = set()
     for index, value in enumerate(raw):
         context = f"runtime_assets[{index}]"
@@ -1118,7 +1119,7 @@ def _parse_runtime_assets(
         asset_id = _require_str(value, "id", context)
         if _IDENTIFIER_RE.fullmatch(asset_id) is None:
             raise RegistryError(f"Invalid runtime asset ID: {asset_id!r}")
-        if asset_id in result:
+        if asset_id in runtime_assets:
             raise RegistryError(f"Duplicate runtime asset ID: {asset_id!r}")
         repository = _require_str(value, "repository", context)
         if _REPOSITORY_ID_RE.fullmatch(repository) is None:
@@ -1164,7 +1165,7 @@ def _parse_runtime_assets(
         if identity in identities:
             raise RegistryError(f"Duplicate runtime asset identity: {identity!r}")
         identities.add(identity)
-        result[asset_id] = RuntimeAsset(
+        runtime_assets[asset_id] = RuntimeAsset(
             id=asset_id,
             repository=repository,
             revision=revision,
@@ -1176,7 +1177,7 @@ def _parse_runtime_assets(
             license_expression=license_expression,
             offline_behavior=offline_behavior,
         )
-    return result
+    return runtime_assets
 
 
 def _parse_models(
@@ -1185,7 +1186,7 @@ def _parse_models(
 ) -> dict[str, ModelSpec]:
     if not isinstance(raw, list) or not raw:
         raise RegistryError("The manifest must contain at least one [[models]] entry.")
-    result: dict[str, ModelSpec] = {}
+    models: dict[str, ModelSpec] = {}
     fast_repositories: set[str] = set()
     for index, value in enumerate(raw):
         context = f"models[{index}]"
@@ -1195,7 +1196,7 @@ def _parse_models(
         model_id = _require_str(value, "id", context)
         if _IDENTIFIER_RE.fullmatch(model_id) is None:
             raise RegistryError(f"Invalid model ID: {model_id!r}")
-        if model_id in result:
+        if model_id in models:
             raise RegistryError(f"Duplicate model ID: {model_id!r}")
         family_id = _require_str(value, "family", context)
         if family_id not in families:
@@ -1278,7 +1279,7 @@ def _parse_models(
                 if not class_path.startswith("fastplms.") or class_path.count(".") < 2:
                     raise RegistryError(f"Invalid Python class path in {context}: {class_path!r}")
                 auto_map.append((auto_class, class_path))
-        result[model_id] = ModelSpec(
+        models[model_id] = ModelSpec(
             id=model_id,
             family=family,
             fast=fast,
@@ -1294,7 +1295,7 @@ def _parse_models(
             notes=notes,
             msa_conditioning=msa_conditioning,
         )
-    return result
+    return models
 
 
 def _validate_registry(
@@ -1409,21 +1410,21 @@ def _validate_registry(
 
 def _load_manifest_bytes(raw_bytes: bytes) -> ModelRegistry:
     try:
-        data = tomllib.loads(raw_bytes.decode("utf-8"))
+        manifest = tomllib.loads(raw_bytes.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise RegistryError(f"Unable to parse model manifest: {error}") from error
-    _reject_unknown_fields(data, _ROOT_FIELDS, "manifest")
-    if data.get("schema_version") != 1:
+    _reject_unknown_fields(manifest, _ROOT_FIELDS, "manifest")
+    if manifest.get("schema_version") != 1:
         raise RegistryError("Unsupported model manifest schema_version; expected 1.")
-    legal_files = _require_digest_list(data, "legal_files", "manifest")
+    legal_files = _require_digest_list(manifest, "legal_files", "manifest")
     required_legal_paths = {"LICENSE", "THIRD_PARTY_NOTICES.md"}
     if {item.path for item in legal_files} != required_legal_paths:
         raise RegistryError("manifest.legal_files must contain LICENSE and THIRD_PARTY_NOTICES.md.")
-    attention_kernels = _parse_attention_kernels(data.get("attention_kernels"))
-    upstreams = _parse_upstreams(data.get("upstreams"))
-    families = _parse_families(data.get("families"), upstreams)
-    runtime_assets = _parse_runtime_assets(data.get("runtime_assets"), families)
-    models = _parse_models(data.get("models"), families)
+    attention_kernels = _parse_attention_kernels(manifest.get("attention_kernels"))
+    upstreams = _parse_upstreams(manifest.get("upstreams"))
+    families = _parse_families(manifest.get("families"), upstreams)
+    runtime_assets = _parse_runtime_assets(manifest.get("runtime_assets"), families)
+    models = _parse_models(manifest.get("models"), families)
     _validate_registry(upstreams, attention_kernels, families, models)
     return ModelRegistry(
         schema_version=1,

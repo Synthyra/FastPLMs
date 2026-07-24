@@ -18,6 +18,7 @@ from .from_native import (
     require_complete_check_goldens,
 )
 
+
 __all__ = [
     "GoldenBundleRecord",
     "GoldenError",

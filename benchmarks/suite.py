@@ -15,7 +15,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
-
 from .regression import compare_reports
 from .run import (
     _load_model,
@@ -24,6 +23,7 @@ from .run import (
     run_case,
     validate_hopper_sm90_environment,
 )
+
 
 PADDING_LENGTHS = (1024, 512, 256, 128, 64, 64, 32, 32)
 FIXED_SHAPES = (

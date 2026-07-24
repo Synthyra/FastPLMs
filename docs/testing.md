@@ -24,7 +24,7 @@ then rejects platform or device drift between preflight and the loaded images.
 | `feature` | DPLM generation, DPLM2 generation, ESM3 multimodal generation, TTT, E1 sequence and RAG adapters, binder flow, pooling, and conversion |
 | `artifact` | Fresh offline remote-code loading and save-reload for every local artifact |
 | `benchmark` | Separate GH200/aarch64 latency, throughput, padding, memory, and exact-device regression suite |
-| `python-matrix` | Clean-wheel, non-editable core-package smokes on Python 3.11-3.14 |
+| `python-matrix` | Isolated repository-source smokes with runtime dependencies on Python 3.11-3.14 |
 
 Routine `check` consumes goldens and never builds an official reference image.
 Live references are reserved for the frozen exact-head `compliance` release
@@ -63,18 +63,18 @@ metric, because those maxima can occur at different times.
 Prepare the exact CPU validation environment before running the gate:
 
 ```bash
-uv lock --check
-uv sync --frozen --python 3.12 --no-default-groups \
-  --group validation --extra cpu --extra dev --extra structure --extra train
+uv venv --python 3.12
+uv pip install \
+  -r requirements/profiles/cpu-validation.in \
+  -c requirements/constraints/validation.txt \
+  --torch-backend cpu
 ```
 
-This consumes the checked lock, the `validation` dependency group, and the
-explicit `cpu`, `dev`, `structure`, and `train` extras. The `cpu` extra routes
-Torch to the locked PyTorch CPU index; `UV_TORCH_BACKEND` does not affect
-project-level `uv sync`. CUDA-only `cueq` and `fp8` extras conflict with the
-CPU extra so `--all-extras` fails closed instead of silently selecting CPU
-Torch for a GPU environment. A stale lock or an environment that would require
-fresh dependency resolution fails before pytest starts.
+This consumes the named CPU validation profile and constrains Torch and
+Transformers to the release versions in
+`requirements/constraints/validation.txt`. `--torch-backend cpu` routes Torch
+to the CPU index. CUDA-only cuEquivariance and FP8 dependencies belong in
+separate environments.
 
 The gate statically covers all 29 checkpoints and executes every advertised
 AutoClass once per family, including forward/loss/backward, resize, tuple and
@@ -85,7 +85,7 @@ bounded disk-spooled generator and FASTA streaming; generation and TTT; PEFT;
 injected-core structure and binder flows; publication security; and curated
 offline documentation examples.
 
-Run the focused quality and package checks from the same locked environment:
+Run the focused quality and source checks from the same environment:
 
 ```bash
 python -m ruff check src tests tools examples benchmarks
@@ -108,18 +108,19 @@ python -m pytest \
   tests/release/test_workflow_declared_inputs.py \
   -q
 python tools/remote/runtime_import_closure.py \
-  --source-root src/fastplms --pyproject pyproject.toml
+  --source-root src/fastplms --requirements-root requirements
 ```
 
 The repository has no GitHub Actions workflows. Run lint, bounded strict
-typing, generated-document checks, release contracts, wheel smoke, and runtime
-import closure directly on the workstation. Cross-version wheels, live
-official implementations, and GPU suites remain release-time responsibilities
-through the explicit `python-matrix`, `check`, `compliance`, and release suites.
+typing, generated-document checks, release contracts, repository-source smoke,
+and runtime import closure directly on the workstation. Cross-version source
+smokes, live official implementations, and GPU suites remain release-time
+responsibilities through the explicit `python-matrix`, `check`, `compliance`,
+and release suites.
 
 ## Cost-controlled schedule
 
-- Before merge: offline CPU contracts and static/package checks.
+- Before merge: offline CPU contracts and static/source checks.
 - Conditional GH200/aarch64 smoke: when a relevant sequence or structure path
   changes, run `gpu-golden-smoke` against the exact candidate head. Candidate
   output is compared with checked-in goldens; no reference image is built.
@@ -225,7 +226,7 @@ inventory, and a tree digest in `.fastplms-source-provenance.json`. Artifact
 validation uses this record only in an extracted tree with no Git metadata and
 rejects missing, added, or modified upstream files.
 
-Python 3.12 is the canonical GPU validation interpreter. Package compatibility
+Python 3.12 is the canonical GPU validation interpreter. Source compatibility
 for Python 3.11, 3.13, and 3.14 is checked separately on the same workstation:
 
 ```bash
@@ -235,11 +236,10 @@ python -m tools.remote \
   --suite python-matrix
 ```
 
-The matrix reuses the candidate image and uv-managed interpreters. For each
-version it performs a frozen, core-only, non-editable install, removes the
-repository source from the import path, enables offline Hub behavior, disables
-CUDA visibility, compiles the installed package, loads `models.toml`, and runs
-a small ESM2 CPU forward. It does not select the `flash` extra. Results are
+The matrix creates an isolated uv-managed environment for each version,
+installs `requirements/profiles/runtime.in`, enables offline Hub behavior,
+disables CUDA visibility, compiles the repository source, loads `models.toml`,
+and runs a small ESM2 CPU forward from an explicit source root. Results are
 recorded in JSON and JUnit. Python 3.12 remains the only environment used for
 the pinned CUDA 13.0, PyTorch 2.13.0, and Transformers 5.13.0 GPU release gates.
 
@@ -304,7 +304,7 @@ The same native stage pins PyTorch Lightning `1.9.5`, TorchMetrics `0.11.4`,
 Lightning Utilities `0.15.2`, and NVIDIA DLLogger revision
 `0478734ff7be75adde8d160e04872664d1c62e5f`. Pinned OpenFold imports those
 packages eagerly; they are reference-container dependencies and are excluded
-from FastPLMs runtime images and package extras.
+from FastPLMs runtime images and direct dependency profiles.
 
 ## Exact contracts
 
@@ -490,10 +490,10 @@ converter prints a TOML declaration only when output is written to the canonical
 printed declaration only after validating both generated files. The read-only
 validator then verifies every recorded identity, shape, dtype, and hash.
 
-The sequence regression resolves the current package class from the manifest
+The sequence regression resolves the current repository-source class from the manifest
 `auto_map` and loads only the pinned checkpoint weights. Generated remote-code
 artifacts have their own offline suite. This separation prevents stale Hub code
-from substituting for the package implementation under test.
+from substituting for the repository implementation under test.
 
 The pinned Biohub ESMC loader has a standalone reproducer so a native-loader
 failure cannot be mistaken for a FastPLMs inference failure:
@@ -515,7 +515,7 @@ Artifact tests build from a pinned local checkpoint snapshot. They create a
 fresh environment with FastPLMs absent from `sys.path`, set
 `HF_HUB_OFFLINE=1`, pass `local_files_only=True` and `trust_remote_code=True`,
 load every advertised AutoClass, run inference, save, reload, and compare with
-the package-source implementation. Network access during this tier is a test
+the repository-source implementation. Network access during this tier is a test
 failure.
 
 ## Test markers

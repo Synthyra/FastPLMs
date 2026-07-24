@@ -16,16 +16,35 @@ Accepted inputs are amino-acid sequences tokenized to residue IDs.
 Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 `AutoModelForMaskedLM`.
 
+## Capabilities
+
+| Feature | Status |
+| --- | --- |
+| Sequence classification | Unavailable: no advertised AutoClass |
+| Token classification | Unavailable: no advertised AutoClass |
+| PEFT fine-tuning | Supported pattern: attach LoRA to the pretrained model |
+| Embeddings | Supported: shared ordered embedding API |
+| Test-time training | Supported: low-rank masked-residue adaptation |
+| Attention variants | Special: SDPA fidelity path; alternate backends have explicit bands |
+| Compliance | Declared: exact release evidence is required |
+
+A supported interface is not a pretrained downstream predictor. Classification
+heads start untrained, and declared compliance metadata is not a claim that an
+arbitrary local build passed its release gate.
+
 ## Install and platform requirements
 
-Install the current FastPLMs package:
+Install the direct dependencies published with this model:
 
 ```bash
-python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git"
+python -m pip install -r \
+  "https://huggingface.co/Synthyra/ESMplusplus_6B/resolve/main/requirements.txt"
 ```
 
-Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. Eager, SDPA, and Flex use the core install. FlashAttention requires the `flash` extra, compatible CUDA hardware, and BF16 execution. The Hub quick start below requires network
+The FastPLMs implementation itself is embedded in the model repository and loaded
+by Transformers through `trust_remote_code=True`.
+
+Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The artifact requirements include the direct FlashAttention loader dependency. FlashAttention also requires compatible CUDA hardware and BF16 execution. The Hub quick start below requires network
 access on first download. For an air-gapped run, first build the manifest-pinned
 local artifact and use the offline form shown in the example.
 
@@ -38,23 +57,23 @@ model_id = "Synthyra/ESMplusplus_6B"
 model = AutoModel.from_pretrained(
     model_id,
     trust_remote_code=True,
+    attn_implementation="sdpa",
 ).eval()
 ```
 
-This example uses the published Hub repository. For offline validation, build
-the manifest-pinned artifact and replace `model_id` with its local
-`dist/hub/ESMplusplus_6B` path, then pass `local_files_only=True`.
+For offline validation, replace `model_id` with the manifest-built
+`dist/hub/ESMplusplus_6B` path and pass `local_files_only=True`.
 
-Leave attention unspecified for the Transformers default. Supported explicit
-choices are `eager`, `sdpa`, `flex_attention`, `flash_attention_2`,
-`flash_attention_3`.
-Pass the selected name through `attn_implementation`.
-When an optimized backend cannot return full attention tensors,
-`output_attentions=True` emits one explicit runtime warning and uses a correctly
-masked eager implementation for that call only. The warning identifies the
-configured backend, effective backend, and reason. Configuration and later
-calls are unchanged.
-For BF16 execution, this family uses parameters loaded directly in BF16.
+## Attention and compliance
+
+The quick start selects `sdpa` explicitly. Declared variants are `eager`, `sdpa`, `flex_attention`, `flash_attention_2`,
+`flash_attention_3`. An unavailable requested backend raises instead of
+silently switching implementations.
+`output_attentions=True` may use the documented, one-call eager fallback solely
+to materialize attention tensors; the configured backend remains unchanged.
+
+This family declares the `compliance` tier. Release evidence binds the exact
+checkpoint, backend, dtype, hardware, inputs, and reference revision.
 
 ## Tokenization and forward inference
 
@@ -84,43 +103,78 @@ print(output.last_hidden_state.shape)
 
 ## Dataset embeddings
 
-The shared embedding API accepts sequences, `(id, sequence)` pairs,
-`EmbeddingInput` records, insertion-ordered `{id: sequence}` mappings, or a
-FASTA path. Results preserve order and duplicate identifiers:
+The shared embedding mixin preserves input order and biological-position
+masking. It accepts sequences, identified records, mappings, or a FASTA path:
 
 ```python
-result = model.embed_dataset(
+pooled = model.embed_dataset(
     ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
     batch_size=2,
     pooling=("mean", "std"),
 )
-
-for record in result:
-    print(record.id, record.sequence, record.tensor.shape)
+residues = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    full_embeddings=True,
+)
+print(pooled[0].tensor.shape)   # (2 * d,)
+print(residues[0].tensor.shape) # (l, d)
 ```
 
-Set `full_embeddings=True` for one residue tensor with shape `(l, d)` per
-sequence. Set `output` to a directory for bounded-memory, transactional
-safetensors with ordered-prefix resume, or choose `format="sqlite"` for
-batch-level database commits and exact resume. Pooling excludes boundary,
-padding, and other non-biological positions.
+Set `output` and `format="safetensors"` or `"sqlite"` for transactional,
+bounded-memory persistence. Resume verifies input order, model state, tokenizer
+policy, backend, dtype, and pooling configuration before appending.
 
-For a long FASTA run, stream completed batches into SQLite:
+## PEFT fine-tuning
+
+Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+
+```bash
+python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
+```
 
 ```python
-persisted = model.embed_dataset(
-    "proteins.fasta",
-    batch_size=64,
-    pooling=("mean",),
-    output="protein-embeddings.sqlite",
-    format="sqlite",
-    resume=True,
+from peft import LoraConfig, get_peft_model
+
+peft_model = get_peft_model(
+    model,
+    LoraConfig(
+        r=8,
+        lora_alpha=16,
+        target_modules="all-linear",
+    ),
 )
 ```
 
-Resume verifies the input order, model state, tokenizer policy, backend, dtype,
-and pooling configuration. It never appends incompatible records to an
-existing run.
+This checkpoint has no advertised classifier. Supply the task-specific
+objective and preserve any new head through `modules_to_save`.
+All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
+can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+support boundary. Record the target modules, base revision, data identity, and
+trainable parameter scope.
+
+## Test-time training
+
+TTT samples masked views of one protein and updates only injected low-rank
+adapters. Base checkpoint weights remain frozen:
+
+```python
+from transformers import AutoModelForMaskedLM
+
+ttt_model = AutoModelForMaskedLM.from_pretrained(
+    "Synthyra/ESMplusplus_6B",
+    trust_remote_code=True,
+)
+metrics = ttt_model.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 3, "batch_size": 1, "seed": 7},
+)
+ttt_model.save_pretrained("adapted", safe_serialization=True)
+ttt_model.ttt_reset()
+print(metrics)
+```
+
+Persisted adapters retain their deterministic reset state. TTT adds latency
+and memory, can worsen an output, and does not establish biological function.
 
 ## ESMC behavior
 
@@ -166,7 +220,7 @@ and
 - Precision policies: `default`
 - BF16 execution: `static_parameters`
 - Generation contract: `not_applicable`
-- Optional dependency group: `core`
+- Artifact dependency set: `core`
 - Weight publication allowed: `true`
 - Weight license status: `resolved`
 - Redistributable: `true`
@@ -177,28 +231,22 @@ and
 - FastPLMs weights: `Synthyra/ESMplusplus_6B`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
-- Generator/schema version and complete/runtime-only attestations: recorded in `provenance.json`
 - Official checkpoint: `biohub/ESMC-6B`
 - Artifact source: `fast`
 - State transform: `esmc_to_fastplms_v1`
-- BF16 execution: `static_parameters`
 - Pinned upstreams: `biohub-esm`, `biohub-transformers`
-- Reference container: `reference-biohub-esm`
 - Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The local artifact records exact file identities, conversion details, source
-revisions, and legal texts in `provenance.json`. A nonzero unresolved count is a
-release blocker.
+`provenance.json` records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks release.
 
 ## Validation boundary
 
-For tiers declared by the manifest, the release contract compares applicable
-semantic configuration, tokenizer behavior, state keys, shapes, dtypes,
-values, aliases, and representative inference with the pinned official
-implementation. This metadata does not by itself claim that a particular build
-passed, that one backend is faster, or that an output has biological or
-therapeutic validity.
+Declared tiers compare applicable configuration, tokenizer behavior, state,
+and representative inference with the pinned reference. Metadata alone does
+not claim a build passed, a backend is faster, or an output is biologically
+valid.
 
 ## License
 

@@ -1,40 +1,40 @@
 # Embedding API
 
-## Install and platform requirements
+## Dependencies and platform requirements
 
 The shared sequence embedding API requires Python 3.11-3.14, PyTorch 2.13, and
-Transformers 5.13. Install an immutable FastPLMs runtime revision before loading
-a published checkpoint:
+Transformers 5.13. Install those dependencies directly. Transformers loads the
+runtime source from the pinned Hugging Face model repository:
 
 ```bash
 python -m pip install \
-  "fastplms @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14"
 ```
 
 Core tokenizer-mode embeddings run on CPU or CUDA. E1 uses its raw-sequence
 adapter rather than a tokenizer. Structure models and optional FlashAttention
-backends require the extras and CUDA platforms declared in the support matrix.
+backends require the additional dependencies and CUDA platforms declared in
+the support matrix.
 
 ## Quick start
 
-FastPLMs exposes the same dataset operation as `fastplms.embed_dataset(model,
-...)` and `model.embed_dataset(...)`. This minimal example loads a tokenizer-
-based model and returns one mean-pooled vector per sequence:
+Published models expose `model.embed_dataset(...)`. A source checkout also
+exposes the same implementation as `fastplms.embed_dataset(model, ...)` when
+run with `PYTHONPATH=src`. This minimal Hugging Face example returns one
+mean-pooled vector per sequence:
 
 ```python
 from transformers import AutoModel
-
-from fastplms import EmbeddingInput, embed_dataset
 
 model = AutoModel.from_pretrained(
     "Synthyra/ESM2-150M",
     trust_remote_code=True,
 ).eval()
-result = embed_dataset(
-    model,
+result = model.embed_dataset(
     [
-        EmbeddingInput("protein-a", "MSTNPKPQRKTKRNT"),
-        EmbeddingInput("protein-b", "MKTIIALSYIFCLVFA"),
+        ("protein-a", "MSTNPKPQRKTKRNT"),
+        ("protein-b", "MKTIIALSYIFCLVFA"),
     ],
     batch_size=2,
     pooling=("mean",),
@@ -101,6 +101,10 @@ token budget. `truncate=False` does not silently exceed the model contract: an
 input longer than `max_length` raises with the record position and identifier.
 
 ## Result types
+
+The following source-level imports are for contributor workflows run with
+`PYTHONPATH=src`; Hugging Face users can pass `(id, sequence)` pairs directly
+to the model method.
 
 ```python
 from fastplms import EmbeddingInput

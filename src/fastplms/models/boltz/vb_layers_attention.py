@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping
-
 from einops.layers.torch import Rearrange
 from torch import Tensor, nn
 
@@ -51,12 +50,13 @@ class AttentionPairBias(nn.Module):
         pair_states: Tensor,
         model_cache: MutableMapping[str, Tensor] | None,
     ) -> Tensor:
+        # pair_states: (b, l_q, l_k, d_z)
         if model_cache is not None and "z" in model_cache:
-            return model_cache["z"]
-        pair_bias = self.proj_z(pair_states)
+            return model_cache["z"]  # (b, h, l_q, l_k)
+        pair_bias = self.proj_z(pair_states)  # (b, h, l_q, l_k)
         if model_cache is not None:
             model_cache["z"] = pair_bias
-        return pair_bias
+        return pair_bias  # (b, h, l_q, l_k)
 
     def forward(
         self,
@@ -70,21 +70,26 @@ class AttentionPairBias(nn.Module):
     ) -> Tensor:
         """Transform S with shapes ``S: (b, l_q, d)`` and ``Z: (b, l, l, d_z)``."""
 
-        sequence_states = self.norm_s(s) if self.initial_norm else s
+        # s: (b, l_q, d); z: (b_z, l_q, l_k, d_z); mask: (b_k, l_k).
+        sequence_states = self.norm_s(s) if self.initial_norm else s  # (b, l_q, d)
         if to_keys is not None:
-            key_states = to_keys(sequence_states)
-            key_mask = to_keys(mask.unsqueeze(-1)).squeeze(-1)
+            key_states = to_keys(sequence_states)  # (b, l_k, d)
+            key_mask = to_keys(mask.unsqueeze(-1)).squeeze(-1)  # (b_k, l_k)
         else:
-            key_states = sequence_states if k_in is None else k_in
-            key_mask = mask
+            key_states = sequence_states if k_in is None else k_in  # (b, l_k, d)
+            key_mask = mask  # (b_k, l_k)
 
-        query = reshape_heads(self.proj_q(sequence_states), self.num_heads)
-        key = reshape_heads(self.proj_k(key_states), self.num_heads)
-        value = reshape_heads(self.proj_v(key_states), self.num_heads)
+        query = reshape_heads(
+            self.proj_q(sequence_states), self.num_heads
+        )  # (b, l_q, h, d_h)
+        key = reshape_heads(self.proj_k(key_states), self.num_heads)  # (b, l_k, h, d_h)
+        value = reshape_heads(
+            self.proj_v(key_states), self.num_heads
+        )  # (b, l_k, h, d_h)
         pair_bias = self._resolve_pair_bias(z, model_cache).repeat_interleave(
             multiplicity,
             dim=0,
-        )
+        )  # (b, h, l_q, l_k)
         attended = pair_biased_attention(
             query,
             key,
@@ -92,7 +97,7 @@ class AttentionPairBias(nn.Module):
             pair_bias,
             key_mask,
             self.inf,
-        )
-        attended = attended.reshape(s.shape[0], -1, self.c_s)
-        gate = self.proj_g(sequence_states).sigmoid()
-        return self.proj_o(gate * attended)
+        )  # (b, l_q, h, d_h)
+        attended = attended.reshape(s.shape[0], -1, self.c_s)  # (b, l_q, d)
+        gate = self.proj_g(sequence_states).sigmoid()  # (b, l_q, d)
+        return self.proj_o(gate * attended)  # (b, l_q, d)

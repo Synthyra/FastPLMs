@@ -9,7 +9,6 @@ defined because a caller must choose the modality-specific boundaries.
 from __future__ import annotations
 
 from typing import ClassVar
-
 from transformers import AddedToken, EsmTokenizer, PreTrainedTokenizer
 
 

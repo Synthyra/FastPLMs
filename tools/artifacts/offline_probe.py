@@ -1,4 +1,4 @@
-"""Probe one local Hub artifact without importing the installed FastPLMs package."""
+"""Probe one local Hub artifact without importing FastPLMs from outside it."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
+
 _CPU_CONTRACT_MARKER = ".fastplms-cpu-contract.json"
 _CPU_FORBIDDEN_READ_ROOTS = tuple(
     path.resolve()
@@ -42,8 +43,8 @@ class ProbeCase:
     expected_unexpected_key_prefixes: tuple[str, ...] = ()
 
 
-class _BlockInstalledFastPLMs(importlib.abc.MetaPathFinder):
-    """Prevent a probe from satisfying artifact imports from an installed wheel."""
+class _BlockExternalFastPLMs(importlib.abc.MetaPathFinder):
+    """Prevent a probe from satisfying artifact imports from external source."""
 
     def find_spec(
         self,
@@ -54,8 +55,8 @@ class _BlockInstalledFastPLMs(importlib.abc.MetaPathFinder):
         del path, target
         if fullname == "fastplms" and fullname not in sys.modules:
             raise ModuleNotFoundError(
-                "Artifact remote code attempted to import an installed FastPLMs package "
-                "instead of installing its embedded runtime."
+                "Artifact remote code attempted to import FastPLMs from outside its "
+                "embedded runtime."
             )
         return None
 
@@ -86,14 +87,14 @@ def _add_runtime_site_packages(paths: Iterable[Path]) -> None:
 
 
 def _require_artifact_isolation() -> None:
-    """Reject loaded FastPLMs state and guard against installed-package imports."""
+    """Reject loaded FastPLMs state and guard against external source imports."""
 
     if not sys.flags.isolated:
         raise RuntimeError("Artifact mode must run under python -I")
     if "fastplms" in sys.modules:
         raise RuntimeError("FastPLMs must not be imported before artifact loading")
-    if not any(isinstance(finder, _BlockInstalledFastPLMs) for finder in sys.meta_path):
-        sys.meta_path.insert(0, _BlockInstalledFastPLMs())
+    if not any(isinstance(finder, _BlockExternalFastPLMs) for finder in sys.meta_path):
+        sys.meta_path.insert(0, _BlockExternalFastPLMs())
 
 
 def _tensor_digest(tensor: Any) -> str:
@@ -209,14 +210,14 @@ def _load_class(implementation: str, auto_class: str, class_path: str) -> type:
 
         return getattr(transformers, auto_class)
     module_name, class_name = class_path.rsplit(".", maxsplit=1)
-    package_class = getattr(importlib.import_module(module_name), class_name)
-    register = getattr(package_class, "register_for_auto_class", None)
+    source_class = getattr(importlib.import_module(module_name), class_name)
+    register = getattr(source_class, "register_for_auto_class", None)
     if not callable(register):
         raise RuntimeError(f"{class_path} cannot register for {auto_class}")
     register(auto_class)
-    if getattr(package_class, "_auto_class", None) != auto_class:
+    if getattr(source_class, "_auto_class", None) != auto_class:
         raise RuntimeError(f"{class_path} did not register for {auto_class}")
-    config_class = getattr(package_class, "config_class", None)
+    config_class = getattr(source_class, "config_class", None)
     if auto_class != "AutoConfig" and config_class is not None:
         config_register = getattr(config_class, "register_for_auto_class", None)
         if not callable(config_register):
@@ -224,7 +225,7 @@ def _load_class(implementation: str, auto_class: str, class_path: str) -> type:
         config_register("AutoConfig")
         if getattr(config_class, "_auto_class", None) != "AutoConfig":
             raise RuntimeError(f"{class_path} config did not register for AutoConfig")
-    return package_class
+    return source_class
 
 
 def _assert_complete_saved_auto_map(
@@ -553,11 +554,11 @@ def _prepare_probe_environment(
 ) -> None:
     if implementation == "artifact":
         if source_root is not None:
-            raise ValueError("Artifact mode must not receive a package source root")
+            raise ValueError("Artifact mode must not receive a repository source root")
         _require_artifact_isolation()
         return
     if source_root is None:
-        raise ValueError("Package mode requires --source-root")
+        raise ValueError("Source mode requires --source-root")
     source_path = str(source_root.resolve())
     if source_path not in sys.path:
         sys.path.insert(0, source_path)
@@ -1263,7 +1264,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-class")
     parser.add_argument("--class-path")
     parser.add_argument("--cases-file", type=Path)
-    parser.add_argument("--implementation", choices=("artifact", "package"), required=True)
+    parser.add_argument("--implementation", choices=("artifact", "source"), required=True)
     parser.add_argument(
         "--attn-implementation",
         choices=("flash_attention_2", "flash_attention_3"),
@@ -1315,7 +1316,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 parser.error("--tiny-cpu-contract requires --implementation artifact")
             if arguments.source_root is not None or arguments.attn_implementation is not None:
                 parser.error(
-                    "--tiny-cpu-contract cannot receive package source or Flash backend options"
+                    "--tiny-cpu-contract cannot receive repository source or Flash backend options"
                 )
             _install_cpu_probe_hermetic_guards()
             result = probe_tiny_cpu_many(

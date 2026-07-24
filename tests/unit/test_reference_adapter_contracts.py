@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 import torch
 import torch.nn as nn
+from types import SimpleNamespace
 
 from tests.parity.support.native_reference import (
     _adapter_reference_sources,
@@ -30,19 +29,21 @@ class _AcceptsTypeIds(nn.Module):
         input_ids: torch.Tensor,
         type_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        # input_ids: (b, l); type_ids: (b, l) or None
         del type_ids
-        return input_ids
+        return input_ids  # (b, l)
 
 
 class _AcceptsKeywordArguments(nn.Module):
     def forward(self, input_ids: torch.Tensor, **kwargs: object) -> torch.Tensor:
+        # input_ids: (b, l)
         del kwargs
-        return input_ids
+        return input_ids  # (b, l)
 
 
 class _RejectsTypeIds(nn.Module):
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        return input_ids
+        return input_ids  # (b, l)
 
 
 class _OfficialWrapper(nn.Module):
@@ -51,11 +52,12 @@ class _OfficialWrapper(nn.Module):
         self.generation_calls: list[dict[str, object]] = []
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
-        return input_ids + 1
+        return input_ids + 1  # (b, l)
 
     def generate(self, input_tokens: torch.Tensor, **kwargs: object) -> torch.Tensor:
+        # input_tokens: (b, l)
         self.generation_calls.append({"input_tokens": input_tokens, **kwargs})
-        return input_tokens + 2
+        return input_tokens + 2  # (b, l)
 
 
 class _CheckpointNetwork(_RejectsTypeIds):
@@ -69,6 +71,7 @@ class _CheckpointNetwork(_RejectsTypeIds):
         max_iter: int,
         sampling_strategy: str,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # batch["input_ids"]: (b, l)
         self.generation_calls.append(
             {
                 "batch": batch,
@@ -76,7 +79,10 @@ class _CheckpointNetwork(_RejectsTypeIds):
                 "sampling_strategy": sampling_strategy,
             }
         )
-        return batch["input_ids"] + 3, torch.zeros_like(batch["input_ids"])
+        return (  # each: (b, l)
+            batch["input_ids"] + 3,
+            torch.zeros_like(batch["input_ids"]),
+        )
 
 
 class EsmForDPLM(_RejectsTypeIds):
@@ -91,7 +97,7 @@ class EsmForDPLM(_RejectsTypeIds):
         sampling_strategy: str,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         del max_iter, sampling_strategy
-        tokens = batch["input_ids"]
+        tokens = batch["input_ids"]  # (b, l)
         tokens.ne(self.bos_id)
         raise AssertionError("unreachable")
 
@@ -107,13 +113,13 @@ class _AnkhGenerationTokenizer:
         assert return_tensors == "pt"
         if add_special_tokens:
             assert text == "M S T N P K"
-            input_ids = torch.tensor([[4, 5, 1]])
+            input_ids = torch.tensor([[4, 5, 1]])  # (b=1, l=3)
         else:
             assert text == "A C"
-            input_ids = torch.tensor([[2, 3]])
+            input_ids = torch.tensor([[2, 3]])  # (b=1, l=2)
         return {
-            "input_ids": input_ids,
-            "attention_mask": torch.ones_like(input_ids),
+            "input_ids": input_ids,  # (b=1, l)
+            "attention_mask": torch.ones_like(input_ids),  # (b=1, l)
         }
 
 
@@ -127,7 +133,10 @@ class _AnkhGenerationModel(nn.Module):
         self.generation_calls.append(kwargs)
         decoder_input_ids = kwargs["decoder_input_ids"]
         assert torch.is_tensor(decoder_input_ids)
-        return torch.cat((decoder_input_ids, decoder_input_ids.new_tensor([[9]])), dim=1)
+        return torch.cat(  # (b=1, l + 1)
+            (decoder_input_ids, decoder_input_ids.new_tensor([[9]])),  # (1, l); (1, 1)
+            dim=1,
+        )
 
 
 class _AnkhGenerationAdapter:
@@ -135,7 +144,10 @@ class _AnkhGenerationAdapter:
         self.model = _AnkhGenerationModel()
         self.loads: list[dict[str, object]] = []
 
-    def load_official_seq2seq(self, **kwargs: object):
+    def load_official_seq2seq(
+        self,
+        **kwargs: object,
+    ) -> tuple[_AnkhGenerationModel, _AnkhGenerationTokenizer]:
         self.loads.append(kwargs)
         return self.model, _AnkhGenerationTokenizer()
 
@@ -212,8 +224,8 @@ def test_dplm2_checkpoint_forward_selection_is_signature_gated() -> None:
     assert _accepts_type_ids(_AcceptsKeywordArguments())
 
     model = _RejectsTypeIds()
-    input_tensor = torch.tensor([1])
-    type_ids = torch.tensor([0])
+    input_tensor = torch.tensor([1])  # (l=1,)
+    type_ids = torch.tensor([0])  # (l=1,)
     assert not _accepts_type_ids(model)
     with pytest.raises(TypeError, match="type_ids"):
         model(input_tensor, type_ids=type_ids)
@@ -237,7 +249,7 @@ def test_dplm2_checkpoint_generation_uses_public_selected_network() -> None:
 
     oracle = _OfficialWrapper()
     network = _CheckpointNetwork()
-    input_tokens = torch.tensor([[1, 2]])
+    input_tokens = torch.tensor([[1, 2]])  # (b=1, l=2)
     generated = _call_checkpoint_generate(
         oracle,
         network,
@@ -264,7 +276,7 @@ def test_dplm2_multimodal_generation_is_retained_when_supported() -> None:
     """Native DPLM2 networks continue through the official outer sampler."""
 
     oracle = _OfficialWrapper()
-    input_tokens = torch.tensor([[1, 2]])
+    input_tokens = torch.tensor([[1, 2]])  # (b=1, l=2)
     generated = _call_checkpoint_generate(
         oracle,
         _AcceptsTypeIds(),

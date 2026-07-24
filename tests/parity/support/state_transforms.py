@@ -7,9 +7,9 @@ is a compliance failure, not an invitation to compare only intersecting keys.
 from __future__ import annotations
 
 import re
+import torch
 from collections.abc import Callable, Mapping
 
-import torch
 
 State = Mapping[str, torch.Tensor]
 Transform = Callable[[State], dict[str, torch.Tensor]]
@@ -181,6 +181,7 @@ def transform_state(name: str, state: State) -> dict[str, torch.Tensor]:
 def transform_parameter_names(name: str, parameter_name: str) -> tuple[str, ...]:
     """Map one parameter name, including intentionally duplicated alias names."""
 
+    # marker: (0,)
     marker = torch.empty(0)
     transformed = transform_state(name, {parameter_name: marker})
     return tuple(transformed)

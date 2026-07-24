@@ -23,9 +23,9 @@ Other snapshots are not advertised in code, artifacts, tests, or documentation.
 Local artifact building does not modify the Hub. Files-only publication is a
 separate, add-only workflow described in [Hub artifacts](artifacts.md).
 
-## Install and platform requirements
+## Dependencies and platform requirements
 
-ESMFold2 requires the structure dependency group, Python 3.11-3.14, PyTorch
+ESMFold2 requires the structure dependencies, Python 3.11-3.14, PyTorch
 2.13, Transformers 5.13, and a CUDA device for its published execution
 contract. The current validated release target is the exact containerized Linux
 aarch64 environment on the NVIDIA GH200 workstation. CPU-only, x86-64,
@@ -33,37 +33,47 @@ Windows, macOS, H100, and H200 structure runs do not substitute for that release
 evidence:
 
 ```bash
-python -m pip install \
-  "fastplms[structure] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+uv pip install \
+  -r requirements/core.in \
+  -r requirements/features/structure.in \
+  -c requirements/constraints/validation.txt
 ```
 
-The pruned `structure` extra retains Accelerate specifically for the documented
+These files are dependency declarations, not a FastPLMs installation. The
+loading example below obtains runtime source from the pinned Hugging Face model
+with `trust_remote_code=True`.
+
+The structure dependency file retains Accelerate specifically for the documented
 `device_map`-based, memory-safe loading of the 6B ESMC backbone. It retains
 OmegaConf for the explicit trusted-deserialization boundary in
 `Boltz2Model.from_boltz_checkpoint`, where official Lightning checkpoints may
 contain OmegaConf objects. Plotting, reporting, table, and antibody-numbering
-packages are not structure runtime dependencies and remain in `reporting` or
-example-local `uv --with` inputs.
+packages are not structure runtime dependencies and remain in the reporting or
+binder dependency files.
 
-The reference folding path is included in `structure`. The named
+The reference folding path is included in the structure dependencies. The named
 `cuequivariance` kernel backend is a separate opt-in because it adds NVIDIA's
 CUDA-specific binary runtime:
 
 ```bash
-python -m pip install \
-  "fastplms[structure,cueq] @ git+https://github.com/Synthyra/FastPLMs.git@<runtime-revision>"
+uv pip install \
+  -r requirements/core.in \
+  -r requirements/features/structure.in \
+  -r requirements/features/cueq.in \
+  -c requirements/constraints/validation.txt
 ```
 
-The `cueq` extra pins the version-aligned frontend and CUDA kernels used by the
-release contract: `cuequivariance==0.10.0`, `cuequivariance-torch==0.10.0`, and
-`cuequivariance-ops-torch-cu13==0.10.0`. It intentionally selects NVIDIA's
+The cuEquivariance dependency file pins the version-aligned frontend and CUDA
+kernels used by the release contract: `cuequivariance==0.10.0`,
+`cuequivariance-torch==0.10.0`, and
+`cuequivariance-ops-torch-cu13==0.10.0`. It selects NVIDIA's
 CUDA 13 build because FastPLMs validates PyTorch 2.13 on CUDA 13.0. Do not
 install the CUDA 12 and CUDA 13 kernel packages into the same environment.
 FastPLMs requires both the frontend and the CUDA ops package before accepting
 `model.set_kernel_backend("cuequivariance")`; a frontend-only installation is
 not treated as backend availability.
 
-This backend extra is installable only on Linux with an NVIDIA GPU, a compatible
+This backend is available only on Linux with an NVIDIA GPU, a compatible
 CUDA 13 driver, and CPython 3.11-3.14. NVIDIA publishes both x86-64 and ARM64
 manylinux wheels for those interpreters, so the Linux aarch64 GH200 validation
 workstation can resolve this exact package set. H100 and H200 remain supported
@@ -74,8 +84,9 @@ not interchangeable. Windows, macOS, CPU-only hosts, and the FastPLMs CUDA 12
 legacy reference images are not supported execution paths.
 The cuEquivariance Python frontend is Apache-2.0, while the CUDA ops wheels are
 distributed under the NVIDIA Software License Agreement and are described by
-NVIDIA as beta software. Installing `fastplms[cueq]` means accepting those
-separate NVIDIA terms; FastPLMs does not redistribute the wheels.
+NVIDIA as beta software. Installing the cuEquivariance dependencies means
+accepting those separate NVIDIA terms; FastPLMs does not redistribute the
+wheels.
 
 ## Loading
 

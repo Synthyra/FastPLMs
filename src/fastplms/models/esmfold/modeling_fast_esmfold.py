@@ -14,12 +14,11 @@ depend on the pinned fair-esm or OpenFold parity repositories.
 
 from __future__ import annotations
 
+import torch
+import torch.nn as nn
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
-
-import torch
-import torch.nn as nn
 from einops import rearrange
 from torch.nn import functional as F
 from transformers.modeling_outputs import ModelOutput
@@ -37,6 +36,7 @@ from transformers.models.esm.modeling_esmfold import (
 from transformers.models.esm.openfold_utils import residue_constants
 
 from fastplms.models._esm_rotary import RotaryEmbedding
+
 
 # Hub composite artifacts define these shared names earlier in the assembled file.
 try:
@@ -68,11 +68,6 @@ except ModuleNotFoundError as error:
     ):
         raise
     # Legacy flat Hub composites define every shared symbol above this block.
-
-
-# =============================================================================
-# Output Dataclass
-# =============================================================================
 
 
 @dataclass
@@ -137,12 +132,13 @@ def _align_internal_esm_attentions(
 ) -> tuple[torch.Tensor, ...]:
     """Remove internal BOS/EOS positions while preserving public padding slots."""
 
+    # attention: (b, h, l + 2, l + 2); residue_mask: (b, l)
     batch_size, sequence_length = residue_mask.shape
-    public_positions = torch.arange(sequence_length, device=residue_mask.device)
-    valid_lengths = residue_mask.to(dtype=torch.int64).sum(dim=-1, keepdim=True)
+    public_positions = torch.arange(sequence_length, device=residue_mask.device)  # (l,)
+    valid_lengths = residue_mask.to(dtype=torch.int64).sum(dim=-1, keepdim=True)  # (b, 1)
     # Internal layout is BOS, compact biological residues, EOS, then padding.
     # Public padding positions therefore advance by two rather than one.
-    internal_positions = public_positions.unsqueeze(0) + 1
+    internal_positions = public_positions.unsqueeze(0) + 1  # (1, l)
     internal_positions = internal_positions + (
         public_positions.unsqueeze(0) >= valid_lengths
     ).to(dtype=torch.int64)
@@ -175,13 +171,8 @@ def _align_internal_esm_attentions(
     return tuple(aligned)
 
 
-# =============================================================================
-# FastESM2 Attention Layers (multi-backend: SDPA, Flash, Flex)
-# =============================================================================
-
-
 class EsmSelfAttention(nn.Module):
-    def __init__(self, config, position_embedding_type: str | None = None):
+    def __init__(self, config, position_embedding_type: str | None = None) -> None:
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0:
             raise ValueError(
@@ -213,11 +204,12 @@ class EsmSelfAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        # hidden_states: (b, l, d)
         batch_size, seq_length = hidden_states.shape[:-1]
         hidden_shape = (batch_size, seq_length, -1, self.attention_head_size)
-        query_heads = self.query(hidden_states).view(hidden_shape).transpose(1, 2)
-        key_heads = self.key(hidden_states).view(hidden_shape).transpose(1, 2)
-        value_heads = self.value(hidden_states).view(hidden_shape).transpose(1, 2)
+        query_heads = self.query(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
+        key_heads = self.key(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
+        value_heads = self.value(hidden_states).view(hidden_shape).transpose(1, 2)  # (b, h, l, d_h)
 
         query_heads = query_heads * self.scale
 
@@ -285,14 +277,17 @@ class EsmSelfAttention(nn.Module):
         value_heads: torch.Tensor,
         attention_mask_4d: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        attn_weights = torch.matmul(query_heads, key_heads.transpose(-1, -2))
+        # query_heads, key_heads, value_heads: (b, h, l, d_h)
+        attn_weights = torch.matmul(
+            query_heads, key_heads.transpose(-1, -2)
+        )  # (b, h, l, l)
         if attention_mask_4d is not None:
             attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), float("-inf"))
         attn_weights = F.softmax(attn_weights, dim=-1)
         if self.dropout_prob > 0 and self.training:
             attn_weights = F.dropout(attn_weights, p=self.dropout_prob, training=self.training)
-        context_heads = torch.matmul(attn_weights, value_heads)
-        attn_output = rearrange(context_heads, "b h s d -> b s (h d)")
+        context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, l, d_h)
+        attn_output = rearrange(context_heads, "b h s d -> b s (h d)")  # (b, l, d)
         return attn_output, attn_weights
 
     def _kernels_flash_attn(
@@ -358,7 +353,7 @@ class EsmSelfAttention(nn.Module):
 
 
 class EsmAttention(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         super().__init__()
         self.self = EsmSelfAttention(config)
         self.output = EsmSelfOutput(config)
@@ -385,7 +380,7 @@ class EsmAttention(nn.Module):
 
 
 class EsmLayer(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         super().__init__()
         self.attention = EsmAttention(config)
         self.intermediate = EsmIntermediate(config)
@@ -417,7 +412,7 @@ class EsmLayer(nn.Module):
 
 
 class FastEsmEncoder(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         super().__init__()
         self.config = config
         self.attention_backend = resolve_attention_backend(config.attn_backend)
@@ -431,6 +426,7 @@ class FastEsmEncoder(nn.Module):
         output_hidden_states: bool = False,
         output_attentions: bool = False,
     ) -> FastEsmEncoderOutput:
+        # hidden_states: (b, l, d); attention_mask: (b, l)
         all_hidden_states = () if output_hidden_states else None
         all_attentions = () if output_attentions else None
 
@@ -476,11 +472,6 @@ class FastEsmEncoder(nn.Module):
         )
 
 
-# =============================================================================
-# FastESM Backbone (replaces EsmModel inside ESMFold)
-# =============================================================================
-
-
 class FastEsmBackbone(nn.Module):
     """FastESM2 backbone with multi-backend attention. Drop-in replacement for
     transformers.EsmModel inside EsmForProteinFolding.
@@ -489,7 +480,7 @@ class FastEsmBackbone(nn.Module):
     masked-LM head are therefore omitted from this structure-only backbone.
     """
 
-    def __init__(self, config):
+    def __init__(self, config) -> None:
         super().__init__()
         self.config = config
         self.embeddings = EsmEmbeddings(config)
@@ -537,11 +528,6 @@ class FastEsmBackbone(nn.Module):
         return output if return_dict else output.to_tuple()
 
 
-# =============================================================================
-# FastEsmFoldConfig
-# =============================================================================
-
-
 class FastEsmFoldConfig(EsmConfig):
     model_type = "fast_esmfold"
 
@@ -552,11 +538,6 @@ class FastEsmFoldConfig(EsmConfig):
         kwargs.pop("ttt_config", None)
         super().__init__(**kwargs)
         self.attn_backend = attn_backend
-
-
-# =============================================================================
-# FastEsmForProteinFolding
-# =============================================================================
 
 
 class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
@@ -576,7 +557,7 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
     _supports_flash_attn_3 = False
     _fastplms_attention_implementations = ("eager", "sdpa", "flex_attention")
 
-    def __init__(self, config: FastEsmFoldConfig):
+    def __init__(self, config: FastEsmFoldConfig) -> None:
         super().__init__(config)
 
         # Replace the standard ESM2 backbone with the multi-backend FastESM2

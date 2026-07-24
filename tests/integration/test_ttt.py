@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
-from typing import ClassVar
-
 import pytest
 import torch
 import torch.nn as nn
+from pathlib import Path
+from types import SimpleNamespace
+from typing import ClassVar
 from transformers import PretrainedConfig, PreTrainedModel
 
 from fastplms.models.ankh.modeling_ankh import FastAnkhForMaskedLMExtension
@@ -23,6 +22,7 @@ from fastplms.models.ttt import (
     TTTConfig,
 )
 from tests.conftest import MODEL_REGISTRY, STRUCTURE_MODEL_REGISTRY
+
 
 TEST_SEQUENCE = "MSTNPKPQRKTKRNT"
 LOCAL_MODEL_CLASSES = {
@@ -87,8 +87,10 @@ class DummyTokenizer:
                 [self.cls_token_id] + [self.vocab[aa] for aa in sequence] + [self.eos_token_id]
             )
         max_len = max(len(ids) for ids in encoded)
+        # input_ids: (len(encoded), max_len)
         input_ids = torch.full((len(encoded), max_len), self.pad_token_id)
         for row, ids in enumerate(encoded):
+            # input_ids[row, :len(ids)]: (...)
             input_ids[row, : len(ids)] = torch.tensor(ids)
         return {"input_ids": input_ids.long()}
 
@@ -127,6 +129,7 @@ class DummyTTTModel(FastPLMTestTimeTrainingMixin, nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
     ):
+        # input_ids: (b, l)
         del attention_mask
         hidden = self.backbone(self.embed(input_ids))
         return SimpleNamespace(logits=self.lm_head(hidden))
@@ -139,6 +142,7 @@ class FamilyAttention(nn.Module):
         self.value = nn.Linear(8, 8)
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        # hidden_states: (..., d)
         return self.query(hidden_states) + self.value(hidden_states)
 
 
@@ -165,6 +169,7 @@ class DummyFamilyTargetTTTModel(FastPLMTestTimeTrainingMixin, nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
     ):
+        # input_ids: (b, l)
         del attention_mask
         hidden = self.embed(input_ids)
         hidden = self.backbone["attention"](hidden)
@@ -203,6 +208,7 @@ class DummyPretrainedTTTModel(FastPLMTestTimeTrainingMixin, PreTrainedModel):
         return [self.backbone]
 
     def forward(self, input_ids: torch.Tensor, **kwargs):
+        # input_ids: (b, l)
         del kwargs
         hidden = self.backbone(self.embed(input_ids))
         return SimpleNamespace(logits=self.lm_head(hidden))
@@ -239,6 +245,7 @@ def test_ttt_lora_alpha_is_the_proteinttt_direct_multiplier() -> None:
         rank=2,
         alpha=6.0,
     )
+    # inputs: (1, 3)
     inputs = torch.tensor([[1.0, 2.0, 3.0]])
     with torch.no_grad():
         adapter.linear.weight.zero_()
@@ -394,9 +401,11 @@ def test_ttt_config_rejects_invalid_optimizer_and_target_contracts(
 def test_ttt_adapter_initialization_is_seeded_and_preserves_ambient_rng() -> None:
     first = DummyTTTModel()
     torch.manual_seed(11)
+    # expected_next: (4,)
     expected_next = torch.rand(4)
     torch.manual_seed(11)
     first._ttt_ensure_initialized()
+    # actual_next: (4,)
     actual_next = torch.rand(4)
 
     torch.manual_seed(987654)
@@ -423,6 +432,7 @@ def test_ttt_generic_replacements_exclude_reserved_vocabulary_ids() -> None:
     }
     model.tokenizer = tokenizer
     model.config = SimpleNamespace(vocab_size=27, model_type="esm3")
+    # input_ids: (1, 6)
     input_ids = torch.tensor([[1, canonical["A"], 24, 25, 26, 2]])
 
     replacements = model._ttt_replacement_tokens(input_ids)
@@ -435,6 +445,7 @@ def test_ttt_generic_replacements_exclude_reserved_vocabulary_ids() -> None:
 def test_ttt_uneven_batch_samples_only_rows_with_residue_targets() -> None:
     model = DummyTTTModel()
     model._ttt_cfg.batch_size = 4
+    # tokenized: (2, 3)
     tokenized = torch.tensor(
         [
             [model.tokenizer.cls_token_id, model.tokenizer.vocab["A"], 2],
@@ -451,6 +462,7 @@ def test_ttt_uneven_batch_samples_only_rows_with_residue_targets() -> None:
 
 def test_ttt_rejects_all_ignored_inputs_before_adapter_injection() -> None:
     model = DummyTTTModel()
+    # input_ids: (1, 3)
     input_ids = torch.tensor(
         [[model.tokenizer.cls_token_id, model.tokenizer.eos_token_id, model.tokenizer.pad_token_id]]
     )
@@ -468,6 +480,7 @@ def test_ttt_rejects_dplm2_structure_tokens_before_adapter_injection() -> None:
     tokenizer._token_to_id = {"<struct_cls>": 33}
     model.tokenizer = tokenizer
     model.config = SimpleNamespace(vocab_size=64, model_type="dplm2", struct_type=0)
+    # input_ids: (1, 5)
     input_ids = torch.tensor([[1, tokenizer.vocab["A"], 33, 40, 2]])
 
     with pytest.raises(ValueError, match="amino-acid-only"):

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import dataclasses
 import sys
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 import torch
+from pathlib import Path
+from types import SimpleNamespace
 
 from fastplms.models.esmfold2 import esmfold2_input_builder
 from fastplms.models.esmfold2.esmfold2_aligner import Aligner
@@ -30,11 +30,12 @@ from fastplms.models.esmfold2.esmfold2_types import (
     StructurePredictionInput,
 )
 
+
 pytestmark = pytest.mark.structure
 
 
 def test_greedy_msa_selection_preserves_official_tie_order() -> None:
-    sequences = np.asarray(
+    sequences = np.asarray(  # (n=5, l=4)
         [list(row) for row in ("AAAA", "AAAT", "AATT", "TTTT", "ATAT")],
         dtype="S1",
     )
@@ -52,15 +53,15 @@ def test_greedy_msa_selection_preserves_official_tie_order() -> None:
 def test_fast_msa_stack_preserves_headerless_and_mixed_inputs() -> None:
     from fastplms.models.esmfold2.esmfold2_msa import FastMSA
 
-    first = FastMSA(np.asarray([list("AAA"), list("AAT")], dtype="S1"))
-    second = FastMSA(np.asarray([list("AAA"), list("ATT")], dtype="S1"))
+    first = FastMSA(np.asarray([list("AAA"), list("AAT")], dtype="S1"))  # (n=2, l=3)
+    second = FastMSA(np.asarray([list("AAA"), list("ATT")], dtype="S1"))  # (n=2, l=3)
     headerless = FastMSA.stack([first, second])
 
     assert headerless.depth == 3
     assert headerless.headers is None
 
     with_headers = FastMSA(
-        np.asarray([list("AAA"), list("ATA")], dtype="S1"),
+        np.asarray([list("AAA"), list("ATA")], dtype="S1"),  # (n=2, l=3)
         ["query", "named"],
     )
     mixed = FastMSA.stack([first, with_headers])
@@ -68,7 +69,7 @@ def test_fast_msa_stack_preserves_headerless_and_mixed_inputs() -> None:
     assert mixed.headers == ["", "", "named"]
 
 
-def test_hhfilter_passes_paths_as_distinct_arguments(tmp_path) -> None:
+def test_hhfilter_passes_paths_as_distinct_arguments(tmp_path: Path) -> None:
     executable = tmp_path / "fake_hhfilter.py"
     executable.write_text(
         "#!/usr/bin/env python3\n"
@@ -115,6 +116,7 @@ def test_a3m_dot_insertions_and_raw_rows_have_consistent_metadata() -> None:
     match_columns = MSA.from_a3m(io.StringIO(source))
     assert match_columns.sequences == ["ACD", "ACD"]
     assert match_columns.deletions is not None
+    # n=2 aligned sequences, l=3 retained match columns.
     assert match_columns.deletions.shape == (2, 3)
 
     raw_rows = MSA.from_a3m(io.StringIO(source), remove_insertions=False)
@@ -124,12 +126,14 @@ def test_a3m_dot_insertions_and_raw_rows_have_consistent_metadata() -> None:
 
 def test_protein_chain_rejects_misaligned_atom37_tables() -> None:
     with pytest.raises(ValueError, match=r"shape \(length, 37, 3\)"):
-        ProteinChain.from_atom37(np.zeros((2, 36, 3), dtype=np.float32))
+        ProteinChain.from_atom37(
+            np.zeros((2, 36, 3), dtype=np.float32)  # (l=2, a=36, xyz=3)
+        )
 
 
 def test_protein_chain_contacts_require_retained_mmcif_source() -> None:
     chain = ProteinChain.from_atom37(
-        np.zeros((2, 37, 3), dtype=np.float32),
+        np.zeros((2, 37, 3), dtype=np.float32),  # (l=2, a=37, xyz=3)
         sequence="AC",
     )
     with pytest.raises(ValueError, match="keep_source=True"):
@@ -231,16 +235,20 @@ class _Structure:
 
 
 def test_atom_indexer_selects_the_declared_property_and_axis() -> None:
-    positions = np.arange(2 * 37 * 3, dtype=np.float32).reshape(2, 37, 3)
-    structure = _Structure(positions, np.ones((2, 37), dtype=bool))
+    positions = np.arange(2 * 37 * 3, dtype=np.float32).reshape(  # (l=2, a=37, xyz=3)
+        2, 37, 3
+    )
+    structure = _Structure(positions, np.ones((2, 37), dtype=bool))  # mask: (l=2, a=37)
     indexer = AtomIndexer(structure, "atom37_positions", dim=1)
     np.testing.assert_array_equal(indexer["CA"], positions[:, 1])
     np.testing.assert_array_equal(indexer[["N", "C"]], positions[:, [0, 2]])
 
 
 def test_atom_name_selection_matches_for_numpy_and_torch() -> None:
-    positions = np.arange(2 * 37 * 3, dtype=np.float32).reshape(2, 37, 3)
-    expected = positions[:, [0, 1, 2]]
+    positions = np.arange(2 * 37 * 3, dtype=np.float32).reshape(  # (l=2, a=37, xyz=3)
+        2, 37, 3
+    )
+    expected = positions[:, [0, 1, 2]]  # (l=2, a_selected=3, xyz=3)
     np.testing.assert_array_equal(
         index_by_atom_name(positions, ["N", "CA", "C"]),
         expected,
@@ -252,31 +260,36 @@ def test_atom_name_selection_matches_for_numpy_and_torch() -> None:
 
 
 def test_pae_bin_expectation_and_tm_score_are_exact_for_uniform_logits() -> None:
-    logits = torch.zeros((1, 2, 2, 4), dtype=torch.float64)
-    mask = torch.ones((1, 2), dtype=torch.bool)
-    pae = compute_predicted_aligned_error(logits, mask)
-    assert torch.equal(pae, torch.full((1, 2, 2), 31.0, dtype=torch.float64))
+    logits = torch.zeros((1, 2, 2, 4), dtype=torch.float64)  # (b=1, l=2, l=2, c=4)
+    mask = torch.ones((1, 2), dtype=torch.bool)  # (b=1, l=2)
+    pae = compute_predicted_aligned_error(logits, mask)  # (b=1, l=2, l=2)
+    assert torch.equal(
+        pae,
+        torch.full((1, 2, 2), 31.0, dtype=torch.float64),  # (b=1, l=2, l=2)
+    )
 
-    centers = torch.tensor([7.75, 23.25, 38.75, 54.25], dtype=torch.float64)
+    centers = torch.tensor([7.75, 23.25, 38.75, 54.25], dtype=torch.float64)  # (c=4,)
     d0 = 1.24 * 4 ** (1 / 3) - 1.8
-    expected_tm = (1 / (1 + (centers / d0) ** 2)).mean().reshape(1)
+    expected_tm = (1 / (1 + (centers / d0) ** 2)).mean().reshape(1)  # (b=1,)
     torch.testing.assert_close(compute_tm(logits, mask), expected_tm, rtol=2e-6, atol=1e-12)
 
 
 def test_aligner_recovers_a_rigid_translation() -> None:
-    mobile_positions = np.full((1, 37, 3), np.nan, dtype=np.float32)
-    mobile_positions[0, :3] = np.asarray(
+    mobile_positions = np.full((1, 37, 3), np.nan, dtype=np.float32)  # (l=1, a=37, xyz=3)
+    mobile_positions[0, :3] = np.asarray(  # (a_selected=3, xyz=3)
         [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
         dtype=np.float32,
     )
-    mask = np.zeros((1, 37), dtype=bool)
-    mask[0, :3] = True
-    target_positions = mobile_positions.copy()
-    target_positions[mask] += np.asarray([2.0, -1.0, 3.0], dtype=np.float32)
+    mask = np.zeros((1, 37), dtype=bool)  # (l=1, a=37)
+    mask[0, :3] = True  # (a_selected=3,)
+    target_positions = mobile_positions.copy()  # (l=1, a=37, xyz=3)
+    target_positions[mask] += np.asarray(  # (xyz=3,), broadcast over n_selected=3
+        [2.0, -1.0, 3.0], dtype=np.float32
+    )
     mobile = _Structure(mobile_positions, mask)
     target = _Structure(target_positions, mask)
 
     aligner = Aligner(mobile, target, only_use_backbone=True)
-    aligned = aligner.apply(mobile)
+    aligned = aligner.apply(mobile)  # atom37_positions: (l=1, a=37, xyz=3)
     assert aligner.rmsd < 1e-7
     np.testing.assert_allclose(aligned.atom37_positions[mask], target_positions[mask], atol=1e-6)

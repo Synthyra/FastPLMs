@@ -3,11 +3,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-from pathlib import Path
-from types import MethodType, SimpleNamespace
-
 import pytest
 import torch
+from pathlib import Path
+from types import MethodType, SimpleNamespace
 
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.esmfold2_msa import MSA
@@ -27,6 +26,7 @@ from tools.artifacts.build import (
     _apply_artifact_config_contract,
     _expected_registry_provenance,
 )
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -151,14 +151,14 @@ def test_artifact_config_rejects_manifest_msa_disagreement(
 def test_fast_checkpoint_rejects_every_low_level_msa_input(provided_name: str) -> None:
     config = ESMFold2Config(msa_encoder={"enabled": False}, msa_conditioning=False)
     values = {name: None for name in MSA_CONDITIONING_INPUT_NAMES}
-    values[provided_name] = torch.zeros(1)
+    values[provided_name] = torch.zeros(1)  # (n=1,)
     with pytest.raises(ValueError, match=provided_name):
         validate_msa_conditioning_inputs(config, **values)
 
 
 def test_full_checkpoint_accepts_low_level_msa_inputs() -> None:
     config = ESMFold2Config(msa_encoder={"enabled": True}, msa_conditioning=True)
-    tensor = torch.zeros(1)
+    tensor = torch.zeros(1)  # (n=1,)
     validate_msa_conditioning_inputs(
         config,
         msa=tensor,
@@ -172,12 +172,12 @@ def test_full_checkpoint_accepts_low_level_msa_inputs() -> None:
 @pytest.mark.parametrize("model_type", [ESMFold2Model, ESMFold2ExperimentalModel])
 @pytest.mark.parametrize("provided_name", MSA_CONDITIONING_INPUT_NAMES)
 def test_fast_model_forward_rejects_every_msa_input_before_computation(
-    model_type: type,
+    model_type: type[ESMFold2Model] | type[ESMFold2ExperimentalModel],
     provided_name: str,
 ) -> None:
     config = ESMFold2Config(msa_encoder={"enabled": False}, msa_conditioning=False)
     model = SimpleNamespace(config=config)
-    tensor = torch.zeros(1)
+    tensor = torch.zeros(1)  # (n=1,)
     required = {
         name: tensor
         for name in (
@@ -208,7 +208,12 @@ def test_fast_model_forward_rejects_every_msa_input_before_computation(
 def _builder_with_features(features: dict[str, torch.Tensor]) -> ESMFold2InputBuilder:
     builder = object.__new__(ESMFold2InputBuilder)
 
-    def prepare_input(self, input, seed=None, device=None):
+    def prepare_input(
+        self: ESMFold2InputBuilder,
+        input: object,
+        seed: int | None = None,
+        device: torch.device | str | None = None,
+    ) -> tuple[dict[str, torch.Tensor], list[object]]:
         del self, input, seed, device
         return dict(features), []
 
@@ -217,8 +222,11 @@ def _builder_with_features(features: dict[str, torch.Tensor]) -> ESMFold2InputBu
 
 
 def test_fast_high_level_input_rejects_explicit_msa_and_strips_synthetic_features() -> None:
-    features = {name: torch.zeros(1) for name in MSA_CONDITIONING_INPUT_NAMES}
-    features["token_index"] = torch.zeros(1)
+    features = {
+        name: torch.zeros(1)  # (n=1,)
+        for name in MSA_CONDITIONING_INPUT_NAMES
+    }
+    features["token_index"] = torch.zeros(1)  # (n=1,)
     builder = _builder_with_features(features)
     model = SimpleNamespace(config=SimpleNamespace(msa_conditioning=False))
     sequence_only = StructurePredictionInput(
@@ -237,7 +245,10 @@ def test_fast_high_level_input_rejects_explicit_msa_and_strips_synthetic_feature
 
 
 def test_full_high_level_input_preserves_msa_features() -> None:
-    features = {name: torch.zeros(1) for name in MSA_CONDITIONING_INPUT_NAMES}
+    features = {
+        name: torch.zeros(1)  # (n=1,)
+        for name in MSA_CONDITIONING_INPUT_NAMES
+    }
     builder = _builder_with_features(features)
     model = SimpleNamespace(config=SimpleNamespace(msa_conditioning=True))
     explicit = StructurePredictionInput(

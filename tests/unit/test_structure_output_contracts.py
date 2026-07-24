@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import warnings
+import pytest
+import torch
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
-
-import pytest
-import torch
 from torch import Tensor, nn
 from transformers.models.esm.modeling_esmfold import EsmForProteinFolding
 
@@ -61,16 +60,17 @@ def _assert_tuple_matches_output(
 class _TinyBoltzCore(nn.Module):
     def __init__(self, width: int = 3) -> None:
         super().__init__()
-        self.weight = nn.Parameter(torch.linspace(0.5, 1.0, width))
+        self.weight = nn.Parameter(torch.linspace(0.5, 1.0, width))  # (d=width,)
 
     def forward(self, feats: dict[str, Tensor], **_kwargs: Any) -> dict[str, Tensor]:
-        signal = feats["signal"] * self.weight
-        pair = signal[:, :, None, :] + signal[:, None, :, :]
+        # feats["signal"]: (b, l, d)
+        signal = feats["signal"] * self.weight  # (b, l, d)
+        pair = signal[:, :, None, :] + signal[:, None, :, :]  # (b, l, l, d)
         return {
-            "pdistogram": pair.unsqueeze(-1),
-            "s": signal,
-            "z": pair,
-            "sample_atom_coords": signal[..., :1].expand(-1, -1, 3),
+            "pdistogram": pair.unsqueeze(-1),  # (b, l, l, d, 1)
+            "s": signal,  # (b, l, d)
+            "z": pair,  # (b, l, l, d)
+            "sample_atom_coords": signal[..., :1].expand(-1, -1, 3),  # (b, l, xyz=3)
         }
 
 
@@ -81,7 +81,9 @@ def test_boltz_public_forward_honors_output_controls_backward_and_reload(
     monkeypatch.setattr(modeling_boltz2, "Boltz2InferenceCore", _TinyBoltzCore)
     config = Boltz2Config(core_kwargs={"width": 3})
     model = Boltz2Model(config)
-    features = {"signal": torch.arange(6, dtype=torch.float32).reshape(1, 2, 3)}
+    features = {
+        "signal": torch.arange(6, dtype=torch.float32).reshape(1, 2, 3)  # (b=1, l=2, d=3)
+    }
 
     structured = model(
         feats=features,
@@ -126,14 +128,18 @@ def test_fast_esmfold_public_forward_honors_output_controls_and_backward(
         input_ids: Tensor,
         **_kwargs: Any,
     ) -> dict[str, Tensor]:
+        # input_ids: (b, l)
         state = self.contract_weight.expand(input_ids.shape[0], input_ids.shape[1], 2)
-        return {"s_s": state, "plddt": state[..., :1]}
+        return {"s_s": state, "plddt": state[..., :1]}  # (b, l, d=2); (b, l, 1)
 
     monkeypatch.setattr(EsmForProteinFolding, "forward", native_forward)
     model = FastEsmForProteinFolding.__new__(FastEsmForProteinFolding)
     nn.Module.__init__(model)
-    model.register_parameter("contract_weight", nn.Parameter(torch.ones(1, 1, 2)))
-    input_ids = torch.zeros((1, 2), dtype=torch.int64)
+    model.register_parameter(
+        "contract_weight",
+        nn.Parameter(torch.ones(1, 1, 2)),  # (1, 1, d=2)
+    )
+    input_ids = torch.zeros((1, 2), dtype=torch.int64)  # (b=1, l=2)
 
     structured = model(
         input_ids,
@@ -219,22 +225,27 @@ def test_fast_esmfold_output_attentions_uses_masked_per_call_eager_fallback(
         attention_mask: Tensor | None = None,
         **_kwargs: Any,
     ) -> dict[str, Tensor]:
+        # input_ids: (b, l); attention_mask: (b, l) or None
         if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
-        esmaa = self.af2_idx_to_esm_idx(input_ids, attention_mask)
-        representations = self.compute_language_model_representations(esmaa)
-        state = representations[:, :, -1, :]
+            attention_mask = torch.ones_like(input_ids)  # (b, l)
+        esmaa = self.af2_idx_to_esm_idx(input_ids, attention_mask)  # (b, l)
+        representations = self.compute_language_model_representations(
+            esmaa
+        )  # (b, l, n_layers, d)
+        state = representations[:, :, -1, :]  # (b, l, d)
         return {
-            "s_s": state,
-            "plddt": torch.ones((*state.shape[:2], 1), device=state.device),
+            "s_s": state,  # (b, l, d)
+            "plddt": torch.ones((*state.shape[:2], 1), device=state.device),  # (b, l, 1)
         }
 
     monkeypatch.setattr(EsmForProteinFolding, "forward", folding_stub)
     model = FastEsmForProteinFolding(
         _tiny_fast_esmfold_config(bypass_lm=False, attn_backend="sdpa")
     ).eval()
-    input_ids = torch.tensor(((0, 1, 2), (3, 4, 0)), dtype=torch.int64)
-    attention_mask = torch.tensor(((1, 1, 1), (1, 1, 0)), dtype=torch.int64)
+    input_ids = torch.tensor(((0, 1, 2), (3, 4, 0)), dtype=torch.int64)  # (b=2, l=3)
+    attention_mask = torch.tensor(  # (b=2, l=3)
+        ((1, 1, 1), (1, 1, 0)), dtype=torch.int64
+    )
     configured_encoder_backend = model.esm.encoder.attention_backend
     attention_module = model.esm.encoder.layer[0].attention.self
     configured_layer_backend = attention_module.attn_backend
@@ -251,7 +262,7 @@ def test_fast_esmfold_output_attentions_uses_masked_per_call_eager_fallback(
 
     assert len(captured) == 1
     assert output.attentions is not None and len(output.attentions) == 1
-    attention = output.attentions[0]
+    attention = output.attentions[0]  # (b=2, h=2, l=3, l=3)
     assert attention.shape == (2, 2, 3, 3)
     torch.testing.assert_close(
         attention[1, :, :, 2],
@@ -371,10 +382,12 @@ class _TinyStructureHead(nn.Module):
                 "denoising_early_exit_rmsd",
             )
         }
-        coords = kwargs["ref_pos"].float()
+        coords = kwargs["ref_pos"].float()  # (b, a, xyz=3)
         multiplicity = int(kwargs["num_diffusion_samples"])
         return {
-            "sample_atom_coords": coords.repeat_interleave(multiplicity, dim=0)
+            "sample_atom_coords": coords.repeat_interleave(
+                multiplicity, dim=0
+            )  # (b * multiplicity, a, xyz=3)
         }
 
 
@@ -386,18 +399,19 @@ class _TinyConfidenceHead(nn.Module):
         num_diffusion_samples: int,
         **_kwargs: Any,
     ) -> dict[str, Tensor]:
+        # z: (b, l, l, d_pair); x_pred: (b * num_diffusion_samples, a, xyz=3)
         _batch_size, sequence_length = z.shape[:2]
         score = z.float().mean(dim=(1, 2, 3)).repeat_interleave(
             num_diffusion_samples
-        )
+        )  # (b * num_diffusion_samples,)
         return {
-            "plddt": score[:, None].expand(-1, sequence_length),
-            "complex_plddt": score,
-            "ptm": score,
-            "iptm": score,
+            "plddt": score[:, None].expand(-1, sequence_length),  # (b * samples, l)
+            "complex_plddt": score,  # (b * samples,)
+            "ptm": score,  # (b * samples,)
+            "iptm": score,  # (b * samples,)
             "pae": z.new_zeros(
                 (x_pred.shape[0], sequence_length, sequence_length)
-            ),
+            ),  # (b * samples, l, l)
         }
 
 
@@ -417,7 +431,7 @@ def test_esmfold2_public_forward_honors_output_controls_and_sampler_overrides(
     model.structure_head = structure_head
     if model_type == "release":
         model.confidence_head = _TinyConfidenceHead()
-    features = prepare_protein_features("AC")
+    features = prepare_protein_features("AC")  # batched tensors for b=1, l=2 residues
     common_kwargs = {
         "num_loops": 0,
         "num_sampling_steps": 1,
@@ -468,7 +482,7 @@ def test_esmfold2_public_forward_honors_output_controls_and_sampler_overrides(
 
     model.zero_grad(set_to_none=True)
     if model_type == "experimental":
-        res_type_soft = torch.nn.functional.one_hot(
+        res_type_soft = torch.nn.functional.one_hot(  # (b=1, l=2, c=NUM_RES_TYPES)
             features["res_type"].long(),
             num_classes=NUM_RES_TYPES,
         ).float()
