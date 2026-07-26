@@ -1,0 +1,4 @@
+* text=auto eol=lf
+# Preserve byte-exact third-party legal text without treating its upstream
+# trailing spaces as project defects.
+LICENSES/ankh/LICENSE.md whitespace=-trailing-space

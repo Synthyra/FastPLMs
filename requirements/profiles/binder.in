@@ -1,0 +1,3 @@
+-r ../core.in
+-r ../features/structure.in
+-r ../features/binder.in

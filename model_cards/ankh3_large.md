@@ -1,0 +1,318 @@
+---
+library_name: transformers
+license: "cc-by-nc-sa-4.0"
+tags:
+  - protein-language-model
+  - fastplms
+---
+
+<!-- Generated from src/fastplms/models.toml. Do not edit. -->
+
+# Synthyra/ANKH3_large
+
+This checkpoint packages the FastPLMs `ANKH` implementation.
+
+Accepted inputs are amino-acid sequences tokenized for encoder or sequence-to-
+sequence use.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`,
+`AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`,
+`AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
+
+## Capabilities
+
+| Feature | Status |
+| --- | --- |
+| Sequence classification | Supported: base weights with an untrained task head |
+| Token classification | Supported: base weights with an untrained task head |
+| PEFT fine-tuning | Supported pattern: preserve the separately trained `classifier` |
+| Embeddings | Special: encoder or explicitly prepared decoder states |
+| Test-time training | Supported: low-rank masked-residue adaptation |
+| Attention variants | Supported: `eager`, `sdpa` |
+| Compliance | Declared: exact release evidence is required |
+
+A supported interface is not a pretrained downstream predictor. Classification
+heads start untrained, and declared compliance metadata is not a claim that an
+arbitrary local build passed its release gate.
+
+## Install and platform requirements
+
+Install the direct dependencies published with this model:
+
+```bash
+python -m pip install -r \
+  "https://huggingface.co/Synthyra/ANKH3_large/resolve/main/requirements.txt"
+```
+
+The FastPLMs implementation itself is embedded in the model repository and loaded
+by Transformers through `trust_remote_code=True`.
+
+Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The declared CPU gate covers tiny offline contracts; published checkpoint throughput and parity require the documented device tier. The Hub quick start below requires network
+access on first download. For an air-gapped run, first build the manifest-pinned
+local artifact and use the offline form shown in the example.
+
+## Quick start
+
+```python
+from transformers import AutoModel
+
+model_id = "Synthyra/ANKH3_large"
+model = AutoModel.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+    attn_implementation="sdpa",
+).eval()
+```
+
+For offline validation, replace `model_id` with the manifest-built
+`dist/hub/ANKH3_large` path and pass `local_files_only=True`.
+
+## Attention and compliance
+
+The quick start selects `sdpa` explicitly. Declared variants are `eager`, `sdpa`. An unavailable requested backend raises
+instead of silently switching implementations.
+`output_attentions=True` may use the documented, one-call eager fallback solely
+to materialize attention tensors; the configured backend remains unchanged.
+
+This family declares the `compliance` tier. Release evidence binds the exact
+checkpoint, backend, dtype, hardware, inputs, and reference revision.
+
+## Tokenization and forward inference
+
+`Synthyra/ANKH3_large` contains the complete encoder-decoder checkpoint.
+`AutoModel` loads the encoder view without allocating the decoder, while
+`AutoModelForSeq2SeqLM` loads the encoder, decoder, cross-attention, and
+language-model head.
+
+Use the tokenizer owned by the loaded model so tokenizer files, revision,
+offline/cache policy, and ANKH's residue-aware pre-tokenizer stay aligned.
+Pass raw protein strings without inserted residue spaces:
+
+```python
+import torch
+
+tokenizer = model.tokenizer
+batch = tokenizer(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    padding=True,
+    return_tensors="pt",
+)
+
+with torch.inference_mode():
+    output = model(**batch)
+
+print(output.last_hidden_state.shape)
+```
+
+## Dataset embeddings
+
+Dataset embeddings default to the encoder final state. Select a native encoder
+layer directly:
+
+```python
+encoder_result = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    hidden_state_source="encoder",
+    hidden_state_index=-1,
+    full_embeddings=True,
+)
+print(encoder_result[0].tensor.shape)  # (l, d)
+```
+
+Decoder representations require `AutoModelForSeq2SeqLM` and exactly one
+aligned decoder input. ANKH does not invent a shifted target:
+
+```python
+from transformers import AutoModelForSeq2SeqLM
+
+seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
+    "Synthyra/ANKH3_large",
+    trust_remote_code=True,
+).eval()
+decoder_result = seq2seq.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    hidden_state_source="decoder",
+    hidden_state_index=-1,
+    decoder_inputs=["M<extra_id_0>"],
+    full_embeddings=True,
+)
+print(decoder_result[0].tensor.shape)  # (decoder_length, d)
+```
+
+Pooling excludes boundary, padding, sentinel, and other non-biological
+positions. Persisted results record the selected stack, layer, inputs, masks,
+and alignment policy.
+
+## Downstream classification
+
+Both downstream AutoClasses reuse the checkpoint backbone and initialize a new,
+untrained `classifier`. Sequence labels have shape `(b,)`; residue labels have
+shape `(b, l)` and use `-100` outside biological positions:
+
+```python
+import torch
+from transformers import AutoTokenizer
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoModelForTokenClassification,
+)
+
+model_id = "Synthyra/ANKH3_large"
+sequence_model = AutoModelForSequenceClassification.from_pretrained(
+    model_id, num_labels=2, trust_remote_code=True
+).eval()
+token_model = AutoModelForTokenClassification.from_pretrained(
+    model_id, num_labels=3, trust_remote_code=True
+).eval()
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
+batch = tokenizer(sequences, padding=True, return_tensors="pt")
+biological = batch["attention_mask"].bool()
+for special_id in tokenizer.all_special_ids:
+    biological &= batch["input_ids"].ne(special_id)
+
+sequence_labels = torch.zeros(len(sequences), dtype=torch.long)
+token_labels = torch.full_like(batch["input_ids"], -100)
+token_labels[biological] = 0
+
+with torch.inference_mode():
+    sequence_output = sequence_model(**batch, labels=sequence_labels)
+    token_output = token_model(**batch, labels=token_labels)
+print(sequence_output.logits.shape)  # (b, 2)
+print(token_output.logits.shape)     # (b, l, 3)
+```
+
+## PEFT fine-tuning
+
+Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+
+```bash
+python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
+```
+
+```python
+from peft import LoraConfig, TaskType, get_peft_model
+
+peft_model = get_peft_model(
+    sequence_model,
+    LoraConfig(
+        task_type=TaskType.SEQ_CLS,
+        r=8,
+        lora_alpha=16,
+        target_modules="all-linear",
+        modules_to_save=["classifier"],
+    ),
+)
+```
+
+This checkpoint advertises a classification head, so the separately trained
+`classifier` is saved with the adapter.
+All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
+can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+support boundary. Record the target modules, base revision, data identity, and
+trainable parameter scope.
+
+## Test-time training
+
+TTT samples masked views of one protein and updates only injected low-rank
+adapters. Base checkpoint weights remain frozen:
+
+```python
+from transformers import AutoModelForMaskedLM
+
+ttt_model = AutoModelForMaskedLM.from_pretrained(
+    "Synthyra/ANKH3_large",
+    trust_remote_code=True,
+)
+metrics = ttt_model.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={"steps": 3, "batch_size": 1, "seed": 7},
+)
+ttt_model.save_pretrained("adapted", safe_serialization=True)
+ttt_model.ttt_reset()
+print(metrics)
+```
+
+Persisted adapters retain their deterministic reset state. TTT adds latency
+and memory, can worsen an output, and does not establish biological function.
+
+## Encoder and sequence-to-sequence use
+
+`Synthyra/ANKH3_large` contains the complete ANKH encoder-decoder checkpoint.
+Use `AutoModel` for encoder embeddings and `AutoModelForSeq2SeqLM` for
+task-specific decoding:
+
+```python
+import torch
+from transformers import AutoModel, AutoModelForSeq2SeqLM, AutoTokenizer
+
+repo_id = "Synthyra/ANKH3_large"
+tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
+encoder = AutoModel.from_pretrained(repo_id, trust_remote_code=True).eval()
+seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
+    repo_id,
+    trust_remote_code=True,
+).eval()
+batch = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
+
+with torch.inference_mode():
+    encoder_hidden = encoder(**batch).last_hidden_state
+    generated_ids = seq2seq.generate(**batch, max_new_tokens=16)
+print(encoder_hidden.shape)
+print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
+```
+
+ANKH artifacts retain CC BY-NC-SA 4.0 terms. The notes below distinguish the
+official heads from FastPLMs extensions. The complete checkpoint is larger than
+the former encoder-only mirror while preserving encoder-output parity.
+
+## Notes and limitations
+
+ANKH parity covers the official encoder and sequence-to-sequence heads.
+AutoModelForMaskedLM exposes the separately named FastPLMs synthesized
+masked-LM extension and is not an official ANKH head.
+
+## Runtime contract
+
+- Public input: Amino-acid sequences tokenized for encoder or sequence-to-sequence use
+- Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
+- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForMaskedLM` = `FastPLMs extension`, `AutoModelForSeq2SeqLM` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
+- Attention implementations: `eager`, `sdpa`
+- Precision policies: `default`
+- BF16 execution: `static_parameters`
+- Generation contract: `required`
+- Artifact dependency set: `core`
+- Weight publication allowed: `true`
+- Weight license status: `resolved`
+- Redistributable: `true`
+- Complete weight publication required: `false`
+
+## Release record
+
+- FastPLMs weights: `Synthyra/ANKH3_large`
+- Runtime revision: recorded separately in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Canonical transformed state SHA-256: `60acb7ef86e85dc0c51fc1edf4c8e69a0480049723b6b2c95e6e9faa720c112a`
+- Conversion equality attestation: recorded in `provenance.json`
+- Official checkpoint: `ElnaggarLab/ankh3-large`
+- Artifact source: `official`
+- State transform: `ankh_t5_to_fastplms_v1`
+- Pinned upstreams: `ankh`
+- Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`
+- Unresolved required file identities: `0`
+
+`provenance.json` records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks release.
+
+## Validation boundary
+
+Declared tiers compare applicable configuration, tokenizer behavior, state,
+and representative inference with the pinned reference. Metadata alone does
+not claim a build passed, a backend is faster, or an output is biologically
+valid.
+
+## License
+
+Checkpoint terms: CC-BY-NC-SA-4.0. The Hub model-card identifier is
+`cc-by-nc-sa-4.0`. Applicable source licenses, notices, attribution,
+and conversion records are distributed with the local artifact. Review them
+before use.

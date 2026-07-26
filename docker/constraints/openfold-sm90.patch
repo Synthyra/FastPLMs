@@ -1,0 +1,29 @@
+diff --git a/setup.py b/setup.py
+--- a/setup.py
++++ b/setup.py
+@@ -30,3 +30,3 @@
+ extra_cuda_flags = [
+-    '-std=c++14',
++    '-std=c++17',
+     '-maxrregcount=50',
+@@ -49,16 +49,5 @@
+-compute_capabilities = set([
+-    (3, 7), # K80, e.g.
+-    (5, 2), # Titan X
+-    (6, 1), # GeForce 1000-series
+-])
+-
+-compute_capabilities.add((7, 0))
+-_, bare_metal_major, _ = get_cuda_bare_metal_version(CUDA_HOME)
+-if int(bare_metal_major) >= 11:
+-    compute_capabilities.add((8, 0))
+-
+-compute_capability, _ = get_nvidia_cc()
+-if compute_capability is not None:
+-    compute_capabilities = set([compute_capability])
+-
++# FastPLMs builds this copied reference source for the declared H100
++# compliance workstation. The pinned submodule itself remains unchanged.
++compute_capabilities = {(9, 0)}
++
+ cc_flag = []

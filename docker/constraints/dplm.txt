@@ -1,0 +1,7 @@
+torch==2.2.0
+torchtext==0.17.0
+torch-scatter==2.1.2+pt22cu121
+transformers==4.39.2
+datasets==2.20.0
+biopython==1.79
+numpy==1.26.4

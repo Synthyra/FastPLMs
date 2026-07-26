@@ -1,0 +1,3184 @@
+{
+  "baseline_revision": "c240d8a85eabcf5f73d7cf2618c4191295f1df5b",
+  "checked_source_files": 148,
+  "environment": {
+    "mypy": "1.20.2",
+    "python": "3.12.13"
+  },
+  "error_count": 1064,
+  "error_file_count": 88,
+  "fingerprint_sha256": "4d2422a34fb52dcffa9d112e7203437c726d76ad8798fb14fea77ad3f6317784",
+  "fingerprints": [
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_args\" of \"ArgumentParser\" has incompatible type \"Iterable[str] | None\"; expected \"Sequence[str] | None\"",
+      "path": "benchmarks/regression.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_args\" of \"ArgumentParser\" has incompatible type \"Iterable[str] | None\"; expected \"Sequence[str] | None\"",
+      "path": "benchmarks/run.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"bool\"",
+      "path": "benchmarks/run.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "benchmarks/run.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "benchmarks/run.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"_load_model\" has incompatible type \"SimpleNamespace\"; expected \"Namespace\"",
+      "path": "benchmarks/suite.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_args\" of \"ArgumentParser\" has incompatible type \"Iterable[str] | None\"; expected \"Sequence[str] | None\"",
+      "path": "benchmarks/suite.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"run_case\" has incompatible type \"SimpleNamespace\"; expected \"Namespace\"",
+      "path": "benchmarks/suite.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "benchmarks/suite.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"list[float]\", target has type \"int\")",
+      "path": "examples/binder_design_fastplms.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"TorchDataset\" (has type \"Any\")",
+      "path": "examples/fine_tuning.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"float\"",
+      "path": "examples/fine_tuning.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"tuple[Any, Any]\"",
+      "path": "examples/fine_tuning.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "examples/fine_tuning.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "Module \"src.fastplms.attention._core\" does not explicitly export attribute \"BlockMask\"",
+      "path": "src/fastplms/attention/__init__.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "Module \"src.fastplms.attention._core\" does not explicitly export attribute \"create_block_mask\"",
+      "path": "src/fastplms/attention/__init__.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "Module \"src.fastplms.attention._core\" does not explicitly export attribute \"flex_attention\"",
+      "path": "src/fastplms/attention/__init__.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 2,
+      "message": "\"object\" has no attribute \"flash_attn_func\"",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 2,
+      "message": "\"object\" has no attribute \"flash_attn_varlen_func\"",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"object\" has no attribute \"fwd\"",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"object\" has no attribute \"varlen_fwd\"",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"Function\" (has type \"Any\")",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 8,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "return-value",
+      "count": 1,
+      "message": "Incompatible return value type (got \"tuple[object, str | None]\", expected \"tuple[object, str]\")",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"OrderedDict\"",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 3,
+      "message": "Missing type arguments for generic type \"tuple\"",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"get_attention_mask\" untyped",
+      "path": "src/fastplms/attention/_core.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"Path\" has incompatible type \"SimplePath[Any]\"; expected \"str | PathLike[str]\"",
+      "path": "src/fastplms/attention/_kernel_lock.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"Path\"",
+      "path": "src/fastplms/attention/_kernel_lock.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"dict[str, Any]\"",
+      "path": "src/fastplms/attention/_kernel_lock.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"FastPLMsAttentionMixin\" has no attribute \"config\"",
+      "path": "src/fastplms/attention/interfaces.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"FastPLMsAttentionMixin\" has no attribute \"modules\"",
+      "path": "src/fastplms/attention/interfaces.py"
+    },
+    {
+      "code": "call-arg",
+      "count": 1,
+      "message": "Too many arguments for \"__init__\" of \"object\"",
+      "path": "src/fastplms/attention/interfaces.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "\"_check_and_adjust_attn_implementation\" undefined in superclass",
+      "path": "src/fastplms/attention/interfaces.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/attention/interfaces.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/attention/interfaces.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_fasta\" has incompatible type \"Iterable[str | EmbeddingInput | tuple[str, str]] | Mapping[str, str] | str | Path\"; expected \"str | Path\"",
+      "path": "src/fastplms/embeddings/runner.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"Iterable[str | EmbeddingInput | tuple[str, str]] | Path\", variable has type \"Iterable[str | EmbeddingInput | tuple[str, str]]\")",
+      "path": "src/fastplms/embeddings/runner.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "TensorValue? has no attribute \"dtype\"",
+      "path": "src/fastplms/embeddings/runner.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "TensorValue? has no attribute \"sha256\"",
+      "path": "src/fastplms/embeddings/runner.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "TensorValue? has no attribute \"shape\"",
+      "path": "src/fastplms/embeddings/runner.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"tuple[EmbeddingRecord, ...]\" of \"EmbeddingRecord | tuple[EmbeddingRecord, ...]\" has no attribute \"load_tensor\"",
+      "path": "src/fastplms/embeddings/runner.py"
+    },
+    {
+      "code": "unreachable",
+      "count": 1,
+      "message": "Statement is unreachable",
+      "path": "src/fastplms/embeddings/runner.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Cannot infer type of lambda",
+      "path": "src/fastplms/embeddings/storage.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"bytes\"",
+      "path": "src/fastplms/embeddings/storage.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "TensorValue? has no attribute \"load\"",
+      "path": "src/fastplms/embeddings/types.py"
+    },
+    {
+      "code": "override",
+      "count": 1,
+      "message": "Signature of \"__getitem__\" incompatible with supertype \"typing.Sequence\"",
+      "path": "src/fastplms/embeddings/types.py"
+    },
+    {
+      "code": "unreachable",
+      "count": 1,
+      "message": "Statement is unreachable",
+      "path": "src/fastplms/embeddings/types.py"
+    },
+    {
+      "code": "valid-type",
+      "count": 3,
+      "message": "Variable \"src.fastplms.embeddings.types.TensorValue\" is not valid as a type",
+      "path": "src/fastplms/embeddings/types.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"Iterable[int]\"",
+      "path": "src/fastplms/models/_diffusion_generation.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/_esm_rotary.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"tuple[Any]\", variable has type \"tuple[()] | None\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "call-arg",
+      "count": 5,
+      "message": "Too many arguments for \"__init__\" of \"object\"",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 6,
+      "message": "Class cannot subclass \"EmbeddingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMTestTimeTrainingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMsAttentionMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 6,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PretrainedConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"T5ForConditionalGeneration\" (has type \"Any\")",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Expected iterable as variadic argument",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"AnkhEncoderOutput\"",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"dict[str, Any]\"",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 14,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 4,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 13,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_init_weights\" untyped",
+      "path": "src/fastplms/models/ankh/modeling_ankh.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/modeling_boltz2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/modeling_boltz2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/modeling_boltz2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PretrainedConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/modeling_boltz2.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"dict[str, Any]\"",
+      "path": "src/fastplms/models/boltz/modeling_boltz2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"sample\" in typed context",
+      "path": "src/fastplms/models/boltz/modeling_boltz2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/boltz/modeling_boltz2.py"
+    },
+    {
+      "code": "var-annotated",
+      "count": 1,
+      "message": "Need type annotation for \"ref_atoms\"",
+      "path": "src/fastplms/models/boltz/vb_const.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_layers_attention.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_layers_attentionv2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_layers_outer_product_mean.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_layers_pair_averaging.py"
+    },
+    {
+      "code": "misc",
+      "count": 4,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_layers_pairformer.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_layers_transition.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_layers_triangular_mult.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"kernel_triangular_mult\" untyped",
+      "path": "src/fastplms/models/boltz/vb_layers_triangular_mult.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument after ** must be a mapping, not \"dict[Any, Any] | None\"",
+      "path": "src/fastplms/models/boltz/vb_modules_confidencev2.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_modules_confidencev2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/boltz/vb_modules_confidencev2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/boltz/vb_modules_confidencev2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 3,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/boltz/vb_modules_confidencev2.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 2,
+      "message": "Missing type arguments for generic type \"dict\"",
+      "path": "src/fastplms/models/boltz/vb_modules_confidencev2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusion_conditioning.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 3 to \"compute\" of \"Potential\" has incompatible type \"dict[str, Any] | None\"; expected \"dict[str, Any]\"",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 3 to \"compute_gradient\" of \"Potential\" has incompatible type \"dict[str, Any] | None\"; expected \"dict[str, Any]\"",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "index",
+      "count": 5,
+      "message": "Value of type \"dict[str, Any] | None\" is not indexable",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"c_in\" in typed context",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"c_noise\" in typed context",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"c_out\" in typed context",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"c_skip\" in typed context",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"loss_weight\" in typed context",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 2,
+      "message": "Call to untyped function \"noise_distribution\" in typed context",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"sample_schedule\" in typed context",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 11,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"dict\"",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"list\"",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"None\" of \"Any | None\" has no attribute \"float\"",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "unreachable",
+      "count": 1,
+      "message": "Statement is unreachable",
+      "path": "src/fastplms/models/boltz/vb_modules_diffusionv2.py"
+    },
+    {
+      "code": "misc",
+      "count": 7,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_modules_encodersv2.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"Callable\"",
+      "path": "src/fastplms/models/boltz/vb_modules_encodersv2.py"
+    },
+    {
+      "code": "misc",
+      "count": 5,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_modules_transformersv2.py"
+    },
+    {
+      "code": "misc",
+      "count": 7,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_modules_trunkv2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_modules_utils.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 9,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/boltz/vb_potentials_potentials.py"
+    },
+    {
+      "code": "override",
+      "count": 1,
+      "message": "Signature of \"compute_function\" incompatible with supertype \"Potential\"",
+      "path": "src/fastplms/models/boltz/vb_potentials_potentials.py"
+    },
+    {
+      "code": "override",
+      "count": 1,
+      "message": "Signature of \"compute_variable\" incompatible with supertype \"Potential\"",
+      "path": "src/fastplms/models/boltz/vb_potentials_potentials.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"tuple[Any, ...]\" of \"Any | tuple[Any, Any]\" has no attribute \"dim\"",
+      "path": "src/fastplms/models/boltz/vb_potentials_potentials.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"tuple[Any, ...]\" of \"Any | tuple[Any, Any]\" has no attribute \"sum\"",
+      "path": "src/fastplms/models/boltz/vb_potentials_potentials.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_attention.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Linear\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_primitives.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_primitives.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"kernel_triangular_attn\" untyped",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_primitives.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"softmax_no_cast\" untyped",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_primitives.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"list[Any] | tuple[Any, ...]\", variable has type \"dict_values[Any, Any]\")",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_utils.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Incompatible redefinition (redefinition with type \"Callable[[Any, int, int], Any]\", original type \"partial[Any]\")",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_utils.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"bool\"",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_utils.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_chunk_slice\" untyped",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_utils.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_flat_idx_to_idx\" untyped",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_utils.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_get_minimal_slice_set\" untyped",
+      "path": "src/fastplms/models/boltz/vb_tri_attn_utils.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument \"output_attentions\" to \"_attn\" of \"ModifiedEsmSelfAttention\" has incompatible type \"bool | None\"; expected \"bool\"",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument \"output_s_max\" to \"_attn\" of \"ModifiedEsmSelfAttention\" has incompatible type \"bool | None\"; expected \"bool\"",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 2,
+      "message": "Argument 5 to \"_manual_attn\" of \"ModifiedEsmSelfAttention\" has incompatible type \"bool | None\"; expected \"bool\"",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "assignment",
+      "count": 2,
+      "message": "Incompatible types in assignment (expression has type \"tuple[Any]\", variable has type \"tuple[()] | None\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"tuple[Any]\" has no attribute \"contiguous\"",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "call-arg",
+      "count": 5,
+      "message": "Too many arguments for \"__init__\" of \"object\"",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 5,
+      "message": "Class cannot subclass \"EmbeddingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmAttention\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmEncoder\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmLayer\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmPreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmSelfAttention\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMTestTimeTrainingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMsAttentionMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Tuple index out of range",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"tuple[Any] | DPLMEncoderOutput\"",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 4,
+      "message": "Call to untyped function \"FAST_DPLM_ENCODER\" in typed context",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 2,
+      "message": "Call to untyped function \"ModifiedEsmAttention\" in typed context",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"ModifiedEsmEncoder\" in typed context",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"ModifiedEsmLayer\" in typed context",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"ModifiedEsmSelfAttention\" in typed context",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 10,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 7,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "operator",
+      "count": 2,
+      "message": "Unsupported left operand type for + (\"None\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "return-value",
+      "count": 1,
+      "message": "Incompatible return value type (got \"tuple[Any, Any, Any, Any, Any]\", expected \"tuple[Any] | DPLMMaskedLMOutput\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "return-value",
+      "count": 1,
+      "message": "Incompatible return value type (got \"tuple[Any, Any, Any, Any]\", expected \"tuple[Any] | DPLMMaskedLMOutput\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"None\" of \"Any | None\" has no attribute \"device\"",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_compute_s_max\" untyped",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "var-annotated",
+      "count": 1,
+      "message": "Need type annotation for \"all_tied_weights_keys\" (hint: \"all_tied_weights_keys: dict[<type>, <type>] = ...\")",
+      "path": "src/fastplms/models/dplm/modeling_dplm.py"
+    },
+    {
+      "code": "assignment",
+      "count": 2,
+      "message": "Incompatible types in assignment (expression has type \"tuple[Any]\", variable has type \"tuple[()] | None\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "call-arg",
+      "count": 5,
+      "message": "Too many arguments for \"__init__\" of \"object\"",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "has-type",
+      "count": 2,
+      "message": "Cannot determine type of \"inv_freq\"",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 5,
+      "message": "Class cannot subclass \"EmbeddingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmAttention\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmEncoder\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmLayer\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmPreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmSelfAttention\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMTestTimeTrainingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMsAttentionMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"RotaryEmbedding\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"dict[str, Any]\"",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 4,
+      "message": "Call to untyped function \"FAST_DPLM2_ENCODER\" in typed context",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"ModifiedEsmAttention\" in typed context",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"ModifiedEsmEncoder\" in typed context",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"ModifiedEsmLayer\" in typed context",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"ModifiedEsmSelfAttention\" in typed context",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 10,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 7,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "operator",
+      "count": 2,
+      "message": "Unsupported left operand type for + (\"None\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "return-value",
+      "count": 1,
+      "message": "Incompatible return value type (got \"tuple[Any, Any, Any, Any, Any]\", expected \"tuple[Any] | DPLM2MaskedLMOutput\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "return-value",
+      "count": 1,
+      "message": "Incompatible return value type (got \"tuple[Any, Any, Any, Any]\", expected \"tuple[Any] | DPLM2MaskedLMOutput\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "unreachable",
+      "count": 1,
+      "message": "Right operand of \"or\" is never evaluated",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_compute_s_max\" untyped",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "var-annotated",
+      "count": 1,
+      "message": "Need type annotation for \"all_tied_weights_keys\" (hint: \"all_tied_weights_keys: dict[<type>, <type>] = ...\")",
+      "path": "src/fastplms/models/dplm2/modeling_dplm2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmTokenizer\" (has type \"Any\")",
+      "path": "src/fastplms/models/dplm2/tokenization_dplm2.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"Callable\"",
+      "path": "src/fastplms/models/e1/attention.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"create_block_causal_mask_optimized\" untyped",
+      "path": "src/fastplms/models/e1/attention.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"create_within_seq_block_mask\" untyped",
+      "path": "src/fastplms/models/e1/attention.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"direct_block_mask\" untyped",
+      "path": "src/fastplms/models/e1/attention.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"doc_id_mask\" untyped",
+      "path": "src/fastplms/models/e1/attention.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 3,
+      "message": "Call to untyped function \"_get_logger\" in typed context",
+      "path": "src/fastplms/models/e1/cache.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/e1/cache.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"forward\" of \"FAST_E1_ENCODER\" has incompatible type \"**dict[str, Any | list[str] | list[int]]\"; expected \"DynamicCache | None\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"forward\" of \"FAST_E1_ENCODER\" has incompatible type \"**dict[str, Any | list[str] | list[int]]\"; expected \"bool\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "misc",
+      "count": 5,
+      "message": "Class cannot subclass \"EmbeddingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMTestTimeTrainingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMsAttentionMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "misc",
+      "count": 3,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "misc",
+      "count": 8,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PretrainedConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"E1BatchPreparer\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"E1ModelOutputWithPast\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"E1PreTrainedModel\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"list[float] | list[list[float]]\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 7,
+      "message": "Call to untyped function \"_get_logger\" in typed context",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 18,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 3,
+      "message": "Missing type arguments for generic type \"PathLike\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"None\" of \"Any | None\" has no attribute \"device\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"None\" of \"Any | None\" has no attribute \"shape\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"bool\" of \"Any | bool\" has no attribute \"long\"",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_compute_s_max\" untyped",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"embed_dataset_with_msa\" untyped",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"embed_with_msa\" untyped",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"score_ppll\" untyped",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/e1/modeling_e1.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 4,
+      "message": "Missing type arguments for generic type \"PathLike\"",
+      "path": "src/fastplms/models/e1/preparation.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/e1/preparation.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"float\"",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"_get_logger\" in typed context",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"CompletedProcess\"",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"list[int]\" of \"Any | list[str] | list[int]\" has no attribute \"max\"",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"list[str]\" of \"Any | list[str] | list[int]\" has no attribute \"max\"",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"predict\" untyped",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"predict_batch\" untyped",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"predict_batch_padded\" untyped",
+      "path": "src/fastplms/models/e1/retrieval.py"
+    },
+    {
+      "code": "assignment",
+      "count": 2,
+      "message": "Incompatible types in assignment (expression has type \"tuple[Any]\", variable has type \"tuple[()] | None\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "call-arg",
+      "count": 5,
+      "message": "Too many arguments for \"__init__\" of \"object\"",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "\"None\" not callable",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 5,
+      "message": "Class cannot subclass \"EmbeddingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmTokenizer\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMTestTimeTrainingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMsAttentionMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 4,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PretrainedConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Expected iterable as variadic argument",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"dict[str, Any]\"",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"int\"",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"EsmAttention\" in typed context",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"EsmEncoder\" in typed context",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"EsmLayer\" in typed context",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"feed_forward_chunk\" in typed context",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 8,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 10,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 9,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_compute_s_max\" untyped",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_init_weights\" untyped",
+      "path": "src/fastplms/models/esm2/modeling_fastesm.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument \"attn_backend\" to \"ESM3Core\" has incompatible type \"str | None\"; expected \"str\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"ZipInfo\" has incompatible type \"PurePosixPath\"; expected \"str\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"encode\" of \"FastESM3Model\" has incompatible type \"str | list[str] | Any | dict[str, Any]\"; expected \"str | list[str]\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"str\", variable has type \"PurePosixPath\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EmbeddingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMTestTimeTrainingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMsAttentionMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "misc",
+      "count": 9,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedTokenizerFast\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PretrainedConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"ESM3CoreOutput\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"FastESM3Output\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"dict[str, Any]\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"int\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"list[int]\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 11,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"list[str]\" of \"str | Any | list[str]\" has no attribute \"to\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"str\" of \"str | Any | list[str]\" has no attribute \"to\"",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "unreachable",
+      "count": 1,
+      "message": "Right operand of \"or\" is never evaluated",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "unreachable",
+      "count": 1,
+      "message": "Statement is unreachable",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"generate\" untyped",
+      "path": "src/fastplms/models/esm3/modeling_esm3.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument \"attentions\" to \"TransformerOutput\" has incompatible type \"tuple[()] | None\"; expected \"tuple[Any] | None\"",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 2,
+      "message": "Argument \"attn_backend\" to \"TransformerStack\" has incompatible type \"str | None\"; expected \"str\"",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument \"hidden_states\" to \"TransformerOutput\" has incompatible type \"tuple[()] | None\"; expected \"tuple[Any] | None\"",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "assignment",
+      "count": 3,
+      "message": "Incompatible types in assignment (expression has type \"tuple[Any]\", variable has type \"tuple[()] | None\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "call-arg",
+      "count": 2,
+      "message": "Too many arguments for \"__init__\" of \"object\"",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "misc",
+      "count": 4,
+      "message": "Class cannot subclass \"EmbeddingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMTestTimeTrainingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMsAttentionMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "misc",
+      "count": 5,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedTokenizerFast\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PretrainedConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"EsmSequenceTokenizer\" in typed context",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"SwiGLU\" in typed context",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 13,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 8,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 10,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "operator",
+      "count": 1,
+      "message": "Unsupported left operand type for + (\"None\")",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "override",
+      "count": 2,
+      "message": "Signature of \"forward\" incompatible with supertype \"ESMplusplusForMaskedLM\"",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"_compute_s_max\" untyped",
+      "path": "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"tuple[Any]\", variable has type \"tuple[()] | None\")",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "func-returns-value",
+      "count": 1,
+      "message": "\"fold_protein_ttt\" of \"FastEsmForProteinFolding\" does not return a value (it only ever returns None)",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "\"None\" not callable",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"EsmForProteinFolding\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMsAttentionMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"ModelOutput\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "misc",
+      "count": 5,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "misc",
+      "count": 2,
+      "message": "Expected iterable as variadic argument",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"EsmAttention\" in typed context",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"EsmLayer\" in typed context",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"FastEsmBackbone\" in typed context",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"FastEsmEncoder\" in typed context",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 4,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "return-value",
+      "count": 1,
+      "message": "Incompatible return value type (got \"None\", expected \"dict[str, Any]\")",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"list[Any]\" of \"Any | list[Any]\" has no attribute \"to\"",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"infer\" untyped",
+      "path": "src/fastplms/models/esmfold/modeling_fast_esmfold.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 2,
+      "message": "\"ESMFold2AttentionMixin\" has no attribute \"config\"",
+      "path": "src/fastplms/models/esmfold2/attention.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/attention.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PretrainedConfig\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold2/configuration_esmfold2.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"ESMFold2EmbeddingMixin\" has no attribute \"_compute_lm_hidden_states\"",
+      "path": "src/fastplms/models/esmfold2/embedding.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"ESMFold2EmbeddingMixin\" has no attribute \"_esmc\"",
+      "path": "src/fastplms/models/esmfold2/embedding.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"ESMFold2EmbeddingMixin\" has no attribute \"device\"",
+      "path": "src/fastplms/models/esmfold2/embedding.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"ESMFold2EmbeddingMixin\" has no attribute \"language_model\"",
+      "path": "src/fastplms/models/esmfold2/embedding.py"
+    },
+    {
+      "code": "empty-body",
+      "count": 8,
+      "message": "Missing return statement",
+      "path": "src/fastplms/models/esmfold2/esmfold2_affine3d.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"bool\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_affine3d.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 14,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/esmfold2_affine3d.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"float\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_aligner.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "Module \"src.fastplms.models.esmfold2.esmfold2_protein_structure\" does not explicitly export attribute \"index_by_atom_name\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_atom_indexer.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_conformers.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 2,
+      "message": "Untyped decorator makes function \"compute_rmsd\" untyped",
+      "path": "src/fastplms/models/esmfold2/esmfold2_metrics.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_metrics.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"concat\" of \"Concatable\" has incompatible type \"Sequence[Any]\"; expected \"list[Concatable]\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"Sequence[Any]\", variable has type \"list[Any]\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"TSequence\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"list[Any] | None\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"batched_gather\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 4,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 3,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 3,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"Iterable\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"Sequence\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"list\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 2,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore[index, return-value]\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore[return-value]\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "var-annotated",
+      "count": 1,
+      "message": "Need type annotation for \"result\" (hint: \"result: list[<type>] = ...\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_misc.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"_scheme_columns\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"_scheme_residue_map\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 5,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"PathLike\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 3,
+      "message": "Missing type arguments for generic type \"tuple\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py"
+    },
+    {
+      "code": "var-annotated",
+      "count": 2,
+      "message": "Need type annotation for \"result\" (hint: \"result: dict[<type>, <type>] = ...\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py"
+    },
+    {
+      "code": "var-annotated",
+      "count": 1,
+      "message": "Need type annotation for \"result\" (hint: \"result: set[<type>] = ...\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"bytes\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_molecular_complex.py"
+    },
+    {
+      "code": "no-redef",
+      "count": 1,
+      "message": "Name \"structure\" already defined on line 703",
+      "path": "src/fastplms/models/esmfold2/esmfold2_molecular_complex.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 4,
+      "message": "Call to untyped function \"normalize_chain_ids_for_pdb\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_molecular_complex.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"bytes\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_msa.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"int\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_msa.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/esmfold2_msa.py"
+    },
+    {
+      "code": "override",
+      "count": 2,
+      "message": "Signature of \"concat\" incompatible with supertype \"src.fastplms.models.esmfold2.esmfold2_sequential_dataclass.SequentialDataclass\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_msa.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_msa.py"
+    },
+    {
+      "code": "var-annotated",
+      "count": 2,
+      "message": "Need type annotation for \"entries\" (hint: \"entries: list[<type>] = ...\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_msa.py"
+    },
+    {
+      "code": "index",
+      "count": 1,
+      "message": "Invalid index type \"str | list[str]\" for \"dict[str, int]\"; expected type \"str\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_normalize_coordinates.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_normalize_coordinates.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_output.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 2,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_parsing.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"compute_tm\" untyped",
+      "path": "src/fastplms/models/esmfold2/esmfold2_predicted_aligned_error.py"
+    },
+    {
+      "code": "assignment",
+      "count": 2,
+      "message": "Incompatible types in assignment (expression has type \"int\", variable has type \"TokenInfo\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_prepare_input.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"tuple[int, ...]\", target has type \"tuple[int, int, int]\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_prepare_input.py"
+    },
+    {
+      "code": "call-overload",
+      "count": 1,
+      "message": "No overload variant of \"get\" of \"dict\" matches argument type \"TokenInfo\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_prepare_input.py"
+    },
+    {
+      "code": "comparison-overlap",
+      "count": 1,
+      "message": "Non-overlapping container check (element type: \"TokenInfo\", container item type: \"int\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_prepare_input.py"
+    },
+    {
+      "code": "index",
+      "count": 1,
+      "message": "Invalid index type \"TokenInfo\" for \"dict[int, tuple[int, int, int]]\"; expected type \"int\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_prepare_input.py"
+    },
+    {
+      "code": "unreachable",
+      "count": 1,
+      "message": "Statement is unreachable",
+      "path": "src/fastplms/models/esmfold2/esmfold2_prepare_input.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 5,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_prepare_input.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 has incompatible type \"object\"; expected \"tuple[Any, ...]\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_processor.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 2,
+      "message": "Argument 1 to \"read\" of \"MmcifWrapper\" has incompatible type \"str | PathLike[str] | TextIOBase\"; expected \"str | PathLike[Any] | StringIO\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "Module \"src.fastplms.models.esmfold2.esmfold2_protein_structure\" does not explicitly export attribute \"index_by_atom_name\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"ProteinChain\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"bytes\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"float\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"from_state_dict\" of \"ProteinChain\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"state_dict\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 21,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 3,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 7,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"dict\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 4,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_chain.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument \"chain_mapping\" to \"DockQResult\" has incompatible type \"float\"; expected \"dict[str, str]\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument \"native_interfaces\" to \"DockQResult\" has incompatible type \"float\"; expected \"int\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"read\" of \"MmcifWrapper\" has incompatible type \"str | PathLike[str] | TextIOBase\"; expected \"str | PathLike[Any] | StringIO\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"DockQResult\", variable has type \"dict[str, float]\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"dict[Any, Any]\", target has type \"float\")",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"float\" has no attribute \"items\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "Module \"src.fastplms.models.esmfold2.esmfold2_protein_chain\" does not explicitly export attribute \"index_by_atom_name\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"ProteinChain\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 6,
+      "message": "Returning Any from function declared to return \"ProteinComplex\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"bytes\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-redef",
+      "count": 1,
+      "message": "Name \"structure\" already defined on line 1108",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"_apply_transformations_fast\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"from_state_dict\" of \"ProteinComplex\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 1,
+      "message": "Call to untyped function \"state_dict\" in typed context",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 19,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 4,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 4,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"dict\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 7,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_complex.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 2,
+      "message": "Untyped decorator makes function \"compute_affine_and_rmsd\" untyped",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_structure.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 2,
+      "message": "Untyped decorator makes function \"compute_alignment_tensors\" untyped",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_structure.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 2,
+      "message": "Untyped decorator makes function \"compute_rmsd_no_alignment\" untyped",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_structure.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 2,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/esmfold2_protein_structure.py"
+    },
+    {
+      "code": "valid-type",
+      "count": 3,
+      "message": "Variable \"src.fastplms.models.esmfold2.esmfold2_sequential_dataclass.Index\" is not valid as a type",
+      "path": "src/fastplms/models/esmfold2/esmfold2_sequential_dataclass.py"
+    },
+    {
+      "code": "call-overload",
+      "count": 1,
+      "message": "No overload variant of \"run\" matches argument types \"tuple[Any, ...]\", \"bool\", \"dict[str, str] | None\", \"str | None\", \"bool\", \"int\", \"int | None\", \"dict[str, Any]\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_system.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"CompletedProcess[Any]\"",
+      "path": "src/fastplms/models/esmfold2/esmfold2_system.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 2 to \"_fold_protein_no_ttt\" of \"ESMFold2Model\" has incompatible type \"**dict[str, Any | str | Path | int | None]\"; expected \"int | None\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 2 to \"_fold_protein_no_ttt\" of \"ESMFold2Model\" has incompatible type \"**dict[str, Any | str | Path | int | None]\"; expected \"int\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 2 to \"_fold_protein_no_ttt\" of \"ESMFold2Model\" has incompatible type \"**dict[str, Any | str | Path | int | None]\"; expected \"str | Path | None\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 2 to \"_fold_protein_no_ttt\" of \"ESMFold2Model\" has incompatible type \"**dict[str, Any | str | Path | int | None]\"; expected \"str\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"FastPLMTestTimeTrainingMixin\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "misc",
+      "count": 5,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"_ESMFold2ESMplusplusAdapter\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"dict[Any, Any]\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "no-untyped-call",
+      "count": 2,
+      "message": "Call to untyped function \"_ttt_select_result\" in typed context",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 11,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a type annotation",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 15,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 4,
+      "message": "Missing type arguments for generic type \"dict\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"forward\" untyped",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"infer_protein\" untyped",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore\" comment, use narrower [method-assign] instead of [assignment] code",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2.py"
+    },
+    {
+      "code": "misc",
+      "count": 29,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"tuple[Any, Any]\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 1,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 1,
+      "message": "Missing type arguments for generic type \"dict\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "type-arg",
+      "count": 5,
+      "message": "Missing type arguments for generic type \"tuple\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "unreachable",
+      "count": 2,
+      "message": "Statement is unreachable",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"build_3d_rope\" untyped",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"sample\" untyped",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 7,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_common.py"
+    },
+    {
+      "code": "method-assign",
+      "count": 1,
+      "message": "Cannot assign to a method",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py"
+    },
+    {
+      "code": "misc",
+      "count": 4,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"PreTrainedModel\" (has type \"Any\")",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"dict[str, Any]\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 6,
+      "message": "Function is missing a return type annotation",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py"
+    },
+    {
+      "code": "no-untyped-def",
+      "count": 10,
+      "message": "Function is missing a type annotation for one or more parameters",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py"
+    },
+    {
+      "code": "untyped-decorator",
+      "count": 1,
+      "message": "Untyped decorator makes function \"infer_protein\" untyped",
+      "path": "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"tuple[float, ...]\", target has type \"tuple[float, float, float]\")",
+      "path": "src/fastplms/models/esmfold2/protein_utils.py"
+    },
+    {
+      "code": "return-value",
+      "count": 1,
+      "message": "Incompatible return value type (got \"tuple[int, ...]\", expected \"tuple[int, int, int, int]\")",
+      "path": "src/fastplms/models/esmfold2/protein_utils.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"FastPLMTestTimeTrainingMixin\" has no attribute \"config\"",
+      "path": "src/fastplms/models/ttt.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 2,
+      "message": "\"FastPLMTestTimeTrainingMixin\" has no attribute \"modules\"",
+      "path": "src/fastplms/models/ttt.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 3,
+      "message": "\"FastPLMTestTimeTrainingMixin\" has no attribute \"parameters\"",
+      "path": "src/fastplms/models/ttt.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 5,
+      "message": "\"FastPLMTestTimeTrainingMixin\" has no attribute \"tokenizer\"",
+      "path": "src/fastplms/models/ttt.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"FastPLMTestTimeTrainingMixin\" has no attribute \"train\"",
+      "path": "src/fastplms/models/ttt.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Class cannot subclass \"Module\" (has type \"Any\")",
+      "path": "src/fastplms/models/ttt.py"
+    },
+    {
+      "code": "operator",
+      "count": 2,
+      "message": "\"FastPLMTestTimeTrainingMixin\" not callable",
+      "path": "src/fastplms/models/ttt.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"validate_hub_license_metadata\" has incompatible type \"Any | None\"; expected \"Mapping[str, object]\"",
+      "path": "tools/artifacts/build.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"Path\"",
+      "path": "tools/artifacts/build.py"
+    },
+    {
+      "code": "union-attr",
+      "count": 1,
+      "message": "Item \"None\" of \"Any | None\" has no attribute \"items\"",
+      "path": "tools/artifacts/build.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_args\" of \"ArgumentParser\" has incompatible type \"Iterable[str] | None\"; expected \"Sequence[str] | None\"",
+      "path": "tools/artifacts/generate_docs.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"str\"",
+      "path": "tools/artifacts/generate_docs.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_args\" of \"ArgumentParser\" has incompatible type \"Iterable[str] | None\"; expected \"Sequence[str] | None\"",
+      "path": "tools/artifacts/offline_probe.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 3,
+      "message": "\"type\" has no attribute \"from_pretrained\"",
+      "path": "tools/artifacts/offline_probe.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"dict[str, Any]\"",
+      "path": "tools/artifacts/offline_probe.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"type\"",
+      "path": "tools/artifacts/offline_probe.py"
+    },
+    {
+      "code": "attr-defined",
+      "count": 1,
+      "message": "\"object\" has no attribute \"detach\"",
+      "path": "tools/conversion/state_transforms.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_args\" of \"ArgumentParser\" has incompatible type \"Iterable[str] | None\"; expected \"Sequence[str] | None\"",
+      "path": "tools/debug/check_notation.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"tuple[tuple[str, int]]\", variable has type \"Iterator[tuple[str, int]]\")",
+      "path": "tools/debug/check_notation.py"
+    },
+    {
+      "code": "assignment",
+      "count": 1,
+      "message": "Incompatible types in assignment (expression has type \"str\", variable has type \"int\")",
+      "path": "tools/debug/compare_structure_bundles.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"literal_eval\" has incompatible type \"expr | None\"; expected \"str | AST\"",
+      "path": "tools/debug/generate_boltz_conformer_patch.py"
+    },
+    {
+      "code": "assignment",
+      "count": 2,
+      "message": "Incompatible types in assignment (expression has type \"expr | None\", variable has type \"Name | Attribute | Subscript\")",
+      "path": "tools/debug/generate_boltz_conformer_patch.py"
+    },
+    {
+      "code": "index",
+      "count": 2,
+      "message": "Unsupported target for indexed assignment (\"Collection[str]\")",
+      "path": "tools/debug/probe_flash_kernels.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"_limitation_records\" has incompatible type \"object\"; expected \"Sequence[Mapping[str, str]] | None\"",
+      "path": "tools/goldens/bundle.py"
+    },
+    {
+      "code": "misc",
+      "count": 1,
+      "message": "Value expression in dictionary comprehension has incompatible type \"Sequence[Any]\"; expected type \"str\"",
+      "path": "tools/goldens/bundle.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 2,
+      "message": "Returning Any from function declared to return \"Path\"",
+      "path": "tools/goldens/from_native.py"
+    },
+    {
+      "code": "no-any-return",
+      "count": 1,
+      "message": "Returning Any from function declared to return \"bytes\"",
+      "path": "tools/goldens/from_native.py"
+    },
+    {
+      "code": "unused-ignore",
+      "count": 1,
+      "message": "Unused \"type: ignore\" comment",
+      "path": "tools/goldens/generate_e1_sampling.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_args\" of \"ArgumentParser\" has incompatible type \"Iterable[str] | None\"; expected \"Sequence[str] | None\"",
+      "path": "tools/remote/python_matrix.py"
+    },
+    {
+      "code": "arg-type",
+      "count": 1,
+      "message": "Argument 1 to \"parse_args\" of \"ArgumentParser\" has incompatible type \"Iterable[str] | None\"; expected \"Sequence[str] | None\"",
+      "path": "tools/remote/run.py"
+    }
+  ],
+  "mypy_command": [
+    "python",
+    "-m",
+    "mypy",
+    "--config-file=/dev/null",
+    "--python-version",
+    "3.12",
+    "--strict",
+    "--warn-unreachable",
+    "--ignore-missing-imports",
+    "--no-site-packages",
+    "--no-incremental",
+    "--explicit-package-bases",
+    "--follow-imports=silent",
+    "--show-error-codes",
+    "--no-color-output",
+    "--no-pretty",
+    "benchmarks",
+    "examples",
+    "src/fastplms",
+    "tools"
+  ],
+  "mypy_exit_code": 1,
+  "raw_report_sha256": "fe3e51a917b33c7650943340722258a518eae61c77bd1ebe0efd9384ad1f5a62",
+  "schema_version": 1,
+  "scope_targets": [
+    "benchmarks",
+    "examples",
+    "src/fastplms",
+    "tools"
+  ],
+  "source_files": [
+    "benchmarks/__init__.py",
+    "benchmarks/__main__.py",
+    "benchmarks/regression.py",
+    "benchmarks/run.py",
+    "benchmarks/suite.py",
+    "examples/__init__.py",
+    "examples/binder_design_fastplms.py",
+    "examples/fine_tuning.py",
+    "src/fastplms/__init__.py",
+    "src/fastplms/attention/__init__.py",
+    "src/fastplms/attention/_core.py",
+    "src/fastplms/attention/_kernel_lock.py",
+    "src/fastplms/attention/interfaces.py",
+    "src/fastplms/embeddings/__init__.py",
+    "src/fastplms/embeddings/pooling.py",
+    "src/fastplms/embeddings/runner.py",
+    "src/fastplms/embeddings/storage.py",
+    "src/fastplms/embeddings/types.py",
+    "src/fastplms/models/__init__.py",
+    "src/fastplms/models/_diffusion_generation.py",
+    "src/fastplms/models/_esm_rotary.py",
+    "src/fastplms/models/ankh/__init__.py",
+    "src/fastplms/models/ankh/modeling_ankh.py",
+    "src/fastplms/models/boltz/__init__.py",
+    "src/fastplms/models/boltz/_pair_attention.py",
+    "src/fastplms/models/boltz/cif_writer.py",
+    "src/fastplms/models/boltz/minimal_featurizer.py",
+    "src/fastplms/models/boltz/minimal_structures.py",
+    "src/fastplms/models/boltz/modeling_boltz2.py",
+    "src/fastplms/models/boltz/vb_const.py",
+    "src/fastplms/models/boltz/vb_layers_attention.py",
+    "src/fastplms/models/boltz/vb_layers_attentionv2.py",
+    "src/fastplms/models/boltz/vb_layers_confidence_utils.py",
+    "src/fastplms/models/boltz/vb_layers_dropout.py",
+    "src/fastplms/models/boltz/vb_layers_initialize.py",
+    "src/fastplms/models/boltz/vb_layers_outer_product_mean.py",
+    "src/fastplms/models/boltz/vb_layers_pair_averaging.py",
+    "src/fastplms/models/boltz/vb_layers_pairformer.py",
+    "src/fastplms/models/boltz/vb_layers_transition.py",
+    "src/fastplms/models/boltz/vb_layers_triangular_mult.py",
+    "src/fastplms/models/boltz/vb_loss_diffusionv2.py",
+    "src/fastplms/models/boltz/vb_modules_confidencev2.py",
+    "src/fastplms/models/boltz/vb_modules_diffusion_conditioning.py",
+    "src/fastplms/models/boltz/vb_modules_diffusionv2.py",
+    "src/fastplms/models/boltz/vb_modules_encodersv2.py",
+    "src/fastplms/models/boltz/vb_modules_transformersv2.py",
+    "src/fastplms/models/boltz/vb_modules_trunkv2.py",
+    "src/fastplms/models/boltz/vb_modules_utils.py",
+    "src/fastplms/models/boltz/vb_potentials_potentials.py",
+    "src/fastplms/models/boltz/vb_potentials_schedules.py",
+    "src/fastplms/models/boltz/vb_tri_attn_attention.py",
+    "src/fastplms/models/boltz/vb_tri_attn_primitives.py",
+    "src/fastplms/models/boltz/vb_tri_attn_utils.py",
+    "src/fastplms/models/dplm/__init__.py",
+    "src/fastplms/models/dplm/modeling_dplm.py",
+    "src/fastplms/models/dplm2/__init__.py",
+    "src/fastplms/models/dplm2/modeling_dplm2.py",
+    "src/fastplms/models/dplm2/tokenization_dplm2.py",
+    "src/fastplms/models/e1/__init__.py",
+    "src/fastplms/models/e1/attention.py",
+    "src/fastplms/models/e1/cache.py",
+    "src/fastplms/models/e1/modeling_e1.py",
+    "src/fastplms/models/e1/preparation.py",
+    "src/fastplms/models/e1/retrieval.py",
+    "src/fastplms/models/esm2/__init__.py",
+    "src/fastplms/models/esm2/modeling_fastesm.py",
+    "src/fastplms/models/esm3/__init__.py",
+    "src/fastplms/models/esm3/modeling_esm3.py",
+    "src/fastplms/models/esm_plusplus/__init__.py",
+    "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py",
+    "src/fastplms/models/esmfold/__init__.py",
+    "src/fastplms/models/esmfold/modeling_fast_esmfold.py",
+    "src/fastplms/models/esmfold2/__init__.py",
+    "src/fastplms/models/esmfold2/attention.py",
+    "src/fastplms/models/esmfold2/configuration_esmfold2.py",
+    "src/fastplms/models/esmfold2/embedding.py",
+    "src/fastplms/models/esmfold2/esmfold2_affine3d.py",
+    "src/fastplms/models/esmfold2/esmfold2_aligner.py",
+    "src/fastplms/models/esmfold2/esmfold2_atom_indexer.py",
+    "src/fastplms/models/esmfold2/esmfold2_conformers.py",
+    "src/fastplms/models/esmfold2/esmfold2_constants.py",
+    "src/fastplms/models/esmfold2/esmfold2_constants_esm3.py",
+    "src/fastplms/models/esmfold2/esmfold2_input_builder.py",
+    "src/fastplms/models/esmfold2/esmfold2_metrics.py",
+    "src/fastplms/models/esmfold2/esmfold2_misc.py",
+    "src/fastplms/models/esmfold2/esmfold2_mmcif_parsing.py",
+    "src/fastplms/models/esmfold2/esmfold2_molecular_complex.py",
+    "src/fastplms/models/esmfold2/esmfold2_msa.py",
+    "src/fastplms/models/esmfold2/esmfold2_msa_filter_sequences.py",
+    "src/fastplms/models/esmfold2/esmfold2_normalize_coordinates.py",
+    "src/fastplms/models/esmfold2/esmfold2_output.py",
+    "src/fastplms/models/esmfold2/esmfold2_paired_msa.py",
+    "src/fastplms/models/esmfold2/esmfold2_parsing.py",
+    "src/fastplms/models/esmfold2/esmfold2_predicted_aligned_error.py",
+    "src/fastplms/models/esmfold2/esmfold2_prepare_input.py",
+    "src/fastplms/models/esmfold2/esmfold2_processor.py",
+    "src/fastplms/models/esmfold2/esmfold2_protein_chain.py",
+    "src/fastplms/models/esmfold2/esmfold2_protein_complex.py",
+    "src/fastplms/models/esmfold2/esmfold2_protein_structure.py",
+    "src/fastplms/models/esmfold2/esmfold2_residue_constants.py",
+    "src/fastplms/models/esmfold2/esmfold2_sequential_dataclass.py",
+    "src/fastplms/models/esmfold2/esmfold2_system.py",
+    "src/fastplms/models/esmfold2/esmfold2_types.py",
+    "src/fastplms/models/esmfold2/esmfold2_utils_types.py",
+    "src/fastplms/models/esmfold2/modeling_esmfold2.py",
+    "src/fastplms/models/esmfold2/modeling_esmfold2_common.py",
+    "src/fastplms/models/esmfold2/modeling_esmfold2_experimental.py",
+    "src/fastplms/models/esmfold2/protein_utils.py",
+    "src/fastplms/models/ttt.py",
+    "src/fastplms/registry.py",
+    "src/fastplms/runtime.py",
+    "tools/artifacts/__init__.py",
+    "tools/artifacts/build.py",
+    "tools/artifacts/build_all.py",
+    "tools/artifacts/generate_docs.py",
+    "tools/artifacts/license_metadata.py",
+    "tools/artifacts/offline_probe.py",
+    "tools/artifacts/publish.py",
+    "tools/artifacts/resolve_fair_esm_assets.py",
+    "tools/artifacts/resolve_manifest_hashes.py",
+    "tools/conversion/__init__.py",
+    "tools/conversion/extract_esmfold2_geometry.py",
+    "tools/conversion/state_transforms.py",
+    "tools/conversion/state_validation.py",
+    "tools/debug/analyze_boltz_opm_projection.py",
+    "tools/debug/check_notation.py",
+    "tools/debug/compare_structure_bundles.py",
+    "tools/debug/export_boltz_conformers.py",
+    "tools/debug/generate_boltz_conformer_patch.py",
+    "tools/debug/probe_cuda_loader.py",
+    "tools/debug/probe_flash_attention_forward.py",
+    "tools/debug/probe_flash_checkpoint_forward.py",
+    "tools/debug/probe_flash_kernels.py",
+    "tools/debug/probe_transformer_engine.py",
+    "tools/debug/probe_transformer_engine_fp8.py",
+    "tools/debug/trace_boltz2_modules.py",
+    "tools/goldens/__init__.py",
+    "tools/goldens/__main__.py",
+    "tools/goldens/bundle.py",
+    "tools/goldens/from_native.py",
+    "tools/goldens/generate_e1_sampling.py",
+    "tools/remote/__init__.py",
+    "tools/remote/__main__.py",
+    "tools/remote/prepare_references.py",
+    "tools/remote/python_matrix.py",
+    "tools/remote/python_support_smoke.py",
+    "tools/remote/run.py",
+    "tools/source_provenance.py"
+  ],
+  "source_inventory_sha256": "f4ec439a48f012353d2f4932dda6c46db09178869b428a6911d1da604d1975bf",
+  "source_tree_sha256": "9732188015f6fa29166428cf9c3320ee7b8045aa9cec52bf154dba671c5e65b3"
+}

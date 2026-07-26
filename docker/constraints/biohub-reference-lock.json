@@ -1,0 +1,69 @@
+{
+  "schema_version": 2,
+  "contract": "fastplms.biohub-reference-lock",
+  "target": {
+    "hardware": "NVIDIA GH200 480GB",
+    "operating_system": "linux",
+    "architecture": "aarch64",
+    "container_platform": "linux/arm64",
+    "python_implementation": "CPython",
+    "python_version": "3.12",
+    "cuda_version": "13.0",
+    "torch_backend": "cu130"
+  },
+  "container": {
+    "dockerfile_path": "docker/biohub-reference-lock.Dockerfile",
+    "dockerfile_sha256": "bfe2e238d5de518a72400233c04156d4b9fbcf509a8c8d84f021fa0827aed18d",
+    "dockerfile_frontend": "docker/dockerfile:1.19@sha256:b6afd42430b15f2d2a4c5a02b919e98a525b785b1aaff16747d2f623364e39b6",
+    "cuda_image": "nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04@sha256:6fd95f7235f228fc7cff6f45d7b2d16ed93bddff4e80a94288731c6c7cea81d7",
+    "cuda_image_digest": "6fd95f7235f228fc7cff6f45d7b2d16ed93bddff4e80a94288731c6c7cea81d7",
+    "python_image": "python:3.12.11-slim-bookworm@sha256:9bb659dc6d5218917236f3711e866a5634bb4c2f208de9d4533aa4863f57c1d3",
+    "python_image_digest": "9bb659dc6d5218917236f3711e866a5634bb4c2f208de9d4533aa4863f57c1d3",
+    "build_python_version": "3.12.11"
+  },
+  "runtime": {
+    "input_path": "docker/constraints/biohub-reference.in",
+    "input_sha256": "78cbe5d02528baa446135400cba7bc6c28a9480b384d4f3efd05807c221fc7db",
+    "lock_path": "docker/constraints/biohub-reference.lock.txt",
+    "lock_sha256": "f87033dffffe953478b482dae82f91603fa705a68e92ee7683c1831586c94ca0",
+    "package_count": 108
+  },
+  "build": {
+    "input_path": "docker/constraints/biohub-biotraj-build.in",
+    "input_sha256": "100cb7ff60b892e66f9bf6f1c56862781997ce7932be430bc6e13086eb74f96d",
+    "lock_path": "docker/constraints/biohub-biotraj-build.lock.txt",
+    "lock_sha256": "c7864daa96028aba35081110c563b8b08c968fd312f7827449d355638f18079d",
+    "package_count": 7
+  },
+  "biotraj": {
+    "version": "1.2.2",
+    "sdist_url": "https://files.pythonhosted.org/packages/07/21/2287edfd0d2569639eea706e25c39e63b46a384cf1712db8ea05768317b0/biotraj-1.2.2.tar.gz#sha256=4bcba92101ed50f369cc1487fb5dfcfe1d8402ad47adaa9232b080553271663a",
+    "sdist_sha256": "4bcba92101ed50f369cc1487fb5dfcfe1d8402ad47adaa9232b080553271663a",
+    "wheel_filename": "biotraj-1.2.2-cp312-cp312-linux_aarch64.whl",
+    "wheel_sha256": "253c1354c401e97d6e951f29e0d768deb5263de6662001281870425c37719f6b",
+    "wheel_size": 887908
+  },
+  "bootstrap_inventory": {
+    "pip": "26.1.1"
+  },
+  "final_inventory_overlays": {
+    "esm": "3.3.0",
+    "transformers": "4.57.6",
+    "uv": "0.10.12"
+  },
+  "pip_check_platform_exceptions": [
+    {
+      "distribution": "nvidia-cusparselt-cu13",
+      "version": "0.8.1",
+      "wheel_filename": "nvidia_cusparselt_cu13-0.8.1-py3-none-manylinux2014_aarch64.whl",
+      "wheel_sha256": "4dca476c50bf4780d46cd0bfbd82e2bc10a08e4fef7950917ce8d7578d22a23f",
+      "filename_platform_tag": "py3-none-manylinux2014_aarch64",
+      "wheel_metadata_platform_tag": "py3-none-manylinux2014_sbsa",
+      "target_hardware": "NVIDIA GH200 480GB",
+      "target_operating_system": "linux",
+      "target_architecture": "aarch64",
+      "accepted_diagnostic": "nvidia-cusparselt-cu13 0.8.1 is not supported on this platform",
+      "resolution": "validated-vendor-metadata-exception-no-wheel-rewrite"
+    }
+  ]
+}

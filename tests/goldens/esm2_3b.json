@@ -1,0 +1,97 @@
+{
+  "checkpoint": {
+    "files": {
+      "config.json": "git-sha1:69e7563923f87d2d7439bfb83e5a19b44b46d71b",
+      "pytorch_model-00001-of-00002.bin": "sha256:0f971f11c449d21422aa982b791619c10351972992c735f4c3cd43fe09790412",
+      "pytorch_model-00002-of-00002.bin": "sha256:7560b46fc383c691fb74b915b7d4bcef40d3df181447f16ba4b298845e308d0c",
+      "special_tokens_map.json": "git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+      "tokenizer_config.json": "git-sha1:3f0d47e841e1cb75257aeaf76d156802899a217e",
+      "vocab.txt": "git-sha1:6b946952cc35537226f07fd70957ee2f848880d2"
+    },
+    "repo_id": "facebook/esm2_t36_3B_UR50D",
+    "revision": "476b639933c8baad5ad09a60ac1a87f987b656fc"
+  },
+  "environment": {
+    "details": {
+      "cuda_device": "NVIDIA H100 PCIe",
+      "cuda_runtime": "13.0",
+      "packages": "{\"certifi\":\"2026.6.17\",\"charset-normalizer\":\"3.4.9\",\"cuda-bindings\":\"13.0.3\",\"cuda-pathfinder\":\"1.2.2\",\"cuda-toolkit\":\"13.0.3.0\",\"fair-esm\":\"2.0.1\",\"filelock\":\"3.29.0\",\"fsspec\":\"2026.4.0\",\"hf-xet\":\"1.5.2\",\"huggingface_hub\":\"0.36.2\",\"idna\":\"3.18\",\"iniconfig\":\"2.3.0\",\"jinja2\":\"3.1.6\",\"markupsafe\":\"3.0.3\",\"mpmath\":\"1.3.0\",\"networkx\":\"3.6.1\",\"numpy\":\"1.26.4\",\"nvidia-cublas\":\"13.1.1.3\",\"nvidia-cuda-cupti\":\"13.0.85\",\"nvidia-cuda-nvrtc\":\"13.0.88\",\"nvidia-cuda-runtime\":\"13.0.96\",\"nvidia-cudnn-cu13\":\"9.20.0.48\",\"nvidia-cufft\":\"12.0.0.61\",\"nvidia-cufile\":\"1.15.1.6\",\"nvidia-curand\":\"10.4.0.35\",\"nvidia-cusolver\":\"12.0.4.66\",\"nvidia-cusparse\":\"12.6.3.3\",\"nvidia-cusparselt-cu13\":\"0.8.1\",\"nvidia-nccl-cu13\":\"2.29.7\",\"nvidia-nvjitlink\":\"13.2.78\",\"nvidia-nvshmem-cu13\":\"3.4.5\",\"nvidia-nvtx\":\"13.0.85\",\"packaging\":\"26.2\",\"pip\":\"26.1.1\",\"pluggy\":\"1.6.0\",\"pygments\":\"2.20.0\",\"pytest\":\"9.0.2\",\"pyyaml\":\"6.0.3\",\"requests\":\"2.34.2\",\"safetensors\":\"0.6.2\",\"setuptools\":\"78.1.0\",\"sympy\":\"1.14.0\",\"torch\":\"2.13.0+cu130\",\"tqdm\":\"4.68.4\",\"triton\":\"3.7.1\",\"typing_extensions\":\"4.15.0\",\"urllib3\":\"2.7.0\",\"uv\":\"0.10.12\"}",
+      "python": "3.12.3",
+      "torch": "2.13.0+cu130"
+    },
+    "fingerprint": "bbf86d3a107f16fa44d7d49ae8a9ab208c80a2da6104de22006aaadf018dcf27"
+  },
+  "generation_command": [
+    "python",
+    "-m",
+    "tools.goldens",
+    "--native-root",
+    "artifacts/reference",
+    "--output-root",
+    "tests/goldens",
+    "--model",
+    "esm2_3b"
+  ],
+  "input_fingerprint": "20ef27191e0e1f305f2345f8ed813f3cf685c82856a90fce0fa9e5209ce3696e",
+  "model_id": "esm2_3b",
+  "schema_version": 1,
+  "source_files": {
+    "native/bf16.safetensors": "d2aa4af21d51eb28436ba1cf9e84d9ed05698c72e8b2f85a82b2f89cf7b03415",
+    "native/metadata.json": "d1b31384d3f92441490ef16c7daa44b085347616a42264cf7fdd37e8c567c18a"
+  },
+  "sources": [
+    {
+      "id": "fair-esm",
+      "revision": "2b369911bb5b4b0dda914521b9475cad1656b2ac",
+      "url": "https://github.com/facebookresearch/esm.git"
+    }
+  ],
+  "tensor_file": {
+    "path": "esm2_3b.safetensors",
+    "sha256": "dfd5a8cb05d3e814a080185c4808c8e7ec2277f070f395562fcfbe4376789e4e"
+  },
+  "tensors": {
+    "input__attention_mask": {
+      "dtype": "int64",
+      "sha256": "a4e9ccfdfcb15d75f04569d8635f6121b56d1316e59da2db60416ce57f78551f",
+      "shape": [
+        3,
+        63
+      ]
+    },
+    "input__input_ids": {
+      "dtype": "int64",
+      "sha256": "7c017cc9226e1262e354dd8494e871929c0ef516214ad8afa58c97df32885bed",
+      "shape": [
+        3,
+        63
+      ]
+    },
+    "output__last_hidden_state": {
+      "dtype": "float32",
+      "sha256": "f33b7320f901536d898f386863969bb5cabee629823e53108a41857acb8086d8",
+      "shape": [
+        3,
+        63,
+        2560
+      ]
+    },
+    "output__logits": {
+      "dtype": "float32",
+      "sha256": "f181a80c9349476aec4ec4878ee7eaf1cd82b08be7ec1808168510db1ceb3eae",
+      "shape": [
+        3,
+        63,
+        33
+      ]
+    },
+    "residue_mask": {
+      "dtype": "bool",
+      "sha256": "73319c84be8834bd1df5ff869f2137ac3aef45c900f775c33824b61bda50eb24",
+      "shape": [
+        3,
+        63
+      ]
+    }
+  }
+}

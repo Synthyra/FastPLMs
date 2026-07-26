@@ -1,18 +1,38 @@
-# Ignore everything by default
+# The build context is an explicit allowlist. Runtime stages never receive the
+# upstream parity oracles; reference stages copy only their selected checkout.
 *
 
-# Keep Python source files anywhere in the tree
-!**/*.py
-
-# Keep dependency manifest used during build
-!requirements.txt
-
-# Keep official submodules (needed for pip install -e during build)
-!official/**
-
-# Keep non-Python files needed by models
-!**/*.json
-!**/*.txt
-!**/*.md
-!Dockerfile
 !.dockerignore
+!.gitmodules
+!kernels.lock
+!README.md
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+
+!requirements/
+!requirements/**
+!LICENSES/
+!LICENSES/**
+!src/
+!src/**
+!tests/
+!tests/**
+!benchmarks/
+!benchmarks/**
+!tools/
+!tools/**
+!docker/
+!docker/**
+!docs/
+!docs/**
+!model_cards/
+!model_cards/**
+
+!vendor/
+!vendor/README.md
+
+**/.git
+**/.git/**
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache

@@ -1,0 +1,5 @@
+-r ../core.in
+-r ../features/cpu.in
+-r ../features/dev.in
+-r ../features/structure.in
+-r ../features/train.in

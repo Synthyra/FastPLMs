@@ -2,745 +2,920 @@
 
 <img width="2816" height="1536" alt="FastPLMs Hero Image" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
 
-FastPLMs is an open-source initiative dedicated to making protein language models (pLMs) efficient and easy to use. By replacing native, often suboptimal attention implementations with **Flash Attention** or **Flex Attention**, we provide high-performance alternatives that are fully compatible with the HuggingFace `transformers` ecosystem and can easily be loaded with no extra code with `AutoModel`.
+FastPLMs maintains the runtime code published with Hugging Face protein
+language and structure models. This repository is the source, test, and
+dependency workspace for those model repositories. It is not an installable
+Python distribution.
 
----
+Published models keep the familiar Transformers interface while making
+attention, embedding, generation, folding, and validation behavior explicit.
+Their runtime code does not import an official model checkout. Each supported
+family instead has a pinned upstream source under `vendor/upstream/`, an
+immutable checkpoint identity, and a declared state transformation. Release
+workflows compare the resulting Hugging Face artifact against that official
+source.
 
-## Table of Contents
-1. [Introduction](#introduction)
-2. [Documentation](#documentation)
-3. [Supported Models](#supported-models)
-4. [Attention Backends](#attention-backends)
-5. [Embedding & Pooling](#embedding--pooling)
-6. [Experimental Test-Time Training](#experimental-test-time-training)
-7. [Concrete Examples](#concrete-examples)
-8. [Testing & Benchmarking](#testing--benchmarking)
-9. [Installation & Docker](#installation--docker)
+## Contents
 
----
+- [Why FastPLMs](#why-fastplms)
+- [Supported models](#supported-models)
+- [Dependencies](#dependencies)
+- [Quick start](#quick-start)
+- [Usage examples](#usage-examples)
+- [Attention backends](#attention-backends)
+- [Design choices](#design-choices)
+- [Validation and reproducibility](#validation-and-reproducibility)
+- [Files-only Hub publication](#files-only-hub-publication)
+- [Documentation](#documentation)
+- [Contributing and citation](#contributing-and-citation)
 
-## Documentation
+## Why FastPLMs
 
-Detailed documentation is available in the [`docs/`](docs/) folder:
+Protein models are often published with architecture-specific loading code,
+tokenization conventions, attention implementations, and output formats.
+FastPLMs separates those concerns:
 
-- [Architecture Overview](docs/architecture.md) - How FastPLMs wraps official models, the attention backend system, Docker layout
-- [Per-Model Guides](docs/models.md) - Loading, configuration, and special handling for each model family
-- [Attention Backends](docs/attention_backends.md) - SDPA, Flash, Flex, Auto: how they work, when to use each, numerical properties
-- [Embedding & Pooling API](docs/embedding_api.md) - Pooler strategies, `embed_dataset()` parameters, SQLite/pth storage
-- [Binder Design Example](docs/binder_design.md) - FastPLMs-only ESMFold2 plus ESM++ binder optimization, CLI, metrics, and EGFR result
-- [Fine-Tuning Guide](docs/finetuning.md) - LoRA, Trainer patterns, dataset classes, metrics
-- [Testing & Benchmarking](docs/testing.md) - Docker commands, pytest markers, compliance architecture, throughput benchmarks
-- [Contributing](docs/contributing.md) - Code style, adding new models, required tests
+- Transformers auto classes provide a consistent loading interface.
+- Model-specific adapters preserve native biological token and structure
+  semantics.
+- A shared embedding API returns ordered, residue-aware representations.
+- Attention backends are explicit capabilities rather than silent fallbacks.
+- The model registry records checkpoint, source, conversion, precision,
+  license, and test contracts in one typed manifest.
+- Official repositories are isolated parity oracles, not production
+  dependencies.
 
----
+A supported model is more than an architecture implementation. Its
+configuration, input preparation, checkpoint conversion, representative
+inference, artifact contents, and legal inventory are all defined and tested.
 
-## Introduction
+## Supported models
 
-### What are Protein Language Models (pLMs)?
-Protein Language Models are transformer-based architectures trained on massive datasets of protein sequences (such as UniProt). These models learn the "grammar" of proteins, capturing evolutionary information, structural constraints, and functional motifs. They are used for:
-- **Representation Learning**: Generating high-dimensional embeddings for downstream tasks (e.g., stability, function prediction).
-- **Protein Generation**: Designing novel sequences with specific properties.
-- **Structure Prediction**: Mapping sequences to their 3D folds (e.g., Boltz2).
+The generated [support matrix](docs/generated/support.md) is the authoritative
+checkpoint list. It is rendered from
+[`src/fastplms/models.toml`](src/fastplms/models.toml), which also defines valid
+AutoClasses, attention backends, precision paths, and release tiers.
 
-### What is this repository?
-FastPLMs provides optimized versions of these models. Our focus is on:
-- **Speed**: Drastically faster inference through optimized attention kernels.
-- **Memory Efficiency**: Lower VRAM usage, enabling larger batch sizes or longer sequences.
-- **Seamless Integration**: Use `AutoModel.from_pretrained(..., trust_remote_code=True)` to load our optimized weights directly from HuggingFace.
+| Family | Primary use | Typical user input | Important distinction |
+| --- | --- | --- | --- |
+| ESM2 | Sequence representations and masked language modeling | Amino-acid sequences tokenized to residue IDs | Preserves ESM2 encoder, MLM, contact, and classification contracts |
+| ESM++ / ESMC | Sequence representations and masked language modeling | Amino-acid sequences tokenized to residue IDs | Biohub ESMC implementation and ESMFold2 language-model backbone |
+| ESM3 | Multimodal protein modeling and generation | Sequence, structure, and function tracks | Retains all three tracks through its multimodal interface |
+| E1 | Retrieval-augmented protein encoding | Raw amino-acid sequences | No tokenizer; native E1 preparation is preserved |
+| DPLM | Discrete diffusion protein generation | Amino-acid sequences tokenized to masked residue IDs | Confidence-based iterative unmasking |
+| DPLM2 | Amino-acid and structure co-generation | Amino-acid and structure token tracks | Separate structure and amino-acid boundary tokens |
+| ANKH | T5 protein encoding and sequence-to-sequence modeling | Amino-acid sequences tokenized for encoder or seq2seq use | The 1.0 artifact contract is one full official-compatible encoder-decoder checkpoint with encoder-default embeddings |
+| ESMFold | Sequence-to-structure inference | Raw amino-acid sequences | Meta ESMFold contract with FastPLMs ESM2 backbone |
+| ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Full variants have 48 folding blocks and optional MSA conditioning; Fast variants have 24 blocks and no MSA conditioning |
+| Boltz2 | Structure prediction | Raw amino-acid sequences or prepared model features | Provisional end-to-end numerical-equivalence status |
 
----
+The model manifest, not this summary, controls support. A backend or AutoClass
+that is valid for one family may be rejected by another.
 
-## Supported Models
+The Synthyra ANKH repositories contain the complete 1.0 encoder-decoder
+checkpoints. `AutoModel` loads the encoder view, and
+`AutoModelForSeq2SeqLM` loads the decoder, cross-attention, and language-model
+head from the same repository.
 
-We maintain a comprehensive [HuggingFace Collection](https://huggingface.co/collections/Synthyra/pretrained-plms-675351ecc050f63baedd77de) of optimized models. Below is a summary of the supported families and their origins.
+## Dependencies
 
-### Model Registry Summary
+Published FastPLMs model repositories require Python 3.11 through 3.14,
+PyTorch 2.13, and Transformers 5.13. Install those runtime dependencies
+directly, then load the model from Hugging Face:
 
-| Model Family | Organization | Official Implementation | FastPLMs Optimization | Checkpoints |
-| :--- | :--- | :--- | :--- | :--- |
-| **E1** | Profluent Bio | [Profluent-Bio/E1](https://github.com/Profluent-Bio/E1) | Flex Attention, Block-Causal | 150M, 300M, 600M |
-| **ESM2** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Flash (SDPA) / Flex Attention | 8M, 35M, 150M, 650M, 3B |
-| **ESM++** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Optimized SDPA / Flex | Small (300M), Large (600M), 6B |
-| **ESM3** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | HF AutoModel wrapper | Open Small |
-| **ESMFold2** | Biohub | [Biohub/esm](https://github.com/Biohub/esm) | Self-contained HF AutoModel wrapper with FastPLMs ESM++ LM backbone, opt-in experimental TTT | Full, Fast, Experimental, Cutoff2025 |
-| **DPLM** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Diffusion Optimized Attention | 150M, 650M, 3B |
-| **DPLM2** | ByteDance | [bytedance/dplm](https://github.com/bytedance/dplm) | Multimodal Diffusion | 150M, 650M, 3B |
-| **ANKH** | Elnaggar Lab | [ElnaggarLab/ankh](https://huggingface.co/ElnaggarLab/ankh-base) | T5 RPE via Flex score_mod | Base, Large, ANKH2-L, ANKH3-L, ANKH3-XL |
-| **ESMFold** | Meta AI | [facebookresearch/esm](https://github.com/facebookresearch/esm) | Fast ESM2 backbone, opt-in experimental ProteinTTT | Standard |
-| **Boltz2** | MIT / Various | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) | Optimized Structure Prediction | Standard |
-
-### Full Model List
-
-| Model Key | Family | Parameters | Organization | FastPLMs Repo ID | Official Reference |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `esm2_8m` | ESM2 | 7.5M | Meta AI | [Synthyra/ESM2-8M](https://huggingface.co/Synthyra/ESM2-8M) | [facebook/esm2_t6_8M_UR50D](https://huggingface.co/facebook/esm2_t6_8M_UR50D) |
-| `esm2_35m` | ESM2 | 33.5M | Meta AI | [Synthyra/ESM2-35M](https://huggingface.co/Synthyra/ESM2-35M) | [facebook/esm2_t12_35M_UR50D](https://huggingface.co/facebook/esm2_t12_35M_UR50D) |
-| `esm2_150m` | ESM2 | 148.2M | Meta AI | [Synthyra/ESM2-150M](https://huggingface.co/Synthyra/ESM2-150M) | [facebook/esm2_t30_150M_UR50D](https://huggingface.co/facebook/esm2_t30_150M_UR50D) |
-| `esm2_650m` | ESM2 | 651.1M | Meta AI | [Synthyra/ESM2-650M](https://huggingface.co/Synthyra/ESM2-650M) | [facebook/esm2_t33_650M_UR50D](https://huggingface.co/facebook/esm2_t33_650M_UR50D) |
-| `esm2_3b` | ESM2 | 2.84B | Meta AI | [Synthyra/ESM2-3B](https://huggingface.co/Synthyra/ESM2-3B) | [facebook/esm2_t36_3B_UR50D](https://huggingface.co/facebook/esm2_t36_3B_UR50D) |
-| `esmplusplus_small` | ESM++ | 333.0M | Biohub | [Synthyra/ESMplusplus_small](https://huggingface.co/Synthyra/ESMplusplus_small) | [biohub/ESMC-300M](https://huggingface.co/biohub/ESMC-300M) |
-| `esmplusplus_large` | ESM++ | 575.0M | Biohub | [Synthyra/ESMplusplus_large](https://huggingface.co/Synthyra/ESMplusplus_large) | [biohub/ESMC-600M](https://huggingface.co/biohub/ESMC-600M) |
-| `esmplusplus_6b` | ESM++ | 6.35B | Biohub | [Synthyra/ESMplusplus_6B](https://huggingface.co/Synthyra/ESMplusplus_6B) | [biohub/ESMC-6B](https://huggingface.co/biohub/ESMC-6B) |
-| `esm3_small` | ESM3 | 1.4B | Biohub | [Synthyra/ESM3_small](https://huggingface.co/Synthyra/ESM3_small) | [biohub/esm3-sm-open-v1](https://huggingface.co/biohub/esm3-sm-open-v1) |
-| `esmfold2` | ESMFold2 | 234.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2](https://huggingface.co/Synthyra/ESMFold2) | [biohub/ESMFold2](https://huggingface.co/biohub/ESMFold2) |
-| `esmfold2_fast` | ESMFold2 | 188.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Fast](https://huggingface.co/Synthyra/ESMFold2-Fast) | [biohub/ESMFold2-Fast](https://huggingface.co/biohub/ESMFold2-Fast) |
-| `esmfold2_experimental_fast` | ESMFold2 | 188.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Experimental-Fast](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast) | [biohub/ESMFold2-Experimental-Fast](https://huggingface.co/biohub/ESMFold2-Experimental-Fast) |
-| `esmfold2_experimental_fast_cutoff2025` | ESMFold2 | 188.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast-Cutoff2025) | [biohub/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Fast-Cutoff2025) |
-| `esmfold2_experimental` | ESMFold2 | 234.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Experimental](https://huggingface.co/Synthyra/ESMFold2-Experimental) | [biohub/ESMFold2-Experimental](https://huggingface.co/biohub/ESMFold2-Experimental) |
-| `esmfold2_experimental_cutoff2025` | ESMFold2 | 234.8M + ESM++ 6B | Biohub | [Synthyra/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Cutoff2025) | [biohub/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Cutoff2025) |
-| `e1_150m` | E1 | 154.4M | Profluent Bio | [Synthyra/Profluent-E1-150M](https://huggingface.co/Synthyra/Profluent-E1-150M) | [Profluent-Bio/E1-150m](https://huggingface.co/Profluent-Bio/E1-150m) |
-| `e1_300m` | E1 | 274.3M | Profluent Bio | [Synthyra/Profluent-E1-300M](https://huggingface.co/Synthyra/Profluent-E1-300M) | [Profluent-Bio/E1-300m](https://huggingface.co/Profluent-Bio/E1-300m) |
-| `e1_600m` | E1 | 641.4M | Profluent Bio | [Synthyra/Profluent-E1-600M](https://huggingface.co/Synthyra/Profluent-E1-600M) | [Profluent-Bio/E1-600m](https://huggingface.co/Profluent-Bio/E1-600m) |
-| `dplm_150m` | DPLM | 148.2M | ByteDance | [Synthyra/DPLM-150M](https://huggingface.co/Synthyra/DPLM-150M) | [airkingbd/dplm_150m](https://huggingface.co/airkingbd/dplm_150m) |
-| `dplm_650m` | DPLM | 651.1M | ByteDance | [Synthyra/DPLM-650M](https://huggingface.co/Synthyra/DPLM-650M) | [airkingbd/dplm_650m](https://huggingface.co/airkingbd/dplm_650m) |
-| `dplm_3b` | DPLM | 2.84B | ByteDance | [Synthyra/DPLM-3B](https://huggingface.co/Synthyra/DPLM-3B) | [airkingbd/dplm_3b](https://huggingface.co/airkingbd/dplm_3b) |
-| `dplm2_150m` | DPLM2 | 158.7M | ByteDance | [Synthyra/DPLM2-150M](https://huggingface.co/Synthyra/DPLM2-150M) | [airkingbd/dplm2_150m](https://huggingface.co/airkingbd/dplm2_150m) |
-| `dplm2_650m` | DPLM2 | 672.1M | ByteDance | [Synthyra/DPLM2-650M](https://huggingface.co/Synthyra/DPLM2-650M) | [airkingbd/dplm2_650m](https://huggingface.co/airkingbd/dplm2_650m) |
-| `dplm2_3b` | DPLM2 | 2.88B | ByteDance | [Synthyra/DPLM2-3B](https://huggingface.co/Synthyra/DPLM2-3B) | [airkingbd/dplm2_3b](https://huggingface.co/airkingbd/dplm2_3b) |
-| `ankh_base` | ANKH | 453.3M | Elnaggar Lab | [Synthyra/ANKH_base](https://huggingface.co/Synthyra/ANKH_base) | [ElnaggarLab/ankh-base](https://huggingface.co/ElnaggarLab/ankh-base) |
-| `ankh_large` | ANKH | 1.15B | Elnaggar Lab | [Synthyra/ANKH_large](https://huggingface.co/Synthyra/ANKH_large) | [ElnaggarLab/ankh-large](https://huggingface.co/ElnaggarLab/ankh-large) |
-| `ankh2_large` | ANKH | 1.15B | Elnaggar Lab | [Synthyra/ANKH2_large](https://huggingface.co/Synthyra/ANKH2_large) | [ElnaggarLab/ankh2-ext2](https://huggingface.co/ElnaggarLab/ankh2-ext2) |
-| `ankh3_large` | ANKH | 1.15B | Elnaggar Lab | [Synthyra/ANKH3_large](https://huggingface.co/Synthyra/ANKH3_large) | [ElnaggarLab/ankh3-large](https://huggingface.co/ElnaggarLab/ankh3-large) |
-| `ankh3_xl` | ANKH | 3.49B | Elnaggar Lab | [Synthyra/ANKH3_xl](https://huggingface.co/Synthyra/ANKH3_xl) | [ElnaggarLab/ankh3-xl](https://huggingface.co/ElnaggarLab/ankh3-xl) |
-| `esmfold` | ESMFold | 3.53B | Meta AI | [Synthyra/FastESMFold](https://huggingface.co/Synthyra/FastESMFold) | [facebookresearch/esm](https://github.com/facebookresearch/esm) |
-| `boltz2` | Boltz2 | 506.3M | MIT / Various | [Synthyra/Boltz2](https://huggingface.co/Synthyra/Boltz2) | [jwohlwend/boltz](https://github.com/jwohlwend/boltz) |
-
----
-
-## Experimental Test-Time Training
-
-FastPLMs includes experimental ProteinTTT-style test-time training utilities for
-sequence PLMs and the PLM backbones used by ESMFold and ESMFold2. TTT is
-disabled by default. Normal `from_pretrained`, `forward`, `embed_dataset`,
-`fold_protein`, and `state_dict()` behavior is unchanged unless you explicitly
-call `ttt()`, `fold_protein(..., ttt=True)`, or `fold_protein_ttt()`.
-
-TTT briefly adapts a model to one input protein using masked language modeling
-and local LoRA adapters. It can improve predictions for difficult or
-low-confidence proteins, especially structure predictions with weak baseline
-pLDDT, but it is not guaranteed to help. It adds GPU memory use and runtime,
-can degrade already confident predictions, and should be treated as an
-experimental test-time compute option.
-
-Supported opt-in paths:
-
-| Model family | TTT API | Notes |
-| :--- | :--- | :--- |
-| ESM2, ESM++, ESM3, E1, DPLM, DPLM2, ANKH | `model.ttt(seq=...)` | MLM LoRA adaptation of the PLM backbone only |
-| FastESMFold | `model.fold_protein(sequence, ttt=True)` or `model.fold_protein_ttt(sequence)` | Returns the best pLDDT fold across baseline and TTT steps |
-| ESMFold2 | `model.fold_protein(sequence, ttt=True, ttt_config=...)` or `model.fold_protein_ttt(sequence)` | Protein-only v1 path, trains LoRA only on the ESM++ `_esmc` backbone |
-| Boltz2 | Not supported | Boltz2 remains inference-only in FastPLMs |
-
-Sequence PLM example:
-
-```python
-from transformers import AutoModelForMaskedLM
-
-model = AutoModelForMaskedLM.from_pretrained(
-    "Synthyra/ESM2-8M",
-    trust_remote_code=True,
-).cuda().eval()
-
-# No adapters are injected until this call.
-metrics = model.ttt(
-    seq="MSTNPKPQRKTKRNT",
-    ttt_config={"steps": 3, "ags": 1, "batch_size": 1},
-)
-model.ttt_reset()
+```bash
+python -m pip install \
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14"
 ```
 
-ESMFold2 example:
+For a source checkout used to build or validate artifacts, install the named
+dependency profile and put `src` on `PYTHONPATH` when running repository code:
+
+```bash
+git clone https://github.com/Synthyra/FastPLMs.git
+cd FastPLMs
+uv venv
+uv pip install \
+  -r requirements/profiles/cpu-validation.in \
+  -c requirements/constraints/validation.txt \
+  --torch-backend cpu
+PYTHONPATH=src python -m pytest tests/cpu -m cpu_contract
+```
+
+Official reference repositories are not runtime or routine-development
+dependencies. Initialize them only for a live release-candidate compliance run,
+as described under [Validation and reproducibility](#validation-and-reproducibility).
+
+Direct dependency declarations live under `requirements/`. Profiles compose
+the combinations exercised by local and container validation:
+
+| Dependency file or profile | Purpose |
+| --- | --- |
+| `profiles/runtime.in` | Core dependencies embedded model code can import |
+| `profiles/cpu-validation.in` | CPU-only tests, linting, typing, structure preparation, and training contracts |
+| `profiles/candidate.in` | CUDA candidate validation with FlashAttention support |
+| `profiles/candidate-structure.in` | CUDA structure and binder validation |
+| `profiles/candidate-fp8.in` | Experimental ESMFold2 ESMC FP8 validation |
+| `features/binder.in` | AbNumber, ANARCII, pandas, and PyArrow for binder design |
+| `features/cueq.in` | Optional cuEquivariance frontend and CUDA 13 kernels |
+| `features/reporting.in` | Plots and statistical reports |
+
+See [`requirements/README.md`](requirements/README.md) for the complete profile
+layout. Official reference implementations are never runtime dependencies.
+
+## Quick start
+
+Load a model with its standard Transformers auto class:
 
 ```python
 from transformers import AutoModel
 
 model = AutoModel.from_pretrained(
-    "Synthyra/ESMFold2-Fast",
+    "Synthyra/ESM2-150M",
     trust_remote_code=True,
-    load_esmc=True,
-    esmc_attn_backend="flex",
+    attn_implementation="sdpa",
+)
+model.eval()
+```
+
+Use the published Hub identifier for ordinary loading. Pin `revision` when an
+immutable model-code snapshot is required. Contributors can instead build the
+manifest-pinned artifact under `dist/hub/ESM2-150M` and load it locally before
+publication.
+
+Tokenizer-based models use the tokenizer paired with the same artifact:
+
+```python
+import torch
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(
+    "Synthyra/ESM2-150M",
+    trust_remote_code=True,
+)
+batch = tokenizer(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    padding=True,
+    return_tensors="pt",
+)
+
+with torch.inference_mode():
+    output = model(**batch)
+
+print(output.last_hidden_state.shape)
+```
+
+E1 is intentionally different. It has no tokenizer and retains its native
+raw-sequence preparation path. Use `model.embed_dataset(...)` for ordinary
+sequence representations or the explicit E1 preparation methods for lower
+level token tensors.
+
+## Usage examples
+
+Calls made directly on a model loaded with `trust_remote_code=True` use the
+runtime bundled in its Hugging Face repository. Examples that import
+`fastplms` modules are contributor workflows and require `PYTHONPATH=src`.
+
+### Ordered sequence embeddings
+
+The model method is available from the Hugging Face artifact. The source-level
+function shown here is for repository work run with `PYTHONPATH=src`:
+
+```python
+from fastplms import EmbeddingInput, embed_dataset
+
+result = embed_dataset(
+    model,
+    [
+        EmbeddingInput("protein-a", "MSTNPKPQRKTKRNT"),
+        EmbeddingInput("protein-a", "MKTIIALSYIFCLVFA"),
+    ],
+    batch_size=2,
+    pooling=("mean", "std"),
+    output="embeddings",
+)
+```
+
+Insertion-ordered mappings are also accepted and preserve their keys as record
+identifiers:
+
+```python
+result = model.embed_dataset(
+    {
+        "protein-a": "MSTNPKPQRKTKRNT",
+        "protein-b": "MKTIIALSYIFCLVFA",
+    },
+    batch_size=2,
+    pooling="mean",
+)
+```
+
+`EmbeddingResult` preserves order, duplicate identifiers, and the original
+sequence. Each record contains an identifier, sequence, and tensor:
+
+```python
+for record in result.records:
+    tensor = record.load_tensor()
+    print(record.id, record.sequence, tensor.shape)
+```
+
+Calling `result.as_dict(key="id")` raises when identifiers repeat unless an
+explicit duplicate policy is provided. This avoids silently overwriting FASTA
+records.
+
+Safetensors output packs generation-scoped shards across batches and can resume
+from the last flushed shard after interruption. An interrupted in-memory shard
+is recomputed. Tensor memory is bounded by the configured shard size rather than
+the full dataset size. Successful overwrites retain prior immutable generations
+so already-open lazy readers remain valid. Stale generations are removed only
+through explicit, dry-run-first garbage collection after the caller guarantees
+there are no active readers or writers. SQLite remains available when database
+transactions and queryable records are preferred.
+
+### FASTA input and in-memory output
+
+Pass a FASTA path directly. Multi-line sequences and record identifiers are
+preserved:
+
+```python
+result = model.embed_dataset(
+    "proteins.fasta",
+    batch_size=32,
+    batch_window_size=128,
+    max_tokens_per_batch=4096,
+    max_length=1024,
+    pooling=("mean", "max"),
+)
+
+for record in result:
+    print(record.id, record.tensor.shape)
+```
+
+When `output` is omitted, tensors remain in memory. Multiple poolers are
+concatenated in request order, and `result.metadata["pool_slices"]` records the
+slice belonging to each transformation. FASTA is streamed line by line into an
+immutable fingerprinted spool. Length bucketing is bounded by
+`batch_window_size`, which defaults to sixteen times `batch_size`; output order
+is restored, and `max_length` always counts biological residues rather than
+tokenizer-added special tokens. SQLite prefixes commit at completed batch-window
+boundaries. Safetensors prefixes publish only when a bounded shard flushes, so
+an interruption replays the unflushed shard rather than necessarily one window.
+Set the window equal to the batch size when per-batch SQLite checkpoint
+boundaries matter.
+
+### Full residue and hidden-state embeddings
+
+Use full embeddings when a downstream task needs one vector per biological
+residue:
+
+```python
+residue_result = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    batch_size=2,
+    full_embeddings=True,
+)
+
+for record in residue_result:
+    print(record.sequence, record.tensor.shape)
+```
+
+Each tensor has shape `(l, d)` after BOS, EOS, padding, chain delimiters, and
+other non-biological positions are removed. To retain every returned model
+state:
+
+```python
+state_result = model.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    full_embeddings=True,
+    store_all_hidden_states=True,
+)
+print(state_result[0].tensor.shape)
+```
+
+The hidden-state tensor has shape `(n, l, d)`, where `n` follows the model's
+native hidden-state output order.
+
+ANKH selects the encoder final state by default. Decoder layers require the
+full sequence-to-sequence view and explicit decoder inputs. Pass proteins as
+raw residue strings without inserted spaces and keep sentinel prompts tight,
+for example `M<extra_id_0>`. The model-owned and explicitly supplied tokenizer
+paths apply the same ANKH normalization contract.
+
+```python
+from transformers import AutoModelForSeq2SeqLM
+
+seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
+    "Synthyra/ANKH_base",
+    trust_remote_code=True,
+).eval()
+decoder_result = seq2seq.embed_dataset(
+    ["MSTNPKPQRKTKRNT"],
+    hidden_state_source="decoder",
+    hidden_state_index=-1,
+    decoder_inputs=["M<extra_id_0>"],
+    full_embeddings=True,
+)
+```
+
+There is no implicit shifted-source decoder contract. Official ANKH tasks use
+task-dependent prompts, sentinels, or generated tokens. Set
+`hidden_state_source="encoder"` and `hidden_state_index` for any encoder layer,
+or `store_all_hidden_states=True` for every layer in the selected stack.
+
+### Safetensors output and exact resume
+
+Directory output uses sharded safetensors by default:
+
+```python
+result = model.embed_dataset(
+    "proteins.fasta",
+    batch_size=64,
+    pooling=("mean",),
+    output="artifacts/protein-embeddings",
+    format="safetensors",
+    resume=True,
+)
+```
+
+The directory contains tensor and descriptor shards, immutable generation
+indexes, the `index.json` convenience pointer, and authoritative `run.json`
+commit marker. Generation descriptors record sequence order, identifiers,
+shapes, dtypes, hashes, and shard keys. The run manifest binds the input, model
+state, tokenizer policy, backend, and pooling configuration. Resume is accepted
+only when existing records are the exact ordered prefix of the same run.
+`run.json` selects an immutable generation; older generations remain available
+to readers opened before a successful overwrite. See
+[Embedding API](docs/embedding_api.md#safetensors-storage) for the exclusive
+garbage-collection contract.
+
+### SQLite streaming
+
+SQLite commits each completed batch window and is useful for long jobs:
+
+```python
+result = model.embed_dataset(
+    "proteins.fasta",
+    batch_size=64,
+    pooling=("mean", "std"),
+    output="artifacts/protein-embeddings.sqlite",
+    format="sqlite",
+    resume=True,
+)
+```
+
+BF16 tensors are stored as raw bytes with an explicit dtype. Resume rejects a
+changed model state, input order, sequence, tokenizer, pooling configuration,
+or attention backend.
+
+SQLite readers open results read-only and preserve ordered duplicate filters:
+
+```python
+from fastplms.embeddings import load_sqlite_result
+
+selected = load_sqlite_result(
+    "artifacts/protein-embeddings.sqlite",
+    record_ids=["protein-b", "protein-a", "protein-b"],
+)
+```
+
+### DPLM sequence generation
+
+DPLM starts from a tokenized sequence whose biological positions define the
+requested length. Iterative unmasking fills those positions:
+
+```python
+import torch
+from transformers import AutoModelForMaskedLM, AutoTokenizer
+
+checkpoint = "Synthyra/DPLM-150M"
+tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+generator = AutoModelForMaskedLM.from_pretrained(
+    checkpoint,
+    trust_remote_code=True,
 ).cuda().eval()
 
-result = model.fold_protein(
-    "MSTNPKPQRKTKRNT",
-    num_loops=1,
-    num_sampling_steps=10,
-    ttt=True,
-    ttt_config={"steps": 1, "ags": 1, "batch_size": 1},
-)
-print(result.ttt_metrics)
+input_ids = tokenizer("A" * 64, return_tensors="pt")["input_ids"].cuda()
+with torch.inference_mode():
+    generated_ids = generator.generate(input_ids, max_iter=100)
+
+sequence = tokenizer.decode(
+    generated_ids[0],
+    skip_special_tokens=True,
+).replace(" ", "")
+print(sequence)
 ```
 
-ESMFold2 loads `Synthyra/ESMplusplus_6B` as its LM backbone by default.
-Legacy `biohub/ESMC-*` IDs in older configs are accepted as migration aliases
-and normalized to the matching Synthyra ESM++ checkpoint.
-For FP8 LM inference, pass `esmc_precision="fp8"` and install
-`transformer_engine.pytorch` in a CUDA environment with FP8-capable hardware.
-FP8 is inference-only, so TTT remains a bf16/fp32 path.
+The official schedule uses 500 steps when `max_iter` is omitted. Reducing the
+step count changes the sampling process. DPLM2 uses separate structure and
+amino-acid tracks; see the [model guide](docs/models.md) for its explicit
+boundary-token example.
 
-If you use the TTT functionality, cite ProteinTTT in addition to FastPLMs and
-the underlying model papers. The ProteinTTT citation is listed in
-[Citations](#esmfold--proteinttt).
+### ESM3 sequence generation
 
----
-
-### License Notes
-
-Biohub ESM++ and ESM3 model cards include `license: mit` metadata and upload a `LICENSE` file copied from the Biohub ESM MIT license. The upstream license is linked from each model card and from the source repository at https://github.com/Biohub/esm/blob/main/LICENSE.md.
-
----
-
-## Attention Backends
-
-All FastPLMs models share a common set of attention backends, controlled via `config.attn_backend`. The default is `"sdpa"`, which is safe on all hardware and numerically equivalent to standard attention.
-
-### Backend Comparison
-
-| Backend | Key | Speed | Numerical Equivalence | Availability |
-| :--- | :--- | :--- | :--- | :--- |
-| PyTorch SDPA | `"sdpa"` | Fast | Exact | Any PyTorch ≥ 2.0 |
-| Flash Attention | `"kernels_flash"` | Fastest | Approximate | Requires `pip install kernels` (pre-built) |
-| Flex Attention | `"flex"` | Very fast | ~Exact | Requires PyTorch ≥ 2.11 (FA4 backend on Hopper/Blackwell) |
-| Auto | `"auto"` | — | — | Always (selects best available) |
-
-### SDPA (default)
-
-PyTorch's [`scaled_dot_product_attention`](https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html) dispatches to a fused CUDA kernel (cuDNN or efficient attention) that is faster and more memory-efficient than naive attention, while being mathematically identical to it. This is the recommended default for reproducibility and general use. It is also the only backend where `output_attentions=True` is handled natively; with other backends, attentions are computed via a separate naive matrix multiplication when requested.
-
-### Flash Attention (`kernels_flash`)
-
-Flash Attention 2 and 3 are typically the fastest options on Ampere (A100) and Hopper (H100) GPUs, often 2–4× faster than SDPA at long sequence lengths. Flash Attention achieves this by tiling the computation and applying an online softmax, which means the results are **not bitwise identical** to SDPA or naive attention. Differences are on the order of floating-point rounding and are often inconsequential for standard inference — but they are not guaranteed to be so. They can compound across layers, interact with low-precision dtypes (fp16/bf16), or affect sensitive downstream tasks. Flash Attention is standard practice in large model training and the trade-off is well understood, but it should not be treated as a drop-in numerical equivalent of SDPA. If exact reproducibility or numerical sensitivity is a concern, use `"sdpa"` instead.
-
-**No compilation required.** FastPLMs uses the HuggingFace [`kernels`](https://github.com/huggingface/kernels) package to load pre-built Flash Attention 2/3 binaries at runtime — no C++ compiler, no CUDA toolkit version pinning, no waiting:
-
-```
-pip install kernels
-```
-
-Building `flash-attn` from source is notoriously painful. The Ninja build system parallelizes aggressively across all available CPU cores, and each NVCC/CICC compiler process it spawns can consume **5–8 GB of RAM on its own**. On a 64-core machine this can push peak RAM usage to **~300 GB**, and even on a throttled single-threaded build (`MAX_JOBS=1 NVCC_THREADS=1`) the compile still takes **many hours** while grinding through paging. Pre-built community wheels cover 384+ version/GPU/CUDA/platform combinations and still routinely fall short of matching a user's exact environment. This is the point where most people give up and go without Flash Attention entirely. The `kernels` package sidesteps all of this by fetching a pre-compiled binary matched to your GPU architecture (SM80 for Ampere, SM90 for Hopper). If no compatible binary exists for your hardware, it gracefully falls back to `flex` or `sdpa` rather than erroring.
-
-### Flex Attention (`flex`)
-
-PyTorch's [`flex_attention`](https://pytorch.org/docs/stable/nn.attention.flex_attention.html) (PyTorch >= 2.11 in FastPLMs Docker images) generates a fused Triton kernel customized to the mask pattern at hand. It is numerically very close to SDPA, typically within floating-point rounding of naive computation. The primary advantage is that it can apply a **block mask** that skips padding tokens entirely, providing a meaningful speedup on batches with variable-length sequences (no compute wasted on padding). E1 uses a block-causal variant of this mask.
-
-The **first forward pass** triggers JIT compilation via Triton, which can take 30–120 seconds. All subsequent calls are fast. Combining with `torch.compile` yields the best sustained throughput.
-
-### Auto (`auto`)
-
-Automatically selects the best available backend in order of preference: `kernels_flash` → `flex` → `sdpa`. Useful when you want maximum speed without configuring the environment manually, and you accept that the resolved backend may differ across machines.
-
-### Setting the Backend
-
-**At load time (every family):**
-```python
-from transformers import AutoConfig, AutoModel
-
-config = AutoConfig.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
-config.attn_backend = "flex"  # "sdpa", "kernels_flash", "flex", or "auto"
-model = AutoModel.from_pretrained("Synthyra/ESM2-150M", config=config, trust_remote_code=True)
-```
-
-**After load time (every family):**
-
-Every family's `PreTrainedModel` subclass exposes a mutable `attn_backend` property whose setter propagates the change to every attention submodule in-place, so you can swap backends on a loaded model without reloading the weights:
+ESM3 keeps multimodal helpers on the loaded model:
 
 ```python
-model = AutoModel.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
-model.attn_backend = "flex"           # every attention layer now uses flex
-model.attn_backend = "kernels_flash"  # flip again, no reload
+from fastplms.models.esm3.modeling_esm3 import FastESM3GenerationConfig
+from transformers import AutoModel
+
+esm3 = AutoModel.from_pretrained(
+    "Synthyra/ESM3_small",
+    trust_remote_code=True,
+).eval()
+config = FastESM3GenerationConfig(num_steps=8, temperature=1.0, seed=7)
+generated = esm3.generate("MK____A", config)
+print(generated)
 ```
 
-This is handy for benchmarking backends on the same weights or for falling back at runtime if a backend is unavailable. The setter asserts if the requested backend isn't installed on the current GPU (e.g. `kernels_flash` without the `kernels` package).
+Underscores mark sequence positions to generate. Sequence-only forward passes
+use `esm3.tokenize_sequences(...)`; structure and function tracks remain
+available through the model's multimodal interface.
 
-### Returning Attention Maps
+### Boltz2 protein structure prediction
 
-All backends support `output_attentions=True`. For the optimized backends (SDPA, Flash Attention, Flex), attention weights are computed via a separate naive matrix multiplication and appended to the output — so enabling this negates the memory savings of those backends. Use it only for inspection or contact prediction, not during high-throughput inference.
-
----
-
-## Embedding & Pooling
-
-The `EmbeddingMixin` (shared across all models) provides a standardized way to extract representations from proteins.
-
-### The Pooler
-The `Pooler` class aggregates sequence-level residue representations into a single fixed-size vector. Supported strategies include:
-- `mean`: Mask-aware average of all residues.
-- `cls`: The first token's representation (Standard for classification).
-- `max`: Element-wise maximum across the sequence.
-- `var` / `std`: Variance or Standard Deviation of representations.
-- `norm`: L2 normalization.
-- `median`: Element-wise median.
-- `parti`: Experimental PageRank-based attention pooling.
-
----
-
-## Concrete Examples
-
-### 1. Batch Embedding with SQLite (Scalable)
-Ideal for embedding millions of sequences where you need to stream data or avoid OOM on RAM.
+Boltz2 exposes a protein-only convenience path in addition to its prepared
+feature interface:
 
 ```python
 import torch
 from transformers import AutoModel
 
-model = AutoModel.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True).cuda()
-
-sequences = ["MALWMRLLPLLALLALWGPDPAAA", "MKTIIALSYIFCLVFA", ...]
-
-# Embed and store in SQLite
-model.embed_dataset(
-    sequences=sequences,
-    batch_size=64,
-    pooling_types=['mean', 'cls'], # Concatenates both
-    sql=True,
-    sql_db_path='large_protein_db.db',
-    embed_dtype=torch.float32
+boltz = AutoModel.from_pretrained(
+    "Synthyra/Boltz2",
+    trust_remote_code=True,
+    dtype=torch.float32,
+).cuda().eval()
+prediction = boltz.predict_structure(
+    amino_acid_sequence="MSTNPKPQRKTKRNTNRRPQDVKFPGG",
+    recycling_steps=3,
+    num_sampling_steps=50,
+    diffusion_samples=1,
+    seed=7,
 )
+boltz.save_as_cif(prediction, "prediction.cif")
+print(prediction.plddt, prediction.ptm, prediction.iptm)
 ```
 
-### 2. Embedding from a FASTA File
-Pass a FASTA file path directly — no manual parsing required. Multi-line sequences are handled automatically. You can combine `fasta_path` with an explicit `sequences` list and the two sources are merged before embedding.
+Boltz2 remains provisional in FastPLMs 1.0. This interface is covered for
+configuration, declared inference-core state, feature preparation, and seeded
+execution, but it is not yet an official end-to-end numerical-equivalence
+claim.
+The helper restores caller RNG state; FP32 parameters and features execute under
+the documented CUDA BF16 autocast policy.
+
+### ESMFold structure prediction
+
+ESMFold accepts raw sequences:
 
 ```python
-# Embed all sequences in a FASTA file and save to SQLite
-model.embed_dataset(
-    fasta_path='my_proteins.fasta',
-    batch_size=64,
-    pooling_types=['mean'],
-    sql=True,
-    sql_db_path='my_proteins.db',
-)
+import torch
+from transformers import AutoModel
 
-# Mix a FASTA file with an explicit list
-model.embed_dataset(
-    sequences=["MKTIIALSYIFCLVFA"],
-    fasta_path='additional_proteins.fasta',
-    batch_size=32,
-    save=True,
-    save_path='combined_embeddings.pth',
-)
+folder = AutoModel.from_pretrained(
+    "Synthyra/FastESMFold",
+    trust_remote_code=True,
+    dtype=torch.float32,
+).cuda().eval()
+
+with torch.inference_mode():
+    structure = folder.infer("MKTLLILAVVAAALA")
+
+print(structure["mean_plddt"])
 ```
 
-### 3. High-Throughput In-Memory Embedding
-Perfect for medium-sized datasets that fit in memory.
+FastPLMs does not expose ProteinTTT for ESMFold. The pinned folding checkpoint
+does not contain a trained masked-language-model head for that objective.
+
+### ESMFold2 folding and learned representations
+
+ESMFold2 accepts amino-acid sequences and typed molecular-complex
+specifications. A target structure is not an input. Atomic coordinates and
+confidence values are produced by the model.
+
+The two Fast checkpoints are inference-optimized for single-sequence use. They
+have 24 folding blocks instead of 48 and were trained without MSA conditioning,
+so they reject MSA-derived inputs. The full `ESMFold2` and
+`ESMFold2-Experimental-Cutoff2025` checkpoints retain 48 blocks and optional
+MSA conditioning. Fast is not necessarily single-chain-only: supported
+multichain and multimolecule requests remain available, but every protein chain
+uses single-sequence mode. This distinction follows the official model
+description in [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf). The
+quick start below intentionally loads Fast and supplies no MSA.
 
 ```python
-# Embed and return as a dictionary
-embeddings = model.embed_dataset(
-    sequences=sequences,
-    batch_size=128,
-    pooling_types=['mean'],
-    save=True,
-    save_path='my_embeddings.pth'
-)
+from transformers import AutoModel
 
-# Access embedding
-seq_vector = embeddings["MALWMRLLPLLALLALWGPDPAAA"] # torch.Tensor
+folder = AutoModel.from_pretrained(
+    "Synthyra/ESMFold2-Fast",
+    trust_remote_code=True,
+    device_map={"": "cuda:0"},
+    esmc_precision="auto",
+).eval()
+
+result = folder.fold_protein(
+    "MSTNPKPQRKTKRNT",
+    num_loops=1,
+    num_sampling_steps=200,
+    num_diffusion_samples=1,
+    seed=7,
+)
+pdb_text = folder.result_to_pdb(result)
+print(result.ptm, result.plddt.mean().item())
 ```
 
-### 4. Custom Pooling & Multi-Strategy
-Concatenate multiple mathematical representations for richer downstream features.
+Build complexes with the input types exposed by the loaded artifact:
 
 ```python
-# Use a variety of pooling types
-embeddings = model.embed_dataset(
-    sequences=sequences,
-    pooling_types=['mean', 'max', 'std', 'var'], # All 4 concatenated
-    batch_size=32,
-    full_embeddings=False
+types = folder.input_types
+complex_input = types.StructurePredictionInput(
+    sequences=[
+        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
+        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
+        types.DNAInput(id="C", sequence="ATGC"),
+        types.LigandInput(id="L", smiles="O"),
+    ]
 )
-
-# Resulting vector size: 4 * hidden_size
-print(embeddings[sequences[0]].shape)
+complex_result = folder.fold(
+    complex_input,
+    num_loops=1,
+    num_sampling_steps=200,
+    seed=7,
+)
+print(complex_result.ptm, complex_result.plddt.mean().item())
 ```
 
-### 5. FastPLMs Binder Design With ESMFold2 And ESM++
-FastPLMs includes a binder design workflow that mirrors the Biohub ESMFold2
-tutorial while using only FastPLMs model repos. ESMFold2 experimental checkpoints
-provide differentiable folding losses and final critics, while ESM++ provides the
-masked-LM pseudoperplexity regularizer.
+The typed interface supports RNA, ligands, modifications, covalent bonds, and
+distogram conditioning. The Fast checkpoint loaded above rejects an MSA even
+when it appears inside an otherwise valid typed request. To attach an MSA to a
+protein input, load the full `Synthyra/ESMFold2` or
+`Synthyra/ESMFold2-Experimental-Cutoff2025` checkpoint. The schema recognizes
+`PocketConditioning`, but the pinned official runtime discards it and hard-codes
+a zero pocket feature. FastPLMs rejects non-null pocket conditioning instead of
+silently ignoring it. Prepared features contain fields such as `ref_pos`; these
+are component reference geometries created during featurization, not a known
+target structure.
+See the offline
+[`structure_preparation.py`](examples/structure_preparation.py) example for the
+supported MSA, multimolecule, modification, bond, and distogram paths and the
+explicit pocket rejection. Its ESMFold2 MSA branch requires one of the full
+checkpoints, not a Fast checkpoint.
+
+Its learned sequence representation combines 81 ordered ESMC hidden states
+with the folding checkpoint's projection. Use the public embedding API to
+retrieve the resulting residue representation:
+
+```python
+representations = folder.embed_dataset(
+    ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
+    batch_size=2,
+    full_embeddings=True,
+)
+print(representations[0].tensor.shape)  # (sequence_length, 256)
+```
+
+For lower-level integrations that already hold the ordered ESMC hidden-state
+stack, the projection is also exposed directly:
+
+```python
+# H: (b, l, 81, 2560)
+Z = folder.project_esmc_hidden_states(H)  # Z: (b, l, 256)
+```
+
+Here, `H` is the 81-state ESMC representation for a prepared sequence batch,
+not a target structure. The dataset embedding API is the higher-level path for
+ordinary sequence inputs.
+
+`folder.embed_dataset(..., full_embeddings=True)` returns one `(l, 256)` tensor
+per single-chain sequence. The embedding path rejects complexes, ligands, MSAs,
+chain-separated inputs, `cls`, and `parti`.
+
+`esmc_precision="auto"` always resolves to BF16. Explicit FP8 is experimental,
+inference-only, and strict:
+
+```python
+folder.reload_esmc(precision="fp8", device="cuda:0")
+print(folder.esmc_precision_status)
+```
+
+FP8 raises when the validated CUDA and Transformer Engine path is unavailable.
+Gradient-enabled paths reload canonical BF16 ESMC weights.
+
+### Test-time training
+
+Supported masked-language models expose opt-in, low-rank test-time adaptation:
+
+```python
+metrics = generator.ttt(
+    seq="MSTNPKPQRKTKRNT",
+    ttt_config={
+        "steps": 3,
+        "ags": 1,
+        "batch_size": 1,
+        "seed": 7,
+    },
+)
+generator.ttt_reset()
+```
+
+TTT updates injected adapter parameters, not base checkpoint weights. It adds
+latency and memory, can worsen a prediction, and does not establish biological
+function. See the [TTT guide](docs/ttt.md) for supported families and folding
+behavior.
+
+### Binder design research example
+
+The FastPLMs binder-design example optimizes a soft binder sequence against
+ESMFold2 structural objectives and an ESM++ sequence prior:
 
 ![FastPLMs EGFR minibinder design](docs/assets/egfr_fastplms_binder_design.png)
 
-Run the verified EGFR 128 amino acid de novo minibinder example on a CUDA
-workstation with the ESMFold2 Docker image:
+Install the `binder` dependency profile, which includes the structure runtime
+and the example-only table and antibody dependencies. The published workflow
+requires Python 3.11-3.14, PyTorch 2.13,
+Transformers 5.13, the verified ESMFold2 runtime assets, and a CUDA device. The
+current release evidence target is the exact containerized Linux aarch64
+environment on the NVIDIA GH200 workstation. CPU-only, x86-64, Windows, macOS,
+H100, and H200 binder runs do not substitute for that evidence.
 
 ```bash
-cd /home/ubuntu/FastPLMs
-
-sudo -n docker run --gpus all --rm \
-  -v /home/ubuntu/FastPLMs:/app \
-  -v /home/ubuntu/FastPLMs:/workspace \
-  -v /home/ubuntu/.cache/huggingface:/workspace/.cache/huggingface \
-  -w /workspace fastplms-esmfold2 \
-  python /app/cookbook/tutorials/binder_design_fastplms.py \
-    --backend local \
-    --target-name egfr \
-    --binder-sequence '################################################################################################################################' \
-    --not-antibody \
-    --steps 150 \
-    --batch-size 1 \
-    --seed 103 \
-    --output-dir /workspace/campaign_egfr_len128_b1_s150_seed103_consensus_cli
+uv pip install \
+  -r requirements/profiles/binder.in \
+  -c requirements/constraints/validation.txt
+PYTHONPATH=src python examples/binder_design_fastplms.py \
+  --target-name pd-l1 \
+  --binder-name minibinder \
+  --batch-size 4 \
+  --steps 150 \
+  --output-dir artifacts/binder-design
 ```
 
-The run writes `trajectory.jsonl`, `best_sequences.fasta`, `results.parquet`,
-`selection.parquet`, and per-critic PDB/CIF/logit files. The verified result had
-hero mean iPTM `0.913870`, hero min iPTM `0.904600`, and all four hero
-ESMFold2 critics above `0.9`.
+The workflow writes optimization trajectories, ranked sequences, structures,
+confidence outputs, and selection tables. These are model outputs for
+prioritization, not experimental evidence of binding, specificity, expression,
+or therapeutic activity. The output directory must not already exist. The
+workflow publishes `run_manifest.json` atomically last, so a missing manifest
+marks an incomplete run. See the [binder-design guide](docs/binder_design.md).
 
-Binder sequence:
+### Fine-tuning
 
-```text
-SAVKHLLEIVKYLEEAIEKALEVDPVFLVPPAAEELLIAAKVIKELAKENPELIEVYELLMKAVKGLKKLVRSNDKEILREVIRLLRKAAKVIREILKNNPDLDPELRKALEELAKVLEEIAEVLEQQ
-```
-
-See [docs/binder_design.md](docs/binder_design.md) for the full strategy,
-official selection rule, Modal backend, per-critic metrics, and caveats.
-
----
-
-## Testing & Benchmarking
-
-FastPLMs includes a pytest-based test suite under `testing/` covering correctness, compliance, and performance. All GPU tests run inside Docker. See [docs/testing.md](docs/testing.md) for the full guide.
-
-### Test Categories
-
-| Test | What it checks | Marker |
-| :--- | :--- | :--- |
-| **AutoModel loading** | Every model loads via the relevant Transformers auto class with `trust_remote_code=True` and produces valid outputs | `gpu` |
-| **Backend consistency** | SDPA, Flex, and Flash backends produce equivalent predictions (>= 95% agreement) | `gpu` |
-| **Weight compliance** | FastPLM weights are bit-exact with the original implementations (ESM2, ESMC, ESM3, E1, DPLM) | `slow`, `gpu` |
-| **Forward compliance** | Forward pass logits/predictions match the originals within tolerance | `slow`, `gpu` |
-| **Rigorous parity** | Per-layer fp32 + bf16 hidden-state and last_hidden_state parity, padding-isolation, tokenizer parity, embed_dataset pipeline parity. Run per family in its own Docker image. | `gpu` |
-| **NaN stability** | Batched inference with padding produces no NaN in real-token embeddings | `gpu` |
-| **Batch-single match** | Batch and single-item embedding produce identical results | `gpu` |
-| **Full model suite** | All of the above across every checkpoint (8M through 3B) | `gpu`, `large` |
-| **Throughput benchmark** | Tokens/sec across models, backends, batch sizes, and sequence lengths | `slow`, `gpu` |
-| **Structure models** | Boltz2, ESMFold, and ESMFold2 loading + forward/parity checks | `structure`, `slow`, `gpu` |
-
-### Running Tests with Docker
-
-FastPLMs uses a per-family Docker setup. A single shared base image (`fastplms-base`) holds torch + transformers + the FastPLMs source, and one image per model family (`fastplms-esm2`, `fastplms-esm_plusplus`, `fastplms-esm3`, `fastplms-esmfold2`, `fastplms-e1`, `fastplms-dplm`, `fastplms-dplm2`, `fastplms-ankh`) layers on top with that family's native reference package. This isolates conflicting dependencies (e.g. Biohub `esm` vs `fair-esm`, DPLM's torchtext pin) and keeps each image small.
+FastPLMs follows `PreTrainedModel` conventions for Trainer, Accelerate, and
+PEFT workflows. Install the `reporting` profile for training with plots:
 
 ```bash
-# Initialize submodules (required before building Docker)
-git submodule update --init --recursive
-
-# Build base + every family image
-./build_images.sh
-
-# Build a single family
-./build_images.sh esm2
-./build_images.sh esm_plusplus
-./build_images.sh esm3
-./build_images.sh esmfold2
+uv pip install \
+  -r requirements/profiles/reporting.in \
+  -c requirements/constraints/validation.txt
+PYTHONPATH=src python examples/fine_tuning.py \
+  --task classification \
+  --model_path Synthyra/ESM2-8M \
+  --model-revision 185ecbd45665d050a8dae326d91886d330c5f9d0 \
+  --classification-dataset-source GleghornLab/DL2_reg \
+  --classification-dataset-revision 7e18f1b98859b0a3e3da283f63d0a153b774cf1f \
+  --attn-backend sdpa \
+  --output-dir artifacts/fine-tuning \
+  --seed 7 \
+  --full-determinism \
+  --plot-results
 ```
 
-Run the parity / compliance tests for one family inside its image:
+For residue-level tasks, align labels to biological residues rather than
+assuming tokenizer position equals residue position. Remote model and dataset
+inputs require immutable 40-character Hub commits; existing local directory
+inputs are identified by a full tree SHA-256 instead. Local datasets must use a
+layout accepted by `datasets.load_dataset`; arbitrary `Dataset.save_to_disk()`
+trees are not accepted. The example writes
+`run_manifest.json` with ordered post-filter hashes of the rows and columns
+actually consumed by training. It atomically publishes `final_model`, reloads
+it against the same immutable base, and verifies the persisted adapter and
+classifier tensor hashes. For the default plot-free run, install
+`requirements/features/train.in` with `requirements/core.in` and omit
+`--plot-results`. See the
+[fine-tuning guide](docs/finetuning.md).
+
+## Attention backends
+
+Select a backend at load time or change it explicitly after loading:
+
+```python
+model.set_attn_implementation("sdpa")
+```
+
+| Backend | Use when | Main constraint |
+| --- | --- | --- |
+| `eager` | Attention matrices or the `parti` pooler are required | Materializes attention scores |
+| `sdpa` | A stable default or official-parity path is required | Torch selects the underlying kernel |
+| `flex_attention` | Padding-aware compiled attention is useful | First use compiles for the requested shape and semantics |
+| `flash_attention_2` | A supported ESM2 or ESM++ BF16 CUDA path needs a precompiled kernel | BF16-only and family-limited |
+| `flash_attention_3` | A supported ESM2, ESM++, or DPLM BF16 CUDA path needs a precompiled kernel | BF16-only and family-limited |
+
+FastPLMs does not implement an `auto` backend. An unavailable request raises.
+When an optimized implementation cannot return attention matrices,
+`output_attentions=True` emits one warning naming the configured backend,
+effective eager backend, and reason, then runs a correctly masked eager call.
+It does not change model configuration or later calls. Leaving
+`attn_implementation` unspecified lets
+Transformers choose its standard default. Explicit requests either run the
+declared implementation or raise.
+
+The Flash dependency file installs Hugging Face `kernels`, not the
+`flash-attn` source distribution. FastPLMs resolves immutable FlashAttention 2
+and 3 snapshots recorded
+in `kernels.lock`, validates the compatible binary, and never compiles a source
+fallback. See the [attention guide](docs/attention_backends.md) for exact
+family, dtype, padding, and numerical contracts.
+
+For ESMC, SDPA is the recommended highest-fidelity path. Flex Attention and
+FlashAttention 3 remain supported, non-experimental backends whose numerical
+deviations are diagnostic rather than strict parity failures. The current
+frozen-head release report is produced on the exact GH200/aarch64 validation
+target and must publish relative L2, Q99.9, residue and pooled cosine, top-1,
+and Jensen-Shannon distributions for each backend, dtype, exact hardware, and
+sequence panel. H100 and H200 remain supported Hopper-class devices, but their
+results are not interchangeable with or accepted as the current GH200 release
+evidence. Pending measurements are
+labeled pending in every ESMC card; no number is inferred from a threshold or
+another checkpoint.
+
+## Design choices
+
+### Manifest-driven model support
+
+[`src/fastplms/models.toml`](src/fastplms/models.toml) is the source of truth
+for model IDs, files, revisions, AutoClasses, tokenizer modes, transformations,
+attention and precision capabilities, upstreams, licenses, and release tiers.
+Support tables and model cards are generated from it.
+
+This avoids three common failure modes: a model appearing in documentation but
+not release tooling, a checkpoint conversion with no immutable identity, and a
+backend being advertised because it imports rather than because it was tested.
+
+### Native biological preparation
+
+The shared interface does not force every family through one tokenizer. E1
+keeps raw-sequence preparation. DPLM2 keeps modality-specific boundaries.
+Structure models retain their native protein, nucleic-acid, ligand, and chain
+representations. Full ESMFold2 checkpoints additionally retain optional MSA
+conditioning; ESMFold2 Fast checkpoints reject MSA-derived inputs. Shared
+pooling begins only after each model identifies its biological residue
+positions.
+
+### Ordered embedding results
+
+Protein datasets routinely contain duplicate sequences and duplicate FASTA
+identifiers. FastPLMs returns ordered records instead of a sequence-keyed
+dictionary so those inputs are not silently lost. Persistent formats record
+per-tensor hashes and complete run fingerprints for auditing and exact resume.
+
+### Explicit precision and backend policy
+
+Parameter storage, compute dtype, and attention implementation are separate
+choices. DPLM and several structure paths retain FP32 parameters while using
+CUDA BF16 autocast. ESMFold2 controls the ESMC backbone independently from its
+folding trunk. Unsupported combinations fail before inference.
+
+### Official code is a parity oracle
+
+Pinned official repositories live under `vendor/upstream/` and are used only
+in isolated reference stages. Production modules cannot import them, modify
+`sys.path` to reach them, or download source code at import time. Artifacts are
+self-contained and load through Transformers with `trust_remote_code=True`.
+
+### Fail-closed artifacts and licenses
+
+Artifact construction verifies required file identities, canonical legal
+texts, conversion details, generated model-card metadata, and offline
+loading. A missing or changed required file is a release error. Source licenses
+and notices are centralized under [`LICENSES/`](LICENSES/); checkpoint-specific
+terms remain distinct from the FastPLMs Apache-2.0 code license.
+
+## Validation and reproducibility
+
+All release validation is containerized. The portable runner accepts the host
+and identity at invocation time:
 
 ```bash
-# ESM2
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm2 \
-    python -m pytest /workspace/testing/test_parity.py -k esm2 -v
-
-# ESM++ (model_key is "esmc")
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm_plusplus \
-    python -m pytest /workspace/testing/test_parity.py -k esmc -v
-
-# ESM3, requires accepted access to biohub/esm3-sm-open-v1 for official parity
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm3 \
-    python -m pytest /workspace/testing/test_parity.py -k esm3 -v
-
-# ESMFold2 / ESMFold2-Fast
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esmfold2 \
-    python -m pytest /workspace/testing/test_esmfold2.py -v -s
-
-# E1, DPLM, DPLM2, ANKH
-for fam in e1 dplm dplm2 ankh; do
-    docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-$fam \
-        python -m pytest /workspace/testing/test_parity.py -k $fam -v
-done
+python -m tools.remote \
+  --host user@gpu-host \
+  --identity /path/to/key \
+  --suite check
 ```
 
-The legacy monolithic `Dockerfile` (image tag `fastplms`) is still supported for the broader test suites that don't need native package isolation:
+Release tiers cover checks, compliance, structure, features, artifacts, and
+benchmarks. Missing required dependencies or declared backends fail rather than
+skip. Expensive suites retain explicit `gpu`, `slow`, `large`, and `structure`
+markers.
 
-```bash
-docker build -t fastplms .
+Before merge, run the positive, fully offline `tests/cpu/` allowlist on the
+validation workstation with Python 3.12, CPU-only Torch 2.13, and Transformers
+5.13. It hides CUDA, blocks socket and Hub downloads, rejects skips and xfails,
+and targets less than five minutes on four CPU cores. Live official references
+remain reserved for the release-candidate `compliance` tier; routine checks
+consume immutable goldens. This repository does not use GitHub Actions.
 
-# Fast tests (small models, no compliance, no structure)
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "gpu and not slow and not large and not structure" -v
-
-# All sequence model tests except 3B
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not large and not structure" -v
-
-# Full suite including 3B models (requires 40+ GB VRAM)
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "not structure" -v
-
-# Structure models only (Boltz2, ESMFold, ESMFold2)
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -m "structure" -v
-```
-
-On Windows, replace `$(pwd)` with `${PWD}`. **Always pass `--ipc=host`** with PyTorch.
-
-### Compliance / Native Reference Dependencies
-
-The parity and compliance tests compare FastPLM outputs against the original model implementations. Each per-family Docker image installs only the deps it needs; outside Docker you can install them piecewise:
-
-| Dependency | Used by | Install |
-| :--- | :--- | :--- |
-| `cloudpathlib`, `zstd`, `biotite` (+ `official/esm` submodule on `sys.path`) | ESM++ / ESMC, ESM3 official parity | provided by `Dockerfile.esm_plusplus` and `Dockerfile.esm3`; the Biohub `esm` package itself is **not** pip-installed because it depends on a Biohub `transformers` fork. |
-| Biohub `transformers` fork, `rdkit`, `biotite`, `msgpack-numpy`, `pydssp`, `pygtrie`, `py3dmol` | ESMFold2 parity and structure export; runtime LM loading uses FastPLMs ESM++ | provided by `Dockerfile.esmfold2` |
-| `E1` | E1 | `pip install -e official/e1` (or use `Dockerfile.e1`) |
-| `transformers` (`EsmForMaskedLM`, `T5EncoderModel`) | ESM2, DPLM, ANKH | already in `requirements.txt` |
-
-If a native dep is missing in your environment, the corresponding parity tests are skipped rather than failing.
-
-### Throughput Benchmarks
-
-Throughput can be measured via the pytest test (saves structured JSON/CSV/PNG results) or the standalone script (more configurable).
-
-```bash
-# Pytest (benchmarks ESM2-8M, ESMplusplus_small, DPLM-150M, DPLM2-150M across all backends)
-docker run --gpus all -v $(pwd):/workspace fastplms python -m pytest /app/testing/test_throughput.py -v -s
-# Output: throughput_results.json, throughput_results.csv, throughput_comparison.png
-
-# Standalone (fully configurable)
-docker run --gpus all -v $(pwd):/workspace fastplms \
-    python -m testing.throughput \
-    --model_paths Synthyra/ESM2-8M Synthyra/ESMplusplus_small \
-    --backends sdpa flex kernels_flash \
-    --batch_sizes 2 4 8 \
-    --sequence_lengths 64 128 256 512 1024 2048 \
-    --output_path /workspace/throughput_comparison.png
-```
-
----
-
-## Installation & Docker
-
-### Local Installation
-
-FastPLMs is developed and tested with Python 3.12 and CUDA 12.8. For local GPU
-installs, install the cu128 PyTorch wheels first, then the pinned direct
-dependencies:
-
-```bash
-git clone --recurse-submodules https://github.com/Synthyra/FastPLMs.git
-cd FastPLMs
-python -m pip install --upgrade pip==26.1.1 setuptools==70.2.0
-python -m pip install torch==2.11.0 torchvision==0.26.0 --index-url https://download.pytorch.org/whl/cu128
-python -m pip install -r requirements.txt
-```
-
-If you already cloned without `--recurse-submodules`, initialize submodules separately:
-```bash
-git submodule update --init --recursive
-```
-
-### Docker (Recommended for GPU Testing)
-
-There are two Docker layouts; pick whichever matches your task.
-
-**Per-family layout (recommended for parity / compliance work).** A shared base image plus one image per model family, each with that family's native reference package isolated from the others. Build all of them once with the helper script:
-
-```bash
-git submodule update --init --recursive
-./build_images.sh                       # base + every family
-./build_images.sh esm2 esm_plusplus     # subset
-```
-
-This produces `fastplms-base` and `fastplms-{esm2,esm_plusplus,esm3,e1,dplm,dplm2,ankh}`. Run a family's tests in its image:
-
-```bash
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace fastplms-esm2 \
-    python -m pytest /workspace/testing/test_parity.py -k esm2 -v
-
-docker run --rm --gpus all --ipc=host -v $(pwd):/workspace -it fastplms-esm2 bash
-```
-
-**Monolithic layout (legacy, single image).** The original `Dockerfile` bundles every dependency that can coexist in one image. Convenient for the broad test suites and throughput benchmarks; not suitable when two families' native deps conflict (notably Biohub `esm` vs `fair-esm`).
+The canonical Docker workflow uses one candidate image and isolated official
+reference images:
 
 ```bash
 git submodule update --init --recursive
-docker build -t fastplms .
-
-docker run --gpus all --ipc=host fastplms python -m pytest /app/testing/ -v
-docker run --gpus all --ipc=host -v $(pwd):/workspace -it fastplms bash
+sudo docker buildx bake -f docker/docker-bake.hcl candidate reference-esm2 --load
+sudo docker compose -f docker/compose.yaml run --rm candidate \
+  python -m pytest tests/parity -k esm2 -v
 ```
 
-On Windows, replace `$(pwd)` with `${PWD}`. Always pass `--ipc=host` with PyTorch.
+Always pass `--ipc=host` to Dockerized PyTorch runs. Benchmarks are separate
+from correctness checks and retain raw samples, environment metadata, warm-up,
+compile-time, steady-state, padding, and memory measurements.
 
----
+Boltz2 remains provisional in FastPLMs 1.0. Configuration, declared
+inference-core state, feature preparation, and seeded execution are tested, but
+native-environment BF16 end-to-end inference does not yet meet the fixed
+numerical-equivalence limits. FastPLMs therefore makes no official inference
+equivalence claim for Boltz2.
 
-## Suggestions & Contributions
-Found a bug or have a feature request? Please open a [GitHub Issue](https://github.com/Synthyra/FastPLMs/issues). We are actively looking for contributions to optimize more pLM architectures!
+## Files-only Hub publication
 
----
+After building and validating local artifacts, update Hub runtime files and
+model cards without uploading or deleting checkpoint weights:
 
-## Citations
+```bash
+PYTHONPATH=src python -m tools.artifacts.publish \
+  --files-only \
+  --artifact-root dist/hub \
+  --dry-run \
+  esm2_8m
+```
 
-If you use FastPLMs, please cite the following along with the relevant model paper(s).
+`--artifact-root` is the local directory containing one built artifact
+subdirectory per selected model. It tells the publisher which validated files
+to upload; it is not a remote Hub path and does not change where models are
+published.
 
-### FastPLMs
+Remove `--dry-run` after reviewing the exact add-only file plan. Repository
+targets come exclusively from `models.toml`. Files-only publication rejects any
+ANKH selection, including the implicit all-model selection, so callers must pass
+explicit non-ANKH model IDs. Authentication uses `HF_TOKEN` or the cached
+Hugging Face login. See [Local Hub artifacts](docs/artifacts.md) for the full
+safety contract.
+
+This files-only workflow is forbidden for the ANKH 1.0 migration. ANKH must
+replace its encoder-only contents with the full encoder-decoder state in one
+immutable commit containing every weight shard, tokenizer asset, configuration,
+runtime source, card, and release record. Validate both `AutoModel` and
+`AutoModelForSeq2SeqLM` from that same commit before publication is accepted.
+Use the explicit `--complete <ankh-model-id>` dry-run and publication workflow.
+It makes one parent-guarded atomic commit containing validated additions and
+only the narrowly scoped deletions needed to replace obsolete registry-pinned
+files, such as a monolithic ANKH weight file superseded by indexed shards.
+DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The maintained ByteDance
+[license](https://github.com/bytedance/dplm/blob/main/LICENSE)
+is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
+defines the repository release as including pretrained DPLM1 and DPLM2 weights.
+Validated DPLM artifacts therefore record `weights_license_status="resolved"`
+and `redistributable=true`; explicit `--complete` publication is permitted after
+the same legal, parity, inventory, parent-commit, and atomic preflight checks.
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Architecture](docs/architecture.md)
+- [Models and generated support](docs/models.md)
+- [Capability-to-evidence manifest](docs/generated/capability_evidence.md)
+- [Embedding API](docs/embedding_api.md)
+- [Attention backends](docs/attention_backends.md)
+- [ESMFold2](docs/esmfold2.md)
+- [Test-time training](docs/ttt.md)
+- [Binder design](docs/binder_design.md)
+- [Fine-tuning](docs/finetuning.md)
+- [Testing and compliance](docs/testing.md)
+- [Benchmarking](docs/benchmarking.md)
+- [Local Hub artifacts](docs/artifacts.md)
+- [Migration to 1.0](docs/migration.md)
+- [Licensing](docs/licensing.md)
+- [Contributing](docs/contributing.md)
+- [Runnable examples](examples/README.md)
+
+FastPLMs 1.0 is an intentional API break. There are no legacy import, backend,
+embedding-storage, or command shims. Use the migration guide when moving from
+the pre-1.0 repository layout.
+
+## Contributing and citation
+
+Start with [AGENTS.md](AGENTS.md) for repository invariants and
+[the contributing guide](docs/contributing.md) for the model-addition and
+validation workflow. Generated support tables and model cards must be changed
+through the manifest or renderer rather than edited directly.
+
+If FastPLMs supports your work, cite FastPLMs and the paper or model card for
+the specific checkpoint family:
 
 ```bibtex
 @misc{FastPLMs,
-  author={Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
-  title={FastPLMs: Fast, efficient, protein language model inference from Huggingface AutoModel.},
-  year={2024},
-  url={https://huggingface.co/Synthyra/ESMplusplus_small},
-  DOI={10.57967/hf/3726},
-  publisher={Hugging Face}
+  author = {Hallee, Logan and Bichara, David and Gleghorn, Jason P.},
+  title = {FastPLMs: Fast, efficient protein language model inference from Hugging Face AutoModel},
+  year = {2024},
+  url = {https://github.com/Synthyra/FastPLMs},
+  doi = {10.57967/hf/3726},
+  publisher = {Hugging Face}
 }
 ```
-
-### Flex Attention
-
-```bibtex
-@article{dong2024flexattention,
-  title={Flex Attention: A Programming Model for Generating Optimized Attention Kernels},
-  author={Dong, Juechu and Feng, Boyuan and Guessous, Driss and Liang, Yanbo and He, Horace},
-  journal={arXiv preprint arXiv:2412.05496},
-  year={2024}
-}
-```
-
-### PyTorch
-
-```bibtex
-@inproceedings{paszke2019pytorch,
-  title={PyTorch: An Imperative Style, High-Performance Deep Learning Library},
-  author={Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and Yang, Edward and DeVito, Zach and Raison, Martin and Tejani, Alykhan and Chilamkurthy, Sasank and Steiner, Benoit and Fang, Lu and Bai, Junjie and Chintala, Soumith},
-  booktitle={Advances in Neural Information Processing Systems 32},
-  year={2019}
-}
-```
-
-### ESM2
-
-```bibtex
-@article{lin2023esm2,
-  title={Evolutionary-scale prediction of atomic-level protein structure with a language model},
-  author={Lin, Zeming and Akin, Halil and Rao, Roshan and Hie, Brian and Zhu, Zhongkai and Lu, Wenting and Smestad, Nikita and Verkuil, Robert and Kabeli, Ori and Shmueli, Yaniv and dos Santos Costa, Allan and Fazel-Zarandi, Maryam and Sercu, Tom and Candido, Salvatore and Rives, Alexander},
-  journal={Science},
-  volume={379},
-  number={6637},
-  pages={1123--1130},
-  year={2023},
-  DOI={10.1126/science.ade2574}
-}
-```
-
-### ESM++ (ESMC)
-
-```bibtex
-@misc{candido2026language,
-  title  = {Language Modeling Materializes a World Model of Protein Biology},
-  author = {Candido, Salvatore and Hayes, Thomas and Derry, Alexander and Rao, Roshan
-            and Lin, Zeming and Verkuil, Robert and Wu, Bryan and Lee, Jin Sub
-            and Bruguera, Elise S. and Keval, Jehan A. and Kopylov, Mykhailo
-            and Pak, John E. and Wu, Wesley and Thomas, Neil and Mataraso, Samson
-            and Hsu, Alvin and Trotman-Grant, Ashton C. and Fatras, Kilian
-            and dos Santos Costa, Allan and Badkundri, Rohil and Ak{\i}n, Halil
-            and Oktay, Deniz and Deaton, Jonathan and Montabana, Elizabeth
-            and Sitwala, Hrishita and Yu, Yue and Wiggert, Marius
-            and Carlin, Dylan Alexander and Goering, Anthony W. and Blazejewski, Tomasz
-            and Sandora, McCullen and Hla, Michael and Jia, Tina Z.
-            and Kloker, Leon H. and Sofroniew, Nicholas J. and Uehara, Masatoshi
-            and Pannu, Jassi and Bachas, Sharrol and Liu, Daniel S.
-            and Sercu, Tom and Rives, Alexander},
-  year   = {2026},
-  url    = {https://biohub.ai/papers/esm_protein.pdf},
-  note   = {Preprint}
-}
-```
-
-### E1
-
-```bibtex
-@article{jain2025e1,
-  title={E1: Retrieval-Augmented Protein Encoder Models},
-  author={Jain, Sarthak and Beazer, Joel and Ruffolo, Jeffrey A and Bhatnagar, Aadyot and Madani, Ali},
-  journal={bioRxiv},
-  DOI={10.1101/2025.11.12.688125},
-  year={2025}
-}
-```
-
-### DPLM
-
-```bibtex
-@article{wang2024dplm,
-  title={Diffusion Language Models Are Versatile Protein Learners},
-  author={Wang, Xinyou and Ye, Zaixiang and Huang, Fei and Cao, Dongyan and Liang, Shujian and Huang, Liang},
-  journal={Proceedings of the 41st International Conference on Machine Learning},
-  year={2024}
-}
-```
-
-### DPLM2
-
-```bibtex
-@article{wang2024dplm2,
-  title={DPLM-2: A Multimodal Diffusion Protein Language Model},
-  author={Wang, Xinyou and Ye, Zaixiang and Huang, Fei and Cao, Dongyan and Liang, Shujian and Huang, Liang},
-  journal={arXiv preprint arXiv:2410.13782},
-  year={2024}
-}
-```
-
-### ANKH
-
-```bibtex
-@article{elnaggar2023ankh,
-  title={Ankh: Optimized Protein Language Model Unlocks General-Purpose Modelling},
-  author={Elnaggar, Ahmed and Essam, Hazem and Salah-Eldin, Wafaa and Moustafa, Walid and Elkerdawy, Mohamed and Rochereau, Charlotte and Rost, Burkhard},
-  journal={arXiv preprint arXiv:2301.06568},
-  year={2023}
-}
-```
-
-```bibtex
-@article{alsamkary2025ankh3,
-  title={Ankh3: Multi-Task Pretraining with Sequence Denoising and Completion Enhances Protein Representations},
-  author={Alsamkary, Hazem and Elshaffei, Mohamed and Elkerdawy, Mohamed and Elnaggar, Ahmed},
-  journal={arXiv preprint arXiv:2505.20052},
-  year={2025}
-}
-```
-
-### Boltz
-
-```bibtex
-@article{passaro2025boltz2,
-  title={Boltz-2: Exploring the Frontiers of Biomolecular Prediction},
-  author={Passaro, Saro and Corso, Gabriele and Wohlwend, Jeremy and Reveiz, Mateo and Bordes, Florian and Wicky, Basile and Dayan, Peter and Jing, Bowen},
-  journal={bioRxiv},
-  year={2025}
-}
-```
-
-```bibtex
-@article{wohlwend2024boltz1,
-  title={Boltz-1: Democratizing Biomolecular Interaction Modeling},
-  author={Wohlwend, Jeremy and Corso, Gabriele and Passaro, Saro and Reveiz, Mateo and Leidal, Ken and Swanson, Wojtek and Kher, Gilmer and Lember, Tommi and Jaakkola, Tommi},
-  journal={bioRxiv},
-  year={2024}
-}
-```
-
-### ESMFold / ProteinTTT
-
-```bibtex
-@misc{bushuiev2026proteinneed,
-  title={One protein is all you need},
-  author={Anton Bushuiev and Roman Bushuiev and Olga Pimenova and Nikola Zadorozhny and Raman Samusevich and Elisabet Manaskova and Rachel Seongeun Kim and Hannes St\"ark and Jiri Sedlar and Martin Steinegger and Tom\'a\v{s} Pluskal and Josef Sivic},
-  year={2026},
-  eprint={2411.02109},
-  archivePrefix={arXiv},
-  primaryClass={cs.LG},
-  url={https://arxiv.org/abs/2411.02109}
-}
-```
----

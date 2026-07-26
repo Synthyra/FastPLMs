@@ -1,0 +1,99 @@
+{
+  "checkpoint": {
+    "files": {
+      "config.json": "git-sha1:f6206456e8c2f22ebe1d37fce3b5d50fd8073e68",
+      "pytorch_model-00001-of-00004.bin": "sha256:0bcb86a115fe744ed686756db143f78851304e855e2f83cec58681c6080ced5f",
+      "pytorch_model-00002-of-00004.bin": "sha256:daf3324f3be949e7dd1c3c84b28da7fec5151b1890cb0904e73427266856a06f",
+      "pytorch_model-00003-of-00004.bin": "sha256:dbbeb7924a21059854f994931e23590b054aa000b10370a71c052c4aa36e9246",
+      "pytorch_model-00004-of-00004.bin": "sha256:21c01740d091487db43446489d8a893dea1fcc6f2e1c1991ece13945f7ab4e07",
+      "special_tokens_map.json": "git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+      "tokenizer_config.json": "git-sha1:dbcdd9fb2e742627ee310713615e0d7aeed0c34e",
+      "vocab.txt": "git-sha1:6b946952cc35537226f07fd70957ee2f848880d2"
+    },
+    "repo_id": "airkingbd/dplm_3b",
+    "revision": "53849d4a7fe944ae0b9cf2bbc0d2cc0054795b51"
+  },
+  "environment": {
+    "details": {
+      "cuda_device": "NVIDIA H100 PCIe",
+      "cuda_runtime": "12.1",
+      "packages": "{\"absl-py\":\"2.5.0\",\"accelerate\":\"1.14.0\",\"aiohappyeyeballs\":\"2.7.1\",\"aiohttp\":\"3.14.1\",\"aiosignal\":\"1.4.0\",\"alembic\":\"1.18.5\",\"annotated-types\":\"0.7.0\",\"antlr4-python3-runtime\":\"4.9.3\",\"async-timeout\":\"5.0.1\",\"attrs\":\"26.1.0\",\"autopage\":\"0.6.0\",\"backports.strenum\":\"1.3.1\",\"biopython\":\"1.79\",\"biotite\":\"1.2.0\",\"biotraj\":\"1.2.2\",\"black\":\"26.5.1\",\"byprot\":\"1.0.0\",\"certifi\":\"2026.6.17\",\"cfgv\":\"3.5.0\",\"cftime\":\"1.6.5\",\"charset-normalizer\":\"2.1.1\",\"click\":\"8.4.2\",\"cliff\":\"4.14.0\",\"cmaes\":\"0.13.0\",\"cmd2\":\"3.5.1\",\"colorlog\":\"6.10.1\",\"contourpy\":\"1.3.2\",\"cycler\":\"0.12.1\",\"datasets\":\"2.20.0\",\"debugpy\":\"1.8.21\",\"deepspeed\":\"0.14.4\",\"dill\":\"0.3.8\",\"distlib\":\"0.4.3\",\"dm-tree\":\"0.1.10\",\"e3nn\":\"0.6.0\",\"einops\":\"0.8.2\",\"exceptiongroup\":\"1.3.1\",\"fair-esm\":\"2.0.0\",\"fastjsonschema\":\"2.21.2\",\"filelock\":\"3.29.0\",\"flake8\":\"7.3.0\",\"fonttools\":\"4.63.0\",\"frozenlist\":\"1.8.0\",\"fsspec\":\"2024.5.0\",\"greenlet\":\"3.5.3\",\"griddataformats\":\"1.0.2\",\"grpcio\":\"1.82.1\",\"hf-xet\":\"1.5.1\",\"hjson\":\"3.1.0\",\"huggingface_hub\":\"0.36.2\",\"hydra-colorlog\":\"1.2.0\",\"hydra-core\":\"1.2.0\",\"hydra-optuna-sweeper\":\"1.2.0\",\"identify\":\"2.6.19\",\"idna\":\"3.4\",\"ihm\":\"2.11\",\"iniconfig\":\"2.3.0\",\"isort\":\"8.0.1\",\"jedi\":\"0.20.0\",\"jinja2\":\"3.1.6\",\"joblib\":\"1.5.3\",\"jsonschema\":\"4.26.0\",\"jsonschema-specifications\":\"2025.9.1\",\"jupyter_core\":\"5.9.1\",\"kiwisolver\":\"1.5.0\",\"lightning\":\"2.2.0\",\"lightning-utilities\":\"0.15.3\",\"lmdb\":\"2.3.0\",\"mako\":\"1.3.12\",\"markdown\":\"3.10.2\",\"markdown-it-py\":\"4.2.0\",\"markupsafe\":\"3.0.3\",\"matplotlib\":\"3.10.9\",\"mccabe\":\"0.7.0\",\"mda-xdrlib\":\"0.2.0\",\"mdanalysis\":\"2.9.0\",\"mdtraj\":\"1.10.3\",\"mdurl\":\"0.1.2\",\"ml_collections\":\"1.1.0\",\"mmtf-python\":\"1.1.3\",\"modelcif\":\"1.7\",\"mpmath\":\"1.3.0\",\"mrcfile\":\"1.5.4\",\"msgpack\":\"1.2.1\",\"multidict\":\"6.7.1\",\"multiprocess\":\"0.70.16\",\"mypy_extensions\":\"1.1.0\",\"nbformat\":\"5.10.4\",\"nbstripout\":\"0.9.1\",\"netcdf4\":\"1.7.4\",\"networkx\":\"3.4.2\",\"ninja\":\"1.13.0\",\"nodeenv\":\"1.10.0\",\"numpy\":\"1.26.4\",\"nvidia-cublas-cu12\":\"12.1.3.1\",\"nvidia-cuda-cupti-cu12\":\"12.1.105\",\"nvidia-cuda-nvrtc-cu12\":\"12.1.105\",\"nvidia-cuda-runtime-cu12\":\"12.1.105\",\"nvidia-cudnn-cu12\":\"8.9.2.26\",\"nvidia-cufft-cu12\":\"11.0.2.54\",\"nvidia-curand-cu12\":\"10.3.2.106\",\"nvidia-cusolver-cu12\":\"11.4.5.107\",\"nvidia-cusparse-cu12\":\"12.1.0.106\",\"nvidia-ml-py\":\"13.610.43\",\"nvidia-nccl-cu12\":\"2.19.3\",\"nvidia-nvjitlink-cu12\":\"12.9.86\",\"nvidia-nvtx-cu12\":\"12.1.105\",\"omegaconf\":\"2.3.1\",\"opt-einsum-fx\":\"0.1.4\",\"opt_einsum\":\"3.4.0\",\"optuna\":\"2.10.1\",\"packaging\":\"24.2\",\"pandas\":\"2.3.3\",\"parso\":\"0.8.7\",\"pathspec\":\"1.1.1\",\"peft\":\"0.11.1\",\"pillow\":\"12.3.0\",\"pip\":\"26.1.1\",\"platformdirs\":\"4.10.0\",\"pluggy\":\"1.6.0\",\"pre_commit\":\"4.6.0\",\"prettytable\":\"3.18.0\",\"propcache\":\"0.5.2\",\"protobuf\":\"7.35.1\",\"psutil\":\"7.2.2\",\"pudb\":\"2025.1.5\",\"py-cpuinfo\":\"9.0.0\",\"pyarrow\":\"25.0.0\",\"pyarrow-hotfix\":\"0.7\",\"pycodestyle\":\"2.14.0\",\"pydantic\":\"2.13.4\",\"pydantic_core\":\"2.46.4\",\"pyflakes\":\"3.4.0\",\"pygments\":\"2.20.0\",\"pyparsing\":\"3.3.2\",\"pyperclip\":\"1.11.0\",\"pyrootutils\":\"1.0.4\",\"pytest\":\"9.1.1\",\"python-dateutil\":\"2.9.0.post0\",\"python-discovery\":\"1.4.4\",\"python-dotenv\":\"1.2.2\",\"pytokens\":\"0.4.1\",\"pytorch-lightning\":\"2.2.0\",\"pytz\":\"2026.2\",\"pyyaml\":\"6.0.3\",\"referencing\":\"0.37.0\",\"regex\":\"2026.7.10\",\"requests\":\"2.34.2\",\"rich\":\"15.0.0\",\"rich-argparse\":\"1.8.0\",\"rpds-py\":\"0.30.0\",\"safetensors\":\"0.6.2\",\"scikit-learn\":\"1.7.2\",\"scipy\":\"1.15.3\",\"seaborn\":\"0.13.2\",\"setuptools\":\"59.6.0\",\"sh\":\"2.3.0\",\"six\":\"1.17.0\",\"sqlalchemy\":\"2.0.51\",\"stevedore\":\"5.8.0\",\"sympy\":\"1.14.0\",\"tensorboard\":\"2.21.0\",\"tensorboard-data-server\":\"0.7.2\",\"threadpoolctl\":\"3.6.0\",\"tmtools\":\"0.3.0\",\"tokenizers\":\"0.15.2\",\"tomli\":\"2.4.1\",\"torch\":\"2.2.0+cu121\",\"torch-geometric\":\"2.8.0\",\"torch_scatter\":\"2.1.2+pt22cu121\",\"torchdata\":\"0.7.1\",\"torchmetrics\":\"1.9.0\",\"torchtext\":\"0.17.0+cpu\",\"tqdm\":\"4.66.5\",\"traitlets\":\"5.15.1\",\"transformers\":\"4.39.2\",\"triton\":\"2.2.0\",\"typing-inspection\":\"0.4.2\",\"typing_extensions\":\"4.15.0\",\"tzdata\":\"2026.3\",\"urllib3\":\"1.26.13\",\"urwid\":\"4.0.4\",\"urwid_readline\":\"0.15.1\",\"virtualenv\":\"21.6.1\",\"wcwidth\":\"0.8.2\",\"werkzeug\":\"3.1.8\",\"wrapt\":\"2.2.2\",\"xxhash\":\"3.8.1\",\"yarl\":\"1.24.2\"}",
+      "python": "3.10.12",
+      "torch": "2.2.0+cu121"
+    },
+    "fingerprint": "cd54743355027f7ac24d7f456e3807a2037601cdfc9eb57db041a839c3bfc503"
+  },
+  "generation_command": [
+    "python",
+    "-m",
+    "tools.goldens",
+    "--native-root",
+    "artifacts/reference",
+    "--output-root",
+    "tests/goldens",
+    "--model",
+    "dplm_3b"
+  ],
+  "input_fingerprint": "20ef27191e0e1f305f2345f8ed813f3cf685c82856a90fce0fa9e5209ce3696e",
+  "model_id": "dplm_3b",
+  "schema_version": 1,
+  "source_files": {
+    "native/bf16.safetensors": "09a98566251cafbdc6daceb9520adcba54430354aa4521e64aaefd04abf46db1",
+    "native/metadata.json": "953287da8d2b74557f718091b10617e100a1e17292a436f483ad03b6cccef7f0"
+  },
+  "sources": [
+    {
+      "id": "dplm",
+      "revision": "8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d",
+      "url": "https://github.com/bytedance/dplm.git"
+    }
+  ],
+  "tensor_file": {
+    "path": "dplm_3b.safetensors",
+    "sha256": "75b0a0854fc391133920b0feaaeb8f69ab7568a88b3759627aca1556c4338c1e"
+  },
+  "tensors": {
+    "input__attention_mask": {
+      "dtype": "int64",
+      "sha256": "a4e9ccfdfcb15d75f04569d8635f6121b56d1316e59da2db60416ce57f78551f",
+      "shape": [
+        3,
+        63
+      ]
+    },
+    "input__input_ids": {
+      "dtype": "int64",
+      "sha256": "7c017cc9226e1262e354dd8494e871929c0ef516214ad8afa58c97df32885bed",
+      "shape": [
+        3,
+        63
+      ]
+    },
+    "output__last_hidden_state": {
+      "dtype": "float32",
+      "sha256": "7bd04473fafb3b2b78862690864be2ccfefbed12fdc3cd63162cd652cc292c06",
+      "shape": [
+        3,
+        63,
+        2560
+      ]
+    },
+    "output__logits": {
+      "dtype": "float32",
+      "sha256": "ece5b588a39984172a16a3b10a23b79163a94fad65efd63c52228e7440dd7132",
+      "shape": [
+        3,
+        63,
+        33
+      ]
+    },
+    "residue_mask": {
+      "dtype": "bool",
+      "sha256": "73319c84be8834bd1df5ff869f2137ac3aef45c900f775c33824b61bda50eb24",
+      "shape": [
+        3,
+        63
+      ]
+    }
+  }
+}

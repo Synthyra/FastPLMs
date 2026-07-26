@@ -15,7 +15,15 @@ tags:
 
 Precomputed pooled protein embeddings for the Protify vector benchmark.
 
-This dataset stores ready-to-use `.pth.gz` embedding artifacts for a broad panel of protein language models and controls. It is intended for fast downstream benchmarking in Protify without repeatedly embedding the same benchmark sequences on local GPUs.
+> [!CAUTION]
+> This page documents a historical external dataset, not the FastPLMs 1.0
+> embedding format. FastPLMs writes sharded safetensors or transactional SQLite
+> and never writes new `.pth` files. Prefer the current
+> [embedding API](../embedding_api.md) for new runs.
+
+This dataset stores ready-to-use `.pth.gz` embedding artifacts for a broad
+panel of protein language models and controls. They support downstream Protify
+benchmarks without repeatedly embedding the same sequences on local GPUs.
 
 ## What Is Included
 
@@ -34,7 +42,8 @@ The filename convention mirrors the Protify embedding cache settings:
 | `mean_var` | Mean and variance pooling used for the vector benchmark |
 | `.pth.gz` | PyTorch serialization compressed with gzip |
 
-Use these files when you want fixed-size protein vectors for classical ML, vector search, nearest-neighbor analysis, low-shot benchmarking, or model comparison.
+Use these files for fixed-size protein vectors in classical ML, vector search,
+nearest-neighbor analysis, low-shot benchmarking, or model comparison.
 
 ## Quick Start
 
@@ -65,7 +74,7 @@ import gzip
 import torch
 
 with gzip.open(path, "rb") as handle:
-    embeddings = torch.load(handle, map_location="cpu")
+    embeddings = torch.load(handle, map_location="cpu", weights_only=True)
 
 first_key = next(iter(embeddings))
 first_vector = embeddings[first_key]
@@ -73,6 +82,11 @@ first_vector = embeddings[first_key]
 print(first_key)
 print(first_vector.shape, first_vector.dtype)
 ```
+
+Only load a legacy pickle from a source whose bytes and expected hash you
+trust. If an old payload cannot be read with `weights_only=True`, use the
+FastPLMs read-only legacy importer and its explicit unsafe-pickle opt-in. Never
+enable unsafe pickle loading for an untrusted download.
 
 Download with the Hugging Face CLI:
 
@@ -92,11 +106,15 @@ hf download Synthyra/vector_embeddings \
   --local-dir vector_embeddings
 ```
 
-The full `embeddings/` directory is about 189.22 GiB.
+The full directory is large. Inspect the current Hub repository size before a
+bulk download.
 
 ## Protify Usage
 
-Protify can use these precomputed embeddings as model-ready vector caches for benchmark runs. This avoids recomputing embeddings for every model and dataset combination, which is especially useful for large PLMs and laptop-scale downstream analysis.
+Protify can use these precomputed embeddings as vector caches for benchmark
+runs. This avoids recomputing every model and dataset combination, which is
+especially useful for large protein language models or laptop-scale downstream
+analysis.
 
 Typical workflow:
 
@@ -106,6 +124,9 @@ Typical workflow:
 4. Compare model families against negative controls such as `Random` and `OneHot-Protein`.
 
 ## Model Inventory
+
+This inventory is a historical snapshot of the external dataset. It is not the
+FastPLMs support matrix and is not generated from `src/fastplms/models.toml`.
 
 | Model | File | Size |
 | --- | --- | ---: |
@@ -142,12 +163,18 @@ Typical workflow:
 
 ## Notes
 
-These files are large. Prefer single-file downloads with `hf_hub_download()` or `hf download --include` unless you explicitly need every model.
+These files are large. Prefer single-file downloads with `hf_hub_download()` or
+`hf download --include` unless you need every model.
 
-This repository is an artifact store, not a tabular Hugging Face Datasets dataset. Use `huggingface_hub` or the `hf` CLI rather than `datasets.load_dataset()`.
+This repository is an artifact store, not a tabular Hugging Face Datasets
+dataset. Use `huggingface_hub` or the `hf` CLI rather than
+`datasets.load_dataset()`.
 
-Embedding artifacts are intended to support reproducible Protify benchmarking. For redistribution or derived work, check the licenses and usage terms of the original benchmark datasets and the upstream model checkpoints used to generate each embedding set.
+The artifacts support reproducible Protify benchmarking. For redistribution or
+derived work, check the licenses and usage terms of the original benchmark
+datasets and upstream model checkpoints used to generate each embedding set.
 
 ## Citation
 
-If these embeddings help your work, please cite the relevant upstream model papers or model cards, Protify, and Synthyra resources used in your analysis.
+If these embeddings help your work, cite the relevant upstream model papers or
+model cards, Protify, and the Synthyra resources used in your analysis.

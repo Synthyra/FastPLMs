@@ -1,0 +1,7 @@
+torch==2.13.0
+numpy==1.26.4
+transformers==4.25.1
+tokenizers==0.13.3
+sentencepiece==0.1.99
+biopython==1.80
+datasets==2.20.0

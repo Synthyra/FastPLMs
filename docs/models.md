@@ -1,538 +1,397 @@
-# Per-Model Guides
+# Models
 
-This document covers each model family supported by FastPLMs: loading, configuration, special handling, and available checkpoints.
+The generated [support matrix](generated/support.md) is the current list of
+families, checkpoints, AutoClasses, backends, precisions, licenses, and release
+tiers. It is produced from `src/fastplms/models.toml`; edit the manifest, not the
+table.
 
-Most sequence models (ESM2, ESM++, E1, DPLM, DPLM2, ANKH) share the same embedding pipeline via `EmbeddingMixin`. ESM3 exposes its own compatible `embed_dataset()` method for sequence embeddings. They support most attention backends, with these exceptions: ANKH supports only `sdpa` and `flex`, and ESM3 supports `sdpa` and `flex`. Structure prediction models (Boltz2, ESMFold, ESMFold2, and ESMFold2-Fast) have their own APIs.
+## Dependencies and platform requirements
 
-Experimental test-time training (TTT) is available for ESM2, ESM++, ESM3, E1,
-DPLM, DPLM2, ANKH, FastESMFold, and ESMFold2. It is disabled by default and is
-only activated by explicit calls such as `model.ttt(...)`,
-`fold_protein(..., ttt=True)`, or `fold_protein_ttt(...)`. TTT trains small
-LoRA adapters with a masked language modeling objective on the test protein. It
-can improve difficult or low-confidence cases, but it adds test-time compute and
-can degrade already strong predictions. Treat it as experimental.
+FastPLMs 1.0 sequence models require Python 3.11-3.14, PyTorch 2.13, and
+Transformers 5.13. Install those dependencies directly. The runtime source is
+loaded from the pinned Hugging Face model repository:
 
----
-
-## ESM2
-
-**Organization:** Meta AI
-**Architecture:** Transformer encoder with rotary position embeddings (RoPE)
-**Checkpoints:** 8M, 35M, 150M, 650M, 3B
-
-### Loading
-
-```python
-from transformers import AutoModelForMaskedLM, AutoConfig
-
-# Default (SDPA backend)
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
-
-# With a specific backend
-config = AutoConfig.from_pretrained("Synthyra/ESM2-150M", trust_remote_code=True)
-config.attn_backend = "flex"
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESM2-150M", config=config, trust_remote_code=True)
+```bash
+python -m pip install \
+  "torch>=2.13,<2.14" \
+  "transformers>=5.13,<5.14"
 ```
 
-### Key Details
+Eager and SDPA are portable CPU or CUDA paths. Optimized backends and structure
+families have additional dependency, dtype, CUDA, and platform requirements;
+check the generated support matrix and the relevant family guide before
+selecting one.
 
-- Uses the standard ESM tokenizer (`EsmTokenizer` from `transformers`)
-- Tokenizer accessible via `model.tokenizer`
-- Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load (same mechanism as every other family).
-- Pre-LayerNorm architecture with a final `emb_layer_norm_after`
-- Supports `output_attentions=True` and `output_hidden_states=True`
-- Experimental TTT is opt-in via `model.ttt(seq=...)`; no LoRA adapters are injected during normal inference.
+## Shared loading contract
 
-### Available Checkpoints
-
-| Checkpoint | HuggingFace ID | Official Reference |
-|------------|----------------|-------------------|
-| ESM2-8M | `Synthyra/ESM2-8M` | `facebook/esm2_t6_8M_UR50D` |
-| ESM2-35M | `Synthyra/ESM2-35M` | `facebook/esm2_t12_35M_UR50D` |
-| ESM2-150M | `Synthyra/ESM2-150M` | `facebook/esm2_t30_150M_UR50D` |
-| ESM2-650M | `Synthyra/ESM2-650M` | `facebook/esm2_t33_650M_UR50D` |
-| ESM2-3B | `Synthyra/ESM2-3B` | `facebook/esm2_t36_3B_UR50D` |
-
----
-
-## ESM++ (ESMC)
-
-**Organization:** Biohub
-**Architecture:** Transformer encoder with configurable rotary embeddings (scaling, interleaving)
-**Checkpoints:** Small (300M), Large (600M), 6B
-
-### Loading
+Tokenizer-based sequence models load through the normal Transformers auto
+classes:
 
 ```python
 from transformers import AutoModelForMaskedLM
 
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/ESMplusplus_small", trust_remote_code=True)
+model = AutoModelForMaskedLM.from_pretrained(
+    "Synthyra/ESM2-150M",
+    trust_remote_code=True,
+    attn_implementation="sdpa",
+)
 ```
 
-### Key Details
+Each manifest entry declares its valid AutoClasses. Unsupported class or
+attention combinations fail explicitly. The default attention implementation
+is left unspecified so Transformers can select its standard SDPA path.
 
-- Uses the ESM tokenizer (same as ESM2)
-- **Requires `sequence_id`** parameter for batched inference: `sequence_id = attention_mask.to(dtype=torch.bool)`
-- Uses `einops` for tensor reshaping operations
-- Rotary embeddings support `interleaved` mode and `scale_base`/`scaling_factor` for dynamic scaling
-- Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load.
-- Experimental TTT is opt-in via `model.ttt(seq=...)`; it adapts the PLM backbone only.
+## Sequence model families
 
-### Batched Forward Pass
+### ESM2
+
+FastPLMs preserves ESM2 tokenization, encoder outputs, masked-language-model
+head, contact head, tied weights, and checkpoint keys. Eager, SDPA, Flex
+Attention, and both revision-pinned Hugging Face FlashAttention kernels are
+tested against the pinned checkpoint and Transformers references.
+Plain `AutoModel` omits the optional ESM pooler because the published
+masked-language-model checkpoints contain no trained pooler weights. Pass
+`add_pooling_layer=True` only when intentionally initializing and training
+that head.
+
+### ESM++ and ESMC
+
+The ESM++ family provides the ESMC sequence encoders with Hugging Face auto
+loading, shared embeddings, and residue-aware pooling. It is also the language
+model used by ESMFold2. The model records the resolved attention implementation
+and rejects an unavailable requested kernel.
+
+ESMC follows the pinned Biohub mask precedence. When `sequence_id` is supplied,
+it is authoritative: non-negative values identify chains and `-1` identifies
+padding, while `attention_mask` is ignored. Without `sequence_id`,
+`attention_mask` is the ordinary padding mask and defaults from the tokenizer
+padding ID. Callers that need both chain isolation and padding must encode both
+in `sequence_id`; the two public masks are not intersected.
+
+Exact semantic configuration, tokenizer, state, alias, and SDPA contracts are
+validated against the pinned Biohub implementation. SDPA is the recommended
+highest-fidelity path. Flex Attention and FlashAttention 3 are supported,
+non-experimental backends with diagnostic numerical-deviation warnings rather
+than strict parity gates. Every checkpoint card exposes the required relative
+L2, Q99.9, residue-cosine, pooled-cosine, top-1, and Jensen-Shannon table. Cells
+remain explicitly pending until a frozen-head report from the exact
+GH200/aarch64 validation target for the backend, dtype, software stack, and
+sequence panel is attached. H100 and H200 remain supported Hopper-class
+devices, but measurements from them are not interchangeable with or accepted
+as the current GH200 release evidence.
+
+### ESM3
+
+ESM3 retains sequence, structure, and function tracks and generation helpers
+without importing the official checkout at runtime. Feature tests cover encoding,
+multimodal inputs, forward outputs, and seeded generation. Dataset embedding
+uses the sequence representation and excludes non-protein track tokens.
+With `return_dict=False`, the standard base-model prefix is
+`(last_hidden_state, hidden_states, attentions)` with disabled optional fields
+omitted; multimodal logits and extensions follow. Named output fields are the
+recommended interface for individual tracks.
+
+### DPLM
+
+DPLM generation starts from a tokenized sequence whose biological positions
+define the requested length. The sampler replaces those positions with the mask
+token, predicts all positions, retains the most confident predictions, and
+repeats until no masks remain. The optional `partial_masks` argument is a
+boolean tensor with the same shape and device as `input_tokens`; `True` marks
+positions that must remain fixed.
 
 ```python
-tokenizer = model.tokenizer
-tokenized = tokenizer(sequences, return_tensors="pt", padding=True)
-tokenized = {k: v.to(device) for k, v in tokenized.items()}
-tokenized["sequence_id"] = tokenized["attention_mask"].to(dtype=torch.bool)
+import torch
+from transformers import AutoModelForMaskedLM, AutoTokenizer
+
+checkpoint = "Synthyra/DPLM-150M"
+tokenizer = AutoTokenizer.from_pretrained(checkpoint)
+model = AutoModelForMaskedLM.from_pretrained(
+    checkpoint,
+    trust_remote_code=True,
+).cuda().eval()
+
+X = tokenizer("A" * 64, return_tensors="pt")["input_ids"].cuda()
+with torch.inference_mode():
+    generated_tokens = model.generate(X, max_iter=100)
+sequence = tokenizer.decode(generated_tokens[0], skip_special_tokens=True).replace(" ", "")
+```
+
+`sampling_strategy` accepts `gumbel_argmax`, `argmax`, or `vanilla`. The
+official 500-step schedule is used when `max_iter` is omitted. A shorter
+schedule reduces latency but changes the sampling process.
+
+DPLM advertises eager, SDPA, Flex Attention, and the precompiled Hugging Face
+kernels implementation of FlashAttention 3. The official BF16 inference path
+loads FP32-resident parameters and enters an explicit CUDA BF16 autocast
+context:
+
+```python
+model = AutoModelForMaskedLM.from_pretrained(
+    checkpoint,
+    trust_remote_code=True,
+    attn_implementation="sdpa",
+    dtype=torch.float32,
+).cuda().eval()
+
+with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
+    output = model(X)
+```
+
+Static BF16 parameter storage is not an advertised DPLM precision path. The
+official autocast contract is exact at every hidden state with SDPA and meets
+the fixed engineering target with eager, Flex Attention, and FlashAttention 3.
+Released DPLM checkpoints configure attention-probability dropout as zero.
+For custom fine-tuning configurations with a nonzero value, FastPLMs applies
+that dropout in eager and SDPA training calls. Flex Attention and
+FlashAttention 3 fail closed for nonzero training dropout because those paths
+do not implement the declared stochastic contract. Evaluation always uses
+zero attention dropout. Decoder cross-attention supports eager and SDPA and
+fails closed when another backend is requested.
+Plain DPLM and DPLM2 `AutoModel` loads likewise omit the optional untrained ESM
+pooler by default; it remains available through explicit
+`add_pooling_layer=True`.
+
+DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The pinned ByteDance
+[LICENSE](https://github.com/bytedance/dplm/blob/main/LICENSE)
+and [README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
+provide the immutable license basis; the latter explicitly scopes the official
+repository release to the pretrained weights for both model families.
+
+### DPLM2
+
+DPLM2 applies the same confidence-based unmasking separately to amino-acid and
+structure tokens. Co-generation input X contains two equal-length tracks,
+including their boundary tokens, in the official order: structure first and
+amino acids second. The output mapping contains `output_tokens` with the same
+shape as X.
+
+```python
+import torch
+from transformers import AutoModelForMaskedLM, AutoTokenizer
+
+checkpoint = "Synthyra/DPLM2-150M"
+tokenizer = AutoTokenizer.from_pretrained(checkpoint, trust_remote_code=True)
+model = AutoModelForMaskedLM.from_pretrained(
+    checkpoint,
+    trust_remote_code=True,
+).cuda().eval()
+vocab = tokenizer.get_vocab()
+l = 64
+structure = [
+    vocab["<cls_struct>"],
+    *([vocab["<mask_struct>"]] * l),
+    vocab["<eos_struct>"],
+]
+amino_acids = [
+    vocab["<cls_aa>"],
+    *([vocab["<mask_aa>"]] * l),
+    vocab["<eos_aa>"],
+]
+X = torch.tensor([structure + amino_acids], device="cuda")
 
 with torch.inference_mode():
-    output = model(**tokenized)
+    generated_tokens = model.generate(X, max_iter=100)["output_tokens"]
 ```
 
-### Available Checkpoints
+The DPLM2 tokenizer preserves separate amino-acid and structure boundary,
+unknown, and mask tokens. Generic `cls_token`, `eos_token`, `mask_token`, and
+`unk_token` aliases are intentionally unset, so multimodal tracks must add the
+corresponding `<cls_aa>`/`<eos_aa>` or `<cls_struct>`/`<eos_struct>` tokens
+explicitly and tokenize them with `add_special_tokens=False`.
+`model.embed_dataset(...)` and amino-acid TTT still accept raw sequences: the
+model adapter adds `<cls_aa>` and `<eos_aa>`, invokes this exact tokenizer with
+`add_special_tokens=False`, and excludes those boundaries from residue outputs.
 
-| Checkpoint | HuggingFace ID | Official Reference |
-|------------|----------------|-------------------|
-| ESM++ Small (300M) | `Synthyra/ESMplusplus_small` | `biohub/ESMC-300M` |
-| ESM++ Large (600M) | `Synthyra/ESMplusplus_large` | `biohub/ESMC-600M` |
-| ESM++ 6B | `Synthyra/ESMplusplus_6B` | `biohub/ESMC-6B` |
+The default sampler uses `annealing@2.0:0.1` token sampling and
+`stochastic1.0` confidence selection. `argmax` with `deterministic` unmasking
+provides a deterministic compliance path. The checkpoint sets
+`tie_word_embeddings=False`, so input and output embeddings are intentionally
+distinct. The trained contact head remains under `esm.contact_head`.
 
-### Binder Design Role
+DPLM2 advertises SDPA only. Its BF16 inference contract keeps checkpoint
+parameters in FP32 and evaluates the forward pass under CUDA BF16 autocast.
+Loading static BF16 parameters for evaluation raises before inference. Eager,
+Flex Attention, FlashAttention 2, and FlashAttention 3 requests fail explicitly
+because their representative deep hidden-state comparisons miss the release
+engineering target.
 
-The FastPLMs binder design tutorial uses ESM++ as the masked-LM
-pseudoperplexity regularizer on mutable binder residues. The verified EGFR run
-uses `Synthyra/ESMplusplus_6B` by default, paired with FastPLMs ESMFold2
-experimental checkpoints for differentiable folding and final criticism.
+### E1
 
-See [Binder Design Example](binder_design.md) for the full local and Modal
-workflow, official selection metrics, and the verified EGFR 128 amino acid
-minibinder result.
+E1 has no tokenizer dependency. Its dedicated adapter accepts raw protein
+sequences and preserves official boundary-token, context, and retrieval-augmented
+generation preparation. Launches display `Profluent-E1` as required by the
+upstream agreement. E1 legal files and modified-file notices are distributed
+with relevant artifacts and containers. E1 advertises SDPA and Flex Attention;
+its eager path is not advertised because it misses the pinned output contract.
 
----
+MSA-aware embedding returns the same ordered, duplicate-preserving
+`EmbeddingResult` and uses the same safetensors or SQLite persistence as
+ordinary dataset embedding. Record IDs are zero-based input positions, and
+`max_len` is measured in biological residues. `matrix_embed=True` selects full
+residue output. Local A3M input is deterministic and offline. Homology search
+and Hub MSA download are separate, networked acquisition steps and are never
+triggered by an offline embedding call.
 
-## ESM3
-
-**Organization:** Biohub
-**Architecture:** Multimodal protein model over sequence, structure, and function tracks
-**Checkpoints:** Open Small
-
-### Loading
+Local MMseqs2 search defaults to the official multi-architecture CPU image
+`ghcr.io/soedinglab/mmseqs2:18-8cc5c` pinned to manifest digest
+`sha256:41b12b0d5f41432fa1b9976123da6e2e06e7fab49a34964f3b54ec038e5845d9`.
+It never pulls implicitly. The container runs with `--network none`, each phase
+has a bounded timeout, and every local image inspection must match the requested
+repository digest, Linux platform, host architecture, and a valid image ID.
 
 ```python
-import torch
-from transformers import AutoModel
+from fastplms.models.e1.retrieval import HomologueSearcher
 
-model = AutoModel.from_pretrained(
-    "Synthyra/ESM3_small",
-    trust_remote_code=True,
-    dtype=torch.bfloat16,
-    device_map="cuda",
+searcher = HomologueSearcher(
+    target_db="databases/uniref30",
+    use_gpu=False,
+    allow_pull=False,
+    allow_network=False,
+    phase_timeout=1800,
+    target_db_identity="uniref30-release-2025-02",
 )
+a3m_path = searcher.search("MSTNPKPQRKTKRNT", "msa-results", seq_id="query-1")
 ```
 
-`AutoModelForMaskedLM` also resolves to the same ESM3 wrapper class, which returns sequence logits plus ESM3 track logits.
-
-### Key Details
-
-- Supports sequence-only inference by default via `input_ids` and `attention_mask`.
-- Additional ESM3 tracks can be passed as tensors: `structure_tokens`, `ss8_tokens`, `sasa_tokens`, `function_tokens`, `residue_annotation_tokens`, `average_plddt`, `per_res_plddt`, `structure_coords`, `chain_id`, and `sequence_id`.
-- Exposes `forward_sequence()` and `tokenize_sequences()` helpers for ergonomic sequence inference.
-- Supports `embed_dataset()` with pooled `mean`, `cls`, and `max` embeddings, plus residue-wise embeddings through `full_embeddings=True`.
-- Supports `sdpa` and `flex` attention backends.
-- Includes the Biohub ESM MIT license in the Hub `LICENSE` file and model card metadata.
-- Experimental TTT is opt-in via `model.ttt(seq=...)` and uses `sequence_logits` only.
-
-### Available Checkpoints
-
-| Checkpoint | HuggingFace ID | Official Reference |
-|------------|----------------|-------------------|
-| ESM3 Small | `Synthyra/ESM3_small` | `biohub/esm3-sm-open-v1` |
-
----
-
-## E1
-
-**Organization:** Profluent Bio
-**Architecture:** Transformer with within-sequence and global (block-causal) attention layers
-**Checkpoints:** 150M, 300M, 600M
-
-### Loading
-
-```python
-from transformers import AutoModelForMaskedLM
-
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/Profluent-E1-150M", trust_remote_code=True)
-```
-
-### Key Details
-
-- **Sequence mode**: E1 does not use a standard HuggingFace tokenizer. Tokenization is built into the model via `E1BatchPreparer`
-- Uses RMSNorm (not LayerNorm)
-- Grouped-query attention (num_key_value_heads < num_heads)
-- Two attention layer types that alternate:
-  - `WITHIN_SEQ`: Attention within individual sequences only
-  - `GLOBAL`: Cross-sequence block-causal attention
-- Separate RoPE configurations for within-sequence and global attention (different `rope_theta`)
-- KV caching via `DynamicCache` for efficient generation
-- Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load.
-- Experimental TTT is opt-in via `model.ttt(seq=...)`; the E1 path carries `input_ids`, `within_seq_position_ids`, `global_position_ids`, and `sequence_ids`.
-
-### Tokenization (Sequence Mode)
-
-E1's tokenization happens via `model.model.prep_tokens`:
-
-```python
-batch_kwargs = model.model.prep_tokens.get_batch_kwargs(sequences, device=device)
-# Returns dict with:
-#   input_ids, within_seq_position_ids, global_position_ids,
-#   sequence_ids, labels, context, context_len
-```
-
-For the `embed_dataset()` pipeline, pass `tokenizer=None` and the mixin handles E1's sequence mode automatically.
-
-### Embedding Extraction
-
-```python
-embeddings = model.embed_dataset(
-    sequences=["MKTLLILAVVAAALA", "MALWMRLLPLLALL"],
-    batch_size=2,
-    tokenizer=None,  # E1 uses sequence mode
-    pooling_types=["mean"],
-    save=False,
-)
-```
-
-### MSA Context And PPLL
-
-FastPLMs exposes E1 MSA context utilities directly on the model object:
-
-```python
-a3m_path = model.search_homologues(
-    sequence="MALWMRLLPLLALLALWGPDPAAA",
-    output_dir="msas",
-    provider="colabfold",
-)
-
-scores = model.score_ppll(
-    sequences=["MALWMRLLPLLALLALWGPDPAAA"],
-    a3m_path=a3m_path,
-    ensemble=True,
-)
-
-embeddings = model.embed_with_msa(
-    sequences=["MALWMRLLPLLALLALWGPDPAAA"],
-    a3m_path=a3m_path,
-    pooling_types=["mean"],
-)
-```
-
-MSA parsing and context sampling match Profluent's official E1 `msa_sampling` behavior. `score_ppll()` intentionally differs from the official `E1Scorer`: FastPLMs reports mean correct-token probability for each scored sequence and optionally averages across sampled contexts, rather than computing mutant deltas against a parent sequence. This is much cheaper and is the preferred scoring path here.
-
-### Available Checkpoints
-
-| Checkpoint | HuggingFace ID | Official Reference |
-|------------|----------------|-------------------|
-| E1-150M | `Synthyra/Profluent-E1-150M` | `Profluent-Bio/E1-150m` |
-| E1-300M | `Synthyra/Profluent-E1-300M` | `Profluent-Bio/E1-300m` |
-| E1-600M | `Synthyra/Profluent-E1-600M` | `Profluent-Bio/E1-600m` |
-
-### Compliance Dependencies
-
-E1 compliance tests require the official E1 package:
-
-```bash
-pip install E1 @ git+https://github.com/Profluent-AI/E1.git
-```
-
-This is pre-installed in the Docker image.
-
----
-
-## DPLM
-
-**Organization:** ByteDance
-**Architecture:** Diffusion-optimized transformer based on ESM2 architecture
-**Checkpoints:** 150M, 650M, 3B
-
-### Loading
-
-```python
-from transformers import AutoModelForMaskedLM
-
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM-150M", trust_remote_code=True)
-```
-
-### Key Details
-
-- Uses the ESM tokenizer (same as ESM2)
-- Backend can be set on the config before `from_pretrained` or via the mutable `model.attn_backend` property after load.
-- Architecture extends `EsmConfig` and `EsmPreTrainedModel` from HuggingFace
-- Supports cross-attention and KV caching for generation
-- `ModifiedEsmSelfAttention` extends the official `EsmSelfAttention` with multi-backend support
-- Experimental TTT is opt-in via `model.ttt(seq=...)`; normal DPLM inference and diffusion APIs are unchanged.
-
-### Post-Load Backend Switching
-
-```python
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM-150M", trust_remote_code=True)
-model.attn_backend = "flex"  # Updates every attention layer in-place
-```
-
-### Available Checkpoints
-
-| Checkpoint | HuggingFace ID | Official Reference |
-|------------|----------------|-------------------|
-| DPLM-150M | `Synthyra/DPLM-150M` | `airkingbd/dplm_150m` |
-| DPLM-650M | `Synthyra/DPLM-650M` | `airkingbd/dplm_650m` |
-| DPLM-3B | `Synthyra/DPLM-3B` | `airkingbd/dplm_3b` |
-
----
-
-## DPLM2
-
-**Organization:** ByteDance
-**Architecture:** Multimodal diffusion transformer handling both sequence and structure tokens
-**Checkpoints:** 150M, 650M, 3B
-
-### Loading
-
-```python
-from transformers import AutoModelForMaskedLM
-
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/DPLM2-150M", trust_remote_code=True)
-```
-
-### Key Details
-
-- Uses the ESM tokenizer
-- **Multimodal input**: Handles both amino acid tokens and structure tokens in packed sequences
-- Mutable `model.attn_backend` property (same as DPLM)
-- Special token normalization: `_normalize_dplm2_input_ids()` maps tokens above vocab_size back into range
-- Packed multimodal layout detection: `_has_packed_multimodal_layout()` checks if input_ids contain interleaved AA and structure tokens
-- The official DPLM2 has an extra `contact_head` not present in the FastPLM version, so weight compliance testing is skipped for this family
-- Experimental TTT is opt-in via `model.ttt(seq=...)`; it adapts only LoRA weights on the PLM backbone.
-
-### Available Checkpoints
-
-| Checkpoint | HuggingFace ID | Official Reference |
-|------------|----------------|-------------------|
-| DPLM2-150M | `Synthyra/DPLM2-150M` | `airkingbd/dplm2_150m` |
-| DPLM2-650M | `Synthyra/DPLM2-650M` | `airkingbd/dplm2_650m` |
-| DPLM2-3B | `Synthyra/DPLM2-3B` | `airkingbd/dplm2_3b` |
-
----
-
-## ANKH
-
-**Organization:** Elnaggar Lab
-**Architecture:** T5-style encoder with bidirectional gated GELU FFN and learned relative position bias (bucketed)
-**Checkpoints:** Base, Large, ANKH2-Large, ANKH3-Large, ANKH3-XL
-
-### Loading
-
-```python
-from transformers import AutoModelForMaskedLM, AutoConfig
-
-# Default (SDPA)
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/ANKH_base", trust_remote_code=True)
-
-# Flex backend (block-mask aware)
-config = AutoConfig.from_pretrained("Synthyra/ANKH_base", trust_remote_code=True)
-config.attn_backend = "flex"
-model = AutoModelForMaskedLM.from_pretrained("Synthyra/ANKH_base", config=config, trust_remote_code=True)
-```
-
-### Key Details
-
-- Uses the checkpoint-matched ANKH T5 tokenizer exposed through each Synthyra checkpoint
-- Tokenizer accessible via `model.tokenizer`
-- Backend can be set on the config before `from_pretrained` OR via the mutable `model.attn_backend` property after load (same mechanism as every other family).
-- **Attention is unscaled** (no `1/sqrt(d_kv)` factor). T5 trains without scaling; the learned relative position bias absorbs the temperature.
-- Only `sdpa` and `flex` are supported. Requesting `kernels_flash` silently falls back to `flex` (or `sdpa` if flex is unavailable) because flash kernels can't accept additive position bias.
-- Layer 0 owns the relative-position-bias `nn.Embedding`; subsequent layers receive the precomputed bias through the forward call.
-- The native ANKH checkpoint is a T5 encoder-decoder; FastPLMs uses the encoder only and bolts on a separate `lm_head` for the `ForMaskedLM` variant. For weight-parity comparisons against `transformers.T5EncoderModel`, the FastPLMs `lm_head.weight` is allowlisted as an expected extra parameter.
-- ANKH3 checkpoints use 256-token tokenizers, while ANKH v1/v2 checkpoints use 144-token tokenizers. Use the checkpoint tokenizer through `model.tokenizer` or `AutoTokenizer.from_pretrained(<checkpoint>)`.
-- Experimental TTT is opt-in via `model.ttt(seq=...)`; the ANKH MaskedLM head is not pretrained for standard MLM, so results should be treated especially cautiously.
-
-### Available Checkpoints
-
-| Checkpoint | HuggingFace ID | Official Reference |
-|------------|----------------|-------------------|
-| ANKH-base | `Synthyra/ANKH_base` | `ElnaggarLab/ankh-base` |
-| ANKH-large | `Synthyra/ANKH_large` | `ElnaggarLab/ankh-large` |
-| ANKH2-large | `Synthyra/ANKH2_large` | `ElnaggarLab/ankh2-ext2` |
-| ANKH3-large | `Synthyra/ANKH3_large` | `ElnaggarLab/ankh3-large` |
-| ANKH3-XL | `Synthyra/ANKH3_xl` | `ElnaggarLab/ankh3-xl` |
-
----
-
-## Boltz2
-
-**Organization:** MIT / Various
-**Architecture:** Diffusion-based structure prediction model
-**Checkpoints:** Standard
-
-### Loading
-
-```python
-from transformers import AutoModel
-
-model = AutoModel.from_pretrained("Synthyra/Boltz2", trust_remote_code=True, dtype=torch.float32)
-```
-
-### Key Details
-
-- **Structure prediction model**, not a sequence encoder. Does not inherit from `EmbeddingMixin`
-- Uses `AutoModel` (not `AutoModelForMaskedLM`)
-- Custom featurization pipeline via `minimal_featurizer.build_boltz2_features()`
-- Outputs atomic coordinates, pLDDT, pTM, ipTM confidence scores
-- Can export predictions as CIF files via `model.save_as_cif(output, "pred.cif")`
-- TTT is not supported for Boltz2 in FastPLMs.
-
-### Predict Structure
-
-```python
-output = model.predict_structure(
-    amino_acid_sequence="MSTNPKPQRKTKRNTNRRPQDVKFPGG",
-    recycling_steps=3,
-    num_sampling_steps=200,
-    diffusion_samples=1,
-)
-print(output.sample_atom_coords.shape)  # (N_atoms, 3)
-print(output.plddt.shape)               # (N_residues,)
-```
-
-### Compliance Testing
-
-Boltz2 compliance is tested via a standalone script (`testing/run_boltz2_compliance.py`) that compares coordinates, pairwise distances, and TM-scores against the official implementation.
-
----
-
-## ESMFold2
-
-**Organization:** Biohub
-**Architecture:** ESMC-backed diffusion structure predictor
-**Checkpoints:** Full, Fast, Experimental, Experimental-Fast, Cutoff2025 variants
-
-### Loading
-
-```python
-import torch
-from transformers import AutoModel
-
-model = AutoModel.from_pretrained(
-    "Synthyra/ESMFold2-Fast",
-    trust_remote_code=True,
-    dtype=torch.float32,
-).eval().cuda()
-```
-
-### Key Details
-
-- Uses `AutoModel`, not `AutoModelForMaskedLM`.
-- Can fold single chains and multi-chain complexes.
-- Loads the embedded PLM through `Synthyra/ESMplusplus_6B` by default, using
-  FastPLMs ESM++ with `config.esmc_attn_backend = "flex"`.
-- Exposes `fold_protein()`, `fold()`, `prepare_structure_input()`,
-  `result_to_cif()`, and `result_to_pdb()`.
-- Experimental checkpoints support `res_type_soft` for differentiable binder
-  sequence optimization.
-- Final scoring can report pTM, iPTM, pLDDT, structures, and distogram logits.
-- `set_kernel_backend()`, `set_chunk_size()`, and `apply_torch_compile()` are
-  available on the ESMFold2 wrappers.
-- Experimental TTT is opt-in via `fold_protein(..., ttt=True)` or
-  `fold_protein_ttt(...)`; it trains LoRA adapters only on `_esmc`, not the
-  folding trunk, confidence head, or diffusion head.
-
-### Available Checkpoints
-
-| Checkpoint | HuggingFace ID | Use |
-|------------|----------------|-----|
-| ESMFold2 | `Synthyra/ESMFold2` | Full released structure predictor |
-| ESMFold2-Fast | `Synthyra/ESMFold2-Fast` | Faster released structure predictor |
-| ESMFold2-Experimental-Fast | `Synthyra/ESMFold2-Experimental-Fast` | Binder inversion and hero critic |
-| ESMFold2-Experimental-Fast-Cutoff2025 | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` | Binder inversion and hero critic |
-| ESMFold2-Experimental | `Synthyra/ESMFold2-Experimental` | Final hero critic |
-| ESMFold2-Experimental-Cutoff2025 | `Synthyra/ESMFold2-Experimental-Cutoff2025` | Final hero critic |
-
-### Binder Design Example
-
-The FastPLMs binder workflow lives at
-`cookbook/tutorials/binder_design_fastplms.py` and supports local CUDA or Modal
-execution. The optimizer follows the official ESM strategy: continuous amino acid
-logits, cysteine suppression, ESMFold2 distogram structure losses, ESM++
-pseudoperplexity, late-trajectory iPTM selection, and final critic ranking.
-
-```bash
-python cookbook/tutorials/binder_design_fastplms.py \
-  --backend local \
-  --target-name egfr \
-  --binder-sequence '################################################################################################################################' \
-  --not-antibody \
-  --steps 150 \
-  --batch-size 1 \
-  --seed 103 \
-  --output-dir binder_design_egfr_len128_seed103
-```
-
-The verified EGFR result had hero mean iPTM `0.913870`, hero min iPTM
-`0.904600`, and all four hero critics above `0.9`.
-
-Binder sequence:
-
-```text
-SAVKHLLEIVKYLEEAIEKALEVDPVFLVPPAAEELLIAAKVIKELAKENPELIEVYELLMKAVKGLKKLVRSNDKEILREVIRLLRKAAKVIREILKNNPDLDPELRKALEELAKVLEEIAEVLEQQ
-```
-
-See [Binder Design Example](binder_design.md) for output files, per-critic
-metrics, pI filtering, optional scaling critics, and caveats.
-
----
-
-## ESMFold
-
-**Organization:** Meta AI (wrapped by Synthyra)
-**Architecture:** ESM2 backbone + structure module with optional experimental Test-Time Training (TTT)
-**Checkpoints:** Standard
-
-### Loading
-
-```python
-from transformers import AutoModel
-
-model = AutoModel.from_pretrained("Synthyra/FastESMFold", trust_remote_code=True, dtype=torch.float32)
-```
-
-### Key Details
-
-- Inherits from `transformers.EsmForProteinFolding` with the ESM2 backbone replaced by `FastEsmBackbone`
-- Supports all attention backends via `config.attn_backend`
-- TTT is disabled by default and must be requested with `ttt=True` or `fold_protein_ttt(...)`
-- Optional experimental TTT adapts the ESM2 backbone via LoRA + masked LM before folding
-- TTT can improve low-confidence sequences, but it adds compute and may degrade already strong predictions
-
-### Structure Prediction
-
-```python
-# Without TTT
-with torch.no_grad():
-    output = model.infer("MKTLLILAVVAAALA")
-pdb_string = model.output_to_pdb(output)
-
-# With experimental TTT (default: 10 optimizer steps)
-result = model.fold_protein("MKTLLILAVVAAALA", ttt=True)
-# result = {"plddt": float, "ptm": float, "pdb_string": str, ...}
-```
-
-### TTT Defaults
-
-TTT is disabled by default. Standard `fold_protein(...)` is a baseline fold and
-returns `best_step=0`. You can also call `model.infer(...)` directly for raw
-ESMFold outputs. Use `model._ttt_cfg` to tune optimizer steps, LoRA rank, and
-masking parameters before calling `fold_protein(..., ttt=True)`.
-
-```python
-model._ttt_cfg.steps = 3
-result = model.fold_protein_ttt("MKTLLILAVVAAALA")
-```
+The database and output must resolve beneath the current working directory;
+symlink escapes are rejected before Docker runs. Successful searches write
+`search-provenance.json` beside the A3M with the image version, manifest digest,
+local image ID, platform, database identity, parameters, and sequence hash.
+The sidecar also records the A3M size and SHA-256; cached output is reused only
+when both source-record and result integrity checks match. `allow_pull=True` is an explicit
+network acquisition opt-in. `allow_network=True` separately permits network
+access inside the search container, which a local database search does not
+require.
+
+GPU MMseqs2 is not selected automatically. The stable official CUDA image is
+AMD64-only, so it is incompatible with GH200/ARM64. `use_gpu=True` requires a
+caller-supplied, digest-pinned image that is compatible with the current host;
+the CPU default fails closed instead of silently attempting GPU execution.
+
+### ANKH
+
+The ANKH 1.0 migration replaced every Synthyra ANKH repository with full
+official-compatible T5 state.
+`FastAnkhModel` and `AutoModel` load the encoder and shared embeddings cleanly
+without decoder allocation, while `FastAnkhForConditionalGeneration` and
+`AutoModelForSeq2SeqLM` load the encoder, decoder, cross-attention, and LM head
+from the same repository. The larger full checkpoint changes the
+default Hub contents while preserving encoder output parity.
+
+Encoder embeddings are the default and select the final state unless
+`hidden_state_index` or `store_all_hidden_states` requests another view.
+Decoder embeddings require exactly one explicit aligned `decoder_inputs` list
+or `decoder_input_ids` tensor. FastPLMs does not shift the source implicitly,
+because official ANKH tasks use prompts, sentinels, or generated tokens. The
+decoder biological mask excludes start, EOS, padding, sentinel, and other
+special tokens; persistence fingerprints stack, layer, decoder input, mask, and
+alignment.
+
+The encoder is the representative throughput architecture and supports the
+manifest-declared eager and SDPA attention implementations. Exact encoder and
+sequence-to-sequence weights, aliases, seeded inference, and save/reload must be
+validated from the same artifact and new Hub revision before that revision is
+advertised. Files-only publication is forbidden for the migration.
+The previous synthesized masked-language-model head remains available only as
+the separately named `FastAnkhForMaskedLMExtension`; it is a FastPLMs extension,
+not an official equivalent.
+
+ANKH code and mirrored weights retain CC BY-NC-SA 4.0 terms. FastPLMs displays
+those terms but does not enforce a runtime usage policy.
+
+## Structure model families
+
+### ESMFold
+
+ESMFold retains the official ESM2 language-model trunk, folding trunk, output
+heads, and structure export. Structure compliance hashes prepared features,
+uses seeded stochastic inputs, checks geometry and finite values, and compares
+coordinates and confidence outputs with the pinned reference.
+
+The structure-only ESM2 backbone omits the masked-LM and contact-regression
+heads because folding consumes hidden states only. Both independently
+implemented checkpoint transforms declare and test those omissions. Reported
+pLDDT remains on the conventional `(0, 100)` scale; compliance normalizes it to
+`(0, 1)` before computing mean absolute error.
+For multimer inputs, summary mean pLDDT excludes synthetic linker residues and
+includes only biological residues from the requested chains.
+
+The folding checkpoint remains in FP32 parameter storage. CUDA BF16 inference
+enters autocast around the folding operation; loading the checkpoint itself as
+static BF16 is not the declared compliance path.
+
+### ESMFold2
+
+Supported variants are restricted to:
+
+| Official checkpoint | Folding blocks | MSA conditioning | Intended path |
+| --- | ---: | --- | --- |
+| `biohub/ESMFold2` | 48 | Optional | Full sequence or complex inference, including MSA-conditioned requests |
+| `biohub/ESMFold2-Fast` | 24 | None; MSA-derived inputs are rejected | Inference-optimized single-sequence use |
+| `biohub/ESMFold2-Experimental-Cutoff2025` | 48 | Optional | Experimental-cutoff full inference, including MSA-conditioned requests |
+| `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; MSA-derived inputs are rejected | Experimental-cutoff, inference-optimized single-sequence use |
+
+The Fast distinction is architectural, not merely a speed label. Biohub's
+[Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf) describes Fast as a
+model with 24 folding blocks trained without MSA conditioning for
+single-sequence inference, compared with 48 folding blocks in the full model.
+The Fast variants are not necessarily single-chain-only: supported multichain
+and multimolecule requests remain available, but each protein chain uses
+single-sequence mode. Fast variants reject MSA-derived inputs. Use a full variant
+whenever optional MSA conditioning is part of the request.
+
+All four expose the learned ESMC projection and the `auto`, `bf16`, `fp32`, and
+`fp8` ESMC precision policy. The manifest marks `fp8` as experimental; it is an
+explicit inference-only opt-in rather than a release numerical-parity claim.
+See [ESMFold2](esmfold2.md) for the exact embedding, reload, and folding contracts.
+
+The ESMFold2 folding checkpoint remains FP32 and folding computation uses CUDA
+BF16 autocast. Its ESMC backbone is governed independently by the requested
+ESMC precision, so selecting BF16 or FP8 ESMC does not change folding-parameter
+storage.
+
+### Boltz2
+
+Boltz2 accepts a raw amino-acid sequence through its protein helper or prepared
+model features through its lower-level interface. It preserves trunk,
+diffusion, confidence, and export behavior. Its larger scientific dependency
+set is isolated in `requirements/features/structure.in` and the structure
+candidate image. Chemistry and plotting dependencies are not part of the core
+runtime requirements.
+
+Boltz2 retains FP32 parameters and runs supported CUDA BF16 structure inference
+inside autocast. Static BF16 parameter loading is not its declared compliance
+or artifact-validation path.
+
+`predict_structure(..., seed=...)` owns a scoped Python, NumPy, CPU Torch, and
+CUDA RNG context and restores caller state on return. Prepared features and
+parameters remain FP32; the supported CUDA compute path enters BF16 autocast
+inside that scope. `seed` accepts a Python `int` or `None`; booleans, floats,
+strings, NumPy integer scalars, and other coercible values are rejected before
+any RNG state is read or changed.
+
+Boltz2 is provisional in FastPLMs 1.0. Exact configuration, the declared
+inference-core state, feature preparation, and seeded execution remain covered,
+but native-environment BF16 end-to-end inference currently exceeds the fixed
+numerical-equivalence limits. FastPLMs does not yet claim official inference
+equivalence for Boltz2. Its ongoing structure tests remain available without
+blocking the ESM++ and ESMFold2 release gates.
+
+## Test-time training
+
+ProteinTTT-derived adaptation is opt-in and covered as a feature, not a default
+loading behavior. It never runs during model construction or ordinary inference.
+ESMFold2 reloads ESMC in BF16 before a gradient-enabled path. See
+[test-time training](ttt.md).
+
+## Adding a checkpoint
+
+Before code changes, capture the official configuration, tokenizer files and
+behavior, state-key and alias schema, outputs, source revision, environment, and
+licenses. Add the immutable checkpoint identities and conversion record to the
+manifest. Then add official-generated goldens, a live reference case, artifact
+loading, and all feature tests declared for the family. A selectable backend
+must have an explicit implementation, failure behavior, and documented
+numerical boundary. Only backends that meet the applicable release thresholds
+may be described as parity paths.

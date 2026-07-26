@@ -1,0 +1,10 @@
+accelerate>=1.10,<2
+biopython>=1.85,<2
+biotite>=1.4,<2
+brotli>=1.1,<2
+msgpack>=1.1,<2
+msgpack-numpy>=0.4.8,<1
+omegaconf>=2.3,<3
+rdkit>=2025.9,<2027
+scipy>=1.15,<2
+zstandard>=0.23,<1

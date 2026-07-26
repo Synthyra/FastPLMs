@@ -1,191 +1,143 @@
-# Architecture Overview
+# Architecture
 
-FastPLMs provides optimized, HuggingFace-compatible implementations of protein language models (PLMs) with pluggable attention backends.
+FastPLMs separates runtime code, release evidence, and official reference code.
+The separation is enforced by tests and container build contexts, not only by
+convention.
 
-## Repository Layout
+## Repository boundaries
 
-```
-FastPLMs/
-  fastplms/                  # Main package
-    ankh/                    # ANKH (Elnaggar Lab)
-    boltz/                   # Boltz2 (structure prediction)
-    dplm/                    # DPLM (ByteDance)
-    dplm2/                   # DPLM2 (ByteDance)
-    e1/                      # E1 (Profluent Bio)
-    esm2/                    # ESM2 (Meta AI)
-    esm3/                    # ESM3 (Biohub)
-    esm_plusplus/            # ESM++ / ESMC (Biohub)
-    esmfold/                 # ESMFold (structure prediction)
-    esmfold2/                # ESMFold2 / ESMFold2-Fast (structure prediction)
-    attention.py             # Shared attention backend code
-    embedding_mixin.py       # Shared pooling & embedding utilities
-    weight_parity_utils.py   # Weight comparison utilities
-    fine_tuning_example.py   # LoRA fine-tuning example
-  official/                  # Official reference repos (git submodules)
-    boltz/                   # Official Boltz
-    e1/                      # Official E1
-    dplm/                    # Official DPLM
-    esm/                     # Official Biohub ESM (sys.path-injected, not pip-installed)
-  entrypoint_setup.py        # PyTorch runtime config
-  cookbook/                  # FastPLMs examples and tutorials
-    tutorials/
-      binder_design_fastplms.py
-      binder_design_fastplms.ipynb
-  testing/                   # Test suite + benchmarks
-    official/                # Official model loaders for compliance / parity
-    test_parity.py           # Rigorous per-family parity suite
-  Dockerfile                 # Monolithic image (legacy)
-  Dockerfile.base            # Shared base image (per-family layout)
-  Dockerfile.<family>        # One per family: esm2, esm_plusplus, esm3, esmfold2, e1, dplm, dplm2, ankh
-  build_images.sh            # Builds base + selected family images
-  update_HF.py               # Pushes composite modeling files + weights to HF Hub
-  docs/                      # Documentation
+```text
+src/fastplms/       runtime source copied into Hugging Face artifacts
+tests/              unit, integration, parity, structure, and release tests
+benchmarks/         standalone, exact-device Hopper/SM90 performance harness
+docker/             candidate, runtime, and reference container definitions
+examples/           runnable training and protein-design workflows
+tools/              artifact, conversion, remote, and debugging commands
+vendor/upstream/    pinned official Git submodules
+LICENSES/           distributable third-party legal texts
+model_cards/        generated checkpoint cards
 ```
 
-Each model family lives in its own package directory containing:
+Production modules live only under `src/fastplms`. Their direct Python
+dependencies are declared under `requirements/`, but they may not import code
+from `vendor`, alter `sys.path` to reach an official checkout, or download code
+at import time. Importing runtime source must not create a tokenizer, initialize
+a model, compile a kernel, log, change global Torch settings, or access the
+network.
 
-| File | Purpose |
-|------|---------|
-| `modeling_*.py` | HuggingFace-compatible `PreTrainedModel` + `PretrainedConfig` subclasses |
-| `get_weights.py` | Script to convert official checkpoints to FastPLM format |
-| `README.md` | Per-model HuggingFace card README |
-| `LICENSE` | Per-model license file |
-| `__init__.py` | Package init (often minimal; models load via `trust_remote_code`) |
+Official repositories live under `vendor/upstream` as real Git submodules.
+Reference adapters call their public APIs and normalize outputs for comparison.
+An adapter may not import FastPLMs, patch an upstream class, use a FastPLMs
+loader, or reconstruct an official forward pass.
 
-## How Model Loading Works
+## Manifest-driven release data
 
-All FastPLMs models are distributed on the [HuggingFace Hub](https://huggingface.co/Synthyra) and loaded with `trust_remote_code=True`:
+`src/fastplms/models.toml` is the sole source of truth for supported models. Its
+typed loader in `fastplms.registry` validates:
 
-```python
-from transformers import AutoModelForMaskedLM
+- immutable checkpoint and upstream revisions;
+- file identities and explicitly unresolved release blockers;
+- AutoClass mappings and tokenizer modes;
+- state transformations and conversion records;
+- attention, dtype, precision, dependency, VRAM, and test contracts;
+- code and checkpoint licenses;
+- reference containers and documentation state.
 
-model = AutoModelForMaskedLM.from_pretrained(
-    "Synthyra/ESM2-150M",
-    trust_remote_code=True,
-)
-```
+Tests derive model cases from this registry. Container validation checks that
+every declared reference target exists. Documentation support tables and model
+cards are generated from it. The artifact builder selects the declared source,
+verifies every pinned input, applies the named transformation, and records the
+same source record in the output.
 
-When `trust_remote_code=True` is passed, HuggingFace downloads the `modeling_*.py` file from the Hub repo and executes it locally. The Hub copy is kept in sync with the canonical copy in this repository via `update_HF.py`.
+Adding a model only in Python code is therefore insufficient. A release-visible
+model must be represented completely in the manifest and pass all generated
+consistency checks.
 
-The model's `config.json` on the Hub contains an `auto_map` entry that tells `AutoModel` which class to instantiate:
+## Loading and artifact flow
 
-```json
-{
-  "auto_map": {
-    "AutoConfig": "modeling_fastesm.FastEsmConfig",
-    "AutoModelForMaskedLM": "modeling_fastesm.FastEsmForMaskedLM"
-  }
-}
-```
+The same model contract is used from source conversion through downstream
+inference:
 
-## EmbeddingMixin
+1. the manifest selects an immutable checkpoint and pinned official source;
+2. the artifact builder verifies checkpoint, tokenizer, source, and legal file
+   identities;
+3. the named state transformation produces canonical FastPLMs weights;
+4. the builder writes a self-contained runtime bundle and generated model card;
+5. Transformers loads the artifact through an advertised AutoClass with
+   `trust_remote_code=True`;
+6. model-specific preparation identifies biological residues or structure
+   entities before shared APIs transform the output;
+7. parity and artifact suites compare the same declared behavior against the
+   isolated official reference.
 
-Every sequence model (ESM2, ESM++, E1, DPLM, DPLM2) inherits from `EmbeddingMixin` (`fastplms/embedding_mixin.py`), which provides:
+This flow keeps user loading simple without making the official checkout a
+runtime dependency. A local artifact under `dist/hub/<model>` and a published
+copy use the same Transformers interface.
 
-- `embed_dataset()`: Batch embedding pipeline with pooling, SQLite/pth storage, FASTA parsing, and deduplication
-- `_embed()`: Abstract method implemented by each model to return last hidden states
-- `load_embeddings_from_pth()` / `load_embeddings_from_db()`: Load previously saved embeddings
+## Runtime source
 
-The mixin supports two modes:
+`fastplms.attention` owns backend names, mask construction, and explicit
+dispatch. Models use Transformers' `attn_implementation` and
+`set_attn_implementation()` contract. Mask builders produce the 4D masks used
+by eager and SDPA, the packed 2D token masks used by declared precompiled
+Hugging Face kernels, and Flex `BlockMask` objects. Flex functions and masks are
+cached only after explicit use, keyed by device, dtype, execution shape, and
+mask semantics rather than the exact row-length tuple. FastPLMs exposes bounded
+cache cleanup without clearing process-global Torch compiler state. Original
+padding masks must have exact `(batch, sequence)` shape before any backend
+branch.
 
-1. **Tokenizer mode** (ESM2, ESM++, DPLM, DPLM2): The caller provides a tokenizer; `_embed(input_ids, attention_mask)` is called
-2. **Sequence mode** (E1): The caller passes `tokenizer=None`; `_embed(sequences, return_attention_mask=True)` is called, which returns `(embeddings, mask)`
+`fastplms.embeddings` owns ordered records, biological-residue masks, pooling,
+persistence, and resume. Model-specific adapters only prepare the representation
+and residue mask. E1 keeps its tokenizer-free raw-sequence adapter. ESMFold2
+produces its learned width-256 representation through a dedicated mixin.
 
-See [Embedding & Pooling API](embedding_api.md) for full details.
+`fastplms.models` contains model-family implementations. Parameter names remain
+compatible with existing checkpoints where possible. If a schema must change,
+`models.toml` names a deterministic converter and the release suite compares the
+converted key set, shape, dtype, and values exactly.
 
-## Cross-Model Workflows
+`fastplms.runtime` reports source and runtime capabilities without mutating
+global state. Optional dependencies are imported only when their feature is
+requested.
 
-FastPLMs also includes cookbook workflows that combine multiple model families.
-The binder design tutorial is the main example:
+## Checkpoint and artifact boundary
 
-- ESMFold2 experimental models provide differentiable structure losses through
-  `res_type_soft`.
-- ESM++ provides the masked-LM pseudoperplexity regularizer.
-- ESMFold2 hero critics provide final pTM, iPTM, pLDDT, PDB/CIF structures, and
-  selection metrics.
+Hub checkpoint files remain external assets pinned by immutable revision and
+hash. `tools/artifacts/build.py` consumes an already downloaded snapshot and
+never logs in, downloads, creates a repository, or uploads. It writes a local
+artifact under `dist/hub/<model>/` with unchanged runtime source modules,
+AutoClass metadata, tokenizer assets, legal files, source records, and deterministic
+safetensors shards.
 
-The workflow supports local CUDA Docker runs and Modal execution through
-[`cookbook/tutorials/binder_design_fastplms.py`](../cookbook/tutorials/binder_design_fastplms.py).
-See [Binder Design Example](binder_design.md) for the EGFR 128 amino acid
-minibinder result, CLI, artifacts, and scoring details.
+An artifact is valid only if it loads in a fresh offline environment with
+FastPLMs absent from `sys.path`, `HF_HUB_OFFLINE=1`, `local_files_only=True`, and
+`trust_remote_code=True`. Every advertised AutoClass must load, run, save,
+reload, and match the repository-source implementation.
 
-## Attention Backend System
+Runtime bundling uses tracked, clean regular files selected by path,
+extension, and size allowlists. It rejects untracked inputs, symlinks,
+credentials, unknown binaries, and path escapes. Release records separate weight
+and runtime revisions, records source-tree and embedded-bundle digests plus
+generator/schema version, and provides distinct complete-artifact and
+runtime-only attestations. Publication rehashes validated bytes at preflight.
 
-Most models share a common attention backend abstraction controlled by `config.attn_backend`. Four backends are available:
+## Container boundary
 
-| Backend | Key | Numerics | Speed |
-|---------|-----|----------|-------|
-| PyTorch SDPA | `"sdpa"` | Exact | Fast |
-| Flash Attention | `"kernels_flash"` | Approximate | Fastest |
-| Flex Attention | `"flex"` | Near-exact | Very fast |
-| Auto | `"auto"` | Varies | Best available |
+`docker/Dockerfile` is a digest-pinned multi-stage build. Candidate stages use
+the release validation stack. Reference stages install each upstream's native
+environment and receive only the corresponding submodule and required legal
+files. Runtime stages receive neither submodules nor checkpoint weights.
 
-Each model's attention layer stores an `AttentionBackend` enum and dispatches accordingly. See [Attention Backends](attention_backends.md) for implementation details.
+`docker/docker-bake.hcl` names build targets. `docker/compose.yaml` centralizes
+GPU access, `ipc: host`, caches, source mounts, and output mounts.
+`tools/remote/run.py` creates an isolated source archive, sends it to a host
+specified at invocation time, runs Docker there, and returns JUnit, JSON, and
+benchmark outputs. Hostnames, identities, and secrets are never tracked.
 
-**Backend setting is uniform across families:**
+## Design rule
 
-- At load time, every family accepts `config.attn_backend = "..."` before `from_pretrained`.
-- At runtime, every family exposes a mutable `model.attn_backend` property whose setter propagates to every attention submodule. Use this to benchmark backends on the same weights without reloading.
-- Exception: ANKH silently resolves `kernels_flash` to `flex` (or `sdpa`), because T5 relative position bias is incompatible with the flash kernels.
-- Exception: ESM3 supports `sdpa` and `flex` in the FastPLMs wrapper.
-
-## Entrypoint Setup
-
-`entrypoint_setup.py` configures PyTorch runtime defaults for optimal GPU performance:
-
-- TensorFloat32 matmul precision (`torch.set_float32_matmul_precision('high')`)
-- TF32 enabled for matmul and cuDNN
-- cuDNN autotuner (`benchmark=True`)
-- Deterministic mode off for speed
-- Inductor max autotune GEMM backends (ATEN, CUTLASS, FBGEMM)
-- Dynamo scalar output capture and recompile limit
-
-This module is imported at the top of standalone scripts (`throughput.py`, `compliance.py`) but is not imported by the model files themselves.
-
-## Docker Layout
-
-There are two coexisting layouts.
-
-### Per-family layout (recommended)
-
-A shared base image plus one image per model family. This isolates conflicting native deps (notably Biohub `esm` vs `fair-esm`, and DPLM's torchtext pin) so each family can be tested against its own native reference without breaking the others.
-
-- `Dockerfile.base` produces `fastplms-base`: CUDA 12.8, Python 3.12, PyTorch 2.11.0, transformers, FastPLMs source at `/app`. No native reference packages.
-- `Dockerfile.<family>` (esm2, esm_plusplus, esm3, esmfold2, e1, dplm, dplm2, ankh) layers on top of `fastplms-base` and installs only that family's native reference deps.
-- `build_images.sh` is a convenience script that builds the base then any subset of family images.
-
-`testing/official/<family>.py` provides the `load_official_model(...)` wrapper that the parity tests call. For ESM++ and ESM3, the Biohub `esm` package itself is **not** pip-installed (it depends on a Biohub `transformers` fork); instead `testing/official/__init__.py` injects the in-tree `official/esm` submodule onto `sys.path` at import time.
-
-### Monolithic layout (legacy)
-
-The original top-level `Dockerfile` (image tag `fastplms`) bundles every dep that can coexist into a single image. Used by the broad test suites and throughput benchmarks where per-family isolation isn't needed.
-
-### Common environment
-
-Both layouts use:
-
-- **Base image**: `nvidia/cuda:12.8.0-cudnn-runtime-ubuntu24.04` with Python 3.12
-- **Source code**: Copied to `/app` (`PYTHONPATH=/app`)
-- **Runtime workdir**: `/workspace` for outputs, caches, and volume mounts
-- **Caches**: `HF_HOME=/workspace/.cache/huggingface`, `TORCH_HOME=/workspace/.cache/torch`
-
-## Weight Conversion
-
-Each model family has a `get_weights.py` script that:
-
-1. Loads the official checkpoint (from HuggingFace or a local file)
-2. Remaps parameter names and shapes to match the FastPLM architecture
-3. Exports `config.json`, `pytorch_model.bin`, and the modeling source files
-4. The exported directory can be pushed to HuggingFace via `update_HF.py`
-
-## Parity & Compliance Testing
-
-Each family has a corresponding module in `testing/official/` (e.g., `testing/official/esm2.py`) that wraps the original model in a standardized interface returning `(model, tokenizer)`. The parity / compliance suites load both implementations side-by-side and compare:
-
-- **Tokenizer parity** (`test_parity.py`): vocab, every token id, every special token id
-- **Weight parity**: bit-exact equality of every parameter, with family-specific allowlisted extras (e.g. ANKH's `lm_head.weight`, since native is a T5 encoder without a head)
-- **Forward parity (fp32 + bf16)**: per-layer relative-std AND relative-maxabs hidden-state diff (two complementary metrics so a localized regression can't hide inside a collapsed scalar), `last_hidden_state` absolute + relative maxabs, logits MSE, padding-isolation across SDPA and Flex, end-to-end `embed_dataset` pipeline for every family
-- **Backend consistency**: every family's supported backends (typically SDPA vs Flex vs `kernels_flash`) agree on the fast side to per-backend tolerance; ANKH compares SDPA vs Flex only because kernels_flash silently falls back
-- **Backend setter propagation**: `model.attn_backend = X` actually updates every attention submodule. If this regresses, every backend-parametrized test becomes a no-op.
-
-The parity suite runs per family in its own Docker image (per the per-family layout above). See [Testing & Benchmarking](testing.md) for full details.
+The preferred implementation is the shortest clear implementation that meets
+the exact behavioral contract. More complex code is retained only when a
+repeatable benchmark establishes a useful speed or memory benefit and the strict
+compliance suite still passes.

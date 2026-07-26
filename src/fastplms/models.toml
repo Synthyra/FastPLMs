@@ -1,0 +1,1238 @@
+schema_version = 1
+legal_files = [
+  "LICENSE=sha256:2d2b50c7b1414bff1189a1db1f0cfb92e3e064b50f4c2b1019827b683e1b629a",
+  "THIRD_PARTY_NOTICES.md=sha256:25704b3c76404696cae52e7fca13088d329f70f412687340351259e86cd62baa",
+]
+
+[[attention_kernels]]
+implementation = "flash_attention_2"
+repository = "kernels-community/flash-attn2"
+revision = "db6b51744f0cd7061386442c09df890fc6d9f47e"
+version = 2
+expected_variant = "flash_attn2"
+dtypes = ["bfloat16"]
+
+[[attention_kernels]]
+implementation = "flash_attention_3"
+repository = "kernels-community/flash-attn3"
+revision = "43f0bd269777115d94ff826e0d113ce9c1c9087b"
+version = 1
+expected_variant = "flash_attn3"
+dtypes = ["bfloat16"]
+
+[[runtime_assets]]
+id = "esmfold2_ccd"
+repository = "biohub/ESMFold2"
+revision = "1ebf0e3481a5184eb6171d40615c79e384b48796"
+path = "ccd.pkl"
+sha256 = "9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5"
+size = 417306584
+consumer_family = "esmfold2"
+trust_kind = "hash_pinned_pickle"
+license = "MIT"
+offline_behavior = "requires_cached_verified_file"
+
+[[upstreams]]
+id = "ankh"
+path = "vendor/upstream/ankh"
+url = "https://github.com/agemagician/Ankh.git"
+revision = "02b4e25ce5389b9e771c9df6e546c62af1216f8e"
+license = "CC-BY-NC-SA-4.0"
+license_files = ["LICENSE.md"]
+license_digests = ["LICENSE.md=sha256:cd041d7f9f52936e8824ac3f754e9c67410763205fc8a7020ba74fc8b6edc088"]
+distribution_files = ["LICENSE.md=sha256:cd041d7f9f52936e8824ac3f754e9c67410763205fc8a7020ba74fc8b6edc088"]
+
+[[upstreams]]
+id = "biohub-esm"
+path = "vendor/upstream/biohub-esm"
+url = "https://github.com/Biohub/esm.git"
+revision = "82ee35553d39169d678f784c8d3f8712ffd7d2c4"
+license = "MIT"
+license_files = ["LICENSE.md", "THIRD_PARTY_NOTICE.md"]
+license_digests = [
+  "LICENSE.md=sha256:b63df9ca1dd96b3b21eec226b51b236d0bd152ac20eafc43aad46bf832b48d8a",
+  "THIRD_PARTY_NOTICE.md=sha256:5bff8515ba4e0f53abdc43714c180b79c5b606160497d98de741a369cb9b6a23",
+]
+distribution_files = [
+  "LICENSE.md=sha256:b63df9ca1dd96b3b21eec226b51b236d0bd152ac20eafc43aad46bf832b48d8a",
+  "THIRD_PARTY_NOTICE.md=sha256:5bff8515ba4e0f53abdc43714c180b79c5b606160497d98de741a369cb9b6a23",
+]
+
+[[upstreams]]
+id = "biohub-transformers"
+path = "vendor/upstream/biohub-transformers"
+url = "https://github.com/Biohub/transformers.git"
+revision = "3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf"
+license = "Apache-2.0"
+license_files = ["LICENSE"]
+license_digests = ["LICENSE=sha256:77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049"]
+distribution_files = ["LICENSE=sha256:77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049"]
+
+[[upstreams]]
+id = "boltz"
+path = "vendor/upstream/boltz"
+url = "https://github.com/jwohlwend/boltz.git"
+revision = "b1ebfc46ecf57f5414e0d1a6f9027bbb122c53bc"
+license = "MIT"
+license_files = ["LICENSE"]
+license_digests = ["LICENSE=sha256:f0667fd5e66c51e1ba8ddaa0249c6d7225b30037e02c45782d8f2c2943ac2617"]
+distribution_files = ["LICENSE=sha256:f0667fd5e66c51e1ba8ddaa0249c6d7225b30037e02c45782d8f2c2943ac2617"]
+
+[[upstreams]]
+id = "dplm"
+path = "vendor/upstream/dplm"
+url = "https://github.com/bytedance/dplm.git"
+revision = "8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d"
+license = "Apache-2.0"
+license_files = ["LICENSE"]
+license_digests = ["LICENSE=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"]
+distribution_files = [
+  "LICENSE=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "PROVENANCE.md=sha256:a659f74be9073cf1ad2d2f7071531ca56959b421f111152cf4c41184ace5970e",
+]
+
+[[upstreams]]
+id = "e1"
+path = "vendor/upstream/e1"
+url = "https://github.com/Profluent-AI/E1.git"
+revision = "bfd2620a602248499f3d2583d85a7ecddf0b6e02"
+license = "Apache-2.0 AND Profluent-E1-Agreement"
+license_files = ["LICENSE", "ATTRIBUTION", "NOTICE"]
+license_digests = [
+  "LICENSE=sha256:8ef1dd556091544db3044164a8015424a3dcb3450fb3765a81b88463551bbe81",
+  "ATTRIBUTION=sha256:deb22b250f6491b649eda5c63e080dd56486b8d2736cea6a52ef875436214367",
+  "NOTICE=sha256:6de9db0320b4ee82f665c0951d8fd4cd53701a659c9dbce9bc3e3ea6afc4c6b3",
+]
+distribution_files = [
+  "LICENSE=sha256:8ef1dd556091544db3044164a8015424a3dcb3450fb3765a81b88463551bbe81",
+  "ATTRIBUTION=sha256:deb22b250f6491b649eda5c63e080dd56486b8d2736cea6a52ef875436214367",
+  "NOTICE=sha256:6de9db0320b4ee82f665c0951d8fd4cd53701a659c9dbce9bc3e3ea6afc4c6b3",
+  "Apache-2.0.txt=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "BSD-3-Clause.txt=sha256:36e1987f2f17db7f8ad36cd7a37dbb7aeaaf0ab68b97ab4b9d3556f3a7a76ae8",
+  "MODIFICATIONS.md=sha256:2506f47c0f5475af8e8ff2cff13eb8b79e8e25a08a054cdd617bf336536750ca",
+]
+
+[[upstreams]]
+id = "fair-esm"
+path = "vendor/upstream/fair-esm"
+url = "https://github.com/facebookresearch/esm.git"
+revision = "2b369911bb5b4b0dda914521b9475cad1656b2ac"
+license = "MIT"
+license_files = ["LICENSE"]
+license_digests = ["LICENSE=sha256:da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"]
+distribution_files = [
+  "LICENSE=sha256:da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
+  "PROVENANCE.md=sha256:950adb94daf15e646ddf226dacfe2a8e77801aa0793e439a9a3490a48eb666e7",
+]
+
+[[upstreams]]
+id = "openfold"
+path = "vendor/upstream/openfold"
+url = "https://github.com/aqlaboratory/openfold.git"
+revision = "4b41059694619831a7db195b7e0988fc4ff3a307"
+license = "Apache-2.0"
+license_files = ["LICENSE"]
+license_digests = ["LICENSE=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"]
+distribution_files = [
+  "LICENSE=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+  "MODIFICATIONS.md=sha256:fd6f0aa1086a0c996cf967b326d18e965660cda0ad5c7f36a3474a8490720da3",
+  "PROVENANCE.md=sha256:48c903db43a217a3126afaefbac60b7ddac7efda2dfcc0cbff0bffc7d6c30081",
+]
+
+[[upstreams]]
+id = "protein-ttt"
+path = "vendor/upstream/protein-ttt"
+url = "https://github.com/anton-bushuiev/ProteinTTT.git"
+revision = "fde2817cd84b936167cc76ccabf31e5c0fe49962"
+license = "MIT"
+license_files = ["LICENSE"]
+license_digests = ["LICENSE=sha256:bb01e7d5554f9e2e117172e56551452f68a7818df7bc8e71cd7a776a1d4ba3df"]
+distribution_files = [
+  "LICENSE=sha256:bb01e7d5554f9e2e117172e56551452f68a7818df7bc8e71cd7a776a1d4ba3df",
+  "PROVENANCE.md=sha256:dc641c37353c2efd50ccbdb316ca4aae495ec02c1563e0e15bac92f75fc482e5",
+]
+
+[families.esm2]
+architecture = "ESM2"
+upstreams = ["fair-esm"]
+tokenizer_mode = "tokenizer"
+public_input = "Amino-acid sequences tokenized to residue IDs"
+extra = "core"
+reference_container = "reference-esm2"
+reference_adapter = "tests.parity.support.reference_adapters.esm2"
+attention = ["eager", "sdpa", "flex_attention", "flash_attention_2", "flash_attention_3"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "fp32_parameters_autocast"
+precisions = ["default"]
+vram_tier = "sequence"
+checkpoint_license = "MIT"
+hub_license = "mit"
+weights_publication_allowed = true
+state_transform = "esm2_hf_to_fastplms_v1"
+conversion_provenance = "Input: the pinned official ESM2 state dictionary. Transformation: apply the deterministic esm2_hf_to_fastplms_v1 key map while preserving tensor values and materializing the tied input/output embedding values as independent tensors. Output: the pinned Synthyra FastPLMs checkpoint. Validation: release parity compares exact keys and values after the declared non-aliasing transform, tokenizer behavior, and inference. Limitation: any numerical rewrite requires a new transform identifier and exact conversion test."
+representative = "esm2_8m"
+documentation = "docs/models.md#esm2"
+test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_esm_rotary.py", "models/esm2", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.esm2.modeling_fastesm.FastEsmConfig", AutoModel = "fastplms.models.esm2.modeling_fastesm.FastEsmModel", AutoModelForMaskedLM = "fastplms.models.esm2.modeling_fastesm.FastEsmForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.esm2.modeling_fastesm.FastEsmForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esm2.modeling_fastesm.FastEsmForTokenClassification" }
+
+[families.esm_plusplus]
+architecture = "ESMC"
+upstreams = ["biohub-esm", "biohub-transformers"]
+tokenizer_mode = "tokenizer"
+public_input = "Amino-acid sequences tokenized to residue IDs"
+extra = "core"
+reference_container = "reference-biohub-esm"
+reference_adapter = "tests.parity.support.reference_adapters.esm_plusplus"
+attention = ["eager", "sdpa", "flex_attention", "flash_attention_2", "flash_attention_3"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "static_parameters"
+precisions = ["default"]
+vram_tier = "sequence"
+checkpoint_license = "MIT"
+hub_license = "mit"
+weights_publication_allowed = true
+state_transform = "esmc_to_fastplms_v1"
+conversion_provenance = "Input: the pinned Biohub ESMC checkpoint. Transformation: apply the deterministic esmc_to_fastplms_v1 parameter map into the FastPLMs ESMC modules. Output: the pinned Synthyra ESMplusplus checkpoint. Validation: release parity compares keys, shapes, dtypes, values, aliases, and live inference. Limitation: runtime attention and precision selection are not serialized weight transforms."
+representative = "esmc_small"
+documentation = "docs/models.md#esm-and-esmc"
+test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esm_plusplus", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusConfig", AutoModel = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusModel", AutoModelForMaskedLM = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForMaskedLM" }
+
+[families.esm3]
+architecture = "ESM3"
+upstreams = ["biohub-esm", "biohub-transformers"]
+tokenizer_mode = "tokenizer"
+public_input = "Sequence, structure, and function tracks prepared through the multimodal helpers"
+extra = "core"
+reference_container = "reference-biohub-esm"
+reference_adapter = "tests.parity.support.reference_adapters.esm3"
+attention = ["eager", "sdpa", "flex_attention"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "fp32_parameters_autocast"
+precisions = ["default"]
+vram_tier = "large-sequence"
+checkpoint_license = "MIT"
+hub_license = "mit"
+weights_publication_allowed = true
+state_transform = "esm3_to_fastplms_v1"
+conversion_provenance = "Input: the pinned Biohub ESM3 checkpoint. Transformation: apply the deterministic esm3_to_fastplms_v1 parameter map for the supported sequence and multimodal modules and expand BF16 checkpoint tensors to FP32 storage. Output: the pinned Synthyra ESM3 checkpoint. Validation: release parity compares exact state identity after the declared map and live feature behavior. Limitation: unsupported upstream modalities may not be inferred from this record."
+representative = "esm3_small"
+documentation = "docs/models.md#esm3"
+test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esm3", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.esm3.modeling_esm3.FastESM3Config", AutoModel = "fastplms.models.esm3.modeling_esm3.FastESM3Model" }
+
+[families.e1]
+architecture = "E1"
+upstreams = ["e1"]
+tokenizer_mode = "sequence"
+public_input = "Raw amino-acid sequences prepared by the native E1 adapter"
+extra = "core"
+reference_container = "reference-e1"
+reference_adapter = "tests.parity.support.reference_adapters.e1"
+attention = ["sdpa", "flex_attention"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "static_parameters"
+precisions = ["default"]
+vram_tier = "sequence"
+checkpoint_license = "Profluent-E1-Agreement"
+hub_license = "other"
+hub_license_name = "Profluent-E1 Clickthrough License Agreement"
+hub_license_link = "https://github.com/Profluent-AI/E1/blob/main/LICENSE"
+weights_publication_allowed = true
+state_transform = "e1_to_fastplms_v1"
+conversion_provenance = "Input: the pinned Profluent-E1 checkpoint and tokenizer-free sequence contract. Transformation: apply e1_to_fastplms_v1 to the FastPLMs encoder and official task heads, storing floating tensors in BF16. Output: the pinned Synthyra Profluent-E1 checkpoint. Validation: release parity covers state identity after the declared cast, sequence and RAG preparation, aliases, and inference. Limitation: the FastPLMs scoring extension is not represented as an official E1 head."
+representative = "e1_150m"
+documentation = "docs/models.md#e1"
+test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/e1", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.e1.modeling_e1.E1Config", AutoModel = "fastplms.models.e1.modeling_e1.E1Model", AutoModelForMaskedLM = "fastplms.models.e1.modeling_e1.E1ForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.e1.modeling_e1.E1ForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.e1.modeling_e1.E1ForTokenClassification" }
+
+[families.dplm]
+architecture = "DPLM"
+upstreams = ["dplm"]
+tokenizer_mode = "tokenizer"
+public_input = "Amino-acid sequences tokenized to masked or partially masked residue IDs"
+extra = "core"
+reference_container = "reference-dplm"
+reference_adapter = "tests.parity.support.reference_adapters.dplm"
+attention = ["eager", "sdpa", "flex_attention", "flash_attention_3"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "fp32_parameters_autocast"
+precisions = ["default"]
+vram_tier = "sequence"
+checkpoint_license = "Apache-2.0"
+hub_license = "apache-2.0"
+weights_publication_allowed = true
+state_transform = "dplm_to_fastplms_v1"
+conversion_provenance = "Input: the pinned official DPLM1 checkpoint. Transformation: apply dplm_to_fastplms_v1, omitting the unused absolute-position table for rotary checkpoints and materializing the tied input/output embedding values as independent tensors. Output: the pinned Synthyra DPLM checkpoint. Validation: release parity compares exact state identity after the declared transform, tokenizer behavior, generation, and inference. License basis: the pinned ByteDance DPLM Apache-2.0 LICENSE and README explicitly scope the repository release to the pretrained DPLM1 and DPLM2 weights; immutable evidence is recorded in LICENSES/dplm/PROVENANCE.md. Limitation: redistribution remains subject to Apache-2.0 and the pinned source record; no broader rights are inferred."
+representative = "dplm_150m"
+documentation = "docs/models.md#dplm"
+test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_diffusion_generation.py", "models/_esm_rotary.py", "models/dplm", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.dplm.modeling_dplm.DPLMConfig", AutoModel = "fastplms.models.dplm.modeling_dplm.DPLMModel", AutoModelForMaskedLM = "fastplms.models.dplm.modeling_dplm.DPLMForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.dplm.modeling_dplm.DPLMForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.dplm.modeling_dplm.DPLMForTokenClassification" }
+
+[families.dplm2]
+architecture = "DPLM2"
+upstreams = ["dplm"]
+tokenizer_mode = "tokenizer"
+public_input = "Tokenized amino-acid and structure tracks with explicit modality boundaries"
+extra = "core"
+reference_container = "reference-dplm"
+reference_adapter = "tests.parity.support.reference_adapters.dplm2"
+attention = ["sdpa"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "fp32_parameters_autocast"
+precisions = ["default"]
+vram_tier = "sequence"
+checkpoint_license = "Apache-2.0"
+hub_license = "apache-2.0"
+weights_publication_allowed = true
+state_transform = "dplm2_to_fastplms_v1"
+conversion_provenance = "Input: the pinned official DPLM2 checkpoint. Transformation: apply dplm2_to_fastplms_v1, retaining the independent language-model head and trained encoder contact head while omitting the unused absolute-position table for rotary checkpoints. Output: the pinned Synthyra DPLM2 checkpoint. Validation: release parity compares exact keys and values after the declared omission, non-aliasing, tokenizer behavior, generation, and inference. License basis: the pinned ByteDance DPLM Apache-2.0 LICENSE and README explicitly scope the repository release to the pretrained DPLM1 and DPLM2 weights; immutable evidence is recorded in LICENSES/dplm/PROVENANCE.md. Limitation: no head exception is permitted by this source record, and redistribution remains subject to Apache-2.0."
+representative = "dplm2_150m"
+documentation = "docs/models.md#dplm2"
+test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_diffusion_generation.py", "models/_esm_rotary.py", "models/dplm2", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.dplm2.modeling_dplm2.DPLM2Config", AutoModel = "fastplms.models.dplm2.modeling_dplm2.DPLM2Model", AutoModelForMaskedLM = "fastplms.models.dplm2.modeling_dplm2.DPLM2ForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.dplm2.modeling_dplm2.DPLM2ForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.dplm2.modeling_dplm2.DPLM2ForTokenClassification" }
+tokenizer_class = "fastplms.models.dplm2.tokenization_dplm2.DPLM2Tokenizer"
+
+[families.ankh]
+architecture = "ANKH"
+upstreams = ["ankh"]
+tokenizer_mode = "tokenizer"
+public_input = "Amino-acid sequences tokenized for encoder or sequence-to-sequence use"
+extra = "core"
+reference_container = "reference-ankh"
+reference_adapter = "tests.parity.support.reference_adapters.ankh"
+attention = ["eager", "sdpa"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "static_parameters"
+precisions = ["default"]
+vram_tier = "large-sequence"
+checkpoint_license = "CC-BY-NC-SA-4.0"
+hub_license = "cc-by-nc-sa-4.0"
+weights_publication_allowed = true
+state_transform = "ankh_t5_to_fastplms_v1"
+conversion_provenance = "Input: the pinned official ANKH T5 checkpoint. Transformation: apply ankh_t5_to_fastplms_v1 to the official encoder and sequence-to-sequence heads. Output: the pinned Synthyra ANKH checkpoint. Validation: release parity compares exact mapped state, tokenizer behavior, official heads, and inference. Limitation: the separately named FastPLMs masked-language-model extension is not an official ANKH head."
+representative = "ankh_base"
+documentation = "docs/models.md#ankh"
+test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
+requires_complete_weight_publication = false
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/ankh", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.ankh.modeling_ankh.FastAnkhConfig", AutoModel = "fastplms.models.ankh.modeling_ankh.FastAnkhModel", AutoModelForMaskedLM = "fastplms.models.ankh.modeling_ankh.FastAnkhForMaskedLMExtension", AutoModelForSeq2SeqLM = "fastplms.models.ankh.modeling_ankh.FastAnkhForConditionalGeneration", AutoModelForSequenceClassification = "fastplms.models.ankh.modeling_ankh.FastAnkhForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.ankh.modeling_ankh.FastAnkhForTokenClassification" }
+
+[families.boltz2]
+architecture = "Boltz2"
+upstreams = ["boltz"]
+tokenizer_mode = "structure"
+public_input = "Raw amino-acid sequences through the convenience API, or prepared model features"
+extra = "structure"
+reference_container = "reference-boltz2"
+reference_adapter = "tests.parity.support.reference_adapters.boltz"
+attention = ["eager"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "fp32_parameters_autocast"
+precisions = ["default"]
+vram_tier = "structure"
+checkpoint_license = "MIT"
+hub_license = "mit"
+weights_publication_allowed = true
+state_transform = "boltz2_inference_core_v1"
+conversion_provenance = "Input: the pinned official Boltz2 checkpoint. Transformation: select and map the supported Boltz2 inference-core parameters with boltz2_inference_core_v1. Output: the pinned Synthyra Boltz2 checkpoint. Validation: release parity covers state identity for the declared subset, feature preparation, seeded inference, and structure outputs. Limitation: this record does not claim support for undeclared upstream training components."
+representative = "boltz2"
+documentation = "docs/models.md#boltz2"
+test_tiers = ["structure", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "models/boltz"]
+auto_map = { AutoConfig = "fastplms.models.boltz.modeling_boltz2.Boltz2Config", AutoModel = "fastplms.models.boltz.modeling_boltz2.Boltz2Model" }
+
+[families.esmfold]
+architecture = "ESMFold"
+upstreams = ["fair-esm", "openfold"]
+tokenizer_mode = "structure"
+public_input = "Raw amino-acid sequences through folding helpers, or prepared residue tensors"
+extra = "structure"
+reference_container = "reference-esmfold"
+reference_adapter = "tests.parity.support.reference_adapters.esmfold"
+attention = ["eager", "sdpa", "flex_attention"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "fp32_parameters_autocast"
+precisions = ["default"]
+vram_tier = "structure"
+checkpoint_license = "MIT"
+hub_license = "mit"
+weights_publication_allowed = true
+state_transform = "esmfold_meta_to_fastplms_v1"
+conversion_provenance = "Input: the pinned native Meta ESMFold checkpoint plus its pinned ESM2 backbone. Transformation: apply esmfold_meta_to_fastplms_v1 to map native ESM2 names into the structure-only FastPLMs backbone, retain folding tensors, omit five deterministically reconstructed geometry buffers, omit the folding-unused ESM2 masked-LM and contact-regression heads, and remove the obsolete random FastPLMs TTT head from earlier mirrors. Output: canonical FP32 FastPLMs ESMFold state with an explicit CUDA BF16-autocast execution path. Validation: release parity compares exact mapped keys, shapes, dtypes, values, aliases, semantic configuration, FP32 and BF16-compute seeded inference, and structure metrics with pLDDT normalized to (0, 1). Limitation: ESMFold TTT is rejected because the official checkpoint contains no trained masked-language-model head."
+representative = "esmfold"
+documentation = "docs/models.md#esmfold"
+test_tiers = ["check", "compliance", "structure", "feature", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_esm_rotary.py", "models/esmfold"]
+auto_map = { AutoConfig = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmFoldConfig", AutoModel = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForProteinFolding" }
+
+[families.esmfold2]
+architecture = "ESMFold2"
+upstreams = ["biohub-esm", "biohub-transformers", "protein-ttt"]
+backbone_model = "esmc_6b"
+tokenizer_mode = "structure"
+public_input = "Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors"
+extra = "structure"
+reference_container = "reference-esmfold2"
+reference_adapter = "tests.parity.support.reference_adapters.esmfold2"
+attention = ["eager", "sdpa", "flex_attention"]
+dtypes = ["float32", "bfloat16"]
+bf16_execution = "fp32_parameters_autocast"
+precisions = ["auto", "fp32", "bf16", "fp8"]
+experimental_precisions = ["fp8"]
+vram_tier = "structure-6b"
+checkpoint_license = "MIT"
+hub_license = "mit"
+weights_publication_allowed = true
+state_transform = "identity"
+conversion_provenance = "Input: each pinned Biohub ESMFold2 checkpoint and its separately pinned ESMC checkpoint. Transformation: apply identity to preserve the folding checkpoint exactly, load its parameters in FP32 for CUDA BF16-autocast execution, retain canonical BF16 ESMC weights, and optionally rebuild exactly 80 ESMC attention output projections as transient Transformer Engine linears. Output: the corresponding pinned Synthyra ESMFold2 checkpoint plus its declared ESMC precision policy. Validation: release parity covers exact canonical state, learned projection, prepared features, and seeded BF16 folding; experimental FP8 validation covers strict unavailable-device behavior, all four variants, and three BF16-to-FP8 reload cycles on the standard variant. Limitation: only the four manifest-listed ESMFold2 variants are supported; FP8 is experimental, applies only to inference-time ESMC execution, and requires direct CUDA loading with Transformer Engine availability."
+representative = "esmfold2"
+documentation = "docs/esmfold2.md"
+test_tiers = ["check", "compliance", "structure", "feature", "artifact", "benchmark"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esmfold2", "models/esm_plusplus", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2.ESMFold2Model" }
+
+[[models]]
+id = "esm2_8m"
+family = "esm2"
+size_category = "small"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_8m.json=sha256:6975e86d1d8f27488bf2a676551feaa48cc19254c9d24b6acb09198122745609", tensors = "tests/goldens/esm2_8m.safetensors=sha256:b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c" }
+fast_repo = "Synthyra/ESM2-8M"
+fast_revision = "185ecbd45665d050a8dae326d91886d330c5f9d0"
+fast_files = [
+  "config.json=git-sha1:46d0a7b517f59123c6ebc6d1011585731cbab259",
+  "model.safetensors=sha256:c824e6ded5fb71c72bc5ac05300699947819023cb26cdaf6897665e6b2645e1b",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3cfc5db0c6790859a3bc2a4dc053a813acd65295",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+official_repo = "facebook/esm2_t6_8M_UR50D"
+official_revision = "c731040fcd8d73dceaa04b0a8e6329b345b0f5df"
+official_files = [
+  "config.json=git-sha1:c2c6e65a87d9d20d47699ae236d605b80c741dd3",
+  "model.safetensors=sha256:24c5fa474c48f3b754b86efe752d5f189d2bcd88190fa2270fc92b2ef3034189",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3f0d47e841e1cb75257aeaf76d156802899a217e",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+
+[[models.oracle_assets]]
+role = "weights"
+path = "models/esm2_t6_8M_UR50D.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t6_8M_UR50D.pt"
+sha256 = "46f002a9870c9bdecd0ea887acb1f9a38a6b561e8f8bf8a6990b679b9d31b928"
+size = 30099493
+
+[[models.oracle_assets]]
+role = "contact_regression"
+path = "regression/esm2_t6_8M_UR50D-contact-regression.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t6_8M_UR50D-contact-regression.pt"
+sha256 = "8f7a4557d57713b97ba0e484303007efb7230d25299c0ac47a0a1b12a87bbb9d"
+size = 1511
+
+[[models]]
+id = "esm2_35m"
+family = "esm2"
+size_category = "small"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_35m.json=sha256:e919d3ce6d20b6a942d27d92323814ae7594a0129dc9c4de27c5053e96675bcd", tensors = "tests/goldens/esm2_35m.safetensors=sha256:c9b8bb616cf884fb7744521a2fcc6eed23586342d11241e6c9ef16454ec31e17" }
+fast_repo = "Synthyra/ESM2-35M"
+fast_revision = "37ab9f56b41e365b3bd9e25d6fefe9150fd910f0"
+fast_files = [
+  "config.json=git-sha1:4d428c9934572f39e2a00db162249971f37c88e4",
+  "model.safetensors=sha256:21d95ab6bb9aa91bfec87eff11da61a657b732f2df279cbddbae6a7f1f0bba9c",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3cfc5db0c6790859a3bc2a4dc053a813acd65295",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+official_repo = "facebook/esm2_t12_35M_UR50D"
+official_revision = "6fbf070e65b0b7291e7bbcd451118c216cff79d8"
+official_files = [
+  "config.json=git-sha1:3f64131bb610ed1ce482c4b5421fc358c785278f",
+  "model.safetensors=sha256:e35647818e0e064351d4531ed480d225a002567b4b2b93ad3a9246d753150fc0",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3f0d47e841e1cb75257aeaf76d156802899a217e",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+
+[[models.oracle_assets]]
+role = "weights"
+path = "models/esm2_t12_35M_UR50D.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t12_35M_UR50D.pt"
+sha256 = "7f21e80e61d16a71735163ef555d3009afb0c98da74c48e29df08606973cc55e"
+size = 134095705
+
+[[models.oracle_assets]]
+role = "contact_regression"
+path = "regression/esm2_t12_35M_UR50D-contact-regression.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t12_35M_UR50D-contact-regression.pt"
+sha256 = "16641e05d830d0ce863dd152dbb8c2f3ddfa3c3ec2a66080152c8abad01d8585"
+size = 1959
+
+[[models]]
+id = "esm2_150m"
+family = "esm2"
+size_category = "medium"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_150m.json=sha256:c04c93486024ba0fa1c81fbfbe92ee79d1d4c7f1cfcc2c9886728522f752feab", tensors = "tests/goldens/esm2_150m.safetensors=sha256:c03fe9916dba137b452a6bbe944c7dc414db4019a6f0921e87b92d4bb6a8a42f" }
+fast_repo = "Synthyra/ESM2-150M"
+fast_revision = "979e0880dfc9e0c0080839b83d9d2dc05b92786a"
+fast_files = [
+  "config.json=git-sha1:efeae2af182b7d34dc35740a45f157661e7acdf4",
+  "model.safetensors=sha256:d1f7c60f98c31af328381519a750972b6a31b13b97aa7cca2e71b5ae1b3f8f53",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3cfc5db0c6790859a3bc2a4dc053a813acd65295",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+official_repo = "facebook/esm2_t30_150M_UR50D"
+official_revision = "a695f6045e2e32885fa60af20c13cb35398ce30c"
+official_files = [
+  "config.json=git-sha1:52e04179e6fbad6663a94ea5cc44f09d764c5cd4",
+  "model.safetensors=sha256:c3f1da8aea53bddd32c246c86168c23b9fd72341fb9db9a94436f855f5053566",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3f0d47e841e1cb75257aeaf76d156802899a217e",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+
+[[models.oracle_assets]]
+role = "weights"
+path = "models/esm2_t30_150M_UR50D.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t30_150M_UR50D.pt"
+sha256 = "881c7176cf198ef8dec26a3c375d40eb58d0c33df95c22562ca6cc6d3f812c62"
+size = 592774773
+
+[[models.oracle_assets]]
+role = "contact_regression"
+path = "regression/esm2_t30_150M_UR50D-contact-regression.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t30_150M_UR50D-contact-regression.pt"
+sha256 = "6a604b96722ed052eef8a094ad90b275ba2e987d406315dbed0bdc6b3c4238a7"
+size = 3431
+
+[[models]]
+id = "esm2_650m"
+family = "esm2"
+size_category = "large"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_650m.json=sha256:f18332172fcb3abf5dd2485fd55f5b0d193ad3b93a44cc744e0d02817c927477", tensors = "tests/goldens/esm2_650m.safetensors=sha256:c3a66b75add03628e62e238cb63da6a9e4d321f8160e84bdf2a131c096977f86" }
+fast_repo = "Synthyra/ESM2-650M"
+fast_revision = "ca0718a5d52b80d5c60dd76860e55e061a95fb0a"
+fast_files = [
+  "config.json=git-sha1:88f6bd240680b29c3244df8292246048401f5caf",
+  "model.safetensors=sha256:a15142e94ecf36f0edde9b37796f591e609ebe1694ca411e93640f0ee384994a",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3cfc5db0c6790859a3bc2a4dc053a813acd65295",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+official_repo = "facebook/esm2_t33_650M_UR50D"
+official_revision = "08e4846e537177426273712802403f7ba8261b6c"
+official_files = [
+  "config.json=git-sha1:a956a25d277f30bd870d3760b9a116f19ead885e",
+  "model.safetensors=sha256:a08adabb949fa67ad3c14b509d04fd60368b35007b0095e3358f81200c4f4db0",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3f0d47e841e1cb75257aeaf76d156802899a217e",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+
+[[models.oracle_assets]]
+role = "weights"
+path = "models/esm2_t33_650M_UR50D.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t33_650M_UR50D.pt"
+sha256 = "ea9d0522b335a8778dea6535a65301f10208dece28cd5865482b0b1fc446168c"
+size = 2604537549
+
+[[models.oracle_assets]]
+role = "contact_regression"
+path = "regression/esm2_t33_650M_UR50D-contact-regression.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t33_650M_UR50D-contact-regression.pt"
+sha256 = "8ffe6edbd4173dc8d45c2cd5cb27d43aad77ec26b4c768200c58ae1f96693575"
+size = 3687
+
+[[models]]
+id = "esm2_3b"
+family = "esm2"
+size_category = "xlarge"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm2_3b.json=sha256:5043b2333c57a34d54fac53916722d1acb4b6fd50395b9abafa805435b184a48", tensors = "tests/goldens/esm2_3b.safetensors=sha256:dfd5a8cb05d3e814a080185c4808c8e7ec2277f070f395562fcfbe4376789e4e" }
+notes = "The pinned default SDPA BF16 path uses a checkpoint-specific numeric calibration: relative L2 target/hard limit 0.06/0.07, relative Q99.9 0.15/0.18, first-percentile residue cosine 0.994/0.992, and pooled cosine 0.998/0.997. Exact state identity and the global logits-distribution contract remain required."
+fast_repo = "Synthyra/ESM2-3B"
+fast_revision = "ff89d0180f414ab9c677219a25da79bf09185456"
+fast_files = [
+  "config.json=git-sha1:94944ad6cabaa40a3ce1cbe6699cf464fdc1b2c0",
+  "model-00001-of-00003.safetensors=sha256:04b57854545c23779b562ee2ae22f10021ba0f4d586ba0ad482ee6eda187d562",
+  "model-00002-of-00003.safetensors=sha256:34954aaa05bc91635776ba6672946da5822626753d80db97b38c0538e9525102",
+  "model-00003-of-00003.safetensors=sha256:a6b3a55b9e3b2e1778de34c665c3dd17bdfdf6da9d6d5c97730c57168709ccae",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3cfc5db0c6790859a3bc2a4dc053a813acd65295",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+official_repo = "facebook/esm2_t36_3B_UR50D"
+official_revision = "476b639933c8baad5ad09a60ac1a87f987b656fc"
+official_files = [
+  "config.json=git-sha1:69e7563923f87d2d7439bfb83e5a19b44b46d71b",
+  "pytorch_model-00001-of-00002.bin=sha256:0f971f11c449d21422aa982b791619c10351972992c735f4c3cd43fe09790412",
+  "pytorch_model-00002-of-00002.bin=sha256:7560b46fc383c691fb74b915b7d4bcef40d3df181447f16ba4b298845e308d0c",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:3f0d47e841e1cb75257aeaf76d156802899a217e",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+
+[[models.oracle_assets]]
+role = "weights"
+path = "models/esm2_t36_3B_UR50D.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/models/esm2_t36_3B_UR50D.pt"
+sha256 = "7de8b4082ba15891959ab368b77ce3886697af1efb16d3c9e9e7b0c5d3f07500"
+size = 5678116398
+
+[[models.oracle_assets]]
+role = "contact_regression"
+path = "regression/esm2_t36_3B_UR50D-contact-regression.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/regression/esm2_t36_3B_UR50D-contact-regression.pt"
+sha256 = "4da500eab246481dc9c8c95bc7b1d02f2803d761c380b0e95186d4a07d0fc84e"
+size = 6759
+
+[[models]]
+id = "esmc_small"
+family = "esm_plusplus"
+size_category = "medium"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmc_small.json=sha256:bb02652cf3cc484756b98ffa4ba55ed4c55870d2cea3342adb1d920ba9dfe10a", tensors = "tests/goldens/esmc_small.safetensors=sha256:03378d0f0fdd8161178ebb2c1f0da1b9776a726c8e8d3a10c009808a24de5654" }
+notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention and FlashAttention 3 remain selectable as opt-in alternatives, but they are not strict-parity choices: on the locked H100 BF16 generated-boundary panel, ESMC-6B Flex Attention exceeds the 0.03 relative-L2 hard limit and FlashAttention 3 falls below the 0.995 residue-cosine hard limit. The deviation is consistent with backend-specific BF16 kernel arithmetic; it is not a weight-conversion difference or silent fallback. Use SDPA for exact Biohub parity or FlashAttention 2 for release-gated acceleration."
+fast_repo = "Synthyra/ESMplusplus_small"
+fast_revision = "46c5f7d562e47d4c14165b424c71ab7db008e6fb"
+fast_files = [
+  "config.json=git-sha1:df2f44187157b0cc371c48c887b77b1783679201",
+  "model.safetensors=sha256:d099223765bc4f1ae8d6c7e18561ce41df1d54073fdc5327ef0a229235a8f52a",
+  "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+  "tokenizer.json=git-sha1:f49735e56cebab0e791aeaae777757b7fd114f71",
+  "tokenizer_config.json=git-sha1:2985ed2b8aa8ecfb1d12f53f47d2b8a44cc21756",
+]
+official_repo = "biohub/ESMC-300M"
+official_revision = "a59b831785f907e96e6a246b1d142bfb76df31ee"
+official_files = [
+  "config.json=git-sha1:9a49eacf4e65c39f74381f0f0d240e3b89ef43d7",
+  "model.safetensors=sha256:0772d8fe64bb25e14fe6f23b80e3c9a7d215d0da3c6cba5bd356d7c0e0bb22cc",
+  "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+  "tokenizer.json=git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+  "tokenizer_config.json=git-sha1:2238856624f8d39f03af53a2576c2d9b18c82f61",
+]
+
+[[models]]
+id = "esmc_large"
+family = "esm_plusplus"
+size_category = "large"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmc_large.json=sha256:7a4d614f67b6fde417f3fd89f61e7ec442ae284769734b2b73e14945a816a8fd", tensors = "tests/goldens/esmc_large.safetensors=sha256:e13302df4cf7e8381552f1043a8fd0f31f3e0d50b2ab6009fb86b7940ae8ff79" }
+notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention and FlashAttention 3 remain selectable as opt-in alternatives, but they are not strict-parity choices: on the locked H100 BF16 generated-boundary panel, ESMC-6B Flex Attention exceeds the 0.03 relative-L2 hard limit and FlashAttention 3 falls below the 0.995 residue-cosine hard limit. The deviation is consistent with backend-specific BF16 kernel arithmetic; it is not a weight-conversion difference or silent fallback. Use SDPA for exact Biohub parity or FlashAttention 2 for release-gated acceleration."
+fast_repo = "Synthyra/ESMplusplus_large"
+fast_revision = "f813401638b3fddab09748aec1ad2bf537aa4208"
+fast_files = [
+  "config.json=git-sha1:5736371902fe5d04e2859be30ac7dbd31b271b25",
+  "model.safetensors=sha256:4aff3f8c5de68c4d3e3824eb2c478e4a47355d3f849f3c745e5c8a5ee6cff851",
+  "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+  "tokenizer.json=git-sha1:f49735e56cebab0e791aeaae777757b7fd114f71",
+  "tokenizer_config.json=git-sha1:2985ed2b8aa8ecfb1d12f53f47d2b8a44cc21756",
+]
+official_repo = "biohub/ESMC-600M"
+official_revision = "a7e82012c83126b9eedb055fea9fa84b6c02f094"
+official_files = [
+  "config.json=git-sha1:71c8241dc28a5fb636248267a0927c0242b264c1",
+  "model.safetensors=sha256:e4232c30fd35fe2f57051ec88a703996ac94520580b4b836894207a3d45d9ff8",
+  "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+  "tokenizer.json=git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+  "tokenizer_config.json=git-sha1:2238856624f8d39f03af53a2576c2d9b18c82f61",
+]
+
+[[models]]
+id = "esmc_6b"
+family = "esm_plusplus"
+size_category = "xlarge"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmc_6b.json=sha256:e229d938719782f280fab22dfc4c43e86109fdb0cc523631168c5a491afaace3", tensors = "tests/goldens/esmc_6b.safetensors=sha256:a948945e985c7deaca7be8b7eed09c0a9521a2af3f2b10fc2ec7a7d2a0f99ada" }
+notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention and FlashAttention 3 remain selectable as opt-in alternatives, but they are not strict-parity choices: on the locked H100 BF16 generated-boundary panel, ESMC-6B Flex Attention exceeds the 0.03 relative-L2 hard limit and FlashAttention 3 falls below the 0.995 residue-cosine hard limit. The deviation is consistent with backend-specific BF16 kernel arithmetic; it is not a weight-conversion difference or silent fallback. Use SDPA for exact Biohub parity or FlashAttention 2 for release-gated acceleration."
+fast_repo = "Synthyra/ESMplusplus_6B"
+fast_revision = "0d579cce3b0f09efa6b3baddf6cc3fd8c9b616c8"
+fast_files = [
+  "config.json=git-sha1:e740cbcf211f2511c70c25a1ff6017a757ba7a69",
+  "model-00001-of-00006.safetensors=sha256:d30d18703453019f2d2d050866309888720c28eebc9a10307d1ddf3799e85a65",
+  "model-00002-of-00006.safetensors=sha256:b3d85378ab5023f4160a96e9c8cbd4cc6f78a771a83c856e88d48112f555bc13",
+  "model-00003-of-00006.safetensors=sha256:52595519b59349c5c6e373e6f5ca4a3d48ea6dde345f7e61e24766df5fab0e5b",
+  "model-00004-of-00006.safetensors=sha256:e46c6113c89c6f3e9b072c1bef02d763a625c37bcd8f9da2ed9363891c9a0758",
+  "model-00005-of-00006.safetensors=sha256:6d92cb2bf9791de644de2ae86f8523d802ac3b4aaabfff0716ab6c2b97f6fb14",
+  "model-00006-of-00006.safetensors=sha256:5fc1a8632490bb34162823c35d0d591337b9e4195b22cc0560741397a6e9d0b3",
+  "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+  "tokenizer.json=git-sha1:f49735e56cebab0e791aeaae777757b7fd114f71",
+  "tokenizer_config.json=git-sha1:2985ed2b8aa8ecfb1d12f53f47d2b8a44cc21756",
+]
+official_repo = "biohub/ESMC-6B"
+official_revision = "45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a"
+official_files = [
+  "config.json=git-sha1:19f5fb09e4f630fb5b748a497183c22a87ec5102",
+  "model-00001-of-00006.safetensors=sha256:bd90149ff223e6ac1a0cac6147a5ae0df20d3a21df4f65356a1f19cd14f4aa8a",
+  "model-00002-of-00006.safetensors=sha256:f75e2144d8269fe2eb4b3e0823fb089b94f176d8024153e85b8fb573a42294fa",
+  "model-00003-of-00006.safetensors=sha256:f699f01ecc9691d9c6470492765fe54b8b5d2e9f277c139e89427433ffdfe0b2",
+  "model-00004-of-00006.safetensors=sha256:46add1b7be098bbfdc3073884851ba3057f1b33ea23a158b650a37007dabd13d",
+  "model-00005-of-00006.safetensors=sha256:1e1cb62f060a34e18f54a31a76683ef888b8cec59e73315f5b31d25d45a1f88c",
+  "model-00006-of-00006.safetensors=sha256:56c73e13ae96e777ce65eee99364056069ef93b646470f352f83c5f1037b1b18",
+  "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+  "tokenizer.json=git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+  "tokenizer_config.json=git-sha1:2238856624f8d39f03af53a2576c2d9b18c82f61",
+]
+
+[[models]]
+id = "esm3_small"
+family = "esm3"
+tokenizer_source = "esmc_small"
+size_category = "large"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esm3_small.json=sha256:5470e8596cbba0e2882647eccbc53c36d8b48b0f3947d1fe0bcea68da1078c32", tensors = "tests/goldens/esm3_small.safetensors=sha256:d957922f810c9ab4c557d80d5aaaf6a3aab79a5a45e4638012a634a4134803b1" }
+fast_repo = "Synthyra/ESM3_small"
+fast_revision = "7ddb5a740f9e5f93933eb6410c0ee8684bc63ec1"
+fast_files = [
+  "config.json=git-sha1:60526e2fdd8af9d4fba17f323775458ef5a1a1f9",
+  "model-00001-of-00002.safetensors=sha256:a4c9b736c4c59d51180e966005a164859b47d5cd36e1f8ecdea619fbd34a0e92",
+  "model-00002-of-00002.safetensors=sha256:bea60e4e91b03bb00b6cedd29b07606b8543f0869fb74454af7b26e216d80d2b",
+  "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+  "tokenizer.json=git-sha1:f49735e56cebab0e791aeaae777757b7fd114f71",
+  "tokenizer_config.json=git-sha1:2985ed2b8aa8ecfb1d12f53f47d2b8a44cc21756",
+]
+official_repo = "biohub/esm3-sm-open-v1"
+official_revision = "47f0545b2b6daf26a93439a3cd610f4f7f3d5478"
+official_files = [
+  "config.json=git-sha1:0967ef424bce6791893e9a57bb952f80fd536e93",
+  "data/weights/esm3_function_decoder_v0.pth=sha256:f76d074efcaccfe21365a4fa96f212dadd66798e1e49d809ab7ffbe025d227c9",
+  "data/weights/esm3_sm_open_v1.pth=sha256:5ead5a135c658068db6a4f1b933e72d6110992c4668822e1c0e2dcc53e38acd9",
+  "data/weights/esm3_structure_decoder_v0.pth=sha256:3b726258a44274792b40ce7ea307e10c5da09936368a4ffa2970264d909da65b",
+  "data/weights/esm3_structure_encoder_v0.pth=sha256:467acbaee703ba3ccde6e75241a912a316952e5ff071355f85c1d33c68704f40",
+]
+
+[[models]]
+id = "e1_150m"
+family = "e1"
+size_category = "small"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/e1_150m.json=sha256:701a64a6ab1a2fec5a427555b6af96232526c15cb3d5b4dc7fb253ac8f20b922", tensors = "tests/goldens/e1_150m.safetensors=sha256:6558bc8f1a7b20629eaaaa6f72601d0c2cdb859a5dc13595549b1773b6e2de41" }
+fast_repo = "Synthyra/Profluent-E1-150M"
+fast_revision = "7c5f3bbf697226a2e0900db7a100f9201774a907"
+fast_files = [
+  "config.json=git-sha1:562ef21e722ca708064fc3d54d25b731d4ac8171",
+  "model.safetensors=sha256:d779ed3a4e23799aafc932dc09c9963428d10aa7075999b5f8851b39c76b67f6",
+]
+official_repo = "Profluent-Bio/E1-150m"
+official_revision = "c4dbfe827e4aa6ed7f95eaef50dc1e084f4d77dc"
+official_files = [
+  "config.json=git-sha1:485e649199b46fe6ee7456bebf7aae9b3d4baeab",
+  "model.safetensors=sha256:ba2656339005e6598642836acfdafde480fecc7e145ce0058eb54adf572c3484",
+]
+
+[[models]]
+id = "e1_300m"
+family = "e1"
+size_category = "medium"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/e1_300m.json=sha256:d3478f3f5957a0e0377864074dde0107de890019f96cb63548ee17ffb8f3ec3a", tensors = "tests/goldens/e1_300m.safetensors=sha256:92778b9ef95a803ddc84b3e3ca764c59e045872a94bcff0eb0cd47647732c188" }
+fast_repo = "Synthyra/Profluent-E1-300M"
+fast_revision = "5ef52c0ad2ae2578f40622696b763523810e8e26"
+fast_files = [
+  "config.json=git-sha1:f5c91498b76a3e3282a0d716d87738abb1a1b6c1",
+  "model.safetensors=sha256:9271c4176a8a2e0905a0bb769570ba1c2978fb999a87da92db4cf2b041224864",
+]
+official_repo = "Profluent-Bio/E1-300m"
+official_revision = "5a2871c587eadbcc9237bc686ea45e5b4d28dfb3"
+official_files = [
+  "config.json=git-sha1:918cb09e6e96d4719ed85951f38c693360f9cdb8",
+  "model.safetensors=sha256:31e09a2542f45b04e6ce4adafb3b657f21e2d56d12bf68fd2266b1576a80bc9b",
+]
+
+[[models]]
+id = "e1_600m"
+family = "e1"
+size_category = "large"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/e1_600m.json=sha256:914be191c28141c1f84535cdb69ead0588a2057bb19d46c5bc7f3891a3d6739e", tensors = "tests/goldens/e1_600m.safetensors=sha256:22ed8417a4651ded255099f6d15c63c2c40552e700d2b0470d1adfde3a39c513" }
+fast_repo = "Synthyra/Profluent-E1-600M"
+fast_revision = "6c8bf0ec83b0e0178677c528b101efffd0677742"
+fast_files = [
+  "config.json=git-sha1:1d35c0b35b473259875fd29ee80167487a0d6afe",
+  "model.safetensors=sha256:793483b1b3411eab73fe5214b94d1424ca0545992dfac6889cfc0186af472363",
+]
+official_repo = "Profluent-Bio/E1-600m"
+official_revision = "52d959fb87a609d15cf223a485127b29ed5c382a"
+official_files = [
+  "config.json=git-sha1:8a0a439ed4201462bc01189c9f8b43523b257b5c",
+  "model.safetensors=sha256:cfc108d4b98baaa62932331b40be265eae39dc382595bc3cde4a5ab55db1bf7a",
+]
+
+[[models]]
+id = "dplm_150m"
+family = "dplm"
+size_category = "small"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm_150m.json=sha256:3228551fe3bed951db9ec97347143ec4462ce7c221ac240b7ce7730948c1dc1f", tensors = "tests/goldens/dplm_150m.safetensors=sha256:392992235195beed97ab8359b90a2e11e52f4326606f99a471447bed81d146bd" }
+fast_repo = "Synthyra/DPLM-150M"
+fast_revision = "90ba742754151a774f3b7ed580170d0a76b3e69d"
+fast_files = [
+  "config.json=git-sha1:117ac2c1222152ef378abaad1f605e18c4a18ab0",
+  "model.safetensors=sha256:8bac5ac767ceb8deb511b272d32883f811768d56cb25e920cea94ba9b979ca14",
+  "special_tokens_map.json=git-sha1:ef5f0f7d7baf4947564eafcf79972d272cd80a15",
+  "tokenizer_config.json=git-sha1:80100348e3f2b8ab05b59f3352ea7631685083cd",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+official_repo = "airkingbd/dplm_150m"
+official_revision = "49b7125a5d28c6418fcc2f3c4fe799352ac1488b"
+official_files = [
+  "config.json=git-sha1:4910cb02f1840e9ac577026f601829604af58c74",
+  "pytorch_model.bin=sha256:ea4eaa99536b60ed76f945f71a1a5e604f08447ec3def5104a93ca6001a59961",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:dbcdd9fb2e742627ee310713615e0d7aeed0c34e",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+
+[[models]]
+id = "dplm_650m"
+family = "dplm"
+size_category = "large"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm_650m.json=sha256:bf58d0ce73aaac7e6fb1923ef3d9adad67122df2a3dd414c3229488ef9587a6d", tensors = "tests/goldens/dplm_650m.safetensors=sha256:073f0a6abea7e48f28c2d921ff8329a28e22627f01979277cb324908a01b3378" }
+fast_repo = "Synthyra/DPLM-650M"
+fast_revision = "05dc16d97c5c028aed924c9ed681cee4ab609760"
+fast_files = [
+  "config.json=git-sha1:3537150eb87b213a676d5840548625e220b60e8b",
+  "model.safetensors=sha256:e27a47b8ec1c078b3fccb36542210e20f0380c88828db2ca9acf3d8a25048bd8",
+  "special_tokens_map.json=git-sha1:ef5f0f7d7baf4947564eafcf79972d272cd80a15",
+  "tokenizer_config.json=git-sha1:80100348e3f2b8ab05b59f3352ea7631685083cd",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+official_repo = "airkingbd/dplm_650m"
+official_revision = "7a7e651baa667d094aba05e9dc1cf52a3332110a"
+official_files = [
+  "config.json=git-sha1:625574d625a4178ca6966e9545fee56026c0b634",
+  "pytorch_model.bin=sha256:db4e54343a89e7600f41c3aacbc593db1b0caee82ec28cab25ff2ae090eba39c",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:dbcdd9fb2e742627ee310713615e0d7aeed0c34e",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+
+[[models]]
+id = "dplm_3b"
+family = "dplm"
+size_category = "xlarge"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm_3b.json=sha256:a5b6df8b9c7b371976892ec1d6c45581a32ad3a6325c6c0a0b3267012848c8ed", tensors = "tests/goldens/dplm_3b.safetensors=sha256:75b0a0854fc391133920b0feaaeb8f69ab7568a88b3759627aca1556c4338c1e" }
+fast_repo = "Synthyra/DPLM-3B"
+fast_revision = "7d764dd3d70ecf1ac0e64693de64a0064aacac65"
+fast_files = [
+  "config.json=git-sha1:7f5baf9426be06760c86882948b0f4af2e681e22",
+  "model-00001-of-00003.safetensors=sha256:37b54855d087ef3e7d883464ae9d5ea3127ec15a16c6323d91ad16a6b98305c9",
+  "model-00002-of-00003.safetensors=sha256:042604fefb05ea8c360a48416ce7ba662a4f90b176b4baf646c5c1814c35e6e8",
+  "model-00003-of-00003.safetensors=sha256:b9ae04012665163c3fc9781dd04fcd69738ac20c07e615e98fc4483fd2c4de45",
+  "special_tokens_map.json=git-sha1:ef5f0f7d7baf4947564eafcf79972d272cd80a15",
+  "tokenizer_config.json=git-sha1:80100348e3f2b8ab05b59f3352ea7631685083cd",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+official_repo = "airkingbd/dplm_3b"
+official_revision = "53849d4a7fe944ae0b9cf2bbc0d2cc0054795b51"
+official_files = [
+  "config.json=git-sha1:f6206456e8c2f22ebe1d37fce3b5d50fd8073e68",
+  "pytorch_model-00001-of-00004.bin=sha256:0bcb86a115fe744ed686756db143f78851304e855e2f83cec58681c6080ced5f",
+  "pytorch_model-00002-of-00004.bin=sha256:daf3324f3be949e7dd1c3c84b28da7fec5151b1890cb0904e73427266856a06f",
+  "pytorch_model-00003-of-00004.bin=sha256:dbbeb7924a21059854f994931e23590b054aa000b10370a71c052c4aa36e9246",
+  "pytorch_model-00004-of-00004.bin=sha256:21c01740d091487db43446489d8a893dea1fcc6f2e1c1991ece13945f7ab4e07",
+  "special_tokens_map.json=git-sha1:ba0f9b53dbbf27934f7555e5d31e37bdea9317f1",
+  "tokenizer_config.json=git-sha1:dbcdd9fb2e742627ee310713615e0d7aeed0c34e",
+  "vocab.txt=git-sha1:6b946952cc35537226f07fd70957ee2f848880d2",
+]
+
+[[models]]
+id = "dplm2_150m"
+family = "dplm2"
+size_category = "small"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm2_150m.json=sha256:d269de779ea1503de72c77e7b2e6224afc9797bd945b40c571ff6faec782e4aa", tensors = "tests/goldens/dplm2_150m.safetensors=sha256:17fc26600938ba5364b8ecb96750786d33e9f92bcd4ea4df3e12a389340748eb" }
+artifact_source = "official"
+canonical_state_sha256 = "82e1751f59052b8de72b082517557db47947e8d9b4ac2f11278369e6c0cbf001"
+fast_repo = "Synthyra/DPLM2-150M"
+fast_revision = "182745b8dc5661f898481a4fa60a7af9d53385c4"
+fast_files = [
+  "config.json=git-sha1:07905a2e4327d27d073cd0390f140aec2976125a",
+  "model.safetensors=sha256:0a7751b3113027b1d9c966a5bda2d6ab831855de7aaa047b911731665a7c3cc6",
+  "special_tokens_map.json=git-sha1:e6378d20e897b8806734e65fd3ef9cf42a17631b",
+  "tokenizer_config.json=git-sha1:f2090783e3368b7323aa877e2b740e09f0862259",
+  "vocab.txt=git-sha1:9706a4277a5c39dc9b4ec7b283e8eb130ceaa7f2",
+]
+official_repo = "airkingbd/dplm2_150m"
+official_revision = "3451d984d06497f835ed49634bd68c9dfb54d730"
+official_files = [
+  "config.json=git-sha1:20f1e55c64fdc4d1d30f7b1df64b6167fa23dc7c",
+  "pytorch_model.bin=sha256:be7f5cf9e421f59fcc437e63ce1c7391099a314a4e9a4f10b8688785fa581238",
+  "special_tokens_map.json=git-sha1:eb760e9f49a55145bbe0c64922d4ec2d3de1692a",
+  "tokenizer_config.json=git-sha1:fc8c21760dcff173955afb106859e5f015d4f757",
+  "vocab.txt=git-sha1:e133a3abd4350ddc3fc62548e162c8df7e62cf37",
+]
+
+[[models]]
+id = "dplm2_650m"
+family = "dplm2"
+size_category = "large"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/dplm2_650m.json=sha256:d9a7548f9af657a72d441ca70f27379863724fcce8ddd3da4f672104b7bfb772", tensors = "tests/goldens/dplm2_650m.safetensors=sha256:c4e0e467c252c3ac813363d2d4b17a5e3bd99e75fad315e76d97689b4655ddac" }
+artifact_source = "official"
+canonical_state_sha256 = "cba76b6602d2258de9fffff953b608d93cb8ef4a9e89b0bbd27e160c81e78bb4"
+fast_repo = "Synthyra/DPLM2-650M"
+fast_revision = "b9d8527a9473a54954fa2764f590b9ea1b435bb2"
+fast_files = [
+  "config.json=git-sha1:3e079579b214d48a09db57f2c60be6a1acea5baf",
+  "model.safetensors=sha256:92db08c7dbfd6c5e03fbfeaea3f36b09640ee794dcf5ea8d550527869a9f1d63",
+  "special_tokens_map.json=git-sha1:e6378d20e897b8806734e65fd3ef9cf42a17631b",
+  "tokenizer_config.json=git-sha1:f2090783e3368b7323aa877e2b740e09f0862259",
+  "vocab.txt=git-sha1:9706a4277a5c39dc9b4ec7b283e8eb130ceaa7f2",
+]
+official_repo = "airkingbd/dplm2_650m"
+official_revision = "0bc69b644976c6680ab7e26669854d1979e8876e"
+official_files = [
+  "config.json=git-sha1:4cce8d9dc212cdace0e20e89169790bcf199c158",
+  "pytorch_model.bin=sha256:8d6e08cc05e4858064a714013c74cc88c9caa2cc8b12c34605a3c24bcd877cfb",
+  "special_tokens_map.json=git-sha1:eb760e9f49a55145bbe0c64922d4ec2d3de1692a",
+  "tokenizer_config.json=git-sha1:fc8c21760dcff173955afb106859e5f015d4f757",
+  "vocab.txt=git-sha1:e133a3abd4350ddc3fc62548e162c8df7e62cf37",
+]
+
+[[models]]
+id = "dplm2_3b"
+family = "dplm2"
+size_category = "xlarge"
+# The pinned public sampler fails before generation because cls_token_id is None.
+# State, tokenizer, and inference parity remain required for this checkpoint.
+generation_contract = "official_unavailable"
+official_golden = { metadata = "tests/goldens/dplm2_3b.json=sha256:d6e0e02af53b13cb129192f06e264758aa21c9ebf4ee82411cf67037082d2329", tensors = "tests/goldens/dplm2_3b.safetensors=sha256:838b11824d08f83bcb0c0b3268e579f3a87dbfb965370cfe5c3f8793b96b1964" }
+notes = "The pinned official DPLM2-3B sampler fails before generation, so live generation equivalence cannot be established for this checkpoint. State, tokenizer, and inference parity remain required."
+artifact_source = "official"
+canonical_state_sha256 = "8c46ec09115dbe6cbfb91d94ab5e906369d57e27fe620a7741c6f8cb1b6ca890"
+fast_repo = "Synthyra/DPLM2-3B"
+fast_revision = "2a63babe8848abf5233d31bd55891dff8285fc50"
+fast_files = [
+  "config.json=git-sha1:5932b1d501fed28b84614e0d2c1ecc4e89f10d6e",
+  "model-00001-of-00003.safetensors=sha256:2ff393f6e8df1568ce075d50de69ff4e5e9d9886e5ec47e43d6c24df23459be3",
+  "model-00002-of-00003.safetensors=sha256:feb3cea852c2aa849cc30783a984a97f0d076990ade6606cda5e38bf2a5a9621",
+  "model-00003-of-00003.safetensors=sha256:9be363ddb98436af20901981ffbed2f1097377424987f6c1baad27d512b62e71",
+  "special_tokens_map.json=git-sha1:e6378d20e897b8806734e65fd3ef9cf42a17631b",
+  "tokenizer_config.json=git-sha1:f2090783e3368b7323aa877e2b740e09f0862259",
+  "vocab.txt=git-sha1:9706a4277a5c39dc9b4ec7b283e8eb130ceaa7f2",
+]
+official_repo = "airkingbd/dplm2_3b"
+official_revision = "9e77567926f98d1b997ea9131a8eeb035b9bf827"
+official_files = [
+  "config.json=git-sha1:22d51ce44cd6da8d819e0d00566987bb51d74753",
+  "pytorch_model-00001-of-00004.bin=sha256:d8c641eae6bf891581ec64d543169891b093e296f5679ac75c695bcf596b4211",
+  "pytorch_model-00002-of-00004.bin=sha256:6478ad86ec5fef3d1d26580493af2d8666009d3ff884f3f88548080c8bbf94b5",
+  "pytorch_model-00003-of-00004.bin=sha256:dde8f88dac4a6355488c2fb433ee12cd69f1169950566624fba43684d4d99dc6",
+  "pytorch_model-00004-of-00004.bin=sha256:17ec0145152bc10e4dd3b4c2edff337979f6b99ee7c7bfd6cf4e6dbd7262d079",
+  "special_tokens_map.json=git-sha1:eb760e9f49a55145bbe0c64922d4ec2d3de1692a",
+  "tokenizer_config.json=git-sha1:fc8c21760dcff173955afb106859e5f015d4f757",
+  "vocab.txt=git-sha1:e133a3abd4350ddc3fc62548e162c8df7e62cf37",
+]
+
+[[models]]
+id = "ankh_base"
+family = "ankh"
+size_category = "medium"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/ankh_base.json=sha256:ebce8d7de821827ee995789c9b38d79252d3b2f76888130b0a8a7eedafaefe2b", tensors = "tests/goldens/ankh_base.safetensors=sha256:f0e78aa15d11749e0c64ff57f9e88c51cec6538a0adf8951f839df70cc708b65" }
+notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
+artifact_source = "official"
+canonical_state_sha256 = "cdd8d30d88e5bf41f44e1eef4470d8e46607aba5f7c7c805b06c035b89c8c16f"
+fast_repo = "Synthyra/ANKH_base"
+fast_revision = "a3afa1db21c876dff57b3540fa7241e138fb1ed6"
+fast_files = [
+  "config.json=git-sha1:d1b81bb97129bc75dea04daef1ea2af373018e6b",
+  "model-00001-of-00001.safetensors=sha256:c943d25cacdafd2c8e3518a74450b5f90f715becf30ceb24c327f1c5a0bc8b5d",
+  "model.safetensors.index.json=git-sha1:ca251ab9277c06081b33e027f68f5bdc0808b443",
+  "special_tokens_map.json=git-sha1:55b145827029ae9672e50d4bb368540daacce791",
+  "tokenizer.json=git-sha1:212c5ef08819fa2463c6289ba4ef7db30e715c0a",
+  "tokenizer_config.json=git-sha1:a8a872ae3441e7cc85ce19210dff1e4c5d2d7bd0",
+]
+official_repo = "ElnaggarLab/ankh-base"
+official_revision = "d99cb6b966530dfc2ae96bc69d9255c2a07308b0"
+official_files = [
+  "config.json=git-sha1:abd44a36b5469e9a7cb019e4059b5ac1392d8422",
+  "pytorch_model.bin=sha256:9b2a886374f0ff4a893f4e7a989deed76bb2458c8998bd5202ea8e97d92ddcc3",
+  "special_tokens_map.json=git-sha1:55b145827029ae9672e50d4bb368540daacce791",
+  "tokenizer.json=git-sha1:212c5ef08819fa2463c6289ba4ef7db30e715c0a",
+  "tokenizer_config.json=git-sha1:a8a872ae3441e7cc85ce19210dff1e4c5d2d7bd0",
+]
+
+[[models]]
+id = "ankh_large"
+family = "ankh"
+size_category = "large"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/ankh_large.json=sha256:59492518b021de5cfaea87d672c9448c8558e99a3443ba2cc7ab544963196ecb", tensors = "tests/goldens/ankh_large.safetensors=sha256:3fb8d3ac27716d15a9ea92aeef6acf2b977bcc887d9b535000539e523673459b" }
+notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
+artifact_source = "official"
+canonical_state_sha256 = "e498a2e9aea76ef784cbe3e596c6b3f5e9a40e209ad837f7e3207099e4d74483"
+fast_repo = "Synthyra/ANKH_large"
+fast_revision = "92d2403bbe3c32acaa944fbb8dc2beb5f571f008"
+fast_files = [
+  "config.json=git-sha1:46eef0fff286107820f8ffc523127fa981435aeb",
+  "model-00001-of-00002.safetensors=sha256:79301f0b6a4fcbfd3b8bd10ca892846d79b1aad6ad06976da7380249e36f5158",
+  "model-00002-of-00002.safetensors=sha256:20062a5049fcde509030024527665a75062a95d64966558dfcaa9245b441cbec",
+  "model.safetensors.index.json=git-sha1:6b707ca3ce7255d241a52feeca68c0cbbe2a383f",
+  "special_tokens_map.json=git-sha1:55b145827029ae9672e50d4bb368540daacce791",
+  "tokenizer.json=git-sha1:212c5ef08819fa2463c6289ba4ef7db30e715c0a",
+  "tokenizer_config.json=git-sha1:d7fe02ba6f2b18d9ccfa19ac129c9fdc9ec24d09",
+]
+official_repo = "ElnaggarLab/ankh-large"
+official_revision = "74b371dbfa3ee0a05d32ae74df0c2e0b82d6b9a6"
+official_files = [
+  "config.json=git-sha1:1abf33e52ee3d6be67d780ec57d32ac2b27b5306",
+  "pytorch_model.bin=sha256:517b6e8b279dedcb477af240b35c46bd6eb3307723eb281e60d4b2c8a87b889b",
+  "special_tokens_map.json=git-sha1:55b145827029ae9672e50d4bb368540daacce791",
+  "tokenizer.json=git-sha1:212c5ef08819fa2463c6289ba4ef7db30e715c0a",
+  "tokenizer_config.json=git-sha1:d7fe02ba6f2b18d9ccfa19ac129c9fdc9ec24d09",
+]
+
+[[models]]
+id = "ankh2_large"
+family = "ankh"
+size_category = "large"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/ankh2_large.json=sha256:e8df38994ca1a1e0c598ace34a0b257b264937e4fdbb01bc41544985116b02a4", tensors = "tests/goldens/ankh2_large.safetensors=sha256:25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d" }
+notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
+artifact_source = "official"
+canonical_state_sha256 = "597c4fe2fa8711f11a25317905f1d62fa92905e55fdd5c0a79614cd9c9d2bca3"
+fast_repo = "Synthyra/ANKH2_large"
+fast_revision = "729167c1980316ae61691338838447491926033f"
+fast_files = [
+  "config.json=git-sha1:dd5d59e6b74bc8afa9fd4a5bda13526c235dabb8",
+  "generation_config.json=git-sha1:91f792e452403d46e170e206f9e50be5ddef9b9a",
+  "model-00001-of-00002.safetensors=sha256:7c0c297f60bcf81c732cdfeae6e99e140272807eb52afd70356fc6fdfa94e5a8",
+  "model-00002-of-00002.safetensors=sha256:f3d425d3e8741ccbdd925446559a9bf317c2c91e328f2eee44924423b56e3a3d",
+  "model.safetensors.index.json=git-sha1:6b707ca3ce7255d241a52feeca68c0cbbe2a383f",
+  "special_tokens_map.json=git-sha1:55b145827029ae9672e50d4bb368540daacce791",
+  "tokenizer.json=git-sha1:212c5ef08819fa2463c6289ba4ef7db30e715c0a",
+  "tokenizer_config.json=git-sha1:854e5db75dae8b1e9dd39c5bae80dae5508b3e25",
+]
+official_repo = "ElnaggarLab/ankh2-ext2"
+official_revision = "aa9b9fa72288c47d9f618ce80c011e24b54e17a8"
+official_files = [
+  "config.json=git-sha1:9286bed4ecbc4f7113024919d16ec9719b0c0748",
+  "generation_config.json=git-sha1:91f792e452403d46e170e206f9e50be5ddef9b9a",
+  "pytorch_model.bin=sha256:2df583f28f111276ee22a7b76007f4297e9a69766d60bccd9c8d7169c06ac606",
+  "special_tokens_map.json=git-sha1:55b145827029ae9672e50d4bb368540daacce791",
+  "tokenizer.json=git-sha1:212c5ef08819fa2463c6289ba4ef7db30e715c0a",
+  "tokenizer_config.json=git-sha1:854e5db75dae8b1e9dd39c5bae80dae5508b3e25",
+]
+
+[[models]]
+id = "ankh3_large"
+family = "ankh"
+size_category = "large"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/ankh3_large.json=sha256:2e5bb05b3baa5baa78f61fef7d2a2c669b0da5dbfaf6b50b12abd3e17253a961", tensors = "tests/goldens/ankh3_large.safetensors=sha256:e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513" }
+notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
+artifact_source = "official"
+canonical_state_sha256 = "60acb7ef86e85dc0c51fc1edf4c8e69a0480049723b6b2c95e6e9faa720c112a"
+fast_repo = "Synthyra/ANKH3_large"
+fast_revision = "c6d16ca2a1b3b27a27bcf3875e816a059029d264"
+fast_files = [
+  "config.json=git-sha1:813ffc6c319549a2c1f3503e1309c36110202d65",
+  "generation_config.json=git-sha1:5767cc0cacebfd06884eb27ae1c796d3ca829fd2",
+  "model-00001-of-00002.safetensors=sha256:7f1f5c5dcff4b6bc6b8464fe9a7eebdd99b0789ee8da895f42a41bdb04191654",
+  "model-00002-of-00002.safetensors=sha256:c1a67cef9b76202362ff00c9d2b2dc4b5fc7acd1f22d30c8b3f2e3d2597d0f22",
+  "model.safetensors.index.json=git-sha1:a20cfc1f8517ef47d12d08604dc93c064f1e6736",
+  "special_tokens_map.json=git-sha1:d596919b7fa2a197edd441ec3ec4685ecacd2de4",
+  "spiece.model=sha256:f2b5e1bbd110b71ca9b2878e1fcd3265610076ecc97bd696e8a745c9bacc54e0",
+  "tokenizer.json=git-sha1:90f0c94b43c81496b3ca81e3ec1c092ef2dd7fca",
+  "tokenizer_config.json=git-sha1:0e699eebfa778698473b4faf1e66ef363b93fb21",
+]
+official_repo = "ElnaggarLab/ankh3-large"
+official_revision = "2be091622e8a393f0ef21735070084123c874b6e"
+official_files = [
+  "config.json=git-sha1:f5278f77d158cdd8a173df888e3ed365e84a80a3",
+  "generation_config.json=git-sha1:5767cc0cacebfd06884eb27ae1c796d3ca829fd2",
+  "pytorch_model.bin=sha256:26321a345e07a25b21c6c41b651c4db91b420892e52c0dcbc55bd7a8f510f95b",
+  "special_tokens_map.json=git-sha1:d596919b7fa2a197edd441ec3ec4685ecacd2de4",
+  "spiece.model=sha256:f2b5e1bbd110b71ca9b2878e1fcd3265610076ecc97bd696e8a745c9bacc54e0",
+  "tokenizer.json=git-sha1:90f0c94b43c81496b3ca81e3ec1c092ef2dd7fca",
+  "tokenizer_config.json=git-sha1:0e699eebfa778698473b4faf1e66ef363b93fb21",
+]
+
+[[models]]
+id = "ankh3_xl"
+family = "ankh"
+size_category = "xlarge"
+generation_contract = "required"
+official_golden = { metadata = "tests/goldens/ankh3_xl.json=sha256:66bb12e033e4163be225d636108a479393228a4f5061015c8af114e766c3c486", tensors = "tests/goldens/ankh3_xl.safetensors=sha256:72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae" }
+notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head. The official PyTorch shard index is deliberately excluded: the builder verifies every declared source shard directly and writes a new canonical safetensors index."
+artifact_source = "official"
+canonical_state_sha256 = "dd2188e0d2ca65232135714eef6de394239734d843ddae4928c7398685d858e7"
+fast_repo = "Synthyra/ANKH3_xl"
+fast_revision = "d2856892e7535af2f55c2c4de043b1b272a29ed8"
+fast_files = [
+  "config.json=git-sha1:791460a5c0d6c03bebbac1d7eec7e35805eaf7b7",
+  "generation_config.json=git-sha1:91f792e452403d46e170e206f9e50be5ddef9b9a",
+  "model-00001-of-00005.safetensors=sha256:f6b841f6b800e436b08e362d04f8442fd044839b1e32ba6ac01ecb30a9d2bae5",
+  "model-00002-of-00005.safetensors=sha256:ea556d511d4747ada49b9d0c24ef503774410093e53c0d003ffb9407efc2be31",
+  "model-00003-of-00005.safetensors=sha256:125884f5dcb5b44435e3b76330582f31f74547b67c9b6cadf9a4d7cf38748eb7",
+  "model-00004-of-00005.safetensors=sha256:e776ef6c5d6a50d4b3fcf0bbb2431de7ce813eddd2903290e54809c801ddb241",
+  "model-00005-of-00005.safetensors=sha256:58ee3b065cfcccd179fdbecef9827dfb91feb33e0d8385b692e6309d56ec530e",
+  "model.safetensors.index.json=git-sha1:74d149f64234c3f43eb85971f40b4a1c6d05a407",
+  "special_tokens_map.json=git-sha1:d596919b7fa2a197edd441ec3ec4685ecacd2de4",
+  "spiece.model=sha256:f2b5e1bbd110b71ca9b2878e1fcd3265610076ecc97bd696e8a745c9bacc54e0",
+  "tokenizer.json=git-sha1:90f0c94b43c81496b3ca81e3ec1c092ef2dd7fca",
+  "tokenizer_config.json=git-sha1:0e699eebfa778698473b4faf1e66ef363b93fb21",
+]
+official_repo = "ElnaggarLab/ankh3-xl"
+official_revision = "e00113df5c95ef71df7ea3f5a73d56bd00e473a4"
+official_files = [
+  "config.json=git-sha1:f8997040e8913df75fd2eebe71a2a8eb750ed0d0",
+  "generation_config.json=git-sha1:91f792e452403d46e170e206f9e50be5ddef9b9a",
+  "pytorch_model-00001-of-00003.bin=sha256:2c9793cbee16697cd4149debe07d3a27143e280f6e970fa46042aae820fea981",
+  "pytorch_model-00002-of-00003.bin=sha256:31c5a860e414513c829ae52affb0970d7cef2c0545df2d6e1338b6806ab7174b",
+  "pytorch_model-00003-of-00003.bin=sha256:055a853bdd3623db95a637935aa299427e837cd8ea69fc04708b0262508bec75",
+  "special_tokens_map.json=git-sha1:d596919b7fa2a197edd441ec3ec4685ecacd2de4",
+  "spiece.model=sha256:f2b5e1bbd110b71ca9b2878e1fcd3265610076ecc97bd696e8a745c9bacc54e0",
+  "tokenizer.json=git-sha1:90f0c94b43c81496b3ca81e3ec1c092ef2dd7fca",
+  "tokenizer_config.json=git-sha1:0e699eebfa778698473b4faf1e66ef363b93fb21",
+]
+
+[[models]]
+id = "boltz2"
+family = "boltz2"
+size_category = "structure"
+generation_contract = "not_applicable"
+notes = "Boltz2 is provisional in FastPLMs 1.0. Exact configuration, the declared inference-core state, feature preparation, and seeded execution remain tested, but native-environment BF16 end-to-end inference currently exceeds the fixed numerical-equivalence limits. FastPLMs therefore does not claim official inference equivalence for this checkpoint yet. Work on that numerical gap continues independently of the ESM++ and ESMFold2 release gates."
+fast_repo = "Synthyra/Boltz2"
+fast_revision = "3b148fc5efea109c065ec82ba8683d024de7134e"
+fast_files = [
+  "config.json=git-sha1:8682ccb12e177e73bc7a351ff7e3af484bfb6fac",
+  "model.safetensors=sha256:5c863fd200a1613a0e311071e2ad73ab350635e3fd336e6822cf45c52cb960e5",
+]
+official_repo = "boltz-community/boltz-2"
+official_revision = "6fdef46d763fee7fbb83ca5501ccceff43b85607"
+official_files = [
+  "boltz2_conf.ckpt=sha256:090e82ac8c92f5e943fa1b39e7410a44027bea7243c0bbb3caa67a77fc1428e1",
+  "mols.tar=sha256:39e076d96dbec6b4e86982bbda16f3a53a2a60c9bdc17828d88f6f9a0c7d1fd7",
+]
+
+[[models]]
+id = "esmfold"
+family = "esmfold"
+size_category = "structure"
+generation_contract = "not_applicable"
+official_golden = { metadata = "tests/goldens/esmfold.json=sha256:380b9a96168410717d1f698feaabb826b1606444cbdeec86c2ea06d9ffe8f186", tensors = "tests/goldens/esmfold.safetensors=sha256:873b1b325a43d8e0f35f355c8914a2a9fe611cc48763875e9e6a22e09ec9ebcb" }
+fast_repo = "Synthyra/FastESMFold"
+fast_revision = "b88c8cb50d19b2cf7ab4fee4b0a61f5e02da7823"
+fast_files = [
+  "config.json=git-sha1:18e0091dcbf6140bf68924d53c4c8917b9cd90b1",
+  "model-00001-of-00003.safetensors=sha256:36fab9e5c96d409b2a34a8b4f1273acac8c07f119c32c4fcfa7d47bbcd55b83c",
+  "model-00002-of-00003.safetensors=sha256:34954aaa05bc91635776ba6672946da5822626753d80db97b38c0538e9525102",
+  "model-00003-of-00003.safetensors=sha256:2f1178cda0e6cff3b1e158e1acc59c83e3f4fc46e246388a5127bc56b8d9c4f2",
+  "special_tokens_map.json=git-sha1:53cd95604a28eb7e23da763c8da23f5006ab2179",
+  "tokenizer_config.json=git-sha1:10213f69b51b4b38876a29271b8f908e853a5800",
+  "vocab.txt=git-sha1:eee0a1fc93c82568f78f086550fbd7c591cf423a",
+]
+official_repo = "facebook/esmfold_v1"
+official_revision = "75a3841ee059df2bf4d56688166c8fb459ddd97a"
+official_files = [
+  "config.json=git-sha1:1232d0aee4be551021d8e70e66ed2b062df917bf",
+  "pytorch_model.bin=sha256:2ee07356b125d1e3e57503c204111fd7323347fc4735d41d3caac57c2a78e116",
+  "special_tokens_map.json=git-sha1:121c8d54f8ea66cdf678f48b3cb37c05b4de5c0d",
+  "tokenizer_config.json=git-sha1:aad24fba9f1bad2d74ed79d414ddcd60e6b0f812",
+  "vocab.txt=git-sha1:9abfdf5472c0ed970648b683b86ab131256b3e42",
+]
+
+[[models.oracle_assets]]
+role = "weights"
+path = "models/esmfold_3B_v1.pt"
+url = "https://dl.fbaipublicfiles.com/fair-esm/models/esmfold_3B_v1.pt"
+sha256 = "e9a52579027e77d2d2e0a18218e755821f395730e86624cab9413dc117f5ca62"
+size = 2771653574
+
+[[models]]
+id = "esmfold2"
+family = "esmfold2"
+size_category = "structure"
+generation_contract = "not_applicable"
+msa_conditioning = true
+official_golden = { metadata = "tests/goldens/esmfold2.json=sha256:f6e0ed1ec400b9a0fcc817db51774be968dc454b7a32645a07c479e42423ab20", tensors = "tests/goldens/esmfold2.safetensors=sha256:e4d6be4344c528e26b13f79a9303549e3de7e582da195c0078db3ce957fad420" }
+fast_repo = "Synthyra/ESMFold2"
+fast_revision = "cd5a0927cec585a778d983b99a8db23d2e9b281e"
+fast_files = [
+  "config.json=git-sha1:67e81ff571f393f0b630cd5a22398bd84979c030",
+  "model.safetensors=sha256:138fd4350d6892b81ce6be7ff9bf5a93ae9d4d3751f46a27438a3f9f0dcefa0e",
+]
+official_repo = "biohub/ESMFold2"
+official_revision = "1ebf0e3481a5184eb6171d40615c79e384b48796"
+official_files = [
+  "config.json=git-sha1:0300c084b990b2bd600efd9f538aa5de27109fea",
+  "model.safetensors=sha256:138fd4350d6892b81ce6be7ff9bf5a93ae9d4d3751f46a27438a3f9f0dcefa0e",
+]
+
+[[models]]
+id = "esmfold2_fast"
+family = "esmfold2"
+size_category = "structure"
+generation_contract = "not_applicable"
+msa_conditioning = false
+official_golden = { metadata = "tests/goldens/esmfold2_fast.json=sha256:091b004c0b330217b59c12acd6da3d6edaf91e48d95f6d5f40fc20399cef9478", tensors = "tests/goldens/esmfold2_fast.safetensors=sha256:6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990" }
+fast_repo = "Synthyra/ESMFold2-Fast"
+fast_revision = "407875bfcaa42552bfcb25acd67ee1888b790170"
+fast_files = [
+  "config.json=git-sha1:62ccca15a416a5dcbd02cd6ce161f432c7b4de58",
+  "model.safetensors=sha256:60ca19f2898188beba92944365f7b909efd9c99212f5018af75cc47cd9a6184a",
+]
+official_repo = "biohub/ESMFold2-Fast"
+official_revision = "b28d8ace5e05e61e5bec1e6820cfd3e221819d12"
+official_files = [
+  "config.json=git-sha1:c0ca526090fa7f8342ee4666d56e7fe3a4b8cbb2",
+  "model.safetensors=sha256:60ca19f2898188beba92944365f7b909efd9c99212f5018af75cc47cd9a6184a",
+]
+
+[[models]]
+id = "esmfold2_experimental_cutoff2025"
+family = "esmfold2"
+size_category = "structure"
+generation_contract = "not_applicable"
+msa_conditioning = true
+official_golden = { metadata = "tests/goldens/esmfold2_experimental_cutoff2025.json=sha256:cfd0e35b2bc468a0dc4f614d3acfa2fce004f96e9ae2433256ed095b829d55cc", tensors = "tests/goldens/esmfold2_experimental_cutoff2025.safetensors=sha256:9347466bbe803b6f5dc82e3356ca6cbbf2c2edd8765f9fd273385bda255019f6" }
+fast_repo = "Synthyra/ESMFold2-Experimental-Cutoff2025"
+fast_revision = "632ff4a9e68f1de78ee956a613267bdcdb5b354d"
+fast_files = [
+  "config.json=git-sha1:41119745d38bc5503a0212ad923e75211dec565f",
+  "model.safetensors=sha256:01358c317428d38535e3db513cab177336fc0f7fab0d84002e64b7741d5181b3",
+]
+official_repo = "biohub/ESMFold2-Experimental-Cutoff2025"
+official_revision = "56f94f5c1069ecde17512c96928850518340d287"
+official_files = [
+  "config.json=git-sha1:79ed0dc0f867b8f09bfa004d6f77397c2ab9b38d",
+  "model.safetensors=sha256:01358c317428d38535e3db513cab177336fc0f7fab0d84002e64b7741d5181b3",
+]
+auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel" }
+
+[[models]]
+id = "esmfold2_experimental_fast_cutoff2025"
+family = "esmfold2"
+size_category = "structure"
+generation_contract = "not_applicable"
+msa_conditioning = false
+official_golden = { metadata = "tests/goldens/esmfold2_experimental_fast_cutoff2025.json=sha256:1d0b2da4f1579243f37ae04bd4b834b747005cd8e8e7665e00d088123c43afd9", tensors = "tests/goldens/esmfold2_experimental_fast_cutoff2025.safetensors=sha256:516e216d05d7e6bee59e77126d3e595e2bb7821929433f00c259c5d5241964bb" }
+fast_repo = "Synthyra/ESMFold2-Experimental-Fast-Cutoff2025"
+fast_revision = "8f022c2514a6c32692aaca078a8391d6bc6c4bac"
+fast_files = [
+  "config.json=git-sha1:b9d39e941050179ca51faaed58cbbd77778c1143",
+  "model.safetensors=sha256:4e903b740ad6ad704ec60881bfd593e0d6c874a630ffa0f0838276e0b665088f",
+]
+official_repo = "biohub/ESMFold2-Experimental-Fast-Cutoff2025"
+official_revision = "74b88548bf19688b8727432db0d698cb2e1d8783"
+official_files = [
+  "config.json=git-sha1:0333d68ddb12ed2f066741dcb801142f466c0a2c",
+  "model.safetensors=sha256:4e903b740ad6ad704ec60881bfd593e0d6c874a630ffa0f0838276e0b665088f",
+]
+auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel" }
