@@ -149,12 +149,14 @@ complex_result = model.fold(
 print(complex_result.ptm, complex_result.plddt.mean().item())
 ```
 
-The typed interface also supports RNA, protein MSAs, modifications, covalent
-bonds, and distogram conditioning. The public schema recognizes
-`PocketConditioning`, but the pinned official runtime discards it and hard-codes
-a zero pocket feature. FastPLMs therefore rejects non-null pocket conditioning
-instead of silently ignoring it. Prepared `ref_pos` values are component
-reference geometries created during featurization, not target coordinates.
+The typed interface also supports RNA, protein MSAs, modifications, and covalent
+bonds. The public schema recognizes `PocketConditioning` and
+`DistogramConditioning`, but the pinned official forward consumes neither. Its
+feature builder hard-codes a zero pocket feature and constructs distogram tensors
+that the released model ignores. FastPLMs therefore rejects non-null pocket and
+distogram conditioning instead of silently ignoring scientific inputs. Prepared
+`ref_pos` values are component reference geometries created during featurization,
+not target coordinates.
 Predicted coordinates and confidence scores are outputs and do not establish
 biochemical activity.
 

@@ -545,21 +545,20 @@ complex_result = folder.fold(
 print(complex_result.ptm, complex_result.plddt.mean().item())
 ```
 
-The typed interface supports RNA, ligands, modifications, covalent bonds, and
-distogram conditioning. The Fast checkpoint loaded above rejects an MSA even
-when it appears inside an otherwise valid typed request. To attach an MSA to a
-protein input, load the full `Synthyra/ESMFold2` or
-`Synthyra/ESMFold2-Experimental-Cutoff2025` checkpoint. The schema recognizes
-`PocketConditioning`, but the pinned official runtime discards it and hard-codes
-a zero pocket feature. FastPLMs rejects non-null pocket conditioning instead of
-silently ignoring it. Prepared features contain fields such as `ref_pos`; these
-are component reference geometries created during featurization, not a known
-target structure.
+The typed interface supports RNA, ligands, modifications, and covalent bonds.
+The Fast checkpoint loaded above rejects an MSA even when it appears inside an
+otherwise valid typed request. To attach an MSA to a protein input, load the full
+`Synthyra/ESMFold2` or `Synthyra/ESMFold2-Experimental-Cutoff2025` checkpoint.
+The schema recognizes `PocketConditioning` and `DistogramConditioning`, but the
+pinned official forward consumes neither. FastPLMs rejects non-null pocket and
+distogram conditioning instead of silently ignoring scientific inputs. Prepared
+features contain fields such as `ref_pos`; these are component reference
+geometries created during featurization, not a known target structure.
 See the offline
 [`structure_preparation.py`](examples/structure_preparation.py) example for the
-supported MSA, multimolecule, modification, bond, and distogram paths and the
-explicit pocket rejection. Its ESMFold2 MSA branch requires one of the full
-checkpoints, not a Fast checkpoint.
+supported MSA, multimolecule, modification, and bond paths and the explicit
+pocket and distogram rejection contracts. Its ESMFold2 MSA branch requires one
+of the full checkpoints, not a Fast checkpoint.
 
 Its learned sequence representation combines 81 ordered ESMC hidden states
 with the folding checkpoint's projection. Use the public embedding API to

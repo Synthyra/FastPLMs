@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import inspect
 import os
 import subprocess
 import sys
-import pytest
-import torch
 from pathlib import Path
 from types import MethodType, SimpleNamespace
+
+import pytest
+import torch
 
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.esmfold2_msa import MSA
@@ -15,7 +17,9 @@ from fastplms.models.esmfold2.esmfold2_types import ProteinInput, StructurePredi
 from fastplms.models.esmfold2.modeling_esmfold2 import ESMFold2Model
 from fastplms.models.esmfold2.modeling_esmfold2_common import (
     MSA_CONDITIONING_INPUT_NAMES,
+    PREPARED_AUXILIARY_INPUT_NAMES,
     validate_msa_conditioning_inputs,
+    validate_prepared_auxiliary_inputs,
 )
 from fastplms.models.esmfold2.modeling_esmfold2_experimental import (
     ESMFold2ExperimentalModel,
@@ -167,6 +171,63 @@ def test_full_checkpoint_accepts_low_level_msa_inputs() -> None:
         deletion_value=tensor,
         deletion_mean=tensor,
     )
+
+
+@pytest.mark.parametrize("model_type", [ESMFold2Model, ESMFold2ExperimentalModel])
+def test_forward_explicitly_accepts_every_prepared_auxiliary_input(
+    model_type: type[ESMFold2Model] | type[ESMFold2ExperimentalModel],
+) -> None:
+    signature = inspect.signature(model_type.forward)
+    assert set(PREPARED_AUXILIARY_INPUT_NAMES) <= set(signature.parameters)
+    assert all(
+        parameter.kind is not inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+
+
+def test_inert_prepared_auxiliary_conditioning_is_accepted() -> None:
+    validate_prepared_auxiliary_inputs(
+        pocket_feature=torch.zeros(2, dtype=torch.long),  # (n=2,)
+        disto_cond=torch.zeros(2, 2),  # (l=2, l=2)
+        disto_cond_mask=torch.zeros(2, 2, dtype=torch.bool),  # (l=2, l=2)
+    )
+
+
+@pytest.mark.parametrize(
+    ("provided_name", "values"),
+    (
+        (
+            "pocket_feature",
+            {
+                "pocket_feature": torch.ones(1, dtype=torch.long),
+                "disto_cond": None,
+                "disto_cond_mask": None,
+            },
+        ),
+        (
+            "disto_cond",
+            {
+                "pocket_feature": None,
+                "disto_cond": torch.ones(1, 1),
+                "disto_cond_mask": None,
+            },
+        ),
+        (
+            "disto_cond_mask",
+            {
+                "pocket_feature": None,
+                "disto_cond": None,
+                "disto_cond_mask": torch.ones(1, 1, dtype=torch.bool),
+            },
+        ),
+    ),
+)
+def test_active_prepared_auxiliary_conditioning_is_rejected(
+    provided_name: str,
+    values: dict[str, torch.Tensor | None],
+) -> None:
+    with pytest.raises(NotImplementedError, match=provided_name):
+        validate_prepared_auxiliary_inputs(**values)
 
 
 @pytest.mark.parametrize("model_type", [ESMFold2Model, ESMFold2ExperimentalModel])

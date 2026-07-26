@@ -194,7 +194,7 @@ def test_generated_capability_evidence_covers_manifest() -> None:
     advertised_entries = sum(len(family.auto_map) for family in registry.families.values())
     assert text.count("[runnable AutoClass contract]") == advertised_entries
     assert "ANKH embeddings and generation" in text
-    assert "pocket requests fail closed" in text
+    assert "pocket and distogram requests fail closed" in text
 
 
 def test_autoclass_capability_evidence_matches_runtime_and_benchmark_selectors() -> None:

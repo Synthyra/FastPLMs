@@ -25,6 +25,7 @@ from fastplms.models.esmfold2.esmfold2_predicted_aligned_error import (
 from fastplms.models.esmfold2.esmfold2_protein_chain import ProteinChain
 from fastplms.models.esmfold2.esmfold2_system import run_subprocess_with_errorcheck
 from fastplms.models.esmfold2.esmfold2_types import (
+    DistogramConditioning,
     PocketConditioning,
     ProteinInput,
     StructurePredictionInput,
@@ -200,6 +201,22 @@ def test_pocket_conditioning_is_rejected_instead_of_silently_dropped() -> None:
     request = StructurePredictionInput(
         sequences=[ProteinInput(id="A", sequence="ACD")],
         pocket=PocketConditioning(binder_chain_id="A", contacts=[("A", 0)]),
+    )
+    with pytest.raises(NotImplementedError, match="refuses this input"):
+        clean_esmfold2_input(request)
+
+
+def test_distogram_conditioning_is_rejected_instead_of_silently_dropped() -> None:
+    from fastplms.models.esmfold2.esmfold2_processor import clean_esmfold2_input
+
+    request = StructurePredictionInput(
+        sequences=[ProteinInput(id="A", sequence="ACD")],
+        distogram_conditioning=[
+            DistogramConditioning(
+                chain_id="A",
+                distogram=np.zeros((3, 3), dtype=np.float32),  # (l=3, l=3)
+            )
+        ],
     )
     with pytest.raises(NotImplementedError, match="refuses this input"):
         clean_esmfold2_input(request)

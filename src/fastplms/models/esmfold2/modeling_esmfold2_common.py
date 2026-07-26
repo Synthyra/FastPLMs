@@ -57,6 +57,14 @@ MSA_CONDITIONING_INPUT_NAMES = (
     "deletion_value",
     "deletion_mean",
 )
+PREPARED_AUXILIARY_INPUT_NAMES = (
+    "pocket_feature",
+    "gt_coords",
+    "is_resolved",
+    "frames_idx",
+    "disto_cond",
+    "disto_cond_mask",
+)
 
 
 def validate_kernel_backend(backend: str | None) -> None:
@@ -102,6 +110,29 @@ def validate_msa_conditioning_inputs(
         raise ValueError(
             "This ESMFold2 checkpoint was trained without MSA conditioning and rejects "
             f"MSA-derived inputs: {', '.join(provided)}."
+        )
+
+
+def validate_prepared_auxiliary_inputs(
+    *,
+    pocket_feature: Tensor | None,
+    disto_cond: Tensor | None,
+    disto_cond_mask: Tensor | None,
+) -> None:
+    """Accept inert upstream features while rejecting unsupported conditioning."""
+
+    if pocket_feature is not None and torch.any(pocket_feature != 0).item():
+        raise NotImplementedError(
+            "The published ESMFold2 forward does not consume pocket conditioning; "
+            "nonzero pocket_feature values are unsupported."
+        )
+    distogram_is_active = (disto_cond is not None and torch.any(disto_cond != 0).item()) or (
+        disto_cond_mask is not None and torch.any(disto_cond_mask).item()
+    )
+    if distogram_is_active:
+        raise NotImplementedError(
+            "The published ESMFold2 forward does not consume distogram conditioning; "
+            "nonzero disto_cond or disto_cond_mask values are unsupported."
         )
 
 
