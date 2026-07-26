@@ -1163,9 +1163,9 @@ generation_contract = "not_applicable"
 msa_conditioning = true
 official_golden = { metadata = "tests/goldens/esmfold2.json=sha256:f6e0ed1ec400b9a0fcc817db51774be968dc454b7a32645a07c479e42423ab20", tensors = "tests/goldens/esmfold2.safetensors=sha256:e4d6be4344c528e26b13f79a9303549e3de7e582da195c0078db3ce957fad420" }
 fast_repo = "Synthyra/ESMFold2"
-fast_revision = "cd5a0927cec585a778d983b99a8db23d2e9b281e"
+fast_revision = "8fc9feb9453de0e93d90e62dfb4c22b8e7750047"
 fast_files = [
-  "config.json=git-sha1:67e81ff571f393f0b630cd5a22398bd84979c030",
+  "config.json=git-sha1:184e3fc66f607163e125dad3e594beed140d00af",
   "model.safetensors=sha256:138fd4350d6892b81ce6be7ff9bf5a93ae9d4d3751f46a27438a3f9f0dcefa0e",
 ]
 official_repo = "biohub/ESMFold2"
@@ -1183,9 +1183,9 @@ generation_contract = "not_applicable"
 msa_conditioning = false
 official_golden = { metadata = "tests/goldens/esmfold2_fast.json=sha256:091b004c0b330217b59c12acd6da3d6edaf91e48d95f6d5f40fc20399cef9478", tensors = "tests/goldens/esmfold2_fast.safetensors=sha256:6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990" }
 fast_repo = "Synthyra/ESMFold2-Fast"
-fast_revision = "407875bfcaa42552bfcb25acd67ee1888b790170"
+fast_revision = "f1ba14562c5766e90c575a27c39cf41219a1a491"
 fast_files = [
-  "config.json=git-sha1:62ccca15a416a5dcbd02cd6ce161f432c7b4de58",
+  "config.json=git-sha1:f6818caf5ed5c2492ff9a25840fc5ac5d034b23a",
   "model.safetensors=sha256:60ca19f2898188beba92944365f7b909efd9c99212f5018af75cc47cd9a6184a",
 ]
 official_repo = "biohub/ESMFold2-Fast"
@@ -1203,9 +1203,9 @@ generation_contract = "not_applicable"
 msa_conditioning = true
 official_golden = { metadata = "tests/goldens/esmfold2_experimental_cutoff2025.json=sha256:cfd0e35b2bc468a0dc4f614d3acfa2fce004f96e9ae2433256ed095b829d55cc", tensors = "tests/goldens/esmfold2_experimental_cutoff2025.safetensors=sha256:9347466bbe803b6f5dc82e3356ca6cbbf2c2edd8765f9fd273385bda255019f6" }
 fast_repo = "Synthyra/ESMFold2-Experimental-Cutoff2025"
-fast_revision = "632ff4a9e68f1de78ee956a613267bdcdb5b354d"
+fast_revision = "541dac8849757e9612f4e414ac7128884c3da789"
 fast_files = [
-  "config.json=git-sha1:41119745d38bc5503a0212ad923e75211dec565f",
+  "config.json=git-sha1:88422df0953fd88f7254221f46a57f68034e43af",
   "model.safetensors=sha256:01358c317428d38535e3db513cab177336fc0f7fab0d84002e64b7741d5181b3",
 ]
 official_repo = "biohub/ESMFold2-Experimental-Cutoff2025"
@@ -1224,9 +1224,9 @@ generation_contract = "not_applicable"
 msa_conditioning = false
 official_golden = { metadata = "tests/goldens/esmfold2_experimental_fast_cutoff2025.json=sha256:1d0b2da4f1579243f37ae04bd4b834b747005cd8e8e7665e00d088123c43afd9", tensors = "tests/goldens/esmfold2_experimental_fast_cutoff2025.safetensors=sha256:516e216d05d7e6bee59e77126d3e595e2bb7821929433f00c259c5d5241964bb" }
 fast_repo = "Synthyra/ESMFold2-Experimental-Fast-Cutoff2025"
-fast_revision = "8f022c2514a6c32692aaca078a8391d6bc6c4bac"
+fast_revision = "d7b3e6017cbd45ffe70fe05ace4a147ad0722cb3"
 fast_files = [
-  "config.json=git-sha1:b9d39e941050179ca51faaed58cbbd77778c1143",
+  "config.json=git-sha1:04be1837dc66ef6c2e26ca52cd95f8c33ad1fa9d",
   "model.safetensors=sha256:4e903b740ad6ad704ec60881bfd593e0d6c874a630ffa0f0838276e0b665088f",
 ]
 official_repo = "biohub/ESMFold2-Experimental-Fast-Cutoff2025"
