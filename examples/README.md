@@ -72,6 +72,17 @@ PYTHONPATH=src python examples/task_heads.py dist/hub/ESM2-8M \
   --attn-backend eager --device cpu --dtype float32
 ```
 
+Run the complete weights-only ESMC-6B workflow with explicit local cache and
+output directories:
+
+```bash
+python examples/esmc_weight_geometry.py \
+  --download --download-fold-subsets \
+  --cache-dir /cache/esmc-weight-geometry \
+  --output-dir results/esmc-weight-geometry \
+  --device cuda:0 --stage all --resume
+```
+
 The structure-preparation example deliberately constructs an MSA-conditioned
 request, so point it at a full ESMFold2 artifact:
 
@@ -110,6 +121,8 @@ FlashAttention 3 is supported but unavailable on the current locked target.
 | Structure preparation | [`structure_preparation.py`](structure_preparation.py) | Typed ESMFold2 multimolecule/MSA/modification/bond/distogram input, pocket rejection, seeded ESMFold/Boltz helpers | The MSA branch requires a full 48-block ESMFold2 variant; Fast variants reject MSA-derived inputs; tiny preparation and helper contracts are not full folding parity |
 | Fine-tuning | [`fine_tuning.py`](fine_tuning.py) | ESM2 classification/regression, LoRA or full tuning, eager/SDPA/Flex selection, immutable inputs, atomic verified final artifact | LoRA is the demonstrated PEFT method; Flash training requires a separate explicit BF16 CUDA policy; other PEFT methods are not claimed by this example |
 | Binder design | [`binder_design_fastplms.py`](binder_design_fastplms.py) | Differentiable ESMFold2/ESM++ optimization and critic consensus | Research prioritization only; no experimental binding claim |
+| ESMC weight geometry | [`esmc_weight_geometry.py`](esmc_weight_geometry.py) | Resumable spectra, weight-vector dimension, head geometry, projection alignment, and compression across all 80 ESMC-6B blocks | Checkpoint parameters only; no activation, folding, perplexity, or biological-information claim |
+| ESMC weight geometry deep dive | [`esmc_weight_geometry_deep_dive.py`](esmc_weight_geometry_deep_dive.py) | Exhaustive raw distributions, spectral shape, subspace turnover, FFN neuron arrays, normalization-channel trajectories, data catalogs, and an audit notebook | Extends a completed weights-only run; randomized top-subspace results are approximation-labeled |
 
 The generated [capability-to-evidence manifest](../docs/generated/capability_evidence.md)
 maps each curated example to its required CPU, feature, structure, nightly, or
@@ -140,6 +153,13 @@ branch, and tag revisions; pre-populate every snapshot before a network-isolated
 run. Local fine-tuning dataset directories must be layouts accepted by
 `datasets.load_dataset`; arbitrary `Dataset.save_to_disk()` trees are not
 currently accepted.
+
+`esmc_weight_geometry.py` is also a checkpoint workflow. Its optional `--download`
+path is explicit and revision-pinned; every analysis stage is local after acquisition.
+Pass four local ESMFold2 checkpoints as `LABEL=PATH`, or use
+`--download-fold-subsets` to range-fetch only their mixing, projection, and LayerNorm
+tensors. The workflow streams one safetensors matrix at a time and never instantiates
+ESMC or supplies a protein sequence.
 
 Fine-tuning writes separate task-specific children beneath `--output-dir` and
 records requested and effective attention backends. Binder design refuses any
