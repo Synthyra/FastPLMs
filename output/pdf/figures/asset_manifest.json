@@ -1,0 +1,71 @@
+{
+  "files": [
+    {
+      "bytes": 403,
+      "path": "attention_gt_05.dat",
+      "sha256": "2f02b9dca4389f4b1191b0dff37ed0b3d96def451075d44d53cb7bef89790d1d"
+    },
+    {
+      "bytes": 402,
+      "path": "attention_gt_07.dat",
+      "sha256": "c4238b2742ddbafd35fb422d7fe30286ccc2f07caf9a1fe71aed0847f3f2c5b2"
+    },
+    {
+      "bytes": 217405,
+      "path": "layer_omnibus_anomalies.png",
+      "sha256": "21e5dc58d5b59a8242f25f2a52cccea92714c15037b2de86567694a2b3d843b0"
+    },
+    {
+      "bytes": 1303,
+      "path": "mixer_esmfold2.dat",
+      "sha256": "0b3fb6ad3d37d455e7b8d733b98ecd049111d2a709acac54a73f6926fbbf0db0"
+    },
+    {
+      "bytes": 1302,
+      "path": "mixer_experimental.dat",
+      "sha256": "f386603012099c0a30e947e538cc42779c1cd4d21d649e998f84a1bc6dc0be19"
+    },
+    {
+      "bytes": 1303,
+      "path": "mixer_experimental_fast.dat",
+      "sha256": "aaf3b5baa9faef17c7cdbfcfc993d9ebadf5154ef31307a1ddb63840fbd9c7e9"
+    },
+    {
+      "bytes": 1303,
+      "path": "mixer_fast.dat",
+      "sha256": "1bce6da5bab1186b5a3e770d466a7f3fdfeef96ea2f2559f3e5004ee225ee50c"
+    },
+    {
+      "bytes": 3377,
+      "path": "projection_gate.dat",
+      "sha256": "73dcc320dc3084b2a48b97bb0cc96d8f29d40dc18492c1df6ab0d45afe29b4a3"
+    },
+    {
+      "bytes": 3377,
+      "path": "projection_value.dat",
+      "sha256": "443fc31ed41ef333a30c7023c98d8afd50d4cc52951b1e0dd261a46a2dad14a5"
+    },
+    {
+      "bytes": 3752,
+      "path": "q_effective_rank.dat",
+      "sha256": "7c1a2dc2142438ec5944d05c00766a96cfdc83c02582ed946941bfd21e7852b1"
+    },
+    {
+      "bytes": 639634,
+      "path": "raw_parameter_profiles.png",
+      "sha256": "c6dbbcdd178afc5aa2a39db1797cb79d629425d2d750308dff5098aad6458b85"
+    },
+    {
+      "bytes": 944764,
+      "path": "spectral_shape_profiles.png",
+      "sha256": "50d61ab932e661f79be414832b5b0378566daea8a977d031564fd48d51d3940c"
+    },
+    {
+      "bytes": 690655,
+      "path": "trajectory_speed_curvature.png",
+      "sha256": "38bb42d755a1a6f66b20ace07c49791a1dbbf7bee1206c61b95114cf3f133bb6"
+    }
+  ],
+  "schema_version": 1,
+  "source_report": "C:\\Users\\lhall\\Desktop\\Research\\FastPLMs\\artifacts\\analysis\\esmc_layer51_synthesis_20260726"
+}

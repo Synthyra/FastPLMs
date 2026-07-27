@@ -1,0 +1,325 @@
+checkpoint,checkpoint_label,state_index,producing_block,mixing_weight_pct
+esmfold2,ESMFold2,0,,0.3110041763
+esmfold2,ESMFold2,1,0.0,0.0143107555
+esmfold2,ESMFold2,2,1.0,0.0240003021
+esmfold2,ESMFold2,3,2.0,0.0364922166
+esmfold2,ESMFold2,4,3.0,0.0433687992
+esmfold2,ESMFold2,5,4.0,0.0623326767
+esmfold2,ESMFold2,6,5.0,0.107241247
+esmfold2,ESMFold2,7,6.0,0.1505208587
+esmfold2,ESMFold2,8,7.0,0.1984023812
+esmfold2,ESMFold2,9,8.0,0.2536576179
+esmfold2,ESMFold2,10,9.0,0.4018116826
+esmfold2,ESMFold2,11,10.0,0.7022548838
+esmfold2,ESMFold2,12,11.0,0.1551668136
+esmfold2,ESMFold2,13,12.0,0.0592233236
+esmfold2,ESMFold2,14,13.0,0.0208804493
+esmfold2,ESMFold2,15,14.0,0.0135462116
+esmfold2,ESMFold2,16,15.0,0.006808956
+esmfold2,ESMFold2,17,16.0,0.00433834
+esmfold2,ESMFold2,18,17.0,0.0029545336
+esmfold2,ESMFold2,19,18.0,0.0023685527
+esmfold2,ESMFold2,20,19.0,0.0020045784
+esmfold2,ESMFold2,21,20.0,0.0017557756
+esmfold2,ESMFold2,22,21.0,0.0016545282
+esmfold2,ESMFold2,23,22.0,0.0017227488
+esmfold2,ESMFold2,24,23.0,0.0020642302
+esmfold2,ESMFold2,25,24.0,0.0020069178
+esmfold2,ESMFold2,26,25.0,0.0019395782
+esmfold2,ESMFold2,27,26.0,0.0020671704
+esmfold2,ESMFold2,28,27.0,0.0022009364
+esmfold2,ESMFold2,29,28.0,0.0023141288
+esmfold2,ESMFold2,30,29.0,0.0028922708
+esmfold2,ESMFold2,31,30.0,0.003539221
+esmfold2,ESMFold2,32,31.0,0.0043843958
+esmfold2,ESMFold2,33,32.0,0.0046195485
+esmfold2,ESMFold2,34,33.0,0.0048543451
+esmfold2,ESMFold2,35,34.0,0.0055434766
+esmfold2,ESMFold2,36,35.0,0.0056332283
+esmfold2,ESMFold2,37,36.0,0.0069017287
+esmfold2,ESMFold2,38,37.0,0.0062173995
+esmfold2,ESMFold2,39,38.0,0.0070345517
+esmfold2,ESMFold2,40,39.0,0.0088710893
+esmfold2,ESMFold2,41,40.0,0.0101495728
+esmfold2,ESMFold2,42,41.0,0.0142066687
+esmfold2,ESMFold2,43,42.0,0.0128667648
+esmfold2,ESMFold2,44,43.0,0.0187428712
+esmfold2,ESMFold2,45,44.0,0.034449671
+esmfold2,ESMFold2,46,45.0,0.0339375797
+esmfold2,ESMFold2,47,46.0,0.0855876723
+esmfold2,ESMFold2,48,47.0,0.8096328984
+esmfold2,ESMFold2,49,48.0,1.8532629692
+esmfold2,ESMFold2,50,49.0,3.9192742638
+esmfold2,ESMFold2,51,50.0,10.6536501016
+esmfold2,ESMFold2,52,51.0,3.321619466
+esmfold2,ESMFold2,53,52.0,2.5537221293
+esmfold2,ESMFold2,54,53.0,0.4214544012
+esmfold2,ESMFold2,55,54.0,0.1480012444
+esmfold2,ESMFold2,56,55.0,0.0563583057
+esmfold2,ESMFold2,57,56.0,0.0776007591
+esmfold2,ESMFold2,58,57.0,0.0798266547
+esmfold2,ESMFold2,59,58.0,0.1056743222
+esmfold2,ESMFold2,60,59.0,0.1891167092
+esmfold2,ESMFold2,61,60.0,0.4437105042
+esmfold2,ESMFold2,62,61.0,0.4618797687
+esmfold2,ESMFold2,63,62.0,0.2102746612
+esmfold2,ESMFold2,64,63.0,0.0713733956
+esmfold2,ESMFold2,65,64.0,0.0528506797
+esmfold2,ESMFold2,66,65.0,0.0316671389
+esmfold2,ESMFold2,67,66.0,0.0381250555
+esmfold2,ESMFold2,68,67.0,0.0422294353
+esmfold2,ESMFold2,69,68.0,0.0369458162
+esmfold2,ESMFold2,70,69.0,0.0205506122
+esmfold2,ESMFold2,71,70.0,0.018969314
+esmfold2,ESMFold2,72,71.0,0.0222149903
+esmfold2,ESMFold2,73,72.0,0.0439737291
+esmfold2,ESMFold2,74,73.0,0.330605919
+esmfold2,ESMFold2,75,74.0,1.7100794745
+esmfold2,ESMFold2,76,75.0,4.0025106076
+esmfold2,ESMFold2,77,76.0,7.4218044186
+esmfold2,ESMFold2,78,77.0,12.5330611619
+esmfold2,ESMFold2,79,78.0,23.081213895
+esmfold2,ESMFold2,80,79.0,22.3759177709
+esmfold2_fast,ESMFold2 Fast,0,,1.4885018138
+esmfold2_fast,ESMFold2 Fast,1,0.0,0.0151888019
+esmfold2_fast,ESMFold2 Fast,2,1.0,0.0254442931
+esmfold2_fast,ESMFold2 Fast,3,2.0,0.0405487289
+esmfold2_fast,ESMFold2 Fast,4,3.0,0.058051129
+esmfold2_fast,ESMFold2 Fast,5,4.0,0.0904073586
+esmfold2_fast,ESMFold2 Fast,6,5.0,0.191603085
+esmfold2_fast,ESMFold2 Fast,7,6.0,0.2558804733
+esmfold2_fast,ESMFold2 Fast,8,7.0,0.3215650427
+esmfold2_fast,ESMFold2 Fast,9,8.0,0.4402583046
+esmfold2_fast,ESMFold2 Fast,10,9.0,0.7964763167
+esmfold2_fast,ESMFold2 Fast,11,10.0,1.6640108542
+esmfold2_fast,ESMFold2 Fast,12,11.0,0.1597516775
+esmfold2_fast,ESMFold2 Fast,13,12.0,0.040587824
+esmfold2_fast,ESMFold2 Fast,14,13.0,0.0073174355
+esmfold2_fast,ESMFold2 Fast,15,14.0,0.0039657874
+esmfold2_fast,ESMFold2 Fast,16,15.0,0.0014751151
+esmfold2_fast,ESMFold2 Fast,17,16.0,0.0008205129
+esmfold2_fast,ESMFold2 Fast,18,17.0,0.0005870438
+esmfold2_fast,ESMFold2 Fast,19,18.0,0.0004595612
+esmfold2_fast,ESMFold2 Fast,20,19.0,0.0003819588
+esmfold2_fast,ESMFold2 Fast,21,20.0,0.0003466473
+esmfold2_fast,ESMFold2 Fast,22,21.0,0.0003168126
+esmfold2_fast,ESMFold2 Fast,23,22.0,0.000310263
+esmfold2_fast,ESMFold2 Fast,24,23.0,0.0003383816
+esmfold2_fast,ESMFold2 Fast,25,24.0,0.0003389788
+esmfold2_fast,ESMFold2 Fast,26,25.0,0.0003335662
+esmfold2_fast,ESMFold2 Fast,27,26.0,0.0003426267
+esmfold2_fast,ESMFold2 Fast,28,27.0,0.0003593753
+esmfold2_fast,ESMFold2 Fast,29,28.0,0.0003895476
+esmfold2_fast,ESMFold2 Fast,30,29.0,0.0004574588
+esmfold2_fast,ESMFold2 Fast,31,30.0,0.0005135912
+esmfold2_fast,ESMFold2 Fast,32,31.0,0.0005797985
+esmfold2_fast,ESMFold2 Fast,33,32.0,0.0006170122
+esmfold2_fast,ESMFold2 Fast,34,33.0,0.000653236
+esmfold2_fast,ESMFold2 Fast,35,34.0,0.0006954232
+esmfold2_fast,ESMFold2 Fast,36,35.0,0.000702649
+esmfold2_fast,ESMFold2 Fast,37,36.0,0.0008782635
+esmfold2_fast,ESMFold2 Fast,38,37.0,0.000754094
+esmfold2_fast,ESMFold2 Fast,39,38.0,0.000834835
+esmfold2_fast,ESMFold2 Fast,40,39.0,0.00103115
+esmfold2_fast,ESMFold2 Fast,41,40.0,0.0013168344
+esmfold2_fast,ESMFold2 Fast,42,41.0,0.0022261204
+esmfold2_fast,ESMFold2 Fast,43,42.0,0.0021640408
+esmfold2_fast,ESMFold2 Fast,44,43.0,0.0034362901
+esmfold2_fast,ESMFold2 Fast,45,44.0,0.00689939
+esmfold2_fast,ESMFold2 Fast,46,45.0,0.0079144605
+esmfold2_fast,ESMFold2 Fast,47,46.0,0.0277795486
+esmfold2_fast,ESMFold2 Fast,48,47.0,1.3668484689
+esmfold2_fast,ESMFold2 Fast,49,48.0,2.9001918019
+esmfold2_fast,ESMFold2 Fast,50,49.0,4.1231715129
+esmfold2_fast,ESMFold2 Fast,51,50.0,10.1337734901
+esmfold2_fast,ESMFold2 Fast,52,51.0,2.9259956517
+esmfold2_fast,ESMFold2 Fast,53,52.0,2.2633085386
+esmfold2_fast,ESMFold2 Fast,54,53.0,0.1933620911
+esmfold2_fast,ESMFold2 Fast,55,54.0,0.0463422745
+esmfold2_fast,ESMFold2 Fast,56,55.0,0.0162294556
+esmfold2_fast,ESMFold2 Fast,57,56.0,0.0226253141
+esmfold2_fast,ESMFold2 Fast,58,57.0,0.0206979433
+esmfold2_fast,ESMFold2 Fast,59,58.0,0.0264225266
+esmfold2_fast,ESMFold2 Fast,60,59.0,0.0741900417
+esmfold2_fast,ESMFold2 Fast,61,60.0,0.3246289806
+esmfold2_fast,ESMFold2 Fast,62,61.0,0.2829586187
+esmfold2_fast,ESMFold2 Fast,63,62.0,0.1085904777
+esmfold2_fast,ESMFold2 Fast,64,63.0,0.0198810282
+esmfold2_fast,ESMFold2 Fast,65,64.0,0.0106128709
+esmfold2_fast,ESMFold2 Fast,66,65.0,0.0050161446
+esmfold2_fast,ESMFold2 Fast,67,66.0,0.0046599317
+esmfold2_fast,ESMFold2 Fast,68,67.0,0.0036296967
+esmfold2_fast,ESMFold2 Fast,69,68.0,0.0026000866
+esmfold2_fast,ESMFold2 Fast,70,69.0,0.0015836206
+esmfold2_fast,ESMFold2 Fast,71,70.0,0.0015788697
+esmfold2_fast,ESMFold2 Fast,72,71.0,0.0027011379
+esmfold2_fast,ESMFold2 Fast,73,72.0,0.0099054668
+esmfold2_fast,ESMFold2 Fast,74,73.0,0.3202176893
+esmfold2_fast,ESMFold2 Fast,75,74.0,1.7151674943
+esmfold2_fast,ESMFold2 Fast,76,75.0,3.9273142185
+esmfold2_fast,ESMFold2 Fast,77,76.0,5.7661635376
+esmfold2_fast,ESMFold2 Fast,78,77.0,12.5126926916
+esmfold2_fast,ESMFold2 Fast,79,78.0,20.9084303518
+esmfold2_fast,ESMFold2 Fast,80,79.0,24.2926944621
+esmfold2_experimental_cutoff2025,Experimental 2025,0,,0.6994901885
+esmfold2_experimental_cutoff2025,Experimental 2025,1,0.0,0.0216165747
+esmfold2_experimental_cutoff2025,Experimental 2025,2,1.0,0.0237054617
+esmfold2_experimental_cutoff2025,Experimental 2025,3,2.0,0.0365013917
+esmfold2_experimental_cutoff2025,Experimental 2025,4,3.0,0.0512581025
+esmfold2_experimental_cutoff2025,Experimental 2025,5,4.0,0.0944230363
+esmfold2_experimental_cutoff2025,Experimental 2025,6,5.0,0.2413007205
+esmfold2_experimental_cutoff2025,Experimental 2025,7,6.0,0.3415466256
+esmfold2_experimental_cutoff2025,Experimental 2025,8,7.0,0.4571182421
+esmfold2_experimental_cutoff2025,Experimental 2025,9,8.0,0.5207669851
+esmfold2_experimental_cutoff2025,Experimental 2025,10,9.0,0.8359508125
+esmfold2_experimental_cutoff2025,Experimental 2025,11,10.0,1.779474066
+esmfold2_experimental_cutoff2025,Experimental 2025,12,11.0,0.0923385049
+esmfold2_experimental_cutoff2025,Experimental 2025,13,12.0,0.0197014206
+esmfold2_experimental_cutoff2025,Experimental 2025,14,13.0,0.0018129014
+esmfold2_experimental_cutoff2025,Experimental 2025,15,14.0,0.0010158977
+esmfold2_experimental_cutoff2025,Experimental 2025,16,15.0,0.0003660122
+esmfold2_experimental_cutoff2025,Experimental 2025,17,16.0,0.0002234588
+esmfold2_experimental_cutoff2025,Experimental 2025,18,17.0,0.0001728407
+esmfold2_experimental_cutoff2025,Experimental 2025,19,18.0,0.0001427293
+esmfold2_experimental_cutoff2025,Experimental 2025,20,19.0,0.000124874
+esmfold2_experimental_cutoff2025,Experimental 2025,21,20.0,0.0001171557
+esmfold2_experimental_cutoff2025,Experimental 2025,22,21.0,0.0001133454
+esmfold2_experimental_cutoff2025,Experimental 2025,23,22.0,0.0001128528
+esmfold2_experimental_cutoff2025,Experimental 2025,24,23.0,0.0001211414
+esmfold2_experimental_cutoff2025,Experimental 2025,25,24.0,0.0001152391
+esmfold2_experimental_cutoff2025,Experimental 2025,26,25.0,0.0001127902
+esmfold2_experimental_cutoff2025,Experimental 2025,27,26.0,0.0001130139
+esmfold2_experimental_cutoff2025,Experimental 2025,28,27.0,0.0001144142
+esmfold2_experimental_cutoff2025,Experimental 2025,29,28.0,0.0001172846
+esmfold2_experimental_cutoff2025,Experimental 2025,30,29.0,0.0001259241
+esmfold2_experimental_cutoff2025,Experimental 2025,31,30.0,0.0001339076
+esmfold2_experimental_cutoff2025,Experimental 2025,32,31.0,0.0001413378
+esmfold2_experimental_cutoff2025,Experimental 2025,33,32.0,0.0001441291
+esmfold2_experimental_cutoff2025,Experimental 2025,34,33.0,0.0001473731
+esmfold2_experimental_cutoff2025,Experimental 2025,35,34.0,0.0001531536
+esmfold2_experimental_cutoff2025,Experimental 2025,36,35.0,0.0001583927
+esmfold2_experimental_cutoff2025,Experimental 2025,37,36.0,0.0001786677
+esmfold2_experimental_cutoff2025,Experimental 2025,38,37.0,0.0001716966
+esmfold2_experimental_cutoff2025,Experimental 2025,39,38.0,0.0001897746
+esmfold2_experimental_cutoff2025,Experimental 2025,40,39.0,0.0002188633
+esmfold2_experimental_cutoff2025,Experimental 2025,41,40.0,0.0002700945
+esmfold2_experimental_cutoff2025,Experimental 2025,42,41.0,0.0003988355
+esmfold2_experimental_cutoff2025,Experimental 2025,43,42.0,0.0003965685
+esmfold2_experimental_cutoff2025,Experimental 2025,44,43.0,0.0005444275
+esmfold2_experimental_cutoff2025,Experimental 2025,45,44.0,0.001131578
+esmfold2_experimental_cutoff2025,Experimental 2025,46,45.0,0.0012005623
+esmfold2_experimental_cutoff2025,Experimental 2025,47,46.0,0.0105825556
+esmfold2_experimental_cutoff2025,Experimental 2025,48,47.0,1.4645181737
+esmfold2_experimental_cutoff2025,Experimental 2025,49,48.0,4.4095296191
+esmfold2_experimental_cutoff2025,Experimental 2025,50,49.0,5.5901378947
+esmfold2_experimental_cutoff2025,Experimental 2025,51,50.0,9.9882865813
+esmfold2_experimental_cutoff2025,Experimental 2025,52,51.0,3.6394084594
+esmfold2_experimental_cutoff2025,Experimental 2025,53,52.0,2.0460352852
+esmfold2_experimental_cutoff2025,Experimental 2025,54,53.0,0.140545818
+esmfold2_experimental_cutoff2025,Experimental 2025,55,54.0,0.0530418026
+esmfold2_experimental_cutoff2025,Experimental 2025,56,55.0,0.0156418305
+esmfold2_experimental_cutoff2025,Experimental 2025,57,56.0,0.027777588
+esmfold2_experimental_cutoff2025,Experimental 2025,58,57.0,0.0244908874
+esmfold2_experimental_cutoff2025,Experimental 2025,59,58.0,0.0298958778
+esmfold2_experimental_cutoff2025,Experimental 2025,60,59.0,0.0800303761
+esmfold2_experimental_cutoff2025,Experimental 2025,61,60.0,0.3953701544
+esmfold2_experimental_cutoff2025,Experimental 2025,62,61.0,0.4058235793
+esmfold2_experimental_cutoff2025,Experimental 2025,63,62.0,0.1797312687
+esmfold2_experimental_cutoff2025,Experimental 2025,64,63.0,0.0332826944
+esmfold2_experimental_cutoff2025,Experimental 2025,65,64.0,0.0180492022
+esmfold2_experimental_cutoff2025,Experimental 2025,66,65.0,0.0092070548
+esmfold2_experimental_cutoff2025,Experimental 2025,67,66.0,0.0071609592
+esmfold2_experimental_cutoff2025,Experimental 2025,68,67.0,0.0106022286
+esmfold2_experimental_cutoff2025,Experimental 2025,69,68.0,0.0061177781
+esmfold2_experimental_cutoff2025,Experimental 2025,70,69.0,0.0031076226
+esmfold2_experimental_cutoff2025,Experimental 2025,71,70.0,0.0034422629
+esmfold2_experimental_cutoff2025,Experimental 2025,72,71.0,0.0030067189
+esmfold2_experimental_cutoff2025,Experimental 2025,73,72.0,0.0055431494
+esmfold2_experimental_cutoff2025,Experimental 2025,74,73.0,0.3318001384
+esmfold2_experimental_cutoff2025,Experimental 2025,75,74.0,1.8162870095
+esmfold2_experimental_cutoff2025,Experimental 2025,76,75.0,3.5866089405
+esmfold2_experimental_cutoff2025,Experimental 2025,77,76.0,6.4421220889
+esmfold2_experimental_cutoff2025,Experimental 2025,78,77.0,11.7548601207
+esmfold2_experimental_cutoff2025,Experimental 2025,79,78.0,20.5840149172
+esmfold2_experimental_cutoff2025,Experimental 2025,80,79.0,21.6581459915
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,0,,2.6207243169
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,1,0.0,0.0056986088
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,2,1.0,0.0085787628
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,3,2.0,0.0155829191
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,4,3.0,0.023763267
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,5,4.0,0.0482221447
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,6,5.0,0.1931035563
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,7,6.0,0.2542877629
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,8,7.0,0.4112953317
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,9,8.0,0.498728619
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,10,9.0,0.887141182
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,11,10.0,2.2105566156
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,12,11.0,0.0673187565
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,13,12.0,0.0113560922
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,14,13.0,0.0009896023
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,15,14.0,0.0006722964
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,16,15.0,0.0002982415
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,17,16.0,0.0002075367
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,18,17.0,0.0001663914
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,19,18.0,0.0001425034
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,20,19.0,0.0001243473
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,21,20.0,0.0001160012
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,22,21.0,0.000112295
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,23,22.0,0.0001143216
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,24,23.0,0.0001211095
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,25,24.0,0.0001193225
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,26,25.0,0.0001154526
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,27,26.0,0.0001163296
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,28,27.0,0.0001152817
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,29,28.0,0.000117941
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,30,29.0,0.0001289583
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,31,30.0,0.0001382503
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,32,31.0,0.0001447307
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,33,32.0,0.0001508733
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,34,33.0,0.0001565131
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,35,34.0,0.0001625182
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,36,35.0,0.0001671816
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,37,36.0,0.0001882771
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,38,37.0,0.0001817976
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,39,38.0,0.0001926468
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,40,39.0,0.000215483
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,41,40.0,0.0002419443
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,42,41.0,0.0003584521
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,43,42.0,0.0003504004
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,44,43.0,0.0004422393
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,45,44.0,0.0007036104
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,46,45.0,0.0007761461
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,47,46.0,0.004011744
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,48,47.0,0.5543104566
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,49,48.0,2.6084781284
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,50,49.0,2.6961259086
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,51,50.0,10.2527242574
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,52,51.0,3.7206198931
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,53,52.0,2.8094709816
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,54,53.0,0.1685285772
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,55,54.0,0.0311521989
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,56,55.0,0.0067884669
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,57,56.0,0.01223825
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,58,57.0,0.010595596
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,59,58.0,0.0130224005
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,60,59.0,0.0413638158
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,61,60.0,0.3968147643
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,62,61.0,0.3955682788
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,63,62.0,0.1427187749
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,64,63.0,0.0137663839
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,65,64.0,0.0051513409
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,66,65.0,0.0018593553
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,67,66.0,0.0013634999
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,68,67.0,0.0015171
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,69,68.0,0.0006984945
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,70,69.0,0.0004550816
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,71,70.0,0.0004690347
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,72,71.0,0.0007624941
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,73,72.0,0.0017131618
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,74,73.0,0.5873421843
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,75,74.0,1.8095197724
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,76,75.0,4.2357223445
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,77,76.0,5.2352908604
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,78,77.0,12.4935421733
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,79,78.0,19.911243322
+esmfold2_experimental_fast_cutoff2025,Experimental Fast 2025,80,79.0,24.5703439719

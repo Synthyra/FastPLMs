@@ -1,0 +1,718 @@
+\documentclass[10pt]{article}
+
+\usepackage[letterpaper,margin=0.82in,headheight=15pt]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,longtable,tabularx,array,multirow}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{float}
+\usepackage{pgfplots}
+\usepackage{pgfplotstable}
+\usepackage{tikz}
+\usepackage{siunitx}
+\usepackage{listings}
+\usepackage{lastpage}
+
+\pgfplotsset{compat=1.18}
+\graphicspath{{figures/}}
+
+\definecolor{ink}{HTML}{1C2430}
+\definecolor{muted}{HTML}{5F6B7A}
+\definecolor{rulegray}{HTML}{D7DCE2}
+\definecolor{blue}{HTML}{356AA0}
+\definecolor{gold}{HTML}{C8932D}
+\definecolor{orange}{HTML}{D66A2C}
+\definecolor{olive}{HTML}{71863D}
+\definecolor{pink}{HTML}{B85A82}
+\definecolor{paleblue}{HTML}{EEF4FA}
+\definecolor{palegold}{HTML}{FBF5E8}
+\definecolor{palewarn}{HTML}{FFF7E8}
+\definecolor{palegray}{HTML}{F4F6F8}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue,
+  pdftitle={ESMC-6B State 51 Weight Geometry},
+  pdfauthor={Synthyra Research},
+  pdfsubject={Weights-only analysis of ESMC-6B and ESMFold2 checkpoint geometry}
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\footnotesize\color{muted}ESMC-6B state 51 weight geometry}
+\fancyhead[R]{\footnotesize\color{muted}Weights-only technical report}
+\fancyfoot[L]{\footnotesize\color{muted}Synthyra Research}
+\fancyfoot[R]{\footnotesize\color{muted}\thepage\ of \pageref{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0pt}
+
+\titleformat{\section}{\Large\bfseries\color{ink}}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\large\bfseries\color{ink}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{ink}}{\thesubsubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{2.0ex plus 0.5ex}{0.8ex}
+\titlespacing*{\subsection}{0pt}{1.5ex plus 0.3ex}{0.5ex}
+
+\setlist[itemize]{leftmargin=1.5em,itemsep=0.25em,topsep=0.4em}
+\setlist[enumerate]{leftmargin=1.7em,itemsep=0.35em,topsep=0.4em}
+\captionsetup{font=small,labelfont=bf,textfont={color=muted}}
+\sisetup{detect-all,round-mode=places,round-precision=3}
+
+\newcommand{\ESMC}{ESMC-6B}
+\newcommand{\ESMFold}{ESMFold2}
+\newcommand{\blockfifty}{block~50}
+\newcommand{\statefiftyone}{state~51}
+\newcommand{\VO}{V--O}
+\newcommand{\QKVO}{QKVO}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\newenvironment{findingbox}[1]{%
+  \par\medskip\noindent\begin{minipage}{\textwidth}
+  \color{ink}\hrule height 1.2pt\vspace{0.55em}
+  \textbf{\color{blue}#1}\par\smallskip
+}{%
+  \vspace{0.45em}\hrule height 0.4pt
+  \end{minipage}\par\medskip
+}
+
+\newenvironment{cautionbox}[1]{%
+  \par\medskip\noindent\begin{minipage}{\textwidth}
+  \color{ink}\hrule height 1.2pt\vspace{0.55em}
+  \textbf{\color{orange}#1}\par\smallskip
+}{%
+  \vspace{0.45em}\hrule height 0.4pt
+  \end{minipage}\par\medskip
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{palegray},
+  frame=single,
+  rulecolor=\color{rulegray},
+  framesep=7pt,
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  columns=fullflexible,
+  breaklines=true,
+  showstringspaces=false
+}
+
+\pgfplotsset{
+  report axis/.style={
+    width=\textwidth,
+    height=0.46\textwidth,
+    axis line style={draw=ink!70},
+    tick style={draw=ink!65},
+    tick label style={font=\footnotesize,color=muted},
+    label style={font=\small,color=ink},
+    title style={font=\small\bfseries,color=ink},
+    grid=major,
+    grid style={draw=rulegray!70,line width=0.2pt},
+    legend style={font=\footnotesize,draw=none,fill=none,cells={anchor=west}},
+    every axis plot/.append style={line width=1.15pt},
+    clip=true
+  }
+}
+
+\begin{document}
+
+\begin{titlepage}
+\thispagestyle{empty}
+\vspace*{1.0cm}
+\noindent{\color{blue}\rule{\textwidth}{2.2pt}}\\[1.0cm]
+{\Huge\bfseries\color{ink} ESMC-6B State 51 Weight Geometry\par}
+\vspace{0.45cm}
+{\Large\color{muted} A weights-only investigation of the ESMFold2 mixing outlier\par}
+\vspace{1.15cm}
+
+\begin{findingbox}{Bottom line}
+State 51 receives approximately 10\% of the learned ESMFold2 state-mixing mass in all four supported checkpoints. The relevant producer is transformer block 50. The strongest weights-only explanation is a projection-aligned write/relay event: block 50 reorganizes multiple attention heads and its SwiGLU feed-forward pathway into compact directions preferentially read by the shared 256-dimensional folding projection. Generic contact, SAE, intrinsic-dimension, norm, and compression criteria need not reward those same directions.
+\end{findingbox}
+
+\vfill
+\begin{tabular}{@{}ll@{}}
+\textbf{Analysis scope} & All 80 ESMC transformer blocks; four ESMFold2 checkpoints \\
+\textbf{Evidence type} & Checkpoint weights only; no sequences or activations \\
+\textbf{Compute} & NVIDIA GH200 480GB workstation \\
+\textbf{ESMC revision} & \texttt{45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a} \\
+\textbf{Validation} & 64/64 saved data-quality checks passed \\
+\textbf{Report date} & July 27, 2026 \\
+\end{tabular}
+\vspace{0.8cm}
+
+\noindent{\color{blue}\rule{\textwidth}{0.8pt}}
+\end{titlepage}
+
+\begin{abstract}
+This report analyzes the checkpoint geometry of all 80 transformer blocks in ESMC-6B and the mixing/projection weights of four ESMFold2 checkpoints. State 51 is a reproducible mixer outlier, receiving 9.988\%--10.654\% of total softmax mass and ranking fourth in every checkpoint. Correct indexing maps this state to the output of block 50. Block 50 exhibits statistically unusual alignment between compact feed-forward input subspaces and the folding projection, a network-wide maximum in the number of strongly coupled attention heads, and a sharp redistribution of SwiGLU neuron coupling. These effects persist under scale and LayerNorm sensitivity checks. In contrast, weight-vector intrinsic dimension, normalization statistics, and weight-only compression do not robustly isolate blocks 50--51. The evidence supports a task-specific, projection-readable interface state, but does not establish activation usage, folding causality, or biological meaning.
+\end{abstract}
+
+\tableofcontents
+\clearpage
+
+\section{Question, evidence, and conclusion}
+
+The motivating discrepancy is straightforward. Contact-oriented P@L performance and the SAE curves in Figure S26 of the supplied preprint dip near layer 51, yet the ESMFold2 mixer assigns that state unusually high mass. The question is whether the checkpoint weights contain a structural explanation for why a folding model would prefer a state that appears weaker under other representational criteria.
+
+Three observations must be kept separate:
+\begin{itemize}
+  \item P@L measures whether residue-contact information is accessible to a particular probe or attention-derived statistic.
+  \item The Figure S26 SAE metrics measure reconstruction difficulty and masked-language-model perplexity change after SAE reconstruction.
+  \item ESMFold2 mixing measures which normalized and projected states are useful to a jointly trained folding objective.
+\end{itemize}
+
+These are different functionals of a hidden state. A low-volume direction can matter strongly to a 256-wide folding projection while contributing little to average reconstruction loss, masked-token prediction, or contact precision. The weight analysis tests whether such a pathway is geometrically available. It cannot establish that real protein activations occupy that pathway.
+
+\begin{findingbox}{Primary conclusion}
+The positive evidence localizes to block 50, the producer of state 51. It is a coordinated event spanning FFN projection alignment, multi-head V--O coupling, and neuron-wise FFN redistribution. Block 51, the consumer of state 51, is not a comparably robust isolated anomaly.
+\end{findingbox}
+
+\section{Model interface and the indexing distinction}
+
+ESMC exposes 81 ordered hidden states from 80 transformer blocks:
+\begin{align*}
+h_0 &:\ \text{token embedding state},\\
+h_1 &:\ \text{output of block 0},\\
+h_s &:\ \text{output of block }s-1,\\
+h_{51} &:\ \text{output of block 50},\\
+h_{80} &:\ \text{output of block 79}.
+\end{align*}
+
+Consequently, state 51 is produced by block 50 and consumed by block 51. Calling the feature ``layer 51'' without distinguishing state and block indices shifts the putative causal location by one block. Both blocks were prespecified, together with blocks 48--53 and late-layer controls 76--79.
+
+For learned mixing logits $c_s$, LayerNorm $N$, shared bias-free projection $W\in\R^{256\times2560}$, and state vector $h_s\in\R^{2560}$, the implemented folding input is
+\begin{align}
+\alpha_s &= \frac{\exp(c_s)}{\sum_{t=0}^{80}\exp(c_t)},\\
+z &= \sum_{s=0}^{80}\alpha_s WN(h_s). \label{eq:mixer}
+\end{align}
+There is one shared projection per checkpoint, not a separate matrix for each state. Projection precedes mixing. Because LayerNorm is nonlinear, Equation~\ref{eq:mixer} is not generally equivalent to normalizing a raw weighted sum of hidden states.
+
+The coefficient $\alpha_{51}\approx0.10$ means that state 51 receives about one tenth of the convex mixing mass. It does not imply one tenth of the final information, norm, variance, or causal contribution. Projected states can correlate, cancel, or be redundant.
+
+\section{Mixer consistency across four ESMFold2 checkpoints}
+
+\begin{table}[H]
+\centering
+\caption{Exact mixing summaries. Mass values are fractions of the 81-state softmax total.}
+\label{tab:mixer}
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Checkpoint & $\alpha_{51}$ & Rank & Mass 77--80 & Top-1 & Effective states \\
+\midrule
+ESMFold2 & 0.10654 & 4 & 0.65412 & 0.23081 & 10.64 \\
+Experimental 2025 & 0.09988 & 4 & 0.60439 & 0.21658 & 11.46 \\
+Experimental Fast 2025 & 0.10253 & 4 & 0.62210 & 0.24570 & 10.86 \\
+ESMFold2 Fast & 0.10134 & 4 & 0.63480 & 0.24293 & 10.79 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The pairwise Pearson correlations between the full 81-state profiles range from 0.988 to 0.997, with Spearman correlations from 0.981 to 0.996. The last four states carry 60.44\%--65.41\% of the total mass, but a distinct state-51 peak remains in every checkpoint.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  report axis,
+  xlabel={ESMC hidden-state index},
+  ylabel={Softmax mixing mass (\%)},
+  xmin=0,xmax=80,ymin=0,ymax=27,
+  legend columns=2,
+  legend pos=north west
+]
+\addplot[color=blue] table[x=state,y=weight]{figures/mixer_esmfold2.dat};
+\addlegendentry{ESMFold2}
+\addplot[color=gold,dashed] table[x=state,y=weight]{figures/mixer_experimental.dat};
+\addlegendentry{Experimental 2025}
+\addplot[color=orange,dashdotted] table[x=state,y=weight]{figures/mixer_experimental_fast.dat};
+\addlegendentry{Experimental Fast 2025}
+\addplot[color=olive,dotted] table[x=state,y=weight]{figures/mixer_fast.dat};
+\addlegendentry{ESMFold2 Fast}
+\addplot[color=ink!70,densely dashed] coordinates {(51,0) (51,27)};
+\node[anchor=south west,font=\scriptsize,color=ink] at (axis cs:51,20.5) {state 51};
+\end{axis}
+\end{tikzpicture}
+\caption{All four ESMFold2 checkpoints strongly favor late states while preserving an earlier state-51 peak. The checkpoint agreement is a robustness result, not four independent biological replicates.}
+\label{fig:mixer}
+\end{figure}
+
+The projection matrices themselves are not duplicates. Pairwise raw projection Frobenius cosines are only 0.121--0.228, rank-16 row-subspace overlaps are 0.345--0.451, and rank-256 overlaps are 0.263--0.339. Thus the checkpoints read related but materially different 256-dimensional subspaces while converging on almost the same depth profile.
+
+\section{Projection alignment: the strongest direct explanation}
+
+Let $U_r\in\R^{2560\times r}$ be a rank-$r$ orthonormal basis from an ESMC weight matrix and let $P\in\R^{2560\times256}$ span the row space of the folding projection. The normalized overlap is
+\begin{align}
+\mathcal{O}_r(U,P)
+  &= \frac{\lVert U_r^\top P\rVert_F^2}{r}
+   = \frac{1}{r}\sum_{i=1}^r\cos^2\theta_i, \label{eq:overlap}
+\end{align}
+where $\theta_i$ are principal angles. The score is one for full containment and zero for orthogonality. For isotropically random subspaces in 2560 dimensions,
+\begin{equation}
+\mathbb{E}[\mathcal{O}_r]=\frac{256}{2560}=0.10.
+\end{equation}
+
+The comparison used input-side right singular vectors for Q, K, V, gate, and value matrices, and residual-output left singular vectors for O and the FFN down projection. Ranks 16, 32, 64, 128, and 256 were tested with both raw and LayerNorm-scaled folding projections.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  report axis,
+  xlabel={ESMC transformer block},
+  ylabel={Rank-16 normalized overlap},
+  xmin=0,xmax=79,ymin=0.075,ymax=0.38,
+  legend pos=north west
+]
+\addplot[color=blue] table[x=block,y=mean]{figures/projection_gate.dat};
+\addlegendentry{SwiGLU gate}
+\addplot[color=orange,dashed] table[x=block,y=mean]{figures/projection_value.dat};
+\addlegendentry{SwiGLU value}
+\addplot[only marks,mark=*,mark size=2.2pt,color=blue] coordinates {(50,0.163593)};
+\addplot[only marks,mark=*,mark size=2.2pt,color=orange] coordinates {(50,0.159953)};
+\addplot[color=ink!65,densely dotted] coordinates {(0,0.1) (79,0.1)};
+\node[anchor=south east,font=\scriptsize,color=muted] at (axis cs:79,0.101) {isotropic expectation};
+\addplot[color=gold,densely dashed] coordinates {(50,0.075) (50,0.38)};
+\node[anchor=south west,font=\scriptsize,color=ink] at (axis cs:50,0.34) {block 50};
+\end{axis}
+\end{tikzpicture}
+\caption{Four-checkpoint mean rank-16 overlap between ESMC FFN input subspaces and the folding projection. Block 50 is a local peak for both gate and value directions.}
+\label{fig:projection}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{Prespecified block-50 projection-alignment results.}
+\label{tab:projection}
+\begin{tabular}{@{}llrrrr@{}}
+\toprule
+Family & Sensitivity & Overlap & Local robust $z$ & Null $p$ & BH $q$ \\
+\midrule
+Value, rank 16 & Raw & 0.15995 & 2.46 & 0.0003 & 0.0240 \\
+Value, rank 16 & LN-scaled & 0.15872 & 2.32 & 0.0005 & 0.0400 \\
+Value, rank 32 & Raw & 0.15266 & 1.74 & 0.0006 & 0.0480 \\
+Gate, rank 16 & Raw & 0.16359 & 4.07 & 0.0033 & 0.1320 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Every checkpoint has a positive block-50 local delta. For value rank 16 the raw deltas are $+0.0288$ to $+0.0431$, and the LayerNorm-scaled deltas are $+0.0280$ to $+0.0423$. Gate rank 16 has deltas from $+0.0340$ to $+0.0519$. The value result survives the prespecified family-wise correction; the gate result is strong supporting evidence but not an independent discovery at 5\% FDR.
+
+Across all 80 blocks, gate-projection alignment tracks the mixer after removing smooth depth trends. Mean depth-detrended Pearson correlations are 0.823, 0.814, and 0.797 at gate ranks 16, 32, and 64. Corresponding values include 0.787 for value rank 256, 0.765 for Q rank 256, and 0.720 for K rank 256. For gate rank 16 the checkpoint-specific range is 0.786--0.845, with an exact circular-shift $p=0.0125$ in each checkpoint, the smallest possible value with 79 nonzero shifts.
+
+\begin{findingbox}{Geometric intuition}
+The mixer favors states whose producer blocks expose compact directions compatible with the downstream folding readout. Block 50 is a local maximum of that compatibility. A direction can be small relative to the full 2560-dimensional residual stream yet disproportionately important after projection to 256 dimensions.
+\end{findingbox}
+
+\section{Attention geometry: a distributed block-50 event}
+
+Q, K, and V were split into 40 heads of shape $64\times2560$, and O into 40 corresponding $2560\times64$ blocks. Per-head metrics included Frobenius and spectral norms, stable and effective rank, Q--K principal angles, V--O subspace coupling, projection overlap, within-layer redundancy, and adjacent-layer similarity.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  report axis,
+  xlabel={ESMC transformer block},
+  ylabel={Number of heads},
+  xmin=0,xmax=79,ymin=0,ymax=11,
+  ytick={0,2,4,6,8,10},
+  legend pos=north west
+]
+\addplot[color=blue,mark=*,mark size=0.8pt] table[x=block,y=count]{figures/attention_gt_05.dat};
+\addlegendentry{$\mathcal{O}_{VO}>0.5$}
+\addplot[color=orange,dashed,mark=o,mark size=0.8pt] table[x=block,y=count]{figures/attention_gt_07.dat};
+\addlegendentry{$\mathcal{O}_{VO}>0.7$}
+\addplot[color=gold,densely dashed] coordinates {(50,0) (50,11)};
+\node[anchor=south west,font=\scriptsize,color=ink] at (axis cs:50,9.3) {block 50};
+\end{axis}
+\end{tikzpicture}
+\caption{Counts of high V--O coupling heads among 40 heads per block. Block 50 reaches the global maximum at both thresholds and immediately relaxes at block 51.}
+\label{fig:attention}
+\end{figure}
+
+At block 50, 10 heads exceed V--O overlap 0.5 and six exceed 0.7. These are global maxima, with BH-adjusted $q=0.008$ and $q=0.004$, respectively. V--O overlap dispersion is 0.25668 ($q=0.008$), and mean O stable rank is 31.7635 ($q=0.008$). Block 51 has only two heads above 0.5 and none above 0.7.
+
+\begin{table}[H]
+\centering
+\caption{Most strongly V--O coupled heads in block 50.}
+\begin{tabular}{@{}rrrr@{}}
+\toprule
+Head & V--O overlap & Q spectral norm & Interpretation \\
+\midrule
+16 & 0.818 & 7.28 & extreme coupling \\
+20 & 0.814 & 14.34 & extreme coupling \\
+22 & 0.784 & --- & extreme coupling \\
+38 & 0.779 & --- & extreme coupling \\
+39 & 0.765 & --- & extreme coupling \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Direct per-head projection overlap does not survive detrended significance testing. Layer-mean correlations are only moderate, approximately 0.39--0.57 with $p\approx0.06$--0.10. The stronger result appears after aggregating head behavior and incorporating the FFN/projection pathway, arguing against a single specialized ``folding head.''
+
+Hungarian matching over joint QKVO similarity identifies a local role reorganization. Transitions $49\rightarrow50$, $50\rightarrow51$, and $51\rightarrow52$ have matched similarities 0.09524, 0.09322, and 0.08791, ranking first, second, and eighth. Their gains over fixed head indices rank second, fourth, and third. Absolute similarities are low because full head operators change substantially with depth; the informative quantity is the relative ranking and the gain from allowing head permutation.
+
+\section{Feed-forward geometry: redistribution rather than amplification}
+
+Each block has 6912 SwiGLU neurons. Gate and value rows were paired with the corresponding FFN down-projection column. The analysis measured gate--value cosine, gate--down cosine, value--down cosine, norm ratios, subspace overlap, neuron redundancy, and triple-strength concentration.
+
+At block 50:
+\begin{itemize}
+  \item mean gate--down cosine is $-0.008076$, the global minimum and a local robust $z=-4.91$ with BH $q=0.008$;
+  \item value--down cosine standard deviation is 0.31397 with BH $q=0.004$;
+  \item gate--down cosine standard deviation is 0.30242 with BH $q=0.010$.
+\end{itemize}
+
+The mean is numerically tiny, so ``anti-alignment'' would be an overstatement. The robust effect is a broadened neuron-wise coupling distribution, with more neurons in both unusually aligned and unusually anti-aligned tails. This is consistent with heterogeneous routing directions, a subset of which becomes accessible to the folding projection.
+
+\section{Spectra and linear dimension}
+
+For a matrix $W$ with singular values $s_1\ge\cdots\ge s_m$, define
+\begin{align}
+p_i &= \frac{s_i^2}{\sum_j s_j^2},\\
+\operatorname{srank}(W) &= \frac{\lVert W\rVert_F^2}{\lVert W\rVert_2^2},\\
+\operatorname{PR}(W) &= \frac{(\sum_i s_i^2)^2}{\sum_i s_i^4},\\
+\operatorname{erank}(W) &= \exp\!\left(-\sum_i p_i\log p_i\right),\\
+E_1(W) &= \frac{s_1^2}{\lVert W\rVert_F^2},\\
+r_\tau &= \min\left\{r:\sum_{i\le r}p_i\ge\tau\right\},\\
+\epsilon_r &= \sqrt{1-\sum_{i\le r}p_i},\\
+C_r &= \frac{r(m+n)}{mn}.
+\end{align}
+Here $\epsilon_r$ is truncated-SVD relative Frobenius error and $C_r$ is the rank-$r$ factorized storage fraction for an $m\times n$ matrix.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  report axis,
+  xlabel={ESMC transformer block},
+  ylabel={Q effective rank},
+  xmin=0,xmax=79,ymin=0,ymax=1750,
+  legend style={at={(0.02,0.98)},anchor=north west}
+]
+\addplot[color=blue] table[x=block,y=effective_rank]{figures/q_effective_rank.dat};
+\addplot[color=gold,densely dashed] coordinates {(50,0) (50,1750)};
+\node[anchor=south west,font=\scriptsize,color=ink] at (axis cs:50,1480) {block 50};
+\end{axis}
+\end{tikzpicture}
+\caption{Entropy-based effective rank of the uncentered Q operator across depth. The global depth trend is large, motivating depth detrending before correlation with the ESMFold2 mixer.}
+\label{fig:qrank}
+\end{figure}
+
+At block 50, Q has effective rank 718.51, participation ratio 175.08, stable rank 17.23, leading energy fraction 0.0580, and spectral norm 25.95. The high effective rank means Q is not globally low-rank. The much lower stable rank means that a small number of leading singular directions dominate operator norm. A compact downstream readout can therefore select meaningful leading directions without the whole matrix being strongly compressible.
+
+After removing the smooth depth trend, mixer mass is inversely associated with Q participation ratio ($r\approx-0.757$), Q effective rank ($r\approx-0.672$), K effective rank ($r\approx-0.675$), and Q stable rank ($r\approx-0.561$). Q effective-rank correlations at lags $-2,-1,0,+1,+2$ are $-0.567,-0.652,-0.672,-0.554,-0.489$. The prespecified state-to-producer alignment is strongest.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{spectral_shape_profiles.png}
+\caption{Operator spectral-shape profiles for Q, K, V, O, gate, value, and down matrices. The shaded region marks blocks 48--53 and the dashed line marks block 50. These profiles show a transition zone, not a unique whole-matrix rank collapse.}
+\label{fig:spectralshape}
+\end{figure}
+
+\section{Weight-vector intrinsic dimension}
+
+Rows and columns were treated as point clouds in raw Euclidean and unit-normalized cosine-equivalent geometry. For nearest-neighbor distances $T_1<T_2<\cdots$, TwoNN uses $\mu=T_2/T_1$ and
+\begin{equation}
+-\log[1-F(\mu)] = d\log\mu.
+\end{equation}
+The local Levina--Bickel estimator is
+\begin{equation}
+\widehat d_i(k)=\left[\frac{1}{k-1}\sum_{j=1}^{k-1}\log\frac{T_k}{T_j}\right]^{-1},
+\end{equation}
+evaluated at $k=10,20,50$ together with neighborhood-distance concentration and local-dimension dispersion.
+
+Raw Euclidean analyses produce excursions near blocks 50--51, including a raw value-column TwoNN local $z\approx6.9$ at block 51. These excursions disappear after unit normalization. They are therefore driven mainly by vector norms rather than angular manifold complexity and fail the prespecified normalization-sensitivity criterion.
+
+\begin{findingbox}{Negative result}
+The state-51 phenomenon is not robustly explained by a generic expansion or collapse of weight-vector intrinsic dimension. This conclusion applies to learned weight vectors, not protein representation dimension, because no activations were analyzed.
+\end{findingbox}
+
+\section{Layer trajectories and the broader 48--53 transition}
+
+For each tensor family, the 80 vectorized matrices define a parameter trajectory with
+\begin{align}
+d_F(i,j) &= \lVert W_i-W_j\rVert_F,\\
+\cos(i,j) &= \frac{\langle\operatorname{vec}W_i,\operatorname{vec}W_j\rangle}
+{\lVert W_i\rVert_F\lVert W_j\rVert_F}.
+\end{align}
+
+Centered kernel PCA on each $80\times80$ layer Gram matrix gives the effective dimensions in Table~\ref{tab:trajectory}. Every trajectory has algebraic rank 79.
+
+\begin{table}[H]
+\centering
+\caption{Effective dimension of the 80-point layer trajectory.}
+\label{tab:trajectory}
+\begin{tabular}{@{}lrrrrrrr@{}}
+\toprule
+Family & Down & Gate & K & O & Q & V & Value \\
+\midrule
+Effective dimension & 70.16 & 70.32 & 73.24 & 76.85 & 72.47 & 72.46 & 66.32 \\
+Algebraic rank & 79 & 79 & 79 & 79 & 79 & 79 & 79 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The layer paths are not confined to a small global subspace. Several families increase step size entering block 50, but turning angle and curvature are not uniquely extreme. The $47\rightarrow48$ transition ranks third by multi-family effective-rank derivative and second by stable-rank derivative. Transitions $49\rightarrow50$ and $50\rightarrow51$ rank approximately 13--14 by effective-rank derivative, with $50\rightarrow51$ eighth by stable-rank derivative. The defensible description is a blocks-48--53 regime containing a particularly readable state emitted by block 50.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{trajectory_speed_curvature.png}
+\caption{Adjacent Frobenius step size and parameter-trajectory turning angle. Block 50 participates in a local transition, but is not the only global trajectory change point.}
+\label{fig:trajectory}
+\end{figure}
+
+\section{Normalization, scale, and weight reconstruction}
+
+All attention and FFN LayerNorm parameters, Q/K normalization vectors, and matrix-scale statistics were examined. Metrics included moments, coefficient of variation, tail quantiles, adjacent cosine, amplified/suppressed channel fractions, channel-depth outliers, and cross-role similarity.
+
+No normalization statistic at blocks 50 or 51 survives 5\% FDR. The closest is the block-50 attention-input normalization suppressed-channel fraction at $q\approx0.052$. Scale-invariant projection overlap and normalized-cosine checks remain positive, so ordinary matrix scale is not sufficient.
+
+Weight reconstruction included truncated SVD, symmetric per-row INT8 and INT4 quantization, unstructured magnitude sparsity at 10\%, 25\%, 50\%, and 75\%, and deterministic 2:4 sparsity. For a reconstruction $\widehat W$,
+\begin{align}
+\epsilon_F &= \frac{\lVert W-\widehat W\rVert_F}{\lVert W\rVert_F},\\
+\cos_F &= \frac{\langle\operatorname{vec}W,\operatorname{vec}\widehat W\rangle}
+{\lVert W\rVert_F\lVert\widehat W\rVert_F},\\
+\delta_2 &= \frac{|\lVert\widehat W\rVert_2-\lVert W\rVert_2|}{\lVert W\rVert_2}.
+\end{align}
+No block-50 or block-51 quantization or sparsity metric survives family-wise FDR. The state is not preferred simply because its producer is uniquely compressible.
+
+\begin{figure}[p]
+\centering
+\includegraphics[width=\textwidth]{raw_parameter_profiles.png}
+\caption{Raw parameter distributions and singular-vector localization. The highlighted 48--53 region does not support a simple raw-scale explanation for state 51.}
+\label{fig:raw}
+\end{figure}
+
+\section{Layer-wise anomaly synthesis}
+
+Every metric was evaluated against a smooth depth trend, a ten-neighbor local reference, and the full depth distribution. For a target $x$, neighboring median $m$, and median absolute deviation $\operatorname{MAD}$,
+\begin{equation}
+z_{\mathrm{robust}}=0.67448975\frac{x-m}{\operatorname{MAD}}.
+\end{equation}
+Benjamini--Hochberg correction was applied within metric families. Discrete metrics with zero local MAD can generate infinite or extreme robust scores for a one-count change, so they were promoted only when continuous companion metrics and sensitivity checks agreed.
+
+\begin{table}[H]
+\centering
+\caption{Evidence summary centered on the state-51 producer.}
+\label{tab:evidence}
+\begin{tabularx}{\textwidth}{@{}p{0.24\textwidth}p{0.20\textwidth}p{0.18\textwidth}X@{}}
+\toprule
+Evidence family & Block-50 result & Multiplicity status & Interpretation \\
+\midrule
+Value--projection overlap & 0.15995 vs. 0.10 null & $q=0.024$ raw; $q=0.040$ LN-scaled & Strongest direct evidence for a folding-readable subspace \\
+Gate--projection overlap & 0.16359; local $z=4.07$ & $q=0.132$ & Supporting local peak, not a strict family-wise discovery \\
+Attention V--O coupling & 10 heads $>0.5$; 6 heads $>0.7$ & $q=0.008$; $q=0.004$ & Distributed multi-head event \\
+FFN neuron coupling & gate--down mean $-0.008076$; broad tails & $q=0.008$ and companion dispersion $q\le0.010$ & Redistribution rather than simple amplification \\
+Weight-vector dimension & Raw-only excursions & Fails unit-normalized sensitivity & Norm-driven, not robust \\
+Normalization and scale & No 5\% FDR result & closest $q\approx0.052$ & Not sufficient \\
+Quantization and sparsity & No 5\% FDR result & null & Not uniquely compressible \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{layer_omnibus_anomalies.png}
+\caption{Omnibus depth-adjusted anomaly scores. The blocks-48--53 region is elevated, with block 50 locally prominent, but late blocks also contain strong global weight anomalies.}
+\label{fig:omnibus}
+\end{figure}
+
+\section{Statistical and numerical validation}
+
+Mixer associations used Pearson and Spearman correlation, cubic depth detrending, lags $-2$ through $+2$, and circular-shift nulls. With 80 blocks, an exact nonzero-shift test has 79 null alignments, so its minimum attainable $p$-value is $1/80=0.0125$. Broader 10,000-draw phase-randomized tests were used for specified metric families.
+
+Exact Gram-spectrum calculations accumulated the smaller Gram matrix in FP64. Blocks 0, 50, 51, and 79 were checked against direct FP32 SVD. The maximum relative discrepancy among the leading 64 singular values was $4.48\times10^{-4}$; the maximum captured-energy discrepancy was $6.29\times10^{-4}$; and 90\%, 95\%, and 99\% energy-rank thresholds differed by at most one. Negative Gram eigenvalue mass was negligible. For the block-50 down matrix it was $7.17\times10^{-19}$, or $5.36\times10^{-20}$ of Frobenius-squared mass.
+
+Independent randomized rank-64 bases were less stable: the worst leading-spectrum difference was 10.2\%, the median difference was 3.0\%, and the minimum replicate subspace overlap was 0.526. Inferential claims therefore rely on exact Gram/direct-SVD quantities. Randomized tail bases are retained as supporting diagnostics only.
+
+\begin{cautionbox}{Multiplicity and checkpoint dependence}
+Thousands of spectral and geometric metrics are correlated, so isolated exploratory $p$-values should not be treated as independent discoveries. The four ESMFold2 checkpoints share architecture and training lineage. Their agreement is a robustness check, not four independent experimental replicates.
+\end{cautionbox}
+
+\section{Integrated interpretation}
+
+\subsection{Hypothesis 1: block 50 writes a folding-readable residual subspace}
+\textbf{Confidence: moderate; strongest weights-only hypothesis.} The FFN gate/value subspaces at block 50 align with the shared folding projection, the association tracks the mixer across depth and all four checkpoints, and the value result survives raw and LayerNorm-scaled sensitivity checks. This directly explains how the folding model can prefer state 51 even when a contact-oriented probe does not.
+
+\subsection{Hypothesis 2: the write is distributed across heads and consolidated by the FFN}
+\textbf{Confidence: moderate.} Ten high-coupling V--O heads, six extreme heads, elevated O stable rank, Hungarian head reorganization, and FFN coupling dispersion coincide at block 50. Weak per-head projection significance favors an ensemble effect rather than a single folding head.
+
+\subsection{Hypothesis 3: state 51 is a transient interface state}
+\textbf{Confidence: moderate-low.} State 51 may be a convenient basis that block 50 emits and block 51 immediately transforms. This explains why the producer is unusual, the consumer is less so, and generic representational metrics can dip at the same depth. A downstream mixer can select a transient interface even when it is not the best standalone state.
+
+\subsection{Hypothesis 4: P@L and SAE metrics miss low-volume task-specific directions}
+\textbf{Confidence: plausible but unestablished by weights.} A low-dimensional direction can matter strongly to the folding projection while contributing little to average reconstruction loss, masked-LM perplexity, or contact precision. The spectra and subspace overlaps make this geometrically plausible, but only activation interventions can show that protein sequences use it.
+
+\subsection{Alternative explanations}
+\begin{itemize}
+  \item Checkpoint agreement may partly reflect shared initialization, data, or training lineage.
+  \item Mixer coefficients can compensate for projected-state correlations and cancellations; a large coefficient is not unique attribution.
+  \item The folding projection may align with a weight subspace that is rarely occupied by real activations.
+  \item The structure-specific signal may be distributed across blocks 48--53, with state 51 serving as the most convenient linear readout point.
+\end{itemize}
+
+\section{What the weights establish}
+
+\begin{tabularx}{\textwidth}{@{}>{\bfseries}p{0.18\textwidth}X@{}}
+Established & State 51 is heavily weighted in every supported checkpoint; block 50 produces it; and block 50 has unusual projection, head, and FFN geometry. \\
+\addlinespace
+Not supported & The phenomenon is only matrix scale; block 51 is a robust isolated anomaly; one head causes the mixer mass; normalized intrinsic dimension explains it; or block 50 is uniquely compressible. \\
+\addlinespace
+Unknown & Whether aligned directions activate on real proteins, causally improve folding, or represent biology rather than training-specific organization. \\
+\end{tabularx}
+
+\begin{findingbox}{Validation rating}
+Ready to share with weights-only caveats. All 64 saved quality checks pass, direct SVD agrees with the Gram spectra, the strongest projection result survives LayerNorm and scale sensitivity, and null findings are preserved. Causal and biological claims remain intentionally withheld.
+\end{findingbox}
+
+\section{Recommended activation follow-up}
+
+The next phase should be narrow and causal:
+\begin{enumerate}
+  \item Decompose the actual projected contributions $\alpha_sWN(h_s)$ on a fixed protein panel. Measure per-state norm, covariance, cancellation, and contribution to the final 256-vector.
+  \item At state 51, ablate only the rank-16 block-50 value subspace that overlaps the folding projection. Compare it with equal-rank orthogonal and matched-norm random controls.
+  \item Intervene on the block-50 heads with the highest V--O coupling, individually and jointly, to distinguish additivity, redundancy, and FFN gating.
+  \item Replace state 51 with controlled interpolations of states 50 and 52 after LayerNorm while holding the mixer and projection fixed.
+  \item Measure folding metrics together with P@L and the original SAE criteria. The hypothesis predicts a selective folding deficit larger than the change in generic contact or reconstruction scores.
+  \item Train or inspect SAEs separately on the projection-aligned component and its orthogonal complement.
+\end{enumerate}
+
+The decisive experiment is an equal-rank, equal-norm, projection-aware ablation. If the aligned block-50 subspace is causal, removing it should hurt ESMFold2 more than removing an orthogonal block-50 subspace, even when both perturbations have similar effects on P@L or masked-LM perplexity.
+
+\clearpage
+\appendix
+
+\section{Weight inventory}
+
+The primary ESMC matrices were analyzed for every block 0--79:
+\begin{longtable}{@{}p{0.28\textwidth}p{0.23\textwidth}p{0.41\textwidth}@{}}
+\toprule
+Tensor family & Shape & Role \\
+\midrule
+\endfirsthead
+\toprule
+Tensor family & Shape & Role \\
+\midrule
+\endhead
+Q, K, V & $2560\times2560$ each & Split from joint $7680\times2560$ QKV input projection \\
+Attention O & $2560\times2560$ & Residual-stream attention output map \\
+SwiGLU gate & $6912\times2560$ & First half of FFN input projection \\
+SwiGLU value & $6912\times2560$ & Second half of FFN input projection \\
+FFN down & $2560\times6912$ & Returns SwiGLU features to the residual stream \\
+Attention LayerNorm & 2560 weights and biases & Pre-attention channel scaling and centering \\
+FFN LayerNorm & 2560 weights and biases & Pre-FFN channel scaling and centering \\
+Q/K norms & 2560-vector parameters & Query/key normalization \\
+Final ESMC norm & 2560-vector parameters & Contextual state-80 normalization \\
+ESMFold2 mixer & 81 logits & Softmax weights over ESMC states 0--80 \\
+ESMFold2 LayerNorm & 2560 weights and biases & Shared normalization preceding folding projection \\
+ESMFold2 projection & $256\times2560$ & Shared bias-free state projection \\
+\bottomrule
+\end{longtable}
+
+Token embeddings and the MLM head were excluded from the primary layer analysis. Zero-length \code{\_extra\_state} metadata was ignored. The folding trunk and structure module were outside this pass.
+
+\section{Analysis matrix}
+
+\begin{longtable}{@{}p{0.22\textwidth}p{0.34\textwidth}p{0.36\textwidth}@{}}
+\toprule
+Lens & Measurements & Interpretation boundary \\
+\midrule
+\endfirsthead
+\toprule
+Lens & Measurements & Interpretation boundary \\
+\midrule
+\endhead
+Operator spectra & Singular spectra; stable, participation, and effective ranks; energy thresholds; condition estimates & Linear operator geometry, not activation dimension \\
+Centered PCA & Row- and column-centered spectra & Geometry of learned neuron vectors \\
+Weight-vector dimension & TwoNN; Levina--Bickel at $k=10,20,50$; concentration and dispersion & Weight-vector dimension only \\
+Layer trajectories & Pairwise Frobenius distance, cosine, centered kernel PCA, step size, turning angle & Parameter evolution through depth \\
+Attention heads & Norms, ranks, Q--K angles, V--O coupling, projection overlap, redundancy, Hungarian matching & Availability of head pathways, not attention usage \\
+FFN neurons & Gate/value/down cosines, norm ratios, overlap, redundancy, concentration & Routing geometry, not neuron activation \\
+Projection alignment & Principal angles and normalized overlap at ranks 16--256 & Readable subspaces, not causal contribution \\
+Compression & Truncated SVD, INT8/INT4, magnitude sparsity, 2:4 sparsity & Parameter reconstruction only \\
+Anomaly testing & Depth residuals, local robust scores, global percentiles, BH FDR & Exploratory families remain dependent \\
+\bottomrule
+\end{longtable}
+
+\section{Reproducibility and provenance}
+
+The full analysis was rerun on an NVIDIA GH200 480GB workstation using CUDA 12.8 and Python 3.10.12. Checkpoint tensors were streamed with safetensors; ESMC was not instantiated or executed. Provenance records \code{model\_execution=false}. The full remote result archive contains 765 files totaling approximately 1.17 GB at:
+\begin{lstlisting}
+/home/ubuntu/esmc_weight_geometry_deep_dive_server_20260726
+\end{lstlisting}
+
+The pinned ESMC revision is:
+\begin{lstlisting}
+45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a
+\end{lstlisting}
+
+The six verified ESMC shard SHA-256 hashes are:
+\begin{lstlisting}
+bd90149ff223e6ac1a0cac6147a5ae0df20d3a21df4f65356a1f19cd14f4aa8a
+f75e2144d8269fe2eb4b3e0823fb089b94f176d8024153e85b8fb573a42294fa
+f699f01ecc9691d9c6470492765fe54b8b5d2e9f277c139e89427433ffdfe0b2
+46add1b7be098bbfdc3073884851ba3057f1b33ea23a158b650a37007dabd13d
+1e1cb62f060a34e18f54a31a76683ef888b8cec59e73315f5b31d25d45a1f88c
+56c73e13ae96e777ce65eee99364056069ef93b646470f352f83c5f1037b1b18
+\end{lstlisting}
+
+The four extracted ESMFold2 subset hashes are recorded in \code{deep\_dive\_provenance.json}. The server audit materializes bounded report extracts, records the exact DuckDB SQL, inventories every server artifact, and verifies all expected row counts. Every CSV field and NPZ member is documented with dtype, shape or row count, extrema, missingness, and definition.
+
+\section{Evidence archive map}
+
+\begin{longtable}{@{}p{0.31\textwidth}p{0.61\textwidth}@{}}
+\toprule
+Artifact & Purpose \\
+\midrule
+\endfirsthead
+\toprule
+Artifact & Purpose \\
+\midrule
+\endhead
+\code{REPORT\_SOURCE.md} & Complete narrative source used to construct this document \\
+\code{server\_audit\_summary.json} & Machine-readable synthesis of prespecified and exploratory results \\
+\code{output\_data\_quality\_checks.csv} & 64 completed output validation checks, all passing \\
+\code{output\_field\_dictionary.csv} & Field-level definitions, dtypes, row counts, null counts, distinct counts, and ranges \\
+\code{output\_array\_catalog.csv} & NPZ member names, shapes, dtypes, sizes, extrema, and non-finite counts \\
+\code{server\_artifact\_manifest.csv} & Inventory of all 765 server-run artifacts \\
+\code{sql\_validation.json} & DuckDB query execution and result-count validation \\
+\code{deep\_dive\_provenance.json} & Hardware, software, checkpoint, stage, and command history \\
+\code{report\_tables/*.csv} & Bounded source tables for the primary report figures \\
+\code{weights\_only\_deep\_dive.ipynb} & Executed reproducible analysis notebook \\
+\bottomrule
+\end{longtable}
+
+\section{Open questions}
+\begin{itemize}
+  \item Does state 51 remain fourth-ranked if the mixer is refit while removing one state at a time, or are several states exchangeable?
+  \item Are projection-aligned directions enriched for geometry, secondary structure, chain-interface, or confidence features?
+  \item Do monomers, multimers, disordered proteins, and long-repeat proteins use the state-51 component differently?
+  \item Did the mixer bump emerge early in ESMFold2 training, or only after the folding trunk learned to exploit block-50 directions?
+  \item Does an independently initialized folding head recover the same state preference and subspace alignment?
+  \item Is the Figure S26 trough preserved across SAE seeds, sparsity levels, normalization choices, and activation panels?
+\end{itemize}
+
+\addcontentsline{toc}{section}{References}
+\begin{thebibliography}{9}
+\bibitem{worldmodel}
+\textit{Language Modeling Materializes a World Model of Protein Biology}. bioRxiv preprint 2026.06.03.729735, 2026. \url{https://doi.org/10.64898/2026.06.03.729735}.
+
+\bibitem{esmc6b}
+Arc Institute. \textit{Biohub ESMC-6B checkpoint}, pinned revision \code{45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a}. \url{https://huggingface.co/biohub/ESMC-6B}.
+
+\bibitem{fastplms}
+FastPLMs repository. ESMFold2 language-model shim, checkpoint manifest, and weights-only analysis programs. Local reproducibility source accompanying this report.
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,112 @@
+{
+  "baseline_dir": "/home/ubuntu/esmc_weight_geometry_results_20260725",
+  "checkpoint": "/home/ubuntu/esmc_weight_geometry_cache_20260725/biohub--ESMC-6B--45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a",
+  "command_line": [
+    "examples/esmc_weight_geometry_deep_dive.py",
+    "--baseline-dir",
+    "/home/ubuntu/esmc_weight_geometry_results_20260725",
+    "--output-dir",
+    "/home/ubuntu/esmc_weight_geometry_deep_dive_server_20260726",
+    "--device",
+    "cuda",
+    "--resume",
+    "--stage",
+    "notebook"
+  ],
+  "cuda_runtime": "12.8",
+  "device": "cuda",
+  "fold_subset_sha256": {
+    "esmfold2": "47789bd44de198dabeb861f4766ebd164afa925fadc94e611b3374709f011c90",
+    "esmfold2_experimental_cutoff2025": "9d450db736039684b86386dc61312d944a7af6c96535143391b3615168c5c035",
+    "esmfold2_experimental_fast_cutoff2025": "b5f5ef10384c59efd19c3ff2730afe5455b6273116f6312546ae06d0f8a0290b",
+    "esmfold2_fast": "eb1c404858a3d6a87384b32b8d79eaf3127a6adf167dd2a6a31d19727d050c69"
+  },
+  "folds": {
+    "esmfold2": "/home/ubuntu/esmc_weight_geometry_cache_20260725/esmfold2-subsets/esmfold2--1ebf0e3481a5184eb6171d40615c79e384b48796",
+    "esmfold2_experimental_cutoff2025": "/home/ubuntu/esmc_weight_geometry_cache_20260725/esmfold2-subsets/esmfold2_experimental_cutoff2025--56f94f5c1069ecde17512c96928850518340d287",
+    "esmfold2_experimental_fast_cutoff2025": "/home/ubuntu/esmc_weight_geometry_cache_20260725/esmfold2-subsets/esmfold2_experimental_fast_cutoff2025--74b88548bf19688b8727432db0d698cb2e1d8783",
+    "esmfold2_fast": "/home/ubuntu/esmc_weight_geometry_cache_20260725/esmfold2-subsets/esmfold2_fast--b28d8ace5e05e61e5bec1e6820cfd3e221819d12"
+  },
+  "numpy": "1.21.5",
+  "output_dir": "/home/ubuntu/esmc_weight_geometry_deep_dive_server_20260726",
+  "pid": 938009,
+  "platform": "Linux-6.8.0-1046-nvidia-64k-aarch64-with-glibc2.35",
+  "python": "3.10.12",
+  "run_history": [
+    {
+      "command_line": [
+        "examples/esmc_weight_geometry_deep_dive.py",
+        "--baseline-dir",
+        "/home/ubuntu/esmc_weight_geometry_results_20260725",
+        "--output-dir",
+        "/home/ubuntu/esmc_weight_geometry_deep_dive_server_20260726",
+        "--esmc-checkpoint",
+        "/home/ubuntu/esmc_weight_geometry_cache_20260725/biohub--ESMC-6B--45b0fa5d7fb06faefbd5e3b89bdcef35d564e79a",
+        "--esmfold2-checkpoint",
+        "esmfold2=/home/ubuntu/esmc_weight_geometry_cache_20260725/esmfold2-subsets/esmfold2--1ebf0e3481a5184eb6171d40615c79e384b48796",
+        "--esmfold2-checkpoint",
+        "esmfold2_fast=/home/ubuntu/esmc_weight_geometry_cache_20260725/esmfold2-subsets/esmfold2_fast--b28d8ace5e05e61e5bec1e6820cfd3e221819d12",
+        "--esmfold2-checkpoint",
+        "esmfold2_experimental_cutoff2025=/home/ubuntu/esmc_weight_geometry_cache_20260725/esmfold2-subsets/esmfold2_experimental_cutoff2025--56f94f5c1069ecde17512c96928850518340d287",
+        "--esmfold2-checkpoint",
+        "esmfold2_experimental_fast_cutoff2025=/home/ubuntu/esmc_weight_geometry_cache_20260725/esmfold2-subsets/esmfold2_experimental_fast_cutoff2025--74b88548bf19688b8727432db0d698cb2e1d8783",
+        "--device",
+        "cuda",
+        "--top-rank",
+        "64",
+        "--stage",
+        "all"
+      ],
+      "device": "cuda",
+      "stages": [
+        "catalog",
+        "derived",
+        "raw",
+        "normalization",
+        "subspaces",
+        "statistics",
+        "figures",
+        "notebook"
+      ]
+    },
+    {
+      "command_line": [
+        "examples/esmc_weight_geometry_deep_dive.py",
+        "--baseline-dir",
+        "/home/ubuntu/esmc_weight_geometry_results_20260725",
+        "--output-dir",
+        "/home/ubuntu/esmc_weight_geometry_deep_dive_server_20260726",
+        "--device",
+        "cuda",
+        "--resume",
+        "--stage",
+        "notebook"
+      ],
+      "device": "cuda",
+      "stages": [
+        "notebook"
+      ]
+    }
+  ],
+  "schema_version": 1,
+  "stages": [
+    "catalog",
+    "derived",
+    "raw",
+    "normalization",
+    "subspaces",
+    "statistics",
+    "figures",
+    "notebook"
+  ],
+  "top_rank": 64,
+  "torch": "2.7.0",
+  "verified_checkpoint_sha256": {
+    "model-00001-of-00006.safetensors": "bd90149ff223e6ac1a0cac6147a5ae0df20d3a21df4f65356a1f19cd14f4aa8a",
+    "model-00002-of-00006.safetensors": "f75e2144d8269fe2eb4b3e0823fb089b94f176d8024153e85b8fb573a42294fa",
+    "model-00003-of-00006.safetensors": "f699f01ecc9691d9c6470492765fe54b8b5d2e9f277c139e89427433ffdfe0b2",
+    "model-00004-of-00006.safetensors": "46add1b7be098bbfdc3073884851ba3057f1b33ea23a158b650a37007dabd13d",
+    "model-00005-of-00006.safetensors": "1e1cb62f060a34e18f54a31a76683ef888b8cec59e73315f5b31d25d45a1f88c",
+    "model-00006-of-00006.safetensors": "56c73e13ae96e777ce65eee99364056069ef93b646470f352f83c5f1037b1b18"
+  }
+}

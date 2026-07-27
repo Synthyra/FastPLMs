@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "stages": {
+    "validation": "passed",
+    "package": "passed",
+    "verification": "passed"
+  },
+  "counts": {
+    "blocks": 30,
+    "charts": 4,
+    "html": 0,
+    "metrics": 4,
+    "tables": 0
+  },
+  "sourceDialog": "passed",
+  "sourceInteraction": "keyboard_menu_semantic_click",
+  "viewports": [1440, 390],
+  "note": "Canonical portable delivery used the packaged builder, chart extractor, and verifier. A narrowly scoped CSS guard corrects the packaged reader's 100vw overflow under classic Windows scrollbars."
+}

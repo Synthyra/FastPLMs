@@ -1,0 +1,79 @@
+{
+  "attention_head_threshold_profile": {
+    "columns": [
+      "block",
+      "produced_state",
+      "threshold",
+      "head_count"
+    ],
+    "row_count": 160,
+    "sql": "SELECT block, produced_state, threshold, head_count FROM read_csv_auto('report_tables/attention_head_threshold_profile.csv') ORDER BY threshold, block"
+  },
+  "key_evidence": {
+    "columns": [
+      "finding",
+      "value",
+      "unit"
+    ],
+    "row_count": 5,
+    "sql": "SELECT finding, value, unit FROM read_csv_auto('report_tables/key_evidence.csv') ORDER BY finding"
+  },
+  "mixer_profile": {
+    "columns": [
+      "checkpoint",
+      "checkpoint_label",
+      "state_index",
+      "producing_block",
+      "mixing_weight_pct"
+    ],
+    "row_count": 324,
+    "sql": "SELECT checkpoint, checkpoint_label, state_index, producing_block, mixing_weight_pct FROM read_csv_auto('report_tables/mixer_profile.csv') ORDER BY checkpoint, state_index"
+  },
+  "mixer_summary": {
+    "columns": [
+      "adjacent_total_variation",
+      "checkpoint",
+      "depth_center_of_mass",
+      "depth_standard_deviation",
+      "effective_state_count",
+      "entropy",
+      "gini",
+      "hhi",
+      "maximum_weight_state",
+      "state_51_mass",
+      "state_51_rank",
+      "states_77_80_mass",
+      "top1_mass",
+      "top4_mass",
+      "top8_mass",
+      "checkpoint_label"
+    ],
+    "row_count": 4,
+    "sql": "SELECT * FROM read_csv_auto('report_tables/mixer_summary.csv') ORDER BY state_51_mass DESC"
+  },
+  "projection_gate_value_rank16_profile": {
+    "columns": [
+      "block",
+      "produced_state",
+      "family",
+      "mean_overlap",
+      "minimum_overlap",
+      "maximum_overlap"
+    ],
+    "row_count": 160,
+    "sql": "SELECT block, produced_state, family, mean_overlap, minimum_overlap, maximum_overlap FROM read_csv_auto('report_tables/projection_gate_value_rank16_profile.csv') ORDER BY family, block"
+  },
+  "spectral_q_effective_rank_profile": {
+    "columns": [
+      "block",
+      "produced_state",
+      "family",
+      "effective_rank",
+      "depth_residual",
+      "local_robust_z",
+      "bh_q"
+    ],
+    "row_count": 80,
+    "sql": "SELECT block, produced_state, family, effective_rank, depth_residual, local_robust_z, bh_q FROM read_csv_auto('report_tables/spectral_q_effective_rank_profile.csv') ORDER BY block"
+  }
+}

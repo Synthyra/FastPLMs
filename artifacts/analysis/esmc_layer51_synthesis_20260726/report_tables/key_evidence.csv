@@ -1,0 +1,6 @@
+finding,value,unit
+State 51 mixer mass,0.1025710860760027,fraction
+States 77-80 mixer mass,0.6288538543386379,fraction
+Block 50 heads with VO overlap > 0.5,10.0,heads
+Block 50 heads with VO overlap > 0.7,6.0,heads
+Block 50 gate-down cosine mean,-0.0080763415443415,cosine

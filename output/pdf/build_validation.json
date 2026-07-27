@@ -1,0 +1,31 @@
+{
+  "artifact": "esmc_state51_weight_geometry.pdf",
+  "artifact_sha256": "33e383b7b00c260e4ad6f7b9207b9a47e62438102c8bb4df3d3f773bd8168dbe",
+  "source": "esmc_state51_weight_geometry.tex",
+  "source_sha256": "91449450d9a59fbcb31d380b69f07ebfddf9381c66719ffa38375322897baa3d",
+  "compiler": "Tectonic 0.16.9",
+  "physical_pages": 16,
+  "numbered_pages": 15,
+  "figures": 8,
+  "primary_tables": 5,
+  "visual_qa": {
+    "renderer": "Poppler pdftoppm at 120 dpi",
+    "pages_inspected": "1-16",
+    "clipped_content": false,
+    "overlapping_content": false,
+    "broken_glyphs": false,
+    "duplicate_headings": false
+  },
+  "text_qa": {
+    "title_found": true,
+    "projection_aligned_conclusion_found": true,
+    "quality_check_count_found": true,
+    "unicode_replacement_character_found": false,
+    "empty_pages": []
+  },
+  "analysis_validation": {
+    "saved_quality_checks_passed": 64,
+    "saved_quality_checks_total": 64,
+    "new_model_computation_for_pdf": false
+  }
+}

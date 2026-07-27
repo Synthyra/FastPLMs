@@ -1,0 +1,65 @@
+check,detail,expected,scope,severity,status,value
+row_count,,1680,spectral_shape_metrics.csv,none,pass,1680
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,spectral_shape_metrics.csv,none,pass,0
+no_exact_duplicate_rows,,0,spectral_shape_metrics.csv,none,pass,0
+row_count,,1659,adjacent_spectral_transitions.csv,none,pass,1659
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,adjacent_spectral_transitions.csv,none,pass,0
+no_exact_duplicate_rows,,0,adjacent_spectral_transitions.csv,none,pass,0
+row_count,,560,trajectory_local_geometry.csv,none,pass,560
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,trajectory_local_geometry.csv,none,pass,0
+no_exact_duplicate_rows,,0,trajectory_local_geometry.csv,none,pass,0
+row_count,,80,attention_head_distribution_summary.csv,none,pass,80
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,attention_head_distribution_summary.csv,none,pass,0
+no_exact_duplicate_rows,,0,attention_head_distribution_summary.csv,none,pass,0
+row_count,,79,attention_head_permutation_geometry.csv,none,pass,79
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,attention_head_permutation_geometry.csv,none,pass,0
+no_exact_duplicate_rows,,0,attention_head_permutation_geometry.csv,none,pass,0
+row_count,,4,mixer_profile_summary.csv,none,pass,4
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,mixer_profile_summary.csv,none,pass,0
+no_exact_duplicate_rows,,0,mixer_profile_summary.csv,none,pass,0
+row_count,,6,mixer_profile_pairwise.csv,none,pass,6
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,mixer_profile_pairwise.csv,none,pass,0
+no_exact_duplicate_rows,,0,mixer_profile_pairwise.csv,none,pass,0
+row_count,,3920,compression_pareto.csv,none,pass,3920
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,compression_pareto.csv,none,pass,0
+no_exact_duplicate_rows,,0,compression_pareto.csv,none,pass,0
+row_count,,560,raw_tensor_statistics.csv,none,pass,560
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,raw_tensor_statistics.csv,none,pass,0
+no_exact_duplicate_rows,,0,raw_tensor_statistics.csv,none,pass,0
+row_count,,80,ffn_neuron_summary.csv,none,pass,80
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,ffn_neuron_summary.csv,none,pass,0
+no_exact_duplicate_rows,,0,ffn_neuron_summary.csv,none,pass,0
+row_count,,168,randomized_svd_sensitivity.csv,none,pass,168
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,randomized_svd_sensitivity.csv,none,pass,0
+no_exact_duplicate_rows,,0,randomized_svd_sensitivity.csv,none,pass,0
+row_count,,480,normalization_vector_statistics.csv,none,pass,480
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,normalization_vector_statistics.csv,none,pass,0
+no_exact_duplicate_rows,,0,normalization_vector_statistics.csv,none,pass,0
+row_count,,15360,normalization_channel_depth_metrics.csv,none,pass,15360
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,normalization_channel_depth_metrics.csv,none,pass,0
+no_exact_duplicate_rows,,0,normalization_channel_depth_metrics.csv,none,pass,0
+row_count,,474,normalization_adjacent_changes.csv,none,pass,474
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,normalization_adjacent_changes.csv,none,pass,0
+no_exact_duplicate_rows,,0,normalization_adjacent_changes.csv,none,pass,0
+row_count,,1200,normalization_cross_role.csv,none,pass,1200
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,normalization_cross_role.csv,none,pass,0
+no_exact_duplicate_rows,,0,normalization_cross_role.csv,none,pass,0
+row_count,,553,adjacent_raw_matrix_changes.csv,none,pass,553
+no_infinite_values,Null values are assessed separately because some fields are structurally inapplicable,0,adjacent_raw_matrix_changes.csv,none,pass,0
+no_exact_duplicate_rows,,0,adjacent_raw_matrix_changes.csv,none,pass,0
+esmfold2_softmax_sum,,1.0,esmfold2_mixing_weights.csv,none,pass,0.9999999999999973
+esmfold2_state_coverage,,81,esmfold2_mixing_weights.csv,none,pass,81
+esmfold2_experimental_cutoff2025_softmax_sum,,1.0,esmfold2_mixing_weights.csv,none,pass,0.999999999999998
+esmfold2_experimental_cutoff2025_state_coverage,,81,esmfold2_mixing_weights.csv,none,pass,81
+esmfold2_experimental_fast_cutoff2025_softmax_sum,,1.0,esmfold2_mixing_weights.csv,none,pass,0.9999999999999982
+esmfold2_experimental_fast_cutoff2025_state_coverage,,81,esmfold2_mixing_weights.csv,none,pass,81
+esmfold2_fast_softmax_sum,,1.0,esmfold2_mixing_weights.csv,none,pass,0.9999999999999982
+esmfold2_fast_state_coverage,,81,esmfold2_mixing_weights.csv,none,pass,81
+monotone_nonincreasing,,0,baseline/spectra,none,pass,0
+nonnegative,,0,baseline/spectra,none,pass,0
+symmetric_with_valid_diagonals,,0,baseline/trajectory,none,pass,0
+energy_at_1_reconciles_to_baseline,,<1e-12,spectral_shape_metrics.csv,none,pass,2.220446049250313e-16
+file_count,,560,bases,none,pass,560
+maximum_saved_orthogonality_error,,<1e-3,bases,none,pass,0.0001359985487500351
+file_count,,80,ffn_neurons,none,pass,80
+array_shapes,,0,ffn_neurons,none,pass,0
