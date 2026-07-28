@@ -36,6 +36,11 @@
       "sha256": "1bce6da5bab1186b5a3e770d466a7f3fdfeef96ea2f2559f3e5004ee225ee50c"
     },
     {
+      "bytes": 7376,
+      "path": "pal_mixer_comparison.dat",
+      "sha256": "3652e516a63f3128e308b9c556b6828eb7df2b41798690ec51a1b2ff2620d819"
+    },
+    {
       "bytes": 3377,
       "path": "projection_gate.dat",
       "sha256": "73dcc320dc3084b2a48b97bb0cc96d8f29d40dc18492c1df6ab0d45afe29b4a3"
@@ -44,6 +49,16 @@
       "bytes": 3377,
       "path": "projection_value.dat",
       "sha256": "443fc31ed41ef333a30c7023c98d8afd50d4cc52951b1e0dd261a46a2dad14a5"
+    },
+    {
+      "bytes": 63046,
+      "path": "published_figure1d.png",
+      "sha256": "33d3196223a4a978bcf4becb1def04bb26b4ac1e1bc00a762c727d6b19c64322"
+    },
+    {
+      "bytes": 116554,
+      "path": "published_figure_s26.png",
+      "sha256": "51cf240e3fe64c2bc857dc227dd5a6eab6d68afbdef167dbad87001f54345a96"
     },
     {
       "bytes": 3752,
