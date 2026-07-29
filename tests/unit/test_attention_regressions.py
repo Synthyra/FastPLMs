@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import functools
 import warnings
 import pytest
 import torch
+from collections.abc import Callable
 from types import SimpleNamespace
 from transformers.models.esm.configuration_esm import EsmConfig
 
@@ -126,6 +128,56 @@ def test_esmplusplus_rejects_empty_attention_rows_without_fallback_or_mutation()
 
     assert captured == []
     assert stack.attention_backend == configured_backend
+
+
+def test_esmplusplus_builds_attention_masks_outside_torch_compile(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stack = TransformerStack(d_model=8, n_heads=2, n_layers=1, attn_backend="sdpa").eval()
+    hidden_states = torch.randn(2, 4, 8)  # (b=2, l=4, d=8)
+    first_mask = torch.tensor(((1, 1, 0, 0), (1, 1, 1, 0)))  # (b, l)
+    second_mask = torch.tensor(((1, 1, 1, 0), (1, 0, 0, 0)))  # (b, l)
+    expected_first = stack(hidden_states, attention_mask=first_mask).last_hidden_state
+    expected_second = stack(hidden_states, attention_mask=second_mask).last_hidden_state
+    compiled_graphs: list[torch.fx.GraphModule] = []
+
+    def counting_backend(
+        graph_module: torch.fx.GraphModule,
+        example_inputs: list[torch.Tensor],
+    ) -> Callable[..., object]:
+        del example_inputs
+        compiled_graphs.append(graph_module)
+        return graph_module.forward
+
+    compiled_stack = torch.compile(stack, backend=counting_backend, dynamic=False)
+    try:
+        actual_first = compiled_stack(
+            hidden_states,
+            attention_mask=first_mask,
+        ).last_hidden_state
+        first_compile_count = len(compiled_graphs)
+        actual_second = compiled_stack(
+            hidden_states,
+            attention_mask=second_mask,
+        ).last_hidden_state
+
+        assert first_compile_count > 0
+        assert len(compiled_graphs) == first_compile_count
+        torch.testing.assert_close(actual_first, expected_first)
+        torch.testing.assert_close(actual_second, expected_second)
+        with pytest.raises(
+            ValueError,
+            match="attention_mask must keep at least one valid key per batch row",
+        ):
+            compiled_stack(
+                hidden_states,
+                attention_mask=torch.tensor(((1, 1, 0, 0), (0, 0, 0, 0))),
+            )
+    finally:
+        torch.compiler.reset()
+
+    captured = capsys.readouterr()
+    assert "Graph break from `Tensor.item()`" not in captured.err
 
 
 def _assert_masked_output_attentions_fallback(encoder: torch.nn.Module) -> None:
@@ -540,6 +592,166 @@ def test_esm3_sequence_id_grouping_combines_with_public_padding_mask() -> None:
     assert torch.count_nonzero(attention_weights[0, :, :2, 2:4]) == 0
 
 
+def test_esm3_flex_mask_preparation_does_not_construct_dense_pairwise_mask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SequenceIdWithoutPairwiseOperations:
+        shape = (2, 4)
+
+        def unsqueeze(self, _dim: int) -> torch.Tensor:
+            raise AssertionError("Flex mask preparation must not construct a dense pairwise mask")
+
+    sequence_id = SequenceIdWithoutPairwiseOperations()
+    affine_mask = torch.ones(2, 4, dtype=torch.bool)
+    expected_block_mask = object()
+
+    def create_flex_block_mask(*args: object) -> object:
+        assert args == (sequence_id, None, 2, 4, torch.device("cpu"))
+        return expected_block_mask
+
+    monkeypatch.setattr(
+        esm3_module.TransformerStack,
+        "_create_flex_block_mask",
+        staticmethod(create_flex_block_mask),
+    )
+
+    dense_mask, block_mask, prepared_affine_mask, mask_semantics, effective_backend = (
+        esm3_module.TransformerStack._prepare_attention_masks(
+            sequence_id=sequence_id,
+            attention_mask=None,
+            affine_mask=affine_mask,
+            batch_size=2,
+            seq_len=4,
+            device=torch.device("cpu"),
+            attention_backend=AttentionBackend.FLEX,
+            output_attentions=False,
+        )
+    )
+
+    assert dense_mask is None
+    assert block_mask is expected_block_mask
+    assert prepared_affine_mask is affine_mask
+    assert mask_semantics == "sequence_id_equality"
+    assert effective_backend == AttentionBackend.FLEX
+
+
+def test_esm3_builds_intersected_attention_masks_outside_torch_compile(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    torch.manual_seed(41)
+    model = FastESM3Model(
+        FastESM3Config(
+            hidden_size=8,
+            num_attention_heads=2,
+            num_vector_heads=2,
+            num_hidden_layers=2,
+            attn_backend="sdpa",
+        )
+    ).eval()
+    input_ids = torch.tensor(((0, 3, 4, 2, 1), (0, 6, 7, 2, 1)))  # (b=2, l=5)
+    sequence_id = torch.tensor(((0, 0, 1, 1, -1), (0, 1, 1, 1, -1)))  # (b, l)
+    first_mask = torch.tensor(((1, 1, 1, 1, 0), (1, 1, 1, 1, 0)))  # (b, l)
+    second_mask = torch.tensor(((1, 1, 1, 0, 0), (1, 1, 0, 1, 0)))  # (b, l)
+    structure_coords = torch.randn(2, 5, 3, 3)  # (b, l, backbone_atom=3, xyz=3)
+    structure_coords[:, 2] = torch.nan
+
+    affine_mask = torch.tensor(((1, 1, 0, 1, 1), (1, 0, 1, 1, 1)), dtype=torch.bool)
+    dense_mask, block_mask, prepared_affine_mask, mask_semantics, effective_backend = (
+        model.esm3.transformer._prepare_attention_masks(
+            sequence_id=sequence_id,
+            attention_mask=first_mask,
+            affine_mask=affine_mask,
+            batch_size=2,
+            seq_len=5,
+            device=torch.device("cpu"),
+            attention_backend=AttentionBackend.SDPA,
+            output_attentions=False,
+        )
+    )
+    expected_dense_mask = (
+        sequence_id.unsqueeze(-1).eq(sequence_id.unsqueeze(-2)).unsqueeze(1)
+        & first_mask.bool()[:, None, None, :]
+    )
+    assert torch.equal(dense_mask, expected_dense_mask)
+    assert block_mask is None
+    assert torch.equal(prepared_affine_mask, affine_mask & first_mask.bool())
+    assert mask_semantics == "sequence_id_and_padding"
+    assert effective_backend == AttentionBackend.SDPA
+
+    with warnings.catch_warnings(record=True) as caught_warnings, pytest.raises(
+        ValueError,
+        match="attention_mask must keep at least one valid key per batch row",
+    ):
+        model.esm3.transformer._prepare_attention_masks(
+            sequence_id=sequence_id,
+            attention_mask=torch.zeros_like(first_mask),
+            affine_mask=affine_mask,
+            batch_size=2,
+            seq_len=5,
+            device=torch.device("cpu"),
+            attention_backend=AttentionBackend.SDPA,
+            output_attentions=True,
+        )
+    assert not caught_warnings
+
+    call = functools.partial(
+        model,
+        input_ids=input_ids,
+        sequence_id=sequence_id,
+        structure_coords=structure_coords,
+    )
+    with torch.no_grad():
+        expected_first = call(attention_mask=first_mask).last_hidden_state
+        expected_second = call(attention_mask=second_mask).last_hidden_state
+
+    compiled_graphs: list[torch.fx.GraphModule] = []
+
+    def counting_backend(
+        graph_module: torch.fx.GraphModule,
+        example_inputs: list[torch.Tensor],
+    ) -> Callable[..., object]:
+        del example_inputs
+        compiled_graphs.append(graph_module)
+        return graph_module.forward
+
+    compiled_model = torch.compile(model, backend=counting_backend, dynamic=False)
+    try:
+        with torch.no_grad():
+            actual_first = compiled_model(
+                input_ids=input_ids,
+                sequence_id=sequence_id,
+                structure_coords=structure_coords,
+                attention_mask=first_mask,
+            ).last_hidden_state
+            first_compile_count = len(compiled_graphs)
+            actual_second = compiled_model(
+                input_ids=input_ids,
+                sequence_id=sequence_id,
+                structure_coords=structure_coords,
+                attention_mask=second_mask,
+            ).last_hidden_state
+
+        assert first_compile_count > 0
+        assert len(compiled_graphs) == first_compile_count
+        torch.testing.assert_close(actual_first, expected_first)
+        torch.testing.assert_close(actual_second, expected_second)
+        with pytest.raises(
+            ValueError,
+            match="attention_mask must keep at least one valid key per batch row",
+        ):
+            compiled_model(
+                input_ids=input_ids,
+                sequence_id=sequence_id,
+                structure_coords=structure_coords,
+                attention_mask=torch.tensor(((1, 1, 1, 1, 0), (0, 0, 0, 0, 0))),
+            )
+    finally:
+        torch.compiler.reset()
+
+    captured = capsys.readouterr()
+    assert "Graph break from `Tensor.item()`" not in captured.err
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     (
@@ -670,7 +882,8 @@ def test_esmplusplus_chain_masks_fail_closed_without_assertions(
     stack = TransformerStack(d_model=8, n_heads=2, n_layers=1, attn_backend="sdpa")
 
     with pytest.raises(ValueError, match=r"sequence_id must have shape \(2, 4\)"):
-        stack._sequence_id_attention_masks(
+        stack._prepare_attention_masks(
+            attention_mask=None,
             sequence_id=torch.ones(2, 4, 1, dtype=torch.bool),
             batch_size=2,
             seq_len=4,
@@ -679,7 +892,8 @@ def test_esmplusplus_chain_masks_fail_closed_without_assertions(
 
     stack.attention_backend = AttentionBackend.FLASH_ATTENTION_3
     with pytest.raises(ValueError, match="only supports boolean sequence_id"):
-        stack._sequence_id_attention_masks(
+        stack._prepare_attention_masks(
+            attention_mask=None,
             sequence_id=torch.zeros(2, 4, dtype=torch.long),
             batch_size=2,
             seq_len=4,
@@ -689,7 +903,8 @@ def test_esmplusplus_chain_masks_fail_closed_without_assertions(
     stack.attention_backend = AttentionBackend.FLEX_ATTENTION
     monkeypatch.setattr(_core, "create_block_mask", None)
     with pytest.raises(RuntimeError, match="create_block_mask is unavailable"):
-        stack._sequence_id_attention_masks(
+        stack._prepare_attention_masks(
+            attention_mask=None,
             sequence_id=torch.ones(2, 4, dtype=torch.bool),
             batch_size=2,
             seq_len=4,

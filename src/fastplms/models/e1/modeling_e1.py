@@ -135,6 +135,54 @@ def _get_logger():
     return logging.get_logger(__name__)
 
 
+@torch.compiler.disable
+def _validate_cached_global_query_start(first_sequence_id: torch.Tensor) -> None:
+    """Keep cached-query validation eager while preserving padding semantics."""
+
+    if bool(first_sequence_id.eq(-1).any()):
+        raise ValueError("E1 cached queries must start with a non-padding sequence token.")
+
+
+@torch.compiler.disable
+def _validate_biological_indices(
+    within_positions: torch.Tensor,
+    global_positions: torch.Tensor,
+    sequence_numbers: torch.Tensor,
+    config: E1Config,
+) -> None:
+    """Validate E1's sequence and position conventions outside compiled graphs."""
+
+    lowest_position, highest_position = torch.aminmax(within_positions)
+    minimum_position = int(lowest_position.item())
+    maximum_position = int(highest_position.item())
+    if minimum_position < -1 or maximum_position >= config.max_num_positions_within_seq:
+        raise ValueError(
+            "Position ids must be in the range "
+            f"[-1, {config.max_num_positions_within_seq}); got max "
+            f"{maximum_position} and min {minimum_position}"
+        )
+
+    lowest_global, highest_global = torch.aminmax(global_positions)
+    minimum_global = int(lowest_global.item())
+    maximum_global = int(highest_global.item())
+    if minimum_global < -1 or maximum_global >= config.max_num_positions_global:
+        raise ValueError(
+            "Global position ids must be in the range "
+            f"[-1, {config.max_num_positions_global}); got max "
+            f"{maximum_global} and min {minimum_global}"
+        )
+
+    lowest_sequence, highest_sequence = torch.aminmax(sequence_numbers)
+    minimum_sequence = int(lowest_sequence.item())
+    maximum_sequence = int(highest_sequence.item())
+    if minimum_sequence < -1 or maximum_sequence >= config.max_num_sequences:
+        raise ValueError(
+            "Sequence ids must be in the range "
+            f"[-1, {config.max_num_sequences}); got max "
+            f"{maximum_sequence} and min {minimum_sequence}"
+        )
+
+
 _TOKENIZER_LOAD_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
     "fastplms_e1_tokenizer_load_context",
     default=None,
@@ -319,6 +367,19 @@ class RotaryPositionalEmbedding(nn.Module):
         self.cos_cached = angles.cos()
         self.sin_cached = angles.sin()
 
+    @torch.compiler.disable
+    def _ensure_sin_cos_cache(
+        self,
+        position_ids: torch.Tensor,
+        seq_len: int | None,
+        device: torch.device,
+    ) -> None:
+        """Resize the data-dependent rotary cache outside compiled graphs."""
+
+        required_length = int(position_ids.max().item()) + 1 if seq_len is None else seq_len
+        if required_length > self.max_seq_len_cached:
+            self._set_sin_cos_cache(seq_len=required_length, device=device)
+
     def forward(
         self,
         q: torch.Tensor,
@@ -328,10 +389,7 @@ class RotaryPositionalEmbedding(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # q, k: (b, l, h, d)
         device, dtype = q.device, q.dtype
-        seq_len = position_ids.max().item() + 1 if seq_len is None else seq_len
-
-        if seq_len > self.max_seq_len_cached:
-            self._set_sin_cos_cache(seq_len=seq_len, device=device)
+        self._ensure_sin_cos_cache(position_ids, seq_len, device)
 
         # Selecting by position inserts a head axis for broadcasting.
         idxs = position_ids.to(device)
@@ -717,8 +775,7 @@ class Attention(nn.Module):
         if cached_len < 0:
             raise ValueError(f"E1 cached KV length {kv_len} is shorter than query length {q_len}.")
         first_sequence_id = query_sequence_ids[:, :1]
-        if bool(first_sequence_id.eq(-1).any()):
-            raise ValueError("E1 cached queries must start with a non-padding sequence token.")
+        _validate_cached_global_query_start(first_sequence_id)
         cached_sequence_ids = first_sequence_id.expand(-1, cached_len)
         key_sequence_ids = torch.cat((cached_sequence_ids, query_sequence_ids), dim=-1)
         return query_sequence_ids, key_sequence_ids
@@ -1314,33 +1371,12 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         within_positions = within_seq_position_ids.long()
         global_positions = global_position_ids.long()
         sequence_numbers = sequence_ids.long()
-        lowest_position, highest_position = torch.aminmax(within_positions)
-        if (
-            lowest_position.item() < -1
-            or highest_position.item() >= self.config.max_num_positions_within_seq
-        ):
-            raise ValueError(
-                "Position ids must be in the range "
-                f"[-1, {self.config.max_num_positions_within_seq}); got max "
-                f"{highest_position.item()} and min {lowest_position.item()}"
-            )
-        lowest_global, highest_global = torch.aminmax(global_positions)
-        if (
-            lowest_global.item() < -1
-            or highest_global.item() >= self.config.max_num_positions_global
-        ):
-            raise ValueError(
-                "Global position ids must be in the range "
-                f"[-1, {self.config.max_num_positions_global}); got max "
-                f"{highest_global.item()} and min {lowest_global.item()}"
-            )
-        lowest_sequence, highest_sequence = torch.aminmax(sequence_numbers)
-        if lowest_sequence.item() < -1 or highest_sequence.item() >= self.config.max_num_sequences:
-            raise ValueError(
-                "Sequence ids must be in the range "
-                f"[-1, {self.config.max_num_sequences}); got max "
-                f"{highest_sequence.item()} and min {lowest_sequence.item()}"
-            )
+        _validate_biological_indices(
+            within_positions,
+            global_positions,
+            sequence_numbers,
+            self.config,
+        )
 
         if inputs_embeds is None:
             if input_ids is None:

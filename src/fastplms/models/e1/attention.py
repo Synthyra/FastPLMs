@@ -322,11 +322,7 @@ def varlen_flex_attention_func(
     seqlens_k = cu_seqlens_k[1:] - cu_seqlens_k[:-1]  # (n,)
     block_mask = block_mask_creator(seqlens_q, seqlens_k)
 
-    packed_lengths = (
-        *(int(length) for length in seqlens_q.tolist()),
-        -1,
-        *(int(length) for length in seqlens_k.tolist()),
-    )
+    packed_lengths = _packed_lengths_cache_key(seqlens_q, seqlens_k)
     fn = _get_flex_attention_fn(
         device=query_states.device,
         dtype=query_states.dtype,
@@ -351,6 +347,21 @@ def varlen_flex_attention_func(
     return attn_output  # (b, l_q, h, d)
 
 
+@torch.compiler.disable
+def _packed_lengths_cache_key(
+    query_lengths: torch.Tensor,
+    key_lengths: torch.Tensor,
+) -> tuple[int, ...]:
+    """Convert packed lengths to an immutable Flex cache key eagerly."""
+
+    return (
+        *(int(length) for length in query_lengths.tolist()),
+        -1,
+        *(int(length) for length in key_lengths.tolist()),
+    )
+
+
+@torch.compiler.disable
 def _get_unpad_data(sequence_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, int]:
     """Return packed indices and run lengths for the non-padding sequence IDs."""
 
@@ -384,6 +395,7 @@ def _get_unpad_data(sequence_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Ten
     )
 
 
+@torch.compiler.disable
 def _unpad_input(
     query_layer: torch.Tensor,
     key_layer: torch.Tensor,

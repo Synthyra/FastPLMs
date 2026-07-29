@@ -1494,16 +1494,18 @@ def test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache(
         ((True, True, False, False), (True, False, True, False))
     )
 
-    *_, first = stack._sequence_id_attention_masks(
-        boolean_pattern,
+    *_, first = stack._prepare_attention_masks(
+        attention_mask=None,
+        sequence_id=boolean_pattern,
         batch_size=2,
         seq_len=4,
         device=torch.device("cpu"),
         dtype=torch.bfloat16,
         effective_backend=AttentionBackend.FLEX,
     )
-    *_, repeated = stack._sequence_id_attention_masks(
-        boolean_pattern.clone(),
+    *_, repeated = stack._prepare_attention_masks(
+        attention_mask=None,
+        sequence_id=boolean_pattern.clone(),
         batch_size=2,
         seq_len=4,
         device=torch.device("cpu"),
@@ -1513,8 +1515,9 @@ def test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache(
     assert repeated is first
     assert len(created) == 1
 
-    *_, different_dtype = stack._sequence_id_attention_masks(
-        boolean_pattern,
+    *_, different_dtype = stack._prepare_attention_masks(
+        attention_mask=None,
+        sequence_id=boolean_pattern,
         batch_size=2,
         seq_len=4,
         device=torch.device("cpu"),
@@ -1524,8 +1527,9 @@ def test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache(
     assert different_dtype is not first
 
     chain_pattern = torch.tensor(((0, 0, -1, -1), (0, 1, 1, -1)))
-    *_, chain_mask = stack._sequence_id_attention_masks(
-        chain_pattern,
+    *_, chain_mask = stack._prepare_attention_masks(
+        attention_mask=None,
+        sequence_id=chain_pattern,
         batch_size=2,
         seq_len=4,
         device=torch.device("cpu"),
@@ -1536,8 +1540,9 @@ def test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache(
     assert len(created) == 3
     assert len(_core._flex_block_masks) == 2
 
-    *_, rebuilt = stack._sequence_id_attention_masks(
-        boolean_pattern,
+    *_, rebuilt = stack._prepare_attention_masks(
+        attention_mask=None,
+        sequence_id=boolean_pattern,
         batch_size=2,
         seq_len=4,
         device=torch.device("cpu"),

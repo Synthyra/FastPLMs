@@ -696,53 +696,17 @@ class TransformerStack(nn.Module):
         # Match the pinned Biohub Transformers contract: a supplied sequence_id
         # is authoritative and must encode padding as -1.  attention_mask is
         # ignored in that mode rather than intersected with the chain mask.
-        if sequence_id is None and attention_mask is not None:
-            expected_shape = (x.shape[0], x.shape[1])
-            if attention_mask.ndim != 2 or tuple(attention_mask.shape) != expected_shape:
-                raise ValueError(
-                    f"attention_mask must have shape {expected_shape}; "
-                    f"received {tuple(attention_mask.shape)}."
-                )
-            attention_mask = attention_mask.to(device=x.device, dtype=torch.bool)
-            if not bool(attention_mask.any(dim=1).all()):
-                raise ValueError("attention_mask must keep at least one valid key per batch row.")
-        effective_backend = resolve_attention_backend_for_call(
-            self.attention_backend,
-            output_attentions=bool(output_attentions),
-        )
-
-        if sequence_id is None and attention_mask is not None:
-            attention_mask_2d, attention_mask_4d, flex_block_mask = (
-                self._sequence_id_attention_masks(
-                    sequence_id=attention_mask.to(device=x.device, dtype=torch.bool),
-                    batch_size=x.shape[0],
-                    seq_len=x.shape[1],
-                    device=x.device,
-                    dtype=x.dtype,
-                    effective_backend=effective_backend,
-                )
-            )
-        elif sequence_id is None:
-            attention_mask_2d, attention_mask_4d, flex_block_mask = get_attention_mask(
-                effective_backend=effective_backend,
+        attention_mask_2d, attention_mask_4d, flex_block_mask = (
+            self._prepare_attention_masks(
+                attention_mask=attention_mask,
+                sequence_id=sequence_id,
                 batch_size=x.shape[0],
                 seq_len=x.shape[1],
                 device=x.device,
-                attention_mask=attention_mask,
                 dtype=x.dtype,
-                mask_semantics="padding",
+                output_attentions=bool(output_attentions),
             )
-        else:
-            attention_mask_2d, attention_mask_4d, flex_block_mask = (
-                self._sequence_id_attention_masks(
-                    sequence_id=sequence_id,
-                    batch_size=x.shape[0],
-                    seq_len=x.shape[1],
-                    device=x.device,
-                    dtype=x.dtype,
-                    effective_backend=effective_backend,
-                )
-            )
+        )
 
         for block in self.blocks:
             if output_hidden_states:
@@ -790,44 +754,73 @@ class TransformerStack(nn.Module):
             s_max=full_s_max,
         )
 
-    def _sequence_id_attention_masks(
+    @torch.compiler.disable
+    def _prepare_attention_masks(
         self,
-        sequence_id: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+        sequence_id: torch.Tensor | None,
         batch_size: int,
         seq_len: int,
         device: torch.device,
         dtype: torch.dtype | None = None,
         effective_backend: AttentionBackend | None = None,
+        output_attentions: bool = False,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, BlockMask | None]:
+        mask_name = "sequence_id" if sequence_id is not None else "attention_mask"
+        mask_pattern = sequence_id if sequence_id is not None else attention_mask
+        if mask_pattern is None:
+            backend = resolve_attention_backend_for_call(
+                self.attention_backend,
+                output_attentions=output_attentions,
+            )
+            return get_attention_mask(
+                effective_backend=backend,
+                batch_size=batch_size,
+                seq_len=seq_len,
+                device=device,
+                attention_mask=None,
+                dtype=dtype,
+                mask_semantics="padding",
+            )
+
         expected_shape = (batch_size, seq_len)
-        if sequence_id.ndim != 2 or tuple(sequence_id.shape) != expected_shape:
+        if mask_pattern.ndim != 2 or tuple(mask_pattern.shape) != expected_shape:
             raise ValueError(
-                f"sequence_id must have shape {expected_shape}; "
-                f"received {tuple(sequence_id.shape)}."
+                f"{mask_name} must have shape {expected_shape}; "
+                f"received {tuple(mask_pattern.shape)}."
             )
-        if sequence_id.device != device:
-            sequence_id = sequence_id.to(device=device)
-        backend = (
-            self.attention_backend
-            if effective_backend is None
-            else resolve_attention_backend(effective_backend)
+        if mask_pattern.device != device:
+            mask_pattern = mask_pattern.to(device=device)
+        if sequence_id is None:
+            mask_pattern = mask_pattern.to(dtype=torch.bool)
+        attention_mask_2d = (
+            mask_pattern if mask_pattern.dtype == torch.bool else mask_pattern != -1
         )
-        if sequence_id.dtype == torch.bool:
-            attention_mask_2d = sequence_id
-            # Biohub's boolean single-chain form groups biological positions
-            # together and padding positions together. Padding queries remain
-            # finite without allowing their states to enter residue attention.
-            attention_mask_4d = sequence_id[:, None, :, None] == sequence_id[:, None, None, :]
-        else:
-            attention_mask_2d = sequence_id != -1
-            attention_mask_4d = (sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)).unsqueeze(
-                1
-            )
         if not bool(attention_mask_2d.any(dim=1).all()):
             raise ValueError("attention_mask must keep at least one valid key per batch row.")
 
+        if mask_pattern.dtype == torch.bool:
+            # Biohub's boolean single-chain form groups biological positions
+            # together and padding positions together. Padding queries remain
+            # finite without allowing their states to enter residue attention.
+            attention_mask_4d = (
+                mask_pattern[:, None, :, None] == mask_pattern[:, None, None, :]
+            )
+        else:
+            attention_mask_4d = (
+                mask_pattern.unsqueeze(-1) == mask_pattern.unsqueeze(-2)
+            ).unsqueeze(1)
+        backend = (
+            resolve_attention_backend_for_call(
+                self.attention_backend,
+                output_attentions=output_attentions,
+            )
+            if effective_backend is None
+            else resolve_attention_backend(effective_backend)
+        )
+
         if backend.is_flash:
-            if sequence_id.dtype != torch.bool:
+            if mask_pattern.dtype != torch.bool:
                 raise ValueError(
                     "ESM++ FlashAttention only supports boolean sequence_id padding masks. "
                     "Use eager, sdpa, or flex_attention for chain-aware integer sequence_id "
@@ -836,22 +829,22 @@ class TransformerStack(nn.Module):
             return attention_mask_2d, attention_mask_4d, None
 
         if backend == AttentionBackend.FLEX:
-            if sequence_id.dtype == torch.bool:
+            if mask_pattern.dtype == torch.bool:
 
                 def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
                     del head_idx
-                    return sequence_id[batch_idx, q_idx] == sequence_id[batch_idx, kv_idx]
+                    return mask_pattern[batch_idx, q_idx] == mask_pattern[batch_idx, kv_idx]
 
             else:
 
                 def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
                     del head_idx
-                    q_id = sequence_id[batch_idx, q_idx]
-                    kv_id = sequence_id[batch_idx, kv_idx]
+                    q_id = mask_pattern[batch_idx, q_idx]
+                    kv_id = mask_pattern[batch_idx, kv_idx]
                     return q_id == kv_id
 
             flex_block_mask = _get_flex_block_mask(
-                mask_pattern=sequence_id,
+                mask_pattern=mask_pattern,
                 batch_size=batch_size,
                 query_length=seq_len,
                 key_value_length=seq_len,
@@ -859,7 +852,7 @@ class TransformerStack(nn.Module):
                 dtype=dtype,
                 mask_semantics=(
                     "boolean_sequence_id"
-                    if sequence_id.dtype == torch.bool
+                    if mask_pattern.dtype == torch.bool
                     else "integer_sequence_id"
                 ),
                 mask_mod=mask_mod,

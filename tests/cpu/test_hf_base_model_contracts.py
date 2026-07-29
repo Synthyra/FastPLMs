@@ -365,8 +365,9 @@ def test_esmc_sequence_id_is_authoritative_for_chain_and_padding_masks() -> None
         ).last_hidden_state
 
     torch.testing.assert_close(actual, expected, rtol=0.0, atol=0.0)
-    mask_2d, mask_4d, block_mask = model.transformer._sequence_id_attention_masks(
-        sequence_id,
+    mask_2d, mask_4d, block_mask = model.transformer._prepare_attention_masks(
+        attention_mask=None,
+        sequence_id=sequence_id,
         batch_size=1,
         seq_len=6,
         device=input_ids.device,

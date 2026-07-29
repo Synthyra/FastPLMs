@@ -56,7 +56,8 @@ def test_esmplusplus_boolean_sequence_id_matches_biohub_equality_mask() -> None:
     )
     sequence_id = torch.tensor([[True, True, True, False, False]])  # (b=1, l=5)
 
-    mask_2d, mask_4d, block_mask = stack._sequence_id_attention_masks(
+    mask_2d, mask_4d, block_mask = stack._prepare_attention_masks(
+        attention_mask=None,
         sequence_id=sequence_id,
         batch_size=1,
         seq_len=5,
@@ -67,6 +68,41 @@ def test_esmplusplus_boolean_sequence_id_matches_biohub_equality_mask() -> None:
     assert torch.equal(mask_2d, sequence_id)
     assert torch.equal(mask_4d, expected)
     assert block_mask is None
+
+
+def test_esmplusplus_rejects_invalid_attention_mask_before_pairwise_construction() -> None:
+    class InvalidMask:
+        ndim = 2
+        shape = (1, 4)
+        device = torch.device("cpu")
+        dtype = torch.bool
+
+        def to(self, **kwargs):
+            assert kwargs == {"dtype": torch.bool}
+            return self
+
+        def any(self, *, dim: int) -> torch.Tensor:
+            assert dim == 1
+            return torch.tensor([False])
+
+        def __getitem__(self, _key):
+            raise AssertionError("pairwise mask construction must follow row validation")
+
+    stack = TransformerStack(
+        d_model=16,
+        n_heads=4,
+        n_layers=1,
+        attn_backend="eager",
+    )
+
+    with pytest.raises(ValueError, match="at least one valid key per batch row"):
+        stack._prepare_attention_masks(
+            attention_mask=InvalidMask(),
+            sequence_id=None,
+            batch_size=1,
+            seq_len=4,
+            device=torch.device("cpu"),
+        )
 
 
 @pytest.mark.parametrize("model_class", (ESMplusplusModel, ESMplusplusForMaskedLM))

@@ -1581,6 +1581,22 @@ class SWAAtomTransformer(nn.Module):
 # ===========================================================================
 
 
+@torch.compiler.disable
+def _prepare_atom_encoder_metadata(
+    atom_attention_mask: Tensor,
+    atom_to_token: Tensor,
+    num_diffusion_samples: int,
+) -> tuple[Tensor, Tensor, Tensor, int, int]:
+    """Prepare mask-derived atom metadata outside compiled diffusion graphs."""
+    mask_exp = atom_attention_mask.repeat_interleave(num_diffusion_samples, 0)
+    seqlens = mask_exp.sum(dim=-1, dtype=torch.int32)
+    indices = torch.nonzero(mask_exp.flatten(), as_tuple=False).flatten()
+    max_seqlen = int(seqlens.max().item())
+    cu_seqlens = F.pad(torch.cumsum(seqlens, dim=0, dtype=torch.int32), (1, 0))
+    n_tokens = int(atom_to_token.max().item()) + 1
+    return mask_exp, indices, cu_seqlens, max_seqlen, n_tokens
+
+
 class ESMFold2AtomEncoder(nn.Module):
     """Encode atom inputs with normalization and sliding-window attention.
 
@@ -1677,13 +1693,14 @@ class ESMFold2AtomEncoder(nn.Module):
             cos, sin = self.atom_transformer._build_3d_rope(ref_pos, ref_space_uid)
             cos = cos.repeat_interleave(num_diffusion_samples, 0)
             sin = sin.repeat_interleave(num_diffusion_samples, 0)
-            mask_exp = atom_attention_mask.repeat_interleave(num_diffusion_samples, 0)
-            seqlens = mask_exp.sum(dim=-1, dtype=torch.int32)
-            indices = torch.nonzero(mask_exp.flatten(), as_tuple=False).flatten()
-            max_seqlen = int(seqlens.max().item())
-            cu_seqlens = F.pad(torch.cumsum(seqlens, dim=0, dtype=torch.int32), (1, 0))
+            mask_exp, indices, cu_seqlens, max_seqlen, n_tokens = (
+                _prepare_atom_encoder_metadata(
+                    atom_attention_mask,
+                    atom_to_token,
+                    num_diffusion_samples,
+                )
+            )
             attention_params = (cos, sin, indices, cu_seqlens, max_seqlen)
-            n_tokens = int(atom_to_token.max().item()) + 1
             if layer_cache is not None:
                 layer_cache["c_base"] = c_base
                 layer_cache["attention_params"] = attention_params
