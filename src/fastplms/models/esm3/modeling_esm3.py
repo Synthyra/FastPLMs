@@ -1350,12 +1350,13 @@ class MultiHeadAttention(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        seq_id: torch.Tensor | None,
         attention_mask: torch.Tensor | None = None,
+        flex_block_mask: BlockMask | None = None,
+        mask_semantics: str = "dense",
         output_attentions: bool = False,
         effective_backend: AttentionBackend | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        # x: (b, l, d); seq_id, attention_mask: (b, l)
+        # x: (b, l, d); attention_mask: (b, 1, l, l) or (b, 1, 1, l)
         qkv = self.layernorm_qkv(x)  # (b, l, 3 * d)
         query, key, value = torch.chunk(qkv, 3, dim=-1)
         query = self.q_ln(query).to(query.dtype)
@@ -1368,13 +1369,7 @@ class MultiHeadAttention(nn.Module):
             h=self.n_heads,
         )
         query, key, value = map(reshaper, (query, key, value))  # each (b, h, l, d_h)
-
-        mask = None
-        if seq_id is not None:
-            mask = (seq_id.unsqueeze(-1) == seq_id.unsqueeze(-2)).unsqueeze(1)
-        if attention_mask is not None:
-            key_padding_mask = attention_mask[:, None, None, :]
-            mask = key_padding_mask if mask is None else mask & key_padding_mask
+        mask = attention_mask
 
         if effective_backend is None:
             effective_backend = resolve_attention_backend_for_call(
@@ -1401,15 +1396,6 @@ class MultiHeadAttention(nn.Module):
         else:
             attn_weights = None
             if effective_backend == AttentionBackend.FLEX:
-                block_mask = self._create_flex_block_mask(seq_id, attention_mask, query)
-                if seq_id is not None and attention_mask is not None:
-                    mask_semantics = "sequence_id_and_padding"
-                elif seq_id is not None:
-                    mask_semantics = "sequence_id_equality"
-                elif attention_mask is not None:
-                    mask_semantics = "padding"
-                else:
-                    mask_semantics = "dense"
                 fn = _get_flex_attention_fn(
                     device=query.device,
                     dtype=query.dtype,
@@ -1423,7 +1409,7 @@ class MultiHeadAttention(nn.Module):
                     query,
                     key,
                     value,
-                    block_mask=block_mask,
+                    block_mask=flex_block_mask,
                     scale=self.scale,
                 )
             elif effective_backend == AttentionBackend.SDPA:
@@ -1441,37 +1427,6 @@ class MultiHeadAttention(nn.Module):
             context = context.masked_fill(~mask.any(dim=-1, keepdim=True), 0.0)
         context = einops.rearrange(context, "b h s d -> b s (h d)")  # (b, l, d)
         return self.out_proj(context), attn_weights
-
-    @staticmethod
-    def _create_flex_block_mask(
-        seq_id: torch.Tensor | None,
-        attention_mask: torch.Tensor | None,
-        query: torch.Tensor,
-    ) -> BlockMask | None:
-        if seq_id is None and attention_mask is None:
-            return None
-        if create_block_mask is None:
-            raise RuntimeError(
-                "Flex Attention requested but torch.create_block_mask is unavailable."
-            )
-        batch_size, _, seq_len, _ = query.shape
-
-        def mask_mod(batch_idx, _head_idx, q_idx, kv_idx):
-            if seq_id is None:
-                return attention_mask[batch_idx, kv_idx]
-            allowed = seq_id[batch_idx, q_idx] == seq_id[batch_idx, kv_idx]
-            if attention_mask is not None:
-                allowed = allowed & attention_mask[batch_idx, kv_idx]
-            return allowed
-
-        return create_block_mask(
-            mask_mod,
-            batch_size,
-            1,
-            seq_len,
-            seq_len,
-            device=query.device,
-        )
 
 
 class GeometricReasoningOriginalImpl(nn.Module):
@@ -1683,6 +1638,8 @@ class UnifiedTransformerBlock(nn.Module):
         x: torch.Tensor,
         sequence_id: torch.Tensor | None,
         attention_mask: torch.Tensor | None,
+        flex_block_mask: BlockMask | None,
+        mask_semantics: str,
         frames: Affine3D,
         frames_mask: torch.Tensor,
         chain_id: torch.Tensor,
@@ -1693,8 +1650,9 @@ class UnifiedTransformerBlock(nn.Module):
         if self.use_plain_attn:
             plain_residual, attn_weights = self.attn(
                 x,
-                sequence_id,
                 attention_mask,
+                flex_block_mask,
+                mask_semantics,
                 output_attentions=output_attentions,
                 effective_backend=effective_backend,
             )
@@ -1772,9 +1730,17 @@ class TransformerStack(nn.Module):
             chain_id = torch.ones(size=batch_dims, dtype=torch.int64, device=x.device)
         if affine is None or affine_mask is None:
             raise ValueError("affine and affine_mask are required for ESM3 transformer calls.")
-        effective_backend = resolve_attention_backend_for_call(
-            self.attention_backend,
-            output_attentions=output_attentions,
+        attention_mask, flex_block_mask, affine_mask, mask_semantics, effective_backend = (
+            self._prepare_attention_masks(
+                sequence_id=sequence_id,
+                attention_mask=attention_mask,
+                affine_mask=affine_mask,
+                batch_size=x.shape[0],
+                seq_len=x.shape[1],
+                device=x.device,
+                attention_backend=self.attention_backend,
+                output_attentions=output_attentions,
+            )
         )
         all_hidden_states = [] if output_hidden_states else None
         all_attentions = []
@@ -1783,6 +1749,8 @@ class TransformerStack(nn.Module):
                 x,
                 sequence_id,
                 attention_mask,
+                flex_block_mask,
+                mask_semantics,
                 affine,
                 affine_mask,
                 chain_id,
@@ -1796,6 +1764,107 @@ class TransformerStack(nn.Module):
         hidden_states = tuple(all_hidden_states) if all_hidden_states is not None else None
         attentions = tuple(all_attentions) if output_attentions else None
         return self.norm(x), x, hidden_states, attentions
+
+    @staticmethod
+    @torch.compiler.disable
+    def _prepare_attention_masks(
+        sequence_id: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
+        affine_mask: torch.Tensor,
+        batch_size: int,
+        seq_len: int,
+        device: torch.device,
+        attention_backend: AttentionBackend,
+        output_attentions: bool,
+    ) -> tuple[
+        torch.Tensor | None,
+        BlockMask | None,
+        torch.Tensor,
+        str,
+        AttentionBackend,
+    ]:
+        expected_mask_shape = (batch_size, seq_len)
+        if sequence_id is not None and tuple(sequence_id.shape) != expected_mask_shape:
+            raise ValueError(
+                "sequence_id must have shape (batch, sequence); "
+                f"expected {expected_mask_shape}, received {tuple(sequence_id.shape)}."
+            )
+        if attention_mask is not None:
+            if tuple(attention_mask.shape) != expected_mask_shape:
+                raise ValueError(
+                    "attention_mask must have shape (batch, sequence); "
+                    f"expected {expected_mask_shape}, received {tuple(attention_mask.shape)}."
+                )
+            if attention_mask.dtype != torch.bool and not bool(
+                torch.logical_or(attention_mask == 0, attention_mask == 1).all()
+            ):
+                raise ValueError("attention_mask must contain only boolean or 0/1 values.")
+            attention_mask = attention_mask.to(device=device, dtype=torch.bool)
+            if not bool(attention_mask.any(dim=-1).all()):
+                raise ValueError("attention_mask must keep at least one valid key per batch row.")
+            affine_mask = affine_mask & attention_mask
+
+        effective_backend = resolve_attention_backend_for_call(
+            attention_backend,
+            output_attentions=output_attentions,
+        )
+
+        dense_mask = None
+        if sequence_id is not None:
+            dense_mask = (sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)).unsqueeze(1)
+        if attention_mask is not None:
+            key_padding_mask = attention_mask[:, None, None, :]
+            dense_mask = key_padding_mask if dense_mask is None else dense_mask & key_padding_mask
+
+        if sequence_id is not None and attention_mask is not None:
+            mask_semantics = "sequence_id_and_padding"
+        elif sequence_id is not None:
+            mask_semantics = "sequence_id_equality"
+        elif attention_mask is not None:
+            mask_semantics = "padding"
+        else:
+            mask_semantics = "dense"
+
+        flex_block_mask = None
+        if effective_backend == AttentionBackend.FLEX and dense_mask is not None:
+            flex_block_mask = TransformerStack._create_flex_block_mask(
+                sequence_id,
+                attention_mask,
+                batch_size,
+                seq_len,
+                device,
+            )
+        return dense_mask, flex_block_mask, affine_mask, mask_semantics, effective_backend
+
+    @staticmethod
+    def _create_flex_block_mask(
+        sequence_id: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
+        batch_size: int,
+        seq_len: int,
+        device: torch.device,
+    ) -> BlockMask:
+        if create_block_mask is None:
+            raise RuntimeError(
+                "Flex Attention requested but torch.create_block_mask is unavailable."
+            )
+
+        def mask_mod(batch_idx, _head_idx, q_idx, kv_idx):
+            if sequence_id is None:
+                return attention_mask[batch_idx, kv_idx]
+            allowed = sequence_id[batch_idx, q_idx] == sequence_id[batch_idx, kv_idx]
+            if attention_mask is not None:
+                allowed = allowed & attention_mask[batch_idx, kv_idx]
+            return allowed
+
+        return create_block_mask(
+            mask_mod,
+            batch_size,
+            1,
+            seq_len,
+            seq_len,
+            device=device,
+        )
 
 
 class EncodeInputs(nn.Module):
@@ -2049,26 +2118,6 @@ class ESM3Core(nn.Module):
             function_tokens,
             residue_annotation_tokens,
         )
-        expected_mask_shape = tuple(x.shape[:2])
-        if sequence_id is not None and tuple(sequence_id.shape) != expected_mask_shape:
-            raise ValueError(
-                "sequence_id must have shape (batch, sequence); "
-                f"expected {expected_mask_shape}, received {tuple(sequence_id.shape)}."
-            )
-        if attention_mask is not None:
-            if tuple(attention_mask.shape) != expected_mask_shape:
-                raise ValueError(
-                    "attention_mask must have shape (batch, sequence); "
-                    f"expected {expected_mask_shape}, received {tuple(attention_mask.shape)}."
-                )
-            if attention_mask.dtype != torch.bool and not bool(
-                torch.logical_or(attention_mask == 0, attention_mask == 1).all()
-            ):
-                raise ValueError("attention_mask must contain only boolean or 0/1 values.")
-            attention_mask = attention_mask.to(device=x.device, dtype=torch.bool)
-            if not bool(attention_mask.any(dim=-1).all()):
-                raise ValueError("attention_mask must keep at least one valid key per batch row.")
-            affine_mask = affine_mask & attention_mask
         x, embedding, hidden_states, attentions = self.transformer(
             x,
             sequence_id,

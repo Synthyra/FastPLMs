@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 import torch.nn.functional as F
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
 from fastplms.models.e1 import modeling_e1 as e1_modeling
+from fastplms.models.e1.attention import _get_unpad_data, _packed_lengths_cache_key
 from fastplms.models.e1.cache import DynamicCache, KVCache
 from fastplms.models.e1.modeling_e1 import (
     Attention,
@@ -260,6 +262,114 @@ def _tiny_e1_batch() -> dict[str, torch.Tensor]:
         "global_position_ids": torch.arange(4).unsqueeze(0),
         "sequence_ids": torch.zeros(1, 4, dtype=torch.long),
     }
+
+
+def test_e1_sdpa_scalar_validation_runs_outside_torch_compile(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    model = E1Model(_tiny_e1_config()).eval()
+    first_batch = _tiny_e1_batch()
+    second_batch = {
+        **_tiny_e1_batch(),
+        "within_seq_position_ids": torch.tensor([[0, 1, 0, 1]]),
+        "sequence_ids": torch.tensor([[0, 0, 1, 1]]),
+    }
+
+    def run(
+        input_ids: torch.Tensor,
+        within_seq_position_ids: torch.Tensor,
+        global_position_ids: torch.Tensor,
+        sequence_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        return model(
+            input_ids=input_ids,
+            within_seq_position_ids=within_seq_position_ids,
+            global_position_ids=global_position_ids,
+            sequence_ids=sequence_ids,
+            use_cache=False,
+            output_hidden_states=False,
+        ).last_hidden_state
+
+    with torch.inference_mode():
+        expected_first = run(**first_batch)
+        expected_second = run(**second_batch)
+
+    compiled_graphs: list[torch.fx.GraphModule] = []
+
+    def counting_backend(
+        graph_module: torch.fx.GraphModule,
+        example_inputs: list[torch.Tensor],
+    ) -> Callable[..., object]:
+        del example_inputs
+        compiled_graphs.append(graph_module)
+        return graph_module.forward
+
+    compiled_run = torch.compile(run, backend=counting_backend, dynamic=False)
+    try:
+        with torch.inference_mode():
+            actual_first = compiled_run(**first_batch)
+            first_compile_count = len(compiled_graphs)
+            actual_second = compiled_run(**second_batch)
+
+            assert first_compile_count > 0
+            assert len(compiled_graphs) == first_compile_count
+            torch.testing.assert_close(actual_first, expected_first)
+            torch.testing.assert_close(actual_second, expected_second)
+            with pytest.raises(ValueError, match="Sequence ids must be in the range"):
+                compiled_run(
+                    **{
+                        **first_batch,
+                        "sequence_ids": torch.full(
+                            (1, 4),
+                            model.config.max_num_sequences,
+                        ),
+                    }
+                )
+    finally:
+        torch.compiler.reset()
+
+    captured = capsys.readouterr()
+    assert "Graph break from `Tensor.item()`" not in captured.err
+
+
+def test_e1_cached_query_and_packed_metadata_run_outside_torch_compile(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    attention = _tiny_attention(AttentionLayerType.GLOBAL)
+    compiled_cached_ids = torch.compile(
+        attention._cached_global_sequence_ids,
+        backend="eager",
+        dynamic=False,
+    )
+
+    def packed_metadata(
+        sequence_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, int, tuple[int, ...]]:
+        indices, cumulative_lengths, maximum_length = _get_unpad_data(sequence_ids)
+        sequence_lengths = cumulative_lengths[1:] - cumulative_lengths[:-1]
+        cache_key = _packed_lengths_cache_key(sequence_lengths, sequence_lengths)
+        return indices, cumulative_lengths, maximum_length, cache_key
+
+    compiled_metadata = torch.compile(packed_metadata, backend="eager", dynamic=False)
+    try:
+        query_ids, key_ids = compiled_cached_ids(torch.tensor([[2, 2]]), 5)
+        assert torch.equal(query_ids, torch.tensor([[2, 2]]))
+        assert torch.equal(key_ids, torch.tensor([[2, 2, 2, 2, 2]]))
+        with pytest.raises(ValueError, match="must start with a non-padding"):
+            compiled_cached_ids(torch.tensor([[-1, 2]]), 5)
+
+        indices, cumulative_lengths, maximum_length, cache_key = compiled_metadata(
+            torch.tensor([[0, 0, 1, -1], [0, 0, 0, -1]])
+        )
+        assert torch.equal(indices, torch.tensor([0, 1, 2, 4, 5, 6]))
+        assert torch.equal(cumulative_lengths, torch.tensor([0, 2, 3, 6], dtype=torch.int32))
+        assert maximum_length == 3
+        assert cache_key == (2, 1, 3, -1, 2, 1, 3)
+    finally:
+        torch.compiler.reset()
+
+    captured = capsys.readouterr()
+    assert "Graph break from `Tensor.item()`" not in captured.err
 
 
 def test_e1_config_round_trip_preserves_cache_policy(tmp_path: Path) -> None:

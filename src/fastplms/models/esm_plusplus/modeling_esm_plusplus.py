@@ -793,8 +793,13 @@ class TransformerStack(nn.Module):
             mask_pattern = mask_pattern.to(device=device)
         if sequence_id is None:
             mask_pattern = mask_pattern.to(dtype=torch.bool)
+        attention_mask_2d = (
+            mask_pattern if mask_pattern.dtype == torch.bool else mask_pattern != -1
+        )
+        if not bool(attention_mask_2d.any(dim=1).all()):
+            raise ValueError("attention_mask must keep at least one valid key per batch row.")
+
         if mask_pattern.dtype == torch.bool:
-            attention_mask_2d = mask_pattern
             # Biohub's boolean single-chain form groups biological positions
             # together and padding positions together. Padding queries remain
             # finite without allowing their states to enter residue attention.
@@ -802,12 +807,9 @@ class TransformerStack(nn.Module):
                 mask_pattern[:, None, :, None] == mask_pattern[:, None, None, :]
             )
         else:
-            attention_mask_2d = mask_pattern != -1
             attention_mask_4d = (
                 mask_pattern.unsqueeze(-1) == mask_pattern.unsqueeze(-2)
             ).unsqueeze(1)
-        if not bool(attention_mask_2d.any(dim=1).all()):
-            raise ValueError("attention_mask must keep at least one valid key per batch row.")
         backend = (
             resolve_attention_backend_for_call(
                 self.attention_backend,
