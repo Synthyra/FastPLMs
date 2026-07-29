@@ -1809,13 +1809,6 @@ class TransformerStack(nn.Module):
             output_attentions=output_attentions,
         )
 
-        dense_mask = None
-        if sequence_id is not None:
-            dense_mask = (sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)).unsqueeze(1)
-        if attention_mask is not None:
-            key_padding_mask = attention_mask[:, None, None, :]
-            dense_mask = key_padding_mask if dense_mask is None else dense_mask & key_padding_mask
-
         if sequence_id is not None and attention_mask is not None:
             mask_semantics = "sequence_id_and_padding"
         elif sequence_id is not None:
@@ -1825,8 +1818,10 @@ class TransformerStack(nn.Module):
         else:
             mask_semantics = "dense"
 
+        dense_mask = None
         flex_block_mask = None
-        if effective_backend == AttentionBackend.FLEX and dense_mask is not None:
+        has_attention_mask = sequence_id is not None or attention_mask is not None
+        if effective_backend == AttentionBackend.FLEX and has_attention_mask:
             flex_block_mask = TransformerStack._create_flex_block_mask(
                 sequence_id,
                 attention_mask,
@@ -1834,6 +1829,14 @@ class TransformerStack(nn.Module):
                 seq_len,
                 device,
             )
+        else:
+            if sequence_id is not None:
+                dense_mask = (sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)).unsqueeze(1)
+            if attention_mask is not None:
+                key_padding_mask = attention_mask[:, None, None, :]
+                dense_mask = (
+                    key_padding_mask if dense_mask is None else dense_mask & key_padding_mask
+                )
         return dense_mask, flex_block_mask, affine_mask, mask_semantics, effective_backend
 
     @staticmethod

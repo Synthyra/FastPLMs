@@ -592,6 +592,49 @@ def test_esm3_sequence_id_grouping_combines_with_public_padding_mask() -> None:
     assert torch.count_nonzero(attention_weights[0, :, :2, 2:4]) == 0
 
 
+def test_esm3_flex_mask_preparation_does_not_construct_dense_pairwise_mask(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SequenceIdWithoutPairwiseOperations:
+        shape = (2, 4)
+
+        def unsqueeze(self, _dim: int) -> torch.Tensor:
+            raise AssertionError("Flex mask preparation must not construct a dense pairwise mask")
+
+    sequence_id = SequenceIdWithoutPairwiseOperations()
+    affine_mask = torch.ones(2, 4, dtype=torch.bool)
+    expected_block_mask = object()
+
+    def create_flex_block_mask(*args: object) -> object:
+        assert args == (sequence_id, None, 2, 4, torch.device("cpu"))
+        return expected_block_mask
+
+    monkeypatch.setattr(
+        esm3_module.TransformerStack,
+        "_create_flex_block_mask",
+        staticmethod(create_flex_block_mask),
+    )
+
+    dense_mask, block_mask, prepared_affine_mask, mask_semantics, effective_backend = (
+        esm3_module.TransformerStack._prepare_attention_masks(
+            sequence_id=sequence_id,
+            attention_mask=None,
+            affine_mask=affine_mask,
+            batch_size=2,
+            seq_len=4,
+            device=torch.device("cpu"),
+            attention_backend=AttentionBackend.FLEX,
+            output_attentions=False,
+        )
+    )
+
+    assert dense_mask is None
+    assert block_mask is expected_block_mask
+    assert prepared_affine_mask is affine_mask
+    assert mask_semantics == "sequence_id_equality"
+    assert effective_backend == AttentionBackend.FLEX
+
+
 def test_esm3_builds_intersected_attention_masks_outside_torch_compile(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
