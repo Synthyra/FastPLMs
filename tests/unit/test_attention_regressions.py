@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 import pytest
 import torch
+from collections.abc import Callable
 from types import SimpleNamespace
 from transformers.models.esm.configuration_esm import EsmConfig
 
@@ -126,6 +127,56 @@ def test_esmplusplus_rejects_empty_attention_rows_without_fallback_or_mutation()
 
     assert captured == []
     assert stack.attention_backend == configured_backend
+
+
+def test_esmplusplus_builds_attention_masks_outside_torch_compile(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    stack = TransformerStack(d_model=8, n_heads=2, n_layers=1, attn_backend="sdpa").eval()
+    hidden_states = torch.randn(2, 4, 8)  # (b=2, l=4, d=8)
+    first_mask = torch.tensor(((1, 1, 0, 0), (1, 1, 1, 0)))  # (b, l)
+    second_mask = torch.tensor(((1, 1, 1, 0), (1, 0, 0, 0)))  # (b, l)
+    expected_first = stack(hidden_states, attention_mask=first_mask).last_hidden_state
+    expected_second = stack(hidden_states, attention_mask=second_mask).last_hidden_state
+    compiled_graphs: list[torch.fx.GraphModule] = []
+
+    def counting_backend(
+        graph_module: torch.fx.GraphModule,
+        example_inputs: list[torch.Tensor],
+    ) -> Callable[..., object]:
+        del example_inputs
+        compiled_graphs.append(graph_module)
+        return graph_module.forward
+
+    compiled_stack = torch.compile(stack, backend=counting_backend, dynamic=False)
+    try:
+        actual_first = compiled_stack(
+            hidden_states,
+            attention_mask=first_mask,
+        ).last_hidden_state
+        first_compile_count = len(compiled_graphs)
+        actual_second = compiled_stack(
+            hidden_states,
+            attention_mask=second_mask,
+        ).last_hidden_state
+
+        assert first_compile_count > 0
+        assert len(compiled_graphs) == first_compile_count
+        torch.testing.assert_close(actual_first, expected_first)
+        torch.testing.assert_close(actual_second, expected_second)
+        with pytest.raises(
+            ValueError,
+            match="attention_mask must keep at least one valid key per batch row",
+        ):
+            compiled_stack(
+                hidden_states,
+                attention_mask=torch.tensor(((1, 1, 0, 0), (0, 0, 0, 0))),
+            )
+    finally:
+        torch.compiler.reset()
+
+    captured = capsys.readouterr()
+    assert "Graph break from `Tensor.item()`" not in captured.err
 
 
 def _assert_masked_output_attentions_fallback(encoder: torch.nn.Module) -> None:
@@ -670,7 +721,8 @@ def test_esmplusplus_chain_masks_fail_closed_without_assertions(
     stack = TransformerStack(d_model=8, n_heads=2, n_layers=1, attn_backend="sdpa")
 
     with pytest.raises(ValueError, match=r"sequence_id must have shape \(2, 4\)"):
-        stack._sequence_id_attention_masks(
+        stack._prepare_attention_masks(
+            attention_mask=None,
             sequence_id=torch.ones(2, 4, 1, dtype=torch.bool),
             batch_size=2,
             seq_len=4,
@@ -679,7 +731,8 @@ def test_esmplusplus_chain_masks_fail_closed_without_assertions(
 
     stack.attention_backend = AttentionBackend.FLASH_ATTENTION_3
     with pytest.raises(ValueError, match="only supports boolean sequence_id"):
-        stack._sequence_id_attention_masks(
+        stack._prepare_attention_masks(
+            attention_mask=None,
             sequence_id=torch.zeros(2, 4, dtype=torch.long),
             batch_size=2,
             seq_len=4,
@@ -689,7 +742,8 @@ def test_esmplusplus_chain_masks_fail_closed_without_assertions(
     stack.attention_backend = AttentionBackend.FLEX_ATTENTION
     monkeypatch.setattr(_core, "create_block_mask", None)
     with pytest.raises(RuntimeError, match="create_block_mask is unavailable"):
-        stack._sequence_id_attention_masks(
+        stack._prepare_attention_masks(
+            attention_mask=None,
             sequence_id=torch.ones(2, 4, dtype=torch.bool),
             batch_size=2,
             seq_len=4,
