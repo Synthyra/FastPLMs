@@ -31,7 +31,6 @@ from tools.artifacts.build import (
     _write_runtime_snapshot,
 )
 from tools.artifacts.offline_probe import _CPU_CONTRACT_MARKER, _runtime_site_packages
-from tools.artifacts.publish import _validate_publishable_non_weight_path
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -417,19 +416,3 @@ def test_isolated_probe_blocks_reference_reads_before_remote_code_exec(
 
     assert completed.returncode != 0
     assert "may not access submodule/reference path" in completed.stdout + completed.stderr
-
-
-def test_cpu_contract_marker_is_rejected_by_publication_allowlist(tmp_path: Path) -> None:
-    marker = tmp_path / _CPU_CONTRACT_MARKER
-    marker.write_text("{}\n", encoding="utf-8")
-
-    with pytest.raises(
-        ArtifactError,
-        match=r"sensitive|outside the publication allowlist",
-    ):
-        _validate_publishable_non_weight_path(
-            _CPU_CONTRACT_MARKER,
-            marker,
-            declared_assets=frozenset(),
-            declared_legal_paths=frozenset(),
-        )

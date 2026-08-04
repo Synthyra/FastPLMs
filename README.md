@@ -816,47 +816,32 @@ native-environment BF16 end-to-end inference does not yet meet the fixed
 numerical-equivalence limits. FastPLMs therefore makes no official inference
 equivalence claim for Boltz2.
 
-## Files-only Hub publication
+## Hugging Face publication
 
-After building and validating local artifacts, update Hub runtime files and
-model cards without uploading or deleting checkpoint weights:
+Compile the current runtime sources, model cards, requirements, and legal files
+and upload them to every manifest repository without touching checkpoint
+weights:
 
 ```bash
-PYTHONPATH=src python -m tools.artifacts.publish \
-  --files-only \
-  --artifact-root dist/hub \
-  --dry-run \
-  esm2_8m
+py -m tools.artifacts.publish --files-only
 ```
 
-`--artifact-root` is the local directory containing one built artifact
-subdirectory per selected model. It tells the publisher which validated files
-to upload; it is not a remote Hub path and does not change where models are
-published.
+Model IDs are optional and restrict publication when supplied. Repository
+targets come from `models.toml`; authentication uses `HF_TOKEN` or the cached
+Hugging Face login. Add `--dry-run` to print the generated paths without
+committing them.
 
-Remove `--dry-run` after reviewing the exact add-only file plan. Repository
-targets come exclusively from `models.toml`. Files-only publication rejects any
-ANKH selection, including the implicit all-model selection, so callers must pass
-explicit non-ANKH model IDs. Authentication uses `HF_TOKEN` or the cached
-Hugging Face login. See [Local Hub artifacts](docs/artifacts.md) for the full
-safety contract.
+Without `--files-only`, the publisher also uploads the prepared files under
+`dist/hub/<repository>`, including checkpoint weights, while replacing their
+generated runtime files with the freshly compiled checkout versions:
 
-This files-only workflow is forbidden for the ANKH 1.0 migration. ANKH must
-replace its encoder-only contents with the full encoder-decoder state in one
-immutable commit containing every weight shard, tokenizer asset, configuration,
-runtime source, card, and release record. Validate both `AutoModel` and
-`AutoModelForSeq2SeqLM` from that same commit before publication is accepted.
-Use the explicit `--complete <ankh-model-id>` dry-run and publication workflow.
-It makes one parent-guarded atomic commit containing validated additions and
-only the narrowly scoped deletions needed to replace obsolete registry-pinned
-files, such as a monolithic ANKH weight file superseded by indexed shards.
-DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The maintained ByteDance
-[license](https://github.com/bytedance/dplm/blob/main/LICENSE)
-is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
-defines the repository release as including pretrained DPLM1 and DPLM2 weights.
-Validated DPLM artifacts therefore record `weights_license_status="resolved"`
-and `redistributable=true`; explicit `--complete` publication is permitted after
-the same legal, parity, inventory, parent-commit, and atomic preflight checks.
+```bash
+py -m tools.artifacts.publish esm2_8m
+```
+
+Build a missing prepared artifact with
+`PYTHONPATH=src python -m tools.artifacts.build_all <model-id> --replace` before publishing
+weights.
 
 ## Documentation
 
