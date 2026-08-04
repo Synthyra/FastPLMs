@@ -59,7 +59,7 @@ AutoClasses, attention backends, precision paths, and release tiers.
 | Family | Primary use | Typical user input | Important distinction |
 | --- | --- | --- | --- |
 | ESM2 | Sequence representations and masked language modeling | Amino-acid sequences tokenized to residue IDs | Preserves ESM2 encoder, MLM, contact, and classification contracts |
-| ESM++ / ESMC | Sequence representations and masked language modeling | Amino-acid sequences tokenized to residue IDs | Biohub ESMC implementation and ESMFold2 language-model backbone |
+| ESM++ / ESMC | Sequence representations and masked language modeling | Amino-acid sequences tokenized to residue IDs | Biohub ESMC implementation, ESMFold2 language-model backbone, Biohub hidden-state SAE support, and experimental FP8 inference |
 | ESM3 | Multimodal protein modeling and generation | Sequence, structure, and function tracks | Retains all three tracks through its multimodal interface |
 | E1 | Retrieval-augmented protein encoding | Raw amino-acid sequences | No tokenizer; native E1 preparation is preserved |
 | DPLM | Discrete diffusion protein generation | Amino-acid sequences tokenized to masked residue IDs | Confidence-based iterative unmasking |

@@ -198,10 +198,10 @@ use `attention_mask` as the padding contract.
 
 ### Hidden-state sparse autoencoders
 
-ESM++ accepts hidden-state SAEs from the official
+ESM++ supports hidden-state SAEs from the official
 [Biohub ESMC SAE collection](https://huggingface.co/collections/biohub/esmc-saes-for-hidden-states-all-layers).
-Choose an SAE trained for this checkpoint's ESMC scale, then load and attach
-only the required layer modules:
+Select an SAE for this ESMC scale. Load only the layers that you need. Then
+attach them to the model:
 
 ```python
 import torch
@@ -218,18 +218,19 @@ features = output.sae_outputs["layer23"]
 print(features.shape, features.layout)  # (valid_token_count, codebook_dim), sparse COO
 ```
 
-SAEs run by default after attachment; `compute_sae=False` bypasses their
-execution. Outputs are detached sparse tensors keyed by `layer{N}`, exclude
-padding under the `sequence_id`-before-`attention_mask` rule, and optionally use
-Biohub's `(features / max) * idf` normalization. SAE computation requires
-`input_ids` and rejects mask tokens because the SAEs were trained on unmasked
-sequences. This interface supports hidden-state SAEs only, not MLP-output SAEs.
-FastPLMs does not mirror SAE weights or add them to its model manifest.
+SAEs run after you attach them. Use `compute_sae=False` to skip SAE work.
+Outputs are detached sparse tensors with keys such as `layer{N}`. They exclude
+padding under the `sequence_id` then `attention_mask` rule.
+`normalize_sae=True` uses Biohub `(features / max) * idf` normalization. SAE
+computation requires `input_ids`. It rejects mask tokens because Biohub trained
+the SAEs with unmasked sequences. This interface supports hidden-state SAEs
+only. It does not support MLP-output SAEs. FastPLMs does not copy SAE weights or
+add SAE checkpoints to its model manifest.
 
 ### Experimental FP8 inference
 
-The default remains the checkpoint's declared BF16 behavior. FP8 is an
-explicit experimental inference opt-in on every ESM++ scale:
+The default uses the checkpoint BF16 behavior. FP8 is an explicit experimental
+inference option for every ESM++ scale:
 
 ```python
 import torch
@@ -247,11 +248,11 @@ with torch.inference_mode():
     fp8_output = fp8_model(**{name: value.cuda() for name, value in batch.items()})
 ```
 
-FP8 forward calls require `torch.inference_mode()`, and the sequence dimension
-is padded to a multiple of 16 internally. Conversion uses Transformer Engine
-for the supported linear set and fails closed when the dependency, compatible
-CUDA hardware, or complete conversion contract is unavailable. It never
-silently falls back to BF16 and is not a numerical-parity claim.
+FP8 forward calls require `torch.inference_mode()`. The model pads the sequence
+dimension to a multiple of 16. Transformer Engine converts the supported linear
+layers. The call fails if the dependency, compatible CUDA hardware, or complete
+conversion set is unavailable. It does not silently use BF16. FP8 is not a
+numerical-parity claim.
 
 | Backend | Support | Measurement status |
 | --- | --- | --- |
