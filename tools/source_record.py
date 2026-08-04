@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-ARCHIVE_PROVENANCE_NAME = ".fastplms-source-provenance.json"
+ARCHIVE_PROVENANCE_NAME = ".fastplms-source-record.json"
 ARCHIVE_PROVENANCE_SCHEMA = 2
 _HEX_DIGEST_LENGTH = 64
 _HEX_REVISION_LENGTH = 40

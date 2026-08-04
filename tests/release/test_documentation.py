@@ -366,7 +366,7 @@ def test_generated_cards_publish_canonical_state_commitments() -> None:
             continue
         card = (ROOT / "model_cards" / f"{spec.id}.md").read_text(encoding="utf-8")
         assert f"Canonical transformed state SHA-256: `{spec.canonical_state_sha256}`" in card
-        assert "Conversion equality attestation: recorded in `provenance.json`" in card
+        assert "Conversion equality attestation: recorded in `source-record.json`" in card
 
 
 def test_curated_offline_examples_expose_executable_help() -> None:

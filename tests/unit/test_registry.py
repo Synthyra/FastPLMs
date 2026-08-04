@@ -105,7 +105,7 @@ def test_model_manifest_is_complete_and_typed() -> None:
     dplm_source = registry.upstreams["dplm"]
     assert {item.path for item in dplm_source.distribution_files} == {
         "LICENSE",
-        "PROVENANCE.md",
+        "SOURCE_RECORD.md",
     }
     for source in registry.upstreams.values():
         assert tuple(item.path for item in source.license_digests) == source.license_files
@@ -554,7 +554,7 @@ def test_hub_license_metadata_is_typed_and_complete() -> None:
 def test_dplm_checkpoint_license_evidence_is_immutable_and_complete() -> None:
     registry = load_model_registry()
     revision = registry.upstreams["dplm"].revision
-    evidence = (ROOT / "LICENSES" / "dplm" / "PROVENANCE.md").read_text(encoding="utf-8")
+    evidence = (ROOT / "LICENSES" / "dplm" / "SOURCE_RECORD.md").read_text(encoding="utf-8")
 
     assert revision == "8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d"
     assert f"https://github.com/bytedance/dplm/blob/{revision}/LICENSE" in evidence
@@ -564,7 +564,7 @@ def test_dplm_checkpoint_license_evidence_is_immutable_and_complete() -> None:
         assert family.checkpoint_license == "Apache-2.0"
         assert family.hub_license == "apache-2.0"
         assert family.weights_publication_allowed
-        assert "LICENSES/dplm/PROVENANCE.md" in family.conversion_provenance
+        assert "LICENSES/dplm/SOURCE_RECORD.md" in family.conversion_provenance
 
 
 @pytest.mark.parametrize(

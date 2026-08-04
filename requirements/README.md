@@ -1,12 +1,12 @@
 # Dependency profiles
 
-FastPLMs is loaded from Hugging Face model repositories with
+FastPLMs loads from Hugging Face model repositories with
 `trust_remote_code=True`. This repository is a source, test, and dependency
-workspace, not an installable Python distribution.
+workspace. It is not an installable Python distribution.
 
-`core.in` and `features/*.in` are the direct dependency declarations.
-`profiles/*.in` compose those declarations for the environments exercised by
-the repository. Validation commands constrain Torch and Transformers with
+`core.in` and `features/*.in` declare direct dependencies. `profiles/*.in`
+combine those declarations for repository environments. Validation commands
+constrain Torch and Transformers with
 `constraints/validation.txt`.
 
 Create a local validation environment with:
@@ -20,12 +20,11 @@ uv pip install \
 ```
 
 CUDA container profiles use the same command without `--torch-backend cpu`.
-The FP8 profiles additionally pass
+FP8 profiles also pass
 `--overrides requirements/overrides/cuda.txt`.
 
-When a fully transitive lock is needed for a maintained environment, compile
-the corresponding profile rather than locking every mutually incompatible
-feature together:
+When you need a full transitive lock for a maintained environment, compile the
+required profile. Do not lock all incompatible features together:
 
 ```bash
 uv pip compile \
@@ -37,4 +36,4 @@ uv pip compile \
 ```
 
 Generated locks are environment-specific test inputs. Public Hugging Face
-artifacts should expose only their direct runtime dependencies.
+artifacts must expose only direct runtime dependencies.

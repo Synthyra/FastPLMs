@@ -10,7 +10,7 @@ tags:
 
 # Synthyra/ESMplusplus_6B
 
-This checkpoint packages the FastPLMs `ESMC` implementation.
+This checkpoint contains the FastPLMs `ESMC` implementation.
 
 Accepted inputs are amino-acid sequences tokenized to residue IDs.
 Supported Transformers entry points are `AutoConfig`, `AutoModel`,
@@ -28,9 +28,7 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 | Attention variants | Special: SDPA fidelity path; alternate backends have explicit bands |
 | Compliance | Declared: exact release evidence is required |
 
-A supported interface is not a pretrained downstream predictor. Classification
-heads start untrained, and declared compliance metadata is not a claim that an
-arbitrary local build passed its release gate.
+A supported interface is not a pretrained downstream predictor. Classification heads start untrained. Compliance metadata does not show that a local build passed its release gate.
 
 ## Install and platform requirements
 
@@ -41,12 +39,12 @@ python -m pip install -r \
   "https://huggingface.co/Synthyra/ESMplusplus_6B/resolve/main/requirements.txt"
 ```
 
-The FastPLMs implementation itself is embedded in the model repository and loaded
-by Transformers through `trust_remote_code=True`.
+The FastPLMs implementation itself is embedded in the model repository.
+Transformers loads it through `trust_remote_code=True`.
 
-Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The artifact requirements include the direct FlashAttention loader dependency. FlashAttention also requires compatible CUDA hardware and BF16 execution. The Hub quick start below requires network
-access on first download. For an air-gapped run, first build the manifest-pinned
-local artifact and use the offline form shown in the example.
+This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13. The artifact requirements include the FlashAttention loader dependency. FlashAttention also requires compatible CUDA hardware and BF16 execution. The Hub quick start needs network access for
+the first download. For an air-gapped run, build the manifest-pinned local
+artifact first and use the offline example.
 
 ## Quick start
 
@@ -62,23 +60,23 @@ model = AutoModel.from_pretrained(
 ```
 
 For offline validation, replace `model_id` with the manifest-built
-`dist/hub/ESMplusplus_6B` path and pass `local_files_only=True`.
+`dist/hub/ESMplusplus_6B` path. Pass `local_files_only=True`.
 
 ## Attention and compliance
 
 The quick start selects `sdpa` explicitly. Declared variants are `eager`, `sdpa`, `flex_attention`, `flash_attention_2`,
-`flash_attention_3`. An unavailable requested backend raises instead of
-silently switching implementations.
-`output_attentions=True` may use the documented, one-call eager fallback solely
-to materialize attention tensors; the configured backend remains unchanged.
+`flash_attention_3`. An unavailable requested backend raises. It does not
+silently change implementation.
+`output_attentions=True` can use the documented one-call eager fallback to
+materialize attention tensors. The configured backend does not change.
 
-This family declares the `compliance` tier. Release evidence binds the exact
+This family declares the `compliance` tier. Release evidence identifies the
 checkpoint, backend, dtype, hardware, inputs, and reference revision.
 
 ## Tokenization and forward inference
 
-Load the tokenizer from the same artifact as the model. Padding is represented
-explicitly by the attention mask:
+Load the tokenizer from the same artifact as the model. The attention mask
+shows padding explicitly:
 
 ```python
 import torch
@@ -103,8 +101,8 @@ print(output.last_hidden_state.shape)
 
 ## Dataset embeddings
 
-The shared embedding mixin preserves input order and biological-position
-masking. It accepts sequences, identified records, mappings, or a FASTA path:
+The shared embedding mixin keeps input order and biological-position masking.
+It accepts sequences, identified records, mappings, or a FASTA path:
 
 ```python
 pooled = model.embed_dataset(
@@ -121,12 +119,12 @@ print(residues[0].tensor.shape) # (l, d)
 ```
 
 Set `output` and `format="safetensors"` or `"sqlite"` for transactional,
-bounded-memory persistence. Resume verifies input order, model state, tokenizer
-policy, backend, dtype, and pooling configuration before appending.
+bounded-memory storage. Resume checks input order, model state, tokenizer
+policy, backend, dtype, and pooling configuration before it appends data.
 
 ## PEFT fine-tuning
 
-Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+Install the training dependencies. Then attach LoRA to the loaded checkpoint:
 
 ```bash
 python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
@@ -145,17 +143,17 @@ peft_model = get_peft_model(
 )
 ```
 
-This checkpoint has no advertised classifier. Supply the task-specific
-objective and preserve any new head through `modules_to_save`.
+This checkpoint has no advertised classifier. Supply the task objective and
+preserve any new head through `modules_to_save`.
 All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
-can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+can use PEFT. The ESM2-specific shipped CLI is an example, not a
 support boundary. Record the target modules, base revision, data identity, and
 trainable parameter scope.
 
 ## Test-time training
 
 TTT samples masked views of one protein and updates only injected low-rank
-adapters. Base checkpoint weights remain frozen:
+adapters. Base checkpoint weights stay frozen:
 
 ```python
 from transformers import AutoModelForMaskedLM
@@ -173,35 +171,34 @@ ttt_model.ttt_reset()
 print(metrics)
 ```
 
-Persisted adapters retain their deterministic reset state. TTT adds latency
-and memory, can worsen an output, and does not establish biological function.
+Saved adapters retain their deterministic reset state. TTT adds latency and
+memory, can worsen an output, and does not show biological function.
 
 ## ESMC behavior
 
-This artifact exposes the Biohub ESMC sequence encoder and masked-language-model
-head through Transformers. It is also the language-model family used by
-ESMFold2. SDPA is the default and the recommended choice for highest numerical
-fidelity. Flex Attention and FlashAttention 3 are supported, non-experimental
-backends, but their BF16 arithmetic may be numerically divergent from SDPA.
-Those deviations produce diagnostic warnings rather than strict parity
-failures; dispatch integrity, masks, finite outputs, shapes, and catastrophic
-biological disagreement remain hard gates.
+This artifact provides the Biohub ESMC sequence encoder and masked-language-
+model head through Transformers. ESMFold2 also uses this language-model family.
+SDPA is the default and gives the highest numerical fidelity. Flex Attention and
+FlashAttention 3 are supported non-experimental backends. Their BF16 arithmetic
+can differ numerically from SDPA. These differences give diagnostic warnings,
+not strict-parity failures. Dispatch, masks, finite outputs, shapes, and large
+biological disagreements remain hard gates.
 
 The current GH200/aarch64 release environment validates eager, SDPA, and Flex.
-Flash requests fail closed because compatible locked kernels are unavailable
-on this platform.
+Flash requests raise because compatible locked kernels are unavailable on this
+platform.
 
-When `sequence_id` is supplied, it is authoritative for ESMC attention grouping
-and padding, and `attention_mask` is ignored. Values greater than or equal to
-zero are valid sequence-group IDs; `-1` denotes padding. Omit `sequence_id` to
-use `attention_mask` as the padding contract.
+When `sequence_id` is supplied, it controls ESMC attention groups and padding.
+`attention_mask` is ignored. Values greater than or equal to zero are valid
+sequence-group IDs. `-1` marks padding. Omit `sequence_id` to use
+`attention_mask` for padding.
 
 ### Hidden-state sparse autoencoders
 
 ESM++ supports hidden-state SAEs from the official
 [Biohub ESMC SAE collection](https://huggingface.co/collections/biohub/esmc-saes-for-hidden-states-all-layers).
-Select an SAE for this ESMC scale. Load only the layers that you need. Then
-attach them to the model:
+Select an SAE for this ESMC scale. Load only required layers. Then attach them
+to the model:
 
 ```python
 import torch
@@ -219,17 +216,17 @@ print(features.shape, features.layout)  # (valid_token_count, codebook_dim), spa
 ```
 
 SAEs run after you attach them. Use `compute_sae=False` to skip SAE work.
-Outputs are detached sparse tensors with keys such as `layer{N}`. They exclude
-padding under the `sequence_id` then `attention_mask` rule.
+Outputs are detached sparse tensors with keys such as `layer{N}`. They omit
+padding. The model uses `sequence_id`, then `attention_mask`, for padding.
 `normalize_sae=True` uses Biohub `(features / max) * idf` normalization. SAE
 computation requires `input_ids`. It rejects mask tokens because Biohub trained
 the SAEs with unmasked sequences. This interface supports hidden-state SAEs
-only. It does not support MLP-output SAEs. FastPLMs does not copy SAE weights or
-add SAE checkpoints to its model manifest.
+only, not MLP-output SAEs. FastPLMs does not copy SAE weights or add SAE
+checkpoints to its model manifest.
 
 ### Experimental FP8 inference
 
-The default uses the checkpoint BF16 behavior. FP8 is an explicit experimental
+The default uses checkpoint BF16 behavior. FP8 is an explicit experimental
 inference option for every ESM++ scale:
 
 ```python
@@ -249,10 +246,10 @@ with torch.inference_mode():
 ```
 
 FP8 forward calls require `torch.inference_mode()`. The model pads the sequence
-dimension to a multiple of 16. Transformer Engine converts the supported linear
+dimension to a multiple of 16. Transformer Engine converts supported linear
 layers. The call fails if the dependency, compatible CUDA hardware, or complete
-conversion set is unavailable. It does not silently use BF16. FP8 is not a
-numerical-parity claim.
+conversion set is unavailable. It does not silently use BF16. FP8 does not
+claim numerical parity.
 
 | Backend | Support | Measurement status |
 | --- | --- | --- |
@@ -287,8 +284,8 @@ and
 ## Release record
 
 - FastPLMs weights: `Synthyra/ESMplusplus_6B`
-- Runtime revision: recorded separately in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Runtime revision: recorded in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in the source record
 - Official checkpoint: `biohub/ESMC-6B`
 - Artifact source: `fast`
 - State transform: `esmc_to_fastplms_v1`
@@ -296,19 +293,17 @@ and
 - Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-`provenance.json` records exact file identities, conversion, source revisions,
-legal texts, schema, and attestations. A nonzero unresolved count blocks release.
+The source record records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks a release.
 
 ## Validation boundary
 
-Declared tiers compare applicable configuration, tokenizer behavior, state,
-and representative inference with the pinned reference. Metadata alone does
-not claim a build passed, a backend is faster, or an output is biologically
-valid.
+Declared tiers compare configuration, tokenizer behavior, state, and
+representative inference with the pinned reference. Metadata does not show that
+a build passed, that a backend is faster, or that an output is biologically valid.
 
 ## License
 
 Checkpoint terms: MIT. The Hub model-card identifier is
-`mit`. Applicable source licenses, notices, attribution,
-and conversion records are distributed with the local artifact. Review them
-before use.
+`mit`. The local artifact contains applicable source
+licenses, notices, attribution, and conversion records. Review them before use.

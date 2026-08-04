@@ -10,7 +10,7 @@ tags:
 
 # Synthyra/DPLM-3B
 
-This checkpoint packages the FastPLMs `DPLM` implementation.
+This checkpoint contains the FastPLMs `DPLM` implementation.
 
 Accepted inputs are amino-acid sequences tokenized to masked or partially
 masked residue IDs.
@@ -30,9 +30,7 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`,
 | Attention variants | Supported: `eager`, `sdpa`, `flex_attention`, `flash_attention_3` |
 | Compliance | Declared: exact release evidence is required |
 
-A supported interface is not a pretrained downstream predictor. Classification
-heads start untrained, and declared compliance metadata is not a claim that an
-arbitrary local build passed its release gate.
+A supported interface is not a pretrained downstream predictor. Classification heads start untrained. Compliance metadata does not show that a local build passed its release gate.
 
 ## Install and platform requirements
 
@@ -43,12 +41,12 @@ python -m pip install -r \
   "https://huggingface.co/Synthyra/DPLM-3B/resolve/main/requirements.txt"
 ```
 
-The FastPLMs implementation itself is embedded in the model repository and loaded
-by Transformers through `trust_remote_code=True`.
+The FastPLMs implementation itself is embedded in the model repository.
+Transformers loads it through `trust_remote_code=True`.
 
-Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The artifact requirements include the direct FlashAttention loader dependency. FlashAttention also requires compatible CUDA hardware and BF16 execution. The Hub quick start below requires network
-access on first download. For an air-gapped run, first build the manifest-pinned
-local artifact and use the offline form shown in the example.
+This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13. The artifact requirements include the FlashAttention loader dependency. FlashAttention also requires compatible CUDA hardware and BF16 execution. The Hub quick start needs network access for
+the first download. For an air-gapped run, build the manifest-pinned local
+artifact first and use the offline example.
 
 ## Quick start
 
@@ -64,23 +62,23 @@ model = AutoModel.from_pretrained(
 ```
 
 For offline validation, replace `model_id` with the manifest-built
-`dist/hub/DPLM-3B` path and pass `local_files_only=True`.
+`dist/hub/DPLM-3B` path. Pass `local_files_only=True`.
 
 ## Attention and compliance
 
 The quick start selects `sdpa` explicitly. Declared variants are `eager`, `sdpa`, `flex_attention`, `flash_attention_3`.
-An unavailable requested backend raises instead of silently switching
-implementations.
-`output_attentions=True` may use the documented, one-call eager fallback solely
-to materialize attention tensors; the configured backend remains unchanged.
+An unavailable requested backend raises. It does not silently change
+implementation.
+`output_attentions=True` can use the documented one-call eager fallback to
+materialize attention tensors. The configured backend does not change.
 
-This family declares the `compliance` tier. Release evidence binds the exact
+This family declares the `compliance` tier. Release evidence identifies the
 checkpoint, backend, dtype, hardware, inputs, and reference revision.
 
 ## Tokenization and forward inference
 
-Load the tokenizer from the same artifact as the model. Padding is represented
-explicitly by the attention mask:
+Load the tokenizer from the same artifact as the model. The attention mask
+shows padding explicitly:
 
 ```python
 import torch
@@ -105,8 +103,8 @@ print(output.last_hidden_state.shape)
 
 ## Dataset embeddings
 
-The shared embedding mixin preserves input order and biological-position
-masking. It accepts sequences, identified records, mappings, or a FASTA path:
+The shared embedding mixin keeps input order and biological-position masking.
+It accepts sequences, identified records, mappings, or a FASTA path:
 
 ```python
 pooled = model.embed_dataset(
@@ -123,13 +121,13 @@ print(residues[0].tensor.shape) # (l, d)
 ```
 
 Set `output` and `format="safetensors"` or `"sqlite"` for transactional,
-bounded-memory persistence. Resume verifies input order, model state, tokenizer
-policy, backend, dtype, and pooling configuration before appending.
+bounded-memory storage. Resume checks input order, model state, tokenizer
+policy, backend, dtype, and pooling configuration before it appends data.
 
 ## Downstream classification
 
-Both downstream AutoClasses reuse the checkpoint backbone and initialize a new,
-untrained `classifier`. Sequence labels have shape `(b,)`; residue labels have
+Both downstream AutoClasses use the checkpoint backbone and create a new,
+untrained `classifier`. Sequence labels have shape `(b,)`. Residue labels have
 shape `(b, l)` and use `-100` outside biological positions:
 
 ```python
@@ -167,7 +165,7 @@ print(token_output.logits.shape)     # (b, l, 3)
 
 ## PEFT fine-tuning
 
-Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+Install the training dependencies. Then attach LoRA to the loaded checkpoint:
 
 ```bash
 python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
@@ -188,17 +186,17 @@ peft_model = get_peft_model(
 )
 ```
 
-This checkpoint advertises a classification head, so the separately trained
-`classifier` is saved with the adapter.
+This checkpoint advertises a classification head. Save the separately trained
+`classifier` with the adapter.
 All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
-can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+can use PEFT. The ESM2-specific shipped CLI is an example, not a
 support boundary. Record the target modules, base revision, data identity, and
 trainable parameter scope.
 
 ## Test-time training
 
 TTT samples masked views of one protein and updates only injected low-rank
-adapters. Base checkpoint weights remain frozen:
+adapters. Base checkpoint weights stay frozen:
 
 ```python
 from transformers import AutoModelForMaskedLM
@@ -216,13 +214,13 @@ ttt_model.ttt_reset()
 print(metrics)
 ```
 
-Persisted adapters retain their deterministic reset state. TTT adds latency
-and memory, can worsen an output, and does not establish biological function.
+Saved adapters retain their deterministic reset state. TTT adds latency and
+memory, can worsen an output, and does not show biological function.
 
 ## Diffusion sequence generation
 
-DPLM defines the requested length from biological positions in a tokenized
-input, masks those positions, and iteratively retains confident predictions:
+DPLM gets the requested length from biological positions in a tokenized input.
+It masks these positions and retains confident predictions at each iteration:
 
 ```python
 import torch
@@ -246,20 +244,18 @@ sequence = tokenizer.decode(
 print(sequence)
 ```
 
-Omitting `max_iter` uses the official 500-step schedule. A shorter schedule
-changes the sampling process rather than providing an equivalent faster mode.
+If you omit `max_iter`, DPLM uses the official 500-step schedule. A shorter
+schedule changes the sampling process. It is not an equivalent faster mode.
 
-Plain `AutoModel` omits the optional ESM pooler because this diffusion
-checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
-only when intentionally initializing and training that head.
+Plain `AutoModel` omits the optional ESM pooler because this diffusion checkpoint
+has no trained pooler weights. Pass `add_pooling_layer=True` only when you intend
+to initialize and train that head.
 
-DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The maintained ByteDance
-[LICENSE](https://github.com/bytedance/dplm/blob/main/LICENSE) is Apache-2.0 and the
-[README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
-explicitly scopes the repository release to the pretrained DPLM1 and DPLM2
-weights. FastPLMs artifacts record `weights_license_status="resolved"` and
-`redistributable=true`; complete publication is permitted only after all
-artifact, legal, parity, and atomic-publication preflights pass.
+DPLM1 and DPLM2 checkpoint weights use Apache-2.0. The ByteDance
+[LICENSE](https://github.com/bytedance/dplm/blob/main/LICENSE) uses Apache-2.0. Its [README](https://github.com/bytedance/dplm/blob/main/README.md#overview) limits the
+repository release to pretrained DPLM1 and DPLM2 weights. FastPLMs artifacts
+record `weights_license_status="resolved"` and `redistributable=true`. Complete
+publication requires all artifact, legal, parity, and atomic-publication checks.
 
 ## Runtime contract
 
@@ -279,8 +275,8 @@ artifact, legal, parity, and atomic-publication preflights pass.
 ## Release record
 
 - FastPLMs weights: `Synthyra/DPLM-3B`
-- Runtime revision: recorded separately in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Runtime revision: recorded in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in the source record
 - Official checkpoint: `airkingbd/dplm_3b`
 - Artifact source: `fast`
 - State transform: `dplm_to_fastplms_v1`
@@ -288,19 +284,17 @@ artifact, legal, parity, and atomic-publication preflights pass.
 - Release tiers: `check`, `compliance`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-`provenance.json` records exact file identities, conversion, source revisions,
-legal texts, schema, and attestations. A nonzero unresolved count blocks release.
+The source record records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks a release.
 
 ## Validation boundary
 
-Declared tiers compare applicable configuration, tokenizer behavior, state,
-and representative inference with the pinned reference. Metadata alone does
-not claim a build passed, a backend is faster, or an output is biologically
-valid.
+Declared tiers compare configuration, tokenizer behavior, state, and
+representative inference with the pinned reference. Metadata does not show that
+a build passed, that a backend is faster, or that an output is biologically valid.
 
 ## License
 
 Checkpoint terms: Apache-2.0. The Hub model-card identifier is
-`apache-2.0`. Applicable source licenses, notices, attribution,
-and conversion records are distributed with the local artifact. Review them
-before use.
+`apache-2.0`. The local artifact contains applicable source
+licenses, notices, attribution, and conversion records. Review them before use.

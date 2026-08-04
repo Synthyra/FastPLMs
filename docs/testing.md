@@ -1,16 +1,16 @@
 # Testing and compliance
 
-FastPLMs treats official equivalence as a release property. Routine goldens make
-development faster, but a release requires live comparison with the pinned
+FastPLMs treats official equivalence as a release property. Routine goldens
+reduce development time. A release requires live comparison with the pinned
 official implementation in its native reference container.
 
-GPU release and benchmark suites run through repository Docker images on the
-current exact NVIDIA GH200/aarch64 workstation. H100 and H200 remain
-Hopper-class deployment examples, but they are not current release-confirmation
-evidence. Portable unit and documentation checks can also run locally. Every
-Dockerized PyTorch run uses `--ipc=host` directly or receives `ipc: host` from
-Compose. Remote preflight records the GH200 GPU UUID and native OCI platform,
-then rejects platform or device drift between preflight and the loaded images.
+GPU release and benchmark suites run in repository Docker images on the current
+exact NVIDIA GH200/aarch64 workstation. H100 and H200 are Hopper-class
+deployment examples, but they are not current release-confirmation evidence.
+Portable unit and documentation checks also run locally. Each Dockerized
+PyTorch run uses `--ipc=host` directly or receives `ipc: host` from Compose.
+Remote preflight records the GH200 GPU UUID and native OCI platform. It rejects
+platform or device drift between preflight and the loaded images.
 
 ## Run tiers
 
@@ -26,17 +26,16 @@ then rejects platform or device drift between preflight and the loaded images.
 | `benchmark` | Separate GH200/aarch64 latency, throughput, padding, memory, and exact-device regression suite |
 | `python-matrix` | Isolated repository-source smokes with runtime dependencies on Python 3.11-3.14 |
 
-Routine `check` consumes goldens and never builds an official reference image.
+Routine `check` uses goldens and does not build an official reference image.
 Live references are reserved for the frozen exact-head `compliance` release
-candidate. Missing expected
-dependencies, checkpoints, reference containers, or backends are failures, not
-skips.
+candidate. Missing required dependencies, checkpoints, reference containers, or
+backends are failures, not skips.
 
-Boltz2 is intentionally outside the FastPLMs 1.0 `check` and `compliance`
-claims while its native-environment BF16 numerical gap remains under
-investigation. Its exact state/configuration, feature, seeded-execution,
-artifact, and benchmark diagnostics remain in the focused tiers. This is an
-explicit provisional boundary, not a relaxed tolerance or silent skip.
+Boltz2 is outside the FastPLMs 1.0 `check` and `compliance` claims while its
+native-environment BF16 numerical gap is under investigation. Its exact
+state/configuration, feature, seeded-execution, artifact, and benchmark
+diagnostics remain in focused tiers. This is an explicit provisional boundary,
+not a relaxed tolerance or silent skip.
 
 ## Required offline CPU gate
 
@@ -52,14 +51,14 @@ workers, fixed seeds and thread counts, hidden CUDA, and empty temporary caches.
 It sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, guards sockets and Hub
 download functions, and fails on a skip or xfail. Tiny models use one layer,
 hidden width 8-16, two heads, and a mixed-padding batch of two. The suite budget
-is under five minutes and 4 GiB, with an approximately ten-second per-test cap.
-The controller samples its complete live Linux process tree from `/proc` every
-50 ms and deduplicates PIDs before summing concurrent memory. Complete
-`smaps_rollup` proportional-set-size evidence enforces the 4 GiB gate; if any
+is under five minutes and 4 GiB, with an approximate ten-second test limit. The
+controller samples the complete live Linux process tree from `/proc` every 50
+ms. It deduplicates PIDs before it sums concurrent memory. Complete
+`smaps_rollup` proportional-set-size evidence enforces the 4 GiB gate. If a
 live process lacks PSS, the gate fails closed to the larger concurrent RSS sum
 and records the reason. Per-worker `RUSAGE_SELF` and `RUSAGE_CHILDREN` maxima
-remain in telemetry as a temporal upper-bound diagnostic, not as the budget
-metric, because those maxima can occur at different times.
+remain telemetry for a temporal upper-bound diagnostic, not the budget metric,
+because the maxima can occur at different times.
 Prepare the exact CPU validation environment before running the gate:
 
 ```bash
@@ -76,14 +75,14 @@ Transformers to the release versions in
 to the CPU index. CUDA-only cuEquivariance and FP8 dependencies belong in
 separate environments.
 
-The gate statically covers all 29 checkpoints and executes every advertised
-AutoClass once per family, including forward/loss/backward, resize, tuple and
+The gate statically covers all 29 checkpoints and runs each advertised
+AutoClass once per family. It covers forward/loss/backward, resize, tuple and
 dictionary output, and save/reload. It also covers ANKH stack selection and
-state views; backend masks, fallback warnings, fake Flash dispatch, E1 cache and
-ANKH concurrency; ESMC diagnostics; sequence-family embeddings and persistence;
-bounded disk-spooled generator and FASTA streaming; generation and TTT; PEFT;
-injected-core structure and binder flows; publication security; and curated
-offline documentation examples.
+state views; backend masks, fallback warnings, fake Flash dispatch, E1 cache,
+and ANKH concurrency; ESMC diagnostics; sequence-family embeddings and
+persistence; bounded disk-spooled generator and FASTA streaming; generation and
+TTT; PEFT; injected-core structure and binder flows; publication security; and
+curated offline documentation examples.
 
 Run the focused quality and source checks from the same environment:
 
@@ -113,10 +112,9 @@ python tools/remote/runtime_import_closure.py \
 
 The repository has no GitHub Actions workflows. Run lint, bounded strict
 typing, generated-document checks, release contracts, repository-source smoke,
-and runtime import closure directly on the workstation. Cross-version source
-smokes, live official implementations, and GPU suites remain release-time
-responsibilities through the explicit `python-matrix`, `check`, `compliance`,
-and release suites.
+and runtime import closure on the workstation. Cross-version source smokes,
+live official implementations, and GPU suites are release-time work through the
+explicit `python-matrix`, `check`, `compliance`, and release suites.
 
 ## Cost-controlled schedule
 
@@ -133,19 +131,19 @@ and release suites.
   contract, published artifact, structure panel, and benchmark on one frozen
   exact head.
 
-GPU phases enforce explicit timeouts and cancellation, group all AutoClasses
-for one checkpoint in one isolated process, build independent Buildx targets in
+GPU phases use explicit timeouts and cancellation, group all AutoClasses for a
+checkpoint in one isolated process, build independent Buildx targets in
 parallel, and publish JUnit, duration, cache, environment, and immutable report
-telemetry. GH200/aarch64 benchmarking records cold compilation separately from warm
-throughput; a missing baseline remains a release blocker rather than a synthetic
-placeholder. All GH200 tiers are invoked directly with `python -m tools.remote`;
-there is no hosted CI or scheduled accelerator workflow.
+telemetry. GH200/aarch64 benchmarks record cold compilation separately from
+warm throughput. A missing baseline is a release blocker, not a synthetic
+placeholder. Invoke all GH200 tiers directly with `python -m tools.remote`.
+There is no hosted CI or scheduled accelerator workflow.
 
-Every remote report contains a structured kernel-capability record. It names
-the measured eager, SDPA, and Flex backends, identifies the pinned FA2 revision
-as prior-focused-evidence-only, identifies FA3 as unavailable on linux/arm64,
-and records that network downloads and source builds were disabled. Asking the
-GH200 runner to execute either Flash backend fails before source archiving.
+Each remote report contains a structured kernel-capability record. It names the
+measured eager, SDPA, and Flex backends. It identifies the pinned FA2 revision
+as prior-focused evidence only and FA3 as unavailable on linux/arm64. It also
+records that network downloads and source builds were disabled. A request for
+the GH200 runner to execute either Flash backend fails before source archiving.
 
 ## Frozen ESMC release evidence
 
@@ -162,8 +160,8 @@ combined with GH200 results. Candidate and official-reference measurements must
 carry the same preflight hardware identity.
 
 Default documentation generation does not inspect the environment or discover
-reports. It deliberately renders ESMC measurements as pending. On the frozen
-release head, select the completed report directory explicitly:
+reports. It renders ESMC measurements as pending. On the frozen release head,
+select the completed report directory explicitly:
 
 ```bash
 PYTHONPATH=src python -m tools.artifacts.generate_docs \
@@ -207,8 +205,8 @@ repository. It is not a current release distribution or numerical claim.
 ## Portable remote execution
 
 The runner accepts connection data at invocation time, synchronizes an isolated
-workspace, preserves external model and container caches, and retrieves test and
-benchmark outputs:
+workspace, preserves external model and container caches, and retrieves test
+and benchmark output:
 
 ```bash
 python -m tools.remote \
@@ -217,14 +215,14 @@ python -m tools.remote \
   --suite check
 ```
 
-Workstation names, identity paths, cache credentials, and secrets are not stored
-in tracked files. The runner archive excludes Git metadata, known credential
-names, private-key extensions, and ignored files. Before synchronization, every
+Tracked files do not store workstation names, identity paths, cache credentials,
+or secrets. The runner archive excludes Git metadata, known credential names,
+private-key extensions, and ignored files. Before synchronization, each
 initialized upstream must have a clean tracked tree and a `HEAD` equal to its
-parent Git link. The runner records those revisions, the exact tracked-file
-inventory, and a tree digest in `.fastplms-source-provenance.json`. Artifact
-validation uses this record only in an extracted tree with no Git metadata and
-rejects missing, added, or modified upstream files.
+parent Git link. The runner records the revisions, exact tracked-file inventory,
+and a tree digest in `.fastplms-source-record.json`. Artifact validation
+uses this record only in an extracted tree with no Git metadata. It rejects
+missing, added, or modified upstream files.
 
 Python 3.12 is the canonical GPU validation interpreter. Source compatibility
 for Python 3.11, 3.13, and 3.14 is checked separately on the same workstation:
@@ -260,7 +258,7 @@ container, dependencies, backends, dtypes, precision paths, and declared test
 tiers. Release tests fail when the manifest, Docker targets, artifact metadata,
 support tables, or model cards diverge.
 
-Any manifest `unresolved_files` entry is an explicit release blocker. A test may
+Any manifest `unresolved_files` entry is an explicit release blocker. A test can
 report it precisely, but must not guess a hash or silently omit the asset.
 
 ## Reference isolation

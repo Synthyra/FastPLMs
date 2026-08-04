@@ -1,9 +1,8 @@
 # FastPLMs documentation
 
-This directory explains the public API, model-family contracts, release
+This directory describes the public API, model-family contracts, release
 evidence, and contributor workflows for FastPLMs 1.0. The model manifest at
-`src/fastplms/models.toml` remains authoritative when prose and generated data
-disagree.
+`src/fastplms/models.toml` is authoritative if prose or generated data differs.
 
 ## Start here
 
@@ -47,7 +46,7 @@ PYTHONPATH=src python -m tools.artifacts.generate_docs
 PYTHONPATH=src python -m tools.artifacts.generate_docs --check
 ```
 
-Documentation examples distinguish model output from experimental evidence.
+Documentation examples separate model output from experimental evidence.
 Structure confidence, language-model likelihood, and generated sequences are
-prioritization signals unless an independent experiment establishes the
-corresponding biological claim.
+prioritization signals. Use an independent experiment to establish a biological
+claim.

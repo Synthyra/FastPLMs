@@ -6,8 +6,8 @@ load time with `attn_implementation` or after loading with
 
 ## Dependencies and platform requirements
 
-FastPLMs supports Python 3.11 through 3.14. The release validation environment
-uses PyTorch 2.13 and Transformers 5.13. Install the core dependencies directly;
+FastPLMs runs on Python 3.11 through 3.14. The release validation environment
+uses PyTorch 2.13 and Transformers 5.13. Install the core dependencies.
 Transformers loads FastPLMs runtime source from the Hugging Face model:
 
 ```bash
@@ -47,11 +47,11 @@ Published Hub repositories are the normal user-facing model IDs. Pin
 can use a manifest-built artifact under `dist/hub/<model>` for local,
 offline validation before publishing an update.
 
-If the caller does not choose a backend, FastPLMs leaves the value unspecified
-and Transformers normally selects SDPA. FastPLMs does not implement an `auto`
-backend. An unavailable requested implementation raises. The only per-call
-substitution is the explicit, warning-emitting eager path required by
-`output_attentions=True`; it does not mutate the configured backend.
+If the caller does not choose a backend, FastPLMs leaves the value unspecified.
+Transformers normally selects SDPA. FastPLMs does not implement an `auto`
+backend. An unavailable requested implementation raises. For
+`output_attentions=True`, FastPLMs uses eager attention for that call and emits
+a warning. This does not change the configured backend.
 
 ## Implementations
 
@@ -63,10 +63,10 @@ substitution is the explicit, warning-emitting eager path required by
 | `flash_attention_2` | Precompiled `kernels-community/flash-attn2` handler at revision `db6b51744f0c` | Packed 2D mask | ESM2 and ESM++ only |
 | `flash_attention_3` | Precompiled `kernels-community/flash-attn3` handler at revision `43f0bd269777` | Packed 2D mask | ESM2, ESM++, and DPLM only |
 
-The manifest lists the subset supported by each family. A requested name that
-is not listed for that family raises. A listed optional implementation that
-cannot be imported also raises, because dependency absence is a configuration
-error rather than evidence that another kernel was tested.
+The manifest lists the backends for each family. A name not listed for that
+family raises. A listed optional backend that cannot be imported also raises.
+Missing dependencies are a configuration error. They do not show that another
+kernel was tested.
 
 ## Choosing a backend
 
@@ -106,10 +106,10 @@ loader asks `kernels` to download and hash-validate the compatible variant
 before importing it. It never falls back to a branch, compiles source, imports
 the `flash_attn` package, or substitutes one FlashAttention version for another.
 
-After installing `kernels`, `kernels download .` may be used during
-image build or cache preparation to fetch both locked binaries. This command
-downloads precompiled artifacts only. It is not required when the runtime can
-populate its Hugging Face cache on first use.
+After installing `kernels`, use `kernels download .` during image build or
+cache preparation to fetch both locked binaries. This command downloads only
+precompiled artifacts. It is not required when the runtime populates its
+Hugging Face cache on first use.
 
 An explicit kernel-load failure reports the manifest-pinned repository and
 revision together with the underlying cause. The exception is not replaced by
@@ -131,13 +131,12 @@ Both offline variables, `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, block
 kernel downloads. A required uncached binary therefore raises with its pinned
 repository, revision, and original loader error.
 
-All five ESM++/ESMC backends are selectable. SDPA is the default and is
-recommended for highest numerical fidelity. Flex Attention and FlashAttention
-3 remain supported and non-experimental even though their BF16 arithmetic is
-known to diverge from SDPA. Their accuracy metrics are diagnostics and warnings,
-not strict parity release gates. Dispatch integrity, finite values, exact mask
-semantics, output shape, and catastrophic biological disagreement remain hard
-failures.
+All five ESM++/ESMC backends can be selected. SDPA is the default and has the
+highest numerical fidelity. Flex Attention and FlashAttention 3 are supported
+and non-experimental, although their BF16 arithmetic differs from SDPA.
+Accuracy metrics are diagnostics and warnings, not strict parity release gates.
+Dispatch integrity, finite values, exact mask semantics, output shape, and
+catastrophic biological disagreement are hard failures.
 
 | ESMC backend | Status | Relative L2 | Q99.9 | Residue cosine | Pooled cosine | Top-1 | Jensen-Shannon |
 | --- | --- | --- | --- | --- | --- | --- | --- |

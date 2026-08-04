@@ -301,4 +301,4 @@ def test_mmseqs2_digest_is_disclosed_in_e1_documentation() -> None:
     assert retrieval.MMSEQS2_VERSION in documentation
     assert retrieval.MMSEQS2_CPU_MANIFEST_DIGEST in documentation
     assert "allow_pull=False" in documentation
-    assert "search-provenance.json" in documentation
+    assert "search-record.json" in documentation

@@ -155,7 +155,7 @@ def _artifact_identity(
         registry,
     )
     config = _load_json_object(path / "config.json")
-    provenance = _load_json_object(path / "provenance.json")
+    provenance = _load_json_object(path / "source-record.json")
 
     expected_config: dict[str, object] = {
         "fastplms_model_id": spec.id,

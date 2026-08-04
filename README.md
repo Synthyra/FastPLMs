@@ -2,18 +2,16 @@
 
 <img width="2816" height="1536" alt="FastPLMs Hero Image" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
 
-FastPLMs maintains the runtime code published with Hugging Face protein
-language and structure models. This repository is the source, test, and
-dependency workspace for those model repositories. It is not an installable
-Python distribution.
+FastPLMs maintains runtime code for Hugging Face protein language and structure
+models. This repository is their source, test, and dependency workspace. It is
+not an installable Python distribution.
 
-Published models keep the familiar Transformers interface while making
-attention, embedding, generation, folding, and validation behavior explicit.
-Their runtime code does not import an official model checkout. Each supported
-family instead has a pinned upstream source under `vendor/upstream/`, an
-immutable checkpoint identity, and a declared state transformation. Release
-workflows compare the resulting Hugging Face artifact against that official
-source.
+Published models use the familiar Transformers interface. They state their
+attention, embedding, generation, folding, and validation behavior explicitly.
+Runtime code does not import an official model checkout. Each supported family
+has a pinned upstream source in `vendor/upstream/`, an immutable checkpoint
+identity, and a declared state transformation. Release workflows compare the
+resulting Hugging Face artifact with that official source.
 
 ## Contents
 
@@ -31,28 +29,26 @@ source.
 
 ## Why FastPLMs
 
-Protein models are often published with architecture-specific loading code,
-tokenization conventions, attention implementations, and output formats.
-FastPLMs separates those concerns:
+Protein models often use architecture-specific loading code, tokenization,
+attention, and output formats. FastPLMs separates these concerns:
 
-- Transformers auto classes provide a consistent loading interface.
-- Model-specific adapters preserve native biological token and structure
-  semantics.
+- Transformers auto classes give a consistent loading interface.
+- Model-specific adapters keep native biological token and structure meaning.
 - A shared embedding API returns ordered, residue-aware representations.
-- Attention backends are explicit capabilities rather than silent fallbacks.
-- The model registry records checkpoint, source, conversion, precision,
-  license, and test contracts in one typed manifest.
-- Official repositories are isolated parity oracles, not production
+- Attention backends are explicit capabilities. They are not silent fallbacks.
+- The model registry records checkpoint, source, conversion, precision, license,
+  and test contracts in one typed manifest.
+- Official repositories are isolated parity oracles. They are not production
   dependencies.
 
-A supported model is more than an architecture implementation. Its
-configuration, input preparation, checkpoint conversion, representative
-inference, artifact contents, and legal inventory are all defined and tested.
+A supported model is more than an architecture implementation. FastPLMs defines
+and tests its configuration, input preparation, checkpoint conversion,
+representative inference, artifact contents, and legal inventory.
 
 ## Supported models
 
-The generated [support matrix](docs/generated/support.md) is the authoritative
-checkpoint list. It is rendered from
+The generated [support matrix](docs/generated/support.md) is the checkpoint
+list of record. It is generated from
 [`src/fastplms/models.toml`](src/fastplms/models.toml), which also defines valid
 AutoClasses, attention backends, precision paths, and release tiers.
 
@@ -69,19 +65,19 @@ AutoClasses, attention backends, precision paths, and release tiers.
 | ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Full variants have 48 folding blocks and optional MSA conditioning; Fast variants have 24 blocks and no MSA conditioning |
 | Boltz2 | Structure prediction | Raw amino-acid sequences or prepared model features | Provisional end-to-end numerical-equivalence status |
 
-The model manifest, not this summary, controls support. A backend or AutoClass
-that is valid for one family may be rejected by another.
+The model manifest controls support, not this summary. A backend or AutoClass
+that is valid for one family can be rejected by another.
 
-The Synthyra ANKH repositories contain the complete 1.0 encoder-decoder
-checkpoints. `AutoModel` loads the encoder view, and
+Synthyra ANKH repositories contain complete 1.0 encoder-decoder checkpoints.
+`AutoModel` loads the encoder view. `AutoModelForSeq2SeqLM` loads the decoder,
 `AutoModelForSeq2SeqLM` loads the decoder, cross-attention, and language-model
 head from the same repository.
 
 ## Dependencies
 
 Published FastPLMs model repositories require Python 3.11 through 3.14,
-PyTorch 2.13, and Transformers 5.13. Install those runtime dependencies
-directly, then load the model from Hugging Face:
+PyTorch 2.13, and Transformers 5.13. Install these runtime dependencies. Then
+load the model from Hugging Face:
 
 ```bash
 python -m pip install \
@@ -89,8 +85,8 @@ python -m pip install \
   "transformers>=5.13,<5.14"
 ```
 
-For a source checkout used to build or validate artifacts, install the named
-dependency profile and put `src` on `PYTHONPATH` when running repository code:
+For a source checkout that builds or checks artifacts, install the required
+dependency profile. Put `src` on `PYTHONPATH` when you run repository code:
 
 ```bash
 git clone https://github.com/Synthyra/FastPLMs.git
@@ -104,11 +100,11 @@ PYTHONPATH=src python -m pytest tests/cpu -m cpu_contract
 ```
 
 Official reference repositories are not runtime or routine-development
-dependencies. Initialize them only for a live release-candidate compliance run,
-as described under [Validation and reproducibility](#validation-and-reproducibility).
+dependencies. Initialize them only for a live release-candidate compliance run.
+See [Validation and reproducibility](#validation-and-reproducibility).
 
-Direct dependency declarations live under `requirements/`. Profiles compose
-the combinations exercised by local and container validation:
+Direct dependency declarations are in `requirements/`. Profiles combine the
+dependencies used by local and container validation:
 
 | Dependency file or profile | Purpose |
 | --- | --- |
@@ -139,9 +135,9 @@ model = AutoModel.from_pretrained(
 model.eval()
 ```
 
-Use the published Hub identifier for ordinary loading. Pin `revision` when an
-immutable model-code snapshot is required. Contributors can instead build the
-manifest-pinned artifact under `dist/hub/ESM2-150M` and load it locally before
+Use the published Hub identifier for normal loading. Pin `revision` when you
+need an immutable model-code snapshot. Contributors can build the
+manifest-pinned artifact in `dist/hub/ESM2-150M` and load it locally before
 publication.
 
 Tokenizer-based models use the tokenizer paired with the same artifact:
@@ -166,21 +162,20 @@ with torch.inference_mode():
 print(output.last_hidden_state.shape)
 ```
 
-E1 is intentionally different. It has no tokenizer and retains its native
-raw-sequence preparation path. Use `model.embed_dataset(...)` for ordinary
-sequence representations or the explicit E1 preparation methods for lower
-level token tensors.
+E1 is different. It has no tokenizer and uses native raw-sequence preparation.
+Use `model.embed_dataset(...)` for normal sequence representations. Use explicit
+E1 preparation methods for lower-level token tensors.
 
 ## Usage examples
 
-Calls made directly on a model loaded with `trust_remote_code=True` use the
-runtime bundled in its Hugging Face repository. Examples that import
-`fastplms` modules are contributor workflows and require `PYTHONPATH=src`.
+Calls to a model loaded with `trust_remote_code=True` use the runtime in its
+Hugging Face repository. Examples that import `fastplms` modules are contributor
+workflows and require `PYTHONPATH=src`.
 
 ### Ordered sequence embeddings
 
 The model method is available from the Hugging Face artifact. The source-level
-function shown here is for repository work run with `PYTHONPATH=src`:
+function below is for repository work with `PYTHONPATH=src`:
 
 ```python
 from fastplms import EmbeddingInput, embed_dataset
@@ -197,8 +192,7 @@ result = embed_dataset(
 )
 ```
 
-Insertion-ordered mappings are also accepted and preserve their keys as record
-identifiers:
+Insertion-ordered mappings are accepted. They keep keys as record identifiers:
 
 ```python
 result = model.embed_dataset(
@@ -211,8 +205,8 @@ result = model.embed_dataset(
 )
 ```
 
-`EmbeddingResult` preserves order, duplicate identifiers, and the original
-sequence. Each record contains an identifier, sequence, and tensor:
+`EmbeddingResult` keeps order, duplicate identifiers, and the source sequence.
+Each record contains an identifier, sequence, and tensor:
 
 ```python
 for record in result.records:
@@ -220,18 +214,16 @@ for record in result.records:
     print(record.id, record.sequence, tensor.shape)
 ```
 
-Calling `result.as_dict(key="id")` raises when identifiers repeat unless an
-explicit duplicate policy is provided. This avoids silently overwriting FASTA
-records.
+`result.as_dict(key="id")` raises when identifiers repeat unless you provide a
+duplicate policy. This prevents silent overwrite of FASTA records.
 
-Safetensors output packs generation-scoped shards across batches and can resume
-from the last flushed shard after interruption. An interrupted in-memory shard
-is recomputed. Tensor memory is bounded by the configured shard size rather than
-the full dataset size. Successful overwrites retain prior immutable generations
-so already-open lazy readers remain valid. Stale generations are removed only
-through explicit, dry-run-first garbage collection after the caller guarantees
-there are no active readers or writers. SQLite remains available when database
-transactions and queryable records are preferred.
+Safetensors output stores generation-scoped shards across batches. It can resume
+at the last flushed shard after an interruption. It recomputes an in-memory
+shard that was interrupted. Tensor memory is limited by configured shard size,
+not dataset size. Successful overwrite keeps prior immutable generations, so
+open lazy readers remain valid. Remove stale generations only with explicit,
+dry-run-first garbage collection after you confirm that no reader or writer is
+active. Use SQLite when you need database transactions and queryable records.
 
 ### FASTA input and in-memory output
 
@@ -406,10 +398,9 @@ sequence = tokenizer.decode(
 print(sequence)
 ```
 
-The official schedule uses 500 steps when `max_iter` is omitted. Reducing the
-step count changes the sampling process. DPLM2 uses separate structure and
-amino-acid tracks; see the [model guide](docs/models.md) for its explicit
-boundary-token example.
+The official schedule uses 500 steps when `max_iter` is omitted. Fewer steps
+change sampling. DPLM2 uses separate structure and amino-acid tracks. See the
+[model guide](docs/models.md) for its boundary-token example.
 
 ### ESM3 sequence generation
 
@@ -429,13 +420,12 @@ print(generated)
 ```
 
 Underscores mark sequence positions to generate. Sequence-only forward passes
-use `esm3.tokenize_sequences(...)`; structure and function tracks remain
-available through the model's multimodal interface.
+use `esm3.tokenize_sequences(...)`. The multimodal interface also has structure
+and function tracks.
 
 ### Boltz2 protein structure prediction
 
-Boltz2 exposes a protein-only convenience path in addition to its prepared
-feature interface:
+Boltz2 has a protein-only convenience path and a prepared-feature interface:
 
 ```python
 import torch
@@ -459,10 +449,9 @@ print(prediction.plddt, prediction.ptm, prediction.iptm)
 
 Boltz2 remains provisional in FastPLMs 1.0. This interface is covered for
 configuration, declared inference-core state, feature preparation, and seeded
-execution, but it is not yet an official end-to-end numerical-equivalence
-claim.
-The helper restores caller RNG state; FP32 parameters and features execute under
-the documented CUDA BF16 autocast policy.
+execution. It is not an official end-to-end numerical-equivalence claim. The
+helper restores caller RNG state. FP32 parameters and features run with the
+documented CUDA BF16 autocast policy.
 
 ### ESMFold structure prediction
 
@@ -485,23 +474,22 @@ print(structure["mean_plddt"])
 ```
 
 FastPLMs does not expose ProteinTTT for ESMFold. The pinned folding checkpoint
-does not contain a trained masked-language-model head for that objective.
+has no trained masked-language-model head for this objective.
 
 ### ESMFold2 folding and learned representations
 
 ESMFold2 accepts amino-acid sequences and typed molecular-complex
-specifications. A target structure is not an input. Atomic coordinates and
-confidence values are produced by the model.
+specifications. A target structure is not an input. The model produces atomic
+coordinates and confidence values.
 
-The two Fast checkpoints are inference-optimized for single-sequence use. They
-have 24 folding blocks instead of 48 and were trained without MSA conditioning,
-so they reject MSA-derived inputs. The full `ESMFold2` and
-`ESMFold2-Experimental-Cutoff2025` checkpoints retain 48 blocks and optional
-MSA conditioning. Fast is not necessarily single-chain-only: supported
-multichain and multimolecule requests remain available, but every protein chain
-uses single-sequence mode. This distinction follows the official model
-description in [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf). The
-quick start below intentionally loads Fast and supplies no MSA.
+Fast checkpoints are optimized for single-sequence inference. They have 24
+folding blocks, not 48, and were trained without MSA conditioning. They reject
+MSA-derived inputs. Full `ESMFold2` and `ESMFold2-Experimental-Cutoff2025`
+checkpoints have 48 blocks and optional MSA conditioning. Fast supports
+supported multichain and multimolecule requests, but each protein chain uses
+single-sequence mode. See the official description in
+[Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf). The quick start
+below uses Fast and no MSA.
 
 ```python
 from transformers import AutoModel
@@ -524,7 +512,7 @@ pdb_text = folder.result_to_pdb(result)
 print(result.ptm, result.plddt.mean().item())
 ```
 
-Build complexes with the input types exposed by the loaded artifact:
+Build complexes with input types from the loaded artifact:
 
 ```python
 types = folder.input_types
@@ -546,24 +534,20 @@ print(complex_result.ptm, complex_result.plddt.mean().item())
 ```
 
 The typed interface supports RNA, ligands, modifications, covalent bonds, and
-distogram conditioning. The Fast checkpoint loaded above rejects an MSA even
-when it appears inside an otherwise valid typed request. To attach an MSA to a
-protein input, load the full `Synthyra/ESMFold2` or
-`Synthyra/ESMFold2-Experimental-Cutoff2025` checkpoint. The schema recognizes
-`PocketConditioning`, but the pinned official runtime discards it and hard-codes
-a zero pocket feature. FastPLMs rejects non-null pocket conditioning instead of
-silently ignoring it. Prepared features contain fields such as `ref_pos`; these
-are component reference geometries created during featurization, not a known
-target structure.
-See the offline
-[`structure_preparation.py`](examples/structure_preparation.py) example for the
-supported MSA, multimolecule, modification, bond, and distogram paths and the
-explicit pocket rejection. Its ESMFold2 MSA branch requires one of the full
-checkpoints, not a Fast checkpoint.
+distogram conditioning. The Fast checkpoint above rejects an MSA, including one
+inside an otherwise valid typed request. To add an MSA to a protein input, load
+full `Synthyra/ESMFold2` or `Synthyra/ESMFold2-Experimental-Cutoff2025`. The
+schema recognizes `PocketConditioning`, but the pinned official runtime drops it
+and sets the pocket feature to zero. FastPLMs rejects non-null pocket
+conditioning. Prepared features such as `ref_pos` are component reference
+geometries from featurization. They are not a known target structure. See the
+offline [`structure_preparation.py`](examples/structure_preparation.py) example
+for MSA, multimolecule, modification, bond, and distogram paths and pocket
+rejection. Its ESMFold2 MSA path needs a full checkpoint, not a Fast checkpoint.
 
-Its learned sequence representation combines 81 ordered ESMC hidden states
-with the folding checkpoint's projection. Use the public embedding API to
-retrieve the resulting residue representation:
+The learned sequence representation combines 81 ordered ESMC hidden states with
+the folding checkpoint projection. Use the public embedding API to get the
+residue representation:
 
 ```python
 representations = folder.embed_dataset(
@@ -574,23 +558,22 @@ representations = folder.embed_dataset(
 print(representations[0].tensor.shape)  # (sequence_length, 256)
 ```
 
-For lower-level integrations that already hold the ordered ESMC hidden-state
-stack, the projection is also exposed directly:
+For lower-level integrations that already have the ordered ESMC hidden-state
+stack, use the projection directly:
 
 ```python
 # H: (b, l, 81, 2560)
 Z = folder.project_esmc_hidden_states(H)  # Z: (b, l, 256)
 ```
 
-Here, `H` is the 81-state ESMC representation for a prepared sequence batch,
-not a target structure. The dataset embedding API is the higher-level path for
-ordinary sequence inputs.
+Here, `H` is the 81-state ESMC representation for a prepared sequence batch. It
+is not a target structure. Use the dataset embedding API for normal sequences.
 
 `folder.embed_dataset(..., full_embeddings=True)` returns one `(l, 256)` tensor
-per single-chain sequence. The embedding path rejects complexes, ligands, MSAs,
+for each single-chain sequence. It rejects complexes, ligands, MSAs,
 chain-separated inputs, `cls`, and `parti`.
 
-`esmc_precision="auto"` always resolves to BF16. Explicit FP8 is experimental,
+`esmc_precision="auto"` always uses BF16. Explicit FP8 is experimental,
 inference-only, and strict:
 
 ```python

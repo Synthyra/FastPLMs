@@ -80,7 +80,7 @@ def _write_benchmark_artifact(
         },
     }
     (path / "config.json").write_text(json.dumps(config), encoding="utf-8")
-    (path / "provenance.json").write_text(json.dumps(provenance), encoding="utf-8")
+    (path / "source-record.json").write_text(json.dumps(provenance), encoding="utf-8")
     (path / "artifact-manifest.json").write_text(
         json.dumps({"config.json": "sha256:" + "e" * 64}),
         encoding="utf-8",

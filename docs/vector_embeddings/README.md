@@ -21,9 +21,9 @@ Precomputed pooled protein embeddings for the Protify vector benchmark.
 > and never writes new `.pth` files. Prefer the current
 > [embedding API](../embedding_api.md) for new runs.
 
-This dataset stores ready-to-use `.pth.gz` embedding artifacts for a broad
-panel of protein language models and controls. They support downstream Protify
-benchmarks without repeatedly embedding the same sequences on local GPUs.
+This dataset stores `.pth.gz` embedding artifacts for a range of protein
+language models and controls. They support Protify benchmarks without repeated
+embedding of the same sequences on local GPUs.
 
 ## What Is Included
 
@@ -43,7 +43,7 @@ The filename convention mirrors the Protify embedding cache settings:
 | `.pth.gz` | PyTorch serialization compressed with gzip |
 
 Use these files for fixed-size protein vectors in classical ML, vector search,
-nearest-neighbor analysis, low-shot benchmarking, or model comparison.
+nearest-neighbor analysis, low-shot benchmarks, or model comparison.
 
 ## Quick Start
 
@@ -83,10 +83,10 @@ print(first_key)
 print(first_vector.shape, first_vector.dtype)
 ```
 
-Only load a legacy pickle from a source whose bytes and expected hash you
-trust. If an old payload cannot be read with `weights_only=True`, use the
-FastPLMs read-only legacy importer and its explicit unsafe-pickle opt-in. Never
-enable unsafe pickle loading for an untrusted download.
+Load a legacy pickle only from a source with trusted bytes and expected hash.
+If `weights_only=True` cannot read an old payload, use the FastPLMs read-only
+legacy importer and its explicit unsafe-pickle option. Do not enable unsafe
+pickle loading for an untrusted download.
 
 Download with the Hugging Face CLI:
 
@@ -106,15 +106,14 @@ hf download Synthyra/vector_embeddings \
   --local-dir vector_embeddings
 ```
 
-The full directory is large. Inspect the current Hub repository size before a
+The full directory is large. Check the current Hub repository size before a
 bulk download.
 
 ## Protify Usage
 
-Protify can use these precomputed embeddings as vector caches for benchmark
-runs. This avoids recomputing every model and dataset combination, which is
-especially useful for large protein language models or laptop-scale downstream
-analysis.
+Protify uses these precomputed embeddings as vector caches for benchmark runs.
+This avoids recomputation for each model and dataset combination. It is useful
+for large protein language models and laptop-scale downstream analysis.
 
 Typical workflow:
 
@@ -167,12 +166,12 @@ These files are large. Prefer single-file downloads with `hf_hub_download()` or
 `hf download --include` unless you need every model.
 
 This repository is an artifact store, not a tabular Hugging Face Datasets
-dataset. Use `huggingface_hub` or the `hf` CLI rather than
+dataset. Use `huggingface_hub` or the `hf` CLI. Do not use
 `datasets.load_dataset()`.
 
-The artifacts support reproducible Protify benchmarking. For redistribution or
-derived work, check the licenses and usage terms of the original benchmark
-datasets and upstream model checkpoints used to generate each embedding set.
+The artifacts support reproducible Protify benchmarks. For redistribution or
+derived work, check the licenses and usage terms for the original benchmark
+datasets and upstream model checkpoints that generated each embedding set.
 
 ## Citation
 

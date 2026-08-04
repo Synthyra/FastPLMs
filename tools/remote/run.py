@@ -24,7 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from tools.source_provenance import (
+from tools.source_record import (
     ARCHIVE_PROVENANCE_NAME,
     archive_root_record,
     render_archive_provenance,

@@ -194,7 +194,7 @@ COPY tests/structure/support/state_contract.py /opt/oracle/tests/structure/suppo
 COPY tests/structure/support/boltz2_bundle.py /opt/oracle/tests/structure/support/boltz2_bundle.py
 COPY tests/structure/support/esmfold_bundle.py /opt/oracle/tests/structure/support/esmfold_bundle.py
 COPY tests/structure/support/esmfold2_bundle.py /opt/oracle/tests/structure/support/esmfold2_bundle.py
-COPY tools/source_provenance.py /opt/oracle/tools/source_provenance.py
+COPY tools/source_record.py /opt/oracle/tools/source_record.py
 COPY tools/remote/biohub_reference_environment.py /opt/oracle/tools/remote/biohub_reference_environment.py
 COPY tools/remote/biohub_reference_lock.py /opt/oracle/tools/remote/biohub_reference_lock.py
 COPY tools/remote/biohub_reference_requirements.py /opt/oracle/tools/remote/biohub_reference_requirements.py
@@ -408,7 +408,7 @@ COPY --from=reference-protocol /opt/oracle /opt/oracle
 COPY THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
 COPY LICENSES/fair-esm /licenses/fair-esm
 COPY LICENSES/openfold /licenses/openfold
-COPY LICENSES/dllogger/PROVENANCE.md /licenses/dllogger/PROVENANCE.md
+COPY LICENSES/dllogger/SOURCE_RECORD.md /licenses/dllogger/SOURCE_RECORD.md
 ENV PYTHONPATH=/opt/oracle/vendor/upstream/openfold:/opt/oracle/vendor/upstream/fair-esm:/opt/oracle
 WORKDIR /opt/oracle
 CMD ["python", "-m", "tests.structure.support.esmfold_bundle", "--help"]

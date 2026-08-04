@@ -901,25 +901,23 @@ def _auto_class_status(family: ModelFamily, auto_class: str) -> str:
 
 
 def _platform_requirements(family: ModelFamily) -> str:
-    requirements = ["Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required."]
+    requirements = ["This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13."]
     if family.tokenizer_mode == "structure":
         requirements.append(
-            "The artifact requirements include the direct structure dependencies. "
-            "The published execution contract requires a CUDA device. The current "
-            "validated release target is the exact NVIDIA GH200 on Linux aarch64; "
-            "Linux x86-64, CPU-only, Windows, and macOS structure runs are not "
-            "current release evidence."
+            "The artifact requirements include the structure dependencies. "
+            "The release contract requires a CUDA device. The current validated "
+            "target is the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, "
+            "Windows, and macOS structure runs are not release evidence."
         )
     elif any(name.startswith("flash_attention_") for name in family.attention):
         requirements.append(
-            "The artifact requirements include the direct FlashAttention loader "
-            "dependency. FlashAttention also requires compatible CUDA hardware and "
-            "BF16 execution."
+            "The artifact requirements include the FlashAttention loader dependency. "
+            "FlashAttention also requires compatible CUDA hardware and BF16 execution."
         )
     else:
         requirements.append(
-            "The declared CPU gate covers tiny offline contracts; published "
-            "checkpoint throughput and parity require the documented device tier."
+            "The CPU gate covers small offline tests. Published checkpoint throughput "
+            "and parity require the documented device tier."
         )
     return " ".join(requirements)
 
@@ -935,12 +933,12 @@ python -m pip install -r \\
   "https://huggingface.co/{spec.fast.repo_id}/resolve/main/requirements.txt"
 ```
 
-The FastPLMs implementation itself is embedded in the model repository and loaded
-by Transformers through `trust_remote_code=True`.
+The FastPLMs implementation itself is embedded in the model repository.
+Transformers loads it through `trust_remote_code=True`.
 
-{_platform_requirements(spec.family)} The Hub quick start below requires network
-access on first download. For an air-gapped run, first build the manifest-pinned
-local artifact and use the offline form shown in the example.
+{_platform_requirements(spec.family)} The Hub quick start needs network access for
+the first download. For an air-gapped run, build the manifest-pinned local
+artifact first and use the offline example.
 
 """
 
@@ -2968,9 +2966,9 @@ def _capability_summary(spec: ModelSpec) -> str:
     lines.extend(
         (
             "",
-            "A supported interface is not a pretrained downstream predictor. Classification",
-            "heads start untrained, and declared compliance metadata is not a claim that an",
-            "arbitrary local build passed its release gate.",
+            "A supported interface is not a pretrained downstream predictor. "
+            "Classification heads start untrained. Compliance metadata does not show "
+            "that a local build passed its release gate.",
             "",
         )
     )
@@ -3010,8 +3008,8 @@ for special_id in tokenizer.all_special_ids:
     return f"""\
 ## Downstream classification
 
-Both downstream AutoClasses reuse the checkpoint backbone and initialize a new,
-untrained `classifier`. Sequence labels have shape `(b,)`; residue labels have
+Both downstream AutoClasses use the checkpoint backbone and create a new,
+untrained `classifier`. Sequence labels have shape `(b,)`. Residue labels have
 shape `(b, l)` and use `-100` outside biological positions:
 
 ```python
@@ -3052,8 +3050,8 @@ def _peft_usage(spec: ModelSpec) -> str:
         task_type = "        task_type=TaskType.SEQ_CLS,\n"
         modules_to_save = '        modules_to_save=["classifier"],\n'
         persistence = (
-            "This checkpoint advertises a classification head, so the separately "
-            "trained `classifier` is saved with the adapter."
+            "This checkpoint advertises a classification head. Save the separately "
+            "trained `classifier` with the adapter."
         )
     else:
         model_name = "model"
@@ -3061,13 +3059,13 @@ def _peft_usage(spec: ModelSpec) -> str:
         task_type = ""
         modules_to_save = ""
         persistence = (
-            "This checkpoint has no advertised classifier. Supply the task-specific "
-            "objective and preserve any new head through `modules_to_save`."
+            "This checkpoint has no advertised classifier. Supply the task objective "
+            "and preserve any new head through `modules_to_save`."
         )
     return f"""\
 ## PEFT fine-tuning
 
-Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+Install the training dependencies. Then attach LoRA to the loaded checkpoint:
 
 ```bash
 python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
@@ -3090,7 +3088,7 @@ peft_model = get_peft_model(
 
 {textwrap.fill(persistence, width=79)}
 All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
-can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+can use PEFT. The ESM2-specific shipped CLI is an example, not a
 support boundary. Record the target modules, base revision, data identity, and
 trainable parameter scope.
 
@@ -3105,7 +3103,7 @@ def _sequence_ttt_usage(spec: ModelSpec) -> str:
 ## Test-time training
 
 TTT samples masked views of one protein and updates only injected low-rank
-adapters. Base checkpoint weights remain frozen:
+adapters. Base checkpoint weights stay frozen:
 
 ```python
 from transformers import {auto_class}
@@ -3123,8 +3121,8 @@ ttt_model.ttt_reset()
 print(metrics)
 ```
 
-Persisted adapters retain their deterministic reset state. TTT adds latency
-and memory, can worsen an output, and does not establish biological function.
+Saved adapters retain their deterministic reset state. TTT adds latency and
+memory, can worsen an output, and does not show biological function.
 
 """
 
@@ -3133,27 +3131,27 @@ def _attention_usage(spec: ModelSpec) -> str:
     recommended = "sdpa" if "sdpa" in spec.family.attention else spec.family.attention[0]
     declared = textwrap.fill(
         f"Declared variants are {_code(spec.family.attention)}. An unavailable "
-        "requested backend raises instead of silently switching implementations.",
+        "requested backend raises. It does not silently change implementation.",
         width=79,
         break_long_words=False,
         break_on_hyphens=False,
     )
     if "compliance" in spec.family.test_tiers:
         compliance = (
-            "This family declares the `compliance` tier. Release evidence binds the exact "
-            "checkpoint, backend, dtype, hardware, inputs, and reference revision."
+            "This family declares the `compliance` tier. Release evidence identifies "
+            "the checkpoint, backend, dtype, hardware, inputs, and reference revision."
         )
     else:
         compliance = (
             "This family does not declare the `compliance` tier. Boltz2 remains "
-            "provisional and its structure checks must not be broadened into parity claims."
+            "provisional. Its structure checks are not parity claims."
         )
     return f"""\
 ## Attention and compliance
 
 The quick start selects `{recommended}` explicitly. {declared}
-`output_attentions=True` may use the documented, one-call eager fallback solely
-to materialize attention tensors; the configured backend remains unchanged.
+`output_attentions=True` can use the documented one-call eager fallback to
+materialize attention tensors. The configured backend does not change.
 
 {textwrap.fill(compliance, width=79)}
 
@@ -3168,13 +3166,12 @@ def _sequence_forward_usage(spec: ModelSpec) -> str:
 ## Tokenization and forward inference
 
 `{spec.fast.repo_id}` contains the complete encoder-decoder checkpoint.
-`AutoModel` loads the encoder view without allocating the decoder, while
-`AutoModelForSeq2SeqLM` loads the encoder, decoder, cross-attention, and
-language-model head.
+`AutoModel` loads the encoder without the decoder. `AutoModelForSeq2SeqLM`
+loads the encoder, decoder, cross-attention, and language-model head.
 
-Use the tokenizer owned by the loaded model so tokenizer files, revision,
-offline/cache policy, and ANKH's residue-aware pre-tokenizer stay aligned.
-Pass raw protein strings without inserted residue spaces:
+Use the tokenizer from the loaded model. This keeps tokenizer files, revision,
+offline/cache policy, and ANKH's residue-aware pre-tokenizer aligned. Pass raw
+protein strings without residue spaces:
 
 ```python
 import torch
@@ -3196,8 +3193,8 @@ print(output.last_hidden_state.shape)
     return f"""\
 ## Tokenization and forward inference
 
-Load the tokenizer from the same artifact as the model. Padding is represented
-explicitly by the attention mask:
+Load the tokenizer from the same artifact as the model. The attention mask
+shows padding explicitly:
 
 ```python
 import torch
@@ -3230,8 +3227,8 @@ def _embedding_usage(spec: ModelSpec) -> str:
         return f"""\
 ## Dataset embeddings
 
-Dataset embeddings default to the encoder final state. Select a native encoder
-layer directly:
+Dataset embeddings use the final encoder state by default. Select a native
+encoder layer directly:
 
 ```python
 encoder_result = model.embed_dataset(
@@ -3243,8 +3240,8 @@ encoder_result = model.embed_dataset(
 print(encoder_result[0].tensor.shape)  # (l, d)
 ```
 
-Decoder representations require `AutoModelForSeq2SeqLM` and exactly one
-aligned decoder input. ANKH does not invent a shifted target:
+Decoder representations require `AutoModelForSeq2SeqLM` and one aligned decoder
+input. ANKH does not create a shifted target:
 
 ```python
 from transformers import AutoModelForSeq2SeqLM
@@ -3271,8 +3268,8 @@ and alignment policy.
     return """\
 ## Dataset embeddings
 
-The shared embedding mixin preserves input order and biological-position
-masking. It accepts sequences, identified records, mappings, or a FASTA path:
+The shared embedding mixin keeps input order and biological-position masking.
+It accepts sequences, identified records, mappings, or a FASTA path:
 
 ```python
 pooled = model.embed_dataset(
@@ -3289,8 +3286,8 @@ print(residues[0].tensor.shape) # (l, d)
 ```
 
 Set `output` and `format="safetensors"` or `"sqlite"` for transactional,
-bounded-memory persistence. Resume verifies input order, model state, tokenizer
-policy, backend, dtype, and pooling configuration before appending.
+bounded-memory storage. Resume checks input order, model state, tokenizer
+policy, backend, dtype, and pooling configuration before it appends data.
 
 """
 
@@ -3307,7 +3304,7 @@ def _family_usage_notes(
         return f"""\
 ## Masked language modeling and contacts
 
-Use the masked-language-model AutoClass when logits are required:
+Use the masked-language-model AutoClass when you need logits:
 
 ```python
 import torch
@@ -3331,13 +3328,12 @@ with torch.inference_mode():
 print(logits.shape, contacts.shape)
 ```
 
-Contact prediction materializes attention maps and should not be enabled in a
-high-throughput embedding path unless those maps are required.
+Contact prediction creates attention maps. Do not enable it in a high-throughput
+embedding path unless you need these maps.
 
 Plain `AutoModel` omits the optional ESM pooler because this masked-language-
-model checkpoint contains no trained pooler weights. Pass
-`add_pooling_layer=True` only when intentionally initializing and training that
-head.
+model checkpoint has no trained pooler weights. Pass `add_pooling_layer=True`
+only when you intend to initialize and train that head.
 
 """
     if family_id == "esm_plusplus":
@@ -3355,30 +3351,29 @@ head.
         return f"""\
 ## ESMC behavior
 
-This artifact exposes the Biohub ESMC sequence encoder and masked-language-model
-head through Transformers. It is also the language-model family used by
-ESMFold2. SDPA is the default and the recommended choice for highest numerical
-fidelity. Flex Attention and FlashAttention 3 are supported, non-experimental
-backends, but their BF16 arithmetic may be numerically divergent from SDPA.
-Those deviations produce diagnostic warnings rather than strict parity
-failures; dispatch integrity, masks, finite outputs, shapes, and catastrophic
-biological disagreement remain hard gates.
+This artifact provides the Biohub ESMC sequence encoder and masked-language-
+model head through Transformers. ESMFold2 also uses this language-model family.
+SDPA is the default and gives the highest numerical fidelity. Flex Attention and
+FlashAttention 3 are supported non-experimental backends. Their BF16 arithmetic
+can differ numerically from SDPA. These differences give diagnostic warnings,
+not strict-parity failures. Dispatch, masks, finite outputs, shapes, and large
+biological disagreements remain hard gates.
 
 The current GH200/aarch64 release environment validates eager, SDPA, and Flex.
-Flash requests fail closed because compatible locked kernels are unavailable
-on this platform.
+Flash requests raise because compatible locked kernels are unavailable on this
+platform.
 
-When `sequence_id` is supplied, it is authoritative for ESMC attention grouping
-and padding, and `attention_mask` is ignored. Values greater than or equal to
-zero are valid sequence-group IDs; `-1` denotes padding. Omit `sequence_id` to
-use `attention_mask` as the padding contract.
+When `sequence_id` is supplied, it controls ESMC attention groups and padding.
+`attention_mask` is ignored. Values greater than or equal to zero are valid
+sequence-group IDs. `-1` marks padding. Omit `sequence_id` to use
+`attention_mask` for padding.
 
 ### Hidden-state sparse autoencoders
 
 ESM++ supports hidden-state SAEs from the official
 [Biohub ESMC SAE collection](https://huggingface.co/collections/biohub/esmc-saes-for-hidden-states-all-layers).
-Select an SAE for this ESMC scale. Load only the layers that you need. Then
-attach them to the model:
+Select an SAE for this ESMC scale. Load only required layers. Then attach them
+to the model:
 
 ```python
 import torch
@@ -3396,17 +3391,17 @@ print(features.shape, features.layout)  # (valid_token_count, codebook_dim), spa
 ```
 
 SAEs run after you attach them. Use `compute_sae=False` to skip SAE work.
-Outputs are detached sparse tensors with keys such as `layer{{N}}`. They exclude
-padding under the `sequence_id` then `attention_mask` rule.
+Outputs are detached sparse tensors with keys such as `layer{{N}}`. They omit
+padding. The model uses `sequence_id`, then `attention_mask`, for padding.
 `normalize_sae=True` uses Biohub `(features / max) * idf` normalization. SAE
 computation requires `input_ids`. It rejects mask tokens because Biohub trained
 the SAEs with unmasked sequences. This interface supports hidden-state SAEs
-only. It does not support MLP-output SAEs. FastPLMs does not copy SAE weights or
-add SAE checkpoints to its model manifest.
+only, not MLP-output SAEs. FastPLMs does not copy SAE weights or add SAE
+checkpoints to its model manifest.
 
 ### Experimental FP8 inference
 
-The default uses the checkpoint BF16 behavior. FP8 is an explicit experimental
+The default uses checkpoint BF16 behavior. FP8 is an explicit experimental
 inference option for every ESM++ scale:
 
 ```python
@@ -3426,10 +3421,10 @@ with torch.inference_mode():
 ```
 
 FP8 forward calls require `torch.inference_mode()`. The model pads the sequence
-dimension to a multiple of 16. Transformer Engine converts the supported linear
+dimension to a multiple of 16. Transformer Engine converts supported linear
 layers. The call fails if the dependency, compatible CUDA hardware, or complete
-conversion set is unavailable. It does not silently use BF16. FP8 is not a
-numerical-parity claim.
+conversion set is unavailable. It does not silently use BF16. FP8 does not
+claim numerical parity.
 
 {esmc_table}
 
@@ -3440,9 +3435,9 @@ numerical-parity claim.
         return """\
 ## Sequence inference and masked-sequence generation
 
-ESM3 owns its sequence preparation. This example exercises the sequence track;
-the public input contract also supports structure and function tracks through
-the multimodal helpers:
+ESM3 prepares its sequence input. This example uses the sequence track. The
+public input contract also supports structure and function tracks through the
+multimodal helpers:
 
 ```python
 import torch
@@ -3460,10 +3455,9 @@ print(output.structure_logits.shape)
 print(output.function_logits.shape)
 ```
 
-When `return_dict=False`, ESM3 follows the standard base-model tuple prefix:
+When `return_dict=False`, ESM3 uses the standard base-model tuple prefix:
 `last_hidden_state`, then requested `hidden_states` and `attentions`. Multimodal
-logits and extensions follow that prefix. Prefer named fields for individual
-tracks.
+logits and extensions follow this prefix. Use named fields for individual tracks.
 
 Generate masked sequence positions with an explicit seed:
 
@@ -3479,17 +3473,17 @@ generated = model.generate("MK____A", config)
 print(generated)
 ```
 
-Underscores mark positions to generate. Model outputs are predictions over
-tracks, not experimental measurements of structure or function.
+Underscores mark positions to generate. Model outputs are track predictions,
+not experimental measurements of structure or function.
 
 """
     if family_id == "e1":
         return """\
 ## Tokenizer-free E1 input
 
-E1 has no tokenizer. The model retains native raw-sequence preparation,
-boundary tokens, sequence positions, and retrieval-augmented context behavior.
-The ordinary representation path accepts sequences directly:
+E1 has no tokenizer. The model keeps native raw-sequence preparation, boundary
+tokens, sequence positions, and retrieval-augmented context behavior. The
+ordinary representation path accepts sequences directly:
 
 ```python
 result = model.embed_dataset(
@@ -3500,9 +3494,9 @@ result = model.embed_dataset(
 print(result[0].tensor.shape)
 ```
 
-Lower-level masked-language-model calls must use the E1 batch preparer rather
-than an `AutoTokenizer`. E1 launch messages and distributed legal files retain
-the attribution required by the upstream agreement.
+Lower-level masked-language-model calls must use the E1 batch preparer, not an
+`AutoTokenizer`. E1 launch messages and distributed legal files keep the
+attribution required by the upstream agreement.
 
 """
     if family_id == "dplm":
@@ -3511,8 +3505,8 @@ the attribution required by the upstream agreement.
         return f"""\
 ## Diffusion sequence generation
 
-DPLM defines the requested length from biological positions in a tokenized
-input, masks those positions, and iteratively retains confident predictions:
+DPLM gets the requested length from biological positions in a tokenized input.
+It masks these positions and retains confident predictions at each iteration:
 
 ```python
 import torch
@@ -3536,20 +3530,18 @@ sequence = tokenizer.decode(
 print(sequence)
 ```
 
-Omitting `max_iter` uses the official 500-step schedule. A shorter schedule
-changes the sampling process rather than providing an equivalent faster mode.
+If you omit `max_iter`, DPLM uses the official 500-step schedule. A shorter
+schedule changes the sampling process. It is not an equivalent faster mode.
 
-Plain `AutoModel` omits the optional ESM pooler because this diffusion
-checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
-only when intentionally initializing and training that head.
+Plain `AutoModel` omits the optional ESM pooler because this diffusion checkpoint
+has no trained pooler weights. Pass `add_pooling_layer=True` only when you intend
+to initialize and train that head.
 
-DPLM1 and DPLM2 checkpoint weights are Apache-2.0. The maintained ByteDance
-[LICENSE]({license_url}) is Apache-2.0 and the
-[README]({readme_url})
-explicitly scopes the repository release to the pretrained DPLM1 and DPLM2
-weights. FastPLMs artifacts record `weights_license_status="resolved"` and
-`redistributable=true`; complete publication is permitted only after all
-artifact, legal, parity, and atomic-publication preflights pass.
+DPLM1 and DPLM2 checkpoint weights use Apache-2.0. The ByteDance
+[LICENSE]({license_url}) uses Apache-2.0. Its [README]({readme_url}) limits the
+repository release to pretrained DPLM1 and DPLM2 weights. FastPLMs artifacts
+record `weights_license_status="resolved"` and `redistributable=true`. Complete
+publication requires all artifact, legal, parity, and atomic-publication checks.
 
 """
     if family_id == "dplm2":
@@ -3558,7 +3550,7 @@ artifact, legal, parity, and atomic-publication preflights pass.
         return f"""\
 ## Amino-acid and structure co-generation
 
-DPLM2 uses separate structure and amino-acid tracks with modality-specific
+DPLM2 uses separate structure and amino-acid tracks. Each track has its own
 boundary and mask tokens:
 
 ```python
@@ -3590,19 +3582,19 @@ with torch.inference_mode():
 print(generated.shape)
 ```
 
-Generic `cls_token`, `eos_token`, `mask_token`, and `unk_token` aliases are
-intentionally unset. Callers constructing multimodal tensors must choose the
-amino-acid or structure token explicitly. Raw amino-acid sequences remain
-supported by `model.embed_dataset(...)`.
+Generic `cls_token`, `eos_token`, `mask_token`, and `unk_token` aliases are not
+set. Code that creates multimodal tensors must select the amino-acid or structure
+token explicitly. Raw amino-acid sequences remain supported by
+`model.embed_dataset(...)`.
 
 Plain `AutoModel` omits the optional ESM pooler because this co-generation
-checkpoint contains no trained pooler weights. Pass `add_pooling_layer=True`
-only when intentionally initializing and training that head.
+checkpoint has no trained pooler weights. Pass `add_pooling_layer=True` only
+when you intend to initialize and train that head.
 
-The checkpoint weights are Apache-2.0. The maintained ByteDance
-[LICENSE]({license_url}) and [README]({readme_url}) document the license
-basis for the pretrained DPLM1 and DPLM2 weights. Complete publication remains
-subject to all artifact, legal, parity, and atomic-publication preflights.
+The checkpoint weights use Apache-2.0. The ByteDance [LICENSE]({license_url})
+and [README]({readme_url}) document the license for pretrained DPLM1 and DPLM2
+weights. Complete publication requires all artifact, legal, parity, and
+atomic-publication checks.
 
 """
     if family_id == "ankh":
@@ -3610,7 +3602,7 @@ subject to all artifact, legal, parity, and atomic-publication preflights.
 ## Encoder and sequence-to-sequence use
 
 `{spec.fast.repo_id}` contains the complete ANKH encoder-decoder checkpoint.
-Use `AutoModel` for encoder embeddings and `AutoModelForSeq2SeqLM` for
+Use `AutoModel` for encoder embeddings. Use `AutoModelForSeq2SeqLM` for
 task-specific decoding:
 
 ```python
@@ -3633,9 +3625,9 @@ print(encoder_hidden.shape)
 print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
 ```
 
-ANKH artifacts retain CC BY-NC-SA 4.0 terms. The notes below distinguish the
-official heads from FastPLMs extensions. The complete checkpoint is larger than
-the former encoder-only mirror while preserving encoder-output parity.
+ANKH artifacts retain CC BY-NC-SA 4.0 terms. The notes below distinguish official
+heads from FastPLMs extensions. The complete checkpoint is larger than the former
+encoder-only mirror and preserves encoder-output parity.
 
 """
     if family_id == "boltz2":
@@ -3662,10 +3654,10 @@ print(output.sample_atom_coords.shape)
 print(output.plddt, output.ptm, output.iptm)
 ```
 
-The validation boundary below describes the currently supported inference
-subset and its provisional status. The helper scopes and restores Python,
-NumPy, CPU Torch, and CUDA RNG state. Parameters and prepared features remain
-FP32; supported CUDA inference executes inside BF16 autocast.
+The validation boundary below describes the supported inference subset and its
+provisional status. The helper saves and restores Python, NumPy, CPU Torch, and
+CUDA RNG state. Parameters and prepared features stay FP32. Supported CUDA
+inference runs in BF16 autocast.
 
 """
     if family_id == "esmfold":
@@ -3696,8 +3688,8 @@ print(summary["plddt"], summary["ptm"])
 ```
 
 FastPLMs does not expose ProteinTTT for ESMFold. The pinned folding checkpoint
-does not contain a trained masked-language-model head for that objective, so
-`ttt()` and TTT folding requests raise explicitly.
+has no trained masked-language-model head for this objective. `ttt()` and TTT
+folding requests raise.
 
 """
     if family_id == "esmfold2":
@@ -3717,10 +3709,9 @@ does not contain a trained masked-language-model head for that objective, so
             msa_contract = """\
 ## Alignment-conditioning contract
 
-This is a full 48-block ESMFold2 checkpoint. It supports both
-single-sequence inference and optional MSA-conditioned inference. Typed
-multichain and multimolecule inputs may attach an MSA to each applicable
-protein chain.
+This is a full 48-block ESMFold2 checkpoint. It supports single-sequence
+inference and optional MSA-conditioned inference. Typed multichain and
+multimolecule inputs can attach an MSA to each applicable protein chain.
 
 """
             typed_input_contract = """\
@@ -3730,13 +3721,12 @@ bonds, and distogram conditioning."""
             msa_contract = """\
 ## Alignment-conditioning contract
 
-This 24-block Fast checkpoint is inference-optimized for single-sequence
-conditioning and was trained without MSA conditioning. It is not
-MSA-conditioned and rejects `ProteinInput.msa` and low-level MSA-derived
-features. Typed multichain and multimolecule inputs remain supported when
-every protein chain uses `msa=None`. Use the corresponding full ESMFold2
-checkpoint for MSA-conditioned inference. This follows the official Biohub
-architecture description in [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf).
+This 24-block Fast checkpoint is optimized for single-sequence inference. It
+was trained without MSA conditioning. It rejects `ProteinInput.msa` and low-level
+MSA-derived features. Typed multichain and multimolecule inputs remain supported
+when every protein chain uses `msa=None`. Use the full ESMFold2 checkpoint for
+MSA-conditioned inference. This follows the official Biohub architecture
+description in [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf).
 
 """
             typed_input_contract = """\
@@ -3762,9 +3752,9 @@ print(adapted.ttt_metrics)
 ```
 
 Entering a gradient-enabled path reloads canonical BF16 ESMC weights. TTT adds
-latency and memory, can worsen a prediction, and does not calibrate confidence
-or establish biological validity. Folding TTT is result-scoped: its transient
-ESMC adapter modules are excluded from checkpoint state, so it is not a generic
+latency and memory and can worsen a prediction. It does not calibrate confidence
+or show biological validity. Folding TTT is result-scoped. Its transient ESMC
+adapter modules are excluded from checkpoint state. It is not a generic
 `save_pretrained` adapter-persistence path.
 
 """
@@ -3773,7 +3763,7 @@ ESMC adapter modules are excluded from checkpoint state, so it is not a generic
 ## Test-time training
 
 This experimental checkpoint does not expose folding TTT. Use the corresponding
-standard or Fast checkpoint when opt-in ESMC-backbone adaptation is required.
+standard or Fast checkpoint when you need opt-in ESMC-backbone adaptation.
 
 """
             binder_note = f"""\
@@ -3955,7 +3945,7 @@ def render_model_card(
         canonical_state_provenance = (
             "- Canonical transformed state SHA-256: "
             f"`{spec.canonical_state_sha256}`\n"
-            "- Conversion equality attestation: recorded in `provenance.json`\n"
+            "- Conversion equality attestation: recorded in the source record\n"
         )
     if spec.notes and spec.family.id != "esm_plusplus":
         wrapped_notes = textwrap.fill(
@@ -3988,7 +3978,7 @@ tags:
 
 # {spec.fast.repo_id}
 
-This checkpoint packages the FastPLMs `{spec.family.architecture}` implementation.
+This checkpoint contains the FastPLMs `{spec.family.architecture}` implementation.
 
 {public_input_intro}
 {auto_class_intro}
@@ -4008,7 +3998,7 @@ model = {auto_class}.from_pretrained(
 ```
 
 For offline validation, replace `model_id` with the manifest-built
-`dist/hub/{local_artifact}` path and pass `local_files_only=True`.
+`dist/hub/{local_artifact}` path. Pass `local_files_only=True`.
 
 {attention_usage}{sequence_forward}{embedding_usage}{task_head_usage}{peft_usage}\
 {sequence_ttt_usage}{family_usage}{notes}## Runtime contract
@@ -4029,8 +4019,8 @@ For offline validation, replace `model_id` with the manifest-built
 ## Release record
 
 - FastPLMs weights: `{spec.fast.repo_id}`
-- Runtime revision: recorded separately in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Runtime revision: recorded in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in the source record
 {canonical_state_provenance}\
 - Official checkpoint: `{spec.official.repo_id}`
 - Artifact source: `{spec.artifact_source}`
@@ -4039,22 +4029,20 @@ For offline validation, replace `model_id` with the manifest-built
 - Release tiers: {_code(spec.family.test_tiers)}
 - Unresolved required file identities: `{unresolved}`
 
-`provenance.json` records exact file identities, conversion, source revisions,
-legal texts, schema, and attestations. A nonzero unresolved count blocks release.
+The source record records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks a release.
 
 ## Validation boundary
 
-Declared tiers compare applicable configuration, tokenizer behavior, state,
-and representative inference with the pinned reference. Metadata alone does
-not claim a build passed, a backend is faster, or an output is biologically
-valid.
+Declared tiers compare configuration, tokenizer behavior, state, and
+representative inference with the pinned reference. Metadata does not show that
+a build passed, that a backend is faster, or that an output is biologically valid.
 
 ## License
 
 Checkpoint terms: {checkpoint_terms}. The Hub model-card identifier is
-`{spec.family.hub_license}`. Applicable source licenses, notices, attribution,
-and conversion records are distributed with the local artifact. Review them
-before use.
+`{spec.family.hub_license}`. The local artifact contains applicable source
+licenses, notices, attribution, and conversion records. Review them before use.
 """
 
 

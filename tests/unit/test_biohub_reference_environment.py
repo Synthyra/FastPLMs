@@ -21,7 +21,7 @@ from tools.remote.reference_source_attestation import (
     validate_reference_sources_evidence,
     verify_reference_source,
 )
-from tools.source_provenance import actual_tree_paths, tracked_tree_digest
+from tools.source_record import actual_tree_paths, tracked_tree_digest
 
 
 _TRANSFORMERS_MAIN = "transformers @ git+https://github.com/Biohub/transformers.git@main"

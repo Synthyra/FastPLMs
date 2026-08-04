@@ -1,15 +1,16 @@
 # FastPLMs runnable examples
 
-The examples are executable entry points, not performance or biological-validity
-claims. The curated offline examples consume local, manifest-built Hugging Face
-artifacts, set both Hub offline variables, pass `local_files_only=True`, and do
-not download models, tokenizers, kernels, or runtime assets.
+The examples are executable entry points. They do not make performance or
+biological-validity claims. Curated offline examples use local Hugging Face
+artifacts built from the manifest. They set both Hub offline variables, pass
+`local_files_only=True`, and do not download models, tokenizers, kernels, or
+runtime assets.
 
 ## Dependencies and platform requirements
 
 FastPLMs 1.0 requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
-Published models carry their runtime source in the Hugging Face repository.
-Install the core dependencies directly, then load the model with
+Published models include their runtime source in the Hugging Face repository.
+Install core dependencies, then load the model with
 `trust_remote_code=True`:
 
 ```bash
@@ -18,9 +19,9 @@ python -m pip install \
   "transformers>=5.13,<5.14"
 ```
 
-These examples run from a source checkout. Install the profile needed by the
-workflow, then invoke them with `PYTHONPATH=src`. The CPU validation profile
-covers the portable examples:
+These examples run from a source checkout. Install the required profile. Then
+run them with `PYTHONPATH=src`. The CPU validation profile supports portable
+examples:
 
 ```bash
 uv pip install \
@@ -30,28 +31,26 @@ uv pip install \
 ```
 
 Core sequence examples accept `--device cpu|cuda[:index]` and
-`--dtype float32|bfloat16`; the defaults are the portable CPU/FP32 path.
-Structure examples require `requirements/features/structure.in`, verified
-runtime assets, and CUDA for the published execution contract. Binder design
-uses `requirements/profiles/binder.in`. FlashAttention requires
-`requirements/features/flash.in`, compatible CUDA hardware, a pre-populated
-pinned kernel cache, and BF16. Fine-tuning uses
-`requirements/features/train.in`; add `requirements/features/reporting.in`
-only for plots and statistical reports.
+`--dtype float32|bfloat16`. The default is portable CPU FP32. Structure examples
+require `requirements/features/structure.in`, verified runtime assets, and CUDA
+for the published execution contract. Binder design uses
+`requirements/profiles/binder.in`. FlashAttention requires
+`requirements/features/flash.in`, compatible CUDA hardware, a populated pinned
+kernel cache, and BF16. Fine-tuning uses `requirements/features/train.in`.
+Add `requirements/features/reporting.in` only for plots and statistical reports.
 
-For ESMFold2, choose the artifact by conditioning contract. The full
+For ESMFold2, select an artifact by its conditioning contract. The full
 `ESMFold2` and `ESMFold2-Experimental-Cutoff2025` checkpoints have 48 folding
-blocks and support optional MSA conditioning. The Fast and experimental Fast
-checkpoints have 24 folding blocks, are optimized for single-sequence
-inference, and reject MSA-derived inputs. The distinction follows Biohub
-[Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf).
-Fast is not necessarily single-chain-only: supported multichain and
-multimolecule requests remain available, but each protein chain uses
+blocks and support optional MSA conditioning. Fast and experimental Fast
+checkpoints have 24 folding blocks. They are optimized for single-sequence
+inference and reject MSA-derived inputs. See Biohub
+[Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf). Fast supports
+supported multichain and multimolecule requests, but each protein chain uses
 single-sequence mode.
 
 ## Prepare an offline artifact
 
-Build and validate the local artifact before disconnecting the network:
+Build and validate the local artifact before you disconnect the network:
 
 ```bash
 PYTHONPATH=src python -m tools.artifacts.build \
@@ -60,7 +59,7 @@ PYTHONPATH=src python -m tools.artifacts.build \
   --output-root dist/hub
 ```
 
-Start with `--help` for any entry point. Representative portable commands are:
+For command help, use `--help`. These are representative portable commands:
 
 ```bash
 PYTHONPATH=src python examples/artifact_loading.py dist/hub/ESM2-8M --auto-class AutoModel
@@ -72,28 +71,27 @@ PYTHONPATH=src python examples/task_heads.py dist/hub/ESM2-8M \
   --attn-backend eager --device cpu --dtype float32
 ```
 
-The structure-preparation example deliberately constructs an MSA-conditioned
-request, so point it at a full ESMFold2 artifact:
+The structure-preparation example makes an MSA-conditioned request. Use a full
+ESMFold2 artifact:
 
 ```bash
 PYTHONPATH=src python examples/structure_preparation.py \
   esmfold2 dist/hub/ESMFold2 --device cuda:0
 ```
 
-Use Flex when a compiled path is wanted on the current GH200/aarch64 validation
-target:
+Use Flex for a compiled path on the current GH200/aarch64 validation target:
 
 ```bash
 PYTHONPATH=src python examples/attention_switching.py dist/hub/ESM2-8M \
   --backend flex_attention --device cuda:0 --dtype bfloat16
 ```
 
-The CLI retains explicit FlashAttention 2 and 3 choices for supported
-family/platform combinations with a pre-populated pinned kernel cache. The
-current locked GH200/aarch64 environment has no expected Flash kernels, so use
-SDPA or Flex there. Do not build an unpinned Flash kernel from source. Prior
-FlashAttention 2 results remain historical exact-environment evidence;
-FlashAttention 3 is supported but unavailable on the current locked target.
+The CLI has explicit FlashAttention 2 and 3 choices for supported family and
+platform combinations with a populated pinned kernel cache. The locked
+GH200/aarch64 environment has no expected Flash kernels. Use SDPA or Flex on
+that target. Do not build an unpinned Flash kernel from source. FlashAttention
+2 results are historical exact-environment evidence. FlashAttention 3 is
+supported but is unavailable on the locked target.
 
 ## Example inventory and evidence boundary
 
@@ -112,9 +110,9 @@ FlashAttention 3 is supported but unavailable on the current locked target.
 | Binder design | [`binder_design_fastplms.py`](binder_design_fastplms.py) | Differentiable ESMFold2/ESM++ optimization and critic consensus | Research prioritization only; no experimental binding claim |
 
 The generated [capability-to-evidence manifest](../docs/generated/capability_evidence.md)
-maps each curated example to its required CPU, feature, structure, nightly, or
-compliance evidence. A capability absent from the table above is not implied by
-an example merely because its model class exists.
+maps each curated example to required CPU, feature, structure, nightly, or
+compliance evidence. If a capability is absent from this table, an example does
+not imply that support only because its model class exists.
 
 ## Embedding coverage matrix
 
@@ -133,21 +131,21 @@ an example merely because its model class exists.
 
 ## Network and output policy
 
-`fine_tuning.py` and `binder_design_fastplms.py` are checkpoint workflows, not
-members of the fully offline example gate. Their shipped remote defaults are
-pinned automatically. Custom remote model or dataset sources reject omitted,
-branch, and tag revisions; pre-populate every snapshot before a network-isolated
-run. Local fine-tuning dataset directories must be layouts accepted by
-`datasets.load_dataset`; arbitrary `Dataset.save_to_disk()` trees are not
-currently accepted.
+`fine_tuning.py` and `binder_design_fastplms.py` are checkpoint workflows. They
+are not part of the fully offline example gate. Their shipped remote defaults
+are pinned automatically. Custom remote model or dataset sources reject missing,
+branch, and tag revisions. Populate each snapshot before a network-isolated run.
+Local fine-tuning dataset directories must use layouts accepted by
+`datasets.load_dataset`. Arbitrary `Dataset.save_to_disk()` trees are not
+accepted.
 
-Fine-tuning writes separate task-specific children beneath `--output-dir` and
-records requested and effective attention backends. Binder design refuses any
-pre-existing output directory. It writes `run_manifest.json` atomically last;
-its absence identifies an incomplete run. Retain the complete directory for
+Fine-tuning writes a separate task-specific child below `--output-dir`. It
+records requested and effective attention backends. Binder design rejects an
+existing output directory. It writes `run_manifest.json` atomically last. If
+this file is absent, the run is incomplete. Keep the complete directory for
 reproducibility.
 
-The CPU gate executes CLI wiring and dependency-free preparation with tiny
-local artifacts. Full checkpoints, real optimized kernels, GPU parity,
-structure prediction, and throughput remain in the feature, nightly,
-compliance, structure, and benchmark tiers.
+The CPU gate runs CLI wiring and dependency-free preparation with small local
+artifacts. Full checkpoints, optimized kernels, GPU parity, structure
+prediction, and throughput are in the feature, nightly, compliance, structure,
+and benchmark tiers.

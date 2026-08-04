@@ -228,7 +228,7 @@ def _complete_ankh_artifact(
     for relative_name, payload in tokenizer_payloads.items():
         (artifact / relative_name).write_bytes(payload)
 
-    seed_provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    seed_provenance = json.loads((artifact / "source-record.json").read_text(encoding="utf-8"))
     runtime_revision = seed_provenance["runtime_revision"]
     source_tree_sha256 = seed_provenance["source_tree_sha256"]
     runtime_bundle_sha256 = seed_provenance["runtime_bundle_sha256"]
@@ -244,7 +244,7 @@ def _complete_ankh_artifact(
         release_tool_revision=release_tool_revision,
         release_tool_sha256=release_tool_sha256,
     )
-    publish_contracts._write_json(artifact / "provenance.json", provenance)
+    publish_contracts._write_json(artifact / "source-record.json", provenance)
     runtime_attestation = _runtime_attestation(
         artifact,
         spec,

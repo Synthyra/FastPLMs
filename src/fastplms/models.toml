@@ -88,7 +88,7 @@ license_files = ["LICENSE"]
 license_digests = ["LICENSE=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"]
 distribution_files = [
   "LICENSE=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
-  "PROVENANCE.md=sha256:a659f74be9073cf1ad2d2f7071531ca56959b421f111152cf4c41184ace5970e",
+  "SOURCE_RECORD.md=sha256:a659f74be9073cf1ad2d2f7071531ca56959b421f111152cf4c41184ace5970e",
 ]
 
 [[upstreams]]
@@ -122,7 +122,7 @@ license_files = ["LICENSE"]
 license_digests = ["LICENSE=sha256:da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93"]
 distribution_files = [
   "LICENSE=sha256:da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93",
-  "PROVENANCE.md=sha256:950adb94daf15e646ddf226dacfe2a8e77801aa0793e439a9a3490a48eb666e7",
+  "SOURCE_RECORD.md=sha256:950adb94daf15e646ddf226dacfe2a8e77801aa0793e439a9a3490a48eb666e7",
 ]
 
 [[upstreams]]
@@ -136,7 +136,7 @@ license_digests = ["LICENSE=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c1
 distribution_files = [
   "LICENSE=sha256:cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
   "MODIFICATIONS.md=sha256:fd6f0aa1086a0c996cf967b326d18e965660cda0ad5c7f36a3474a8490720da3",
-  "PROVENANCE.md=sha256:48c903db43a217a3126afaefbac60b7ddac7efda2dfcc0cbff0bffc7d6c30081",
+  "SOURCE_RECORD.md=sha256:48c903db43a217a3126afaefbac60b7ddac7efda2dfcc0cbff0bffc7d6c30081",
 ]
 
 [[upstreams]]
@@ -149,7 +149,7 @@ license_files = ["LICENSE"]
 license_digests = ["LICENSE=sha256:bb01e7d5554f9e2e117172e56551452f68a7818df7bc8e71cd7a776a1d4ba3df"]
 distribution_files = [
   "LICENSE=sha256:bb01e7d5554f9e2e117172e56551452f68a7818df7bc8e71cd7a776a1d4ba3df",
-  "PROVENANCE.md=sha256:dc641c37353c2efd50ccbdb316ca4aae495ec02c1563e0e15bac92f75fc482e5",
+  "SOURCE_RECORD.md=sha256:dc641c37353c2efd50ccbdb316ca4aae495ec02c1563e0e15bac92f75fc482e5",
 ]
 
 [families.esm2]
@@ -268,7 +268,7 @@ checkpoint_license = "Apache-2.0"
 hub_license = "apache-2.0"
 weights_publication_allowed = true
 state_transform = "dplm_to_fastplms_v1"
-conversion_provenance = "Input: the pinned official DPLM1 checkpoint. Transformation: apply dplm_to_fastplms_v1, omitting the unused absolute-position table for rotary checkpoints and materializing the tied input/output embedding values as independent tensors. Output: the pinned Synthyra DPLM checkpoint. Validation: release parity compares exact state identity after the declared transform, tokenizer behavior, generation, and inference. License basis: the pinned ByteDance DPLM Apache-2.0 LICENSE and README explicitly scope the repository release to the pretrained DPLM1 and DPLM2 weights; immutable evidence is recorded in LICENSES/dplm/PROVENANCE.md. Limitation: redistribution remains subject to Apache-2.0 and the pinned source record; no broader rights are inferred."
+conversion_provenance = "Input: the pinned official DPLM1 checkpoint. Transformation: apply dplm_to_fastplms_v1, omitting the unused absolute-position table for rotary checkpoints and materializing the tied input/output embedding values as independent tensors. Output: the pinned Synthyra DPLM checkpoint. Validation: release parity compares exact state identity after the declared transform, tokenizer behavior, generation, and inference. License basis: the pinned ByteDance DPLM Apache-2.0 LICENSE and README explicitly scope the repository release to the pretrained DPLM1 and DPLM2 weights; immutable evidence is recorded in LICENSES/dplm/SOURCE_RECORD.md. Limitation: redistribution remains subject to Apache-2.0 and the pinned source record; no broader rights are inferred."
 representative = "dplm_150m"
 documentation = "docs/models.md#dplm"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
@@ -292,7 +292,7 @@ checkpoint_license = "Apache-2.0"
 hub_license = "apache-2.0"
 weights_publication_allowed = true
 state_transform = "dplm2_to_fastplms_v1"
-conversion_provenance = "Input: the pinned official DPLM2 checkpoint. Transformation: apply dplm2_to_fastplms_v1, retaining the independent language-model head and trained encoder contact head while omitting the unused absolute-position table for rotary checkpoints. Output: the pinned Synthyra DPLM2 checkpoint. Validation: release parity compares exact keys and values after the declared omission, non-aliasing, tokenizer behavior, generation, and inference. License basis: the pinned ByteDance DPLM Apache-2.0 LICENSE and README explicitly scope the repository release to the pretrained DPLM1 and DPLM2 weights; immutable evidence is recorded in LICENSES/dplm/PROVENANCE.md. Limitation: no head exception is permitted by this source record, and redistribution remains subject to Apache-2.0."
+conversion_provenance = "Input: the pinned official DPLM2 checkpoint. Transformation: apply dplm2_to_fastplms_v1, retaining the independent language-model head and trained encoder contact head while omitting the unused absolute-position table for rotary checkpoints. Output: the pinned Synthyra DPLM2 checkpoint. Validation: release parity compares exact keys and values after the declared omission, non-aliasing, tokenizer behavior, generation, and inference. License basis: the pinned ByteDance DPLM Apache-2.0 LICENSE and README explicitly scope the repository release to the pretrained DPLM1 and DPLM2 weights; immutable evidence is recorded in LICENSES/dplm/SOURCE_RECORD.md. Limitation: no head exception is permitted by this source record, and redistribution remains subject to Apache-2.0."
 representative = "dplm2_150m"
 documentation = "docs/models.md#dplm2"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
