@@ -219,15 +219,10 @@ FastPLMs does not invent shifted-source decoder input. Official ANKH workflows
 use task prompts, sentinels, or generated tokens. Decoder pooling excludes
 special tokens. Persisted metadata fingerprints decoder input and alignment.
 
-Files-only publication is forbidden for this migration. Every weight shard,
-weight index, tokenizer asset, configuration, runtime source, model card, and
-release record must land in one immutable Hub commit. Both AutoClass views
-must pass artifact and live parity from that same commit.
-
-Complete publication may remove a superseded monolithic weight path in that
-same commit only when the path is pinned in the current registry, absent from
-the validated sharded inventory, and its remote digest and parent still match
-preflight. Files-only publication remains strictly add-only.
+The ANKH 1.0 migration was published as a complete weights-plus-runtime update
+so its weight shards, index, tokenizer, configuration, runtime, and model card
+changed together. Subsequent files-only updates compile and publish the current
+runtime files without re-uploading those weights.
 
 The separately named `FastAnkhForMaskedLMExtension` remains a FastPLMs
 extension, not an official ANKH head. Sequence and token classification views

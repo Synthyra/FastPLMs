@@ -166,107 +166,40 @@ compares configuration, state, and output against repository source. Network acc
 an undeclared import, a missing legal text, or a missing conversion record fails
 the tier.
 
-## Publish files without weights
+## Publish to Hugging Face
 
-Use the separate publisher to update runtime code, configuration, tokenizer or
-processor assets, model cards, licenses, and notices from an existing local
-artifact:
-
-```bash
-PYTHONPATH=src python -m tools.artifacts.publish \
-  --files-only \
-  --artifact-root dist/hub \
-  --dry-run \
-  esm2_8m
-```
-
-`--artifact-root` points to the local parent directory that contains each
-manifest-built model artifact, such as `dist/hub/ESM2-8M`. It selects the
-validated local files to publish. It is not a Hub repository path or a request
-to upload the directory wholesale.
-
-Review the complete file plan, then repeat without `--dry-run`:
+Compile and upload source-backed files for every manifest model without
+touching its checkpoint weights:
 
 ```bash
-PYTHONPATH=src python -m tools.artifacts.publish \
-  --files-only \
-  --artifact-root dist/hub \
-  esm2_8m
+py -m tools.artifacts.publish --files-only
 ```
 
-Files-only publication rejects every ANKH model because the 1.0 ANKH migration
-requires complete weight replacement. Since an implicit all-model selection
-includes ANKH, callers must pass one or more explicit non-ANKH model IDs.
-Authentication comes from `HF_TOKEN` or the cached Hugging Face login; tokens
-are not accepted as command-line arguments.
+The command reads each family's `runtime_paths` from `models.toml`, packages
+those files under `fastplms/`, generates `fastplms_bundle.py` and
+`modeling_fastplms.py`, and adds the current model card, requirements, notices,
+and license files. Model IDs are optional; omitting them publishes every model.
+Use `--dry-run` to print the generated paths without committing them.
 
-Before the first commit, the publisher:
-
-1. Checks the local artifact and model identities.
-2. Verifies every selected non-weight file against `artifact-manifest.json`.
-3. Verifies the remote checkpoint weight identities against `models.toml`.
-4. Records the current remote commit as `parent_commit`.
-5. Preflights every selected repository.
-
-Each Hub update is one add-only commit made from explicit
-`CommitOperationAdd` entries. The command never creates a repository, adds a
-delete operation, uploads a weight-shaped path, or changes repository settings.
-The parent commit makes the update fail if another process changes the target
-branch between preflight and commit.
-
-`artifact-manifest.json` and `source-record.json` are intentionally withheld. They
-describe the complete local artifact, including its canonical weight shard
-layout, which may differ from the unchanged remote layout. All safetensors,
-PyTorch checkpoint formats, and weight index files are also withheld.
-
-Files-only publishing does not construct a fresh artifact. Build and validate
-the artifact first whenever runtime sources, generated model cards, legal
-inventory, configuration, or tokenizer assets have changed. The publisher does
-not read or hash local checkpoint shards, so the upload step itself performs no
-large weight I/O.
-
-The completed command prints each new Hub commit. Before declaring those
-commits as a new FastPLMs release baseline, update the corresponding
-`fast_revision` values and the digests of any changed manifest-pinned
-non-weight `fast_files`, such as `config.json` or tokenizer assets.
-
-## Publish a complete checkpoint atomically
-
-The Synthyra ANKH repositories now contain the complete 1.0 encoder-decoder
-state. Use complete mode for a future checkpoint replacement that changes
-weights. It publishes the full state together with runtime code, configuration,
-tokenizer, card, legal files, source records, and scoped attestations:
+Without `--files-only`, files from the prepared local artifact are included in
+the same commit, including configuration, tokenizer assets, and weights:
 
 ```bash
-PYTHONPATH=src python -m tools.artifacts.publish \
-  --complete \
-  --artifact-root dist/hub \
-  --dry-run \
-  ankh_base
+py -m tools.artifacts.publish esm2_8m
 ```
 
-`--complete` requires explicit model IDs and never accepts implicit selection or
-`--all`. After reviewing every path, remove `--dry-run`. The publisher makes one
-parent-guarded atomic commit per selected repository, preserving atomicity and
-failing if remote head changes after preflight. Complete mode may delete only
-an obsolete path that is pinned in the current registry `spec.fast.files`, is
-absent from the validated new inventory, and still matches the preflight remote
-digest and parent. This permits a monolithic ANKH weight file to be replaced by
-indexed shards without granting general remote deletion authority. It
-validates that `AutoModel` can load the encoder/shared view without decoder allocation and that
-`AutoModelForSeq2SeqLM` consumes the complete encoder, decoder, cross-attention,
-and LM-head state from the same artifact.
+Prepared artifacts default to `dist/hub/<repository>`. If one is missing, build
+it first with `PYTHONPATH=src python -m tools.artifacts.build_all <model-id> --replace`.
+Authentication comes from `HF_TOKEN` or the cached Hugging Face login.
 
-DPLM1 and DPLM2 complete publication is permitted under Apache-2.0 after every
-normal preflight passes. At the pinned ByteDance revision, the
+DPLM1 and DPLM2 weights are distributed under Apache-2.0. At the pinned
+ByteDance revision, the
 [LICENSE](https://github.com/bytedance/dplm/blob/main/LICENSE)
 is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
 defines the repository release as including pretrained DPLM1 and DPLM2 weights.
-Built artifacts therefore carry Hub license `apache-2.0`,
+Built artifacts carry Hub license `apache-2.0`,
 `weights_license_status="resolved"`, and `redistributable=true`, plus the
-verbatim license and `LICENSES/dplm/SOURCE_RECORD.md`. Synthetic unresolved-license
-fixtures still prove that complete publication fails before any Hub API call or
-mutation when either license field is unresolved.
+verbatim license and `LICENSES/dplm/SOURCE_RECORD.md`.
 
 ## ESMFold2 runtime asset
 

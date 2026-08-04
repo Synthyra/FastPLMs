@@ -337,7 +337,9 @@ The encoder is the representative throughput architecture. It supports the
 manifest-declared eager and SDPA attention implementations. Validate exact
 encoder and sequence-to-sequence weights, aliases, seeded inference, and
 save/reload from the same artifact and new Hub revision before you advertise the
-revision. Files-only publication is forbidden for this migration. The previous
+revision. The ANKH 1.0 migration itself used a complete weights-plus-runtime
+update; subsequent files-only updates compile and publish runtime files without
+re-uploading those weights. The previous
 synthesized masked-language-model head remains available only as
 `FastAnkhForMaskedLMExtension`. It is a FastPLMs extension, not an official
 equivalent.
