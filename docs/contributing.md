@@ -1,7 +1,7 @@
 # Contributing
 
-Changes should preserve scientific behavior, repository boundaries, and a clear
-audit trail. Do not commit or upload model weights as part of a source change.
+Changes must preserve scientific behavior, repository boundaries, and a clear
+audit trail. Do not commit or upload model weights with a source change.
 
 ## Setup
 
@@ -57,7 +57,7 @@ shapes. Run the notation checker before review.
 
 First freeze the official configuration, tokenizer assets and behavior, state
 schema and aliases, representative outputs, source revision, environment, and
-licenses. Then:
+licenses. Then do these steps:
 
 1. update `src/fastplms/models.toml` with immutable identities and a complete
    conversion record;
@@ -79,10 +79,10 @@ documentation.
 ## Documentation
 
 State the input, transformation, output, validation evidence, and limitation.
-Avoid unsupported equivalence, performance, or biological claims. Keep
+Do not make unsupported equivalence, performance, or biological claims. Keep
 first-party model cards under `model_cards/`, legal texts under `LICENSES/`,
-and runnable scripts directly under `examples/`. Generated cards and support
-tables must be changed through `src/fastplms/models.toml` or their renderer.
+and runnable scripts directly under `examples/`. Change generated cards and
+support tables through `src/fastplms/models.toml` or their renderer.
 
 Execute code snippets, validate internal links, and run:
 

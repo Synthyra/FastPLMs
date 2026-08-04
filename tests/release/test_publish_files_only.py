@@ -88,7 +88,7 @@ def _clean_publication_source(
         "THIRD_PARTY_NOTICES.md",
         "kernels.lock",
         "tools/remote/biohub_reference_environment.py",
-        "tools/source_provenance.py",
+        "tools/source_record.py",
     ):
         source = original_root / relative_name
         destination = source_root / relative_name
@@ -204,7 +204,7 @@ def _self_attest_runtime_mutation(artifact: Path, relative_names: tuple[str, ...
 
 
 def _rewrite_materialized_card(artifact: Path, spec: ModelSpec) -> None:
-    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    provenance = json.loads((artifact / "source-record.json").read_text(encoding="utf-8"))
     card_source = ROOT / "model_cards" / f"{spec.id}.md"
     card_template = (
         card_source.read_text(encoding="utf-8")
@@ -394,7 +394,7 @@ def _files_only_artifact(root: Path, spec: ModelSpec) -> Path:
             },
         },
     }
-    _write_json(artifact / "provenance.json", provenance)
+    _write_json(artifact / "source-record.json", provenance)
     (artifact / "model.safetensors.index.json").write_bytes(b"test index")
     (artifact / "model-00001-of-00001.safetensors").write_bytes(b"test shard")
     runtime_files = {
@@ -424,7 +424,7 @@ def _files_only_artifact(root: Path, spec: ModelSpec) -> Path:
     }
     manifest.update(
         {
-            "provenance.json": f"sha256:{hash_file(artifact / 'provenance.json')}",
+            "source-record.json": f"sha256:{hash_file(artifact / 'source-record.json')}",
             "runtime-attestation.json": (
                 f"sha256:{hash_file(artifact / 'runtime-attestation.json')}"
             ),
@@ -462,7 +462,7 @@ def test_files_only_plan_excludes_weights_and_complete_artifact_attestations(
     assert "requirements.txt" in plan.files
     assert "runtime-attestation.json" in plan.files
     assert "artifact-manifest.json" not in plan.files
-    assert "provenance.json" not in plan.files
+    assert "source-record.json" not in plan.files
     assert not any(_is_weight_path(path) for path in plan.files)
     assert api.model_info_calls == [
         {
@@ -625,7 +625,7 @@ def test_files_only_plan_rejects_self_attested_invalid_bundle_data(
 ) -> None:
     spec = get_model_registry()["esm2_8m"]
     artifact = _files_only_artifact(tmp_path, spec)
-    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    provenance = json.loads((artifact / "source-record.json").read_text(encoding="utf-8"))
     (artifact / "fastplms_bundle.py").write_text(
         "\n".join(
             (
@@ -693,7 +693,7 @@ def test_files_only_plan_rejects_self_attested_substituted_bundle_member(
         encoding="utf-8",
         newline="\n",
     )
-    provenance_path = artifact / "provenance.json"
+    provenance_path = artifact / "source-record.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     provenance["runtime_bundle_sha256"] = runtime_hash
     _write_json(provenance_path, provenance)
@@ -713,7 +713,7 @@ def test_files_only_plan_rejects_self_attested_substituted_bundle_member(
     )
     manifest_path = artifact / "artifact-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["provenance.json"] = f"sha256:{hash_file(provenance_path)}"
+    manifest["source-record.json"] = f"sha256:{hash_file(provenance_path)}"
     _write_json(manifest_path, manifest)
 
     with pytest.raises(ArtifactError, match="archive differs at"):
@@ -957,12 +957,12 @@ def test_files_only_plan_rejects_unlisted_regular_file(tmp_path: Path) -> None:
 def test_files_only_plan_rejects_forged_registry_provenance(tmp_path: Path) -> None:
     spec = get_model_registry()["esm2_8m"]
     artifact = _files_only_artifact(tmp_path, spec)
-    provenance_path = artifact / "provenance.json"
+    provenance_path = artifact / "source-record.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     provenance["fast_checkpoint"]["revision"] = "f" * 40
     _write_json(provenance_path, provenance)
     manifest = json.loads((artifact / "artifact-manifest.json").read_text(encoding="utf-8"))
-    manifest["provenance.json"] = f"sha256:{hash_file(provenance_path)}"
+    manifest["source-record.json"] = f"sha256:{hash_file(provenance_path)}"
     _write_json(artifact / "artifact-manifest.json", manifest)
 
     with pytest.raises(ArtifactError, match="current registry"):
@@ -978,7 +978,7 @@ def test_files_only_plan_rejects_stale_runtime_revision(tmp_path: Path) -> None:
     spec = get_model_registry()["esm2_8m"]
     artifact = _files_only_artifact(tmp_path, spec)
     stale = "e" * 40
-    provenance_path = artifact / "provenance.json"
+    provenance_path = artifact / "source-record.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     provenance["runtime_revision"] = stale
     _write_json(provenance_path, provenance)
@@ -993,7 +993,7 @@ def test_files_only_plan_rejects_stale_runtime_revision(tmp_path: Path) -> None:
     _rewrite_materialized_card(artifact, spec)
     _self_attest_runtime_mutation(artifact, ("README.md", "config.json"))
     manifest = json.loads((artifact / "artifact-manifest.json").read_text(encoding="utf-8"))
-    manifest["provenance.json"] = f"sha256:{hash_file(provenance_path)}"
+    manifest["source-record.json"] = f"sha256:{hash_file(provenance_path)}"
     _write_json(artifact / "artifact-manifest.json", manifest)
 
     with pytest.raises(ArtifactError, match="current clean source revision"):

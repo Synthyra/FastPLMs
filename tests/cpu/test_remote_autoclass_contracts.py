@@ -377,7 +377,7 @@ def test_every_family_dispatches_all_advertised_remote_autoclasses_offline(
         "scope": "tests/cpu",
     }
     assert not (artifact / "artifact-manifest.json").exists()
-    assert not (artifact / "provenance.json").exists()
+    assert not (artifact / "source-record.json").exists()
     assert not (artifact / "runtime-attestation.json").exists()
 
 

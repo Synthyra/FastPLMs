@@ -34,10 +34,9 @@ PYTHONPATH=src python -m tools.artifacts.build \
 ```
 
 Tokenizer-mode artifacts built from a FastPLMs checkpoint require
-`--tokenizer-dir` pointing to the manifest-pinned official snapshot. The
-builder copies and records only the official tokenizer files declared by the
-manifest. Artifacts whose selected checkpoint is already the official snapshot
-may omit the option.
+`--tokenizer-dir`. This option must point to the manifest-pinned official
+snapshot. The builder copies and records only tokenizer files declared by the
+manifest. Artifacts that select the official snapshot can omit this option.
 
 Before writing output, the builder validates:
 
@@ -67,17 +66,17 @@ modeling_fastplms.py
 fastplms_bundle.py
 fastplms/...
 README.md
-provenance.json
+source-record.json
 artifact-manifest.json
 LICENSES/...
 THIRD_PARTY_NOTICES.md
 ```
 
-Normal runtime source modules are copied unchanged under `fastplms/`. The
-builder also writes those exact bytes into a deterministic compressed archive
-inside `fastplms_bundle.py`. This flat bundle is required because Transformers'
-remote-module loader follows flat relative Python imports; it does not import
-the copied package tree directly.
+The builder copies normal runtime source modules unchanged under `fastplms/`.
+It also writes the same bytes to a deterministic compressed archive in
+`fastplms_bundle.py`. This flat bundle is required because the Transformers
+remote-module loader uses flat relative Python imports. It does not import the
+copied package tree directly.
 
 `modeling_fastplms.py` imports the flat bundle and verifies its SHA-256 identity
 and canonical embedded file inventory. It rejects unsafe or repeated paths,
@@ -106,7 +105,7 @@ Weights are written as explicit safetensors shards no larger than 5 GiB with a
 sorted index. Trusted legacy `.bin` input is loaded with `weights_only=True` and
 is never copied into the output.
 
-`provenance.json` separates `weights_revision` from `runtime_revision` and
+The source record separates `weights_revision` from `runtime_revision` and
 records source-tree and runtime-bundle SHA-256 digests, generator/schema
 version, scope-specific complete and runtime-only attestations, both checkpoint
 identities, conversion record, BF16 execution policy, upstream revisions,
@@ -215,7 +214,7 @@ delete operation, uploads a weight-shaped path, or changes repository settings.
 The parent commit makes the update fail if another process changes the target
 branch between preflight and commit.
 
-`artifact-manifest.json` and `provenance.json` are intentionally withheld. They
+`artifact-manifest.json` and `source-record.json` are intentionally withheld. They
 describe the complete local artifact, including its canonical weight shard
 layout, which may differ from the unchanged remote layout. All safetensors,
 PyTorch checkpoint formats, and weight index files are also withheld.
@@ -265,7 +264,7 @@ is Apache-2.0 and the [README](https://github.com/bytedance/dplm/blob/main/READM
 defines the repository release as including pretrained DPLM1 and DPLM2 weights.
 Built artifacts therefore carry Hub license `apache-2.0`,
 `weights_license_status="resolved"`, and `redistributable=true`, plus the
-verbatim license and `LICENSES/dplm/PROVENANCE.md`. Synthetic unresolved-license
+verbatim license and `LICENSES/dplm/SOURCE_RECORD.md`. Synthetic unresolved-license
 fixtures still prove that complete publication fails before any Hub API call or
 mutation when either license field is unresolved.
 
@@ -285,8 +284,8 @@ not fetch a substitute.
 
 ## Generated cards and support data
 
-Run `PYTHONPATH=src python -m tools.artifacts.generate_docs` to render model cards and the
-support matrix from `models.toml`. Run the same command with `--check` in CI to
-reject stale generated files. Generated files state the validation boundary and
-do not turn manifest declarations into unverified performance or biological
-claims.
+Run `PYTHONPATH=src python -m tools.artifacts.generate_docs` to render model
+cards and the support matrix from `models.toml`. Run the command with `--check`
+in CI to reject stale generated files. Generated files state the validation
+boundary. They do not turn manifest declarations into unverified performance or
+biological claims.

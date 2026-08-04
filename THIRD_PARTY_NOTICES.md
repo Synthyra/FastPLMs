@@ -46,7 +46,7 @@ explicitly defines the repository release as including pretrained DPLM1 and
 DPLM2 weights, and the same revision carries the complete
 [Apache-2.0 license](https://github.com/bytedance/dplm/blob/8a2e15e53416b4536f03f79ad1f6f6a9cbd5e19d/LICENSE).
 FastPLMs records both checkpoint families as Apache-2.0 and distributes the
-verbatim license plus `LICENSES/dplm/PROVENANCE.md`. Converted weights retain
+verbatim license plus `LICENSES/dplm/SOURCE_RECORD.md`. Converted weights retain
 those terms and remain subject to the ordinary artifact and publication gates.
 
 ## Biohub
@@ -80,7 +80,7 @@ TorchMetrics, Lightning Utilities, and NVIDIA DLLogger. Their exact versions or
 revision are pinned in `docker/constraints/esmfold.txt`; OpenFold imports them
 eagerly, and FastPLMs production code does not depend on them. DLLogger's exact
 source identity and installed-license handling are recorded in
-`LICENSES/dllogger/PROVENANCE.md`.
+`LICENSES/dllogger/SOURCE_RECORD.md`.
 
 ## ProteinTTT
 
@@ -93,7 +93,7 @@ revision-specific provenance are under `LICENSES/protein-ttt/`.
 For every supported family, `src/fastplms/models.toml` records an immutable
 official checkpoint revision, an immutable FastPLMs checkpoint revision, file
 digests, a named state transformation, and a mechanism-level conversion record.
-Generated artifacts reproduce that record in `provenance.json`. A release or
+Generated artifacts reproduce that record in `source-record.json`. A release or
 artifact build must fail when a required file identity, legal text, attribution
 notice, modified-file notice, upstream revision, or conversion record is absent
 or differs from its manifest digest.

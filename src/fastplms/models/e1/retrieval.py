@@ -890,7 +890,7 @@ class HomologueSearcher:
     """
 
     _PROVENANCE_SCHEMA_VERSION = 1
-    _PROVENANCE_FILENAME = "search-provenance.json"
+    _PROVENANCE_FILENAME = "search-record.json"
 
     def __init__(
         self,

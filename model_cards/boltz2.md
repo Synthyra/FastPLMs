@@ -10,7 +10,7 @@ tags:
 
 # Synthyra/Boltz2
 
-This checkpoint packages the FastPLMs `Boltz2` implementation.
+This checkpoint contains the FastPLMs `Boltz2` implementation.
 
 Accepted inputs are raw amino-acid sequences through the convenience API, or
 prepared model features.
@@ -28,9 +28,7 @@ Supported Transformers entry points are `AutoConfig`, `AutoModel`.
 | Attention variants | Supported: `eager` |
 | Compliance | Unavailable: this provisional family has no compliance tier |
 
-A supported interface is not a pretrained downstream predictor. Classification
-heads start untrained, and declared compliance metadata is not a claim that an
-arbitrary local build passed its release gate.
+A supported interface is not a pretrained downstream predictor. Classification heads start untrained. Compliance metadata does not show that a local build passed its release gate.
 
 ## Install and platform requirements
 
@@ -41,12 +39,12 @@ python -m pip install -r \
   "https://huggingface.co/Synthyra/Boltz2/resolve/main/requirements.txt"
 ```
 
-The FastPLMs implementation itself is embedded in the model repository and loaded
-by Transformers through `trust_remote_code=True`.
+The FastPLMs implementation itself is embedded in the model repository.
+Transformers loads it through `trust_remote_code=True`.
 
-Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13 are required. The artifact requirements include the direct structure dependencies. The published execution contract requires a CUDA device. The current validated release target is the exact NVIDIA GH200 on Linux aarch64; Linux x86-64, CPU-only, Windows, and macOS structure runs are not current release evidence. The Hub quick start below requires network
-access on first download. For an air-gapped run, first build the manifest-pinned
-local artifact and use the offline form shown in the example.
+This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13. The artifact requirements include the structure dependencies. The release contract requires a CUDA device. The current validated target is the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and macOS structure runs are not release evidence. The Hub quick start needs network access for
+the first download. For an air-gapped run, build the manifest-pinned local
+artifact first and use the offline example.
 
 ## Quick start
 
@@ -62,21 +60,21 @@ model = AutoModel.from_pretrained(
 ```
 
 For offline validation, replace `model_id` with the manifest-built
-`dist/hub/Boltz2` path and pass `local_files_only=True`.
+`dist/hub/Boltz2` path. Pass `local_files_only=True`.
 
 ## Attention and compliance
 
-The quick start selects `eager` explicitly. Declared variants are `eager`. An unavailable requested backend raises instead
-of silently switching implementations.
-`output_attentions=True` may use the documented, one-call eager fallback solely
-to materialize attention tensors; the configured backend remains unchanged.
+The quick start selects `eager` explicitly. Declared variants are `eager`. An unavailable requested backend raises. It does
+not silently change implementation.
+`output_attentions=True` can use the documented one-call eager fallback to
+materialize attention tensors. The configured backend does not change.
 
-This family does not declare the `compliance` tier. Boltz2 remains provisional
-and its structure checks must not be broadened into parity claims.
+This family does not declare the `compliance` tier. Boltz2 remains provisional.
+Its structure checks are not parity claims.
 
 ## PEFT fine-tuning
 
-Install the direct training dependencies, then attach LoRA to the loaded checkpoint:
+Install the training dependencies. Then attach LoRA to the loaded checkpoint:
 
 ```bash
 python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
@@ -95,10 +93,10 @@ peft_model = get_peft_model(
 )
 ```
 
-This checkpoint has no advertised classifier. Supply the task-specific
-objective and preserve any new head through `modules_to_save`.
+This checkpoint has no advertised classifier. Supply the task objective and
+preserve any new head through `modules_to_save`.
 All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
-can be adapted with PEFT. The ESM2-specific shipped CLI is an example, not a
+can use PEFT. The ESM2-specific shipped CLI is an example, not a
 support boundary. Record the target modules, base revision, data identity, and
 trainable parameter scope.
 
@@ -124,10 +122,10 @@ print(output.sample_atom_coords.shape)
 print(output.plddt, output.ptm, output.iptm)
 ```
 
-The validation boundary below describes the currently supported inference
-subset and its provisional status. The helper scopes and restores Python,
-NumPy, CPU Torch, and CUDA RNG state. Parameters and prepared features remain
-FP32; supported CUDA inference executes inside BF16 autocast.
+The validation boundary below describes the supported inference subset and its
+provisional status. The helper saves and restores Python, NumPy, CPU Torch, and
+CUDA RNG state. Parameters and prepared features stay FP32. Supported CUDA
+inference runs in BF16 autocast.
 
 ## Notes and limitations
 
@@ -156,8 +154,8 @@ continues independently of the ESM++ and ESMFold2 release gates.
 ## Release record
 
 - FastPLMs weights: `Synthyra/Boltz2`
-- Runtime revision: recorded separately in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`
+- Runtime revision: recorded in the built artifact and published commit
+- Source-tree and runtime-bundle SHA-256: recorded in the source record
 - Official checkpoint: `boltz-community/boltz-2`
 - Artifact source: `fast`
 - State transform: `boltz2_inference_core_v1`
@@ -165,19 +163,17 @@ continues independently of the ESM++ and ESMFold2 release gates.
 - Release tiers: `structure`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-`provenance.json` records exact file identities, conversion, source revisions,
-legal texts, schema, and attestations. A nonzero unresolved count blocks release.
+The source record records exact file identities, conversion, source revisions,
+legal texts, schema, and attestations. A nonzero unresolved count blocks a release.
 
 ## Validation boundary
 
-Declared tiers compare applicable configuration, tokenizer behavior, state,
-and representative inference with the pinned reference. Metadata alone does
-not claim a build passed, a backend is faster, or an output is biologically
-valid.
+Declared tiers compare configuration, tokenizer behavior, state, and
+representative inference with the pinned reference. Metadata does not show that
+a build passed, that a backend is faster, or that an output is biologically valid.
 
 ## License
 
 Checkpoint terms: MIT. The Hub model-card identifier is
-`mit`. Applicable source licenses, notices, attribution,
-and conversion records are distributed with the local artifact. Review them
-before use.
+`mit`. The local artifact contains applicable source
+licenses, notices, attribution, and conversion records. Review them before use.

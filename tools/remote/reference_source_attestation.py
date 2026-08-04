@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from tools.source_provenance import actual_tree_paths, tracked_tree_digest
+from tools.source_record import actual_tree_paths, tracked_tree_digest
 
 
 _SCHEMA_VERSION = 1

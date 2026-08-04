@@ -1,9 +1,9 @@
 # Benchmarking
 
-Performance measurements run outside pytest on the current validated NVIDIA
-GH200 workstation in the exact containerized Linux aarch64 environment. H100
-and H200 remain supported Hopper-class devices, but are not interchangeable
-with or accepted as the current release benchmark evidence.
+Performance measurements run outside pytest on the validated NVIDIA GH200
+workstation in the exact containerized Linux aarch64 environment. H100 and H200
+are supported Hopper-class devices, but they are not interchangeable with the
+current release benchmark evidence.
 Pytest contains only a short CUDA-event smoke test for the harness. Correctness,
 parity, and structure compliance remain separate release gates.
 
@@ -27,9 +27,9 @@ backend declared by that family, the suite measures:
 - padding efficiency for lengths `(1024, 512, 256, 128, 64, 64, 32, 32)`.
 
 The steady-state operation receives pre-tokenized, preallocated GPU tensors.
-Loading, first forward, compilation, steady-state forward, and complete embedding
-are separate records. Compilation and first-forward costs are never amortized
-into steady-state throughput.
+Loading, first forward, compilation, steady-state forward, and complete
+embedding are separate records. Compilation and first-forward costs are not
+included in steady-state throughput.
 
 Within one checkpoint and precision, the suite loads model weights once. It
 changes attention only through `set_attn_implementation()`. The first record
@@ -169,8 +169,8 @@ python -m benchmarks.suite \
   --output artifacts/benchmarks/h100-exhaustive.json
 ```
 
-This legacy output name does not imply H100 execution. Current release reports
-must identify the exact GH200/aarch64 target, and no H100 or H200 report is
+This legacy output name does not mean H100 execution. Current release reports
+must identify the exact GH200/aarch64 target. H100 and H200 reports are not
 GH200-equivalent.
 
 Exhaustive records use `matrix_kind="exhaustive"`,
@@ -182,8 +182,7 @@ establish a release gate or speed claim.
 
 GPU work is timed with CUDA events. Warmup continues until the medians of two
 consecutive ten-sample windows differ by less than 2 percent. A case that does
-not stabilize fails so clocks, thermals, and competing workloads can be
-investigated.
+not stabilize fails. Investigate clocks, thermals, and competing workloads.
 
 The measurement phase collects seven blocks. Each block lasts at least 250 ms
 and contains at least five forwards. Reports retain every raw event sample,
@@ -245,6 +244,6 @@ baseline from a different runtime, checkpoint revision, or accelerator model.
 ## Interpreting results
 
 Each dense, throughput, and mixed-padding case is evaluated independently. A
-backend can improve padded batches while regressing dense batches. A throughput
-improvement also does not relax parity: every advertised backend must pass its
+backend can improve padded batches and regress dense batches. A throughput
+improvement does not relax parity. Each advertised backend must pass its
 correctness contract before its performance result can support a claim.

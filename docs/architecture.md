@@ -1,8 +1,7 @@
 # Architecture
 
 FastPLMs separates runtime code, release evidence, and official reference code.
-The separation is enforced by tests and container build contexts, not only by
-convention.
+Tests and container build contexts enforce this separation.
 
 ## Repository boundaries
 
@@ -49,9 +48,8 @@ cards are generated from it. The artifact builder selects the declared source,
 verifies every pinned input, applies the named transformation, and records the
 same source record in the output.
 
-Adding a model only in Python code is therefore insufficient. A release-visible
-model must be represented completely in the manifest and pass all generated
-consistency checks.
+Adding a model only in Python code is insufficient. A release-visible model
+must have a complete manifest entry and pass all generated consistency checks.
 
 ## Loading and artifact flow
 
@@ -70,9 +68,9 @@ inference:
 7. parity and artifact suites compare the same declared behavior against the
    isolated official reference.
 
-This flow keeps user loading simple without making the official checkout a
-runtime dependency. A local artifact under `dist/hub/<model>` and a published
-copy use the same Transformers interface.
+This flow does not make the official checkout a runtime dependency. A local
+artifact under `dist/hub/<model>` and a published copy use the same
+Transformers interface.
 
 ## Runtime source
 
@@ -137,7 +135,6 @@ benchmark outputs. Hostnames, identities, and secrets are never tracked.
 
 ## Design rule
 
-The preferred implementation is the shortest clear implementation that meets
-the exact behavioral contract. More complex code is retained only when a
-repeatable benchmark establishes a useful speed or memory benefit and the strict
-compliance suite still passes.
+Use the shortest clear implementation that meets the exact behavioral contract.
+Retain more complex code only when a repeatable benchmark shows a speed or
+memory benefit and the strict compliance suite passes.

@@ -1,16 +1,15 @@
 # Migration to FastPLMs 1.0
 
-FastPLMs 1.0 intentionally changes the repository layout, embedding return
-types and storage, attention selection, artifact publication, and several model
-contracts. There are no compatibility imports or silent keyword aliases. Run
-the snippets in this guide in the offline CPU documentation job whenever this
-contract changes.
+FastPLMs 1.0 changes the repository layout, embedding return types and storage,
+attention selection, artifact publication, and model contracts. There are no
+compatibility imports or silent keyword aliases. Run these snippets in the
+offline CPU documentation job when this contract changes.
 
 ## Dependencies and source layout
 
 FastPLMs 1.0 requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
-The project is no longer installed as a Python distribution. Published models
-carry their runtime source in the Hugging Face repository and load it with
+The project is not installed as a Python distribution. Published models carry
+their runtime source in the Hugging Face repository and load it with
 `trust_remote_code=True`. Install dependencies directly:
 
 ```bash
@@ -41,14 +40,14 @@ Source remains under `src`:
 | family-local TTT helpers | `fastplms.models.ttt` |
 | `testing/...` operational scripts | `tools.remote`, `tools.artifacts`, `tools.goldens`, or `benchmarks` |
 
-Model implementations remain loadable through the AutoClasses declared in the
+Model implementations load through the AutoClasses declared in the
 [generated support matrix](generated/support.md). Runtime source must not import
 `vendor/upstream`; those repositories are isolated compliance oracles.
 
 ## Attention selection and outputs
 
-Replace `config.attn_backend`, `model.attn_backend`, `flex`,
-`kernels_flash`, and `auto` with the Transformers attention interface:
+Replace `config.attn_backend`, `model.attn_backend`, `flex`, `kernels_flash`,
+and `auto` with the Transformers attention interface:
 
 ```python
 from transformers import AutoModel
@@ -63,13 +62,14 @@ model.set_attn_implementation("sdpa")
 
 The 1.0 names are `eager`, `sdpa`, `flex_attention`,
 `flash_attention_2`, and `flash_attention_3`, restricted by the manifest.
-There is no `auto` backend, source compilation, or unavailable-kernel fallback.
+There is no `auto` backend, source compilation, or fallback for an unavailable
+kernel.
 
-`output_attentions=True` is a documented exception: when an optimized backend
-cannot return the full matrix, FastPLMs emits one warning containing the
-configured backend, effective `eager` backend, and reason. It derives the eager
-4-D mask from the original padding and causal semantics for that call only.
-Configuration and later calls are unchanged.
+`output_attentions=True` is a documented exception. If an optimized backend
+cannot return the full matrix, FastPLMs emits one warning with the configured
+backend, effective `eager` backend, and reason. It derives the eager 4-D mask
+from the original padding and causal semantics for that call only. Configuration
+and later calls are unchanged.
 
 ESMC Flex Attention and FlashAttention 3 remain supported and
 non-experimental. SDPA is recommended for highest numerical fidelity. Their
@@ -80,7 +80,7 @@ Do not convert a threshold into a measured number.
 ## Embedding arguments
 
 The historical method deduplicated and length-sorted sequences, returned a
-sequence-keyed dictionary, and defaulted to writing pickle. The 1.0 operation
+sequence-keyed dictionary, and wrote pickle by default. The 1.0 operation
 preserves order and duplicates and returns `EmbeddingResult`.
 
 | Pre-1.0 argument | FastPLMs 1.0 replacement |
@@ -161,13 +161,13 @@ trusted_pickle = load_legacy_pth(
 ```
 
 SQLite retrieval opens read-only and preserves selector order and duplicates.
-Legacy pickle remains executable input and therefore requires explicit opt-in.
+Legacy pickle is executable input. It requires explicit opt-in.
 
 ## ANKH full-checkpoint replacement
 
 FastPLMs 1.0 replaced each Synthyra encoder-only ANKH repository with the full
-official-compatible T5 state. This increases the default checkpoint size while
-preserving encoder output parity.
+official-compatible T5 state. This increases the default checkpoint size and
+preserves encoder output parity.
 
 `AutoModel` loads the encoder and shared state without decoder allocation.
 `AutoModelForSeq2SeqLM` loads encoder, decoder, cross-attention, and LM head from
@@ -215,9 +215,9 @@ decoder_layer = seq2seq.embed_dataset(
 )
 ```
 
-No shifted-source decoder input is invented. The official ANKH workflows use
-task prompts, sentinels, or generated tokens. Decoder pooling excludes special
-tokens and persisted metadata fingerprints the decoder input and alignment.
+FastPLMs does not invent shifted-source decoder input. Official ANKH workflows
+use task prompts, sentinels, or generated tokens. Decoder pooling excludes
+special tokens. Persisted metadata fingerprints decoder input and alignment.
 
 Files-only publication is forbidden for this migration. Every weight shard,
 weight index, tokenizer asset, configuration, runtime source, model card, and
@@ -244,7 +244,7 @@ Every family and entry point is classified in the
 - `FastPLMs extension`: integration code or a head that is not an official
   pretrained capability.
 
-All advertised classes must honor `return_dict`, output flags, tuple order,
+All advertised classes must support `return_dict`, output flags, tuple order,
 embedding resize and setters, initialization, forward/loss/backward, and
 save/reload.
 

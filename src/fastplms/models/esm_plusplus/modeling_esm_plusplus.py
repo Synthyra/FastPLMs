@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.metadata
 import math
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
+from functools import partial
+from typing import Any, ClassVar
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from dataclasses import dataclass
-from functools import partial
-from typing import ClassVar
 from einops import rearrange
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
@@ -59,6 +63,151 @@ except ModuleNotFoundError as error:
     ):
         raise
     # Legacy flat Hub composites define every shared symbol above this block.
+
+
+_ESMC_FP8_LINEAR_SUFFIX = ".attn.out_proj"
+_ESMC_FP8_ALIGNMENT = 16
+
+
+@dataclass(frozen=True, slots=True)
+class ESMplusplusFP8Status:
+    """Resolved state of the explicit Transformer Engine ESMC FP8 path."""
+
+    enabled: bool
+    reason: str
+    device: str
+    transformer_engine_version: str | None
+    converted_projections: int
+
+    def as_dict(self) -> dict[str, str | int | bool | None]:
+        return asdict(self)
+
+
+def _transformer_engine_version() -> str | None:
+    try:
+        return importlib.metadata.version("transformer-engine")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
+def _load_transformer_engine() -> tuple[Any, Any]:
+    """Load Transformer Engine lazily so ordinary ESM++ imports stay portable."""
+
+    try:
+        te = importlib.import_module("transformer_engine.pytorch")
+        recipe = importlib.import_module("transformer_engine.common.recipe")
+    except (ImportError, OSError, RuntimeError) as error:
+        raise RuntimeError(
+            f"Transformer Engine could not be imported: {type(error).__name__}: {error}"
+        ) from error
+    if not hasattr(recipe, "Float8CurrentScaling"):
+        raise RuntimeError(
+            "Transformer Engine does not expose Float8CurrentScaling, which is "
+            "required by the validated ESMC FP8 path."
+        )
+    return te, recipe
+
+
+def _te_fp8_capability(device: torch.device) -> tuple[bool, str]:
+    """Return whether the strict Transformer Engine FP8 path can run."""
+
+    if device.type != "cuda":
+        return False, "FP8 requires ESM++ on a CUDA device."
+    if not torch.cuda.is_available():
+        return False, "CUDA is unavailable."
+    try:
+        major, minor = torch.cuda.get_device_capability(device)
+    except (AssertionError, RuntimeError, ValueError) as error:
+        return False, f"CUDA capability query failed: {error}"
+    if not (major >= 9 or (major == 8 and minor >= 9)):
+        return False, f"CUDA capability {major}.{minor} does not support FP8."
+    try:
+        te, _ = _load_transformer_engine()
+    except RuntimeError as error:
+        return False, str(error)
+
+    probe = getattr(te, "is_fp8_available", None)
+    if probe is None:
+        try:
+            probe = importlib.import_module("transformer_engine.pytorch.fp8").is_fp8_available
+        except (ImportError, AttributeError, OSError, RuntimeError) as error:
+            return False, f"Transformer Engine has no usable FP8 probe: {error}"
+    try:
+        try:
+            result = probe(return_reason=True)
+        except TypeError:
+            result = probe()
+    except (OSError, RuntimeError) as error:
+        return False, f"Transformer Engine FP8 probe failed: {error}"
+    if isinstance(result, tuple):
+        available = bool(result[0])
+        detail = str(result[1]) if len(result) > 1 and result[1] else ""
+    else:
+        available = bool(result)
+        detail = ""
+    if not available:
+        return False, detail or "Transformer Engine reports FP8 unavailable."
+    return True, "Transformer Engine reports FP8 availability."
+
+
+def _convert_esmc_attention_outputs_to_te(
+    module: nn.Module,
+    *,
+    expected_projections: int,
+) -> tuple[str, ...]:
+    """Replace exactly one attention output projection per ESMC block."""
+
+    targets = [
+        (path, child)
+        for path, child in module.named_modules()
+        if isinstance(child, nn.Linear) and path.endswith(_ESMC_FP8_LINEAR_SUFFIX)
+    ]
+    if len(targets) != expected_projections:
+        raise RuntimeError(
+            "ESMC FP8 conversion expected exactly "
+            f"{expected_projections} attention output projections, found {len(targets)}."
+        )
+
+    te, _ = _load_transformer_engine()
+    modules = dict(module.named_modules())
+    converted: list[str] = []
+    for path, child in targets:
+        owner_path, name = path.rsplit(".", 1)
+        owner = modules[owner_path]
+        replacement = te.Linear(
+            child.in_features,
+            child.out_features,
+            bias=child.bias is not None,
+            params_dtype=child.weight.dtype,
+            device=child.weight.device,
+        )
+        with torch.no_grad():
+            replacement.weight.copy_(child.weight)
+            if child.bias is not None:
+                replacement.bias.copy_(child.bias)
+        replacement.eval().requires_grad_(False)
+        setattr(owner, name, replacement)
+        converted.append(path)
+    return tuple(converted)
+
+
+@contextmanager
+def _esmplusplus_fp8_context(enabled: bool, device: torch.device):
+    """Enter the validated BF16-storage, Transformer Engine FP8 context."""
+
+    if not enabled:
+        yield
+        return
+    if torch.is_grad_enabled():
+        raise RuntimeError("ESM++ FP8 is inference-only; use torch.inference_mode() or no_grad().")
+    te, recipe = _load_transformer_engine()
+    fp8_recipe = recipe.Float8CurrentScaling(
+        use_power_2_scales=False,
+        fp8_format=recipe.Format.HYBRID,
+    )
+    with torch.autocast(device_type=device.type, dtype=torch.bfloat16):
+        with te.autocast(enabled=True, recipe=fp8_recipe):
+            yield
 
 
 class ESMplusplusConfig(PretrainedConfig):
@@ -616,6 +765,8 @@ class TransformerOutput(ModelOutput):
     hidden_states: tuple[torch.Tensor] | None = None
     attentions: tuple[torch.Tensor] | None = None
     s_max: tuple[list[torch.Tensor], ...] | None = None
+    sae_outputs: dict[str, torch.Tensor] | None = None
+    sae_hidden_states: dict[int, torch.Tensor] | None = None
 
 
 @dataclass
@@ -624,6 +775,7 @@ class ESMplusplusOutput(MaskedLMOutput):
 
     s_max: tuple[list[torch.Tensor], ...] | None = None
     last_hidden_state: torch.Tensor | None = None
+    sae_outputs: dict[str, torch.Tensor] | None = None
 
 
 @dataclass
@@ -631,6 +783,7 @@ class ESMplusplusSequenceClassifierOutput(SequenceClassifierOutput):
     """Sequence-classification output with optional attention diagnostics."""
 
     s_max: tuple[list[torch.Tensor], ...] | None = None
+    sae_outputs: dict[str, torch.Tensor] | None = None
 
 
 @dataclass
@@ -638,6 +791,7 @@ class ESMplusplusTokenClassifierOutput(TokenClassifierOutput):
     """Token-classification output with optional attention diagnostics."""
 
     s_max: tuple[list[torch.Tensor], ...] | None = None
+    sae_outputs: dict[str, torch.Tensor] | None = None
 
 
 class TransformerStack(nn.Module):
@@ -688,11 +842,14 @@ class TransformerStack(nn.Module):
         output_attentions: bool | None = False,
         output_s_max: bool | None = False,
         esmfold2_hidden_states: bool = False,
+        sae_layers: tuple[int, ...] = (),
     ) -> TransformerOutput:
         # x: (b, l, d); attention_mask, sequence_id: (b, l)
         hidden_states = () if output_hidden_states else None
         attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
+        sae_layer_set = set(sae_layers)
+        sae_hidden_states = {} if sae_layer_set else None
         # Match the pinned Biohub Transformers contract: a supplied sequence_id
         # is authoritative and must encode padding as -1.  attention_mask is
         # ignored in that mode rather than intersected with the chain mask.
@@ -708,7 +865,7 @@ class TransformerStack(nn.Module):
             )
         )
 
-        for block in self.blocks:
+        for layer_index, block in enumerate(self.blocks):
             if output_hidden_states:
                 if hidden_states is None:
                     raise RuntimeError(
@@ -718,6 +875,8 @@ class TransformerStack(nn.Module):
                 # by the final normalized state. This gives n_layers + 1 states
                 # and, for ESMC-6B, the 81-state order consumed by ESMFold2.
                 hidden_states += (x,)
+            if sae_hidden_states is not None and layer_index in sae_layer_set:
+                sae_hidden_states[layer_index] = x
             if self.gradient_checkpointing and self.training:
                 x, attn_weights, s_max = self._gradient_checkpointing_func(
                     block.__call__,
@@ -746,12 +905,16 @@ class TransformerStack(nn.Module):
         last_hidden_state = self.norm(x)
         if output_hidden_states:
             hidden_states += (last_hidden_state,)
+        final_layer_index = len(self.blocks)
+        if sae_hidden_states is not None and final_layer_index in sae_layer_set:
+            sae_hidden_states[final_layer_index] = last_hidden_state
 
         return TransformerOutput(
             last_hidden_state=last_hidden_state,
             hidden_states=hidden_states,
             attentions=attentions,
             s_max=full_s_max,
+            sae_hidden_states=sae_hidden_states,
         )
 
     @torch.compiler.disable
@@ -881,6 +1044,237 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
         "flash_attention_2",
         "flash_attention_3",
     )
+
+    def __init__(self, config: ESMplusplusConfig, *args: object, **kwargs: object) -> None:
+        super().__init__(config, *args, **kwargs)
+        self._sae_models = nn.ModuleDict()
+        self._esmc_fp8 = False
+        self._esmc_fp8_module_paths: tuple[str, ...] = ()
+        self._esmc_precision_status = ESMplusplusFP8Status(
+            enabled=False,
+            reason="FP8 has not been enabled; canonical checkpoint precision is unchanged.",
+            device="cpu",
+            transformer_engine_version=_transformer_engine_version(),
+            converted_projections=0,
+        )
+
+    @property
+    def esmc_precision_status(self) -> ESMplusplusFP8Status:
+        """Return the explicit FP8 conversion status for this ESM++ instance."""
+
+        return self._esmc_precision_status
+
+    def enable_fp8(self) -> ESMplusplusFP8Status:
+        """Enable the strict inference-only Transformer Engine FP8 path.
+
+        Canonical parameters must already be BF16 on one supported CUDA device.
+        Exactly one attention output projection per transformer block is replaced;
+        all other operations and all SAE weights remain BF16.
+        """
+
+        if self._esmc_fp8:
+            return self._esmc_precision_status
+        if self.training:
+            raise RuntimeError("ESM++ FP8 is inference-only; call eval() before enable_fp8().")
+        parameter_devices = {parameter.device for parameter in self.parameters()}
+        if len(parameter_devices) != 1:
+            raise RuntimeError(
+                "ESM++ FP8 requires every parameter on one CUDA device; sharded device maps "
+                f"are unsupported, found {sorted(map(str, parameter_devices))}."
+            )
+        device = next(iter(parameter_devices), self.device)
+        available, reason = _te_fp8_capability(device)
+        if not available:
+            raise RuntimeError(f"ESM++ FP8 is unavailable: {reason}")
+        non_bf16 = [
+            name
+            for name, parameter in self.named_parameters()
+            if parameter.is_floating_point() and parameter.dtype != torch.bfloat16
+        ]
+        if non_bf16:
+            examples = ", ".join(non_bf16[:3])
+            raise RuntimeError(
+                "ESM++ FP8 requires canonical BF16 parameters before conversion; "
+                f"found {len(non_bf16)} non-BF16 parameters (for example: {examples})."
+            )
+        paths = _convert_esmc_attention_outputs_to_te(
+            self,
+            expected_projections=self.config.num_hidden_layers,
+        )
+        self._esmc_fp8 = True
+        self._esmc_fp8_module_paths = paths
+        self._esmc_precision_status = ESMplusplusFP8Status(
+            enabled=True,
+            reason=(
+                f"{reason} Converted {len(paths)} attention output projections; "
+                "canonical checkpoint and SAE weights remain BF16."
+            ),
+            device=str(device),
+            transformer_engine_version=_transformer_engine_version(),
+            converted_projections=len(paths),
+        )
+        return self._esmc_precision_status
+
+    def add_sae_models(self, sae_models: list[nn.Module]) -> None:
+        """Attach official Biohub hidden-state SAE layers to this ESM++ model."""
+
+        for sae_model in sae_models:
+            if not isinstance(sae_model, nn.Module):
+                raise TypeError(
+                    "Each SAE must be an nn.Module obtained from an official Biohub "
+                    "ESMCSAEModel.layers entry."
+                )
+            layer = getattr(sae_model, "layer", None)
+            if isinstance(layer, bool) or not isinstance(layer, int):
+                raise TypeError("Each SAE layer must expose an integer .layer attribute.")
+            if not 0 <= layer <= self.config.num_hidden_layers:
+                raise ValueError(
+                    f"SAE target layer {layer} is outside the ESM++ hidden-state range "
+                    f"0..{self.config.num_hidden_layers}."
+                )
+            params = getattr(sae_model, "params", None)
+            d_model = getattr(params, "d_model", None)
+            if d_model != self.config.hidden_size:
+                raise ValueError(
+                    f"SAE layer {layer} expects d_model={d_model!r}, but this ESM++ "
+                    f"checkpoint has hidden_size={self.config.hidden_size}."
+                )
+            if not callable(getattr(sae_model, "get_sae_output", None)):
+                raise TypeError("Each SAE layer must expose get_sae_output(layer_states, token_mask).")
+            for name in ("idf", "max"):
+                if not isinstance(getattr(sae_model, name, None), torch.Tensor):
+                    raise TypeError(f"Each SAE layer must expose a tensor {name!r} buffer.")
+            key = f"layer{layer}"
+            if key in self._sae_models:
+                raise ValueError(
+                    f"An SAE is already registered at {key!r}; only one SAE per layer "
+                    "can be active."
+                )
+            self._sae_models[key] = sae_model
+
+    def _prepare_sae_forward(
+        self,
+        *,
+        compute_sae: bool,
+        input_ids: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
+        sequence_id: torch.Tensor | None,
+    ) -> tuple[tuple[int, ...], torch.Tensor | None]:
+        if not compute_sae or not self._sae_models:
+            return (), None
+        if input_ids is None:
+            raise ValueError(
+                "SAE computation requires input_ids so masked-token inputs can be rejected."
+            )
+        if torch.any(input_ids == self.config.mask_token_id):
+            raise ValueError("SAE inputs must not contain mask tokens; SAEs were trained unmasked.")
+        if sequence_id is not None:
+            token_mask = sequence_id >= 0
+        elif attention_mask is not None:
+            token_mask = attention_mask.to(dtype=torch.bool)
+        else:
+            token_mask = input_ids != self.config.pad_token_id
+        layers = tuple(sorted(int(name.removeprefix("layer")) for name in self._sae_models))
+        return layers, token_mask
+
+    def _get_sae_outputs(
+        self,
+        hidden_states: dict[int, torch.Tensor] | None,
+        token_mask: torch.Tensor | None,
+        *,
+        normalize_sae: bool,
+    ) -> dict[str, torch.Tensor] | None:
+        if not self._sae_models:
+            return None
+        if hidden_states is None or token_mask is None:
+            raise RuntimeError("SAE hidden-state collection was not initialized.")
+        outputs: dict[str, torch.Tensor] = {}
+        for key, sae_model in self._sae_models.items():
+            layer = int(key.removeprefix("layer"))
+            if layer not in hidden_states:
+                raise RuntimeError(f"ESM++ did not collect the requested SAE layer {layer}.")
+            sae_output = sae_model.get_sae_output(hidden_states[layer].clone(), token_mask)
+            features = getattr(sae_output, "feature_magnitudes", None)
+            if not isinstance(features, torch.Tensor):
+                raise TypeError("SAE get_sae_output must return tensor feature_magnitudes.")
+            features = features.detach()
+            if normalize_sae:
+                features = (features / sae_model.max) * sae_model.idf
+            outputs[key] = features.to_sparse()
+        return outputs
+
+    def _pad_fp8_inputs(
+        self,
+        input_ids: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
+        sequence_id: torch.Tensor | None,
+        inputs_embeds: torch.Tensor | None,
+    ) -> tuple[
+        torch.Tensor | None,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        int | None,
+    ]:
+        if not self._esmc_fp8:
+            return input_ids, attention_mask, sequence_id, inputs_embeds, None
+        source = input_ids if input_ids is not None else inputs_embeds
+        if source is None:
+            return input_ids, attention_mask, sequence_id, inputs_embeds, None
+        sequence_length = source.shape[1]
+        padded_length = (
+            (sequence_length + _ESMC_FP8_ALIGNMENT - 1) // _ESMC_FP8_ALIGNMENT
+        ) * _ESMC_FP8_ALIGNMENT
+        padding = padded_length - sequence_length
+        if padding == 0:
+            return input_ids, attention_mask, sequence_id, inputs_embeds, None
+        if input_ids is not None:
+            input_ids = F.pad(input_ids, (0, padding), value=self.config.pad_token_id)
+        if inputs_embeds is not None:
+            inputs_embeds = F.pad(inputs_embeds, (0, 0, 0, padding), value=0.0)
+        if sequence_id is not None:
+            sequence_id = F.pad(sequence_id.to(dtype=torch.long), (0, padding), value=-1)
+        else:
+            if attention_mask is None:
+                attention_mask = (
+                    source != self.config.pad_token_id
+                    if input_ids is not None
+                    else torch.ones(
+                        source.shape[:2],
+                        dtype=torch.bool,
+                        device=source.device,
+                    )
+                )
+            attention_mask = F.pad(attention_mask, (0, padding), value=0)
+        return input_ids, attention_mask, sequence_id, inputs_embeds, sequence_length
+
+    @staticmethod
+    def _trim_transformer_output(
+        output: TransformerOutput,
+        sequence_length: int | None,
+    ) -> TransformerOutput:
+        if sequence_length is None:
+            return output
+        hidden_states = (
+            tuple(state[:, :sequence_length] for state in output.hidden_states)
+            if output.hidden_states is not None
+            else None
+        )
+        attentions = (
+            tuple(
+                attention[..., :sequence_length, :sequence_length]
+                for attention in output.attentions
+            )
+            if output.attentions is not None
+            else None
+        )
+        return TransformerOutput(
+            last_hidden_state=output.last_hidden_state[:, :sequence_length],
+            hidden_states=hidden_states,
+            attentions=attentions,
+            s_max=output.s_max,
+            sae_hidden_states=output.sae_hidden_states,
+        )
 
     @property
     def tokenizer(self) -> EsmSequenceTokenizer:
@@ -1026,6 +1420,8 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         output_s_max: bool | None = False,
         esmfold2_hidden_states: bool = False,
         return_dict: bool | None = None,
+        compute_sae: bool = True,
+        normalize_sae: bool = False,
     ) -> TransformerOutput | tuple[torch.Tensor, ...]:
         """Run ESMC inference with the pinned Biohub mask precedence.
 
@@ -1049,25 +1445,47 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        input_ids, attention_mask, sequence_id, inputs_embeds, original_length = (
+            self._pad_fp8_inputs(input_ids, attention_mask, sequence_id, inputs_embeds)
+        )
         if attention_mask is None and sequence_id is None and input_ids is not None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
+        sae_layers, sae_token_mask = self._prepare_sae_forward(
+            compute_sae=compute_sae,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            sequence_id=sequence_id,
+        )
 
         x = self.embed(input_ids) if inputs_embeds is None else inputs_embeds
 
-        transformer_output = self.transformer(
-            x=x,
-            attention_mask=attention_mask,
-            sequence_id=sequence_id,
-            output_hidden_states=output_hidden_states,
-            output_attentions=output_attentions,
-            output_s_max=output_s_max,
-            esmfold2_hidden_states=esmfold2_hidden_states,
+        with _esmplusplus_fp8_context(self._esmc_fp8, self.device):
+            transformer_output = self.transformer(
+                x=x,
+                attention_mask=attention_mask,
+                sequence_id=sequence_id,
+                output_hidden_states=output_hidden_states,
+                output_attentions=output_attentions,
+                output_s_max=output_s_max,
+                esmfold2_hidden_states=esmfold2_hidden_states,
+                sae_layers=sae_layers,
+            )
+        sae_outputs = (
+            self._get_sae_outputs(
+                transformer_output.sae_hidden_states,
+                sae_token_mask,
+                normalize_sae=normalize_sae,
+            )
+            if sae_layers
+            else None
         )
+        transformer_output = self._trim_transformer_output(transformer_output, original_length)
         result = TransformerOutput(
             last_hidden_state=transformer_output.last_hidden_state,
             hidden_states=transformer_output.hidden_states,
             attentions=transformer_output.attentions,
             s_max=transformer_output.s_max,
+            sae_outputs=sae_outputs,
         )
         return result if return_dict else result.to_tuple()
 
@@ -1151,6 +1569,8 @@ class ESMplusplusForMaskedLM(
         esmfold2_hidden_states: bool = False,
         return_dict: bool | None = None,
         compute_logits: bool = True,
+        compute_sae: bool = True,
+        normalize_sae: bool = False,
     ) -> ESMplusplusOutput | tuple[torch.Tensor, ...]:
         if input_ids is None and inputs_embeds is None:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
@@ -1167,20 +1587,41 @@ class ESMplusplusForMaskedLM(
             else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        input_ids, attention_mask, sequence_id, inputs_embeds, original_length = (
+            self._pad_fp8_inputs(input_ids, attention_mask, sequence_id, inputs_embeds)
+        )
         if attention_mask is None and sequence_id is None and input_ids is not None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
+        sae_layers, sae_token_mask = self._prepare_sae_forward(
+            compute_sae=compute_sae,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            sequence_id=sequence_id,
+        )
 
         x = self.embed(input_ids) if inputs_embeds is None else inputs_embeds
 
-        output = self.transformer(
-            x=x,
-            attention_mask=attention_mask,
-            sequence_id=sequence_id,
-            output_hidden_states=output_hidden_states,
-            output_attentions=output_attentions,
-            output_s_max=output_s_max,
-            esmfold2_hidden_states=esmfold2_hidden_states,
+        with _esmplusplus_fp8_context(self._esmc_fp8, self.device):
+            output = self.transformer(
+                x=x,
+                attention_mask=attention_mask,
+                sequence_id=sequence_id,
+                output_hidden_states=output_hidden_states,
+                output_attentions=output_attentions,
+                output_s_max=output_s_max,
+                esmfold2_hidden_states=esmfold2_hidden_states,
+                sae_layers=sae_layers,
+            )
+        sae_outputs = (
+            self._get_sae_outputs(
+                output.sae_hidden_states,
+                sae_token_mask,
+                normalize_sae=normalize_sae,
+            )
+            if sae_layers
+            else None
         )
+        output = self._trim_transformer_output(output, original_length)
 
         last_hidden_state = output.last_hidden_state
         logits = self.sequence_head(last_hidden_state) if compute_logits else None
@@ -1198,6 +1639,7 @@ class ESMplusplusForMaskedLM(
             attentions=output.attentions,
             s_max=output.s_max,
             last_hidden_state=last_hidden_state,
+            sae_outputs=sae_outputs,
         )
         return result if return_dict else result.to_tuple()
 
@@ -1273,6 +1715,8 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
+        compute_sae: bool = True,
+        normalize_sae: bool = False,
     ) -> ESMplusplusSequenceClassifierOutput | tuple[torch.Tensor, ...]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         pooling_mask = attention_mask
@@ -1303,6 +1747,8 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
             output_s_max=output_s_max,
             return_dict=True,
             compute_logits=False,
+            compute_sae=compute_sae,
+            normalize_sae=normalize_sae,
         )
 
         last_hidden_state = output.last_hidden_state
@@ -1338,6 +1784,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
             hidden_states=output.hidden_states,
             attentions=output.attentions,
             s_max=output.s_max,
+            sae_outputs=output.sae_outputs,
         )
         return result if return_dict else result.to_tuple()
 
@@ -1392,6 +1839,8 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
         output_hidden_states: bool | None = None,
         output_s_max: bool | None = False,
         return_dict: bool | None = None,
+        compute_sae: bool = True,
+        normalize_sae: bool = False,
     ) -> ESMplusplusTokenClassifierOutput | tuple[torch.Tensor, ...]:
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         output = super().forward(
@@ -1405,6 +1854,8 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
             output_s_max=output_s_max,
             return_dict=True,
             compute_logits=False,
+            compute_sae=compute_sae,
+            normalize_sae=normalize_sae,
         )
 
         last_hidden_state = output.last_hidden_state
@@ -1420,6 +1871,7 @@ class ESMplusplusForTokenClassification(ESMplusplusForMaskedLM, EmbeddingMixin):
             hidden_states=output.hidden_states,
             attentions=output.attentions,
             s_max=output.s_max,
+            sae_outputs=output.sae_outputs,
         )
         return result if return_dict else result.to_tuple()
 

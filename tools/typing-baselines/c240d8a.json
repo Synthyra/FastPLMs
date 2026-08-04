@@ -3177,7 +3177,7 @@
     "tools/remote/python_matrix.py",
     "tools/remote/python_support_smoke.py",
     "tools/remote/run.py",
-    "tools/source_provenance.py"
+    "tools/source_record.py"
   ],
   "source_inventory_sha256": "f4ec439a48f012353d2f4932dda6c46db09178869b428a6911d1da604d1975bf",
   "source_tree_sha256": "9732188015f6fa29166428cf9c3320ee7b8045aa9cec52bf154dba671c5e65b3"

@@ -1,9 +1,9 @@
 # Binder design example
 
-`examples/binder_design_fastplms.py` is a research workflow that
-optimizes a soft binder sequence against ESMFold2 structural objectives and an
-ESM++ sequence prior. It is a source-level example, not a published model
-service or a claim that a designed sequence binds experimentally.
+`examples/binder_design_fastplms.py` is a research workflow. It optimizes a
+soft binder sequence against ESMFold2 structural objectives and an ESM++
+sequence prior. It is a source-level example, not a published model service or
+evidence that a designed sequence binds experimentally.
 
 ## Input, transformation, and output
 
@@ -20,10 +20,10 @@ Each optimization step:
 5. updates only mutable binder logits;
 6. retains the lowest-loss discrete candidate.
 
-The two supported Cutoff2025 experimental ESMFold2 variants then act as
-critics. Candidates are ranked by mean iPTM across those critics. The workflow
-writes sequences, loss trajectories, structures, confidence fields, and a
-selection table under the requested output directory.
+The two Cutoff2025 experimental ESMFold2 variants then act as critics.
+Candidates are ranked by mean iPTM across those critics. The workflow writes
+sequences, loss trajectories, structures, confidence fields, and a selection
+table to the requested output directory.
 
 Prepared atom tensors are padded to the largest observed atom table in the
 batch, rounded upward for kernel alignment. They are never sized from the first
@@ -120,5 +120,5 @@ and structure serialization. They do not validate affinity, specificity,
 developability, expression, immunogenicity, toxicity, or therapeutic utility.
 
 Candidates require independent structural review, orthogonal computational
-checks, synthesis, and experimental binding and functional validation. Confidence
-scores are model outputs, not measurements of biochemical activity.
+checks, synthesis, and experimental binding and functional validation.
+Confidence scores are model outputs, not measurements of biochemical activity.

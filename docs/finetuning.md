@@ -1,12 +1,11 @@
 # Fine-tuning
 
-FastPLMs models follow Transformers `PreTrainedModel` conventions, so
-compatible family and task-head combinations can use Trainer, Accelerate,
-distributed, and adapter workflows. Core training dependencies are isolated in
-`requirements/features/train.in`. FastPLMs 1.0 supports Python 3.11-3.14 with PyTorch 2.13 and
-Transformers 5.13. CPU is suitable for tiny contract runs; practical checkpoint
-fine-tuning normally requires a CUDA accelerator whose memory fits the selected
-model, optimizer state, and batch.
+FastPLMs models follow Transformers `PreTrainedModel` conventions. Compatible
+families and task heads work with Trainer, Accelerate, distributed, and adapter
+workflows. Core training dependencies are in `requirements/features/train.in`.
+FastPLMs 1.0 supports Python 3.11-3.14 with PyTorch 2.13 and Transformers 5.13.
+Use a CPU for a small contract run. Checkpoint fine-tuning normally needs a CUDA
+accelerator with memory for the model, optimizer state, and batch.
 
 ```bash
 uv pip install \
@@ -15,10 +14,10 @@ uv pip install \
   -c requirements/constraints/validation.txt
 ```
 
-The runnable classification and regression example currently targets ESM2,
-whose artifacts advertise `AutoModelForSequenceClassification`. Plotting is
-disabled by default, so a normal run needs only the training dependencies. To
-request plots, install the reporting profile and pass `--plot-results`:
+The classification and regression example currently targets ESM2. Its artifacts
+advertise `AutoModelForSequenceClassification`. Plotting is disabled by default,
+so a normal run needs only training dependencies. To create plots, install the
+reporting profile and pass `--plot-results`:
 
 ```bash
 uv pip install \
@@ -39,11 +38,10 @@ PYTHONPATH=src python examples/fine_tuning.py \
   --plot-results
 ```
 
-Install only `requirements/core.in` and `requirements/features/train.in`, then
-omit `--plot-results`, for the default plot-free run.
-Generated plots are saved at 300 dpi as
-`<task-output>/classification_results.png` or
-`<task-output>/regression_results.png`. Existing plot files are never replaced.
+For the default run without plots, install only `requirements/core.in` and
+`requirements/features/train.in`, then omit `--plot-results`. The example saves
+plots at 300 dpi as `<task-output>/classification_results.png` or
+`<task-output>/regression_results.png`. It does not replace an existing plot.
 
 Regression uses three independently pinned dataset snapshots:
 
@@ -64,9 +62,9 @@ PYTHONPATH=src python examples/fine_tuning.py \
   --full-determinism
 ```
 
-The exact shipped sources above use those pinned revisions automatically.
-Custom remote sources reject omitted revisions, branches, and tags. For a fully
-local run, pass existing local model and dataset directory paths through
+The shipped sources above use these pinned revisions automatically. Custom
+remote sources reject omitted revisions, branches, and tags. For a fully local
+run, pass existing local model and dataset directory paths through
 `--model_path` and the corresponding `--*-dataset-source` options. Revisions
 may be omitted for local directories because the example records an immutable
 SHA-256 over the complete tree and rejects any tree that changes between model
@@ -99,8 +97,8 @@ SeqA,SeqB,labels
 MKT...,GAV...,-8.42
 ```
 
-All split, column, and label contracts are checked before model initialization.
-Malformed data cannot allocate a model or begin training.
+FastPLMs checks all split, column, and label contracts before model
+initialization. Malformed data cannot allocate a model or start training.
 
 ## Sequence tasks
 
@@ -139,22 +137,20 @@ preparation adapter.
 ## Precision and attention
 
 Select a declared attention backend explicitly for a reproducible training run.
-Do not rely on a silent fallback. Record the resolved backend, Torch and
-Transformers versions, CUDA environment, checkpoint revision, tokenizer hashes,
-dtype, optimizer, seed, and data fingerprint.
+Do not rely on a silent fallback. Record the resolved backend; Torch and
+Transformers versions; CUDA environment; checkpoint revision; tokenizer hashes;
+dtype; optimizer; seed; and data fingerprint.
 
-The runnable example exposes `eager`, `sdpa`, and `flex_attention` through
-`--attn-backend` and defaults to `sdpa`. It intentionally rejects
-FlashAttention because the compact CLI does not expose the explicit BF16 CUDA
-model-loading and placement policy that Flash training requires. The current
-GH200/aarch64 validation environment is not expected to provide compatible
-bundled Flash kernels, and this workflow does not recommend source-building
-them. Prefer SDPA for the default training path and use Flex only on supported
-Torch platforms. Any Flash gradient evidence remains a separate,
-device-specific compliance result. `--output-dir` names a parent directory;
-regression and classification are written into separate task- and
-LoRA-specific children so Trainer state, final artifacts, and manifests do not
-collide.
+The example exposes `eager`, `sdpa`, and `flex_attention` with
+`--attn-backend`. It uses `sdpa` by default. It rejects FlashAttention because
+the CLI does not provide the explicit BF16 CUDA model-load and placement policy
+that Flash training needs. The GH200/aarch64 validation environment does not
+normally provide compatible bundled Flash kernels. This workflow does not
+recommend building them from source. Use SDPA for the default training path.
+Use Flex only on supported Torch platforms. Flash gradient evidence is a
+separate, device-specific compliance result. `--output-dir` names a parent
+directory. Regression and classification use separate task- and LoRA-specific
+children, so Trainer state, final artifacts, and manifests do not collide.
 
 Every selected task child must be absent before the command starts. The CLI
 preflights all selected children, then each training function atomically
@@ -182,16 +178,15 @@ hash. Full fine-tuning verifies the complete model state, including buffers. It
 separately compares logits from the prepared Trainer and the
 independently reloaded model on the first one or two held-out rows.
 
-LoRA is enabled by default in the runnable example. Pass `--no-use-lora` to
-fine-tune the full model instead.
+The example enables LoRA by default. Pass `--no-use-lora` to fine-tune the full
+model.
 
 ## Reproducibility and evaluation
 
-Split homologous proteins at an identity threshold appropriate to the task to
-reduce sequence leakage. Report class balance, length distribution, ambiguous
-residue handling, truncation, and any structure-derived labels. Use task-specific
-metrics and retain per-sequence predictions so aggregate improvements can be
-audited.
+Split homologous proteins at a task-appropriate identity threshold to reduce
+sequence leakage. Report class balance, length distribution, ambiguous-residue
+handling, truncation, and structure-derived labels. Use task-specific metrics
+and retain per-sequence predictions so you can audit aggregate improvements.
 
 The CLI rejects moving Hub references before loading a model or dataset. The
 example refuses a pre-existing task output before loading either source and
@@ -221,6 +216,7 @@ prepared Trainer; it is not a full-dataset pass through the independently
 reloaded instance. Retain the manifest, final artifact, and per-sequence
 evaluation outputs together when making biological claims.
 
-The runnable minimal pattern is in [`examples/fine_tuning.py`](../examples/fine_tuning.py).
-Model-family compliance establishes that the starting checkpoint is represented
-correctly; it does not validate a fine-tuned model's biological claims.
+See [`examples/fine_tuning.py`](../examples/fine_tuning.py) for the minimal
+example. Model-family compliance shows that FastPLMs represents the starting
+checkpoint correctly. It does not validate biological claims for a fine-tuned
+model.

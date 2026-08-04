@@ -31,7 +31,7 @@ construction always writes LF. No other whitespace or content is normalized.
 | Biohub Transformers | `biohub-transformers/LICENSE` | Verbatim Apache-2.0 license |
 | Boltz | `boltz/LICENSE` | Verbatim MIT license |
 | DPLM | `dplm/LICENSE` | Verbatim Apache-2.0 license |
-| DPLM | `dplm/PROVENANCE.md` | Pinned license scope for DPLM1 and DPLM2 checkpoint weights |
+| DPLM | `dplm/SOURCE_RECORD.md` | Pinned license scope for DPLM1 and DPLM2 checkpoint weights |
 | Profluent-E1 | `e1/LICENSE` | Verbatim Profluent-E1 agreement |
 | Profluent-E1 | `e1/ATTRIBUTION` | Verbatim attribution guidelines |
 | Profluent-E1 | `e1/NOTICE` | Verbatim required notice |
@@ -39,17 +39,17 @@ construction always writes LF. No other whitespace or content is normalized.
 | Profluent-E1 | `e1/BSD-3-Clause.txt` | Complete BSD-3-Clause text for the FlashAttention-derived utility identified upstream |
 | Profluent-E1 | `e1/MODIFICATIONS.md` | FastPLMs modified-file notice and conversion identifier |
 | Meta ESM | `fair-esm/LICENSE` | Verbatim MIT license |
-| Meta ESM | `fair-esm/PROVENANCE.md` | Pinned revision and parity-oracle boundary |
+| Meta ESM | `fair-esm/SOURCE_RECORD.md` | Pinned revision and parity-oracle boundary |
 | OpenFold | `openfold/LICENSE` | Verbatim Apache-2.0 license |
 | OpenFold | `openfold/MODIFICATIONS.md` | FastPLMs modified-file notice |
-| OpenFold | `openfold/PROVENANCE.md` | Pinned revision and parity-oracle boundary |
+| OpenFold | `openfold/SOURCE_RECORD.md` | Pinned revision and parity-oracle boundary |
 | ProteinTTT | `protein-ttt/LICENSE` | Verbatim MIT license |
-| ProteinTTT | `protein-ttt/PROVENANCE.md` | Pinned revision and optional-workflow boundary |
+| ProteinTTT | `protein-ttt/SOURCE_RECORD.md` | Pinned revision and optional-workflow boundary |
 
 ## Reference-only notices
 
 Some legal records apply only to isolated parity environments and are not
-copied into model artifacts. `dllogger/PROVENANCE.md` records the pinned
+copied into model artifacts. `dllogger/SOURCE_RECORD.md` records the pinned
 DLLogger dependency and installed-license check used by the ESMFold reference
 image. FastPLMs production code does not import or distribute DLLogger.
 
@@ -62,4 +62,4 @@ Dao-AILab FlashAttention under BSD-3-Clause.
 FastPLMs does not enforce ANKH use restrictions in software. The pinned DPLM
 repository's Apache-2.0 `LICENSE` and README scope the official release to the
 pretrained DPLM1 and DPLM2 weights. The immutable evidence and FastPLMs
-conversion boundary are recorded in `dplm/PROVENANCE.md`.
+conversion boundary are recorded in `dplm/SOURCE_RECORD.md`.

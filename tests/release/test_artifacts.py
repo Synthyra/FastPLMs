@@ -889,7 +889,7 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
     assert (first / "model.safetensors.index.json").is_file()
     assert not (first / "model.safetensors").exists()
     assert len(list(first.glob("model-*.safetensors"))) == 1
-    provenance = json.loads((first / "provenance.json").read_text(encoding="utf-8"))
+    provenance = json.loads((first / "source-record.json").read_text(encoding="utf-8"))
     assert provenance["schema_version"] == 4
     assert provenance["generator"] == {
         "name": "tools.artifacts.build",
@@ -917,7 +917,7 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
         "repo_id": spec.fast.repo_id,
         "revision": spec.fast.revision,
     }
-    assert "provenance.json" not in runtime_attestation["files"]
+    assert "source-record.json" not in runtime_attestation["files"]
     assert "requirements.txt" in runtime_attestation["files"]
     assert not any(_is_weight_file(path) for path in runtime_attestation["files"])
     assert provenance["bf16_execution"] == "static_parameters"
@@ -1495,8 +1495,8 @@ def test_manifest_distributes_required_modified_file_notices() -> None:
         for source_id, source in registry.upstreams.items()
     }
     assert {"Apache-2.0.txt", "BSD-3-Clause.txt", "MODIFICATIONS.md"}.issubset(distribution["e1"])
-    assert {"LICENSE", "PROVENANCE.md"}.issubset(distribution["dplm"])
-    assert {"LICENSE", "MODIFICATIONS.md", "PROVENANCE.md"}.issubset(distribution["openfold"])
+    assert {"LICENSE", "SOURCE_RECORD.md"}.issubset(distribution["dplm"])
+    assert {"LICENSE", "MODIFICATIONS.md", "SOURCE_RECORD.md"}.issubset(distribution["openfold"])
 
 
 def test_artifact_rejects_stale_checked_in_hub_license_metadata(tmp_path: Path) -> None:
@@ -1585,7 +1585,7 @@ def test_artifact_copies_official_tokenizer_bytes_exactly(tmp_path: Path) -> Non
     assert (
         artifact / "tokenizer_config.json"
     ).read_bytes() == official_tokenizer_config.read_bytes()
-    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    provenance = json.loads((artifact / "source-record.json").read_text(encoding="utf-8"))
     assert provenance["tokenizer_checkpoint"]["repo_id"] == official.repo_id
     assert provenance["tokenizer_checkpoint"]["revision"] == official.revision
     assert provenance["tokenizer_checkpoint"]["files"] == {
@@ -1846,7 +1846,7 @@ def test_artifact_build_stamps_unresolved_checkpoint_as_nonredistributable(
         _allow_untracked_runtime_for_tests=True,
     )
 
-    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    provenance = json.loads((artifact / "source-record.json").read_text(encoding="utf-8"))
     attestation = json.loads(
         (artifact / "runtime-attestation.json").read_text(encoding="utf-8")
     )
@@ -2048,7 +2048,7 @@ def test_artifact_validation_rejects_self_attested_forged_legal_provenance(
         source_root,
         _allow_untracked_runtime_for_tests=True,
     )
-    provenance_path = artifact / "provenance.json"
+    provenance_path = artifact / "source-record.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     provenance[field] = forged
     provenance_path.write_text(
@@ -2058,7 +2058,7 @@ def test_artifact_validation_rejects_self_attested_forged_legal_provenance(
     )
     manifest_path = artifact / "artifact-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["provenance.json"] = f"sha256:{hash_file(provenance_path)}"
+    manifest["source-record.json"] = f"sha256:{hash_file(provenance_path)}"
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
@@ -2132,7 +2132,7 @@ def test_dplm2_artifact_materializes_non_decoder_cache_config(tmp_path: Path) ->
     assert raw_config["is_decoder"] is False
     assert raw_config["add_cross_attention"] is False
     assert raw_config["use_cache"] is False
-    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    provenance = json.loads((artifact / "source-record.json").read_text(encoding="utf-8"))
     assert provenance["artifact_checkpoint"]["files"]["config.json"] == (
         source_config_digest.encoded
     )
@@ -2227,7 +2227,7 @@ def test_artifact_uses_manifest_selected_official_checkpoint(tmp_path: Path) -> 
         source_root,
         _allow_untracked_runtime_for_tests=True,
     )
-    provenance = json.loads((artifact / "provenance.json").read_text(encoding="utf-8"))
+    provenance = json.loads((artifact / "source-record.json").read_text(encoding="utf-8"))
     assert provenance["artifact_source"] == "official"
     assert provenance["artifact_checkpoint"]["repo_id"] == "upstream/ToyOfficial"
     assert provenance["artifact_checkpoint"]["revision"] == "5" * 40
@@ -2282,7 +2282,7 @@ def test_artifact_rejects_self_attested_forged_canonical_weight(
     save_file(forged_state, shard, metadata={"format": "pt"})
     forged_state_sha256 = _canonical_state_sha256(forged_state)
 
-    provenance_path = artifact / "provenance.json"
+    provenance_path = artifact / "source-record.json"
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     provenance["canonical_weights"]["shards"][shard.name] = (
         f"sha256:{hash_file(shard)}"
@@ -2299,7 +2299,7 @@ def test_artifact_rejects_self_attested_forged_canonical_weight(
     manifest_path = artifact / "artifact-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest[shard.name] = f"sha256:{hash_file(shard)}"
-    manifest["provenance.json"] = f"sha256:{hash_file(provenance_path)}"
+    manifest["source-record.json"] = f"sha256:{hash_file(provenance_path)}"
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

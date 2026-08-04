@@ -11,7 +11,7 @@ EXPECTED_CRITICAL_TYPING_SCOPE = (
     "tools/artifacts/build.py",
     "tools/artifacts/publish.py",
     "tools/conversion/state_transforms.py",
-    "tools/source_provenance.py",
+    "tools/source_record.py",
 )
 EXPECTED_DIAGNOSTIC_TYPING_SCOPE = (
     "benchmarks",

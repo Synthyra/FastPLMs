@@ -9,11 +9,11 @@ FastPLMs supports exactly four Biohub ESMFold2 variants:
 | `biohub/ESMFold2-Experimental-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Cutoff2025` | 48 | Optional; experimental full-checkpoint contract |
 | `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; experimental Fast single-sequence-conditioning contract |
 
-The Fast variants are inference-optimized for single-sequence conditioning and
-are not MSA-conditioned. They still support the checkpoint's typed
-multichain and multimolecule inputs, but every protein chain must use
-single-sequence mode with `msa=None`. Use the corresponding full ESMFold2
-variant when any protein input carries an MSA. This distinction follows the
+The Fast variants are optimized for single-sequence conditioning and are not
+MSA-conditioned. They accept the checkpoint typed multichain and multimolecule
+inputs, but each protein chain must use single-sequence mode with `msa=None`.
+Use the corresponding full ESMFold2 variant when a protein input has an MSA.
+This distinction follows the
 official Biohub architecture description: Appendix A.2.1 reports 24 folding
 blocks for Fast versus 48 for full ESMFold2 and describes Fast as operating
 without MSA conditioning for single-sequence inference
@@ -39,9 +39,9 @@ uv pip install \
   -c requirements/constraints/validation.txt
 ```
 
-These files are dependency declarations, not a FastPLMs installation. The
-loading example below obtains runtime source from the pinned Hugging Face model
-with `trust_remote_code=True`.
+These files declare dependencies. They do not install FastPLMs. The loading
+example below obtains runtime source from the pinned Hugging Face model with
+`trust_remote_code=True`.
 
 The structure dependency file retains Accelerate specifically for the documented
 `device_map`-based, memory-safe loading of the 6B ESMC backbone. It retains
@@ -102,9 +102,9 @@ model = AutoModel.from_pretrained(
 ).eval()
 ```
 
-This Fast quick start intentionally demonstrates the no-MSA path. It does not
-turn MSA conditioning on implicitly. For MSA-conditioned inference, load
-`Synthyra/ESMFold2` or the experimental full Cutoff2025 checkpoint instead.
+This Fast quick start shows the no-MSA path. It does not enable MSA conditioning
+implicitly. For MSA-conditioned inference, load `Synthyra/ESMFold2` or the
+experimental full Cutoff2025 checkpoint.
 
 The folding model and its ESMC backbone use the same explicitly resolved
 attention implementation. Unsupported names raise. The ESMC checkpoint is
@@ -128,17 +128,16 @@ of `biohub/ESMFold2`. The manifest records its 417,306,584-byte size, MIT
 license, and SHA-256
 `9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5`.
 
-This file is a pickle and therefore an explicit trusted-deserialization
-boundary. FastPLMs rejects user-supplied asset and `cache_dir` symlinks. The
-only allowed link is the Hugging Face snapshot entry for the exact manifest
-repository and revision, and it must resolve inside that repository's contained
-blob directory. The loader creates a private, loader-owned temporary snapshot,
-verifies that snapshot's size and SHA-256, and unpickles only the verified
-snapshot. This closes path-replacement and in-place source-write races between
-validation and deserialization. `HF_HUB_OFFLINE=1` and
-`TRANSFORMERS_OFFLINE=1` require the exact cache object to exist; an offline
-call never downloads or substitutes an asset. The release record stores the identity
-and cache policy for every artifact.
+This file is a pickle, so it is an explicit trusted-deserialization boundary.
+FastPLMs rejects user-supplied asset and `cache_dir` symlinks. The only allowed
+link is the Hugging Face snapshot entry for the exact manifest repository and
+revision. It must resolve inside that repository blob directory. The loader
+creates a private temporary snapshot, verifies its size and SHA-256, and
+unpickles only the verified snapshot. This prevents path replacement and
+in-place source writes between validation and deserialization.
+`HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` require the exact cache object.
+An offline call does not download or substitute an asset. The release record
+stores the identity and cache policy for each artifact.
 
 ## Inputs and outputs
 
@@ -267,7 +266,7 @@ installed Transformer Engine version. Resolution is fail-closed:
   unavailable;
 - explicit `bf16` and `fp32` remain supported.
 
-FP8 must therefore be requested deliberately:
+Request FP8 explicitly:
 
 ```python
 model.reload_esmc(precision="fp8", device="cuda")

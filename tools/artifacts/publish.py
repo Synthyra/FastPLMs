@@ -50,7 +50,7 @@ from tools.artifacts.build import (
 )
 
 
-_COMPLETE_ATTESTATION_FILES = frozenset({"artifact-manifest.json", "provenance.json"})
+_COMPLETE_ATTESTATION_FILES = frozenset({"artifact-manifest.json", "source-record.json"})
 _REQUIRED_FILES_ONLY_PATHS = frozenset(
     {
         "README.md",
@@ -595,7 +595,7 @@ def _assert_current_release_texts(
 ) -> tuple[str, str]:
     """Bind cards and legal texts to the current validated source tree."""
 
-    provenance = _load_json_object(artifact_path / "provenance.json", "provenance.json")
+    provenance = _load_json_object(artifact_path / "source-record.json", "source-record.json")
     runtime_revision = provenance.get("runtime_revision")
     source_tree_sha256 = provenance.get("source_tree_sha256")
     runtime_bundle_sha256 = provenance.get("runtime_bundle_sha256")
@@ -1003,8 +1003,8 @@ def _validate_files_only_artifact(
         "artifact-manifest.json",
     )
     provenance = _load_json_object(
-        artifact_path / "provenance.json",
-        "provenance.json",
+        artifact_path / "source-record.json",
+        "source-record.json",
     )
     config = _load_json_object(artifact_path / "config.json", "config.json")
     if provenance.get("model_id") != spec.id:
@@ -1387,7 +1387,7 @@ def prepare_complete_plan(
         raise ArtifactError(
             "Complete artifact inventory differs from artifact-manifest.json."
         )
-    provenance = _load_json_object(artifact_path / "provenance.json", "provenance.json")
+    provenance = _load_json_object(artifact_path / "source-record.json", "source-record.json")
     if (
         provenance.get("weights_license_status") != "resolved"
         or provenance.get("redistributable") is not True
@@ -1430,7 +1430,7 @@ def prepare_complete_plan(
     digests: list[tuple[str, str]] = []
     for relative_name in sorted(inventory):
         path = _resolve_artifact_manifest_path(artifact_path, relative_name)
-        if relative_name not in {"artifact-manifest.json", "provenance.json"} and (
+        if relative_name not in {"artifact-manifest.json", "source-record.json"} and (
             relative_name not in canonical_weights and not _is_weight_path(relative_name)
         ):
             _validate_publishable_non_weight_path(
@@ -1453,7 +1453,7 @@ def prepare_complete_plan(
     required = {
         "README.md",
         "config.json",
-        "provenance.json",
+        "source-record.json",
         "artifact-manifest.json",
         _RUNTIME_ATTESTATION_NAME,
         *canonical_weights,

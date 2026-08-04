@@ -3,8 +3,8 @@
 ## Dependencies and platform requirements
 
 The shared sequence embedding API requires Python 3.11-3.14, PyTorch 2.13, and
-Transformers 5.13. Install those dependencies directly. Transformers loads the
-runtime source from the pinned Hugging Face model repository:
+Transformers 5.13. Install these dependencies. Transformers loads the runtime
+source from the pinned Hugging Face model repository:
 
 ```bash
 python -m pip install \
@@ -74,14 +74,14 @@ validated before input hashing, model inference, or output creation.
 
 ## Bounded streaming and length policy
 
-FASTA input is read line by line into an immutable, incrementally fingerprinted
-spool. The runner never reads the complete FASTA file into memory. It keeps only
-one bounded `batch_window_size` group eligible for length bucketing, applies
-`max_tokens_per_batch` to the padded biological-residue count, and then restores
-exact source order. Omitting the window size resolves it to sixteen times the
-batch size; an explicit value always wins. The resolved window is included in
-the result metadata and resume fingerprint. Result descriptors are stored once;
-tensor payloads remain lazy for persistent outputs.
+The runner reads FASTA input line by line into an immutable incrementally
+fingerprinted spool. It never reads the complete FASTA file into memory. It
+keeps one bounded `batch_window_size` group for length bucketing, applies
+`max_tokens_per_batch` to the padded biological-residue count, and restores
+source order. If omitted, the window is sixteen times the batch size. An
+explicit value takes precedence. Result metadata and the resume fingerprint
+record the resolved window. Persistent outputs store result descriptors once and
+keep tensor payloads lazy.
 
 SQLite prefixes commit at completed batch-window boundaries. Safetensors packs
 windows into bounded shards and publishes a resumable prefix whenever a shard
@@ -173,11 +173,10 @@ result = model.embed_dataset(
 print(result.metadata["pool_slices"])
 ```
 
-Choose poolers based on the downstream object. `mean` is a stable sequence
-summary, `max` highlights large per-feature responses, and `std` or `var`
-captures within-sequence dispersion. Concatenating poolers increases output
-width and should be treated as a feature-design decision rather than a free
-accuracy improvement.
+Choose poolers for the downstream object. `mean` gives a sequence summary,
+`max` shows large per-feature responses, and `std` or `var` describes
+within-sequence dispersion. Concatenating poolers increases output width. It is
+a feature-design decision, not a free accuracy improvement.
 
 ## Full residue embeddings
 
@@ -308,11 +307,10 @@ after that index, its descriptor shards, and every tensor shard are durable.
 `run.json` even when the convenience pointer is missing or interrupted.
 
 Successful overwrites retain earlier immutable generation indexes, descriptors,
-and tensor shards. This is required for correctness: an `EmbeddingResult` opened
-before the overwrite still resolves its lazy tensors through the earlier paths.
-FastPLMs never guesses when those readers have been released. Preview and then
-explicitly collect stale generations only after guaranteeing that no reader or
-writer for the output remains active:
+and tensor shards. This is required because an `EmbeddingResult` opened before
+the overwrite resolves lazy tensors through the earlier paths. FastPLMs does not
+guess when those readers are released. Preview stale generations. Then collect
+them only after you confirm that no reader or writer for the output is active:
 
 ```python
 from fastplms.embeddings import garbage_collect_safetensors_generations
@@ -409,15 +407,14 @@ checkpoint-identity hash fields. Embedding metadata and resume fingerprints use
 those fields as the fallback, so local offline runs retain complete traceability.
 The packaging fields are excluded from semantic configuration parity.
 
-Run-fingerprint schema v3 binds the exact current bytes, names, dtypes, and
-shapes of every model parameter and persistent buffer. State tensors are copied
-to CPU in bounded chunks rather than duplicating the complete model. The digest
-is recomputed from authoritative bytes for every persisted run; object identity,
-autograd version counters, and cached state digests are never trusted. Mutations
-through `Parameter.data` or another storage alias therefore change both the
-model-state digest and resume identity. Changing any material input, model
-state, or setting prevents resume into an incompatible output. Results written
-by older fingerprint schemas cannot be resumed.
+Run-fingerprint schema v3 binds the current bytes, names, dtypes, and shapes of
+each model parameter and persistent buffer. State tensors are copied to CPU in
+bounded chunks. The digest is recomputed from authoritative bytes for each
+persisted run. FastPLMs does not trust object identity, autograd version
+counters, or cached state digests. A mutation through `Parameter.data` or
+another storage alias changes the model-state digest and resume identity.
+Changing any material input, model state, or setting prevents resume into an
+incompatible output. Results from older fingerprint schemas cannot resume.
 
 Models with meta-device tensors, custom offloading, or an externally managed
 state identity may pass the keyword-only `model_state_fingerprint` override.

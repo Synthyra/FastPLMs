@@ -17,7 +17,7 @@ from tools.artifacts.build import (
     _validated_runtime_snapshot,
 )
 from tools.remote.run import create_source_archive
-from tools.source_provenance import (
+from tools.source_record import (
     ARCHIVE_PROVENANCE_NAME,
     SourceProvenanceError,
     validate_archived_root,

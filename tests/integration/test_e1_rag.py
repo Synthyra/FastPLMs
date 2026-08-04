@@ -380,7 +380,7 @@ def test_mmseqs_searcher_subprocess_path_is_mockable(tmp_path, monkeypatch) -> N
     assert any("createdb" in call for call in calls)
     assert any("search" in call for call in calls)
     assert any("result2msa" in call for call in calls)
-    assert (tmp_path / "msas/query/search-provenance.json").is_file()
+    assert (tmp_path / "msas/query/search-record.json").is_file()
 
 
 def test_colabfold_searcher_http_path_is_mockable(tmp_path, monkeypatch) -> None:

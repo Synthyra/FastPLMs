@@ -1073,7 +1073,7 @@ def probe_tiny_cpu_many(
         raise RuntimeError("Invalid non-release CPU test artifact marker.")
     forbidden_release_files = [
         name
-        for name in ("artifact-manifest.json", "provenance.json", "runtime-attestation.json")
+        for name in ("artifact-manifest.json", "source-record.json", "runtime-attestation.json")
         if (artifact / name).exists()
     ]
     if forbidden_release_files:

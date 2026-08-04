@@ -1,10 +1,10 @@
 # Licensing and attribution
 
 FastPLMs source is distributed under the Apache License 2.0. Model checkpoints,
-official source repositories, and copied third-party components retain their own
+official source repositories, and copied third-party components have their own
 terms. The model manifest records code and checkpoint licenses separately.
 
-Each family also records Hugging Face model-card metadata separately from its
+Each family records Hugging Face model-card metadata separately from its
 human-readable checkpoint terms. Standard checkpoints use the Hub identifiers
 `mit`, `apache-2.0`, or `cc-by-nc-sa-4.0`. E1 uses `other` with the name and
 source link for its clickthrough agreement. DPLM1 and DPLM2 use
@@ -14,21 +14,20 @@ validation.
 `LICENSES/` contains distributable copies of required legal texts.
 `THIRD_PARTY_NOTICES.md` maps each model family and component to its source,
 revision, terms, modifications, and attribution. Release validation compares
-these files with the canonical pinned upstream files by hash.
+these files to the canonical pinned upstream files by hash.
 
 ## ANKH
 
 ANKH implementations and mirrored weights are retained under CC BY-NC-SA 4.0.
-Artifacts and model cards display those terms prominently. FastPLMs does not
-implement a runtime restriction or decide whether a particular use satisfies
-the license.
+Artifacts and model cards show those terms prominently. FastPLMs does not
+implement a runtime restriction or decide if a use satisfies the license.
 
 ## E1
 
 E1 retains the upstream agreement, `ATTRIBUTION`, `NOTICE`, Apache and BSD
 texts, modified-file notices, and documentation attribution. Relevant launches
-display `Profluent-E1`. Redistribution and use remain subject to the upstream
-agreement; review `LICENSES/e1/` before use.
+display `Profluent-E1`. Redistribution and use are subject to the upstream
+agreement. Review `LICENSES/e1/` before use.
 
 ## DPLM
 
@@ -36,13 +35,13 @@ The ByteDance DPLM repository carries an
 [Apache-2.0 license](https://github.com/bytedance/dplm/blob/main/LICENSE)
 and its [official README](https://github.com/bytedance/dplm/blob/main/README.md#overview)
 defines the repository release as including pretrained weights for both DPLM1
-and DPLM2. FastPLMs therefore records both checkpoint families as Apache-2.0,
+and DPLM2. FastPLMs records both checkpoint families as Apache-2.0,
 with Hub metadata `license: apache-2.0`,
 `weights_license_status="resolved"`, and `redistributable=true`.
 
-The verbatim license and immutable evidence record are distributed from
-`LICENSES/dplm/`. Complete publication remains fail-closed unless the artifact,
-legal inventory, state-parity evidence, and atomic Hub preflight all pass.
+`LICENSES/dplm/` contains the verbatim license and immutable evidence record.
+Complete publication fails closed unless the artifact, legal inventory,
+state-parity evidence, and atomic Hub preflight pass.
 
 ## Biohub, Boltz, Meta, OpenFold, and ProteinTTT
 

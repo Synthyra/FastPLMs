@@ -38,7 +38,7 @@ from tools.artifacts.license_metadata import (
     validate_hub_license_metadata,
 )
 from tools.conversion import StateTransformError, apply_state_transform
-from tools.source_provenance import (
+from tools.source_record import (
     ARCHIVE_PROVENANCE_NAME,
     SourceProvenanceError,
     validate_archived_root,
@@ -65,7 +65,7 @@ _MODEL_CARD_RUNTIME_PROVENANCE = (
     "- Runtime revision: recorded separately in the built artifact and published commit"
 )
 _MODEL_CARD_DIGEST_PROVENANCE = (
-    "- Source-tree and runtime-bundle SHA-256: recorded in `provenance.json`"
+    "- Source-tree and runtime-bundle SHA-256: recorded in `source-record.json`"
 )
 _ARTIFACT_REQUIREMENT_INPUTS = (
     "requirements/core.in",
@@ -91,7 +91,7 @@ _RELEASE_TOOL_SCOPE_PATHS = (
     "tools/conversion/state_transforms.py",
     "tools/conversion/state_validation.py",
     "tools/remote/biohub_reference_environment.py",
-    "tools/source_provenance.py",
+    "tools/source_record.py",
 )
 _RELEASE_TOOL_SCOPE_ROOTS = (
     *_ARTIFACT_REQUIREMENT_INPUTS,
@@ -101,7 +101,7 @@ _RELEASE_TOOL_SCOPE_ROOTS = (
     "tools/artifacts",
     "tools/conversion",
     "tools/remote/biohub_reference_environment.py",
-    "tools/source_provenance.py",
+    "tools/source_record.py",
 )
 _RELEASE_TOOL_DIGEST_DOMAIN = b"fastplms-release-tools-v1\0"
 _GENERATED_RUNTIME_UPDATE_PATHS = frozenset(
@@ -2531,7 +2531,7 @@ def _runtime_attestation(
 ) -> dict[str, Any]:
     """Create a deliberately runtime-scoped attestation for files-only updates."""
 
-    canonical_weights = _load_json_object_for_build(root / "provenance.json").get(
+    canonical_weights = _load_json_object_for_build(root / "source-record.json").get(
         "canonical_weights"
     )
     if not isinstance(canonical_weights, Mapping):
@@ -2542,7 +2542,7 @@ def _runtime_attestation(
         raise ArtifactError("Artifact provenance has invalid canonical weight metadata.")
     excluded = {
         "artifact-manifest.json",
-        "provenance.json",
+        "source-record.json",
         _RUNTIME_ATTESTATION_NAME,
         index,
         *(str(name) for name in shards),
@@ -3062,7 +3062,7 @@ def build_artifact(
         )
         _copy_licenses(temporary, source_root, registry, spec)
         _write_json(
-            temporary / "provenance.json",
+            temporary / "source-record.json",
             _provenance(
                 registry,
                 spec,
@@ -3159,7 +3159,7 @@ def validate_artifact(
     required_paths = {
         "README.md",
         "config.json",
-        "provenance.json",
+        "source-record.json",
         "requirements.txt",
         _RUNTIME_ATTESTATION_NAME,
         "THIRD_PARTY_NOTICES.md",
@@ -3201,7 +3201,7 @@ def validate_artifact(
     if not isinstance(config, dict):
         config = None
         failures.append("config.json must contain an object")
-    provenance_path = path / "provenance.json"
+    provenance_path = path / "source-record.json"
     try:
         card_text = (path / "README.md").read_text(encoding="utf-8")
         card_license = parse_hub_license_metadata(card_text)
@@ -3213,7 +3213,7 @@ def validate_artifact(
         provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         provenance = None
-        failures.append("provenance.json is missing or invalid")
+        failures.append("source-record.json is missing or invalid")
     if isinstance(provenance, dict):
         if spec is not None and registry is not None:
             try:
@@ -3685,7 +3685,7 @@ def validate_artifact(
             excluded = {
                 None,
                 "artifact-manifest.json",
-                "provenance.json",
+                "source-record.json",
                 _RUNTIME_ATTESTATION_NAME,
                 *weight_paths,
             }
