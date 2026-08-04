@@ -196,6 +196,63 @@ and padding, and `attention_mask` is ignored. Values greater than or equal to
 zero are valid sequence-group IDs; `-1` denotes padding. Omit `sequence_id` to
 use `attention_mask` as the padding contract.
 
+### Hidden-state sparse autoencoders
+
+ESM++ accepts hidden-state SAEs from the official
+[Biohub ESMC SAE collection](https://huggingface.co/collections/biohub/esmc-saes-for-hidden-states-all-layers).
+Choose an SAE trained for this checkpoint's ESMC scale, then load and attach
+only the required layer modules:
+
+```python
+import torch
+from transformers import AutoModel
+
+sae = AutoModel.from_pretrained("biohub/ESMC-600M-sae-layer27-k64-codebook65536", device=model.device)
+sae.initialize_layers([27])
+model.add_sae_models([sae.layers["27"]])
+
+with torch.inference_mode():
+    output = model(**batch, normalize_sae=True)
+
+features = output.sae_outputs["layer27"]
+print(features.shape, features.layout)  # (valid_token_count, codebook_dim), sparse COO
+```
+
+SAEs run by default after attachment; `compute_sae=False` bypasses their
+execution. Outputs are detached sparse tensors keyed by `layer{N}`, exclude
+padding under the `sequence_id`-before-`attention_mask` rule, and optionally use
+Biohub's `(features / max) * idf` normalization. SAE computation requires
+`input_ids` and rejects mask tokens because the SAEs were trained on unmasked
+sequences. This interface supports hidden-state SAEs only, not MLP-output SAEs.
+FastPLMs does not mirror SAE weights or add them to its model manifest.
+
+### Experimental FP8 inference
+
+The default remains the checkpoint's declared BF16 behavior. FP8 is an
+explicit experimental inference opt-in on every ESM++ scale:
+
+```python
+import torch
+from transformers import AutoModel
+
+fp8_model = AutoModel.from_pretrained(
+    "Synthyra/ESMplusplus_large",
+    trust_remote_code=True,
+    dtype=torch.bfloat16,
+).cuda().eval()
+fp8_model.enable_fp8()
+print(fp8_model.esmc_precision_status)
+
+with torch.inference_mode():
+    fp8_output = fp8_model(**{name: value.cuda() for name, value in batch.items()})
+```
+
+FP8 forward calls require `torch.inference_mode()`, and the sequence dimension
+is padded to a multiple of 16 internally. Conversion uses Transformer Engine
+for the supported linear set and fails closed when the dependency, compatible
+CUDA hardware, or complete conversion contract is unavailable. It never
+silently falls back to BF16 and is not a numerical-parity claim.
+
 | Backend | Support | Measurement status |
 | --- | --- | --- |
 | `sdpa` | Recommended fidelity path | Pending release measurement |
@@ -217,7 +274,7 @@ and
 - Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`
 - AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForMaskedLM` = `pretrained`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3`
-- Precision policies: `default`
+- Precision policies: `default`, `fp8` (experimental)
 - BF16 execution: `static_parameters`
 - Generation contract: `not_applicable`
 - Artifact dependency set: `core`

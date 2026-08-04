@@ -156,6 +156,11 @@ class EsmcReportSet:
 
 ESMC_DIAGNOSTIC_SCHEMA_VERSION = 3
 ESMC_MODEL_IDS = ("esmc_small", "esmc_large", "esmc_6b")
+ESMC_SAE_EXAMPLES = {
+    "esmc_small": ("biohub/ESMC-300M-sae-layer23-k64-codebook65536", 23),
+    "esmc_large": ("biohub/ESMC-600M-sae-layer27-k64-codebook65536", 27),
+    "esmc_6b": ("biohub/ESMC-6B-sae-layer60-k64-codebook16384", 60),
+}
 ESMC_PANEL_KINDS = ("generated_kernel_boundary", "real_biological_holdout")
 ESMC_REFERENCE_SOURCE_NAMES = ("biohub-esm", "biohub-transformers")
 ESMC_BACKENDS = (
@@ -3336,6 +3341,7 @@ head.
 
 """
     if family_id == "esm_plusplus":
+        sae_id, sae_layer = ESMC_SAE_EXAMPLES[spec.id]
         esmc_table = _esmc_diagnostic_table(
             (
                 ("eager", "Supported"),
@@ -3366,6 +3372,63 @@ When `sequence_id` is supplied, it is authoritative for ESMC attention grouping
 and padding, and `attention_mask` is ignored. Values greater than or equal to
 zero are valid sequence-group IDs; `-1` denotes padding. Omit `sequence_id` to
 use `attention_mask` as the padding contract.
+
+### Hidden-state sparse autoencoders
+
+ESM++ accepts hidden-state SAEs from the official
+[Biohub ESMC SAE collection](https://huggingface.co/collections/biohub/esmc-saes-for-hidden-states-all-layers).
+Choose an SAE trained for this checkpoint's ESMC scale, then load and attach
+only the required layer modules:
+
+```python
+import torch
+from transformers import AutoModel
+
+sae = AutoModel.from_pretrained("{sae_id}", device=model.device)
+sae.initialize_layers([{sae_layer}])
+model.add_sae_models([sae.layers["{sae_layer}"]])
+
+with torch.inference_mode():
+    output = model(**batch, normalize_sae=True)
+
+features = output.sae_outputs["layer{sae_layer}"]
+print(features.shape, features.layout)  # (valid_token_count, codebook_dim), sparse COO
+```
+
+SAEs run by default after attachment; `compute_sae=False` bypasses their
+execution. Outputs are detached sparse tensors keyed by `layer{{N}}`, exclude
+padding under the `sequence_id`-before-`attention_mask` rule, and optionally use
+Biohub's `(features / max) * idf` normalization. SAE computation requires
+`input_ids` and rejects mask tokens because the SAEs were trained on unmasked
+sequences. This interface supports hidden-state SAEs only, not MLP-output SAEs.
+FastPLMs does not mirror SAE weights or add them to its model manifest.
+
+### Experimental FP8 inference
+
+The default remains the checkpoint's declared BF16 behavior. FP8 is an
+explicit experimental inference opt-in on every ESM++ scale:
+
+```python
+import torch
+from transformers import AutoModel
+
+fp8_model = AutoModel.from_pretrained(
+    "{model_id}",
+    trust_remote_code=True,
+    dtype=torch.bfloat16,
+).cuda().eval()
+fp8_model.enable_fp8()
+print(fp8_model.esmc_precision_status)
+
+with torch.inference_mode():
+    fp8_output = fp8_model(**{{name: value.cuda() for name, value in batch.items()}})
+```
+
+FP8 forward calls require `torch.inference_mode()`, and the sequence dimension
+is padded to a multiple of 16 internally. Conversion uses Transformer Engine
+for the supported linear set and fails closed when the dependency, compatible
+CUDA hardware, or complete conversion contract is unavailable. It never
+silently falls back to BF16 and is not a numerical-parity claim.
 
 {esmc_table}
 

@@ -68,6 +68,60 @@ padding, while `attention_mask` is ignored. Without `sequence_id`,
 padding ID. Callers that need both chain isolation and padding must encode both
 in `sequence_id`; the two public masks are not intersected.
 
+ESM++ accepts hidden-state sparse autoencoders (SAEs) loaded from the official
+[Biohub ESMC SAE collection](https://huggingface.co/collections/biohub/esmc-saes-for-hidden-states-all-layers).
+This includes the five Biohub Platform checkpoints at ESMC-300M layer 23,
+ESMC-600M layer 27, and ESMC-6B layer 60, as well as compatible hidden-state
+all-layer and layer-specific Hub variants.
+The SAE weights remain in their Biohub repositories and are not mirrored in a
+FastPLMs artifact or manifest entry. Load the SAE container with `AutoModel`,
+materialize only the required layers, and attach those layer modules to the
+matching ESM++ scale:
+
+```python
+import torch
+from transformers import AutoModel, AutoTokenizer
+
+model_id = "Synthyra/ESMplusplus_6B"
+model = AutoModel.from_pretrained(model_id, trust_remote_code=True).eval()
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+sae = AutoModel.from_pretrained(
+    "biohub/ESMC-6B-sae-layer60-k64-codebook16384",
+    allow_patterns=["config.json", "layer_60.safetensors"],
+    device=model.device,
+)
+sae.initialize_layers([60])
+model.add_sae_models([sae.layers["60"]])
+
+inputs = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
+inputs = {name: value.to(model.device) for name, value in inputs.items()}
+with torch.inference_mode():
+    output = model(**inputs, normalize_sae=True)
+
+features = output.sae_outputs["layer60"]
+print(features.shape, features.layout)  # (valid_token_count, codebook_dim), sparse COO
+```
+
+SAEs run by default after attachment; pass `compute_sae=False` for a zero-work
+bypass. `sae_outputs` is keyed by `layer{N}`, and each detached sparse tensor
+contains only positions valid under the same `sequence_id`-before-
+`attention_mask` precedence described above. `normalize_sae=True` applies the
+Biohub `(features / max) * idf` normalization buffers. SAE computation requires
+`input_ids` and rejects mask tokens because these SAEs were trained on unmasked
+sequences. Only SAEs trained against transformer hidden states are supported;
+MLP-output SAEs are outside this interface.
+
+The default ESM++ path remains the checkpoint's declared BF16 behavior. FP8 is
+an explicit experimental inference opt-in for all three ESM++ scales. Load the
+canonical weights as BF16 on CUDA, switch an evaluation model with
+`model.enable_fp8()`, and inspect `model.esmc_precision_status`; FP8 forward
+calls require `torch.inference_mode()`. The model pads the sequence dimension
+to a multiple of 16 internally. Conversion strictly replaces the supported
+linear set through Transformer Engine and raises if Transformer Engine,
+compatible CUDA hardware, or the complete conversion contract is unavailable.
+It never silently falls back to BF16 and does not turn FP8 execution into a
+numerical-parity claim.
+
 Exact semantic configuration, tokenizer, state, alias, and SDPA contracts are
 validated against the pinned Biohub implementation. SDPA is the recommended
 highest-fidelity path. Flex Attention and FlashAttention 3 are supported,

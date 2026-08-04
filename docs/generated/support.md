@@ -69,7 +69,7 @@ selectable. Strict-parity exceptions are documented in the checkpoint cards.
 | Family | Attention | Precision | BF16 execution | Extra | Reference |
 | --- | --- | --- | --- | --- | --- |
 | `esm2` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default` | `fp32_parameters_autocast` | `core` | `reference-esm2` |
-| `esm_plusplus` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default` | `static_parameters` | `core` | `reference-biohub-esm` |
+| `esm_plusplus` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default`, `fp8` (experimental) | `static_parameters` | `core` | `reference-biohub-esm` |
 | `esm3` | `eager`, `sdpa`, `flex_attention` | `default` | `fp32_parameters_autocast` | `core` | `reference-biohub-esm` |
 | `e1` | `sdpa`, `flex_attention` | `default` | `static_parameters` | `core` | `reference-e1` |
 | `dplm` | `eager`, `sdpa`, `flex_attention`, `flash_attention_3` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` |
