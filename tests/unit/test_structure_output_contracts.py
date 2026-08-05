@@ -432,6 +432,32 @@ def test_esmfold2_public_forward_honors_output_controls_and_sampler_overrides(
     if model_type == "release":
         model.confidence_head = _TinyConfidenceHead()
     features = prepare_protein_features("AC")  # batched tensors for b=1, l=2 residues
+    batch_size, sequence_length = features["res_type"].shape
+    features.update(
+        {
+            "pocket_feature": torch.zeros_like(features["res_type"]),
+            "gt_coords": torch.zeros_like(features["ref_pos"]),
+            "is_resolved": torch.zeros_like(features["atom_attention_mask"]),
+            "frames_idx": torch.zeros(
+                batch_size,
+                sequence_length,
+                3,
+                dtype=torch.long,
+            ),  # (b, l, frame=3)
+            "disto_cond": torch.zeros(
+                batch_size,
+                sequence_length,
+                sequence_length,
+                dtype=torch.long,
+            ),  # (b, l, l)
+            "disto_cond_mask": torch.zeros(
+                batch_size,
+                sequence_length,
+                sequence_length,
+                dtype=torch.bool,
+            ),  # (b, l, l)
+        }
+    )
     common_kwargs = {
         "num_loops": 0,
         "num_sampling_steps": 1,

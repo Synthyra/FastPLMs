@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -70,6 +71,9 @@ test_esmfold2_real_features_flow_through_tiny_core_and_tm_loss = (
 )
 test_pocket_conditioning_is_rejected_instead_of_silently_dropped = (
     esmfold2_leaf_contracts.test_pocket_conditioning_is_rejected_instead_of_silently_dropped
+)
+test_distogram_conditioning_is_rejected_instead_of_silently_dropped = (
+    esmfold2_leaf_contracts.test_distogram_conditioning_is_rejected_instead_of_silently_dropped
 )
 test_boltz_save_pretrained_defaults_to_safetensors_and_round_trips = (
     boltz_checkpoint_contracts.test_save_pretrained_defaults_to_safetensors_and_round_trips
@@ -196,6 +200,24 @@ def test_public_binder_workflow_pads_heterogeneous_prepared_atoms_without_trunca
     assert result["inputs"]["ref_pos"].shape == (2, 96, 3)
     assert result["chain_info_list"] == [["chain-1"], ["chain-2"]]
     assert result["distogram_logits"][:, 0, 0, 0].tolist() == [1.0, 2.0]
+
+
+def test_binder_example_rejects_prepared_feature_schema_drift() -> None:
+    from examples import binder_design_fastplms as binder
+
+    class StrictModel:
+        def forward(self, token_index: torch.Tensor) -> torch.Tensor:
+            return token_index
+
+    with pytest.raises(TypeError, match="unexpected_feature"):
+        binder._prepare_model_forward_kwargs(
+            StrictModel(),
+            {
+                "token_index": torch.zeros(1),  # (n=1,)
+                "unexpected_feature": torch.zeros(1),  # (n=1,)
+            },
+            {"seed": 7},
+        )
 
 
 def test_binder_example_main_wires_explicit_offline_cli_arguments(

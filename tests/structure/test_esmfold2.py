@@ -7,8 +7,11 @@ Official parity is exercised only through the isolated bundles in
 from __future__ import annotations
 
 import importlib
+import inspect
+
 import pytest
 import torch
+
 from types import SimpleNamespace
 from transformers.modeling_utils import PreTrainedModel
 
@@ -673,10 +676,9 @@ def test_esmfold2_automodel_loads(model_key: str) -> None:
 def test_esmfold2_input_builder_complex_and_exports() -> None:
     model = _load_fast_model("esmfold2_fast")
     types = model.input_types
-    msa = types.MSA.from_sequences([TEST_SEQUENCE, "MSTNPKPQRKTKRNS"])
     structure_input = types.StructurePredictionInput(
         sequences=[
-            types.ProteinInput(id="A", sequence=TEST_SEQUENCE, msa=msa),
+            types.ProteinInput(id="A", sequence=TEST_SEQUENCE),
             types.DNAInput(id="B", sequence="ATGC"),
             types.LigandInput(id="L", smiles="O"),
         ]
@@ -687,6 +689,7 @@ def test_esmfold2_input_builder_complex_and_exports() -> None:
     assert features["token_index"].shape[1] > len(TEST_SEQUENCE)
     assert features["ref_pos"].shape[-1] == 3
     assert len(chain_infos) == 3
+    inspect.signature(type(model).forward).bind(model, **features)
 
     result = model.fold_protein(
         TEST_SEQUENCE,
@@ -702,5 +705,14 @@ def test_esmfold2_input_builder_complex_and_exports() -> None:
     assert result.plddt.ndim == 1
     assert result.ptm is not None
 
-    del model, features, result
+    multimer = model.fold_protein(
+        f"{TEST_SEQUENCE}:MKTIIALSYIFCLVFA",
+        num_loops=1,
+        num_sampling_steps=1,
+        num_diffusion_samples=1,
+        seed=0,
+    )
+    assert len(set(multimer.complex.chain_id.tolist())) == 2
+
+    del model, features, result, multimer
     torch.cuda.empty_cache()

@@ -643,8 +643,10 @@ def prepare_esmfold2_tensors(
     return features, chain_infos
 
 
-def _filter_model_forward_kwargs(
-    model: Any, kwargs: dict[str, torch.Tensor | int | bool | None]
+def _prepare_model_forward_kwargs(
+    model: Any,
+    features: dict[str, torch.Tensor],
+    controls: dict[str, int | bool | None],
 ) -> dict[str, torch.Tensor | int | bool | None]:
     signature = inspect.signature(model.forward)
     parameters = signature.parameters
@@ -652,8 +654,15 @@ def _filter_model_forward_kwargs(
         parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
     )
     if accepts_kwargs:
-        return kwargs
-    return {key: value for key, value in kwargs.items() if key in parameters}
+        return {**features, **controls}
+    unexpected_features = sorted(set(features) - set(parameters))
+    if unexpected_features:
+        raise TypeError(
+            "Prepared ESMFold2 features are absent from the model forward signature: "
+            f"{', '.join(unexpected_features)}."
+        )
+    supported_controls = {key: value for key, value in controls.items() if key in parameters}
+    return {**features, **supported_controls}
 
 
 def fold_and_get_distogram(
@@ -703,20 +712,17 @@ def fold_and_get_distogram(
         (target_one_hot.repeat(design.size(0), 1, 1), padded_design), dim=1
     )  # (b, l_t + l_b, v_f)
 
-    forward_kwargs: dict[str, torch.Tensor | int | bool | None] = dict(inputs)
-    forward_kwargs.update(
-        {
-            "num_diffusion_samples": 1,
-            "num_sampling_steps": num_sampling_steps,
-            "num_loops": num_loops,
-            "calculate_confidence": calculate_confidence,
-            "seed": seed,
-        }
-    )
+    forward_controls: dict[str, int | bool | None] = {
+        "num_diffusion_samples": 1,
+        "num_sampling_steps": num_sampling_steps,
+        "num_loops": num_loops,
+        "calculate_confidence": calculate_confidence,
+        "seed": seed,
+    }
 
     with seed_context(seed):
         output = model(
-            **_filter_model_forward_kwargs(model, forward_kwargs)
+            **_prepare_model_forward_kwargs(model, inputs, forward_controls)
         )  # distogram_logits: (b, l_t + l_b, l_t + l_b, z)
 
     result: dict[str, Any] = {

@@ -533,17 +533,19 @@ complex_result = folder.fold(
 print(complex_result.ptm, complex_result.plddt.mean().item())
 ```
 
-The typed interface supports RNA, ligands, modifications, covalent bonds, and
-distogram conditioning. The Fast checkpoint above rejects an MSA, including one
+The typed interface supports RNA, ligands, modifications, and covalent bonds.
+The Fast checkpoint above rejects an MSA, including one
 inside an otherwise valid typed request. To add an MSA to a protein input, load
 full `Synthyra/ESMFold2` or `Synthyra/ESMFold2-Experimental-Cutoff2025`. The
-schema recognizes `PocketConditioning`, but the pinned official runtime drops it
-and sets the pocket feature to zero. FastPLMs rejects non-null pocket
-conditioning. Prepared features such as `ref_pos` are component reference
-geometries from featurization. They are not a known target structure. See the
-offline [`structure_preparation.py`](examples/structure_preparation.py) example
-for MSA, multimolecule, modification, bond, and distogram paths and pocket
-rejection. Its ESMFold2 MSA path needs a full checkpoint, not a Fast checkpoint.
+schema recognizes `PocketConditioning` and `DistogramConditioning`, but the
+pinned official forward consumes neither. FastPLMs rejects non-null pocket and
+distogram conditioning instead of silently ignoring scientific inputs. Prepared
+features such as `ref_pos` are component reference geometries from
+featurization. They are not a known target structure. See the offline
+[`structure_preparation.py`](examples/structure_preparation.py) example for MSA,
+multimolecule, modification, and bond paths and the pocket and distogram
+rejection contracts. Its ESMFold2 MSA path needs a full checkpoint, not a Fast
+checkpoint.
 
 The learned sequence representation combines 81 ordered ESMC hidden states with
 the folding checkpoint projection. Use the public embedding API to get the
