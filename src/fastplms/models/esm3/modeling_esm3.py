@@ -16,21 +16,26 @@ import os
 import shutil
 import stat
 import tempfile
-import einops
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import ClassVar
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+
+import einops
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
 from tokenizers.processors import TemplateProcessing
 from transformers import PretrainedConfig, PreTrainedModel, PreTrainedTokenizerFast
-from transformers.modeling_outputs import ModelOutput
+from transformers.modeling_outputs import (
+    ModelOutput,
+    SequenceClassifierOutput,
+    TokenClassifierOutput,
+)
 
 
 try:
@@ -652,6 +657,8 @@ def _render_saved_runtime_bridge(archive_hash: str, tree_hash: str) -> str:
         '_modeling = _import_without_bytecode("fastplms.models.esm3.modeling_esm3")',
         "FastESM3Config = _modeling.FastESM3Config",
         "FastESM3Model = _modeling.FastESM3Model",
+        "FastESM3ForSequenceClassification = _modeling.FastESM3ForSequenceClassification",
+        "FastESM3ForTokenClassification = _modeling.FastESM3ForTokenClassification",
         "",
     ]
     return "\n".join(lines)
@@ -707,6 +714,9 @@ def _validate_saved_runtime_destination(save_directory: Path) -> None:
 def _write_saved_runtime(
     save_directory: Path,
     prepared_runtime: tuple[bytes, dict[str, object], str] | None = None,
+    *,
+    auto_class: str = "AutoModel",
+    model_class: str = "FastESM3Model",
 ) -> None:
     """Make one ESM3 ``save_pretrained`` directory independently loadable."""
 
@@ -729,10 +739,12 @@ def _write_saved_runtime(
         raise RuntimeError("Saved ESM3 config.json is missing or invalid.") from error
     if not isinstance(config, dict):
         raise RuntimeError("Saved ESM3 config.json must contain a JSON object.")
-    config["auto_map"] = {
+    auto_map = {
         "AutoConfig": "modeling_fastplms.FastESM3Config",
         "AutoModel": "modeling_fastplms.FastESM3Model",
     }
+    auto_map[auto_class] = f"modeling_fastplms.{model_class}"
+    config["auto_map"] = auto_map
     config_payload = (json.dumps(config, indent=2, sort_keys=True) + "\n").encode("utf-8")
     _replace_saved_runtime_file(config_path, config_payload)
 
@@ -2255,7 +2267,12 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
         _validate_saved_runtime_destination(save_path)
         prepared_runtime = _build_saved_runtime_archive(Path(__file__).resolve().parents[2])
         super().save_pretrained(save_directory, *args, **kwargs)
-        _write_saved_runtime(save_path, prepared_runtime)
+        _write_saved_runtime(
+            save_path,
+            prepared_runtime,
+            auto_class=self._auto_class,
+            model_class=type(self).__name__,
+        )
 
     def tokenize_sequences(
         self,
@@ -2576,3 +2593,298 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
         if not return_dict:
             return result.to_tuple()
         return result
+
+
+def _esm3_classifier_attention_mask(
+    attention_mask: torch.Tensor | None,
+    input_ids: torch.Tensor | None,
+    sequence_tokens: torch.Tensor | None,
+) -> torch.Tensor | None:
+    """Infer padding attention for classifier calls that provide sequence tokens."""
+
+    if attention_mask is not None:
+        return attention_mask
+    tokens = sequence_tokens if sequence_tokens is not None else input_ids
+    return None if tokens is None else tokens.ne(SEQUENCE_PAD_TOKEN)
+
+
+def _esm3_residue_mask(
+    hidden_states: torch.Tensor,
+    attention_mask: torch.Tensor | None,
+    input_ids: torch.Tensor | None,
+    sequence_tokens: torch.Tensor | None,
+) -> torch.Tensor:
+    """Select biological residue positions from one ESM3 token-aligned output."""
+
+    tokens = sequence_tokens if sequence_tokens is not None else input_ids
+    if attention_mask is None:
+        mask = torch.ones(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
+    else:
+        mask = attention_mask.to(device=hidden_states.device, dtype=torch.bool)
+    if tokens is not None:
+        tokens = tokens.to(hidden_states.device)
+        special = (
+            tokens.eq(SEQUENCE_BOS_TOKEN)
+            | tokens.eq(SEQUENCE_PAD_TOKEN)
+            | tokens.eq(SEQUENCE_EOS_TOKEN)
+            | tokens.eq(SEQUENCE_CHAINBREAK_TOKEN)
+        )
+        mask = mask & ~special
+    return mask
+
+
+def _esm3_problem_type(
+    config: FastESM3Config,
+    num_labels: int,
+    labels: torch.Tensor,
+) -> str:
+    if config.problem_type is None:
+        if num_labels == 1:
+            config.problem_type = "regression"
+        elif labels.dtype in (torch.long, torch.int):
+            config.problem_type = "single_label_classification"
+        else:
+            config.problem_type = "multi_label_classification"
+    if config.problem_type not in {
+        "regression",
+        "single_label_classification",
+        "multi_label_classification",
+    }:
+        raise ValueError(f"Unsupported problem_type: {config.problem_type!r}.")
+    return config.problem_type
+
+
+def _esm3_sequence_classification_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    problem_type: str,
+    num_labels: int,
+) -> torch.Tensor:
+    labels = labels.to(logits.device)
+    if problem_type == "regression":
+        if num_labels == 1:
+            return F.mse_loss(logits.reshape(-1), labels.reshape(-1))
+        return F.mse_loss(logits, labels)
+    if problem_type == "single_label_classification":
+        return F.cross_entropy(logits.view(-1, num_labels), labels.view(-1))
+    return F.binary_cross_entropy_with_logits(logits, labels)
+
+
+def _esm3_token_classification_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    residue_mask: torch.Tensor,
+    problem_type: str,
+    num_labels: int,
+) -> torch.Tensor:
+    labels = labels.to(logits.device)
+    if problem_type == "single_label_classification":
+        if labels.shape != logits.shape[:2]:
+            raise ValueError(
+                "Single-label token targets must have shape (batch, sequence); "
+                f"received {tuple(labels.shape)} for logits {tuple(logits.shape)}."
+            )
+        targets = labels.masked_fill(~residue_mask, -100)
+        return F.cross_entropy(
+            logits.reshape(-1, num_labels),
+            targets.reshape(-1),
+            ignore_index=-100,
+        )
+
+    if problem_type == "regression" and num_labels == 1 and labels.ndim == 2:
+        labels = labels.unsqueeze(-1)
+    if labels.shape != logits.shape:
+        raise ValueError(
+            "Token regression and multilabel targets must match the logits shape; "
+            f"received {tuple(labels.shape)} and {tuple(logits.shape)}."
+        )
+    valid = residue_mask.unsqueeze(-1) & labels.ne(-100)
+    if not bool(valid.any()):
+        raise ValueError("Token labels do not contain a supervised biological residue.")
+    if problem_type == "regression":
+        return F.mse_loss(logits[valid], labels[valid])
+    return F.binary_cross_entropy_with_logits(logits[valid], labels[valid])
+
+
+class FastESM3ForSequenceClassification(FastESM3Model):
+    """ESM3 with a padding-aware classifier over final residue embeddings."""
+
+    _auto_class = "AutoModelForSequenceClassification"
+
+    def __init__(self, config: FastESM3Config, **kwargs) -> None:
+        super().__init__(config, **kwargs)
+        self.num_labels = config.num_labels
+        dropout = getattr(config, "classifier_dropout", 0.0)
+        self.dropout = nn.Dropout(0.0 if dropout is None else float(dropout))
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.classifier.apply(self._init_weights)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        sequence_tokens: torch.Tensor | None = None,
+        structure_tokens: torch.Tensor | None = None,
+        ss8_tokens: torch.Tensor | None = None,
+        sasa_tokens: torch.Tensor | None = None,
+        function_tokens: torch.Tensor | None = None,
+        residue_annotation_tokens: torch.Tensor | None = None,
+        average_plddt: torch.Tensor | None = None,
+        per_res_plddt: torch.Tensor | None = None,
+        structure_coords: torch.Tensor | None = None,
+        chain_id: torch.Tensor | None = None,
+        sequence_id: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+        **kwargs,
+    ) -> SequenceClassifierOutput | tuple[torch.Tensor, ...]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        classifier_attention_mask = _esm3_classifier_attention_mask(
+            attention_mask,
+            input_ids,
+            sequence_tokens,
+        )
+        output = super().forward(
+            input_ids=input_ids,
+            attention_mask=classifier_attention_mask,
+            sequence_tokens=sequence_tokens,
+            structure_tokens=structure_tokens,
+            ss8_tokens=ss8_tokens,
+            sasa_tokens=sasa_tokens,
+            function_tokens=function_tokens,
+            residue_annotation_tokens=residue_annotation_tokens,
+            average_plddt=average_plddt,
+            per_res_plddt=per_res_plddt,
+            structure_coords=structure_coords,
+            chain_id=chain_id,
+            sequence_id=sequence_id,
+            labels=None,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+            **kwargs,
+        )
+        hidden_states = output.last_hidden_state
+        if hidden_states is None:
+            raise RuntimeError("ESM3 did not return final residue embeddings.")
+        residue_mask = _esm3_residue_mask(
+            hidden_states,
+            classifier_attention_mask,
+            input_ids,
+            sequence_tokens,
+        )
+        residue_counts = residue_mask.sum(dim=1, keepdim=True)
+        if not bool(residue_counts.all()):
+            raise ValueError("Sequence classification requires one biological residue per row.")
+        pooled = (hidden_states * residue_mask.unsqueeze(-1)).sum(dim=1)
+        pooled = pooled / residue_counts.to(hidden_states.dtype)
+        logits = self.classifier(self.dropout(pooled))
+
+        loss = None
+        if labels is not None:
+            problem_type = _esm3_problem_type(self.config, self.num_labels, labels)
+            loss = _esm3_sequence_classification_loss(
+                logits,
+                labels,
+                problem_type,
+                self.num_labels,
+            )
+        result = SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
+        return result if return_dict else result.to_tuple()
+
+
+class FastESM3ForTokenClassification(FastESM3Model):
+    """ESM3 with a token task head over final residue embeddings."""
+
+    _auto_class = "AutoModelForTokenClassification"
+
+    def __init__(self, config: FastESM3Config, **kwargs) -> None:
+        super().__init__(config, **kwargs)
+        self.num_labels = config.num_labels
+        dropout = getattr(config, "classifier_dropout", 0.0)
+        self.dropout = nn.Dropout(0.0 if dropout is None else float(dropout))
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        self.classifier.apply(self._init_weights)
+
+    def forward(
+        self,
+        input_ids: torch.Tensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        sequence_tokens: torch.Tensor | None = None,
+        structure_tokens: torch.Tensor | None = None,
+        ss8_tokens: torch.Tensor | None = None,
+        sasa_tokens: torch.Tensor | None = None,
+        function_tokens: torch.Tensor | None = None,
+        residue_annotation_tokens: torch.Tensor | None = None,
+        average_plddt: torch.Tensor | None = None,
+        per_res_plddt: torch.Tensor | None = None,
+        structure_coords: torch.Tensor | None = None,
+        chain_id: torch.Tensor | None = None,
+        sequence_id: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+        **kwargs,
+    ) -> TokenClassifierOutput | tuple[torch.Tensor, ...]:
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        classifier_attention_mask = _esm3_classifier_attention_mask(
+            attention_mask,
+            input_ids,
+            sequence_tokens,
+        )
+        output = super().forward(
+            input_ids=input_ids,
+            attention_mask=classifier_attention_mask,
+            sequence_tokens=sequence_tokens,
+            structure_tokens=structure_tokens,
+            ss8_tokens=ss8_tokens,
+            sasa_tokens=sasa_tokens,
+            function_tokens=function_tokens,
+            residue_annotation_tokens=residue_annotation_tokens,
+            average_plddt=average_plddt,
+            per_res_plddt=per_res_plddt,
+            structure_coords=structure_coords,
+            chain_id=chain_id,
+            sequence_id=sequence_id,
+            labels=None,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+            **kwargs,
+        )
+        hidden_states = output.last_hidden_state
+        if hidden_states is None:
+            raise RuntimeError("ESM3 did not return final residue embeddings.")
+        residue_mask = _esm3_residue_mask(
+            hidden_states,
+            classifier_attention_mask,
+            input_ids,
+            sequence_tokens,
+        )
+        logits = self.classifier(self.dropout(hidden_states))
+
+        loss = None
+        if labels is not None:
+            problem_type = _esm3_problem_type(self.config, self.num_labels, labels)
+            loss = _esm3_token_classification_loss(
+                logits,
+                labels,
+                residue_mask,
+                problem_type,
+                self.num_labels,
+            )
+        result = TokenClassifierOutput(
+            loss=loss,
+            logits=logits,
+            hidden_states=output.hidden_states,
+            attentions=output.attentions,
+        )
+        return result if return_dict else result.to_tuple()

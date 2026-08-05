@@ -154,8 +154,8 @@ continues independently of the ESM++ and ESMFold2 release gates.
 ## Release record
 
 - FastPLMs weights: `Synthyra/Boltz2`
-- Runtime revision: recorded in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in the source record
+- Runtime revision: recorded separately in the built artifact and published commit
+- Runtime source identities: recorded in `source-record.json`
 - Official checkpoint: `boltz-community/boltz-2`
 - Artifact source: `fast`
 - State transform: `boltz2_inference_core_v1`

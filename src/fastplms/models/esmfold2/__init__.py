@@ -9,6 +9,12 @@ if TYPE_CHECKING:
     from .configuration_esmfold2 import ESMFold2Config as ESMFold2Config
     from .modeling_esmfold2 import ESMFold2Model as ESMFold2Model
     from .modeling_esmfold2 import ESMFold2Output as ESMFold2Output
+    from .modeling_esmfold2_classification import (
+        ESMFold2ExperimentalForSequenceClassification as ESMFold2ExperimentalForSequenceClassification,
+        ESMFold2ExperimentalForTokenClassification as ESMFold2ExperimentalForTokenClassification,
+        ESMFold2ForSequenceClassification as ESMFold2ForSequenceClassification,
+        ESMFold2ForTokenClassification as ESMFold2ForTokenClassification,
+    )
     from .modeling_esmfold2_experimental import (
         ESMFold2ExperimentalModel as ESMFold2ExperimentalModel,
     )
@@ -17,6 +23,10 @@ if TYPE_CHECKING:
 _EXPORT_MODULES = {
     "ESMFold2Config": ".configuration_esmfold2",
     "ESMFold2ExperimentalModel": ".modeling_esmfold2_experimental",
+    "ESMFold2ExperimentalForSequenceClassification": ".modeling_esmfold2_classification",
+    "ESMFold2ExperimentalForTokenClassification": ".modeling_esmfold2_classification",
+    "ESMFold2ForSequenceClassification": ".modeling_esmfold2_classification",
+    "ESMFold2ForTokenClassification": ".modeling_esmfold2_classification",
     "ESMFold2Model": ".modeling_esmfold2",
     "ESMFold2Output": ".modeling_esmfold2",
     "seed_context": ".reproducibility",

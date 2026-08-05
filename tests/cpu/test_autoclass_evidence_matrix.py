@@ -72,6 +72,15 @@ def _sequence(
     )
 
 
+def _task_head(symbol_path: str, runtime_test: str) -> AutoClassEvidence:
+    return AutoClassEvidence(
+        symbol_path=symbol_path,
+        capabilities=_HEAD_CAPABILITIES,
+        runtime_tests=(runtime_test,),
+        case_parameter="model_class",
+    )
+
+
 AUTOCLASS_EVIDENCE: dict[tuple[str, str], AutoClassEvidence] = {
     ("esm2", "AutoConfig"): _config(
         "fastplms.models.esm2.modeling_fastesm.FastEsmConfig"
@@ -109,6 +118,18 @@ AUTOCLASS_EVIDENCE: dict[tuple[str, str], AutoClassEvidence] = {
         _ESMC_TEST,
         loss=True,
     ),
+    ("esm_plusplus", "AutoModelForSequenceClassification"): _sequence(
+        "fastplms.models.esm_plusplus.modeling_esm_plusplus."
+        "ESMplusplusForSequenceClassification",
+        _ESMC_TEST,
+        loss=True,
+    ),
+    ("esm_plusplus", "AutoModelForTokenClassification"): _sequence(
+        "fastplms.models.esm_plusplus.modeling_esm_plusplus."
+        "ESMplusplusForTokenClassification",
+        _ESMC_TEST,
+        loss=True,
+    ),
     ("esm3", "AutoConfig"): _config(
         "fastplms.models.esm3.modeling_esm3.FastESM3Config"
     ),
@@ -125,6 +146,16 @@ AUTOCLASS_EVIDENCE: dict[tuple[str, str], AutoClassEvidence] = {
             "tests/cpu/test_generation_contracts.py::test_esm3_sequence_only_forward",
         ),
         limitations=("supervised loss is not applicable to the ESM3 base model",),
+    ),
+    ("esm3", "AutoModelForSequenceClassification"): _task_head(
+        "fastplms.models.esm3.modeling_esm3.FastESM3ForSequenceClassification",
+        "tests/unit/test_esm3_classification.py::"
+        "test_esm3_classifiers_support_tuple_and_dictionary_outputs",
+    ),
+    ("esm3", "AutoModelForTokenClassification"): _task_head(
+        "fastplms.models.esm3.modeling_esm3.FastESM3ForTokenClassification",
+        "tests/unit/test_esm3_classification.py::"
+        "test_esm3_classifiers_support_tuple_and_dictionary_outputs",
     ),
     ("e1", "AutoConfig"): _config("fastplms.models.e1.modeling_e1.E1Config"),
     ("e1", "AutoModel"): _sequence(
@@ -279,6 +310,15 @@ AUTOCLASS_EVIDENCE: dict[tuple[str, str], AutoClassEvidence] = {
             "token resize and classifier-style task loss are not applicable",
         ),
     ),
+    ("esmfold", "AutoModelForSequenceClassification"): _task_head(
+        "fastplms.models.esmfold.modeling_fast_esmfold."
+        "FastEsmForSequenceClassification",
+        "tests/unit/test_esmfold_classification.py::test_classifier_train_scope_is_exact",
+    ),
+    ("esmfold", "AutoModelForTokenClassification"): _task_head(
+        "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForTokenClassification",
+        "tests/unit/test_esmfold_classification.py::test_classifier_train_scope_is_exact",
+    ),
     ("esmfold2", "AutoConfig"): _config(
         "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config"
     ),
@@ -297,6 +337,18 @@ AUTOCLASS_EVIDENCE: dict[tuple[str, str], AutoClassEvidence] = {
             "token resize and classifier-style task loss are not applicable to the "
             "structure pipeline",
         ),
+    ),
+    ("esmfold2", "AutoModelForSequenceClassification"): _task_head(
+        "fastplms.models.esmfold2.modeling_esmfold2_classification."
+        "ESMFold2ForSequenceClassification",
+        "tests/unit/test_esmfold2_classification.py::"
+        "test_esmfold2_classifier_wrappers_bypass_structure_trunk",
+    ),
+    ("esmfold2", "AutoModelForTokenClassification"): _task_head(
+        "fastplms.models.esmfold2.modeling_esmfold2_classification."
+        "ESMFold2ForTokenClassification",
+        "tests/unit/test_esmfold2_classification.py::"
+        "test_esmfold2_classifier_wrappers_bypass_structure_trunk",
     ),
 }
 
@@ -341,9 +393,9 @@ def test_every_advertised_config_round_trips_offline(
     assert reloaded.to_dict() == serialized
 
 
-def test_autoclass_runtime_evidence_matrix_exactly_matches_all_37_entries() -> None:
+def test_autoclass_runtime_evidence_matrix_exactly_matches_all_45_entries() -> None:
     manifest_entries = _manifest_family_entries()
-    assert len(manifest_entries) == 37
+    assert len(manifest_entries) == 45
     assert set(AUTOCLASS_EVIDENCE) == set(manifest_entries)
     for key, evidence in AUTOCLASS_EVIDENCE.items():
         assert evidence.symbol_path == manifest_entries[key]
@@ -397,18 +449,23 @@ def test_autoclass_runtime_evidence_targets_are_collected_cpu_tests(
 
 def test_model_specific_automap_overrides_have_cpu_runtime_evidence() -> None:
     registry = get_model_registry()
-    experimental_path = (
+    experimental_paths = {
         "fastplms.models.esmfold2.modeling_esmfold2_experimental."
-        "ESMFold2ExperimentalModel"
-    )
+        "ESMFold2ExperimentalModel",
+        "fastplms.models.esmfold2.modeling_esmfold2_classification."
+        "ESMFold2ExperimentalForSequenceClassification",
+        "fastplms.models.esmfold2.modeling_esmfold2_classification."
+        "ESMFold2ExperimentalForTokenClassification",
+    }
     overridden_paths = {
         symbol_path
         for spec in registry.values()
         for auto_class, symbol_path in spec.auto_map.items()
         if symbol_path != spec.family.auto_map[auto_class]
     }
-    assert overridden_paths == {experimental_path}
-    _load_symbol(experimental_path)
+    assert overridden_paths == experimental_paths
+    for experimental_path in experimental_paths:
+        _load_symbol(experimental_path)
     module = importlib.import_module("tests.cpu.test_structure_contracts")
     for test_name in (
         "test_esmfold2_advertised_models_tiny_init_backward_and_save_reload",

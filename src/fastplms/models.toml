@@ -199,7 +199,7 @@ representative = "esmc_small"
 documentation = "docs/models.md#esm-and-esmc"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
 runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esm_plusplus", "models/ttt.py"]
-auto_map = { AutoConfig = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusConfig", AutoModel = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusModel", AutoModelForMaskedLM = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForMaskedLM" }
+auto_map = { AutoConfig = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusConfig", AutoModel = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusModel", AutoModelForMaskedLM = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForTokenClassification" }
 
 [families.esm3]
 architecture = "ESM3"
@@ -223,7 +223,7 @@ representative = "esm3_small"
 documentation = "docs/models.md#esm3"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
 runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esm3", "models/ttt.py"]
-auto_map = { AutoConfig = "fastplms.models.esm3.modeling_esm3.FastESM3Config", AutoModel = "fastplms.models.esm3.modeling_esm3.FastESM3Model" }
+auto_map = { AutoConfig = "fastplms.models.esm3.modeling_esm3.FastESM3Config", AutoModel = "fastplms.models.esm3.modeling_esm3.FastESM3Model", AutoModelForSequenceClassification = "fastplms.models.esm3.modeling_esm3.FastESM3ForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esm3.modeling_esm3.FastESM3ForTokenClassification" }
 
 [families.e1]
 architecture = "E1"
@@ -370,8 +370,8 @@ conversion_provenance = "Input: the pinned native Meta ESMFold checkpoint plus i
 representative = "esmfold"
 documentation = "docs/models.md#esmfold"
 test_tiers = ["check", "compliance", "structure", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_esm_rotary.py", "models/esmfold"]
-auto_map = { AutoConfig = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmFoldConfig", AutoModel = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForProteinFolding" }
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_esm_rotary.py", "models/classification_probe.py", "models/esmfold"]
+auto_map = { AutoConfig = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmFoldConfig", AutoModel = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForProteinFolding", AutoModelForSequenceClassification = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForTokenClassification" }
 
 [families.esmfold2]
 architecture = "ESMFold2"
@@ -396,8 +396,8 @@ conversion_provenance = "Input: each pinned Biohub ESMFold2 checkpoint and its s
 representative = "esmfold2"
 documentation = "docs/esmfold2.md"
 test_tiers = ["check", "compliance", "structure", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esmfold2", "models/esm_plusplus", "models/ttt.py"]
-auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2.ESMFold2Model" }
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/classification_probe.py", "models/_esm_rotary.py", "models/esmfold2", "models/esm_plusplus", "models/ttt.py"]
+auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2.ESMFold2Model", AutoModelForSequenceClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ForTokenClassification" }
 
 [[models]]
 id = "esm2_8m"
@@ -1215,7 +1215,7 @@ official_files = [
   "config.json=git-sha1:79ed0dc0f867b8f09bfa004d6f77397c2ab9b38d",
   "model.safetensors=sha256:01358c317428d38535e3db513cab177336fc0f7fab0d84002e64b7741d5181b3",
 ]
-auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel" }
+auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel", AutoModelForSequenceClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForTokenClassification" }
 
 [[models]]
 id = "esmfold2_experimental_fast_cutoff2025"
@@ -1236,4 +1236,4 @@ official_files = [
   "config.json=git-sha1:0333d68ddb12ed2f066741dcb801142f466c0a2c",
   "model.safetensors=sha256:4e903b740ad6ad704ec60881bfd593e0d6c874a630ffa0f0838276e0b665088f",
 ]
-auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel" }
+auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel", AutoModelForSequenceClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForTokenClassification" }

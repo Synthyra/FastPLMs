@@ -146,7 +146,7 @@ def test_every_advertised_automap_symbol_imports_without_optional_runtime_work()
         family_id: family.auto_map
         for family_id, family in registry.families.items()
     }
-    assert sum(len(auto_map) for auto_map in family_maps.values()) == 37
+    assert sum(len(auto_map) for auto_map in family_maps.values()) == 45
     for family_id, auto_map in sorted(family_maps.items()):
         for auto_class, symbol_path in sorted(auto_map.items()):
             symbol = _load_symbol(symbol_path)

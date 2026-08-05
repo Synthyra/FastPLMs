@@ -215,7 +215,7 @@ CAPABILITY_EVIDENCE_SELECTORS: dict[str, EvidenceSelector] = {
         tier="cpu_contract",
         targets=(
             "tests/cpu/test_autoclass_evidence_matrix.py::"
-            "test_autoclass_runtime_evidence_matrix_exactly_matches_all_37_entries",
+            "test_autoclass_runtime_evidence_matrix_exactly_matches_all_45_entries",
             "tests/cpu/test_autoclass_evidence_matrix.py::"
             "test_autoclass_runtime_evidence_targets_are_collected_cpu_tests",
         ),
@@ -2992,6 +2992,12 @@ batch = sequence_model.prep_tokens.get_batch_kwargs(
 )
 biological = batch["sequence_ids"].ne(-1)
 """
+    elif spec.family.id in {"esmfold", "esmfold2"}:
+        preparation = """\
+sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
+batch = sequence_model.prepare_classifier_inputs(sequences)
+biological = batch["attention_mask"].bool()
+"""
     else:
         preparation = f"""\
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
@@ -3003,14 +3009,30 @@ for special_id in tokenizer.all_special_ids:
 """
 
     tokenizer_import = (
-        "" if spec.family.id == "e1" else "from transformers import AutoTokenizer\n"
+        ""
+        if spec.family.id in {"e1", "esmfold", "esmfold2"}
+        else "from transformers import AutoTokenizer\n"
+    )
+    task_description = (
+        "The sequence and token prediction AutoClasses use the checkpoint backbone "
+        "and create a new, untrained `classifier`. Sequence labels have shape `(b,)`. "
+        "Residue labels have shape `(b, l)` and use `-100` outside biological positions."
+    )
+    if spec.family.id in {"esmfold", "esmfold2"}:
+        task_description += (
+            " The folding trunk is skipped. The classifier uses the checkpoint's learned "
+            "pLM state mixture and projection, followed by one trainable transformer probe."
+        )
+    task_description = textwrap.fill(
+        task_description,
+        width=79,
+        break_long_words=False,
+        break_on_hyphens=False,
     )
     return f"""\
-## Downstream classification
+## Downstream prediction
 
-Both downstream AutoClasses use the checkpoint backbone and create a new,
-untrained `classifier`. Sequence labels have shape `(b,)`. Residue labels have
-shape `(b, l)` and use `-100` outside biological positions:
+{task_description}
 
 ```python
 import torch
@@ -3879,19 +3901,15 @@ ESMFold2 does not advertise FlashAttention for the folding interface.
 
 {ESMC_RELEASE_DOCUMENTATION}
 
-## Hash-pinned CCD runtime asset
+## Verified CCD runtime asset
 
 Structure preparation requires `ccd.pkl` from
-`biohub/ESMFold2`. The manifest pins
-its 417,306,584-byte size and SHA-256
-`9ff44b1927c6b9198e38ffe0928706827a09a350c15530beeeabebfa88038fc5`
-under MIT terms. This is a trusted-deserialization boundary: FastPLMs only
-allows the exact manifest repository/revision snapshot link to resolve within
-that repository's contained blob directory; user-supplied asset and `cache_dir`
-symlinks are rejected. The loader creates a private temporary snapshot, verifies
-its size and SHA-256, and unpickles only that loader-owned snapshot, closing
-path-replacement and in-place source-write races. Offline execution requires the
-exact cache object and never downloads a replacement.
+`biohub/ESMFold2`. The manifest pins its repository, revision, size, content
+identity, and MIT terms. This is a trusted-deserialization boundary. FastPLMs
+accepts only the pinned snapshot link inside the repository blob directory and
+rejects user-supplied asset and `cache_dir` symlinks. The loader verifies a
+private temporary snapshot before deserialization. Offline execution requires
+the exact cached object and never downloads a replacement.
 
 {ttt_note}{binder_note}"""
     if allow_generic:
@@ -3911,7 +3929,7 @@ def render_model_card(
     unresolved = len(spec.fast.unresolved_files) + len(spec.official.unresolved_files)
     license_yaml = render_hub_license_yaml(spec.family)
     checkpoint_terms = render_checkpoint_terms(spec.family)
-    canonical_state_provenance = ""
+    canonical_state_record = ""
     tokenizer_provenance = ""
     notes = ""
     capability_summary = _capability_summary(spec)
@@ -3942,10 +3960,9 @@ def render_model_card(
     if spec.family.tokenizer_class is not None:
         tokenizer_provenance = f"- Tokenizer class: `{spec.family.tokenizer_class}`\n"
     if spec.canonical_state_sha256 is not None:
-        canonical_state_provenance = (
-            "- Canonical transformed state SHA-256: "
-            f"`{spec.canonical_state_sha256}`\n"
-            "- Conversion equality attestation: recorded in the source record\n"
+        canonical_state_record = (
+            "- Canonical transformed state identity: recorded in `source-record.json`\n"
+            "- Conversion equality attestation: recorded in `source-record.json`\n"
         )
     if spec.notes and spec.family.id != "esm_plusplus":
         wrapped_notes = textwrap.fill(
@@ -4019,9 +4036,9 @@ For offline validation, replace `model_id` with the manifest-built
 ## Release record
 
 - FastPLMs weights: `{spec.fast.repo_id}`
-- Runtime revision: recorded in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in the source record
-{canonical_state_provenance}\
+- Runtime revision: recorded separately in the built artifact and published commit
+- Runtime source identities: recorded in `source-record.json`
+{canonical_state_record}\
 - Official checkpoint: `{spec.official.repo_id}`
 - Artifact source: `{spec.artifact_source}`
 - State transform: `{spec.family.state_transform}`

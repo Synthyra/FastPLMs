@@ -393,9 +393,9 @@ def test_structure_auto_dispatch_is_complemented_by_public_forward_contracts() -
         assert callable(getattr(structure_contracts, test_name))
 
 
-def test_grouped_remote_dispatch_covers_exactly_37_family_entries() -> None:
+def test_grouped_remote_dispatch_covers_exactly_45_family_entries() -> None:
     registry = get_model_registry()
-    assert sum(len(family.auto_map) for family in registry.families.values()) == 37
+    assert sum(len(family.auto_map) for family in registry.families.values()) == 45
 
 
 def test_isolated_probe_blocks_reference_reads_before_remote_code_exec(

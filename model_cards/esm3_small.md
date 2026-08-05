@@ -14,15 +14,16 @@ This checkpoint contains the FastPLMs `ESM3` implementation.
 
 Accepted inputs are sequence, structure, and function tracks prepared through
 the multimodal helpers.
-Supported Transformers entry points are `AutoConfig`, `AutoModel`.
+Supported Transformers entry points are `AutoConfig`, `AutoModel`,
+`AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
 
 ## Capabilities
 
 | Feature | Status |
 | --- | --- |
-| Sequence classification | Unavailable: no advertised AutoClass |
-| Token classification | Unavailable: no advertised AutoClass |
-| PEFT fine-tuning | Supported pattern: attach LoRA to the pretrained model |
+| Sequence classification | Supported: base weights with an untrained task head |
+| Token classification | Supported: base weights with an untrained task head |
+| PEFT fine-tuning | Supported pattern: preserve the separately trained `classifier` |
 | Embeddings | Supported: shared ordered embedding API |
 | Test-time training | Supported: low-rank masked-residue adaptation |
 | Attention variants | Supported: `eager`, `sdpa`, `flex_attention` |
@@ -95,6 +96,45 @@ Set `output` and `format="safetensors"` or `"sqlite"` for transactional,
 bounded-memory storage. Resume checks input order, model state, tokenizer
 policy, backend, dtype, and pooling configuration before it appends data.
 
+## Downstream prediction
+
+The sequence and token prediction AutoClasses use the checkpoint backbone and
+create a new, untrained `classifier`. Sequence labels have shape `(b,)`.
+Residue labels have shape `(b, l)` and use `-100` outside biological positions.
+
+```python
+import torch
+from transformers import AutoTokenizer
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoModelForTokenClassification,
+)
+
+model_id = "Synthyra/ESM3_small"
+sequence_model = AutoModelForSequenceClassification.from_pretrained(
+    model_id, num_labels=2, trust_remote_code=True
+).eval()
+token_model = AutoModelForTokenClassification.from_pretrained(
+    model_id, num_labels=3, trust_remote_code=True
+).eval()
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
+batch = tokenizer(sequences, padding=True, return_tensors="pt")
+biological = batch["attention_mask"].bool()
+for special_id in tokenizer.all_special_ids:
+    biological &= batch["input_ids"].ne(special_id)
+
+sequence_labels = torch.zeros(len(sequences), dtype=torch.long)
+token_labels = torch.full_like(batch["input_ids"], -100)
+token_labels[biological] = 0
+
+with torch.inference_mode():
+    sequence_output = sequence_model(**batch, labels=sequence_labels)
+    token_output = token_model(**batch, labels=token_labels)
+print(sequence_output.logits.shape)  # (b, 2)
+print(token_output.logits.shape)     # (b, l, 3)
+```
+
 ## PEFT fine-tuning
 
 Install the training dependencies. Then attach LoRA to the loaded checkpoint:
@@ -104,20 +144,22 @@ python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
 ```
 
 ```python
-from peft import LoraConfig, get_peft_model
+from peft import LoraConfig, TaskType, get_peft_model
 
 peft_model = get_peft_model(
-    model,
+    sequence_model,
     LoraConfig(
+        task_type=TaskType.SEQ_CLS,
         r=8,
         lora_alpha=16,
         target_modules="all-linear",
+        modules_to_save=["classifier"],
     ),
 )
 ```
 
-This checkpoint has no advertised classifier. Supply the task objective and
-preserve any new head through `modules_to_save`.
+This checkpoint advertises a classification head. Save the separately trained
+`classifier` with the adapter.
 All FastPLMs checkpoints follow the Transformers `PreTrainedModel` contract and
 can use PEFT. The ESM2-specific shipped CLI is an example, not a
 support boundary. Record the target modules, base revision, data identity, and
@@ -193,8 +235,8 @@ not experimental measurements of structure or function.
 ## Runtime contract
 
 - Public input: Sequence, structure, and function tracks prepared through the multimodal helpers
-- Advertised AutoClasses: `AutoConfig`, `AutoModel`
-- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`
+- Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
+- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
 - Attention implementations: `eager`, `sdpa`, `flex_attention`
 - Precision policies: `default`
 - BF16 execution: `fp32_parameters_autocast`
@@ -208,8 +250,8 @@ not experimental measurements of structure or function.
 ## Release record
 
 - FastPLMs weights: `Synthyra/ESM3_small`
-- Runtime revision: recorded in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in the source record
+- Runtime revision: recorded separately in the built artifact and published commit
+- Runtime source identities: recorded in `source-record.json`
 - Official checkpoint: `biohub/esm3-sm-open-v1`
 - Artifact source: `fast`
 - State transform: `esm3_to_fastplms_v1`

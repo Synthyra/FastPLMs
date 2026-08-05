@@ -37,6 +37,22 @@ from transformers.models.esm.openfold_utils import residue_constants
 
 from fastplms.models._esm_rotary import RotaryEmbedding
 
+try:
+    from fastplms.models.classification_probe import (
+        SequenceClassificationProbe,
+        TokenClassificationProbe,
+    )
+except ModuleNotFoundError as error:
+    _COMPOSITE_CLASSIFIER_NAMES = (
+        "SequenceClassificationProbe",
+        "TokenClassificationProbe",
+    )
+    if error.name != "fastplms" or any(
+        name not in globals() for name in _COMPOSITE_CLASSIFIER_NAMES
+    ):
+        raise
+    # Hub composites define the shared classifier probes before this source.
+
 
 # Hub composite artifacts define these shared names earlier in the assembled file.
 try:
@@ -531,13 +547,42 @@ class FastEsmBackbone(nn.Module):
 class FastEsmFoldConfig(EsmConfig):
     model_type = "fast_esmfold"
 
-    def __init__(self, attn_backend: str | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        attn_backend: str | None = None,
+        classifier_train_scope: str = "probe",
+        classifier_pooling_types: list[str] | None = None,
+        classifier_probe_hidden_size: int = 512,
+        classifier_probe_num_heads: int = 4,
+        classifier_probe_dropout: float = 0.1,
+        classifier_hidden_size: int = 4096,
+        classifier_dropout: float = 0.2,
+        classifier_use_bias: bool = False,
+        **kwargs: Any,
+    ) -> None:
         # Earlier mirrors serialized an untrained ESMFold-specific TTT policy.
         # It is intentionally ignored because the official checkpoint has no
         # trained masked-language-model head.
         kwargs.pop("ttt_config", None)
         super().__init__(**kwargs)
         self.attn_backend = attn_backend
+        if classifier_train_scope not in {"probe", "projection"}:
+            raise ValueError(
+                "classifier_train_scope must be 'probe' or 'projection', got "
+                f"{classifier_train_scope!r}."
+            )
+        self.classifier_train_scope = classifier_train_scope
+        self.classifier_pooling_types = (
+            ["mean"]
+            if classifier_pooling_types is None
+            else list(classifier_pooling_types)
+        )
+        self.classifier_probe_hidden_size = classifier_probe_hidden_size
+        self.classifier_probe_num_heads = classifier_probe_num_heads
+        self.classifier_probe_dropout = classifier_probe_dropout
+        self.classifier_hidden_size = classifier_hidden_size
+        self.classifier_dropout = classifier_dropout
+        self.classifier_use_bias = classifier_use_bias
 
 
 class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
@@ -873,3 +918,139 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
 
         del sequence, return_pdb_string
         self._ttt_unavailable()
+
+
+class _FastEsmFoldClassificationMixin:
+    """Expose ESMFold's checkpoint-trained residue projection to task probes."""
+
+    _classifier_probe_class: type[nn.Module]
+
+    def __init__(self, config: FastEsmFoldConfig) -> None:
+        super().__init__(config)
+        sequence_state_dim = config.esmfold_config.trunk.sequence_state_dim
+        self.classifier = self._classifier_probe_class(config, sequence_state_dim)
+        self.classifier.apply(self._init_weights)
+        self._configure_classifier_train_scope()
+
+    def _configure_classifier_train_scope(self) -> None:
+        """Apply the serialized fine-tuning boundary deterministically."""
+
+        self.requires_grad_(False)
+        self.classifier.requires_grad_(True)
+        if self.config.classifier_train_scope == "projection":
+            self.esm_s_combine.requires_grad_(True)
+            self.esm_s_mlp.requires_grad_(True)
+
+    @staticmethod
+    def prepare_classifier_inputs(
+        sequences: str | list[str],
+    ) -> dict[str, torch.Tensor]:
+        """Encode single-chain proteins as residue-only ESMFold inputs."""
+
+        sequence_batch = [sequences] if isinstance(sequences, str) else list(sequences)
+        if not sequence_batch:
+            raise ValueError("At least one protein sequence is required.")
+
+        supported_residues = residue_constants.restype_order_with_x
+        encoded_sequences: list[torch.Tensor] = []
+        for sequence in sequence_batch:
+            if not isinstance(sequence, str):
+                raise TypeError("Each protein sequence must be a string.")
+            normalized = sequence.upper()
+            if not normalized:
+                raise ValueError("Protein sequences must not be empty.")
+            invalid = sorted(set(normalized).difference(supported_residues))
+            if invalid:
+                raise ValueError(
+                    "ESMFold classifiers accept single-chain proteins containing "
+                    "the 20 standard amino acids or X; unsupported residues: "
+                    f"{', '.join(invalid)}."
+                )
+            encoded_sequences.append(
+                torch.tensor(
+                    [supported_residues[residue] for residue in normalized],
+                    dtype=torch.int64,
+                )
+            )
+
+        input_ids = collate_dense_tensors(encoded_sequences, pad_v=0)
+        attention_mask = collate_dense_tensors(
+            [torch.ones_like(sequence) for sequence in encoded_sequences],
+            pad_v=0,
+        )
+        return {"input_ids": input_ids, "attention_mask": attention_mask}
+
+    def _classifier_features(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if input_ids.ndim != 2:
+            raise ValueError(
+                "input_ids must have shape (batch, residue), got "
+                f"{tuple(input_ids.shape)}."
+            )
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        elif attention_mask.shape != input_ids.shape:
+            raise ValueError(
+                "attention_mask must match input_ids, got "
+                f"{tuple(attention_mask.shape)} and {tuple(input_ids.shape)}."
+            )
+        attention_mask = attention_mask.to(device=input_ids.device)
+        if torch.any(attention_mask.sum(dim=-1) == 0):
+            raise ValueError("Every classifier input must contain at least one residue.")
+
+        esmaa = self.af2_idx_to_esm_idx(input_ids, attention_mask)
+        layer_states = self.compute_language_model_representations(esmaa)
+        layer_states = layer_states.to(self.esm_s_combine.dtype).detach()
+        if self.config.esmfold_config.esm_ablate_sequence:
+            layer_states = layer_states * 0
+        mixed_states = (
+            self.esm_s_combine.softmax(0).unsqueeze(0) @ layer_states
+        ).squeeze(2)
+        residue_embeddings = self.esm_s_mlp(mixed_states)
+        residue_embeddings = residue_embeddings * attention_mask.unsqueeze(-1).to(
+            residue_embeddings.dtype
+        )
+        return residue_embeddings, attention_mask
+
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor | None = None,
+        labels: torch.Tensor | None = None,
+        output_attentions: bool | None = None,
+        output_hidden_states: bool | None = None,
+        return_dict: bool | None = None,
+    ) -> Any:
+        residue_embeddings, attention_mask = self._classifier_features(
+            input_ids,
+            attention_mask,
+        )
+        return self.classifier(
+            residue_embeddings,
+            attention_mask=attention_mask,
+            labels=labels,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+
+class FastEsmForSequenceClassification(
+    _FastEsmFoldClassificationMixin,
+    FastEsmForProteinFolding,
+):
+    """Sequence classification or regression over ESMFold residue features."""
+
+    _classifier_probe_class = SequenceClassificationProbe
+
+
+class FastEsmForTokenClassification(
+    _FastEsmFoldClassificationMixin,
+    FastEsmForProteinFolding,
+):
+    """Residue classification or regression over ESMFold residue features."""
+
+    _classifier_probe_class = TokenClassificationProbe

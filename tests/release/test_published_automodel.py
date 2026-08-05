@@ -60,6 +60,14 @@ _INITIAL_WEIGHT_ALLOWANCES: dict[
     ("esm2", "AutoModel"): ((), ("lm_head",)),
     ("esm2", "AutoModelForSequenceClassification"): (("classifier",), ("lm_head",)),
     ("esm2", "AutoModelForTokenClassification"): (("classifier",), ("lm_head",)),
+    ("esm_plusplus", "AutoModelForSequenceClassification"): (("classifier",), ()),
+    ("esm_plusplus", "AutoModelForTokenClassification"): (("classifier",), ()),
+    ("esm3", "AutoModelForSequenceClassification"): (("classifier",), ()),
+    ("esm3", "AutoModelForTokenClassification"): (("classifier",), ()),
+    ("esmfold", "AutoModelForSequenceClassification"): (("classifier",), ()),
+    ("esmfold", "AutoModelForTokenClassification"): (("classifier",), ()),
+    ("esmfold2", "AutoModelForSequenceClassification"): (("classifier",), ()),
+    ("esmfold2", "AutoModelForTokenClassification"): (("classifier",), ()),
 }
 
 

@@ -358,15 +358,19 @@ def test_generated_esmc_cards_state_mask_precedence_and_route_hopper_scope_to_do
     assert "not current release evidence" in attention_docs
 
 
-def test_generated_cards_publish_canonical_state_commitments() -> None:
+def test_generated_cards_keep_integrity_digests_in_machine_records() -> None:
     from fastplms.registry import get_model_registry
 
     for spec in get_model_registry().values():
-        if spec.canonical_state_sha256 is None:
-            continue
         card = (ROOT / "model_cards" / f"{spec.id}.md").read_text(encoding="utf-8")
-        assert f"Canonical transformed state SHA-256: `{spec.canonical_state_sha256}`" in card
-        assert "Conversion equality attestation: recorded in `source-record.json`" in card
+        assert "SHA-256" not in card
+        assert re.search(r"\b[0-9a-f]{64}\b", card, flags=re.IGNORECASE) is None
+        if spec.canonical_state_sha256 is not None:
+            assert spec.canonical_state_sha256 not in card
+            assert (
+                "Canonical transformed state identity: recorded in `source-record.json`"
+                in card
+            )
 
 
 def test_curated_offline_examples_expose_executable_help() -> None:
