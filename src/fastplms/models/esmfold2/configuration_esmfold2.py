@@ -289,6 +289,23 @@ class ESMFold2Config(PretrainedConfig):
             )
         self.msa_encoder_overwrite = bool(kwargs.get("msa_encoder_overwrite", True))
 
+        self.classifier_train_scope = str(kwargs.get("classifier_train_scope", "probe"))
+        if self.classifier_train_scope not in {"probe", "projection"}:
+            raise ValueError(
+                "classifier_train_scope must be 'probe' or 'projection', "
+                f"got {self.classifier_train_scope!r}."
+            )
+        self.classifier_probe_hidden_size = int(
+            kwargs.get("classifier_probe_hidden_size", 512)
+        )
+        self.classifier_probe_num_heads = int(kwargs.get("classifier_probe_num_heads", 4))
+        self.classifier_probe_dropout = float(kwargs.get("classifier_probe_dropout", 0.1))
+        self.classifier_hidden_size = int(kwargs.get("classifier_hidden_size", 4096))
+        self.classifier_dropout = float(kwargs.get("classifier_dropout", 0.2))
+        self.classifier_pooling_types = list(
+            kwargs.get("classifier_pooling_types", ["mean"])
+        )
+
     def to_dict(self) -> dict[str, Any]:
         output = cast(dict[str, Any], super().to_dict())
         for name, _config_type in _NESTED_CONFIGS:

@@ -368,6 +368,15 @@ The folding checkpoint keeps FP32 parameter storage. CUDA BF16 inference uses
 autocast for the folding operation. Loading the checkpoint itself as static BF16
 is not the declared compliance path.
 
+ESMFold also advertises sequence and residue prediction AutoClasses. These
+paths stop before the folding trunk. They freeze ESM2, apply the checkpoint's
+learned layer mixture and projection, and train one additional transformer probe
+plus its classifier. `classifier_train_scope="probe"` is the default. The
+`"projection"` scope also trains the checkpoint-owned mixture and projection.
+Sequence pooling defaults to the masked residue mean and does not assign CLS
+semantics to the learned representation. The heads support regression,
+single-label classification, and multi-label classification.
+
 ### ESMFold2
 
 Supported variants are restricted to:
@@ -392,6 +401,11 @@ All four expose the learned ESMC projection and the `auto`, `bf16`, `fp32`, and
 `fp8` ESMC precision policy. The manifest marks `fp8` as experimental. It is an
 explicit inference-only opt-in. It does not claim release numerical parity. See
 [ESMFold2](esmfold2.md) for the exact embedding, reload, and folding contracts.
+
+All four also advertise sequence and residue prediction AutoClasses. These
+single-chain, residue-only paths freeze ESMC and bypass every folding trunk. They
+train a transformer probe on the learned 81-state projection. Projection scope
+also trains `base_z_combine` and `base_z_linear`; it does not fine-tune ESMC.
 
 The ESMFold2 folding checkpoint remains FP32. Folding computation uses CUDA
 BF16 autocast. Requested ESMC precision controls the ESMC backbone separately.

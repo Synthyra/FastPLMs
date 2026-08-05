@@ -139,11 +139,11 @@ Pooling excludes boundary, padding, sentinel, and other non-biological
 positions. Persisted results record the selected stack, layer, inputs, masks,
 and alignment policy.
 
-## Downstream classification
+## Downstream prediction
 
-Both downstream AutoClasses use the checkpoint backbone and create a new,
-untrained `classifier`. Sequence labels have shape `(b,)`. Residue labels have
-shape `(b, l)` and use `-100` outside biological positions:
+The sequence and token prediction AutoClasses use the checkpoint backbone and
+create a new, untrained `classifier`. Sequence labels have shape `(b,)`.
+Residue labels have shape `(b, l)` and use `-100` outside biological positions.
 
 ```python
 import torch
@@ -288,10 +288,10 @@ source shard directly and writes a new canonical safetensors index.
 ## Release record
 
 - FastPLMs weights: `Synthyra/ANKH3_xl`
-- Runtime revision: recorded in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in the source record
-- Canonical transformed state SHA-256: `dd2188e0d2ca65232135714eef6de394239734d843ddae4928c7398685d858e7`
-- Conversion equality attestation: recorded in the source record
+- Runtime revision: recorded separately in the built artifact and published commit
+- Runtime source identities: recorded in `source-record.json`
+- Canonical transformed state identity: recorded in `source-record.json`
+- Conversion equality attestation: recorded in `source-record.json`
 - Official checkpoint: `ElnaggarLab/ankh3-xl`
 - Artifact source: `official`
 - State transform: `ankh_t5_to_fastplms_v1`

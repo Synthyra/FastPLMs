@@ -94,8 +94,8 @@ def run_smoke(expected_python: str, source_root: Path) -> dict[str, object]:
         raise AssertionError("The source registry must contain 10 families and 29 checkpoints.")
     family_maps = {spec.family.id: spec.auto_map for spec in registry.values()}
     advertised_entries = sum(len(auto_map) for auto_map in family_maps.values())
-    if advertised_entries != 37:
-        raise AssertionError(f"Expected 37 advertised Auto entries, found {advertised_entries}.")
+    if advertised_entries != 45:
+        raise AssertionError(f"Expected 45 advertised Auto entries, found {advertised_entries}.")
 
     imported_entries: list[str] = []
     for family_id, auto_map in sorted(family_maps.items()):

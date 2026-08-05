@@ -221,6 +221,26 @@ Projection compliance compares identical 81-state inputs. FP32 output must be
 exact. The BF16 engineering target for relative L2 error is `5e-4`, with a hard
 limit of `1e-3`.
 
+## Downstream prediction
+
+Each ESMFold2 variant advertises sequence and token prediction AutoClasses.
+These interfaces accept ungapped, single-chain protein sequences through
+`prepare_classifier_inputs`. Output token positions correspond directly to
+biological residues because this preparation adds no boundary tokens.
+
+The classification path freezes ESMC, computes its ordered 81 hidden states,
+and applies the checkpoint-owned learned mixture and 256-wide projection. It
+then skips `base_z_mlp` and every folding trunk and evaluates one additional
+trainable transformer probe. `classifier_train_scope="probe"` trains only the
+probe and classifier. `classifier_train_scope="projection"` additionally trains
+`base_z_combine` and `base_z_linear`; ESMC remains frozen and in evaluation mode.
+
+Sequence pooling defaults to the masked residue mean. `cls` and `parti` are
+rejected because this representation has neither classification-token nor
+attention-graph semantics. Sequence and token heads use Hugging Face
+`problem_type` behavior for regression, single-label classification, and
+multi-label classification. Token labels use `-100` at ignored positions.
+
 ## Dataset embeddings
 
 ```python

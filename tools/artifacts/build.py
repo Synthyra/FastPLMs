@@ -65,7 +65,7 @@ _MODEL_CARD_RUNTIME_PROVENANCE = (
     "- Runtime revision: recorded separately in the built artifact and published commit"
 )
 _MODEL_CARD_DIGEST_PROVENANCE = (
-    "- Source-tree and runtime-bundle SHA-256: recorded in `source-record.json`"
+    "- Runtime source identities: recorded in `source-record.json`"
 )
 _ARTIFACT_REQUIREMENT_INPUTS = (
     "requirements/core.in",
@@ -1755,6 +1755,7 @@ def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
         "import tempfile",
         "from io import BytesIO",
         "from pathlib import Path",
+        "from typing import ClassVar",
         "from zipfile import ZIP_DEFLATED, ZipFile",
         "",
         "from .fastplms_bundle import RUNTIME_DATA, RUNTIME_HASH",

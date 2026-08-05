@@ -136,7 +136,8 @@ def test_materialized_model_card_keeps_runtime_identity_out_of_user_facing_text(
     assert source_tree_sha256 not in card
     assert runtime_bundle_sha256 not in card
     assert "- Runtime revision: recorded separately" in card
-    assert "- Source-tree and runtime-bundle SHA-256: recorded" in card
+    assert "- Runtime source identities: recorded in `source-record.json`" in card
+    assert "SHA-256" not in card
 
 
 def test_shared_sources_are_in_runtime_artifacts() -> None:
@@ -147,8 +148,12 @@ def test_shared_sources_are_in_runtime_artifacts() -> None:
         "esm2": {"models/_esm_rotary.py"},
         "dplm": {"models/_diffusion_generation.py", "models/_esm_rotary.py"},
         "dplm2": {"models/_diffusion_generation.py", "models/_esm_rotary.py"},
-        "esmfold": {"models/_esm_rotary.py"},
-        "esmfold2": {"models/esm_plusplus"},
+        "esmfold": {"models/_esm_rotary.py", "models/classification_probe.py"},
+        "esmfold2": {
+            "models/_esm_rotary.py",
+            "models/classification_probe.py",
+            "models/esm_plusplus",
+        },
     }
     package_root = ROOT / "src" / "fastplms"
     for family_id, paths in required.items():

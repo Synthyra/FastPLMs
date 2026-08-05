@@ -97,11 +97,11 @@ Set `output` and `format="safetensors"` or `"sqlite"` for transactional,
 bounded-memory storage. Resume checks input order, model state, tokenizer
 policy, backend, dtype, and pooling configuration before it appends data.
 
-## Downstream classification
+## Downstream prediction
 
-Both downstream AutoClasses use the checkpoint backbone and create a new,
-untrained `classifier`. Sequence labels have shape `(b,)`. Residue labels have
-shape `(b, l)` and use `-100` outside biological positions:
+The sequence and token prediction AutoClasses use the checkpoint backbone and
+create a new, untrained `classifier`. Sequence labels have shape `(b,)`.
+Residue labels have shape `(b, l)` and use `-100` outside biological positions.
 
 ```python
 import torch
@@ -262,10 +262,10 @@ tokenizer, and inference parity remain required.
 ## Release record
 
 - FastPLMs weights: `Synthyra/DPLM2-3B`
-- Runtime revision: recorded in the built artifact and published commit
-- Source-tree and runtime-bundle SHA-256: recorded in the source record
-- Canonical transformed state SHA-256: `8c46ec09115dbe6cbfb91d94ab5e906369d57e27fe620a7741c6f8cb1b6ca890`
-- Conversion equality attestation: recorded in the source record
+- Runtime revision: recorded separately in the built artifact and published commit
+- Runtime source identities: recorded in `source-record.json`
+- Canonical transformed state identity: recorded in `source-record.json`
+- Conversion equality attestation: recorded in `source-record.json`
 - Official checkpoint: `airkingbd/dplm2_3b`
 - Artifact source: `official`
 - State transform: `dplm2_to_fastplms_v1`

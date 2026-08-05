@@ -10,15 +10,15 @@ selectable. Strict-parity exceptions are documented in the checkpoint cards.
 | Family | Architecture | Checkpoints | Public input | AutoClasses | Tokenizer class |
 | --- | --- | ---: | --- | --- | --- |
 | `esm2` | ESM2 | 5 | Amino-acid sequences tokenized to residue IDs | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
-| `esm_plusplus` | ESMC | 3 | Amino-acid sequences tokenized to residue IDs | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM` | `n/a` |
-| `esm3` | ESM3 | 1 | Sequence, structure, and function tracks prepared through the multimodal helpers | `AutoConfig`, `AutoModel` | `n/a` |
+| `esm_plusplus` | ESMC | 3 | Amino-acid sequences tokenized to residue IDs | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
+| `esm3` | ESM3 | 1 | Sequence, structure, and function tracks prepared through the multimodal helpers | `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
 | `e1` | E1 | 3 | Raw amino-acid sequences prepared by the native E1 adapter | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
 | `dplm` | DPLM | 3 | Amino-acid sequences tokenized to masked or partially masked residue IDs | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
 | `dplm2` | DPLM2 | 3 | Tokenized amino-acid and structure tracks with explicit modality boundaries | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `fastplms.models.dplm2.tokenization_dplm2.DPLM2Tokenizer` |
 | `ankh` | ANKH | 5 | Amino-acid sequences tokenized for encoder or sequence-to-sequence use | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
 | `boltz2` | Boltz2 | 1 | Raw amino-acid sequences through the convenience API, or prepared model features | `AutoConfig`, `AutoModel` | `n/a` |
-| `esmfold` | ESMFold | 1 | Raw amino-acid sequences through folding helpers, or prepared residue tensors | `AutoConfig`, `AutoModel` | `n/a` |
-| `esmfold2` | ESMFold2 | 4 | Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors | `AutoConfig`, `AutoModel` | `n/a` |
+| `esmfold` | ESMFold | 1 | Raw amino-acid sequences through folding helpers, or prepared residue tensors | `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
+| `esmfold2` | ESMFold2 | 4 | Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors | `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
 
 ## AutoClass weight status
 
@@ -34,8 +34,12 @@ selectable. Strict-parity exceptions are documented in the checkpoint cards.
 | `esm_plusplus` | `AutoConfig` | `FastPLMs extension` |
 | `esm_plusplus` | `AutoModel` | `pretrained` |
 | `esm_plusplus` | `AutoModelForMaskedLM` | `pretrained` |
+| `esm_plusplus` | `AutoModelForSequenceClassification` | `base weights + untrained task head` |
+| `esm_plusplus` | `AutoModelForTokenClassification` | `base weights + untrained task head` |
 | `esm3` | `AutoConfig` | `FastPLMs extension` |
 | `esm3` | `AutoModel` | `pretrained` |
+| `esm3` | `AutoModelForSequenceClassification` | `base weights + untrained task head` |
+| `esm3` | `AutoModelForTokenClassification` | `base weights + untrained task head` |
 | `e1` | `AutoConfig` | `FastPLMs extension` |
 | `e1` | `AutoModel` | `pretrained` |
 | `e1` | `AutoModelForMaskedLM` | `pretrained` |
@@ -61,8 +65,12 @@ selectable. Strict-parity exceptions are documented in the checkpoint cards.
 | `boltz2` | `AutoModel` | `pretrained` |
 | `esmfold` | `AutoConfig` | `FastPLMs extension` |
 | `esmfold` | `AutoModel` | `pretrained` |
+| `esmfold` | `AutoModelForSequenceClassification` | `base weights + untrained task head` |
+| `esmfold` | `AutoModelForTokenClassification` | `base weights + untrained task head` |
 | `esmfold2` | `AutoConfig` | `FastPLMs extension` |
 | `esmfold2` | `AutoModel` | `pretrained` |
+| `esmfold2` | `AutoModelForSequenceClassification` | `base weights + untrained task head` |
+| `esmfold2` | `AutoModelForTokenClassification` | `base weights + untrained task head` |
 
 ## Family execution
 
