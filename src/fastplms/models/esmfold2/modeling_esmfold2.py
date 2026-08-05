@@ -74,6 +74,7 @@ from .modeling_esmfold2_common import (
     maybe_subsample_msa,
     validate_kernel_backend,
     validate_msa_conditioning_inputs,
+    validate_prepared_auxiliary_inputs,
 )
 
 _ESMC_FP8_LINEAR_SUFFIX = ".attn.out_proj"
@@ -1417,6 +1418,12 @@ class ESMFold2Model(
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
+        pocket_feature: Tensor | None = None,
+        gt_coords: Tensor | None = None,
+        is_resolved: Tensor | None = None,
+        frames_idx: Tensor | None = None,
+        disto_cond: Tensor | None = None,
+        disto_cond_mask: Tensor | None = None,
     ) -> ESMFold2Output | tuple[Any, ...]:
         output_hidden_states, return_dict = _resolve_structure_output_controls(
             self.config,
@@ -1432,6 +1439,12 @@ class ESMFold2Model(
             deletion_value=deletion_value,
             deletion_mean=deletion_mean,
         )
+        validate_prepared_auxiliary_inputs(
+            pocket_feature=pocket_feature,
+            disto_cond=disto_cond,
+            disto_cond_mask=disto_cond_mask,
+        )
+        del gt_coords, is_resolved, frames_idx
         tok_mask = token_attention_mask
         atm_mask = atom_attention_mask
         disto_idx = distogram_atom_idx

@@ -19,15 +19,9 @@ def configure_offline() -> None:
 
 
 def build_esmfold2_conditioned_complex(types: Any) -> Any:
-    """Construct the full-variant multimolecule, MSA, bond, and distogram schema."""
-    import numpy as np
-
+    """Construct a supported full-variant multimolecule, MSA, and bond request."""
     protein = "MSTNPKPQRKTKRNT"
     msa = types.MSA.from_sequences([protein, "MSTNPKPQRKTKRNS"])
-    distances = np.full(
-        (len(protein), len(protein)), 8.0, dtype=np.float32
-    )  # (l, l)
-    np.fill_diagonal(distances, 0.0)  # (l, l)
     return types.StructurePredictionInput(
         sequences=[
             types.ProteinInput(id="A", sequence=protein, msa=msa),
@@ -39,9 +33,6 @@ def build_esmfold2_conditioned_complex(types: Any) -> Any:
             types.RNAInput(id="R", sequence="AUGC"),
             types.DNAInput(id="D", sequence="ATGC"),
             types.LigandInput(id="L", smiles="O"),
-        ],
-        distogram_conditioning=[
-            types.DistogramConditioning(chain_id="A", distogram=distances)
         ],
         covalent_bonds=[
             types.CovalentBond(
@@ -80,6 +71,27 @@ def verify_esmfold2_pocket_rejection(model: Any, seed: int) -> str:
     except NotImplementedError as error:
         return str(error)
     raise RuntimeError("ESMFold2 unexpectedly accepted unsupported pocket conditioning.")
+
+
+def verify_esmfold2_distogram_rejection(model: Any, seed: int) -> str:
+    """Show that the schema cannot silently pass unused distance conditioning."""
+    import numpy as np
+
+    types = model.input_types
+    request = types.StructurePredictionInput(
+        sequences=[types.ProteinInput(id="target", sequence="MSTNPKPQRKTKRNT")],
+        distogram_conditioning=[
+            types.DistogramConditioning(
+                chain_id="target",
+                distogram=np.zeros((15, 15), dtype=np.float32),  # (l=15, l=15)
+            )
+        ],
+    )
+    try:
+        model.prepare_structure_input(request, seed=seed)
+    except NotImplementedError as error:
+        return str(error)
+    raise RuntimeError("ESMFold2 unexpectedly accepted unsupported distogram conditioning.")
 
 
 def run_structure_helper(model: Any, family: str, sequence: str, seed: int) -> Any:
@@ -138,6 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         print("chains", len(chain_info))
         pocket_contract = verify_esmfold2_pocket_rejection(model, arguments.seed)
         print("pocket-contract", pocket_contract)
+        distogram_contract = verify_esmfold2_distogram_rejection(model, arguments.seed)
+        print("distogram-contract", distogram_contract)
     else:
         result = run_structure_helper(
             model,

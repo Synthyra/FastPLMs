@@ -829,7 +829,7 @@ def test_structure_preparation_example_executes_each_public_branch() -> None:
     assert isinstance(modified_protein, esmfold2_types.ProteinInput)
     assert modified_protein.modifications == [esmfold2_types.Modification(position=0, ccd="MSE")]
     assert request.covalent_bonds and len(request.covalent_bonds) == 1
-    assert request.distogram_conditioning and len(request.distogram_conditioning) == 1
+    assert request.distogram_conditioning is None
 
     class FakeESMFold2:
         input_types = esmfold2_types
@@ -838,6 +838,8 @@ def test_structure_preparation_example_executes_each_public_branch() -> None:
             assert seed == 11
             if prepared.pocket is not None:
                 raise NotImplementedError("Pocket conditioning is not implemented.")
+            if prepared.distogram_conditioning is not None:
+                raise NotImplementedError("Distogram conditioning is not implemented.")
             return prepared
 
     rejection = structure_preparation.verify_esmfold2_pocket_rejection(
@@ -845,6 +847,11 @@ def test_structure_preparation_example_executes_each_public_branch() -> None:
         seed=11,
     )
     assert "Pocket conditioning" in rejection
+    rejection = structure_preparation.verify_esmfold2_distogram_rejection(
+        FakeESMFold2(),
+        seed=11,
+    )
+    assert "Distogram conditioning" in rejection
 
 
 def test_artifact_loading_example_executes_local_only_autoconfig(tmp_path: Path) -> None:

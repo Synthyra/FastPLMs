@@ -123,6 +123,12 @@ def clean_esmfold2_input(input: StructurePredictionInput) -> StructurePrediction
             "the published ESMFold2 feature pipeline drops it. FastPLMs refuses this "
             "input instead of silently emitting an all-zero pocket feature."
         )
+    if input.distogram_conditioning is not None:
+        raise NotImplementedError(
+            "ESMFold2 distogram conditioning is present in the upstream input schema but "
+            "the published ESMFold2 forward does not consume it. FastPLMs refuses this "
+            "input instead of silently ignoring the supplied distogram."
+        )
 
     cleaned: list[Any] = []
     for item in input.sequences:

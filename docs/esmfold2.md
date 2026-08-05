@@ -174,21 +174,23 @@ result = model.fold(
 print(result.ptm, result.plddt.mean().item())
 ```
 
-The shared schema also supports RNA, modifications, covalent bonds, and
-distogram conditioning. Full ESMFold2 checkpoints additionally accept protein
-MSAs. Fast and experimental Fast checkpoints reject a non-null
+The shared schema also supports RNA, modifications, and covalent bonds. Full
+ESMFold2 checkpoints additionally accept protein MSAs. Fast and experimental
+Fast checkpoints reject a non-null
 `ProteinInput.msa`; this does not prevent no-MSA multichain or multimolecule
-inference. `PocketConditioning` is recognized by the schema, but
-the pinned official runtime drops it and hard-codes a zero pocket feature.
-FastPLMs rejects a non-null pocket request rather than silently discarding it;
-pocket conditioning is not supported in 1.0. No known target structure is
-required. Prepared feature tensors include `ref_pos`, but this is component
-reference geometry created during featurization, not the target coordinates.
-Atomic coordinates and confidence fields are model outputs.
+inference. `PocketConditioning` and `DistogramConditioning` are recognized by
+the schema, but the pinned official forward consumes neither. Its feature
+builder hard-codes a zero pocket feature and constructs distogram tensors that
+the released model ignores. FastPLMs rejects non-null pocket and distogram
+requests rather than silently discarding scientific inputs; neither conditioning
+mode is supported in 1.0. No known target structure is required. Prepared
+feature tensors include `ref_pos`, but this is component reference geometry
+created during featurization, not the target coordinates. Atomic coordinates
+and confidence fields are model outputs.
 The offline [`structure_preparation.py`](../examples/structure_preparation.py)
 example constructs the supported MSA, protein-complex, RNA, DNA, ligand,
-modification, covalent-bond, and distogram inputs and executes the pocket
-rejection contract. Its MSA path is for the full variants. Fast variants may
+modification, and covalent-bond inputs and executes the pocket and distogram
+rejection contracts. Its MSA path is for the full variants. Fast variants may
 use the other typed modalities only when every protein input has `msa=None`.
 
 ## Learned sequence representation
