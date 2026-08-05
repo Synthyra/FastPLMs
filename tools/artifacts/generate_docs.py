@@ -901,25 +901,37 @@ def _auto_class_status(family: ModelFamily, auto_class: str) -> str:
 
 
 def _platform_requirements(family: ModelFamily) -> str:
-    requirements = ["This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13."]
+    paragraphs = [
+        "This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13."
+    ]
     if family.tokenizer_mode == "structure":
-        requirements.append(
-            "The artifact requirements include the structure dependencies. "
-            "The release contract requires a CUDA device. The current validated "
-            "target is the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, "
-            "Windows, and macOS structure runs are not release evidence."
+        paragraphs.extend(
+            (
+                "The artifact requirements include the structure dependencies.",
+                "The release contract requires a CUDA device. The current validated "
+                "target is the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, "
+                "CPU-only, Windows, and macOS structure runs are not release evidence.",
+            )
         )
     elif any(name.startswith("flash_attention_") for name in family.attention):
-        requirements.append(
+        paragraphs.append(
             "The artifact requirements include the FlashAttention loader dependency. "
             "FlashAttention also requires compatible CUDA hardware and BF16 execution."
         )
     else:
-        requirements.append(
+        paragraphs.append(
             "The CPU gate covers small offline tests. Published checkpoint throughput "
             "and parity require the documented device tier."
         )
-    return " ".join(requirements)
+    return "\n\n".join(
+        textwrap.fill(
+            paragraph,
+            width=79,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        for paragraph in paragraphs
+    )
 
 
 def _installation_section(spec: ModelSpec) -> str:
@@ -936,9 +948,11 @@ python -m pip install -r \\
 The FastPLMs implementation itself is embedded in the model repository.
 Transformers loads it through `trust_remote_code=True`.
 
-{_platform_requirements(spec.family)} The Hub quick start needs network access for
-the first download. For an air-gapped run, build the manifest-pinned local
-artifact first and use the offline example.
+{_platform_requirements(spec.family)}
+
+The Hub quick start needs network access for the first download. For an
+air-gapped run, build the manifest-pinned local artifact first and use the
+offline example.
 
 """
 
@@ -2889,90 +2903,65 @@ def _preferred_auto_class(spec: ModelSpec) -> str:
     return sorted(spec.auto_map)[0]
 
 
-def _feature_statuses(spec: ModelSpec) -> tuple[tuple[str, str], ...]:
-    """Return concise, checkpoint-specific public capability statuses."""
+def _model_title(spec: ModelSpec) -> str:
+    """Return a readable checkpoint name for the card heading."""
 
-    family_id = spec.family.id
-    sequence_head = "AutoModelForSequenceClassification" in spec.auto_map
-    token_head = "AutoModelForTokenClassification" in spec.auto_map
-
-    if family_id == "esmfold2":
-        embedding = "Special: ESMC state mixture to 256-wide residue embeddings"
-    elif family_id == "ankh":
-        embedding = "Special: encoder or explicitly prepared decoder states"
-    elif family_id == "e1":
-        embedding = "Special: tokenizer-free raw-sequence preparation"
-    elif family_id in EMBEDDING_FAMILIES:
-        embedding = "Supported: shared ordered embedding API"
-    else:
-        embedding = "Unavailable for this structure-only checkpoint"
-
-    if family_id in SEQUENCE_TTT_AUTO_CLASSES:
-        ttt = "Supported: low-rank masked-residue adaptation"
-    elif family_id == "esmfold2" and "experimental" not in spec.id:
-        ttt = "Special: opt-in folding TTT on the ESMC backbone"
-    elif family_id == "esmfold":
-        ttt = "Unavailable: the checkpoint has no trained MLM head"
-    elif family_id == "esmfold2":
-        ttt = "Unavailable for this experimental checkpoint"
-    else:
-        ttt = "Unavailable for this inference-only checkpoint"
-
+    repository_name = spec.fast.repo_id.rsplit("/", maxsplit=1)[-1]
     if spec.family.id == "esm_plusplus":
-        attention = "Special: SDPA fidelity path; alternate backends have explicit bands"
-    else:
-        attention = f"Supported: {_code(spec.family.attention)}"
-
-    compliance = (
-        "Declared: exact release evidence is required"
-        if "compliance" in spec.family.test_tiers
-        else "Unavailable: this provisional family has no compliance tier"
-    )
-
-    return (
-        (
-            "Sequence classification",
-            "Supported: base weights with an untrained task head"
-            if sequence_head
-            else "Unavailable: no advertised AutoClass",
-        ),
-        (
-            "Token classification",
-            "Supported: base weights with an untrained task head"
-            if token_head
-            else "Unavailable: no advertised AutoClass",
-        ),
-        (
-            "PEFT fine-tuning",
-            "Supported pattern: preserve the separately trained `classifier`"
-            if sequence_head
-            else "Supported pattern: attach LoRA to the pretrained model",
-        ),
-        ("Embeddings", embedding),
-        ("Test-time training", ttt),
-        ("Attention variants", attention),
-        ("Compliance", compliance),
+        scale = repository_name.removeprefix("ESMplusplus_")
+        return f"ESM++ {scale if scale == '6B' else scale.title()}"
+    if spec.family.id == "ankh":
+        name, scale = repository_name.rsplit("_", maxsplit=1)
+        return f"{name}-{scale.upper() if scale == 'xl' else scale.title()}"
+    scale_names = {
+        "base": "Base",
+        "large": "Large",
+        "small": "Small",
+        "xl": "XL",
+    }
+    return " ".join(
+        scale_names.get(part.lower(), part) for part in repository_name.split("_")
     )
 
 
-def _capability_summary(spec: ModelSpec) -> str:
-    lines = [
-        "## Capabilities",
-        "",
-        "| Feature | Status |",
-        "| --- | --- |",
+def _model_overview(spec: ModelSpec) -> str:
+    """Introduce the checkpoint in task-oriented prose."""
+
+    public_input = spec.family.public_input[0].lower() + spec.family.public_input[1:]
+    overview = (
+        f"`{spec.fast.repo_id}` packages the `{spec.official.repo_id}` checkpoint with "
+        "the FastPLMs runtime for Hugging Face Transformers. "
+        f"It accepts {public_input}."
+    )
+    entry_points = (
+        "The repository uses the standard Transformers loading interface with "
+        "`trust_remote_code=True`. See Technical details for each registered class and "
+        "whether its weights come from the checkpoint."
+    )
+    paragraphs = [
+        textwrap.fill(overview, width=79, break_long_words=False, break_on_hyphens=False),
+        textwrap.fill(
+            entry_points,
+            width=79,
+            break_long_words=False,
+            break_on_hyphens=False,
+        ),
     ]
-    lines.extend(f"| {feature} | {status} |" for feature, status in _feature_statuses(spec))
-    lines.extend(
-        (
-            "",
-            "A supported interface is not a pretrained downstream predictor. "
-            "Classification heads start untrained. Compliance metadata does not show "
-            "that a local build passed its release gate.",
-            "",
+    if {
+        "AutoModelForSequenceClassification",
+        "AutoModelForTokenClassification",
+    }.issubset(spec.auto_map):
+        paragraphs.append(
+            textwrap.fill(
+                "The sequence- and token-classification classes reuse the pretrained "
+                "backbone, but their task heads are newly initialized. Fine-tune those "
+                "heads before interpreting their logits as predictions.",
+                width=79,
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
         )
-    )
-    return "\n".join(lines)
+    return "## Model overview\n\n" + "\n\n".join(paragraphs) + "\n\n"
 
 
 def _task_head_usage(spec: ModelSpec) -> str:
@@ -2999,7 +2988,7 @@ batch = sequence_model.prepare_classifier_inputs(sequences)
 biological = batch["attention_mask"].bool()
 """
     else:
-        preparation = f"""\
+        preparation = """\
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
 batch = tokenizer(sequences, padding=True, return_tensors="pt")
@@ -3152,30 +3141,21 @@ memory, can worsen an output, and does not show biological function.
 def _attention_usage(spec: ModelSpec) -> str:
     recommended = "sdpa" if "sdpa" in spec.family.attention else spec.family.attention[0]
     declared = textwrap.fill(
-        f"Declared variants are {_code(spec.family.attention)}. An unavailable "
-        "requested backend raises. It does not silently change implementation.",
+        f"Available backends are {_code(spec.family.attention)}. Requesting an "
+        "unavailable backend raises instead of silently changing implementation.",
         width=79,
         break_long_words=False,
         break_on_hyphens=False,
     )
-    if "compliance" in spec.family.test_tiers:
-        compliance = (
-            "This family declares the `compliance` tier. Release evidence identifies "
-            "the checkpoint, backend, dtype, hardware, inputs, and reference revision."
-        )
-    else:
-        compliance = (
-            "This family does not declare the `compliance` tier. Boltz2 remains "
-            "provisional. Its structure checks are not parity claims."
-        )
     return f"""\
-## Attention and compliance
+## Attention backends
 
-The quick start selects `{recommended}` explicitly. {declared}
+The quick start uses `{recommended}`.
+
+{declared}
+
 `output_attentions=True` can use the documented one-call eager fallback to
 materialize attention tensors. The configured backend does not change.
-
-{textwrap.fill(compliance, width=79)}
 
 """
 
@@ -3908,10 +3888,11 @@ ESMFold2 does not advertise FlashAttention for the folding interface.
 Structure preparation requires `ccd.pkl` from
 `biohub/ESMFold2`. The manifest pins its repository, revision, size, content
 identity, and MIT terms. This is a trusted-deserialization boundary. FastPLMs
-accepts only the pinned snapshot link inside the repository blob directory and
-rejects user-supplied asset and `cache_dir` symlinks. The loader verifies a
-private temporary snapshot before deserialization. Offline execution requires
-the exact cached object and never downloads a replacement.
+accepts only the pinned snapshot link inside the repository blob directory.
+User-supplied asset and `cache_dir` symlinks are rejected. The loader verifies a
+private temporary snapshot before deserialization, protecting against
+path-replacement and in-place source-write races. Offline execution requires the
+exact cached object and never downloads a replacement.
 
 {ttt_note}{binder_note}"""
     if allow_generic:
@@ -3934,7 +3915,7 @@ def render_model_card(
     canonical_state_record = ""
     tokenizer_provenance = ""
     notes = ""
-    capability_summary = _capability_summary(spec)
+    model_overview = _model_overview(spec)
     attention_usage = _attention_usage(spec)
     sequence_forward = _sequence_forward_usage(spec)
     embedding_usage = _embedding_usage(spec)
@@ -3947,15 +3928,6 @@ def render_model_card(
         esmc_evidence=esmc_evidence,
     )
     local_artifact = spec.fast.repo_id.rsplit("/", maxsplit=1)[-1]
-    public_input_intro = textwrap.fill(
-        "Accepted inputs are "
-        f"{spec.family.public_input[0].lower() + spec.family.public_input[1:]}.",
-        width=79,
-    )
-    auto_class_intro = textwrap.fill(
-        f"Supported Transformers entry points are {_code(sorted(spec.auto_map))}.",
-        width=79,
-    )
     recommended_attention = (
         "sdpa" if "sdpa" in spec.family.attention else spec.family.attention[0]
     )
@@ -3985,6 +3957,16 @@ def render_model_card(
     weights_allowed = str(spec.family.weights_publication_allowed).lower()
     weights_license_status = "resolved" if spec.family.weights_publication_allowed else "unresolved"
     complete_weights = str(spec.family.requires_complete_weight_publication).lower()
+    if "compliance" in spec.family.test_tiers:
+        validation_scope = (
+            "Release validation includes the `compliance` tier. Its evidence identifies "
+            "the checkpoint, backend, dtype, hardware, inputs, and reference revision."
+        )
+    else:
+        validation_scope = (
+            "Boltz2 remains provisional and does not declare the `compliance` tier. "
+            "Its structure checks are not parity claims."
+        )
     return f"""---
 library_name: transformers
 {license_yaml}
@@ -3995,15 +3977,9 @@ tags:
 
 {GENERATED_MARKER}
 
-# {spec.fast.repo_id}
+# {_model_title(spec)}
 
-This checkpoint contains the FastPLMs `{spec.family.architecture}` implementation.
-
-{public_input_intro}
-{auto_class_intro}
-
-{capability_summary}
-{_installation_section(spec)}## Quick start
+{model_overview}{_installation_section(spec)}## Quick start
 
 ```python
 from transformers import {auto_class}
@@ -4020,24 +3996,28 @@ For offline validation, replace `model_id` with the manifest-built
 `dist/hub/{local_artifact}` path. Pass `local_files_only=True`.
 
 {attention_usage}{sequence_forward}{embedding_usage}{task_head_usage}{peft_usage}\
-{sequence_ttt_usage}{family_usage}{notes}## Runtime contract
+{sequence_ttt_usage}{family_usage}{notes}## Technical details
 
-- Public input: {spec.family.public_input}
-- Advertised AutoClasses: {_code(sorted(spec.auto_map))}
-- AutoClass weight status: {auto_status}
-- Attention implementations: {_code(spec.family.attention)}
-- Precision policies: {_precision_contract(spec.family)}
+- Inputs: {spec.family.public_input}
+- Transformers classes: {_code(sorted(spec.auto_map))}
+- Checkpoint weights: {auto_status}
+- Attention backends: {_code(spec.family.attention)}
+- Precision: {_precision_contract(spec.family)}
 - BF16 execution: `{spec.family.bf16_execution}`
 - Generation contract: `{spec.generation_contract}`
-- Artifact dependency set: `{"core + structure" if spec.family.extra == "structure" else "core"}`
+- Dependencies: `{"core + structure" if spec.family.extra == "structure" else "core"}`
 - Weight publication allowed: `{weights_allowed}`
 - Weight license status: `{weights_license_status}`
 - Redistributable: `{weights_allowed}`
 - Complete weight publication required: `{complete_weights}`
 
-## Release record
+## Validation and provenance
 
-- FastPLMs weights: `{spec.fast.repo_id}`
+FastPLMs pins the checkpoint, upstream source revisions, state transformation,
+and required files in `models.toml`. Built artifacts record exact source
+identities and conversion details in `source-record.json`.
+
+- FastPLMs checkpoint: `{spec.fast.repo_id}`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Runtime source identities: recorded in `source-record.json`
 {canonical_state_record}\
@@ -4048,14 +4028,12 @@ For offline validation, replace `model_id` with the manifest-built
 - Release tiers: {_code(spec.family.test_tiers)}
 - Unresolved required file identities: `{unresolved}`
 
-The source record records exact file identities, conversion, source revisions,
-legal texts, schema, and attestations. A nonzero unresolved count blocks a release.
-
-## Validation boundary
+{textwrap.fill(validation_scope, width=79, break_long_words=False, break_on_hyphens=False)}
 
 Declared tiers compare configuration, tokenizer behavior, state, and
-representative inference with the pinned reference. Metadata does not show that
-a build passed, that a backend is faster, or that an output is biologically valid.
+representative inference with the pinned reference. A nonzero unresolved count
+blocks release. Metadata alone does not show that a build passed, that a backend
+is faster, or that an output is biologically valid.
 
 ## License
 

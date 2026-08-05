@@ -1,10 +1,9 @@
 """Fail-closed Hugging Face license metadata contracts for model cards."""
 
-from __future__ import annotations
-
-import pytest
 from collections.abc import Callable
 from pathlib import Path
+
+import pytest
 
 from fastplms.registry import HUB_LICENSE_IDENTIFIERS, ModelSpec, load_model_registry
 from tools.artifacts.build import render_model_card as render_artifact_model_card
@@ -124,7 +123,7 @@ def test_model_cards_keep_checkpoint_specific_ttt_boundaries() -> None:
             assert "standard and Fast checkpoints expose" in card
 
 
-def test_every_manifest_model_card_has_the_shared_capability_contract() -> None:
+def test_every_manifest_model_card_has_task_oriented_guidance() -> None:
     registry = load_model_registry()
     specs = tuple(registry.values())
     assert len(specs) == 29
@@ -132,25 +131,20 @@ def test_every_manifest_model_card_has_the_shared_capability_contract() -> None:
     for spec in specs:
         card = (ROOT / "model_cards" / f"{spec.id}.md").read_text(encoding="utf-8")
         normalized = " ".join(card.split())
-        assert "## Capabilities" in card
-        for feature in (
-            "Sequence classification",
-            "Token classification",
-            "PEFT fine-tuning",
-            "Embeddings",
-            "Test-time training",
-            "Attention variants",
-            "Compliance",
-        ):
-            assert f"| {feature} |" in card
+        assert "## Model overview" in card
+        assert "See Technical details for each registered class" in card
+        assert "## Capabilities" not in card
+        assert "| Feature | Status |" not in card
+        assert "## Technical details" in card
+        assert "## Validation and provenance" in card
 
         for backend in spec.family.attention:
             assert f"`{backend}`" in card
-        assert "An unavailable requested backend raises" in normalized
+        assert "Requesting an unavailable backend raises" in normalized
         if "compliance" in spec.family.test_tiers:
-            assert "This family declares the `compliance` tier." in card
+            assert "Release validation includes the `compliance` tier." in card
         else:
-            assert "This family does not declare the `compliance` tier." in card
+            assert "does not declare the `compliance` tier" in card
 
         advertises_heads = {
             "AutoModelForSequenceClassification",
@@ -160,15 +154,15 @@ def test_every_manifest_model_card_has_the_shared_capability_contract() -> None:
         assert 'target_modules="all-linear"' in card
         assert "ESM2-specific shipped CLI is an example, not a\nsupport boundary" in card
         if advertises_heads:
-            assert "## Downstream classification" in card
-            assert "base weights with an untrained task head" in card
+            assert "## Downstream prediction" in card
+            assert "their task heads are newly initialized" in card
+            assert "create a new, untrained `classifier`" in card
             assert "AutoModelForSequenceClassification.from_pretrained" in card
             assert "AutoModelForTokenClassification.from_pretrained" in card
             assert "token_labels = torch.full_like(batch[\"input_ids\"], -100)" in card
             assert 'modules_to_save=["classifier"]' in card
         else:
-            assert "## Downstream classification" not in card
-            assert "| PEFT fine-tuning | Supported pattern:" in card
+            assert "## Downstream prediction" not in card
             assert "preserve any new head through `modules_to_save`" in card
             assert 'modules_to_save=["classifier"]' not in card
 
@@ -178,7 +172,8 @@ def test_every_manifest_model_card_has_the_shared_capability_contract() -> None:
             else:
                 assert "## Dataset embeddings" in card
         else:
-            assert "| Embeddings | Unavailable" in card
+            assert "## Dataset embeddings" not in card
+            assert "## Learned representation and ESMC precision" not in card
 
         ttt_auto_class = SEQUENCE_TTT_AUTO_CLASSES.get(spec.family.id)
         if ttt_auto_class is not None:
@@ -187,6 +182,20 @@ def test_every_manifest_model_card_has_the_shared_capability_contract() -> None:
             assert "updates only injected low-rank" in section
             assert 'save_pretrained("adapted", safe_serialization=True)' in section
             assert "ttt_model.ttt_reset()" in section
+
+
+def test_model_card_titles_use_readable_checkpoint_names() -> None:
+    expected_titles = {
+        "ankh_base": "# ANKH-Base",
+        "ankh2_large": "# ANKH2-Large",
+        "ankh3_xl": "# ANKH3-XL",
+        "esm3_small": "# ESM3 Small",
+        "esmc_small": "# ESM++ Small",
+        "esmc_6b": "# ESM++ 6B",
+    }
+    for model_id, title in expected_titles.items():
+        card = (ROOT / "model_cards" / f"{model_id}.md").read_text(encoding="utf-8")
+        assert f"\n{title}\n" in card
 
 
 def test_esmfold2_cards_publish_embedding_projection_shapes_and_ttt_scope() -> None:
@@ -214,7 +223,7 @@ def test_model_card_renderers_surface_typed_limitations(
     registry = load_model_registry()
     for spec in registry.values():
         card = renderer(spec)
-        assert f"Public input: {spec.family.public_input}" in card
+        assert f"Inputs: {spec.family.public_input}" in card
         assert "Input mode:" not in card
         assert "Internal preparation mode:" not in card
         assert f"Generation contract: `{spec.generation_contract}`" in card

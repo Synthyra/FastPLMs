@@ -8,28 +8,21 @@ tags:
 
 <!-- Generated from src/fastplms/models.toml. Do not edit. -->
 
-# Synthyra/FastESMFold
+# FastESMFold
 
-This checkpoint contains the FastPLMs `ESMFold` implementation.
+## Model overview
 
-Accepted inputs are raw amino-acid sequences through folding helpers, or
-prepared residue tensors.
-Supported Transformers entry points are `AutoConfig`, `AutoModel`,
-`AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
+`Synthyra/FastESMFold` packages the `facebook/esmfold_v1` checkpoint with the
+FastPLMs runtime for Hugging Face Transformers. It accepts raw amino-acid
+sequences through folding helpers, or prepared residue tensors.
 
-## Capabilities
+The repository uses the standard Transformers loading interface with
+`trust_remote_code=True`. See Technical details for each registered class and
+whether its weights come from the checkpoint.
 
-| Feature | Status |
-| --- | --- |
-| Sequence classification | Supported: base weights with an untrained task head |
-| Token classification | Supported: base weights with an untrained task head |
-| PEFT fine-tuning | Supported pattern: preserve the separately trained `classifier` |
-| Embeddings | Unavailable for this structure-only checkpoint |
-| Test-time training | Unavailable: the checkpoint has no trained MLM head |
-| Attention variants | Supported: `eager`, `sdpa`, `flex_attention` |
-| Compliance | Declared: exact release evidence is required |
-
-A supported interface is not a pretrained downstream predictor. Classification heads start untrained. Compliance metadata does not show that a local build passed its release gate.
+The sequence- and token-classification classes reuse the pretrained backbone,
+but their task heads are newly initialized. Fine-tune those heads before
+interpreting their logits as predictions.
 
 ## Install and platform requirements
 
@@ -43,9 +36,17 @@ python -m pip install -r \
 The FastPLMs implementation itself is embedded in the model repository.
 Transformers loads it through `trust_remote_code=True`.
 
-This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13. The artifact requirements include the structure dependencies. The release contract requires a CUDA device. The current validated target is the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and macOS structure runs are not release evidence. The Hub quick start needs network access for
-the first download. For an air-gapped run, build the manifest-pinned local
-artifact first and use the offline example.
+This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
+
+The artifact requirements include the structure dependencies.
+
+The release contract requires a CUDA device. The current validated target is
+the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and
+macOS structure runs are not release evidence.
+
+The Hub quick start needs network access for the first download. For an
+air-gapped run, build the manifest-pinned local artifact first and use the
+offline example.
 
 ## Quick start
 
@@ -63,15 +64,15 @@ model = AutoModel.from_pretrained(
 For offline validation, replace `model_id` with the manifest-built
 `dist/hub/FastESMFold` path. Pass `local_files_only=True`.
 
-## Attention and compliance
+## Attention backends
 
-The quick start selects `sdpa` explicitly. Declared variants are `eager`, `sdpa`, `flex_attention`. An unavailable
-requested backend raises. It does not silently change implementation.
+The quick start uses `sdpa`.
+
+Available backends are `eager`, `sdpa`, `flex_attention`. Requesting an
+unavailable backend raises instead of silently changing implementation.
+
 `output_attentions=True` can use the documented one-call eager fallback to
 materialize attention tensors. The configured backend does not change.
-
-This family declares the `compliance` tier. Release evidence identifies the
-checkpoint, backend, dtype, hardware, inputs, and reference revision.
 
 ## Downstream prediction
 
@@ -169,24 +170,28 @@ FastPLMs does not expose ProteinTTT for ESMFold. The pinned folding checkpoint
 has no trained masked-language-model head for this objective. `ttt()` and TTT
 folding requests raise.
 
-## Runtime contract
+## Technical details
 
-- Public input: Raw amino-acid sequences through folding helpers, or prepared residue tensors
-- Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
-- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
-- Attention implementations: `eager`, `sdpa`, `flex_attention`
-- Precision policies: `default`
+- Inputs: Raw amino-acid sequences through folding helpers, or prepared residue tensors
+- Transformers classes: `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
+- Checkpoint weights: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
+- Attention backends: `eager`, `sdpa`, `flex_attention`
+- Precision: `default`
 - BF16 execution: `fp32_parameters_autocast`
 - Generation contract: `not_applicable`
-- Artifact dependency set: `core + structure`
+- Dependencies: `core + structure`
 - Weight publication allowed: `true`
 - Weight license status: `resolved`
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Release record
+## Validation and provenance
 
-- FastPLMs weights: `Synthyra/FastESMFold`
+FastPLMs pins the checkpoint, upstream source revisions, state transformation,
+and required files in `models.toml`. Built artifacts record exact source
+identities and conversion details in `source-record.json`.
+
+- FastPLMs checkpoint: `Synthyra/FastESMFold`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Runtime source identities: recorded in `source-record.json`
 - Official checkpoint: `facebook/esmfold_v1`
@@ -196,14 +201,13 @@ folding requests raise.
 - Release tiers: `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The source record records exact file identities, conversion, source revisions,
-legal texts, schema, and attestations. A nonzero unresolved count blocks a release.
-
-## Validation boundary
+Release validation includes the `compliance` tier. Its evidence identifies the
+checkpoint, backend, dtype, hardware, inputs, and reference revision.
 
 Declared tiers compare configuration, tokenizer behavior, state, and
-representative inference with the pinned reference. Metadata does not show that
-a build passed, that a backend is faster, or that an output is biologically valid.
+representative inference with the pinned reference. A nonzero unresolved count
+blocks release. Metadata alone does not show that a build passed, that a backend
+is faster, or that an output is biologically valid.
 
 ## License
 

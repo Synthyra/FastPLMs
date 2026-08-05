@@ -8,27 +8,17 @@ tags:
 
 <!-- Generated from src/fastplms/models.toml. Do not edit. -->
 
-# Synthyra/Boltz2
+# Boltz2
 
-This checkpoint contains the FastPLMs `Boltz2` implementation.
+## Model overview
 
-Accepted inputs are raw amino-acid sequences through the convenience API, or
-prepared model features.
-Supported Transformers entry points are `AutoConfig`, `AutoModel`.
+`Synthyra/Boltz2` packages the `boltz-community/boltz-2` checkpoint with the
+FastPLMs runtime for Hugging Face Transformers. It accepts raw amino-acid
+sequences through the convenience API, or prepared model features.
 
-## Capabilities
-
-| Feature | Status |
-| --- | --- |
-| Sequence classification | Unavailable: no advertised AutoClass |
-| Token classification | Unavailable: no advertised AutoClass |
-| PEFT fine-tuning | Supported pattern: attach LoRA to the pretrained model |
-| Embeddings | Unavailable for this structure-only checkpoint |
-| Test-time training | Unavailable for this inference-only checkpoint |
-| Attention variants | Supported: `eager` |
-| Compliance | Unavailable: this provisional family has no compliance tier |
-
-A supported interface is not a pretrained downstream predictor. Classification heads start untrained. Compliance metadata does not show that a local build passed its release gate.
+The repository uses the standard Transformers loading interface with
+`trust_remote_code=True`. See Technical details for each registered class and
+whether its weights come from the checkpoint.
 
 ## Install and platform requirements
 
@@ -42,9 +32,17 @@ python -m pip install -r \
 The FastPLMs implementation itself is embedded in the model repository.
 Transformers loads it through `trust_remote_code=True`.
 
-This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13. The artifact requirements include the structure dependencies. The release contract requires a CUDA device. The current validated target is the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and macOS structure runs are not release evidence. The Hub quick start needs network access for
-the first download. For an air-gapped run, build the manifest-pinned local
-artifact first and use the offline example.
+This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
+
+The artifact requirements include the structure dependencies.
+
+The release contract requires a CUDA device. The current validated target is
+the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and
+macOS structure runs are not release evidence.
+
+The Hub quick start needs network access for the first download. For an
+air-gapped run, build the manifest-pinned local artifact first and use the
+offline example.
 
 ## Quick start
 
@@ -62,15 +60,15 @@ model = AutoModel.from_pretrained(
 For offline validation, replace `model_id` with the manifest-built
 `dist/hub/Boltz2` path. Pass `local_files_only=True`.
 
-## Attention and compliance
+## Attention backends
 
-The quick start selects `eager` explicitly. Declared variants are `eager`. An unavailable requested backend raises. It does
-not silently change implementation.
+The quick start uses `eager`.
+
+Available backends are `eager`. Requesting an unavailable backend raises
+instead of silently changing implementation.
+
 `output_attentions=True` can use the documented one-call eager fallback to
 materialize attention tensors. The configured backend does not change.
-
-This family does not declare the `compliance` tier. Boltz2 remains provisional.
-Its structure checks are not parity claims.
 
 ## PEFT fine-tuning
 
@@ -136,24 +134,28 @@ numerical-equivalence limits. FastPLMs therefore does not claim official
 inference equivalence for this checkpoint yet. Work on that numerical gap
 continues independently of the ESM++ and ESMFold2 release gates.
 
-## Runtime contract
+## Technical details
 
-- Public input: Raw amino-acid sequences through the convenience API, or prepared model features
-- Advertised AutoClasses: `AutoConfig`, `AutoModel`
-- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`
-- Attention implementations: `eager`
-- Precision policies: `default`
+- Inputs: Raw amino-acid sequences through the convenience API, or prepared model features
+- Transformers classes: `AutoConfig`, `AutoModel`
+- Checkpoint weights: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`
+- Attention backends: `eager`
+- Precision: `default`
 - BF16 execution: `fp32_parameters_autocast`
 - Generation contract: `not_applicable`
-- Artifact dependency set: `core + structure`
+- Dependencies: `core + structure`
 - Weight publication allowed: `true`
 - Weight license status: `resolved`
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Release record
+## Validation and provenance
 
-- FastPLMs weights: `Synthyra/Boltz2`
+FastPLMs pins the checkpoint, upstream source revisions, state transformation,
+and required files in `models.toml`. Built artifacts record exact source
+identities and conversion details in `source-record.json`.
+
+- FastPLMs checkpoint: `Synthyra/Boltz2`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Runtime source identities: recorded in `source-record.json`
 - Official checkpoint: `boltz-community/boltz-2`
@@ -163,14 +165,13 @@ continues independently of the ESM++ and ESMFold2 release gates.
 - Release tiers: `structure`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The source record records exact file identities, conversion, source revisions,
-legal texts, schema, and attestations. A nonzero unresolved count blocks a release.
-
-## Validation boundary
+Boltz2 remains provisional and does not declare the `compliance` tier. Its
+structure checks are not parity claims.
 
 Declared tiers compare configuration, tokenizer behavior, state, and
-representative inference with the pinned reference. Metadata does not show that
-a build passed, that a backend is faster, or that an output is biologically valid.
+representative inference with the pinned reference. A nonzero unresolved count
+blocks release. Metadata alone does not show that a build passed, that a backend
+is faster, or that an output is biologically valid.
 
 ## License
 

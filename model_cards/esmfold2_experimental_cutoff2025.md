@@ -8,28 +8,23 @@ tags:
 
 <!-- Generated from src/fastplms/models.toml. Do not edit. -->
 
-# Synthyra/ESMFold2-Experimental-Cutoff2025
+# ESMFold2-Experimental-Cutoff2025
 
-This checkpoint contains the FastPLMs `ESMFold2` implementation.
+## Model overview
 
-Accepted inputs are raw amino-acid sequences or typed molecular-complex
-specifications; low-level forward accepts prepared feature tensors.
-Supported Transformers entry points are `AutoConfig`, `AutoModel`,
-`AutoModelForSequenceClassification`, `AutoModelForTokenClassification`.
+`Synthyra/ESMFold2-Experimental-Cutoff2025` packages the
+`biohub/ESMFold2-Experimental-Cutoff2025` checkpoint with the FastPLMs runtime
+for Hugging Face Transformers. It accepts raw amino-acid sequences or typed
+molecular-complex specifications; low-level forward accepts prepared feature
+tensors.
 
-## Capabilities
+The repository uses the standard Transformers loading interface with
+`trust_remote_code=True`. See Technical details for each registered class and
+whether its weights come from the checkpoint.
 
-| Feature | Status |
-| --- | --- |
-| Sequence classification | Supported: base weights with an untrained task head |
-| Token classification | Supported: base weights with an untrained task head |
-| PEFT fine-tuning | Supported pattern: preserve the separately trained `classifier` |
-| Embeddings | Special: ESMC state mixture to 256-wide residue embeddings |
-| Test-time training | Unavailable for this experimental checkpoint |
-| Attention variants | Supported: `eager`, `sdpa`, `flex_attention` |
-| Compliance | Declared: exact release evidence is required |
-
-A supported interface is not a pretrained downstream predictor. Classification heads start untrained. Compliance metadata does not show that a local build passed its release gate.
+The sequence- and token-classification classes reuse the pretrained backbone,
+but their task heads are newly initialized. Fine-tune those heads before
+interpreting their logits as predictions.
 
 ## Install and platform requirements
 
@@ -43,9 +38,17 @@ python -m pip install -r \
 The FastPLMs implementation itself is embedded in the model repository.
 Transformers loads it through `trust_remote_code=True`.
 
-This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13. The artifact requirements include the structure dependencies. The release contract requires a CUDA device. The current validated target is the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and macOS structure runs are not release evidence. The Hub quick start needs network access for
-the first download. For an air-gapped run, build the manifest-pinned local
-artifact first and use the offline example.
+This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
+
+The artifact requirements include the structure dependencies.
+
+The release contract requires a CUDA device. The current validated target is
+the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and
+macOS structure runs are not release evidence.
+
+The Hub quick start needs network access for the first download. For an
+air-gapped run, build the manifest-pinned local artifact first and use the
+offline example.
 
 ## Quick start
 
@@ -63,15 +66,15 @@ model = AutoModel.from_pretrained(
 For offline validation, replace `model_id` with the manifest-built
 `dist/hub/ESMFold2-Experimental-Cutoff2025` path. Pass `local_files_only=True`.
 
-## Attention and compliance
+## Attention backends
 
-The quick start selects `sdpa` explicitly. Declared variants are `eager`, `sdpa`, `flex_attention`. An unavailable
-requested backend raises. It does not silently change implementation.
+The quick start uses `sdpa`.
+
+Available backends are `eager`, `sdpa`, `flex_attention`. Requesting an
+unavailable backend raises instead of silently changing implementation.
+
 `output_attentions=True` can use the documented one-call eager fallback to
 materialize attention tensors. The configured backend does not change.
-
-This family declares the `compliance` tier. Release evidence identifies the
-checkpoint, backend, dtype, hardware, inputs, and reference revision.
 
 ## Downstream prediction
 
@@ -251,10 +254,11 @@ and
 Structure preparation requires `ccd.pkl` from
 `biohub/ESMFold2`. The manifest pins its repository, revision, size, content
 identity, and MIT terms. This is a trusted-deserialization boundary. FastPLMs
-accepts only the pinned snapshot link inside the repository blob directory and
-rejects user-supplied asset and `cache_dir` symlinks. The loader verifies a
-private temporary snapshot before deserialization. Offline execution requires
-the exact cached object and never downloads a replacement.
+accepts only the pinned snapshot link inside the repository blob directory.
+User-supplied asset and `cache_dir` symlinks are rejected. The loader verifies a
+private temporary snapshot before deserialization, protecting against
+path-replacement and in-place source-write races. Offline execution requires the
+exact cached object and never downloads a replacement.
 
 ## Test-time training
 
@@ -283,24 +287,28 @@ the minibinder isoelectric-point filter. These are model-based prioritization
 signals, not experimental evidence of affinity or specificity. See the
 [complete workflow](https://github.com/Synthyra/FastPLMs/blob/main/docs/binder_design.md).
 
-## Runtime contract
+## Technical details
 
-- Public input: Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors
-- Advertised AutoClasses: `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
-- AutoClass weight status: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
-- Attention implementations: `eager`, `sdpa`, `flex_attention`
-- Precision policies: `auto`, `fp32`, `bf16`, `fp8` (experimental)
+- Inputs: Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors
+- Transformers classes: `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
+- Checkpoint weights: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
+- Attention backends: `eager`, `sdpa`, `flex_attention`
+- Precision: `auto`, `fp32`, `bf16`, `fp8` (experimental)
 - BF16 execution: `fp32_parameters_autocast`
 - Generation contract: `not_applicable`
-- Artifact dependency set: `core + structure`
+- Dependencies: `core + structure`
 - Weight publication allowed: `true`
 - Weight license status: `resolved`
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Release record
+## Validation and provenance
 
-- FastPLMs weights: `Synthyra/ESMFold2-Experimental-Cutoff2025`
+FastPLMs pins the checkpoint, upstream source revisions, state transformation,
+and required files in `models.toml`. Built artifacts record exact source
+identities and conversion details in `source-record.json`.
+
+- FastPLMs checkpoint: `Synthyra/ESMFold2-Experimental-Cutoff2025`
 - Runtime revision: recorded separately in the built artifact and published commit
 - Runtime source identities: recorded in `source-record.json`
 - Official checkpoint: `biohub/ESMFold2-Experimental-Cutoff2025`
@@ -310,14 +318,13 @@ signals, not experimental evidence of affinity or specificity. See the
 - Release tiers: `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-The source record records exact file identities, conversion, source revisions,
-legal texts, schema, and attestations. A nonzero unresolved count blocks a release.
-
-## Validation boundary
+Release validation includes the `compliance` tier. Its evidence identifies the
+checkpoint, backend, dtype, hardware, inputs, and reference revision.
 
 Declared tiers compare configuration, tokenizer behavior, state, and
-representative inference with the pinned reference. Metadata does not show that
-a build passed, that a backend is faster, or that an output is biologically valid.
+representative inference with the pinned reference. A nonzero unresolved count
+blocks release. Metadata alone does not show that a build passed, that a backend
+is faster, or that an output is biologically valid.
 
 ## License
 
