@@ -1162,11 +1162,14 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
     ) -> tuple[tuple[int, ...], torch.Tensor | None]:
         if not compute_sae or not self._sae_models:
             return (), None
-        if input_ids is None:
+        if input_ids is None and attention_mask is None and sequence_id is None:
+            # Embedding inputs carry no token identities, so the caller must supply the mask.
+            # Rejecting masked tokens is then the caller's precondition rather than ours.
             raise ValueError(
-                "SAE computation requires input_ids so masked-token inputs can be rejected."
+                "SAE computation from inputs_embeds requires an explicit attention_mask or "
+                "sequence_id, because the token mask cannot be recovered from embeddings."
             )
-        if torch.any(input_ids == self.config.mask_token_id):
+        if input_ids is not None and torch.any(input_ids == self.config.mask_token_id):
             raise ValueError("SAE inputs must not contain mask tokens; SAEs were trained unmasked.")
         if sequence_id is not None:
             token_mask = sequence_id >= 0
@@ -1183,7 +1186,15 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
         token_mask: torch.Tensor | None,
         *,
         normalize_sae: bool,
+        differentiable_sae: bool = False,
     ) -> dict[str, torch.Tensor] | None:
+        """Encode collected hidden states with every attached SAE.
+
+        The default detaches and sparsifies, which is right for interpretation and matches the
+        official implementation. ``differentiable_sae`` instead keeps the result attached to the
+        graph and dense, so a gradient-based sequence designer can optimize an objective built on
+        SAE features. The arithmetic is identical either way; only the tape and the layout differ.
+        """
         if not self._sae_models:
             return None
         if hidden_states is None or token_mask is None:
@@ -1193,14 +1204,18 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
             layer = int(key.removeprefix("layer"))
             if layer not in hidden_states:
                 raise RuntimeError(f"ESM++ did not collect the requested SAE layer {layer}.")
-            sae_output = sae_model.get_sae_output(hidden_states[layer].clone(), token_mask)
+            layer_states = hidden_states[layer]
+            sae_output = sae_model.get_sae_output(
+                layer_states if differentiable_sae else layer_states.clone(), token_mask
+            )
             features = getattr(sae_output, "feature_magnitudes", None)
             if not isinstance(features, torch.Tensor):
                 raise TypeError("SAE get_sae_output must return tensor feature_magnitudes.")
-            features = features.detach()
+            if not differentiable_sae:
+                features = features.detach()
             if normalize_sae:
                 features = (features / sae_model.max) * sae_model.idf
-            outputs[key] = features.to_sparse()
+            outputs[key] = features if differentiable_sae else features.to_sparse()
         return outputs
 
     def _pad_fp8_inputs(
@@ -1422,6 +1437,7 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
         return_dict: bool | None = None,
         compute_sae: bool = True,
         normalize_sae: bool = False,
+        differentiable_sae: bool = False,
     ) -> TransformerOutput | tuple[torch.Tensor, ...]:
         """Run ESMC inference with the pinned Biohub mask precedence.
 
@@ -1475,6 +1491,7 @@ class ESMplusplusModel(PreTrainedESMplusplusModel, EmbeddingMixin):
                 transformer_output.sae_hidden_states,
                 sae_token_mask,
                 normalize_sae=normalize_sae,
+                differentiable_sae=differentiable_sae,
             )
             if sae_layers
             else None
@@ -1571,6 +1588,7 @@ class ESMplusplusForMaskedLM(
         compute_logits: bool = True,
         compute_sae: bool = True,
         normalize_sae: bool = False,
+        differentiable_sae: bool = False,
     ) -> ESMplusplusOutput | tuple[torch.Tensor, ...]:
         if input_ids is None and inputs_embeds is None:
             raise ValueError("You have to specify either input_ids or inputs_embeds")
@@ -1617,6 +1635,7 @@ class ESMplusplusForMaskedLM(
                 output.sae_hidden_states,
                 sae_token_mask,
                 normalize_sae=normalize_sae,
+                differentiable_sae=differentiable_sae,
             )
             if sae_layers
             else None

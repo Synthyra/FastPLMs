@@ -301,7 +301,7 @@ def test_sae_registration_validates_layer_dimension_and_uniqueness() -> None:
         model.add_sae_models([_SyntheticSAELayer(layer=1)])
 
 
-def test_sae_computation_rejects_masked_tokens_and_inputs_embeds_only() -> None:
+def test_sae_computation_rejects_masked_tokens_and_unmasked_embedding_inputs() -> None:
     model = _model()
     model.add_sae_models([_SyntheticSAELayer(layer=0)])
     masked_ids = _input_ids()
@@ -309,7 +309,10 @@ def test_sae_computation_rejects_masked_tokens_and_inputs_embeds_only() -> None:
 
     with pytest.raises((ValueError, AssertionError), match="mask"):
         model(input_ids=masked_ids)
-    with pytest.raises(ValueError, match="input_ids"):
+    # Embedding inputs are supported, but only with an explicit token mask, since embeddings carry
+    # no token identities to derive one from. Rejecting mask tokens then becomes the caller's
+    # precondition. See tests/unit/test_esmplusplus_sae_differentiable.py for the working path.
+    with pytest.raises(ValueError, match="explicit attention_mask or sequence_id"):
         model(inputs_embeds=model.embed(_input_ids()))
 
 
