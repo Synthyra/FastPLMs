@@ -237,16 +237,13 @@ sequence-group IDs. `-1` marks padding. Omit `sequence_id` to use
 
 ESM++ supports hidden-state SAEs from the official
 [Biohub ESMC SAE collection](https://huggingface.co/collections/biohub/esmc-saes-for-hidden-states-all-layers).
-Select an SAE for this ESMC scale. Load only required layers. Then attach them
-to the model:
+This artifact implements the SAE contract, so no Biohub runtime code is needed.
+Select an SAE for this ESMC scale, then load only the layers you need:
 
 ```python
 import torch
-from transformers import AutoModel
 
-sae = AutoModel.from_pretrained("biohub/ESMC-6B-sae-layer60-k64-codebook16384", device=model.device)
-sae.initialize_layers([60])
-model.add_sae_models([sae.layers["60"]])
+model.load_sae_models("biohub/ESMC-6B-sae-layer60-k64-codebook16384", [60])
 
 with torch.inference_mode():
     output = model(**batch, normalize_sae=True)
@@ -254,6 +251,12 @@ with torch.inference_mode():
 features = output.sae_outputs["layer60"]
 print(features.shape, features.layout)  # (valid_token_count, codebook_dim), sparse COO
 ```
+
+`load_sae_models` reads the shared `config.json` and one
+`layer_{index}.safetensors` shard per requested layer, from a Hub repository
+or a local directory, and attaches the layers on the model device in the model
+dtype. `add_sae_models` still accepts official Biohub `ESMCSAEModel.layers`
+entries.
 
 SAEs run after you attach them. Use `compute_sae=False` to skip SAE work.
 Outputs are detached sparse tensors with keys such as `layer{N}`. They omit

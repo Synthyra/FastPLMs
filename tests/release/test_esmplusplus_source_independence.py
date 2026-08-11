@@ -19,33 +19,55 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCAL_MODEL = ROOT / "src/fastplms/models/esm_plusplus/modeling_esm_plusplus.py"
+LOCAL_SAE = ROOT / "src/fastplms/models/esm_plusplus/modeling_esm_plusplus_sae.py"
 UPSTREAM_ROTARY = ROOT / "vendor/upstream/biohub-esm/esm/layers/rotary.py"
 UPSTREAM_TOKENIZER = ROOT / "vendor/upstream/biohub-esm/esm/tokenization/sequence_tokenizer.py"
+UPSTREAM_SAE = (
+    ROOT / "vendor/upstream/biohub-transformers/src/transformers/models/esmc/modeling_esmc_sae.py"
+)
 MAX_FUNCTION_SIMILARITY = 0.75
 
 # These functions implement the same public contracts, but the repository source
 # must remain independently maintained. Function-level comparisons prevent
 # unrelated model code from diluting a copied implementation's similarity.
+# ESMplusplusSAELayer.__init__ is excluded on purpose: parameter names and shapes
+# are the published shard format, so they must converge for the weights to load.
 SOURCE_PAIRS = (
     (
+        LOCAL_MODEL,
         "EsmSequenceTokenizer.__init__",
         UPSTREAM_TOKENIZER,
         "EsmSequenceTokenizer.__init__",
     ),
     (
+        LOCAL_MODEL,
         "RotaryEmbedding.__init__",
         UPSTREAM_ROTARY,
         "RotaryEmbedding.__init__",
     ),
     (
+        LOCAL_MODEL,
         "RotaryEmbedding._update_cos_sin_cache",
         UPSTREAM_ROTARY,
         "RotaryEmbedding._update_cos_sin_cache",
     ),
     (
+        LOCAL_MODEL,
         "apply_rotary_emb_torch",
         UPSTREAM_ROTARY,
         "apply_rotary_emb_torch",
+    ),
+    (
+        LOCAL_SAE,
+        "ESMplusplusSAELayer.forward",
+        UPSTREAM_SAE,
+        "_ESMCSAELayer.forward",
+    ),
+    (
+        LOCAL_SAE,
+        "ESMplusplusSAELayer.get_sae_output",
+        UPSTREAM_SAE,
+        "_ESMCSAELayer.get_sae_output",
     ),
 )
 
@@ -110,17 +132,18 @@ def _load_upstream_rotary() -> ModuleType:
 
 
 @pytest.mark.parametrize(
-    ("local_name", "upstream_path", "upstream_name"),
+    ("local_path", "local_name", "upstream_path", "upstream_name"),
     SOURCE_PAIRS,
-    ids=[local_name for local_name, _, _ in SOURCE_PAIRS],
+    ids=[local_name for _, local_name, _, _ in SOURCE_PAIRS],
 )
 def test_esmplusplus_functions_are_independently_implemented(
+    local_path: Path,
     local_name: str,
     upstream_path: Path,
     upstream_name: str,
 ) -> None:
     assert upstream_path.is_file(), f"pinned Biohub source is missing: {upstream_path}"
-    local_lines = _normalized_ast_lines(_function(LOCAL_MODEL, local_name))
+    local_lines = _normalized_ast_lines(_function(local_path, local_name))
     upstream_lines = _normalized_ast_lines(_function(upstream_path, upstream_name))
     similarity = SequenceMatcher(
         None,

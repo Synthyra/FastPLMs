@@ -46,7 +46,11 @@ state-parity evidence, and atomic Hub preflight pass.
 ## Biohub, Boltz, Meta, OpenFold, and ProteinTTT
 
 Biohub MIT and Apache notices, including `THIRD_PARTY_NOTICE`, are retained for
-ESM++, ESM3, and ESMFold2. Boltz MIT terms, Meta ESM and ESMFold notices,
+ESM++, ESM3, and ESMFold2. The ESM++ hidden-state sparse autoencoder is a
+FastPLMs implementation of the published Biohub SAE contract, held to exact
+agreement with the pinned Biohub source by test. Biohub retains ownership of
+the SAE weights; FastPLMs reads their published repositories and redistributes
+neither those weights nor Biohub SAE code. Boltz MIT terms, Meta ESM and ESMFold notices,
 OpenFold notices, and ProteinTTT source records are included where their code or
 derived behavior is distributed.
 

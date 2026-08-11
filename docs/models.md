@@ -73,9 +73,11 @@ This includes the five Biohub Platform checkpoints for ESMC-300M layer 23,
 ESMC-600M layer 27, and ESMC-6B layer 60. Compatible hidden-state Hub variants
 are also supported.
 
-Biohub owns the SAE weights. FastPLMs does not copy SAE weights or add SAE
-checkpoints to its manifest. Load the SAE container with `AutoModel`. Load only
-the required layers. Then attach the layers to an ESM++ model of the same scale:
+FastPLMs implements the hidden-state SAE contract itself, so no Biohub runtime
+code is needed to attach one. Biohub owns the SAE weights. FastPLMs does not
+copy SAE weights or add SAE checkpoints to its manifest. `load_sae_models`
+reads the shared `config.json` and one `layer_{index}.safetensors` shard per
+requested layer, then attaches the layers to the model:
 
 ```python
 import torch
@@ -84,13 +86,7 @@ from transformers import AutoModel, AutoTokenizer
 model_id = "Synthyra/ESMplusplus_6B"
 model = AutoModel.from_pretrained(model_id, trust_remote_code=True).eval()
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-sae = AutoModel.from_pretrained(
-    "biohub/ESMC-6B-sae-layer60-k64-codebook16384",
-    allow_patterns=["config.json", "layer_60.safetensors"],
-    device=model.device,
-)
-sae.initialize_layers([60])
-model.add_sae_models([sae.layers["60"]])
+model.load_sae_models("biohub/ESMC-6B-sae-layer60-k64-codebook16384", [60])
 
 inputs = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
 inputs = {name: value.to(model.device) for name, value in inputs.items()}
@@ -100,6 +96,13 @@ with torch.inference_mode():
 features = output.sae_outputs["layer60"]
 print(features.shape, features.layout)  # (valid_token_count, codebook_dim), sparse COO
 ```
+
+`load_sae_models` accepts a Hub repository or a local directory, forwards
+`revision`, `cache_dir`, `token`, and `local_files_only` to the download, and
+returns the attached layers keyed by backbone-layer index. Layers load onto the
+model device in the model dtype unless `dtype` says otherwise. `add_sae_models`
+remains available and still accepts official Biohub `ESMCSAEModel.layers`
+entries, which share the same attachment contract.
 
 SAEs run after you attach them. Set `compute_sae=False` to skip SAE computation.
 `sae_outputs` uses keys such as `layer60`. Each detached sparse tensor contains

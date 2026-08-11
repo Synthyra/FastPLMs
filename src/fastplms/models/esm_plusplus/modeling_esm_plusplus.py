@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import math
+import os
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import partial
@@ -24,6 +26,8 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+
+from .modeling_esm_plusplus_sae import ESMplusplusSAELayer, load_esmc_sae_layers
 
 
 try:
@@ -1115,14 +1119,48 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
         )
         return self._esmc_precision_status
 
+    def load_sae_models(
+        self,
+        repository: str | os.PathLike[str],
+        layers: Sequence[int],
+        *,
+        revision: str | None = None,
+        cache_dir: str | os.PathLike[str] | None = None,
+        token: str | bool | None = None,
+        local_files_only: bool = False,
+        dtype: torch.dtype | None = None,
+    ) -> dict[int, ESMplusplusSAELayer]:
+        """Load hidden-state SAE layers from a Hub repository or local directory, then attach them.
+
+        The layers land on this model's device and, unless ``dtype`` says otherwise, in this
+        model's parameter dtype, so they consume its hidden states without a dtype mismatch.
+        """
+
+        sae_layers = load_esmc_sae_layers(
+            repository,
+            layers,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            local_files_only=local_files_only,
+            device=self.device,
+            dtype=self.dtype if dtype is None else dtype,
+        )
+        self.add_sae_models(list(sae_layers.values()))
+        return sae_layers
+
     def add_sae_models(self, sae_models: list[nn.Module]) -> None:
-        """Attach official Biohub hidden-state SAE layers to this ESM++ model."""
+        """Attach hidden-state SAE layers to this ESM++ model.
+
+        Accepts layers from ``load_sae_models`` and official Biohub ``ESMCSAEModel.layers``
+        entries, which share one attachment contract.
+        """
 
         for sae_model in sae_models:
             if not isinstance(sae_model, nn.Module):
                 raise TypeError(
-                    "Each SAE must be an nn.Module obtained from an official Biohub "
-                    "ESMCSAEModel.layers entry."
+                    "Each SAE must be an nn.Module exposing the hidden-state SAE contract, such "
+                    "as a load_sae_models layer or an official Biohub ESMCSAEModel.layers entry."
                 )
             layer = getattr(sae_model, "layer", None)
             if isinstance(layer, bool) or not isinstance(layer, int):
