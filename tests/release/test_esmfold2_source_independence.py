@@ -58,7 +58,12 @@ SOURCE_COUNTERPARTS = {
     "protein_utils.py": f"{BIOHUB_TRANSFORMERS}/protein_utils.py",
     "reproducibility.py": f"{BIOHUB_ESM}/models/esmfold2/processor.py",
 }
-ORIGINAL_RUNTIME_MODULES = frozenset({"attention.py", "embedding.py"})
+# The pinned upstream ESMFold2 package publishes no classification module, and
+# the manifest records the FastPLMs prediction heads as an extension rather than
+# an official head, so they are classified as original FastPLMs source.
+ORIGINAL_RUNTIME_MODULES = frozenset(
+    {"attention.py", "embedding.py", "modeling_esmfold2_classification.py"}
+)
 
 
 def _meaningful_lines(text: str) -> list[str]:

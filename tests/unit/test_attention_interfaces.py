@@ -9,12 +9,13 @@ import sys
 import warnings
 import pytest
 import torch
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
-from transformers import AttentionInterface
+from transformers import AttentionInterface, PretrainedConfig
 
 
 _TRANSFORMERS_FLASH_HANDLERS = {
@@ -28,10 +29,12 @@ import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module  # noq
 from fastplms.attention import (  # noqa: E402
     FASTPLMS_ATTENTION_FUNCTIONS,
     FASTPLMS_ATTENTION_MASKS,
+    LEGACY_CHECKPOINT_ATTENTION_BACKENDS,
     AttentionBackend,
     FastPLMsAttentionMixin,
     _core,
     _kernel_lock,
+    canonical_checkpoint_attention_backend,
     validate_transformers_attention_interfaces,
 )
 from fastplms.embeddings.runner import _attention_kernel_metadata  # noqa: E402
@@ -994,6 +997,110 @@ def test_esm2_config_normalizes_null_boundary_token_ids(tmp_path: Path) -> None:
     reloaded = FastEsmConfig.from_pretrained(tmp_path, local_files_only=True)
     assert reloaded.bos_token_id == 0
     assert reloaded.eos_token_id == 2
+
+
+def test_canonical_checkpoint_backend_translates_only_the_flex_spelling() -> None:
+    """One shared table owns the historical spellings stored in checkpoints."""
+
+    assert canonical_checkpoint_attention_backend("flex") == "flex_attention"
+    assert dict(LEGACY_CHECKPOINT_ATTENTION_BACKENDS) == {"flex": "flex_attention"}
+    for name in AttentionBackend:
+        assert canonical_checkpoint_attention_backend(name.value) == name.value
+    assert canonical_checkpoint_attention_backend(None) is None
+    # An unmapped name passes through so the backend resolver owns the rejection
+    # and reports the full set of supported implementations.
+    assert canonical_checkpoint_attention_backend("flash") == "flash"
+    assert canonical_checkpoint_attention_backend("unknown") == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("model_class", "config_factory"),
+    [
+        pytest.param(
+            FastEsmModel,
+            lambda backend: FastEsmConfig(
+                vocab_size=16,
+                hidden_size=8,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                intermediate_size=16,
+                position_embedding_type="absolute",
+                attn_backend=backend,
+            ),
+            id="esm2",
+        ),
+        pytest.param(
+            DPLMModel,
+            lambda backend: DPLMConfig(
+                vocab_size=16,
+                hidden_size=8,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                intermediate_size=16,
+                position_embedding_type="absolute",
+                attn_backend=backend,
+            ),
+            id="dplm",
+        ),
+    ],
+)
+def test_stored_flex_spelling_reaches_the_flex_implementation(
+    model_class: type[torch.nn.Module],
+    config_factory: Callable[[str], PretrainedConfig],
+) -> None:
+    """A stored ``"flex"`` backend must select Flex rather than raise."""
+
+    model = model_class(config_factory("flex"))
+
+    assert model.config.attn_backend == "flex_attention"
+    assert model.config._attn_implementation == "flex_attention"
+    assert (
+        model.config.attn_backend
+        == model_class(config_factory("flex_attention")).config.attn_backend
+    )
+
+
+def test_stored_spelling_translation_respects_the_advertised_backend_set() -> None:
+    """Translating a spelling must not grant a family a backend it does not have.
+
+    DPLM2 advertises SDPA only, so the historical name resolves to
+    ``flex_attention`` and is then rejected by the same check that rejects the
+    canonical spelling.
+    """
+
+    def dplm2_config(backend: str) -> DPLM2Config:
+        return DPLM2Config(
+            vocab_size=16,
+            hidden_size=8,
+            num_hidden_layers=1,
+            num_attention_heads=2,
+            intermediate_size=16,
+            position_embedding_type="absolute",
+            attn_backend=backend,
+        )
+
+    expected = r"does not support 'flex_attention'; expected one of \('sdpa',\)"
+    with pytest.raises(ValueError, match=expected):
+        DPLM2Model(dplm2_config("flex"))
+    with pytest.raises(ValueError, match=expected):
+        DPLM2Model(dplm2_config("flex_attention"))
+
+
+def test_stored_backend_translation_never_invents_a_flash_version() -> None:
+    """``"flash"`` names no FlashAttention version, so it must still be rejected."""
+
+    with pytest.raises(ValueError, match="does not support 'flash'"):
+        FastEsmModel(
+            FastEsmConfig(
+                vocab_size=16,
+                hidden_size=8,
+                num_hidden_layers=1,
+                num_attention_heads=2,
+                intermediate_size=16,
+                position_embedding_type="absolute",
+                attn_backend="flash",
+            )
+        )
 
 
 def test_esm_family_base_automodels_do_not_create_untrained_poolers() -> None:

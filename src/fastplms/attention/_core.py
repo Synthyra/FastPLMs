@@ -13,6 +13,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from enum import Enum
 from threading import RLock
+from types import MappingProxyType
 from einops import rearrange
 from torch.nn import functional as F
 
@@ -622,6 +623,29 @@ class AttentionBackend(str, Enum):  # noqa: UP042
 
 
 VALID_ATTENTION_BACKENDS = tuple(b.value for b in AttentionBackend)
+
+# Official upstream sources predate the Transformers ``flex_attention`` name and
+# store ``"flex"`` in their checkpoint configurations. The two names select the
+# identical implementation, so translating one to the other is a rename rather
+# than a backend substitution. ``"flash"`` is deliberately absent: it does not
+# identify a FlashAttention version, and guessing one would be a substitution.
+LEGACY_CHECKPOINT_ATTENTION_BACKENDS = MappingProxyType(
+    {"flex": AttentionBackend.FLEX_ATTENTION.value}
+)
+
+
+def canonical_checkpoint_attention_backend(stored_backend: str | None) -> str | None:
+    """Translate a stored checkpoint backend name to its canonical spelling.
+
+    Call this where a serialized configuration enters FastPLMs. Imperative
+    selection through ``set_attn_implementation`` stays strict and keeps
+    rejecting the historical spellings. An unmapped name passes through so the
+    backend resolver owns the rejection.
+    """
+
+    if stored_backend is None:
+        return None
+    return LEGACY_CHECKPOINT_ATTENTION_BACKENDS.get(stored_backend, stored_backend)
 
 
 def warn_attention_backend_fallback(

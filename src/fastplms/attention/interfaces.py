@@ -10,6 +10,7 @@ from transformers import AttentionInterface, AttentionMaskInterface
 
 from ._core import (
     AttentionBackend,
+    canonical_checkpoint_attention_backend,
     get_attn_implementation,
     kernels_flash_attention_func,
     resolve_attention_backend,
@@ -146,26 +147,32 @@ class FastPLMsAttentionMixin:
     def __init__(self, config, *args: Any, **kwargs: Any) -> None:
         sentinel = object()
         internal = getattr(config, "_attn_implementation_internal", sentinel)
-        canonical = (
+        stored = (
             getattr(config, "_attn_implementation", None) if internal is sentinel else internal
         )
         legacy = getattr(config, "attn_backend", None)
-        requested = canonical if canonical is not None else legacy
+        requested = stored if stored is not None else legacy
         if requested is not None:
             if not isinstance(requested, str):
                 raise TypeError(
                     "The configured attention implementation must be a string or None; "
                     f"received {type(requested).__name__}."
                 )
-            self._validate_attention_name(requested)
+            # A serialized configuration can name a backend with the historical
+            # spelling used by the official source it was converted from. That
+            # names the same implementation, so translate it here rather than
+            # rejecting a checkpoint that asked for an implementation FastPLMs has.
+            canonical = canonical_checkpoint_attention_backend(requested)
+            self._validate_attention_name(canonical)
             # ``PreTrainedModel.__init__`` resolves a missing Transformers
             # implementation to the family default.  Legacy FastPLMs configs
             # persist their explicit choice in ``attn_backend``, so forward it
             # into the canonical Transformers field before the base class can
-            # replace it with SDPA.  A non-None canonical value still wins,
-            # including an explicit ``attn_implementation=...`` load override.
-            if canonical is None and legacy is not None:
-                set_config_attn_implementation(config, legacy)
+            # replace it with SDPA.  A stored canonical value already agrees and
+            # is left untouched, including an explicit
+            # ``attn_implementation=...`` load override.
+            if canonical != stored:
+                set_config_attn_implementation(config, canonical)
         super().__init__(config, *args, **kwargs)
         # Transformers resolves an unspecified implementation during the base
         # model initialization. Synchronize that choice before family layers

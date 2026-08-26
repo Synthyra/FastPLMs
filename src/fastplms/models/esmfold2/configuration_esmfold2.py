@@ -21,6 +21,9 @@ from typing import Any, TypeVar, cast
 
 from transformers.configuration_utils import PretrainedConfig
 
+from fastplms.attention import canonical_checkpoint_attention_backend
+
+
 _ESMC_ATTENTION_IMPLEMENTATIONS = frozenset({"eager", "flex_attention", "sdpa"})
 _ESMC_PRECISIONS = frozenset({"auto", "bf16", "fp32", "fp8"})
 
@@ -56,7 +59,7 @@ def normalize_esmc_attention_implementation(
                 "ESMFold2 has one ESMC attention backbone; use a string or {'': implementation}."
             )
         implementation = implementation[""]
-    canonical = "flex_attention" if implementation == "flex" else implementation
+    canonical = canonical_checkpoint_attention_backend(implementation)
     if canonical is not None and canonical not in _ESMC_ATTENTION_IMPLEMENTATIONS:
         expected = sorted(_ESMC_ATTENTION_IMPLEMENTATIONS)
         raise ValueError(

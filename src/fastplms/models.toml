@@ -1,7 +1,7 @@
 schema_version = 1
 legal_files = [
   "LICENSE=sha256:2d2b50c7b1414bff1189a1db1f0cfb92e3e064b50f4c2b1019827b683e1b629a",
-  "THIRD_PARTY_NOTICES.md=sha256:25704b3c76404696cae52e7fca13088d329f70f412687340351259e86cd62baa",
+  "THIRD_PARTY_NOTICES.md=sha256:d35e506b728868b52290672d54a89c6aade09529af99dbc8a4db72d9e9ca3460",
 ]
 
 [[attention_kernels]]
