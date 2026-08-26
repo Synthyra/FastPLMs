@@ -282,7 +282,8 @@ def _measure_backends(
         revision=spec.fast.revision,
         dtype=dtype,
         device_map=device,
-    ).eval()
+    )
+    model.eval()
     inputs, residue_mask = _prepare_inputs(spec, model, _sequences(), device)
     # A prepared argument the forward does not declare raises a bare TypeError
     # that reads like any other failure, which is how the E1 and ANKH rows of
@@ -363,8 +364,7 @@ def test_relaxed_families_agree_exactly_in_fp32(spec: ModelSpec) -> None:
     """
 
     device = torch.device("cuda")
-    outputs, residue_mask = _measure_backends(spec, device, torch.float32, autocast=False)
-    del residue_mask
+    outputs, _ = _measure_backends(spec, device, torch.float32, autocast=False)
 
     reference = outputs["sdpa"][0]
     for backend, (candidate, _) in outputs.items():
