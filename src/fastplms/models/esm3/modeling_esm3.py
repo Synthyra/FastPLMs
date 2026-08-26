@@ -1046,6 +1046,32 @@ class RotaryEmbedding(nn.Module):
         self._sin_cached = None
         self.reset_parameters()
 
+    def _apply(self, fn, recurse: bool = True):
+        """Move the module, then regenerate device-specific RoPE frequencies.
+
+        ``inv_freq`` is registered with ``persistent=False``, so no checkpoint
+        carries it and nothing refills it after loading. Transformers builds
+        modules under ``torch.device("meta")`` while loading, which makes the
+        tensor ``reset_parameters`` computed in ``__init__`` a meta tensor;
+        materializing that yields uninitialized memory rather than the frequency
+        table. The result is quiet, because uninitialized memory is usually
+        finite: every position is then rotated by frequencies unrelated to
+        ``base`` and ``dim``, and only occasionally is it NaN and visible.
+
+        This mirrors the guard ``esm_plusplus.RotaryEmbedding`` already carries.
+        """
+        if self.inv_freq.is_meta:
+            self.device = torch.device("cpu")
+            self.reset_parameters()
+        result = super()._apply(fn, recurse=recurse)
+        self.register_buffer(
+            "inv_freq", self._compute_inv_freq(self.inv_freq.device), persistent=False
+        )
+        self._seq_len_cached = 0
+        self._cos_cached = None
+        self._sin_cached = None
+        return result
+
     def reset_parameters(self) -> None:
         inv_freq = self._compute_inv_freq(self.device)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
