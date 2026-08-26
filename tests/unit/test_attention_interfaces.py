@@ -15,7 +15,7 @@ from importlib.metadata import version
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
-from transformers import AttentionInterface
+from transformers import AttentionInterface, PretrainedConfig
 
 
 _TRANSFORMERS_FLASH_HANDLERS = {
@@ -1011,8 +1011,6 @@ def test_canonical_checkpoint_backend_translates_only_the_flex_spelling() -> Non
     # and reports the full set of supported implementations.
     assert canonical_checkpoint_attention_backend("flash") == "flash"
     assert canonical_checkpoint_attention_backend("unknown") == "unknown"
-    with pytest.raises(TypeError, match="must be a string or None"):
-        canonical_checkpoint_attention_backend(object())
 
 
 @pytest.mark.parametrize(
@@ -1048,7 +1046,7 @@ def test_canonical_checkpoint_backend_translates_only_the_flex_spelling() -> Non
 )
 def test_stored_flex_spelling_reaches_the_flex_implementation(
     model_class: type[torch.nn.Module],
-    config_factory: Callable[[str], object],
+    config_factory: Callable[[str], PretrainedConfig],
 ) -> None:
     """A stored ``"flex"`` backend must select Flex rather than raise."""
 

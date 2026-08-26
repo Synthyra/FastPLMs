@@ -275,7 +275,13 @@ def _measure_backends(
     *,
     autocast: bool,
 ) -> tuple[dict[str, tuple[torch.Tensor, bool]], torch.Tensor]:
-    """Run every GH200-measurable backend of one model on one shared batch."""
+    """Run every GH200-measurable backend of one model on one shared batch.
+
+    Each backend maps to its residue tensor and whether that tensor is logits.
+    The tensor is (b, l, v) for a family that returns logits and (b, l, d)
+    otherwise, so the caller compares like with like rather than assuming one
+    trailing width. The returned mask is (b, l).
+    """
 
     model = _model_class(spec).from_pretrained(
         spec.fast.repo_id,
@@ -312,6 +318,7 @@ def _measure_backends(
             else contextlib.nullcontext()
         )
         with torch.inference_mode(), numeric_context:
+            # output_tensor: (b, l, v) with logits, otherwise (b, l, d)
             output_tensor, has_logits = _sequence_output(model(**inputs))
             outputs[backend] = output_tensor.detach().clone(), has_logits
 

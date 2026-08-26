@@ -21,8 +21,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 from collections.abc import Callable, Iterator
-from huggingface_hub import snapshot_download
 from pathlib import Path
+from huggingface_hub import snapshot_download
 
 from fastplms.models.e1 import modeling_e1
 from fastplms.registry import get_model_registry
@@ -88,6 +88,8 @@ def _load_model(attn_backend: str, device: torch.device) -> torch.nn.Module:
 
 
 def _encoder_inputs(model: torch.nn.Module, device: torch.device) -> dict[str, torch.Tensor]:
+    """Return the four aligned encoder tensors, each of shape (b, l)."""
+
     batch = model.model.prep_tokens.get_batch_kwargs(_sequences(), device=device)
     return {
         name: batch[name]
@@ -101,10 +103,11 @@ def _encoder_inputs(model: torch.nn.Module, device: torch.device) -> dict[str, t
 
 
 def _relative_l2(candidate: torch.Tensor, reference: torch.Tensor) -> float:
-    # candidate, reference: identical shapes, compared in float32
+    # candidate, reference: equal shapes, compared in float32
     tiny = torch.finfo(torch.float32).tiny
-    difference = torch.linalg.vector_norm(candidate.float() - reference.float())
-    return float(difference / torch.linalg.vector_norm(reference.float()).clamp_min(tiny))
+    difference = torch.linalg.vector_norm(candidate.float() - reference.float())  # ()
+    reference_norm = torch.linalg.vector_norm(reference.float()).clamp_min(tiny)  # ()
+    return float(difference / reference_norm)
 
 
 @pytest.mark.gpu
@@ -119,13 +122,13 @@ def test_stored_flex_spelling_loads_and_matches_the_canonical_backend() -> None:
 
     inputs = _encoder_inputs(legacy, device)
     with torch.inference_mode():
-        legacy_logits = legacy(**inputs).logits.detach().clone()
+        legacy_logits = legacy(**inputs).logits.detach().clone()  # (b, l, vocab)
     del legacy
     torch.cuda.empty_cache()
 
     canonical = _load_model("flex_attention", device)
     with torch.inference_mode():
-        canonical_logits = canonical(**inputs).logits.detach().clone()
+        canonical_logits = canonical(**inputs).logits.detach().clone()  # (b, l, vocab)
     del canonical
     torch.cuda.empty_cache()
 
@@ -209,7 +212,7 @@ def test_full_forward_pass_survives_swapping_the_normalization_kernel(
             dropout_p=0.0,
             prenorm=False,
             residual_in_fp32=False,
-        ).to(hidden_states.dtype)
+        ).to(hidden_states.dtype)  # (b, l, d)
 
     modeling_e1.RMSNorm.forward = fused_forward
     try:
@@ -229,6 +232,7 @@ def test_full_forward_pass_survives_swapping_the_normalization_kernel(
     confident = confidence.ge(0.5)  # (residues,)
     assert bool(confident.any()), "the sequence panel produced no confident biological positions"
     observed_top1 = fused_residues.argmax(-1)  # (residues,)
+    # ()
     top1_agreement = (observed_top1[confident] == expected_top1[confident]).float().mean()
 
     assert relative_l2 <= MAX_LOGIT_RELATIVE_L2, f"relative L2={relative_l2}"

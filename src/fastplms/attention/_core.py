@@ -637,20 +637,14 @@ LEGACY_CHECKPOINT_ATTENTION_BACKENDS = MappingProxyType(
 def canonical_checkpoint_attention_backend(stored_backend: str | None) -> str | None:
     """Translate a stored checkpoint backend name to its canonical spelling.
 
-    This runs where a serialized configuration enters FastPLMs so that a
-    checkpoint written by an official upstream source selects the compiled
-    implementation it names. Imperative runtime selection through
-    ``set_attn_implementation`` stays strict and keeps rejecting the historical
-    spellings.
+    Call this where a serialized configuration enters FastPLMs. Imperative
+    selection through ``set_attn_implementation`` stays strict and keeps
+    rejecting the historical spellings. An unmapped name passes through so the
+    backend resolver owns the rejection.
     """
 
     if stored_backend is None:
         return None
-    if not isinstance(stored_backend, str):
-        raise TypeError(
-            "A stored attention backend must be a string or None; "
-            f"received {type(stored_backend).__name__}."
-        )
     return LEGACY_CHECKPOINT_ATTENTION_BACKENDS.get(stored_backend, stored_backend)
 
 

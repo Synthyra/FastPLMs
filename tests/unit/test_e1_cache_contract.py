@@ -579,14 +579,16 @@ def test_e1_normalization_has_one_environment_independent_implementation() -> No
     torch.manual_seed(0)
     norm = e1_modeling.RMSNorm(16, eps=1e-5)
     with torch.no_grad():
+        # norm.weight: (d,) held away from zero so the scaling is observable
         norm.weight.copy_(torch.rand(16) * 0.5 + 0.75)
     hidden_states = torch.randn(2, 5, 16)  # (b=2, l=5, d=16)
 
     observed = norm(hidden_states)  # (b, l, d)
-    # scale: (b, l, 1); root mean square is accumulated in float32 like the kernel
+    # scale: (b, l, 1); the root mean square accumulates in float32 like the kernel
     scale = torch.rsqrt(
         hidden_states.float().pow(2).mean(-1, keepdim=True) + norm.variance_epsilon
     )
+    # (b, l, d)
     expected = (hidden_states.float() * scale * norm.weight.float()).to(hidden_states.dtype)
 
     torch.testing.assert_close(observed, expected)
