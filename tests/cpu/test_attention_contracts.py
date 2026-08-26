@@ -62,6 +62,18 @@ test_locked_kernel_offline_resolves_sparse_snapshot_without_hub_api = (
 test_locked_kernel_offline_rejects_unlocked_cached_variant = (
     interface_contracts.test_locked_kernel_offline_rejects_unlocked_cached_variant
 )
+test_canonical_checkpoint_backend_translates_only_the_flex_spelling = (
+    interface_contracts.test_canonical_checkpoint_backend_translates_only_the_flex_spelling
+)
+test_stored_flex_spelling_reaches_the_flex_implementation = (
+    interface_contracts.test_stored_flex_spelling_reaches_the_flex_implementation
+)
+test_stored_spelling_translation_respects_the_advertised_backend_set = (
+    interface_contracts.test_stored_spelling_translation_respects_the_advertised_backend_set
+)
+test_stored_backend_translation_never_invents_a_flash_version = (
+    interface_contracts.test_stored_backend_translation_never_invents_a_flash_version
+)
 
 test_attention_masks_require_exact_batch_sequence_shape = (
     contracts.test_attention_masks_require_exact_batch_sequence_shape

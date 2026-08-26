@@ -4,6 +4,7 @@ import configparser
 import hashlib
 import json
 import os
+import runpy
 import subprocess
 import sys
 import textwrap
@@ -888,6 +889,12 @@ def test_artifact_build_is_deterministic_and_self_verifying(tmp_path: Path) -> N
     bridge = (first / "modeling_fastplms.py").read_text(encoding="utf-8")
     assert "from .fastplms_bundle import RUNTIME_DATA, RUNTIME_HASH" in bridge
     assert "from .fastplms." not in bridge
+    # A caller reproducing a historical embedding reads the runtime identity from
+    # config.json. That is only a pin if it names the bundle the bridge refuses
+    # to run without, so tie the recorded digest to the executed one.
+    bundle = runpy.run_path(str(first / "fastplms_bundle.py"))
+    assert bundle["RUNTIME_HASH"] == config["fastplms_runtime_bundle_sha256"]
+    assert f'RUNTIME_HASH != "{config["fastplms_runtime_bundle_sha256"]}"' in bridge
     assert not (first / "vendor").exists()
     assert (first / "LICENSES" / "toy" / "LICENSE").is_file()
     assert (first / "THIRD_PARTY_NOTICES.md").is_file()

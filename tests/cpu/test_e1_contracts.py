@@ -27,8 +27,17 @@ test_e1_from_pretrained_tokenizer_context_is_thread_local = (
 test_e1_lazy_tokenizer_uses_resolved_weight_commit_per_instance = (
     contracts.test_e1_lazy_tokenizer_uses_resolved_weight_commit_per_instance
 )
+test_e1_config_flex_spelling_selects_compiled_flex_attention = (
+    contracts.test_e1_config_flex_spelling_selects_compiled_flex_attention
+)
 test_e1_legacy_backend_setter_rejects_unadvertised_backends = (
     contracts.test_e1_legacy_backend_setter_rejects_unadvertised_backends
+)
+test_e1_normalization_has_one_environment_independent_implementation = (
+    contracts.test_e1_normalization_has_one_environment_independent_implementation
+)
+test_e1_runtime_backend_selection_rejects_the_flex_spelling = (
+    contracts.test_e1_runtime_backend_selection_rejects_the_flex_spelling
 )
 test_e1_loss_bearing_head_tuples_start_with_loss_then_logits = (
     contracts.test_e1_loss_bearing_head_tuples_start_with_loss_then_logits

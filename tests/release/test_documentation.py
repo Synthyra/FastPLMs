@@ -431,7 +431,9 @@ def test_container_guide_runs_complete_candidate_and_compliance_workflows() -> N
     assert "python -m pytest tests/unit tests/integration" in text
     assert '-m "not gpu and not slow and not structure"' in text
     assert "--suite compliance" in text
-    assert "Building those images alone does not run\nparity" in text
+    # Compare against reflowed prose so a line-wrap change cannot fail a
+    # contract about what the guide states.
+    assert "Building these images alone does not run parity" in " ".join(text.split())
 
 
 def test_hub_quick_starts_follow_install_and_platform_contracts() -> None:
@@ -474,11 +476,12 @@ def test_esmfold2_fast_docs_do_not_claim_msa_conditioning() -> None:
     )[1].split("## Attention backends", maxsplit=1)[0]
     normalized_quick_start = " ".join(quick_start.split())
     assert '"Synthyra/ESMFold2-Fast"' in quick_start
-    assert (
-        "quick start below intentionally loads Fast and supplies no MSA" in normalized_quick_start
-    )
+    assert "quick start below uses Fast and no MSA" in normalized_quick_start
     assert "Protein inputs can also carry an MSA" not in quick_start
-    assert "Its ESMFold2 MSA branch requires one of the full checkpoints" in normalized_quick_start
+    assert (
+        "Its ESMFold2 MSA path needs a full checkpoint, not a Fast checkpoint"
+        in normalized_quick_start
+    )
 
     native_preparation = readme.split("### Native biological preparation", maxsplit=1)[1].split(
         "### Ordered embedding results", maxsplit=1
@@ -550,7 +553,7 @@ def test_examples_readme_indexes_every_entry_point_and_states_coverage_boundarie
         "## Embedding coverage matrix",
         "base weights + untrained task head",
         "LoRA is the demonstrated PEFT method",
-        "arbitrary `Dataset.save_to_disk()` trees are not",
+        "`Dataset.save_to_disk()` trees are not",
         "--device cpu|cuda[:index]",
         "--dtype float32|bfloat16",
     ):

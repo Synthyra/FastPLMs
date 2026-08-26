@@ -157,16 +157,25 @@ def test_fasta_stream_order_and_ownership() -> None:
 
 
 def test_esmfold2_package_init_is_lazy() -> None:
+    # The export list tracks the lazy module map rather than a frozen literal, so
+    # adding a public class cannot fail this contract. What is gated is that
+    # importing the package resolves none of those modules.
     probe = """
 import sys
 import fastplms.models.esmfold2 as package
 
-assert package.__all__ == [
+assert package.__all__ == list(package._EXPORT_MODULES)
+assert set(package.__all__) >= {
     "ESMFold2Config",
     "ESMFold2ExperimentalModel",
     "ESMFold2Model",
-]
-assert "fastplms.models.esmfold2.modeling_esmfold2" not in sys.modules
+}
+loaded = {
+    name
+    for name in sys.modules
+    if name.startswith("fastplms.models.esmfold2.")
+}
+assert not loaded, sorted(loaded)
 """
     subprocess.run(
         [sys.executable, "-c", probe],

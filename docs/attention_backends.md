@@ -68,6 +68,24 @@ family raises. A listed optional backend that cannot be imported also raises.
 Missing dependencies are a configuration error. They do not show that another
 kernel was tested.
 
+### Historical backend names in stored configurations
+
+Several official upstream sources predate the Transformers `flex_attention`
+name and serialize the backend as `flex`. Profluent's E1 does this through
+`AttentionMethod.FLEX`, and converted ESMC configurations carry the same
+spelling. Both names select one implementation, so FastPLMs translates `flex`
+to `flex_attention` where a serialized configuration enters the library: a
+`config.json` field, `attn_backend=`, or `attn_implementation=` passed to
+`from_pretrained`. A checkpoint that asks for compiled Flex Attention therefore
+runs it instead of raising.
+
+The translation table holds exactly one entry. `flash` is deliberately absent
+because it does not name a FlashAttention version, and choosing one would be a
+silent substitution. Translation never widens what a family supports: a name
+that resolves to a backend outside the family's manifest row still raises, and
+imperative selection through `set_attn_implementation()` or the legacy
+`attn_backend` setter accepts canonical names only.
+
 ## Choosing a backend
 
 | Need | Start with | Why |
@@ -221,6 +239,30 @@ family support applies to the optimized ANKH encoder. The full
 sequence-to-sequence checkpoint retains the decoder's declared implementation
 boundary.
 
+ANKH is the one family with a widened BF16 band. In FP32 its eager and SDPA
+paths are **bitwise identical** on every checkpoint, so the two implementations
+compute the same function and no mask, bias, or dispatch difference exists. ANKH
+also stores parameters in BF16 rather than autocasting from FP32, and its
+encoder activations peak near `|h|` of `0.2` to `0.8`. Relative L2 and residue
+cosine both scale with that magnitude, so BF16 quantization alone sets a floor
+under those two metrics. Measured on NVIDIA GH200 480GB, CUDA 13.0, torch
+2.13.0+cu130, transformers 5.13.0, four 64-residue sequences, eager against
+SDPA:
+
+| Checkpoint | Relative L2 | Relative Q99.9 | Residue cosine p01 | Pooled cosine | FP32 relative L2 |
+| --- | --- | --- | --- | --- | --- |
+| `ankh_base` | `2.303e-02` | `2.045e-02` | `0.9986925` | `0.9996330` | `0` |
+| `ankh_large` | `1.670e-02` | `1.371e-02` | `0.9996961` | `0.9999447` | `0` |
+| `ankh2_large` | `2.118e-02` | `1.885e-02` | `0.9993446` | `0.9998723` | `0` |
+| `ankh3_large` | `1.996e-02` | `1.154e-02` | `0.9995397` | `0.9999414` | `0` |
+| `ankh3_xl` | `1.388e-02` | `1.238e-02` | `0.9998276` | `0.9999872` | `0` |
+
+The family band widens relative L2 to `3.0e-02` and residue cosine p01 to
+`0.998`. Relative Q99.9 and pooled cosine keep their global limits because every
+checkpoint already satisfies them. A family may only carry a widened band while
+it passes the FP32 identity gate, so a real implementation divergence cannot
+hide behind the wider numbers.
+
 ## Mask semantics
 
 `fastplms.attention` centralizes mask conversion. The same biological validity
@@ -248,6 +290,48 @@ content remains correct for each call. `clear_flex_attention_caches()` provides
 bounded cleanup of FastPLMs compiled-function and `BlockMask` caches without
 clearing process-global Torch compiler state. Importing FastPLMs does not
 compile Flex or modify Dynamo or Inductor settings.
+
+## Forward-pass determinism across environments
+
+A FastPLMs model revision fixes its own forward pass. Selecting an optimized
+implementation is always an explicit request, never a consequence of what
+happens to be installed, so adding or removing an optional package cannot move
+published numbers.
+
+This differs from several official sources. Profluent's E1 resolves
+`kernels-community/triton-layer-norm` at import and uses a fused Triton RMSNorm
+when that succeeds, falling back to `torch.nn.functional.rms_norm` and a warning
+when it does not. The FastPLMs E1 port keeps one normalization implementation.
+
+The two normalizations are not bitwise equal, and the gap is measured rather
+than assumed. On NVIDIA GH200 480GB, CUDA 13.0, torch 2.13.0+cu130, and
+transformers 5.13.0:
+
+| Comparison | dtype | Relative L2 | Residue cosine | Confident top-1 |
+| --- | --- | --- | --- | --- |
+| Elementwise RMSNorm, `d` in {960, 1152, 1536} | `bfloat16` | `1.3e-05` to `2.2e-05` | at least `0.9999997` | not applicable |
+| Elementwise RMSNorm, same widths | `float32` | about `7e-08` | at least `0.9999997` | not applicable |
+| E1-150M logits, whole forward pass | `bfloat16` | `2.7e-03` | at least `0.999993` | `1.000` |
+
+Every value sits inside the global BF16 backend-equivalence contract used for
+attention backends, so the choice of normalization kernel cannot account for a
+downstream shift larger than that contract allows. The fused kernel is also not
+the faster option on this platform: at E1 shapes the Triton kernel measured
+`0.21` to `0.22` ms per call against `0.017` to `0.048` ms for
+`torch.nn.functional.rms_norm`. Keeping the PyTorch operator is therefore both
+the deterministic and the faster choice, and FastPLMs does not expose a
+normalization backend switch.
+
+`tests/integration/test_e1_normalization_stability.py` gates these bounds, and
+`tests/cpu/test_e1_contracts.py` gates the structural property that E1
+normalization has no run-time implementation choice at all.
+
+Reproducing a historical embedding is a matter of pinning the runtime, not the
+environment. A published artifact carries its runtime inside the repository and
+records its identity in `config.json` as `fastplms_runtime_revision`,
+`fastplms_source_tree_sha256`, and `fastplms_runtime_bundle_sha256`. Pinning
+`revision` therefore pins the executing source, and those three fields identify
+which source that is.
 
 ## Attention outputs and `parti`
 

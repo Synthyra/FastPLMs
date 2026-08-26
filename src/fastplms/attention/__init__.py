@@ -1,6 +1,7 @@
 """Shared attention backends, masks, and optional optimized kernels."""
 
 from ._core import (
+    LEGACY_CHECKPOINT_ATTENTION_BACKENDS,
     VALID_ATTENTION_BACKENDS,
     AttentionBackend,
     BlockMask,
@@ -11,6 +12,7 @@ from ._core import (
     _kernels_flash_varlen_forward,
     _unpad_input,
     bool_to_additive_mask,
+    canonical_checkpoint_attention_backend,
     clear_flex_attention_caches,
     create_block_mask,
     flex_attention,
@@ -36,6 +38,7 @@ from .interfaces import (
 __all__ = [
     "FASTPLMS_ATTENTION_FUNCTIONS",
     "FASTPLMS_ATTENTION_MASKS",
+    "LEGACY_CHECKPOINT_ATTENTION_BACKENDS",
     "VALID_ATTENTION_BACKENDS",
     "AttentionBackend",
     "BlockMask",
@@ -47,6 +50,7 @@ __all__ = [
     "_kernels_flash_varlen_forward",
     "_unpad_input",
     "bool_to_additive_mask",
+    "canonical_checkpoint_attention_backend",
     "clear_flex_attention_caches",
     "create_block_mask",
     "flex_attention",

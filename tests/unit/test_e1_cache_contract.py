@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
 import pytest
 import torch
 import torch.nn.functional as F
@@ -532,6 +535,73 @@ def test_e1_legacy_backend_setter_rejects_unadvertised_backends() -> None:
 
     with pytest.raises(ValueError, match="E1 does not support 'eager'"):
         model.attn_backend = "eager"
+
+
+def test_e1_config_flex_spelling_selects_compiled_flex_attention() -> None:
+    """The official E1 backend name must reach the Flex implementation.
+
+    Profluent's ``AttentionMethod.FLEX`` serializes as ``"flex"``, so a
+    checkpoint or caller converted from that source names the backend that way.
+    """
+
+    config = _tiny_e1_config()
+    config.attn_backend = "flex"
+
+    model = E1Model(config).eval()
+
+    assert model.config.attn_backend == "flex_attention"
+    assert model.config._attn_implementation == "flex_attention"
+    attentions = [module for module in model.modules() if isinstance(module, Attention)]
+    assert attentions
+    assert all(
+        attention.attn_backend is e1_modeling.AttentionBackend.FLEX_ATTENTION
+        for attention in attentions
+    )
+
+
+def test_e1_normalization_has_one_environment_independent_implementation() -> None:
+    """E1 normalization must not depend on what is installed alongside FastPLMs.
+
+    The official source picks a fused Triton kernel when ``kernels`` resolves one
+    and PyTorch RMSNorm otherwise, so its forward pass moves with the
+    environment. FastPLMs keeps one implementation, which is what lets a pinned
+    revision pin the numerics.
+    """
+
+    forward = ast.parse(textwrap.dedent(inspect.getsource(e1_modeling.RMSNorm.forward)))
+    branches = [
+        node
+        for node in ast.walk(forward)
+        if isinstance(node, (ast.If, ast.IfExp, ast.Try))
+    ]
+    assert not branches, "E1 normalization must not select an implementation at run time"
+
+    torch.manual_seed(0)
+    norm = e1_modeling.RMSNorm(16, eps=1e-5)
+    with torch.no_grad():
+        norm.weight.copy_(torch.rand(16) * 0.5 + 0.75)
+    hidden_states = torch.randn(2, 5, 16)  # (b=2, l=5, d=16)
+
+    observed = norm(hidden_states)  # (b, l, d)
+    # scale: (b, l, 1); root mean square is accumulated in float32 like the kernel
+    scale = torch.rsqrt(
+        hidden_states.float().pow(2).mean(-1, keepdim=True) + norm.variance_epsilon
+    )
+    expected = (hidden_states.float() * scale * norm.weight.float()).to(hidden_states.dtype)
+
+    torch.testing.assert_close(observed, expected)
+
+
+def test_e1_runtime_backend_selection_rejects_the_flex_spelling() -> None:
+    """Imperative selection stays strict; only stored configurations translate."""
+
+    model = E1Model(_tiny_e1_config()).eval()
+
+    with pytest.raises(ValueError, match="E1 does not support 'flex'"):
+        model.attn_backend = "flex"
+    with pytest.raises(ValueError, match="does not support 'flex'"):
+        model.set_attn_implementation("flex")
+    assert model.config.attn_backend == "sdpa"
 
 
 def _tiny_attention(layer_type: AttentionLayerType) -> Attention:
