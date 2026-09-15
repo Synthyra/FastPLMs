@@ -35,10 +35,11 @@ sequence or rounded downward, so dense binder batches cannot truncate atoms.
 
 Run from a source checkout with the `binder` dependency profile. The published
 workflow requires Python 3.11-3.14,
-PyTorch 2.13, Transformers 5.13, verified ESMFold2 runtime assets, and CUDA. The
-current release evidence target is the exact containerized Linux aarch64
-environment on the NVIDIA GH200 workstation. CPU-only, x86-64, Windows, macOS,
-H100, and H200 binder runs do not substitute for that evidence.
+PyTorch 2.13, Transformers 5.13, verified ESMFold2 runtime assets, and CUDA.
+Docker execution with the required capabilities and numerical tests is valid on
+any compatible host. Record the actual accelerator and software stack in the
+run manifest. Historical release measurements from the containerized Linux
+aarch64 NVIDIA GH200 workstation remain tied to that environment.
 
 The script intentionally has no standalone PEP 723 dependency block.
 `requirements/profiles/binder.in` composes the core, structure, and bounded

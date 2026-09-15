@@ -16,11 +16,13 @@ evidence, and contributor workflows for FastPLMs 1.0. The model manifest at
 | Build and validate an offline Hub artifact | [Artifacts](artifacts.md) |
 | Run parity, structure, or release tests | [Testing](testing.md) |
 | Measure throughput or memory | [Benchmarking](benchmarking.md) |
+| Review ESMFold2-300 validation evidence | [ESMFold2-300 validation](validation/esmfold2_small.md) |
 
 ## Model and research workflows
 
 - [ESMFold2](esmfold2.md): folding, learned representations, the distinct full
-  and Fast MSA contracts, BF16, and experimental FP8.
+  and Fast MSA contracts, experimental base300M/base600M architecture variants,
+  BF16, and ESMC-6B-only experimental FP8.
 - [Test-time training](ttt.md): opt-in low-rank adaptation and its evidence
   boundary.
 - [Binder design](binder_design.md): differentiable ESMFold2 and ESM++ research

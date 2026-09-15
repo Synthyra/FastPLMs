@@ -63,7 +63,7 @@ _TRANSFER_TIMEOUT_SECONDS = 1_800
 _BIOHUB_REFERENCE_TARGETS = frozenset({"reference-biohub-esm", "reference-esmfold2"})
 _BIOHUB_BUILD_TARGET = "biohub-biotraj-wheel"
 _MACHINE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_GH200_RELEASE_BACKENDS = ("eager", "sdpa", "flex_attention")
+_PORTABLE_RELEASE_BACKENDS = ("eager", "sdpa", "flex_attention")
 _FLASH_ATTENTION_2_REVISION = "db6b51744f0cd7061386442c09df890fc6d9f47e"
 _FLASH_ATTENTION_3_REVISION = "43f0bd269777115d94ff826e0d113ce9c1c9087b"
 _REFERENCE_IMAGE_IDENTITY_PATH = (
@@ -165,16 +165,18 @@ def _kernel_capability_preflight(
 
     platform_name = host_hardware.get("container_platform")
     architecture = host_hardware.get("architecture")
-    if platform_name != "linux/arm64" or architecture != "arm64":
+    if platform_name not in {"linux/arm64", "linux/amd64"} or platform_name != (
+        f"linux/{architecture}"
+    ):
         return {
             "schema_version": 1,
             "status": "failed",
-            "policy": "gh200-native-no-flash-download-v1",
+            "policy": "native-no-flash-download-v1",
             "platform": platform_name,
             "selected_backends": list(requested_backends),
             "network_downloads": False,
             "source_builds": False,
-            "reason": "The current release kernel policy is bound to native GH200 linux/arm64.",
+            "reason": "Validation requires a native Linux Docker platform.",
             "backends": {},
         }
 
@@ -183,7 +185,7 @@ def _kernel_capability_preflight(
         return {
             "schema_version": 1,
             "status": "failed",
-            "policy": "gh200-native-no-flash-download-v1",
+            "policy": "native-no-flash-download-v1",
             "platform": platform_name,
             "selected_backends": list(requested),
             "network_downloads": False,
@@ -217,7 +219,7 @@ def _kernel_capability_preflight(
             "provider": "kernels-community/flash-attn2",
             "revision": _FLASH_ATTENTION_2_REVISION,
             "reason": (
-                "The GH200 release matrix reuses prior revision-pinned focused FA2 "
+                "The release matrix reuses prior revision-pinned focused FA2 "
                 "evidence; it does not download, build, or execute FA2 in this run."
             ),
         },
@@ -228,7 +230,7 @@ def _kernel_capability_preflight(
             "revision": _FLASH_ATTENTION_3_REVISION,
             "reason": (
                 "The manifest-pinned FA3 kernel has no validated linux/arm64 artifact "
-                "for the current GH200 release image."
+                "for the current release image."
             ),
         },
     }
@@ -241,7 +243,7 @@ def _kernel_capability_preflight(
     return {
         "schema_version": 1,
         "status": "failed" if unavailable else "passed",
-        "policy": "gh200-native-no-flash-download-v1",
+        "policy": "native-no-flash-download-v1",
         "platform": platform_name,
         "selected_backends": list(requested),
         "excluded_backends": [
@@ -250,7 +252,7 @@ def _kernel_capability_preflight(
         "network_downloads": False,
         "source_builds": False,
         "reason": (
-            "Requested backends are unavailable under the native GH200 policy: "
+            "Requested backends are unavailable under the native container policy: "
             + ", ".join(unavailable)
             if unavailable
             else None
@@ -599,7 +601,7 @@ _RUN_NIGHTLY_BENCHMARK = _compose_run(
     "--artifact-root",
     "dist/hub",
     "--backends",
-    *_GH200_RELEASE_BACKENDS,
+    *_PORTABLE_RELEASE_BACKENDS,
     "--output",
     "artifacts/benchmarks/nightly-h100.json",
     "--junit-output",
@@ -610,7 +612,7 @@ _RUN_RELEASE_BENCHMARK = _compose_run(
     "--artifact-root",
     "dist/hub",
     "--backends",
-    *_GH200_RELEASE_BACKENDS,
+    *_PORTABLE_RELEASE_BACKENDS,
     "--output",
     "artifacts/benchmarks/release-h100.json",
     "--junit-output",
@@ -773,7 +775,7 @@ SUITES = {
         pre_commands=(
             _RUN_CHECK_GOLDENS,
         ),
-        attention_backends=_GH200_RELEASE_BACKENDS,
+        attention_backends=_PORTABLE_RELEASE_BACKENDS,
     ),
     "gpu-golden-smoke": Suite(
         ("candidate-structure",),
@@ -791,7 +793,7 @@ SUITES = {
             "pytest",
             (
                 "tests/release/test_validation_stack.py::"
-                "test_release_hopper_sm90_gpu_is_available_without_running_a_model"
+                "test_release_cuda_gpu_is_available_without_running_a_model"
             ),
             "tests/integration/test_official_goldens.py",
             "tests/structure/test_structure_official_goldens.py",
@@ -865,7 +867,7 @@ SUITES = {
             "tests/parity/test_native_results.py",
             (
                 "tests/release/test_validation_stack.py::"
-                "test_release_hopper_sm90_gpu_is_available_without_running_a_model"
+                "test_release_cuda_gpu_is_available_without_running_a_model"
             ),
             (
                 "tests/release/test_validation_stack.py::"
@@ -882,7 +884,7 @@ SUITES = {
             *_RUN_NATIVE_REFERENCES,
             *_RUN_RELEASE_STRUCTURE_REFERENCES,
         ),
-        attention_backends=_GH200_RELEASE_BACKENDS,
+        attention_backends=_PORTABLE_RELEASE_BACKENDS,
     ),
     "structure": Suite(
         (
@@ -974,7 +976,7 @@ SUITES = {
             "--artifact-root",
             "dist/hub",
             "--backends",
-            *_GH200_RELEASE_BACKENDS,
+            *_PORTABLE_RELEASE_BACKENDS,
             "--output",
             "artifacts/benchmarks/h100-current.json",
             "--baseline",
@@ -985,7 +987,7 @@ SUITES = {
         pre_commands=(_BUILD_BENCHMARK_ARTIFACTS,),
         required_paths=("benchmarks/baselines/h100.json",),
         pre_command_timeout_seconds=14_400,
-        attention_backends=_GH200_RELEASE_BACKENDS,
+        attention_backends=_PORTABLE_RELEASE_BACKENDS,
     ),
     "benchmark-capture": Suite(
         ("candidate", "candidate-fp8"),
@@ -1001,7 +1003,7 @@ SUITES = {
             "--artifact-root",
             "dist/hub",
             "--backends",
-            *_GH200_RELEASE_BACKENDS,
+            *_PORTABLE_RELEASE_BACKENDS,
             "--output",
             "artifacts/benchmarks/h100-baseline-candidate.json",
             "--junit-output",
@@ -1009,7 +1011,7 @@ SUITES = {
         ),
         pre_commands=(_BUILD_BENCHMARK_ARTIFACTS,),
         pre_command_timeout_seconds=14_400,
-        attention_backends=_GH200_RELEASE_BACKENDS,
+        attention_backends=_PORTABLE_RELEASE_BACKENDS,
     ),
     "nightly": Suite(
         (
@@ -1049,7 +1051,7 @@ SUITES = {
         ),
         pre_command_timeout_seconds=14_400,
         command_timeout_seconds=21_600,
-        attention_backends=_GH200_RELEASE_BACKENDS,
+        attention_backends=_PORTABLE_RELEASE_BACKENDS,
     ),
     "release": Suite(
         (
@@ -1106,7 +1108,7 @@ SUITES = {
             _RUN_RELEASE_BENCHMARK,
         ),
         pre_command_timeout_seconds=21_600,
-        attention_backends=_GH200_RELEASE_BACKENDS,
+        attention_backends=_PORTABLE_RELEASE_BACKENDS,
     ),
     "python-matrix": Suite(
         ("candidate",),

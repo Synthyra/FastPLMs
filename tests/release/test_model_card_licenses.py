@@ -40,6 +40,13 @@ EMBEDDING_FAMILIES = {
 }
 
 
+def _is_experimental_esmfold2(spec: ModelSpec) -> bool:
+    """Identify ESMFold2 experimental implementations from their AutoClass map."""
+    return spec.family.id == "esmfold2" and "modeling_esmfold2_experimental" in spec.auto_map[
+        "AutoModel"
+    ]
+
+
 @pytest.mark.parametrize(
     "renderer",
     (render_documentation_model_card, render_artifact_model_card),
@@ -117,7 +124,7 @@ def test_model_cards_keep_checkpoint_specific_ttt_boundaries() -> None:
     registry = load_model_registry()
     for spec in registry.by_family("esmfold2"):
         card = (ROOT / "model_cards" / f"{spec.id}.md").read_text(encoding="utf-8")
-        if "experimental" in spec.id:
+        if _is_experimental_esmfold2(spec):
             assert "standard and Fast checkpoints expose" not in card
         else:
             assert "standard and Fast checkpoints expose" in card
@@ -126,7 +133,7 @@ def test_model_cards_keep_checkpoint_specific_ttt_boundaries() -> None:
 def test_every_manifest_model_card_has_task_oriented_guidance() -> None:
     registry = load_model_registry()
     specs = tuple(registry.values())
-    assert len(specs) == 29
+    assert len(specs) == 31
 
     for spec in specs:
         card = (ROOT / "model_cards" / f"{spec.id}.md").read_text(encoding="utf-8")
@@ -136,12 +143,15 @@ def test_every_manifest_model_card_has_task_oriented_guidance() -> None:
         assert "## Capabilities" not in card
         assert "| Feature | Status |" not in card
         assert "## Technical details" in card
-        assert "## Validation and provenance" in card
+        assert "## Validation and sources" in card
 
         for backend in spec.family.attention:
             assert f"`{backend}`" in card
         assert "Requesting an unavailable backend raises" in normalized
-        if "compliance" in spec.family.test_tiers:
+        if spec.backbone_model is not None:
+            assert "ESMFold2-600 is not inference-validated" in card
+            assert "not a full structure benchmark result" in card
+        elif "compliance" in spec.family.test_tiers:
             assert "Release validation includes the `compliance` tier." in card
         else:
             assert "does not declare the `compliance` tier" in card
@@ -169,6 +179,8 @@ def test_every_manifest_model_card_has_task_oriented_guidance() -> None:
         if spec.family.id in EMBEDDING_FAMILIES:
             if spec.family.id == "esmfold2":
                 assert "## Learned representation and ESMC precision" in card
+                if spec.id in {"esmfold2_300", "esmfold2_600"}:
+                    assert "## Protein folding" in card
             else:
                 assert "## Dataset embeddings" in card
         else:
@@ -200,11 +212,16 @@ def test_model_card_titles_use_readable_checkpoint_names() -> None:
 
 def test_esmfold2_cards_publish_embedding_projection_shapes_and_ttt_scope() -> None:
     registry = load_model_registry()
+    expected_hidden_shapes = {
+        "esmfold2_300": "(b, l, 31, 960)",
+        "esmfold2_600": "(b, l, 37, 1152)",
+    }
     for spec in registry.by_family("esmfold2"):
         card = (ROOT / "model_cards" / f"{spec.id}.md").read_text(encoding="utf-8")
-        assert "`H: (b, l, 81, 2560) -> Z: (b, l, 256)`" in card
+        hidden_shape = expected_hidden_shapes.get(spec.id, "(b, l, 81, 2560)")
+        assert f"`H: {hidden_shape} -> Z: (b, l, 256)`" in card
         assert "returns one `(l, 256)` residue" in card
-        if "experimental" in spec.id:
+        if _is_experimental_esmfold2(spec):
             assert "does not expose folding TTT" in card
         else:
             assert "## Optional folding TTT" in card

@@ -34,6 +34,19 @@ class BiohubReferenceEnvironmentError(RuntimeError):
     """The native runtime or persisted image identity differs from its lock."""
 
 
+def _normalized_architecture(value: object) -> str:
+    """Normalize Linux architecture aliases for lock compatibility checks."""
+
+    if not isinstance(value, str):
+        return "unknown"
+    normalized = value.strip().lower()
+    if normalized in {"aarch64", "arm64"}:
+        return "arm64"
+    if normalized in {"x86_64", "amd64"}:
+        return "amd64"
+    return normalized
+
+
 def _sha256(path: Path) -> str:
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -72,13 +85,17 @@ def _validated_image_identity(value: object, *, target: str) -> dict[str, str]:
             f"Container image identity fields differ for {target!r}."
         )
     digest = value["content_digest"]
+    architecture = value["architecture"]
+    resolved_platform = value["resolved_platform"]
     if not isinstance(digest, str) or _IMAGE_ID.fullmatch(digest) is None:
         raise BiohubReferenceEnvironmentError(f"Container image digest is invalid for {target!r}.")
     if (
         value["image_id"] != digest
         or value["os"] != "linux"
-        or value["architecture"] != "arm64"
-        or value["resolved_platform"] != "linux/arm64"
+        or not isinstance(architecture, str)
+        or architecture not in {"arm64", "amd64"}
+        or not isinstance(resolved_platform, str)
+        or resolved_platform != f"linux/{architecture}"
     ):
         raise BiohubReferenceEnvironmentError(f"Container image platform differs for {target!r}.")
     return {field: str(value[field]) for field in sorted(fields)}
@@ -88,8 +105,15 @@ def _validated_container_identity(value: object) -> dict[str, object]:
     fields = {"schema_version", "resolved_platform", "docker_server", "docker_buildx", "images"}
     if not isinstance(value, Mapping) or set(value) != fields:
         raise BiohubReferenceEnvironmentError("Reference container identity fields differ.")
-    if value["schema_version"] != 1 or value["resolved_platform"] != "linux/arm64":
-        raise BiohubReferenceEnvironmentError("Reference container platform is not linux/arm64.")
+    resolved_platform = value["resolved_platform"]
+    if value["schema_version"] != 1 or resolved_platform not in {
+        "linux/arm64",
+        "linux/amd64",
+    }:
+        raise BiohubReferenceEnvironmentError(
+            "Reference container platform is not a native Linux platform."
+        )
+    expected_architecture = resolved_platform.split("/", maxsplit=1)[1]
     buildx = value["docker_buildx"]
     if not isinstance(buildx, str) or not buildx.strip():
         raise BiohubReferenceEnvironmentError("Docker Buildx identity is missing.")
@@ -109,7 +133,12 @@ def _validated_container_identity(value: object) -> dict[str, object]:
         or not required_server_fields.issubset(server)
         or not set(server).issubset(allowed_server_fields)
         or server.get("Os") != "linux"
-        or server.get("Arch") not in {"arm64", "aarch64"}
+        or server.get("Arch")
+        not in (
+            {"arm64", "aarch64"}
+            if expected_architecture == "arm64"
+            else {"amd64", "x86_64"}
+        )
         or any(not isinstance(item, (str, int, float, bool)) for item in server.values())
     ):
         raise BiohubReferenceEnvironmentError("Docker server identity is invalid.")
@@ -120,10 +149,15 @@ def _validated_container_identity(value: object) -> dict[str, object]:
     for raw_target, identity in images.items():
         if not isinstance(raw_target, str) or not raw_target:
             raise BiohubReferenceEnvironmentError("Reference container target name is invalid.")
-        normalized_images[raw_target] = _validated_image_identity(identity, target=raw_target)
+        normalized_identity = _validated_image_identity(identity, target=raw_target)
+        if normalized_identity["resolved_platform"] != resolved_platform:
+            raise BiohubReferenceEnvironmentError(
+                f"Container image platform differs from the container target for {raw_target!r}."
+            )
+        normalized_images[raw_target] = normalized_identity
     return {
         "schema_version": 1,
-        "resolved_platform": "linux/arm64",
+        "resolved_platform": value["resolved_platform"],
         "docker_server": {str(key): server[key] for key in sorted(server)},
         "docker_buildx": buildx.strip(),
         "images": {key: normalized_images[key] for key in sorted(normalized_images)},
@@ -165,15 +199,15 @@ def _runtime_identity(installed_inventory: Mapping[str, str]) -> dict[str, objec
     capability = list(torch.cuda.get_device_capability(0))
     if (
         system != "linux"
-        or machine != "aarch64"
+        or machine not in {"aarch64", "arm64", "x86_64", "amd64"}
         or implementation != "CPython"
         or not python_version.startswith("3.12.")
         or torch_version != installed_inventory.get("torch")
         or not cuda_runtime.startswith("13.0")
-        or gpu_name != "NVIDIA GH200 480GB"
-        or capability != [9, 0]
     ):
-        raise BiohubReferenceEnvironmentError("Active runtime differs from the GH200 lock target.")
+        raise BiohubReferenceEnvironmentError(
+            "Active runtime differs from the container dependency contract."
+        )
     uname = platform.uname()
     return {
         "operating_system": system,
@@ -326,6 +360,10 @@ def validate_biohub_reference_environment_evidence(
     container = _validated_container_identity(value["container_identity"])
     if value["container_identity"] != container:
         raise BiohubReferenceEnvironmentError("Container identity is not canonically ordered.")
+    if container["resolved_platform"] != contract.target.container_platform:
+        raise BiohubReferenceEnvironmentError(
+            "Reference container platform differs from the dependency lock target."
+        )
     container_digest = value["container_identity_sha256"]
     if (
         not isinstance(container_digest, str)
@@ -356,7 +394,7 @@ def validate_biohub_reference_environment_evidence(
         raise BiohubReferenceEnvironmentError("Biohub runtime identity fields differ.")
     if (
         runtime["operating_system"] != "linux"
-        or runtime["architecture"] != "aarch64"
+        or runtime["architecture"] not in {"aarch64", "arm64", "x86_64", "amd64"}
         or runtime["python_implementation"] != "CPython"
         or not isinstance(runtime["python_version"], str)
         or not runtime["python_version"].startswith("3.12.")
@@ -365,25 +403,35 @@ def validate_biohub_reference_environment_evidence(
         or not runtime["cuda_runtime"].startswith("13.0")
         or not isinstance(runtime["cuda_driver"], str)
         or not runtime["cuda_driver"].strip()
+        or _normalized_architecture(runtime["architecture"])
+        != _normalized_architecture(contract.target.architecture)
     ):
         raise BiohubReferenceEnvironmentError("Biohub runtime differs from the target policy.")
     gpu = runtime["gpu"]
     if (
         not isinstance(gpu, Mapping)
         or set(gpu) != {"name", "capability", "total_memory_bytes"}
-        or gpu["name"] != "NVIDIA GH200 480GB"
-        or gpu["capability"] != [9, 0]
+        or not isinstance(gpu["name"], str)
+        or not gpu["name"].strip()
+        or not isinstance(gpu["capability"], list)
+        or len(gpu["capability"]) != 2
+        or any(
+            not isinstance(component, int)
+            or isinstance(component, bool)
+            or component < 0
+            for component in gpu["capability"]
+        )
         or isinstance(gpu["total_memory_bytes"], bool)
         or not isinstance(gpu["total_memory_bytes"], int)
         or gpu["total_memory_bytes"] <= 0
     ):
-        raise BiohubReferenceEnvironmentError("Biohub GPU identity differs from GH200/SM90.")
+        raise BiohubReferenceEnvironmentError("Biohub GPU identity is incomplete.")
     uname = runtime["uname"]
     if (
         not isinstance(uname, Mapping)
         or set(uname) != {"system", "release", "version", "machine"}
         or uname["system"] != "Linux"
-        or uname["machine"] != "aarch64"
+        or uname["machine"] != runtime["architecture"]
         or any(not isinstance(item, str) or not item for item in uname.values())
     ):
         raise BiohubReferenceEnvironmentError("Biohub uname identity is invalid.")

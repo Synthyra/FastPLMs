@@ -1,4 +1,4 @@
-"""Validate and attest the native GH200 Biohub reference dependency lock."""
+"""Validate and attest the native Biohub reference dependency lock."""
 
 from __future__ import annotations
 
@@ -412,7 +412,7 @@ def _parse_pip_check_platform_exceptions(
 
 
 def load_biohub_reference_lock_contract(path: Path) -> BiohubReferenceLockContract:
-    """Load the checked-in strict GH200 lock contract."""
+    """Load the checked-in strict Biohub lock contract."""
 
     raw = _load_json(path)
     expected = {
@@ -935,10 +935,10 @@ def _gpu_name() -> str:
             timeout=15,
         )
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        raise BiohubReferenceLockError("Unable to attest the GH200 build host.") from error
+        raise BiohubReferenceLockError("Unable to attest the NVIDIA build host.") from error
     names = tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
     if len(names) != 1:
-        raise BiohubReferenceLockError(f"Expected one GH200 device, received {names!r}.")
+        raise BiohubReferenceLockError(f"Expected one NVIDIA device, received {names!r}.")
     return names[0]
 
 
@@ -966,10 +966,6 @@ def write_biohub_reference_build_evidence(
     if python_version != contract.container.build_python_version:
         raise BiohubReferenceLockError("Build Python patch version differs from pinned image.")
     hardware = _gpu_name()
-    if hardware != contract.target.hardware:
-        raise BiohubReferenceLockError(
-            f"Build hardware differs: expected {contract.target.hardware!r}, received {hardware!r}."
-        )
     if wheel.name != contract.biotraj.wheel_filename:
         raise BiohubReferenceLockError("Evidence wheel filename differs from contract.")
     if wheel.stat().st_size != contract.biotraj.wheel_size:

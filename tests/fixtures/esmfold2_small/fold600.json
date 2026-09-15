@@ -1,0 +1,91 @@
+{
+  "architectures": [
+    "ESMFold2ExperimentalModel"
+  ],
+  "confidence_head": {
+    "distogram_bins": 128,
+    "enabled": false,
+    "folding_trunk": {
+      "dropout": 0.25,
+      "n_heads": 8,
+      "n_layers": 4
+    },
+    "max_dist": 52.0,
+    "min_dist": 2.0,
+    "num_pae_bins": 64,
+    "num_pde_bins": 64,
+    "num_plddt_bins": 50
+  },
+  "d_pair": 256,
+  "d_single": 384,
+  "disable_msa_features": true,
+  "dtype": "float32",
+  "esmc_id": "biohub/ESMC-600M-1500000",
+  "folding_trunk": {
+    "dropout": 0.25,
+    "n_heads": 8,
+    "n_layers": 24
+  },
+  "force_lm_dropout_during_inference": false,
+  "inputs": {
+    "atom_encoder": {
+      "d_atom": 128,
+      "d_token": 768,
+      "expansion_ratio": 2,
+      "n_blocks": 3,
+      "n_heads": 4,
+      "n_spatial_rope_pairs_per_axis": 2,
+      "n_uid_rope_pairs": 10,
+      "spatial_rope_base_frequency": 20.0,
+      "swa_window_size": 128,
+      "uid_rope_base_frequency": 10000.0
+    },
+    "d_inputs": 451
+  },
+  "lm_d_model": 1152,
+  "lm_dropout": 0.0,
+  "lm_num_layers": 36,
+  "model_type": "esmfold2",
+  "msa_encoder": {
+    "d_hidden": 32,
+    "d_msa": 128,
+    "enabled": false,
+    "msa_head_width": 32,
+    "n_heads_msa": 8,
+    "n_layers": 4
+  },
+  "n_relative_chain_bins": 2,
+  "n_relative_residx_bins": 32,
+  "num_diffusion_samples": 16,
+  "num_loops": 3,
+  "structure_head": {
+    "diffusion_module": {
+      "atom_num_blocks": 3,
+      "atom_num_heads": 4,
+      "c_atom": 128,
+      "c_s_inputs": 451,
+      "c_token": 768,
+      "c_z": 256,
+      "fourier_dim": 256,
+      "relpos_r_max": 32,
+      "relpos_s_max": 2,
+      "sigma_data": 16.0,
+      "token_num_blocks": 12,
+      "token_num_heads": 16,
+      "transition_multiplier": 2
+    },
+    "distogram_bins": 128,
+    "gamma_0": 0.605,
+    "gamma_min": 1.107,
+    "inference_num_steps": 15,
+    "inference_p": 8.0,
+    "inference_s_max": 160.0,
+    "inference_s_min": 0.0004,
+    "noise_scale": 0.901,
+    "step_scale": 1.638,
+    "train_noise_log_mean": -1.2,
+    "train_noise_log_std": 1.5
+  },
+  "transformers_version": "4.57.6",
+  "type": "experimental"
+}

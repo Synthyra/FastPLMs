@@ -40,9 +40,8 @@ This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
 
 The artifact requirements include the structure dependencies.
 
-The release contract requires a CUDA device. The current validated target is
-the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and
-macOS structure runs are not release evidence.
+Validation runs in Docker on any compatible CUDA device. Record the container,
+hardware, precision, and inputs; no GPU product or workstation is required.
 
 The Hub quick start needs network access for the first download. For an
 air-gapped run, build the manifest-pinned local artifact first and use the
@@ -153,6 +152,7 @@ with torch.inference_mode():
     output = model.infer(
         "MKTLLILAVVAAALA",
         num_recycles=4,
+        verbose=False,
     )
 
 print(output["mean_plddt"])
@@ -185,7 +185,7 @@ folding requests raise.
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Validation and provenance
+## Validation and sources
 
 FastPLMs pins the checkpoint, upstream source revisions, state transformation,
 and required files in `models.toml`. Built artifacts record exact source

@@ -43,7 +43,9 @@ For ESMFold2, select an artifact by its conditioning contract. The full
 `ESMFold2` and `ESMFold2-Experimental-Cutoff2025` checkpoints have 48 folding
 blocks and support optional MSA conditioning. Fast and experimental Fast
 checkpoints have 24 folding blocks. They are optimized for single-sequence
-inference and reject MSA-derived inputs. See Biohub
+inference and reject MSA-derived inputs. The experimental `ESMFold2-300` and
+`ESMFold2-600` configs also disable the confidence head, so they do not produce
+pLDDT, pTM, iPTM, or PAE fields. See Biohub
 [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf). Fast supports
 supported multichain and multimolecule requests, but each protein chain uses
 single-sequence mode.
@@ -79,7 +81,7 @@ PYTHONPATH=src python examples/structure_preparation.py \
   esmfold2 dist/hub/ESMFold2 --device cuda:0
 ```
 
-Use Flex for a compiled path on the current GH200/aarch64 validation target:
+Use Flex for a compiled path on a compatible CUDA host:
 
 ```bash
 PYTHONPATH=src python examples/attention_switching.py dist/hub/ESM2-8M \
@@ -87,11 +89,11 @@ PYTHONPATH=src python examples/attention_switching.py dist/hub/ESM2-8M \
 ```
 
 The CLI has explicit FlashAttention 2 and 3 choices for supported family and
-platform combinations with a populated pinned kernel cache. The locked
-GH200/aarch64 environment has no expected Flash kernels. Use SDPA or Flex on
-that target. Do not build an unpinned Flash kernel from source. FlashAttention
-2 results are historical exact-environment evidence. FlashAttention 3 is
-supported but is unavailable on the locked target.
+platform combinations with a populated pinned kernel cache. A locked
+environment may have no expected Flash kernels. Use SDPA or Flex when those
+kernels are unavailable. Do not build an unpinned Flash kernel from source.
+FlashAttention 2 results are historical exact-environment evidence.
+FlashAttention 3 is supported but may be unavailable on the locked target.
 
 ## Example inventory and evidence boundary
 
@@ -100,12 +102,12 @@ supported but is unavailable on the locked target.
 | Offline AutoClass loading | [`artifact_loading.py`](artifact_loading.py) | Load any advertised AutoClass from a local artifact | Loading only; forward/loss/save-reload are CPU contract tests |
 | MLM, contacts, and task heads | [`task_heads.py`](task_heads.py) | ESM2 masked-residue scoring, trained contact head, sequence and token classification loss | Sequence and token classifiers use base weights + untrained task head unless a separately fine-tuned head is supplied |
 | Ordered embeddings and retrieval | [`embedding_and_retrieval.py`](embedding_and_retrieval.py) | Repeated sequences or FASTA, mean/std pooling, safetensors or SQLite, duplicate-preserving SQLite retrieval | Full-residue, all-layer, mapping, generator, and other poolers remain shared-API examples/tests |
-| Attention switching | [`attention_switching.py`](attention_switching.py) | Eager, SDPA, Flex, explicit Flash requirements, warning-emitting masked eager fallback without configuration mutation | Not a parity or throughput benchmark; the current GH200/aarch64 lock has no expected Flash kernels |
+| Attention switching | [`attention_switching.py`](attention_switching.py) | Eager, SDPA, Flex, explicit Flash requirements, warning-emitting masked eager fallback without configuration mutation | Not a parity or throughput benchmark; the locked validation environment may have no expected Flash kernels |
 | ANKH stack selection | [`ankh_embeddings.py`](ankh_embeddings.py) | Encoder final/all layers, decoder layer with explicit prompt, deterministic seq2seq generation | The offline example accepts a validated local artifact and loads both views, so budget device memory accordingly |
 | Diffusion and multimodal generation | [`generation.py`](generation.py) | Seeded DPLM, DPLM2, and conditioned ESM3 generation | One representative deterministic strategy per family |
 | E1 RAG | [`e1_rag.py`](e1_rag.py) | Local A3M retrieval, ordered duplicate records, shared persistence | No remote MSA search or network fallback |
 | Test-time training | [`ttt.py`](ttt.py) | Seeded update, atomic save, reset, local reload | Output must be absent and outside the source artifact |
-| Structure preparation | [`structure_preparation.py`](structure_preparation.py) | Typed ESMFold2 multimolecule/MSA/modification/bond input, explicit pocket/distogram rejection, seeded ESMFold/Boltz helpers | The MSA branch requires a full 48-block ESMFold2 variant; Fast variants reject MSA-derived inputs; tiny preparation and helper contracts are not full folding parity |
+| Structure preparation | [`structure_preparation.py`](structure_preparation.py) | Typed ESMFold2 multimolecule/MSA/modification/bond input, explicit pocket/distogram rejection, seeded ESMFold/Boltz helpers | The MSA branch requires a full 48-block ESMFold2 variant; Fast variants reject MSA-derived inputs; base300M/base600M confidence fields are unavailable; tiny preparation and helper contracts are not full folding parity |
 | Fine-tuning | [`fine_tuning.py`](fine_tuning.py) | ESM2 classification/regression, LoRA or full tuning, eager/SDPA/Flex selection, immutable inputs, atomic verified final artifact | LoRA is the demonstrated PEFT method; Flash training requires a separate explicit BF16 CUDA policy; other PEFT methods are not claimed by this example |
 | Binder design | [`binder_design_fastplms.py`](binder_design_fastplms.py) | Differentiable ESMFold2/ESM++ optimization and critic consensus | Research prioritization only; no experimental binding claim |
 

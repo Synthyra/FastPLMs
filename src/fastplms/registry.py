@@ -149,6 +149,9 @@ _MODEL_FIELDS = frozenset(
         "auto_map",
         "notes",
         "msa_conditioning",
+        "backbone",
+        "backbone_model",
+        "publication_status",
     }
 )
 _RUNTIME_ASSET_FIELDS = frozenset(
@@ -392,6 +395,9 @@ class ModelSpec:
     auto_map_items: tuple[tuple[str, str], ...] = ()
     notes: str = ""
     msa_conditioning: bool | None = None
+    backbone: CheckpointSource | None = None
+    backbone_model: str | None = None
+    publication_status: str = "published"
 
     @property
     def is_deep_reference(self) -> bool:
@@ -476,6 +482,8 @@ class ModelRegistry(Mapping[str, ModelSpec]):
         selected = self._models.values() if model_id is None else (self._models[model_id],)
         unresolved: list[str] = []
         for model in selected:
+            if model.publication_status == "pending":
+                unresolved.append(f"{model.id}.fast:unpublished")
             for label, checkpoint in (("fast", model.fast), ("official", model.official)):
                 for path in checkpoint.unresolved_files:
                     unresolved.append(f"{model.id}.{label}:{path}")
@@ -675,7 +683,12 @@ def _parse_checkpoint(table: Mapping[str, Any], prefix: str, context: str) -> Ch
     if _REPOSITORY_ID_RE.fullmatch(repo_id) is None:
         raise RegistryError(f"{context}.{prefix}_repo must be a Hugging Face repository ID.")
     revision = _require_str(table, f"{prefix}_revision", context)
-    _validate_revision(revision, f"{context}.{prefix}_revision")
+    if not (
+        prefix == "fast"
+        and table.get("publication_status") == "pending"
+        and revision == "unpublished"
+    ):
+        _validate_revision(revision, f"{context}.{prefix}_revision")
     encoded_files = _require_str_list(table, f"{prefix}_files", context)
     files = tuple(FileDigest.parse(value) for value in encoded_files)
     paths = [item.path for item in files]
@@ -1207,6 +1220,22 @@ def _parse_models(
             raise RegistryError(f"Duplicate FastPLMs repository ID: {fast.repo_id!r}")
         fast_repositories.add(fast.repo_id)
         family = families[family_id]
+        publication_status = value.get("publication_status", "published")
+        if publication_status not in {"pending", "published"}:
+            raise RegistryError(f"{context}.publication_status must be pending or published.")
+        if publication_status == "pending" and fast.revision != "unpublished":
+            raise RegistryError(f"{context}: pending publication must use unpublished revision.")
+        backbone = None
+        if "backbone" in value:
+            raw_backbone = value["backbone"]
+            if family_id != "esmfold2" or not isinstance(raw_backbone, dict):
+                raise RegistryError(f"{context}.backbone is only valid for ESMFold2.")
+            _reject_unknown_fields(raw_backbone, {"repo", "revision", "files"}, context)
+            backbone = _parse_checkpoint(
+                {f"official_{key}": item for key, item in raw_backbone.items()},
+                "official",
+                f"{context}.backbone",
+            )
         oracle_assets = _parse_oracle_assets(value, context)
         official_golden = _parse_official_golden(value, model_id, context)
         size_category = _require_str(value, "size_category", context)
@@ -1293,6 +1322,9 @@ def _parse_models(
             tokenizer_source_id=tokenizer_source_id,
             auto_map_items=tuple(auto_map),
             notes=notes,
+            backbone=backbone,
+            backbone_model=value.get("backbone_model"),
+            publication_status=publication_status,
             msa_conditioning=msa_conditioning,
         )
     return models
@@ -1331,7 +1363,31 @@ def _validate_registry(
             raise RegistryError(
                 f"Tokenizer source {source.id!r} has no official tokenizer assets."
             )
+    for spec in models.values():
+        if spec.backbone is not None and spec.backbone_model is None:
+            raise RegistryError(
+                f"{spec.id}: backbone_model is required when a backbone source is declared."
+            )
+        if spec.backbone_model is not None:
+            if (
+                spec.family.id != "esmfold2"
+                or not isinstance(spec.backbone_model, str)
+                or spec.backbone_model not in models
+            ):
+                raise RegistryError(f"{spec.id}: unknown ESMFold2 backbone model.")
+            if models[spec.backbone_model].family.id != "esm_plusplus" or spec.backbone is None:
+                raise RegistryError(
+                    f"{spec.id}: backbone must pin an ESM++ dependency and its source."
+                )
     expected_esmfold2 = {
+        "esmfold2_300": (
+            "Synthyra/ESMFold2-300",
+            "biohub/ESMFold2-Experimental-Fast-base300M-step1500k",
+        ),
+        "esmfold2_600": (
+            "Synthyra/ESMFold2-600",
+            "biohub/ESMFold2-Experimental-Fast-base600M-step1500k",
+        ),
         "esmfold2": ("Synthyra/ESMFold2", "biohub/ESMFold2"),
         "esmfold2_fast": ("Synthyra/ESMFold2-Fast", "biohub/ESMFold2-Fast"),
         "esmfold2_experimental_cutoff2025": (
@@ -1350,7 +1406,7 @@ def _validate_registry(
     }
     if actual_esmfold2 != expected_esmfold2:
         raise RegistryError(
-            "ESMFold2 support must contain exactly the four approved model IDs and "
+            "ESMFold2 support must contain exactly the six approved model IDs and "
             "official/Synthyra repositories."
         )
 

@@ -1,16 +1,24 @@
 # Testing and compliance
 
+Optional folding progress has CPU coverage in
+`tests/unit/test_esmfold_progress.py`, `test_esmfold2_progress.py`, and
+`test_boltz_progress.py`. These checks cover the quiet default and unchanged
+outputs with progress enabled. `test_esmfold2_decode.py` checks two-chain CIF
+export without confidence heads.
+
 FastPLMs treats official equivalence as a release property. Routine goldens
 reduce development time. A release requires live comparison with the pinned
 official implementation in its native reference container.
 
-GPU release and benchmark suites run in repository Docker images on the current
-exact NVIDIA GH200/aarch64 workstation. H100 and H200 are Hopper-class
-deployment examples, but they are not current release-confirmation evidence.
-Portable unit and documentation checks also run locally. Each Dockerized
-PyTorch run uses `--ipc=host` directly or receives `ipc: host` from Compose.
-Remote preflight records the GH200 GPU UUID and native OCI platform. It rejects
-platform or device drift between preflight and the loaded images.
+GPU release and benchmark suites run in repository Docker images on a
+compatible accelerator host. Docker execution with the required capabilities
+and numerical tests is valid on any compatible host. Portable unit and
+documentation checks also run locally. Each Dockerized PyTorch run uses
+`--ipc=host` directly or receives `ipc: host` from Compose. Remote preflight
+records the actual GPU UUID, native OCI platform, driver, and software stack,
+then rejects drift between preflight and the loaded images. Existing historical
+release measurements identify an NVIDIA GH200/aarch64 environment and remain
+tied to that environment.
 
 ## Run tiers
 
@@ -20,10 +28,10 @@ platform or device drift between preflight and the loaded images.
 | `check` | Candidate-only units, imports, local integration, release checks, and immutable checkpoint goldens; no artifacts, live references, or kernel downloads |
 | `gpu-golden-smoke` | Conditional exact-device comparison with checked-in sequence and structure goldens; no live reference build |
 | `compliance` | Every checkpoint whose manifest declares the release compliance tier against its live pinned official implementation |
-| `structure` | ESMFold, four ESMFold2 variants, provisional Boltz2 diagnostics, feature preparation, export, and seeded stochastic output |
+| `structure` | ESMFold, six ESMFold2 variants, provisional Boltz2 diagnostics, feature preparation, export, and seeded stochastic output |
 | `feature` | DPLM generation, DPLM2 generation, ESM3 multimodal generation, TTT, E1 sequence and RAG adapters, binder flow, pooling, and conversion |
 | `artifact` | Fresh offline remote-code loading and save-reload for every local artifact |
-| `benchmark` | Separate GH200/aarch64 latency, throughput, padding, memory, and exact-device regression suite |
+| `benchmark` | Separate latency, throughput, padding, memory, and exact-device regression suite with recorded hardware |
 | `python-matrix` | Isolated repository-source smokes with runtime dependencies on Python 3.11-3.14 |
 
 Routine `check` uses goldens and does not build an official reference image.
@@ -119,12 +127,12 @@ explicit `python-matrix`, `check`, `compliance`, and release suites.
 ## Cost-controlled schedule
 
 - Before merge: offline CPU contracts and static/source checks.
-- Conditional GH200/aarch64 smoke: when a relevant sequence or structure path
+- Conditional accelerator smoke: when a relevant sequence or structure path
   changes, run `gpu-golden-smoke` against the exact candidate head. Candidate
   output is compared with checked-in goldens; no reference image is built.
-- Extended workstation tier: sharded real-checkpoint goldens,
+- Extended accelerator tier: sharded real-checkpoint goldens,
   eager/SDPA/Flex execution, generation, PEFT, structure, artifacts, FP8, and
-  throughput by family. The GH200 job does not download, build, or execute
+  throughput by family. The historical GH200 job does not download, build, or execute
   FA2/FA3 kernels; FA2 retains separate prior focused evidence and FA3 is
   explicitly unavailable in the current linux/arm64 lock.
 - Release candidate: every live pinned reference, checkpoint/state/tokenizer
@@ -134,16 +142,16 @@ explicit `python-matrix`, `check`, `compliance`, and release suites.
 GPU phases use explicit timeouts and cancellation, group all AutoClasses for a
 checkpoint in one isolated process, build independent Buildx targets in
 parallel, and publish JUnit, duration, cache, environment, and immutable report
-telemetry. GH200/aarch64 benchmarks record cold compilation separately from
+telemetry. Benchmarks record cold compilation separately from
 warm throughput. A missing baseline is a release blocker, not a synthetic
-placeholder. Invoke all GH200 tiers directly with `python -m tools.remote`.
+placeholder. Invoke accelerator tiers directly with `python -m tools.remote`.
 There is no hosted CI or scheduled accelerator workflow.
 
 Each remote report contains a structured kernel-capability record. It names the
 measured eager, SDPA, and Flex backends. It identifies the pinned FA2 revision
 as prior-focused evidence only and FA3 as unavailable on linux/arm64. It also
 records that network downloads and source builds were disabled. A request for
-the GH200 runner to execute either Flash backend fails before source archiving.
+the locked runner to execute either Flash backend fails before source archiving.
 
 ## Frozen ESMC release evidence
 
@@ -152,12 +160,11 @@ of three checkpoints, five BF16 attention backends, and two immutable sequence
 panels. A release set therefore contains exactly 30 records under one explicit
 directory: 18 measured eager, SDPA, and Flex records, plus 12 structured
 FlashAttention 2 and 3 locked-platform unavailable records. All 30 records must
-come from the current exact GH200/aarch64
-accelerator, repository container images, dependency lock, installed inventory,
-and official source attestations. H100 and H200 remain supported Hopper-class
-examples, but their measurements are not current release evidence and are not
-combined with GH200 results. Candidate and official-reference measurements must
-carry the same preflight hardware identity.
+come from one explicitly recorded accelerator target, the repository container
+images, dependency lock, installed inventory, and official source attestations.
+Candidate and official-reference measurements must carry the same preflight
+hardware identity. The existing GH200/aarch64 records are historical evidence
+for that target and are not combined with measurements from another device.
 
 Default documentation generation does not inspect the environment or discover
 reports. It renders ESMC measurements as pending. On the frozen release head,
@@ -382,7 +389,7 @@ exact checkpoint, backend, dtype, hardware, and locked sequence panel. The
 FlashAttention 2 and 3 records contain structured current-platform
 unavailability instead. Both remain supported, non-experimental interfaces;
 the current locked GH200/aarch64 image raises before dispatch. Model-card cells
-remain pending until frozen-head, exact-device GH200/aarch64 evidence exists.
+remain pending until frozen-head, exact-device evidence exists.
 
 The pinned ESM2-3B SDPA BF16 path has a checkpoint-specific calibration:
 relative L2 target/hard limit `0.06`/`0.07`, relative Q99.9 `0.15`/`0.18`,
@@ -392,24 +399,31 @@ global. Exact state identity and perfect confident-token agreement still gate
 this checkpoint.
 
 ESMFold2 FP8 is experimental and is not a release numerical-parity gate. Its
-smoke coverage on the locked, exact-device GH200/aarch64 stack verifies explicit opt-in, finite
-outputs, exactly 80 converted ESMC attention output projections, transient
-runtime state, and strict failure when unavailable. `auto` always resolves to
-BF16 so model behavior does not change with hardware or optional dependencies.
+smoke coverage verifies explicit opt-in, finite outputs, exactly 80 converted
+ESMC attention output projections, transient runtime state, and strict failure
+when unavailable. `auto` always resolves to BF16 so model behavior does not
+change with hardware or optional dependencies.
 
 ## ESMFold2 projection and structure
 
 Projection from identical ordered ESMC states is exact in FP32. The BF16
 relative L2 target is `5e-4`, with a hard limit of `1e-3`. Experimental FP8
-smoke runs once on each of the four variants and performs three fresh
+smoke runs on each ESMC-6B variant and performs three fresh
 BF16-to-FP8 reload cycles only on the standard variant.
 
 Folding tests hash prepared features and sampled diffusion noise. They require
-exact discrete features and masks, valid geometry, and no NaNs. Coordinate and
-confidence thresholds are documented in [ESMFold2](esmfold2.md) and encoded once
-in the strict metric module. The pinned five-protein, three-seed, four-variant
-panel found exact official-versus-candidate BF16 parity in all 60 cases. A
-prior FP8 diagnostic passed its historical structure limits in 48 of 60 cases;
+exact discrete features and masks, valid geometry, and no NaNs. For variants
+with an enabled confidence head, coordinate and confidence thresholds are
+documented in [ESMFold2](esmfold2.md) and encoded once in the strict metric
+module. Base300M and base600M have no confidence outputs, so those confidence
+metrics do not apply. The pinned five-protein, three-seed, four-variant
+panel found exact official-versus-candidate BF16 parity in all 60 cases. The
+  base300M has a passed single-protein comparison, documented in
+  [ESMFold2-300 validation](validation/esmfold2_small.md). This is not the full
+  structure benchmark; base600M has no inference validation. The published
+  mirrors are pinned to revisions `a38a62ae930d157484b331c2bf4241684573adba`
+  (300M) and `71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M).
+A prior FP8 diagnostic passed its historical structure limits in 48 of 60 cases;
 that result is retained as evidence, not as a release gate or equivalence claim.
 
 ## Goldens

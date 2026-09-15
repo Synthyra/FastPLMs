@@ -1,13 +1,15 @@
 # ESMFold2
 
-FastPLMs supports exactly four Biohub ESMFold2 variants:
+FastPLMs supports six Biohub ESMFold2 variants:
 
-| Official checkpoint | FastPLMs mirror | Folding blocks | MSA conditioning |
-| --- | --- | ---: | --- |
-| `biohub/ESMFold2` | `Synthyra/ESMFold2` | 48 | Optional; single-sequence and MSA-conditioned inference are supported |
-| `biohub/ESMFold2-Fast` | `Synthyra/ESMFold2-Fast` | 24 | None; inference-optimized single-sequence conditioning |
-| `biohub/ESMFold2-Experimental-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Cutoff2025` | 48 | Optional; experimental full-checkpoint contract |
-| `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; experimental Fast single-sequence-conditioning contract |
+| Official checkpoint | FastPLMs mirror | Folding blocks | MSA conditioning | Confidence head | Inference evidence |
+| --- | --- | ---: | --- | --- | --- |
+| `biohub/ESMFold2` | `Synthyra/ESMFold2` | 48 | Optional; single-sequence and MSA-conditioned inference are supported | Enabled | Established family contract |
+| `biohub/ESMFold2-Fast` | `Synthyra/ESMFold2-Fast` | 24 | None; inference-optimized single-sequence conditioning | Enabled | Established family contract |
+| `biohub/ESMFold2-Experimental-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Cutoff2025` | 48 | Optional; experimental full-checkpoint contract | Enabled | Experimental family contract |
+| `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; experimental Fast single-sequence-conditioning contract | Enabled | Experimental family contract |
+| `biohub/ESMFold2-Experimental-Fast-base300M-step1500k` | `Synthyra/ESMFold2-300` | 24 | None; single-sequence conditioning | Disabled; backbone `960 x 30` | Published; single-protein comparison passed; full benchmark pending |
+| `biohub/ESMFold2-Experimental-Fast-base600M-step1500k` | `Synthyra/ESMFold2-600` | 24 | None; single-sequence conditioning | Disabled; backbone `1152 x 36` | Published; not inference validated |
 
 The Fast variants are optimized for single-sequence conditioning and are not
 MSA-conditioned. They accept the checkpoint typed multichain and multimolecule
@@ -19,18 +21,39 @@ blocks for Fast versus 48 for full ESMFold2 and describes Fast as operating
 without MSA conditioning for single-sequence inference
 ([Biohub preprint](https://biohub.ai/papers/esm_protein.pdf)).
 
-Other snapshots are not advertised in code, artifacts, tests, or documentation.
-Local artifact building does not modify the Hub. Files-only publication is a
-separate, add-only workflow described in [Hub artifacts](artifacts.md).
+The base300M and base600M checkpoints are experimental architecture variants.
+Their pinned configs declare 24 folding blocks, no MSA conditioning, and
+`confidence_head.enabled=false`. They therefore do not produce pLDDT, pTM,
+iPTM, or PAE outputs. The 300M single-protein comparison passed, as reported
+in [ESMFold2-300 validation](validation/esmfold2_small.md). This is not the
+full structure benchmark, which remains pending. The mirrors are published at
+revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
+inference validation result. Local artifact building does not modify the
+Hub. Files-only publication is a separate, add-only workflow described in
+[Hub artifacts](artifacts.md).
+
+## Progress display and confidence-free export
+
+`fold`, `fold_protein`, `infer_protein`, and direct `forward` calls accept
+`verbose=False` by default. Set `verbose=True` to show progress for input
+preparation, backbone features, recycling, diffusion steps, confidence
+calculation when enabled, and decoding. Progress display does not change the
+sampling settings or random-number sequence.
+
+For a two-protein example that saves `complex.cif`, start with a model card's
+Quick start. The 300M and 600M results keep confidence values unavailable;
+their CIF files use `?` for unknown confidence-derived B factors.
 
 ## Dependencies and platform requirements
 
 ESMFold2 requires the structure dependencies, Python 3.11-3.14, PyTorch
 2.13, Transformers 5.13, and a CUDA device for its published execution
-contract. The current validated release target is the exact containerized Linux
-aarch64 environment on the NVIDIA GH200 workstation. CPU-only, x86-64,
-Windows, macOS, H100, and H200 structure runs do not substitute for that release
-evidence:
+contract. Docker execution with the required capabilities and numerical tests
+is valid on any compatible host. Record the actual accelerator, architecture,
+driver, and software versions in each validation report. The historical release
+measurements were collected in a containerized Linux aarch64 environment on an
+NVIDIA GH200 workstation; those measurements remain tied to that environment.
 
 ```bash
 uv pip install \
@@ -75,13 +98,10 @@ not treated as backend availability.
 
 This backend is available only on Linux with an NVIDIA GPU, a compatible
 CUDA 13 driver, and CPython 3.11-3.14. NVIDIA publishes both x86-64 and ARM64
-manylinux wheels for those interpreters, so the Linux aarch64 GH200 validation
-workstation can resolve this exact package set. H100 and H200 remain supported
-Hopper-class execution devices, but only the exact GH200/aarch64 environment is
-the current release evidence target. Results must identify the exact device and
-architecture, and performance baselines from different accelerator models are
-not interchangeable. Windows, macOS, CPU-only hosts, and the FastPLMs CUDA 12
-legacy reference images are not supported execution paths.
+manylinux wheels for those interpreters. Results must identify the exact device
+and architecture, and performance baselines from different accelerator models
+are not interchangeable. Windows, macOS, CPU-only hosts, and the FastPLMs
+CUDA 12 legacy reference images are not supported execution paths.
 The cuEquivariance Python frontend is Apache-2.0, while the CUDA ops wheels are
 distributed under the NVIDIA Software License Agreement and are described by
 NVIDIA as beta software. Installing the cuEquivariance dependencies means
@@ -110,16 +130,18 @@ The folding model and its ESMC backbone use the same explicitly resolved
 attention implementation. Unsupported names raise. The ESMC checkpoint is
 loaded directly on the requested CUDA device when a CUDA device is used. For a
 declared ESMC-6B Hub identifier, FastPLMs forwards the immutable revision from
-`models.toml` to both configuration and weight loading. Other remote ESMC
-checkpoints are rejected because they do not satisfy the learned 81-state,
-2560-width projection contract. A local checkpoint directory remains a
-supported explicit source and has no Hub revision.
+`models.toml` to both configuration and weight loading. Remote ESMC checkpoints
+are accepted only when they satisfy the declared backbone projection contract:
+ESMC-6B uses 81 states at width 2560, while base300M and base600M use the
+declared standard ESM++ small and large layouts. A local checkpoint directory
+remains a supported explicit source and has no Hub revision.
 
 The folding checkpoint itself loads with FP32 parameters. Learned projection,
 folding trunk, and diffusion computation run under CUDA BF16 autocast. ESMC has
 an independent precision policy: its canonical BF16 weights may remain BF16 or
 be used to reconstruct the transient FP8 inference path without changing the
-folding checkpoint's FP32 storage.
+folding checkpoint's FP32 storage. Only the ESMC-6B variants can reconstruct
+the transient FP8 path; base300M and base600M remain BF16-only for ESMC.
 
 ## Hash-pinned CCD asset
 
@@ -187,6 +209,11 @@ mode is supported in 1.0. No known target structure is required. Prepared
 feature tensors include `ref_pos`, but this is component reference geometry
 created during featurization, not the target coordinates. Atomic coordinates
 and confidence fields are model outputs.
+The base300M and base600M experimental Fast variants have
+`confidence_head.enabled=false` in their pinned configs. Folding with either
+variant returns structure outputs without pLDDT, pTM, iPTM, or PAE fields, so
+the confidence-printing examples above apply only to variants with an enabled
+confidence head.
 The offline [`structure_preparation.py`](../examples/structure_preparation.py)
 example constructs the supported MSA, protein-complex, RNA, DNA, ligand,
 modification, and covalent-bond inputs and executes the pocket and distogram
@@ -195,13 +222,30 @@ use the other typed modalities only when every protein input has `msa=None`.
 
 ## Learned sequence representation
 
-Biohub ESMC-6B provides the embedding state followed by 80 transformer-layer
-states. FastPLMs validates that exact 81-state ordering and width before applying
-the folding checkpoint's learned projection:
+The established ESMFold2 variants use Biohub ESMC-6B: one embedding state and
+80 transformer-layer states. The experimental base300M and base600M variants
+use the corresponding standard ESM++ small and large backbones, with hidden
+state stacks `(b, l, 31, 960)` and `(b, l, 37, 1152)`. FastPLMs validates the
+declared state count and width before applying each folding checkpoint's learned
+projection. The native step-1500000 identifiers remain source records; the
+runtime reuses the pinned standard ESM++ backbone mapping.
 
 ```text
 H: (b, l, 81, 2560)
 ```
+
+For the experimental variants, the corresponding inputs are:
+
+```text
+base300M H: (b, l, 31, 960)
+base600M H: (b, l, 37, 1152)
+```
+
+CPU tensor checks found exact BF16 equality after the native-to-standard layout
+conversion for all 308 base300M tensors and all 368 base600M tensors. The native
+files store BF16-rounded values promoted to FP32, while standard ESM++ retains
+its original FP32 values. This establishes BF16 tensor equality for the checked
+states, not FP32 identity or folding inference equivalence.
 
 For each state, `base_z_linear` applies layer normalization and a bias-free
 linear map to width 256. The softmax of `base_z_combine` gives 81 scalar weights.
@@ -219,9 +263,9 @@ This is the learned sequence summary returned before `base_z_mlp` expands it
 into pair features. The refactor retains the checkpoint names
 `base_z_linear`, `base_z_combine`, and `base_z_mlp`.
 
-Projection compliance compares identical 81-state inputs. FP32 output must be
-exact. The BF16 engineering target for relative L2 error is `5e-4`, with a hard
-limit of `1e-3`.
+Projection compliance compares identical ordered hidden-state inputs. FP32
+output must be exact. The BF16 engineering target for relative L2 error is
+`5e-4`, with a hard limit of `1e-3`.
 
 ## Downstream prediction
 
@@ -271,8 +315,10 @@ not the embedding utility.
 
 ## ESMC precision policy
 
-The accepted precision values are `auto`, `bf16`, `fp32`, and `fp8`. The
-manifest marks `fp8` as experimental:
+The established ESMC-6B variants accept `auto`, `bf16`, `fp32`, and `fp8`; the
+manifest marks `fp8` as experimental. The base300M and base600M variants accept
+`auto`, `bf16`, and `fp32`, and reject `fp8` because FP8 support is limited to
+ESMC-6B:
 
 ```python
 model.reload_esmc(precision="auto", device="cuda")
@@ -294,6 +340,9 @@ Request FP8 explicitly:
 model.reload_esmc(precision="fp8", device="cuda")
 assert model.esmc_precision_status.resolved == "fp8"
 ```
+
+This request applies only to variants using the ESMC-6B backbone. The
+base300M and base600M variants fail closed for `precision="fp8"`.
 
 Converting every ESMC linear compounds quantization error across 80 layers.
 The experimental path instead converts exactly each layer's attention output
@@ -333,8 +382,8 @@ A non-release H100 diagnostic over multiple real proteins and seeds found exact
 official-versus-candidate BF16 parity but model- and sequence-dependent FP8
 folding deviations. FP8 passed the historical hard structure limits in 48 of
 60 cases. The panel and its fixtures are not part of the release suite; current
-coverage is one explicit FP8 smoke per variant plus three reload cycles on the
-standard variant. This evidence motivates the BF16 `auto` policy and precludes
+coverage is one explicit FP8 smoke per ESMC-6B variant plus three reload cycles
+on the standard variant. This evidence motivates the BF16 `auto` policy and precludes
 an FP8 numerical-equivalence claim.
 
 ## Gradient-enabled paths

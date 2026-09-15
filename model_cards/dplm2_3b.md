@@ -256,7 +256,7 @@ tokenizer, and inference parity remain required.
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Validation and provenance
+## Validation and sources
 
 FastPLMs pins the checkpoint, upstream source revisions, state transformation,
 and required files in `models.toml`. Built artifacts record exact source

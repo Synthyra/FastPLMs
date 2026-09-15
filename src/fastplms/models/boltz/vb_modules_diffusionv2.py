@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import nn
 from torch.nn import Module
+from tqdm.auto import tqdm
 
 from . import vb_const as const
 from . import vb_layers_initialize as init
@@ -294,6 +295,7 @@ class AtomDiffusion(Module):
         multiplicity=1,
         max_parallel_samples=None,
         steering_args=None,
+        verbose: bool = False,
         **network_condition_kwargs,
     ):
         if steering_args is not None and (
@@ -339,7 +341,16 @@ class AtomDiffusion(Module):
         atom_coords_denoised = None
 
         # gradually denoise
-        for step_idx, (sigma_tm, sigma_t, gamma) in enumerate(sigmas_and_gammas):
+        for step_idx, (sigma_tm, sigma_t, gamma) in enumerate(
+            tqdm(
+                sigmas_and_gammas,
+                desc="Boltz2: Diffusion sampling",
+                unit="step",
+                disable=not verbose,
+                dynamic_ncols=True,
+                leave=False,
+            )
+        ):
             random_R, random_tr = compute_random_augmentation(
                 multiplicity, device=atom_coords.device, dtype=atom_coords.dtype
             )

@@ -1,0 +1,76 @@
+{
+  "candidate": "artifacts/esmfold2-small/candidate",
+  "exact_tensors": {
+    "feature__asym_id": "equal",
+    "feature__atom_attention_mask": "equal",
+    "feature__atom_to_token": "equal",
+    "feature__deletion_mean": "equal",
+    "feature__deletion_value": "equal",
+    "feature__distogram_atom_idx": "equal",
+    "feature__entity_id": "equal",
+    "feature__has_deletion": "equal",
+    "feature__input_ids": "equal",
+    "feature__mol_type": "equal",
+    "feature__msa": "equal",
+    "feature__msa_attention_mask": "equal",
+    "feature__ref_atom_name_chars": "equal",
+    "feature__ref_charge": "equal",
+    "feature__ref_element": "equal",
+    "feature__ref_pos": "equal",
+    "feature__ref_space_uid": "equal",
+    "feature__res_type": "equal",
+    "feature__residue_index": "equal",
+    "feature__sym_id": "equal",
+    "feature__token_attention_mask": "equal",
+    "feature__token_bonds": "equal",
+    "feature__token_index": "equal",
+    "noise__initial_standard_normal": "equal"
+  },
+  "failures": [],
+  "geometry": {
+    "ca_rmsd": 0.07748135179281235,
+    "lddt_ca": 1.0
+  },
+  "numeric": {
+    "hidden__lm": {
+      "pooled_cosine_min": 1.0000007152557373,
+      "relative_l2": 7.166183877416188e-07,
+      "relative_q999": 6.865271870992729e-07,
+      "residue_cosine_p01": 1.0000004768371582
+    },
+    "output__atom_pad_mask": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "relative_l2": 0.0
+    },
+    "output__distogram_logits": {
+      "max_abs": 1.0,
+      "mean_abs": 0.07992647588253021,
+      "relative_l2": 0.009732905775308609
+    },
+    "output__entity_id": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "relative_l2": 0.0
+    },
+    "output__residue_index": {
+      "max_abs": 0.0,
+      "mean_abs": 0.0,
+      "relative_l2": 0.0
+    },
+    "output__sample_atom_coords": {
+      "max_abs": 22.109264373779297,
+      "mean_abs": 6.068988800048828,
+      "relative_l2": 1.164304494857788
+    },
+    "projection__base_z_mlp_input": {
+      "pooled_cosine_min": 0.9999999403953552,
+      "relative_l2": 0.001845383201725781,
+      "relative_q999": 0.0028090658597648144,
+      "residue_cosine_p01": 0.9999967217445374
+    }
+  },
+  "reference": "artifacts/esmfold2-small/reference",
+  "schema_version": 1,
+  "status": "passed"
+}

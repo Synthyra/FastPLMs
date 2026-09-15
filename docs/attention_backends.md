@@ -159,18 +159,20 @@ catastrophic biological disagreement are hard failures.
 | ESMC backend | Status | Relative L2 | Q99.9 | Residue cosine | Pooled cosine | Top-1 | Jensen-Shannon |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `sdpa` | Recommended fidelity path | Exact-head report required | Exact-head report required | Exact-head report required | Exact-head report required | Exact-head report required | Exact-head report required |
-| `eager` | Supported fallback semantics | Pending measured frozen-head GH200/aarch64 set | Pending | Pending | Pending | Pending | Pending |
+| `eager` | Supported fallback semantics | Pending measured frozen-head set | Pending | Pending | Pending | Pending | Pending |
 | `flash_attention_2` | Supported; unavailable on current lock | Structured unavailable record required; prior execution evidence is historical and separate | Not measured | Not measured | Not measured | Not measured | Not measured |
-| `flex_attention` | Supported, numerically divergent | Pending measured frozen-head GH200/aarch64 set | Pending | Pending | Pending | Pending | Pending |
+| `flex_attention` | Supported, numerically divergent | Pending measured frozen-head set | Pending | Pending | Pending | Pending | Pending |
 | `flash_attention_3` | Supported, non-experimental; unavailable on current lock | Structured unavailable record required | Not measured | Not measured | Not measured | Not measured | Not measured |
 
 The release candidate must replace eager, SDPA, and Flex pending cells with
 distributions measured for each checkpoint, dtype, hardware, and locked
 sequence panel. FlashAttention 2 and 3 instead require structured unavailable
 records with no numerical fields. A threshold is not a measurement, and a
-result from another head or revision is not carried forward. The current release-confirmation target is the exact
-GH200/aarch64 workstation and repository container build. H100 and H200 remain
-Hopper-class deployment examples, but they are not current release evidence.
+result from another head or revision is not carried forward. Docker execution
+with the required capabilities and numerical tests is valid on any compatible
+host. Reports must identify the actual accelerator, architecture, and software
+stack. Historical measurements from the GH200/aarch64 workstation remain tied
+to that environment.
 
 Diagnostic jobs write immutable JSON reports under
 `artifacts/diagnostics/esmc/`. Published accuracy bands produce warnings. The
@@ -355,9 +357,9 @@ exact, recommended path; eager validates fallback and mask semantics; Flex is
 the measured supported diagnostic backend. A published Flex-band miss warns
 and records all six metric distributions, while dispatch, finiteness,
 mask/shape integrity, and the separate corruption limits remain hard failures.
-FlashAttention 2 and 3 remain supported, non-experimental interfaces, but the
-current locked GH200/aarch64 image records them as unavailable and fails closed
-before dispatch. Historical FlashAttention 2 execution evidence remains
+FlashAttention 2 and 3 remain supported, non-experimental interfaces. The
+historical locked GH200/aarch64 image records them as unavailable and fails
+closed before dispatch. Historical FlashAttention 2 execution evidence remains
 separate from current release acceptance.
 
 Performance is measured separately from correctness. See

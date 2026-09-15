@@ -22,8 +22,8 @@ from tests.parity.support.reference_adapters.biohub_source import (
 from tests.structure.support import esmfold2_bundle
 from tests.structure.support.esmfold2_bundle import load_bundle, load_request
 from tests.structure.support.hardware import (
-    assert_same_hopper_sm90_device,
-    hopper_sm90_fingerprint,
+    assert_same_device,
+    device_fingerprint,
 )
 from tools.remote.biohub_reference_environment import (
     validate_biohub_reference_environment_evidence,
@@ -121,7 +121,7 @@ def _assert_bundle_identity(
     assert status["resolved"] == precision
     environment = metadata["environment"]
     assert isinstance(environment, Mapping)
-    hopper_sm90_fingerprint(environment)
+    device_fingerprint(environment)
     if producer == "candidate":
         assert str(environment["torch"]).split("+", maxsplit=1)[0] == "2.13.0"
         assert environment["transformers"] == "5.13.0"
@@ -512,7 +512,11 @@ def test_esmfold2_semantic_config_ignores_only_packaging_and_runtime_policy() ->
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "spec",
-    [_spec_parameter(spec) for spec in get_model_registry().by_family("esmfold2")],
+    [
+        _spec_parameter(spec)
+        for spec in get_model_registry().by_family("esmfold2")
+        if spec.backbone_model is None
+    ],
 )
 def test_esmfold2_isolated_bf16_folding_compliance(
     spec: ModelSpec,
@@ -543,7 +547,7 @@ def test_esmfold2_isolated_bf16_folding_compliance(
     candidate_environment = bf16_metadata["environment"]
     assert isinstance(reference_environment, Mapping)
     assert isinstance(candidate_environment, Mapping)
-    assert_same_hopper_sm90_device(candidate_environment, reference_environment)
+    assert_same_device(candidate_environment, reference_environment)
     assert bf16_metadata["semantic_config"] == reference_metadata["semantic_config"]
     assert bf16_metadata["state"] == reference_metadata["state"]
     _assert_exact_inputs(

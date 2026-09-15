@@ -33,7 +33,9 @@ def test_infer_preserves_official_multimer_contract() -> None:
         "num_recycles",
         "residue_index_offset",
         "chain_linker",
+        "verbose",
     ]
+    assert inspect.signature(FastEsmForProteinFolding.infer).parameters["verbose"].default is False
     model = FastEsmForProteinFolding.__new__(FastEsmForProteinFolding)
     torch.nn.Module.__init__(model)
     model.register_parameter(

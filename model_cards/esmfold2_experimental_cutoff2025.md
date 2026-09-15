@@ -10,6 +10,47 @@ tags:
 
 # ESMFold2-Experimental-Cutoff2025
 
+## Quick start
+
+Load the published model, fold two protein chains together, and write an mmCIF
+file. The example omits `num_sampling_steps` and uses the model default.
+
+```python
+from pathlib import Path
+
+import torch
+from transformers import AutoModel
+
+model = AutoModel.from_pretrained(
+    "Synthyra/ESMFold2-Experimental-Cutoff2025",
+    trust_remote_code=True,
+    dtype=torch.float32,
+    device_map="cuda",
+    esmc_precision="bf16",
+    attn_implementation="sdpa",
+).eval()
+model.set_chunk_size(32)
+
+types = model.input_types
+complex_input = types.StructurePredictionInput(
+    sequences=[
+        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
+        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
+    ]
+)
+with torch.inference_mode():
+    result = model.fold(
+        complex_input,
+        num_loops=3,
+        num_diffusion_samples=1,
+        seed=17,
+        verbose=True,
+    )
+Path("complex.cif").write_text(model.result_to_cif(result), encoding="utf-8")
+```
+
+Set `verbose=False` to silence the folding progress display. This variant has an enabled confidence head and returns confidence fields.
+
 ## Model overview
 
 `Synthyra/ESMFold2-Experimental-Cutoff2025` packages the
@@ -42,29 +83,12 @@ This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
 
 The artifact requirements include the structure dependencies.
 
-The release contract requires a CUDA device. The current validated target is
-the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, CPU-only, Windows, and
-macOS structure runs are not release evidence.
+Validation runs in Docker on any compatible CUDA device. Record the container,
+hardware, precision, and inputs; no GPU product or workstation is required.
 
 The Hub quick start needs network access for the first download. For an
 air-gapped run, build the manifest-pinned local artifact first and use the
 offline example.
-
-## Quick start
-
-```python
-from transformers import AutoModel
-
-model_id = "Synthyra/ESMFold2-Experimental-Cutoff2025"
-model = AutoModel.from_pretrained(
-    model_id,
-    trust_remote_code=True,
-    attn_implementation="sdpa",
-).eval()
-```
-
-For offline validation, replace `model_id` with the manifest-built
-`dist/hub/ESMFold2-Experimental-Cutoff2025` path. Pass `local_files_only=True`.
 
 ## Attention backends
 
@@ -165,28 +189,6 @@ result = model.fold_protein(
 pdb_text = model.result_to_pdb(result)
 cif_text = model.result_to_cif(result)
 print(result.ptm, result.plddt.mean().item())
-```
-
-No target structure is required. For complexes, construct the input from the
-types exposed by the loaded artifact:
-
-```python
-types = model.input_types
-complex_input = types.StructurePredictionInput(
-    sequences=[
-        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
-        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
-        types.DNAInput(id="C", sequence="ATGC"),
-        types.LigandInput(id="L", smiles="O"),
-    ]
-)
-complex_result = model.fold(
-    complex_input,
-    num_loops=1,
-    num_sampling_steps=200,
-    seed=7,
-)
-print(complex_result.ptm, complex_result.plddt.mean().item())
 ```
 
 The typed interface also supports RNA, protein MSAs, modifications, and covalent
@@ -302,7 +304,7 @@ signals, not experimental evidence of affinity or specificity. See the
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Validation and provenance
+## Validation and sources
 
 FastPLMs pins the checkpoint, upstream source revisions, state transformation,
 and required files in `models.toml`. Built artifacts record exact source

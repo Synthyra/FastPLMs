@@ -270,7 +270,7 @@ checkpoints to its model manifest.
 ### Experimental FP8 inference
 
 The default uses checkpoint BF16 behavior. FP8 is an explicit experimental
-inference option for every ESM++ scale:
+inference option for ESMC-6B:
 
 ```python
 import torch
@@ -293,6 +293,8 @@ dimension to a multiple of 16. Transformer Engine converts supported linear
 layers. The call fails if the dependency, compatible CUDA hardware, or complete
 conversion set is unavailable. It does not silently use BF16. FP8 does not
 claim numerical parity.
+
+
 
 | Backend | Support | Measurement status |
 | --- | --- | --- |
@@ -324,7 +326,7 @@ and
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Validation and provenance
+## Validation and sources
 
 FastPLMs pins the checkpoint, upstream source revisions, state transformation,
 and required files in `models.toml`. Built artifacts record exact source

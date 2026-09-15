@@ -282,7 +282,7 @@ source shard directly and writes a new canonical safetensors index.
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Validation and provenance
+## Validation and sources
 
 FastPLMs pins the checkpoint, upstream source revisions, state transformation,
 and required files in `models.toml`. Built artifacts record exact source

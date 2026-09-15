@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import re
 import sys
 import tempfile
 from collections.abc import Iterable, Mapping
@@ -44,6 +45,7 @@ _BUILD_ONLY_FILES = {
     "runtime-attestation.json",
     "source-record.json",
 }
+_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def compile_model_files(spec: ModelSpec, source_root: Path) -> dict[str, bytes]:
@@ -126,6 +128,23 @@ def _operation(path_in_repo: str, source: bytes | Path) -> CommitOperationAdd:
     return CommitOperationAdd(path_in_repo=path_in_repo, path_or_fileobj=payload)
 
 
+def _remote_parent_commit(api: HfApi, repo_id: str, revision: str) -> str:
+    """Return the current remote commit SHA or fail closed before upload."""
+
+    try:
+        info = api.model_info(repo_id=repo_id, revision=revision)
+    except Exception as error:
+        raise ArtifactError(
+            f"Unable to resolve the remote parent commit for {repo_id}@{revision}."
+        ) from error
+    parent_commit = getattr(info, "sha", None)
+    if not isinstance(parent_commit, str) or _COMMIT_SHA_RE.fullmatch(parent_commit) is None:
+        raise ArtifactError(
+            f"Remote parent commit for {repo_id}@{revision} is missing or invalid."
+        )
+    return parent_commit
+
+
 def publish_models(
     specs: Iterable[ModelSpec],
     *,
@@ -153,15 +172,18 @@ def publish_models(
         if dry_run:
             continue
 
+        operations = [
+            _operation(relative_name, source)
+            for relative_name, source in files.items()
+        ]
+        parent_commit = _remote_parent_commit(api, spec.fast.repo_id, revision)
         commit = api.create_commit(
             repo_id=spec.fast.repo_id,
             repo_type="model",
             revision=revision,
-            operations=[
-                _operation(relative_name, source)
-                for relative_name, source in files.items()
-            ],
+            operations=operations,
             commit_message=commit_message,
+            parent_commit=parent_commit,
         )
         commits.append(commit)
     return tuple(commits)

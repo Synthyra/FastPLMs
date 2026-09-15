@@ -267,32 +267,7 @@ the SAEs with unmasked sequences. This interface supports hidden-state SAEs
 only, not MLP-output SAEs. FastPLMs does not copy SAE weights or add SAE
 checkpoints to its model manifest.
 
-### Experimental FP8 inference
-
-The default uses checkpoint BF16 behavior. FP8 is an explicit experimental
-inference option for every ESM++ scale:
-
-```python
-import torch
-from transformers import AutoModel
-
-fp8_model = AutoModel.from_pretrained(
-    "Synthyra/ESMplusplus_large",
-    trust_remote_code=True,
-    dtype=torch.bfloat16,
-).cuda().eval()
-fp8_model.enable_fp8()
-print(fp8_model.esmc_precision_status)
-
-with torch.inference_mode():
-    fp8_output = fp8_model(**{name: value.cuda() for name, value in batch.items()})
-```
-
-FP8 forward calls require `torch.inference_mode()`. The model pads the sequence
-dimension to a multiple of 16. Transformer Engine converts supported linear
-layers. The call fails if the dependency, compatible CUDA hardware, or complete
-conversion set is unavailable. It does not silently use BF16. FP8 does not
-claim numerical parity.
+FP8 is restricted to ESMC-6B; smaller ESM++ models use BF16.
 
 | Backend | Support | Measurement status |
 | --- | --- | --- |
@@ -315,7 +290,7 @@ and
 - Transformers classes: `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification`
 - Checkpoint weights: `AutoConfig` = `FastPLMs extension`, `AutoModel` = `pretrained`, `AutoModelForMaskedLM` = `pretrained`, `AutoModelForSequenceClassification` = `base weights + untrained task head`, `AutoModelForTokenClassification` = `base weights + untrained task head`
 - Attention backends: `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3`
-- Precision: `default`, `fp8` (experimental)
+- Precision: `default`
 - BF16 execution: `static_parameters`
 - Generation contract: `not_applicable`
 - Dependencies: `core`
@@ -324,7 +299,7 @@ and
 - Redistributable: `true`
 - Complete weight publication required: `false`
 
-## Validation and provenance
+## Validation and sources
 
 FastPLMs pins the checkpoint, upstream source revisions, state transformation,
 and required files in `models.toml`. Built artifacts record exact source

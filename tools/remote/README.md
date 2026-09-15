@@ -1,4 +1,4 @@
-# Remote Hopper/SM90 runner
+# Remote accelerator runner
 
 The runner archives Git-tracked files and tracked files from initialized, pinned
 upstream submodules. It copies them to a unique remote directory, builds the
@@ -40,16 +40,15 @@ official reference. Artifact construction is in `artifact`, `nightly`, and
 `release`. The repository does not use GitHub Actions. Run CPU, source,
 reference, and GPU validation on the workstation before merge or release.
 
-`gpu-golden-smoke` is the conditional Hopper/SM90 tier. The current release run
-uses the exact containerized Linux aarch64 environment on the configured GH200.
-It builds only the structure candidate superset and compares sequence and
-structure candidates with checked-in, hash-validated goldens. H100 and H200
-are supported Hopper-class devices, but their results do not replace GH200
-release evidence. The suite does not build or import an official reference.
+`gpu-golden-smoke` is the conditional accelerator tier. It runs Docker images
+with the capabilities required by the selected models, on the host platform
+reported during preflight. It builds only the structure candidate superset and
+compares sequence and structure candidates with checked-in, hash-validated
+goldens. The suite does not build or import an official reference.
 Large cases remain in `nightly`.
 
 `nightly` builds candidate, structure, FP8, and artifact images together. It
-runs the complete checkpoint golden panels, the eager/SDPA/Flex GH200 matrix,
+runs the complete checkpoint golden panels, the eager/SDPA/Flex matrix,
 generation, TTT, PEFT, binder and structure flows, offline artifact loading,
 FP8 reloads, and a descriptive family throughput report. It does not build live
 official references or download or build Flash kernels. FA2 remains separate
@@ -58,18 +57,17 @@ prior focused evidence. FA3 is unavailable in the current arm64 lock.
 The `compliance` suite is the live-reference release-candidate tier. Its build,
 reference, and test phases have explicit cancellation timeouts. It compares each
 release-gated sequence checkpoint with its pinned official implementation. It
-runs the full ESMFold and four-variant ESMFold2 folding gates, including ESMFold2
+runs the full ESMFold and six-variant ESMFold2 folding gates, including ESMFold2
 FP8 validation. Boltz2 remains provisional. It runs only in the focused
 `structure`, `artifact`, and `benchmark` tiers.
 
-The Biohub oracle has a platform-specific, fully pinned, hash-attested GH200
-lock, including any source-built BioTraj wheel. Before source archive or Buildx,
+The Biohub oracle has a platform-specific, fully pinned, hash-attested lock,
+including any source-built BioTraj wheel. Before source archive or Buildx,
 each remote suite records `uname -m`, normalized OCI architecture, GPU name,
 UUID, driver, and total memory. Bake receives this native platform. The runner
 rejects an image when its resolved platform or digest differs from preflight. It
-also rejects hardware drift during the build. A GH200 runs `linux/arm64` images
-directly, not emulated `linux/amd64` images. This is GH200-only evidence. Docker
-does not remove ABI differences, and an unvalidated architecture is not equal.
+also rejects hardware drift during the build. Docker does not remove ABI
+differences, and reports must retain the actual hardware and architecture.
 
 After image inspection and before a reference command, the runner writes
 `artifacts/reference/environment/container-images.json` (mounted at
@@ -92,15 +90,14 @@ must remain BF16.
 `benchmark` is gated. It requires the tracked immutable
 `benchmarks/baselines/h100.json` and fails before remote work when the baseline
 is absent. The file name is a legacy automation identifier. The release baseline
-must record the exact GH200 model, Linux aarch64 architecture, and environment.
+must record the exact model, architecture, and environment used to produce it.
 Regression comparison requires an exact match. The runner does not create a
 baseline. `benchmark-capture` makes an ungated, descriptive candidate report
 with separate cold compilation, first-forward, warmup, and steady-state
 measurements. Review this report before adding a baseline in another change.
 Full release benchmark and ESMC evidence must use the same preflight hardware
-identity as candidate and official-reference measurements. The GH200 lock
-provides this same-host contract on `linux/arm64`. Do not substitute or combine
-evidence from another architecture or GPU UUID.
+identity as candidate and official-reference measurements. Do not substitute or
+combine evidence from another architecture or GPU UUID.
 
 Each benchmark run is self-contained. Focused benchmark and capture suites use
 `tools.artifacts.build_all --benchmark-suite`. The nightly throughput phase and
@@ -123,8 +120,8 @@ cannot authenticate a Git commit. Therefore, Git-free builds use
 records the clean source HEAD and archive SHA-256. Clean Git worktrees use the
 exact Git revision.
 
-Run validation tiers with `python -m tools.remote` on the GH200 Linux aarch64
-workstation. Bind release evidence to the exact candidate revision. Run only one
+Run validation tiers with `python -m tools.remote` on a compatible accelerator
+host. Bind release evidence to the exact candidate revision. Run only one
 accelerator-heavy suite at one time.
 
 ## Python source-support matrix

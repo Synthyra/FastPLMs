@@ -1,0 +1,365 @@
+{
+  "compiled_standard_artifact": {
+    "files": [
+      {
+        "path": "LICENSES/FastPLMs-Apache-2.0.txt",
+        "present": true,
+        "sha256": "2d2b50c7b1414bff1189a1db1f0cfb92e3e064b50f4c2b1019827b683e1b629a"
+      },
+      {
+        "path": "LICENSES/biohub-esm/LICENSE.md",
+        "present": true,
+        "sha256": "b63df9ca1dd96b3b21eec226b51b236d0bd152ac20eafc43aad46bf832b48d8a"
+      },
+      {
+        "path": "LICENSES/biohub-esm/THIRD_PARTY_NOTICE.md",
+        "present": true,
+        "sha256": "5bff8515ba4e0f53abdc43714c180b79c5b606160497d98de741a369cb9b6a23"
+      },
+      {
+        "path": "LICENSES/biohub-transformers/LICENSE",
+        "present": true,
+        "sha256": "77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049"
+      },
+      {
+        "path": "THIRD_PARTY_NOTICES.md",
+        "present": true,
+        "sha256": "25704b3c76404696cae52e7fca13088d329f70f412687340351259e86cd62baa"
+      }
+    ],
+    "license_files": [
+      "LICENSES/FastPLMs-Apache-2.0.txt",
+      "LICENSES/biohub-esm/LICENSE.md",
+      "LICENSES/biohub-esm/THIRD_PARTY_NOTICE.md",
+      "LICENSES/biohub-transformers/LICENSE",
+      "THIRD_PARTY_NOTICES.md"
+    ],
+    "path": "dist/hub/ESMplusplus_small",
+    "source_metadata": {
+      "checkpoint_license": "MIT",
+      "redistributable": true,
+      "weights_license_status": "resolved"
+    },
+    "source_upstream_ids": [
+      "biohub-esm",
+      "biohub-transformers"
+    ]
+  },
+  "models": [
+    {
+      "backbone_legal_upstreams": [
+        "biohub-esm",
+        "biohub-transformers"
+      ],
+      "folding_checkpoint": {
+        "files": [
+          {
+            "expected": "git-sha1:8c9a04fe22b0e5fca77bc4e2861a12c9494ef4d4",
+            "matches": true,
+            "observed": "git-sha1:8c9a04fe22b0e5fca77bc4e2861a12c9494ef4d4",
+            "path": "config.json",
+            "present": true
+          },
+          {
+            "expected": "sha256:44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd",
+            "matches": true,
+            "observed": "sha256:44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd",
+            "path": "model.safetensors",
+            "present": true
+          }
+        ],
+        "snapshot": "artifacts/esmfold2-small/fold300",
+        "source": {
+          "files": {
+            "config.json": "git-sha1:8c9a04fe22b0e5fca77bc4e2861a12c9494ef4d4",
+            "model.safetensors": "sha256:44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd"
+          },
+          "repo_id": "biohub/ESMFold2-Experimental-Fast-base300M-step1500k",
+          "revision": "21531e59002c9205284715e28ee802dafb430637"
+        }
+      },
+      "legal_upstreams": [
+        "biohub-esm",
+        "biohub-transformers",
+        "protein-ttt"
+      ],
+      "model_id": "esmfold2_300",
+      "native_backbone": {
+        "files": [
+          {
+            "expected": "git-sha1:7fe728a0eb3fb81b24491d6cc1de816bf7797c27",
+            "matches": true,
+            "observed": "git-sha1:7fe728a0eb3fb81b24491d6cc1de816bf7797c27",
+            "path": "config.json",
+            "present": true
+          },
+          {
+            "expected": "sha256:8bd6cacf9b5a92d51954b64b20407f1f9f564a7e4849b8663470784d2a8b7ed2",
+            "matches": true,
+            "observed": "sha256:8bd6cacf9b5a92d51954b64b20407f1f9f564a7e4849b8663470784d2a8b7ed2",
+            "path": "model.safetensors",
+            "present": true
+          },
+          {
+            "expected": "git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+            "matches": true,
+            "observed": "git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+            "path": "tokenizer.json",
+            "present": true
+          },
+          {
+            "expected": "git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89",
+            "matches": true,
+            "observed": "git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89",
+            "path": "tokenizer_config.json",
+            "present": true
+          },
+          {
+            "expected": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+            "matches": true,
+            "observed": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+            "path": "special_tokens_map.json",
+            "present": true
+          }
+        ],
+        "snapshot": "artifacts/esmfold2-small/backbone300",
+        "source": {
+          "files": {
+            "config.json": "git-sha1:7fe728a0eb3fb81b24491d6cc1de816bf7797c27",
+            "model.safetensors": "sha256:8bd6cacf9b5a92d51954b64b20407f1f9f564a7e4849b8663470784d2a8b7ed2",
+            "special_tokens_map.json": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+            "tokenizer.json": "git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+            "tokenizer_config.json": "git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89"
+          },
+          "repo_id": "biohub/ESMC-300M-1500000",
+          "revision": "56803b6378b82e16c3b24aac49d1fce4445540b7"
+        }
+      },
+      "standard_backbone": {
+        "model_id": "esmc_small",
+        "required_for_comparison": [
+          "config.json",
+          "model.safetensors"
+        ],
+        "snapshot": "artifacts/esmfold2-small/standard300",
+        "source": {
+          "files": {
+            "config.json": "git-sha1:df2f44187157b0cc371c48c887b77b1783679201",
+            "model.safetensors": "sha256:d099223765bc4f1ae8d6c7e18561ce41df1d54073fdc5327ef0a229235a8f52a",
+            "special_tokens_map.json": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+            "tokenizer.json": "git-sha1:f49735e56cebab0e791aeaae777757b7fd114f71",
+            "tokenizer_config.json": "git-sha1:2985ed2b8aa8ecfb1d12f53f47d2b8a44cc21756"
+          },
+          "repo_id": "Synthyra/ESMplusplus_small",
+          "revision": "46c5f7d562e47d4c14165b424c71ab7db008e6fb"
+        }
+      }
+    },
+    {
+      "backbone_legal_upstreams": [
+        "biohub-esm",
+        "biohub-transformers"
+      ],
+      "folding_checkpoint": {
+        "files": [
+          {
+            "expected": "git-sha1:95517e555f17a1eca4b68866c89033a1f6916a5d",
+            "matches": true,
+            "observed": "git-sha1:95517e555f17a1eca4b68866c89033a1f6916a5d",
+            "path": "config.json",
+            "present": true
+          },
+          {
+            "expected": "sha256:11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602",
+            "matches": true,
+            "observed": "sha256:11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602",
+            "path": "model.safetensors",
+            "present": true
+          }
+        ],
+        "snapshot": "artifacts/esmfold2-small/fold600",
+        "source": {
+          "files": {
+            "config.json": "git-sha1:95517e555f17a1eca4b68866c89033a1f6916a5d",
+            "model.safetensors": "sha256:11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602"
+          },
+          "repo_id": "biohub/ESMFold2-Experimental-Fast-base600M-step1500k",
+          "revision": "15cf2d6648692f6c17cee1297d8a285476fffa9b"
+        }
+      },
+      "legal_upstreams": [
+        "biohub-esm",
+        "biohub-transformers",
+        "protein-ttt"
+      ],
+      "model_id": "esmfold2_600",
+      "native_backbone": {
+        "files": [
+          {
+            "expected": "git-sha1:ec29f6009b21d710f64bf1c058f3a9710833d692",
+            "matches": true,
+            "observed": "git-sha1:ec29f6009b21d710f64bf1c058f3a9710833d692",
+            "path": "config.json",
+            "present": true
+          },
+          {
+            "expected": "sha256:d6869f5ae0f11e5dc829b195e062e87cfcc2f851a08a5edbaf5d1083ae7f76cc",
+            "matches": true,
+            "observed": "sha256:d6869f5ae0f11e5dc829b195e062e87cfcc2f851a08a5edbaf5d1083ae7f76cc",
+            "path": "model.safetensors",
+            "present": true
+          },
+          {
+            "expected": "git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+            "matches": true,
+            "observed": "git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+            "path": "tokenizer.json",
+            "present": true
+          },
+          {
+            "expected": "git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89",
+            "matches": true,
+            "observed": "git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89",
+            "path": "tokenizer_config.json",
+            "present": true
+          },
+          {
+            "expected": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+            "matches": true,
+            "observed": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+            "path": "special_tokens_map.json",
+            "present": true
+          }
+        ],
+        "snapshot": "artifacts/esmfold2-small/backbone600",
+        "source": {
+          "files": {
+            "config.json": "git-sha1:ec29f6009b21d710f64bf1c058f3a9710833d692",
+            "model.safetensors": "sha256:d6869f5ae0f11e5dc829b195e062e87cfcc2f851a08a5edbaf5d1083ae7f76cc",
+            "special_tokens_map.json": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+            "tokenizer.json": "git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c",
+            "tokenizer_config.json": "git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89"
+          },
+          "repo_id": "biohub/ESMC-600M-1500000",
+          "revision": "21af9cc429af76ebda6c48074fb624db4735aaaf"
+        }
+      },
+      "standard_backbone": {
+        "model_id": "esmc_large",
+        "required_for_comparison": [
+          "config.json",
+          "model.safetensors"
+        ],
+        "snapshot": "artifacts/esmfold2-small/standard600",
+        "source": {
+          "files": {
+            "config.json": "git-sha1:5736371902fe5d04e2859be30ac7dbd31b271b25",
+            "model.safetensors": "sha256:4aff3f8c5de68c4d3e3824eb2c478e4a47355d3f849f3c745e5c8a5ee6cff851",
+            "special_tokens_map.json": "git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
+            "tokenizer.json": "git-sha1:f49735e56cebab0e791aeaae777757b7fd114f71",
+            "tokenizer_config.json": "git-sha1:2985ed2b8aa8ecfb1d12f53f47d2b8a44cc21756"
+          },
+          "repo_id": "Synthyra/ESMplusplus_large",
+          "revision": "f813401638b3fddab09748aec1ad2bf537aa4208"
+        }
+      }
+    }
+  ],
+  "repository_legal_files": [
+    {
+      "expected": "sha256:2d2b50c7b1414bff1189a1db1f0cfb92e3e064b50f4c2b1019827b683e1b629a",
+      "matches": true,
+      "observed": "sha256:2d2b50c7b1414bff1189a1db1f0cfb92e3e064b50f4c2b1019827b683e1b629a",
+      "path": "LICENSE"
+    },
+    {
+      "expected": "sha256:d35e506b728868b52290672d54a89c6aade09529af99dbc8a4db72d9e9ca3460",
+      "matches": true,
+      "observed": "sha256:d35e506b728868b52290672d54a89c6aade09529af99dbc8a4db72d9e9ca3460",
+      "path": "THIRD_PARTY_NOTICES.md"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "static manifest, local snapshot, and legal inventory verification; no inference executed",
+  "status": "passed",
+  "upstream_legal_inventory": [
+    {
+      "canonical_files": [
+        {
+          "expected": "sha256:b63df9ca1dd96b3b21eec226b51b236d0bd152ac20eafc43aad46bf832b48d8a",
+          "matches": true,
+          "observed": "sha256:b63df9ca1dd96b3b21eec226b51b236d0bd152ac20eafc43aad46bf832b48d8a",
+          "path": "vendor/upstream/biohub-esm/LICENSE.md"
+        },
+        {
+          "expected": "sha256:5bff8515ba4e0f53abdc43714c180b79c5b606160497d98de741a369cb9b6a23",
+          "matches": true,
+          "observed": "sha256:5bff8515ba4e0f53abdc43714c180b79c5b606160497d98de741a369cb9b6a23",
+          "path": "vendor/upstream/biohub-esm/THIRD_PARTY_NOTICE.md"
+        }
+      ],
+      "distribution_files": [
+        {
+          "expected": "sha256:b63df9ca1dd96b3b21eec226b51b236d0bd152ac20eafc43aad46bf832b48d8a",
+          "matches": true,
+          "observed": "sha256:b63df9ca1dd96b3b21eec226b51b236d0bd152ac20eafc43aad46bf832b48d8a",
+          "path": "LICENSES/biohub-esm/LICENSE.md"
+        },
+        {
+          "expected": "sha256:5bff8515ba4e0f53abdc43714c180b79c5b606160497d98de741a369cb9b6a23",
+          "matches": true,
+          "observed": "sha256:5bff8515ba4e0f53abdc43714c180b79c5b606160497d98de741a369cb9b6a23",
+          "path": "LICENSES/biohub-esm/THIRD_PARTY_NOTICE.md"
+        }
+      ],
+      "id": "biohub-esm",
+      "license": "MIT"
+    },
+    {
+      "canonical_files": [
+        {
+          "expected": "sha256:77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049",
+          "matches": true,
+          "observed": "sha256:77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049",
+          "path": "vendor/upstream/biohub-transformers/LICENSE"
+        }
+      ],
+      "distribution_files": [
+        {
+          "expected": "sha256:77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049",
+          "matches": true,
+          "observed": "sha256:77fd4710def9ec3c0f6225800e0235f15a425abd4a8b03559127fcd782612049",
+          "path": "LICENSES/biohub-transformers/LICENSE"
+        }
+      ],
+      "id": "biohub-transformers",
+      "license": "Apache-2.0"
+    },
+    {
+      "canonical_files": [
+        {
+          "expected": "sha256:bb01e7d5554f9e2e117172e56551452f68a7818df7bc8e71cd7a776a1d4ba3df",
+          "matches": true,
+          "observed": "sha256:bb01e7d5554f9e2e117172e56551452f68a7818df7bc8e71cd7a776a1d4ba3df",
+          "path": "vendor/upstream/protein-ttt/LICENSE"
+        }
+      ],
+      "distribution_files": [
+        {
+          "expected": "sha256:bb01e7d5554f9e2e117172e56551452f68a7818df7bc8e71cd7a776a1d4ba3df",
+          "matches": true,
+          "observed": "sha256:bb01e7d5554f9e2e117172e56551452f68a7818df7bc8e71cd7a776a1d4ba3df",
+          "path": "LICENSES/protein-ttt/LICENSE"
+        },
+        {
+          "expected": "sha256:dc641c37353c2efd50ccbdb316ca4aae495ec02c1563e0e15bac92f75fc482e5",
+          "matches": true,
+          "observed": "sha256:dc641c37353c2efd50ccbdb316ca4aae495ec02c1563e0e15bac92f75fc482e5",
+          "path": "LICENSES/protein-ttt/SOURCE_RECORD.md"
+        }
+      ],
+      "id": "protein-ttt",
+      "license": "MIT"
+    }
+  ]
+}

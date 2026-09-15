@@ -25,8 +25,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class FakeApi:
-    def __init__(self) -> None:
+    def __init__(self, *, parent_sha: object = "b" * 40) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.info_calls: list[dict[str, str]] = []
+        self.parent_sha = parent_sha
+
+    def model_info(self, **kwargs: str) -> SimpleNamespace:
+        self.info_calls.append(kwargs)
+        return SimpleNamespace(sha=self.parent_sha)
 
     def create_commit(self, **kwargs: Any) -> SimpleNamespace:
         self.calls.append(kwargs)
@@ -99,6 +105,8 @@ def test_files_only_compiles_and_uploads_without_an_artifact(
     call = api.calls[0]
     assert call["repo_id"] == spec.fast.repo_id
     assert call["revision"] == "main"
+    assert call["parent_commit"] == "b" * 40
+    assert api.info_calls == [{"repo_id": spec.fast.repo_id, "revision": "main"}]
     assert {operation.path_in_repo for operation in call["operations"]} == {
         "README.md",
         "modeling_fastplms.py",
@@ -143,6 +151,35 @@ def test_default_mode_adds_prepared_artifact_files_and_weights(
     }
     assert _operation_payload(operations["model.safetensors"]) == b"weights"
     assert _operation_payload(operations["modeling_fastplms.py"]) == b"current"
+    assert api.calls[0]["parent_commit"] == "b" * 40
+
+
+@pytest.mark.parametrize("parent_sha", [None, "", "a" * 39, "g" * 40])
+def test_publish_fails_closed_when_remote_parent_commit_is_invalid(
+    parent_sha: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = get_model_registry()["ankh_base"]
+    monkeypatch.setattr(
+        publish_module,
+        "compile_model_files",
+        lambda _spec, _root: {"README.md": b"card"},
+    )
+    api = FakeApi(parent_sha=parent_sha)
+
+    with pytest.raises(ArtifactError, match=r"parent commit.*missing or invalid"):
+        publish_models(
+            (spec,),
+            source_root=ROOT,
+            artifact_root=ROOT / "dist" / "hub",
+            revision="main",
+            api=api,  # type: ignore[arg-type]
+            commit_message="Update model",
+            files_only=True,
+        )
+
+    assert api.calls == []
+    assert len(api.info_calls) == 1
 
 
 def test_default_mode_explains_how_to_build_a_missing_artifact(

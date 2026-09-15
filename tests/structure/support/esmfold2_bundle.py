@@ -151,10 +151,12 @@ def prepare_requests(
     from fastplms.registry import get_model_registry
 
     registry = get_model_registry()
-    actual_ids = tuple(spec.id for spec in registry.by_family("esmfold2"))
+    actual_ids = tuple(
+        spec.id for spec in registry.by_family("esmfold2") if spec.backbone_model is None
+    )
     if actual_ids != supported_model_ids:
         raise RuntimeError(
-            "The ESMFold2 bundle schema supports exactly the four release variants; "
+            "The ESMFold2 bundle schema supports the four 6B-backbone variants; "
             f"manifest contains {actual_ids}."
         )
 
@@ -681,7 +683,7 @@ def _default_request(exchange_root: Path, model_id: str) -> Path:
 
 
 def _all_prepared_requests(exchange_root: Path) -> tuple[Path, ...]:
-    """Return the exact four prepared requests in the release-schema order."""
+    """Return the four 6B-backbone prepared requests in the release-schema order."""
 
     request_root = exchange_root / "structure" / "requests" / reference_container
     available = {path.stem: path for path in sorted(request_root.glob("*.json"))}

@@ -1,0 +1,34 @@
+{
+  "atom_count": 250,
+  "attention_backend": "sdpa",
+  "backbone_compute_dtype": "bfloat16",
+  "chains": [
+    "A",
+    "B"
+  ],
+  "chunk_size": 32,
+  "cif_confidence_value": "?",
+  "cif_path": "artifacts/esmfold2-small/quickstart/complex.cif",
+  "cif_sha256": "14367441bcab8b9ab58602174c761de6e8dde0ac0a5772496c3338394847772d",
+  "confidence_available": false,
+  "coordinate_shape": [
+    250,
+    3
+  ],
+  "coordinates_finite": true,
+  "folding_parameter_dtype": "float32",
+  "loading": "local prepared artifact through AutoModel, with automatic pinned ESM++ backbone loading",
+  "model_id": "esmfold2_300",
+  "num_diffusion_samples": 1,
+  "num_loops": 3,
+  "num_sampling_steps": 15,
+  "runtime_bundle_sha256": "4f6a9d59126e9bee9e65b30d55161d648473a058b6aed36727f2ae2cd99d44d7",
+  "scope": "two-protein quick-start execution and CIF export",
+  "seed": 17,
+  "sequences": [
+    "MSTNPKPQRKTKRNT",
+    "MKTIIALSYIFCLVFA"
+  ],
+  "status": "passed",
+  "verbose": true
+}

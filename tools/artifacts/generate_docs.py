@@ -211,6 +211,11 @@ ESMC_TOP_LEVEL_FIELDS = {
 
 
 CAPABILITY_EVIDENCE_SELECTORS: dict[str, EvidenceSelector] = {
+    "cpu:esmfold2-small": EvidenceSelector(
+        tier="check",
+        targets=("tests/unit/test_esmfold2_small.py", "tests/unit/test_esmc_native_conversion.py"),
+        scope="300M and 600M configuration, dependency conversion, confidence absence, and FP8 rejection. Inference evidence is separately scoped in docs/validation/esmfold2_small.md.",
+    ),
     "cpu:autoclass-runtime": EvidenceSelector(
         tier="cpu_contract",
         targets=(
@@ -592,7 +597,7 @@ def _esmfold2_structure_capability_rows(
                 capability,
                 "[ESMFold2](../esmfold2.md)",
                 "[structure preparation](../../examples/structure_preparation.py)",
-                (
+                ("cpu:structure-contracts", "cpu:esmfold2-small") if spec.backbone_model is not None else (
                     "cpu:structure-contracts",
                     "structure:full-suite",
                     "compliance:structure-automodel",
@@ -868,11 +873,12 @@ def _render_curated_example_cpu_evidence() -> list[str]:
     return lines
 
 
-def _precision_contract(family: ModelFamily) -> str:
+def _precision_contract(family: ModelFamily, spec: ModelSpec | None = None) -> str:
     experimental = set(family.experimental_precisions)
     return ", ".join(
         f"`{value}` (experimental)" if value in experimental else f"`{value}`"
         for value in family.precisions
+        if spec is None or value != "fp8" or (spec.backbone_model is None and spec.id not in {"esmc_small", "esmc_large"})
     )
 
 
@@ -908,9 +914,9 @@ def _platform_requirements(family: ModelFamily) -> str:
         paragraphs.extend(
             (
                 "The artifact requirements include the structure dependencies.",
-                "The release contract requires a CUDA device. The current validated "
-                "target is the exact NVIDIA GH200 on Linux aarch64. Linux x86-64, "
-                "CPU-only, Windows, and macOS structure runs are not release evidence.",
+                "Validation runs in Docker on any compatible CUDA device. Record the "
+                "container, hardware, precision, and inputs; no GPU product or "
+                "workstation is required.",
             )
         )
     elif any(name.startswith("flash_attention_") for name in family.attention):
@@ -3294,6 +3300,75 @@ policy, backend, dtype, and pooling configuration before it appends data.
 """
 
 
+def _esmfold2_quick_start(spec: ModelSpec) -> str:
+    """Return the short two-chain folding example for ESMFold2 cards."""
+
+    if spec.family.id != "esmfold2":
+        return ""
+    is_small_variant = spec.id in {"esmfold2_300", "esmfold2_600"}
+    sampling_steps = "        num_sampling_steps=15,\n" if is_small_variant else ""
+    step_note = (
+        "This example uses 15 diffusion steps, matching the experimental config."
+        if is_small_variant
+        else "The example omits `num_sampling_steps` and uses the model default."
+    )
+    confidence_note = (
+        "The confidence fields are unavailable because this experimental variant "
+        "has a disabled confidence head."
+        if is_small_variant
+        else "This variant has an enabled confidence head and returns confidence fields."
+    )
+    confidence_note = textwrap.fill(
+        confidence_note,
+        width=79,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+    return f"""\
+## Quick start
+
+Load the published model, fold two protein chains together, and write an mmCIF
+file. {step_note}
+
+```python
+from pathlib import Path
+
+import torch
+from transformers import AutoModel
+
+model = AutoModel.from_pretrained(
+    "{spec.fast.repo_id}",
+    trust_remote_code=True,
+    dtype=torch.float32,
+    device_map="cuda",
+    esmc_precision="bf16",
+    attn_implementation="sdpa",
+).eval()
+model.set_chunk_size(32)
+
+types = model.input_types
+complex_input = types.StructurePredictionInput(
+    sequences=[
+        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
+        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
+    ]
+)
+with torch.inference_mode():
+    result = model.fold(
+        complex_input,
+        num_loops=3,
+{sampling_steps}        num_diffusion_samples=1,
+        seed=17,
+        verbose=True,
+    )
+Path("complex.cif").write_text(model.result_to_cif(result), encoding="utf-8")
+```
+
+Set `verbose=False` to silence the folding progress display. {confidence_note}
+
+"""
+
+
 def _family_usage_notes(
     spec: ModelSpec,
     *,
@@ -3339,6 +3414,36 @@ only when you intend to initialize and train that head.
 
 """
     if family_id == "esm_plusplus":
+        fp8_usage = "FP8 is restricted to ESMC-6B; smaller ESM++ models use BF16."
+        if spec.id == "esmc_6b":
+            fp8_usage = f"""### Experimental FP8 inference
+
+The default uses checkpoint BF16 behavior. FP8 is an explicit experimental
+inference option for ESMC-6B:
+
+```python
+import torch
+from transformers import AutoModel
+
+fp8_model = AutoModel.from_pretrained(
+    "{model_id}",
+    trust_remote_code=True,
+    dtype=torch.bfloat16,
+).cuda().eval()
+fp8_model.enable_fp8()
+print(fp8_model.esmc_precision_status)
+
+with torch.inference_mode():
+    fp8_output = fp8_model(**{{name: value.cuda() for name, value in batch.items()}})
+```
+
+FP8 forward calls require `torch.inference_mode()`. The model pads the sequence
+dimension to a multiple of 16. Transformer Engine converts supported linear
+layers. The call fails if the dependency, compatible CUDA hardware, or complete
+conversion set is unavailable. It does not silently use BF16. FP8 does not
+claim numerical parity.
+
+"""
         sae_id, sae_layer = ESMC_SAE_EXAMPLES[spec.id]
         esmc_table = _esmc_diagnostic_table(
             (
@@ -3404,32 +3509,7 @@ the SAEs with unmasked sequences. This interface supports hidden-state SAEs
 only, not MLP-output SAEs. FastPLMs does not copy SAE weights or add SAE
 checkpoints to its model manifest.
 
-### Experimental FP8 inference
-
-The default uses checkpoint BF16 behavior. FP8 is an explicit experimental
-inference option for every ESM++ scale:
-
-```python
-import torch
-from transformers import AutoModel
-
-fp8_model = AutoModel.from_pretrained(
-    "{model_id}",
-    trust_remote_code=True,
-    dtype=torch.bfloat16,
-).cuda().eval()
-fp8_model.enable_fp8()
-print(fp8_model.esmc_precision_status)
-
-with torch.inference_mode():
-    fp8_output = fp8_model(**{{name: value.cuda() for name, value in batch.items()}})
-```
-
-FP8 forward calls require `torch.inference_mode()`. The model pads the sequence
-dimension to a multiple of 16. Transformer Engine converts supported linear
-layers. The call fails if the dependency, compatible CUDA hardware, or complete
-conversion set is unavailable. It does not silently use BF16. FP8 does not
-claim numerical parity.
+{fp8_usage}
 
 {esmc_table}
 
@@ -3652,6 +3732,7 @@ output = model.predict_structure(
     num_sampling_steps=50,
     diffusion_samples=1,
     seed=7,
+    verbose=False,
 )
 model.save_as_cif(output, "prediction.cif")
 
@@ -3679,6 +3760,7 @@ with torch.inference_mode():
     output = model.infer(
         "MKTLLILAVVAAALA",
         num_recycles=4,
+        verbose=False,
     )
 
 print(output["mean_plddt"])
@@ -3695,6 +3777,45 @@ print(summary["plddt"], summary["ptm"])
 FastPLMs does not expose ProteinTTT for ESMFold. The pinned folding checkpoint
 has no trained masked-language-model head for this objective. `ttt()` and TTT
 folding requests raise.
+
+"""
+    if spec.id in {"esmfold2_300", "esmfold2_600"}:
+        backbone = "Synthyra/ESMplusplus_small" if spec.id == "esmfold2_300" else "Synthyra/ESMplusplus_large"
+        return f"""## Protein folding
+
+This experimental Fast checkpoint has 24 folding blocks and uses the frozen
+`{backbone}` backbone. The config-declared step-1500000 backbone and the
+pinned ESM++ weights are tensor-exact in BF16 after layout conversion.
+
+```python
+import torch
+
+model = model.cuda().eval()
+with torch.inference_mode():
+    output = model.infer_protein(
+        "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE",
+        seed=17,
+        num_diffusion_samples=1,
+    )
+print(output.sample_atom_coords.shape)
+```
+
+Folding parameters remain FP32 with CUDA BF16 autocast. The backbone uses
+BF16; FP8 requests fail. The 15-step sampler and three folding loops remain
+the checkpoint defaults. Protein inputs require `msa=None`.
+This checkpoint was trained without MSA conditioning. It rejects
+`ProteinInput.msa` and MSA-derived features. Typed multichain and multimolecule
+inputs remain supported without MSA conditioning.
+
+The confidence head is disabled: pLDDT, pTM, iPTM, and PAE are unavailable.
+The 300 and 600 suffixes describe backbone scale, not total model parameters.
+
+## Learned representation and ESMC precision
+
+The learned projection maps `H: (b, l, {31 if spec.id == "esmfold2_300" else 37}, {960 if spec.id == "esmfold2_300" else 1152}) -> Z: (b, l, 256)`.
+`embed_dataset` returns one `(l, 256)` residue representation per sequence.
+The experimental architecture does not expose folding TTT.
+
 
 """
     if family_id == "esmfold2":
@@ -3814,28 +3935,6 @@ cif_text = model.result_to_cif(result)
 print(result.ptm, result.plddt.mean().item())
 ```
 
-No target structure is required. For complexes, construct the input from the
-types exposed by the loaded artifact:
-
-```python
-types = model.input_types
-complex_input = types.StructurePredictionInput(
-    sequences=[
-        types.ProteinInput(id="A", sequence="MSTNPKPQRKTKRNT"),
-        types.ProteinInput(id="B", sequence="MKTIIALSYIFCLVFA"),
-        types.DNAInput(id="C", sequence="ATGC"),
-        types.LigandInput(id="L", smiles="O"),
-    ]
-)
-complex_result = model.fold(
-    complex_input,
-    num_loops=1,
-    num_sampling_steps=200,
-    seed=7,
-)
-print(complex_result.ptm, complex_result.plddt.mean().item())
-```
-
 {typed_input_contract} The public schema recognizes `PocketConditioning` and
 `DistogramConditioning`, but the pinned official forward consumes neither. Its
 feature builder hard-codes a zero pocket feature and constructs distogram tensors
@@ -3916,9 +4015,10 @@ def render_model_card(
     license_yaml = render_hub_license_yaml(spec.family)
     checkpoint_terms = render_checkpoint_terms(spec.family)
     canonical_state_record = ""
-    tokenizer_provenance = ""
+    tokenizer_details = ""
     notes = ""
     model_overview = _model_overview(spec)
+    esmfold2_quick_start = _esmfold2_quick_start(spec)
     attention_usage = _attention_usage(spec)
     sequence_forward = _sequence_forward_usage(spec)
     embedding_usage = _embedding_usage(spec)
@@ -3934,8 +4034,25 @@ def render_model_card(
     recommended_attention = (
         "sdpa" if "sdpa" in spec.family.attention else spec.family.attention[0]
     )
+    generic_quick_start = "" if spec.family.id == "esmfold2" else f"""## Quick start
+
+```python
+from transformers import {auto_class}
+
+model_id = "{spec.fast.repo_id}"
+model = {auto_class}.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+    attn_implementation="{recommended_attention}",
+).eval()
+```
+
+For offline validation, replace `model_id` with the manifest-built
+`dist/hub/{local_artifact}` path. Pass `local_files_only=True`.
+
+"""
     if spec.family.tokenizer_class is not None:
-        tokenizer_provenance = f"- Tokenizer class: `{spec.family.tokenizer_class}`\n"
+        tokenizer_details = f"- Tokenizer class: `{spec.family.tokenizer_class}`\n"
     if spec.canonical_state_sha256 is not None:
         canonical_state_record = (
             "- Canonical transformed state identity: recorded in `source-record.json`\n"
@@ -3960,7 +4077,14 @@ def render_model_card(
     weights_allowed = str(spec.family.weights_publication_allowed).lower()
     weights_license_status = "resolved" if spec.family.weights_publication_allowed else "unresolved"
     complete_weights = str(spec.family.requires_complete_weight_publication).lower()
-    if "compliance" in spec.family.test_tiers:
+    if spec.backbone_model is not None:
+        validation_scope = (
+            "ESMFold2-300 passed a Docker BF16 reference comparison on one compact "
+            "Protein G sequence. ESMFold2-600 is not inference-validated. Both have "
+            "configuration, weight identity, and artifact loading checks. This is "
+            "bounded checkpoint evidence, not a full structure benchmark result."
+        )
+    elif "compliance" in spec.family.test_tiers:
         validation_scope = (
             "Release validation includes the `compliance` tier. Its evidence identifies "
             "the checkpoint, backend, dtype, hardware, inputs, and reference revision."
@@ -3982,22 +4106,7 @@ tags:
 
 # {_model_title(spec)}
 
-{model_overview}{_installation_section(spec)}## Quick start
-
-```python
-from transformers import {auto_class}
-
-model_id = "{spec.fast.repo_id}"
-model = {auto_class}.from_pretrained(
-    model_id,
-    trust_remote_code=True,
-    attn_implementation="{recommended_attention}",
-).eval()
-```
-
-For offline validation, replace `model_id` with the manifest-built
-`dist/hub/{local_artifact}` path. Pass `local_files_only=True`.
-
+{esmfold2_quick_start}{model_overview}{_installation_section(spec)}{generic_quick_start}\
 {attention_usage}{sequence_forward}{embedding_usage}{task_head_usage}{peft_usage}\
 {sequence_ttt_usage}{family_usage}{notes}## Technical details
 
@@ -4005,7 +4114,7 @@ For offline validation, replace `model_id` with the manifest-built
 - Transformers classes: {_code(sorted(spec.auto_map))}
 - Checkpoint weights: {auto_status}
 - Attention backends: {_code(spec.family.attention)}
-- Precision: {_precision_contract(spec.family)}
+- Precision: {_precision_contract(spec.family, spec)}
 - BF16 execution: `{spec.family.bf16_execution}`
 - Generation contract: `{spec.generation_contract}`
 - Dependencies: `{"core + structure" if spec.family.extra == "structure" else "core"}`
@@ -4014,7 +4123,7 @@ For offline validation, replace `model_id` with the manifest-built
 - Redistributable: `{weights_allowed}`
 - Complete weight publication required: `{complete_weights}`
 
-## Validation and provenance
+## Validation and sources
 
 FastPLMs pins the checkpoint, upstream source revisions, state transformation,
 and required files in `models.toml`. Built artifacts record exact source
@@ -4027,7 +4136,7 @@ identities and conversion details in `source-record.json`.
 - Official checkpoint: `{spec.official.repo_id}`
 - Artifact source: `{spec.artifact_source}`
 - State transform: `{spec.family.state_transform}`
-{tokenizer_provenance}- Pinned upstreams: {_code(spec.family.upstreams)}
+{tokenizer_details}- Pinned upstreams: {_code(spec.family.upstreams)}
 - Release tiers: {_code(spec.family.test_tiers)}
 - Unresolved required file identities: `{unresolved}`
 

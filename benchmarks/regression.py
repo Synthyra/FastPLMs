@@ -20,7 +20,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class GateThresholds:
-    """Scalar thresholds used by the exact-device Hopper/SM90 regression gate."""
+    """Scalar thresholds used by the exact-environment regression gate."""
 
     confidence: float = 0.95
     soft_throughput_ratio: float = 0.95

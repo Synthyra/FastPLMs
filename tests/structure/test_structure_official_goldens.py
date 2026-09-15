@@ -18,7 +18,6 @@ from fastplms.registry import ModelSpec, get_model_registry
 from tests.structure import test_esmfold2_folding_compliance as esmfold2_metrics
 from tests.structure import test_esmfold_folding_compliance as esmfold_metrics
 from tests.structure.support import esmfold2_bundle, esmfold_bundle
-from tests.structure.support.hardware import assert_recorded_hopper_device_matches
 from tools.goldens import validate_golden_bundle
 
 
@@ -50,22 +49,6 @@ def _release_parameter(spec: ModelSpec) -> object:
     return pytest.param(spec, id=spec.id, marks=pytest.mark.large)
 
 
-def _assert_golden_device_matches_current(metadata: dict[str, object]) -> None:
-    environment = metadata["environment"]
-    assert isinstance(environment, dict)
-    recorded = environment["details"]
-    assert isinstance(recorded, dict)
-    properties = torch.cuda.get_device_properties(0)
-    assert_recorded_hopper_device_matches(
-        {
-            "cuda_device": properties.name,
-            "cuda_device_capability": list(torch.cuda.get_device_capability(0)),
-            "cuda_total_memory": int(properties.total_memory),
-        },
-        recorded,
-    )
-
-
 @pytest.mark.structure
 @pytest.mark.gpu
 @pytest.mark.slow
@@ -74,7 +57,6 @@ def _assert_golden_device_matches_current(metadata: dict[str, object]) -> None:
 def test_esmfold_candidate_matches_checked_structure_golden(tmp_path: Path) -> None:
     spec = REGISTRY[esmfold_bundle.model_id]
     golden, metadata = _golden(spec)
-    _assert_golden_device_matches_current(metadata)
     request_path = esmfold_bundle.prepare_request(tmp_path)
     request = esmfold_bundle.load_request(request_path)
     assert metadata["input_fingerprint"] == request["request_sha256"]
@@ -116,7 +98,6 @@ def test_esmfold2_candidate_matches_checked_structure_golden(
     tmp_path: Path,
 ) -> None:
     golden, metadata = _golden(spec)
-    _assert_golden_device_matches_current(metadata)
     request_path = esmfold2_bundle.prepare_requests(tmp_path, model_ids=(spec.id,))[0]
     request = esmfold2_bundle.load_request(request_path)
     assert metadata["input_fingerprint"] == request["request_sha256"]

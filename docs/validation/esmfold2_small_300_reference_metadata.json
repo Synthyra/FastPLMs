@@ -1,0 +1,320 @@
+{
+  "attention_backend": "sdpa",
+  "backbone_compute_dtype": "bfloat16",
+  "backbone_snapshot": "/workspace/artifacts/esmfold2-small/official-backbone300",
+  "chunk_size": 32,
+  "confidence_head_enabled": false,
+  "config": {
+    "_name_or_path": "artifacts/esmfold2-small/fold300",
+    "add_cross_attention": false,
+    "architectures": [
+      "ESMFold2ExperimentalModel"
+    ],
+    "attn_implementation": "sdpa",
+    "bad_words_ids": null,
+    "begin_suppress_tokens": null,
+    "bos_token_id": null,
+    "chunk_size_feed_forward": 0,
+    "confidence_head": {
+      "distogram_bins": 128,
+      "enabled": false,
+      "folding_trunk": {
+        "dropout": 0.25,
+        "n_heads": 8,
+        "n_layers": 4
+      },
+      "max_dist": 52.0,
+      "min_dist": 2.0,
+      "num_pae_bins": 64,
+      "num_pde_bins": 64,
+      "num_plddt_bins": 50
+    },
+    "cross_attention_hidden_size": null,
+    "d_pair": 256,
+    "d_single": 384,
+    "decoder_start_token_id": null,
+    "disable_msa_features": true,
+    "diversity_penalty": 0.0,
+    "do_sample": false,
+    "dtype": "float32",
+    "early_stopping": false,
+    "encoder_no_repeat_ngram_size": 0,
+    "eos_token_id": null,
+    "esmc_id": "biohub/ESMC-300M-1500000",
+    "exponential_decay_length_penalty": null,
+    "finetuning_task": null,
+    "folding_trunk": {
+      "dropout": 0.25,
+      "n_heads": 8,
+      "n_layers": 24
+    },
+    "force_lm_dropout_during_inference": false,
+    "forced_bos_token_id": null,
+    "forced_eos_token_id": null,
+    "id2label": {
+      "0": "LABEL_0",
+      "1": "LABEL_1"
+    },
+    "inputs": {
+      "atom_encoder": {
+        "d_atom": 128,
+        "d_token": 768,
+        "expansion_ratio": 2,
+        "n_blocks": 3,
+        "n_heads": 4,
+        "n_spatial_rope_pairs_per_axis": 2,
+        "n_uid_rope_pairs": 10,
+        "spatial_rope_base_frequency": 20.0,
+        "swa_window_size": 128,
+        "uid_rope_base_frequency": 10000.0
+      },
+      "d_inputs": 451
+    },
+    "is_decoder": false,
+    "is_encoder_decoder": false,
+    "label2id": {
+      "LABEL_0": 0,
+      "LABEL_1": 1
+    },
+    "length_penalty": 1.0,
+    "lm_d_model": 960,
+    "lm_dropout": 0.0,
+    "lm_encoder": {
+      "enabled": true,
+      "lm_dropout": 0.25,
+      "n_layers": 4,
+      "per_loop_lm_dropout": true
+    },
+    "lm_num_layers": 30,
+    "max_length": 20,
+    "min_length": 0,
+    "model_type": "esmfold2",
+    "msa_encoder": {
+      "d_hidden": 32,
+      "d_msa": 128,
+      "enabled": false,
+      "msa_head_width": 32,
+      "n_heads_msa": 8,
+      "n_layers": 4
+    },
+    "msa_encoder_overwrite": true,
+    "n_relative_chain_bins": 2,
+    "n_relative_residx_bins": 32,
+    "no_repeat_ngram_size": 0,
+    "num_beam_groups": 1,
+    "num_beams": 1,
+    "num_diffusion_samples": 16,
+    "num_loops": 3,
+    "num_return_sequences": 1,
+    "output_attentions": false,
+    "output_hidden_states": false,
+    "output_scores": false,
+    "pad_token_id": null,
+    "parcae": {
+      "coda_n_layers": 2,
+      "enabled": true,
+      "max_steps": 6,
+      "min_steps": 1,
+      "poisson_mean": 3.0
+    },
+    "prefix": null,
+    "problem_type": null,
+    "pruned_heads": {},
+    "remove_invalid_values": false,
+    "repetition_penalty": 1.0,
+    "return_dict": true,
+    "return_dict_in_generate": false,
+    "sep_token_id": null,
+    "structure_head": {
+      "diffusion_module": {
+        "atom_num_blocks": 3,
+        "atom_num_heads": 4,
+        "c_atom": 128,
+        "c_s_inputs": 451,
+        "c_token": 768,
+        "c_z": 256,
+        "fourier_dim": 256,
+        "relpos_r_max": 32,
+        "relpos_s_max": 2,
+        "sigma_data": 16.0,
+        "token_num_blocks": 12,
+        "token_num_heads": 16,
+        "transition_multiplier": 2
+      },
+      "distogram_bins": 128,
+      "gamma_0": 0.605,
+      "gamma_min": 1.107,
+      "inference_num_steps": 15,
+      "inference_p": 8.0,
+      "inference_s_max": 160.0,
+      "inference_s_min": 0.0004,
+      "noise_scale": 0.901,
+      "step_scale": 1.638,
+      "train_noise_log_mean": -1.2,
+      "train_noise_log_std": 1.5
+    },
+    "suppress_tokens": null,
+    "task_specific_params": null,
+    "temperature": 1.0,
+    "tf_legacy_loss": false,
+    "tie_encoder_decoder": false,
+    "tie_word_embeddings": true,
+    "tokenizer_class": null,
+    "top_k": 50,
+    "top_p": 1.0,
+    "torchscript": false,
+    "transformers_version": "4.57.6",
+    "type": "experimental",
+    "typical_p": 1.0,
+    "use_bfloat16": false
+  },
+  "environment": {
+    "cuda_runtime": "13.0",
+    "cuda_total_memory": 8585216000,
+    "gpu": "NVIDIA GeForce RTX 4070 Laptop GPU",
+    "gpu_capability": [
+      8,
+      9
+    ],
+    "peak_memory_allocated": 1454067200,
+    "python": "3.12.14",
+    "torch": "2.13.0+cu130",
+    "transformers": "4.57.6"
+  },
+  "fold_snapshot": "/workspace/artifacts/esmfold2-small/fold300",
+  "folding_parameter_dtype": "float32",
+  "model_id": "esmfold2-300",
+  "num_diffusion_samples": 1,
+  "num_loops": 3,
+  "num_sampling_steps": 15,
+  "producer": "reference",
+  "schema_version": 1,
+  "seed": 17,
+  "sequence": "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE",
+  "source_files": {
+    "backbone": [
+      {
+        "path": "config.json",
+        "size_bytes": 190
+      },
+      {
+        "path": "model.safetensors",
+        "size_bytes": 1328079584
+      }
+    ],
+    "fold": [
+      {
+        "path": ".cache/huggingface/.gitignore",
+        "size_bytes": 1
+      },
+      {
+        "path": ".cache/huggingface/CACHEDIR.TAG",
+        "size_bytes": 195
+      },
+      {
+        "path": ".cache/huggingface/download/README.md.metadata",
+        "size_bytes": 103
+      },
+      {
+        "path": ".cache/huggingface/download/config.json.metadata",
+        "size_bytes": 104
+      },
+      {
+        "path": ".cache/huggingface/download/model.safetensors.metadata",
+        "size_bytes": 128
+      },
+      {
+        "path": ".cache/huggingface/trees/21531e59002c9205284715e28ee802dafb430637.json",
+        "size_bytes": 659
+      },
+      {
+        "path": "README.md",
+        "size_bytes": 810
+      },
+      {
+        "path": "config.json",
+        "size_bytes": 2090
+      },
+      {
+        "path": "model.safetensors",
+        "size_bytes": 684606540
+      }
+    ]
+  },
+  "state_identity": {
+    "backbone": {
+      "sha256": "540867d48827f928d54e24efa42e3eb862a7e87c2efbad8f44b3f7bef854aa4d",
+      "tensor_count": 302
+    },
+    "fold": {
+      "sha256": "c0041b7d1814fbfc114bb08dce0ce8d0e32a24751ee39da60903976c899426d0",
+      "tensor_count": 820
+    }
+  },
+  "tensor_hashes": {
+    "feature__asym_id": "4384f666de6068cb79824519e4ee61147fae5d20ef57128fd6868b26dc9bc9dc",
+    "feature__atom_attention_mask": "ffcb8e7cdbac0c7d728416672f665bc6d49144d6e89bd98cf8f9d1759f01db34",
+    "feature__atom_to_token": "77b3a276db54f29e16c4cd55cd7f01d945bcf01da3fc6d963ba0e0bf8a02a172",
+    "feature__deletion_mean": "d715dd7ffcd2dad4d3f61c85661d981c7ad6bb708e8d5c2b1a61b4e6e5c3762a",
+    "feature__deletion_value": "357234216320438b45b29ebdc9f39702600dc06291a9aff46d48f598f6a746d9",
+    "feature__distogram_atom_idx": "30b6f4ba580a9823ea546c1e3062d747c55b9e10ff92575f2fee7d108ac03afd",
+    "feature__entity_id": "60d8b4ed60f591fead6ac23089395eac185d930d1a10522e6965a7718ef48f46",
+    "feature__has_deletion": "2b0db36e285cb62f61981ad3406942d27f0f13977d936298f523386faddcf288",
+    "feature__input_ids": "cc58c790e7b6c24ee598488df1a6d9caf5435f2f08c16ef8516af9d0d244a7c8",
+    "feature__mol_type": "4384f666de6068cb79824519e4ee61147fae5d20ef57128fd6868b26dc9bc9dc",
+    "feature__msa": "6d4fd19022c4fe8ad43f981b1c0f694791ffdd6b202a9302a974c931d345667f",
+    "feature__msa_attention_mask": "98efb6ca9467a86dc954392dd985343340ff8c00ade2f7715de3751806b54f5d",
+    "feature__ref_atom_name_chars": "bf368b67344b45ebc39d16aad5ec18fbade374125093d05aee27232da0ec09c6",
+    "feature__ref_charge": "0647ccec2eac92e0164150336a5ab7d7da709d7adee24470bf912915c94ea3ba",
+    "feature__ref_element": "3e71e8d13edcc063a7df97064e12c6f839fa5385d6dd3100a83fdecab3953abd",
+    "feature__ref_pos": "03690f4c221ff42556726e6b8f12979c30af9fd8a3de32351e0886c89254c2ff",
+    "feature__ref_space_uid": "77b3a276db54f29e16c4cd55cd7f01d945bcf01da3fc6d963ba0e0bf8a02a172",
+    "feature__res_type": "858a79402df986fd004b5084850ca2b1659c18a7ef9eb84fc5346bb27022e027",
+    "feature__residue_index": "da07d96adab4a6aa0306b553e729a31fbb975dd41be21dc4742433e24d917251",
+    "feature__sym_id": "4384f666de6068cb79824519e4ee61147fae5d20ef57128fd6868b26dc9bc9dc",
+    "feature__token_attention_mask": "d89a70754c9d760a78dbb9489c6c8590390368c0bfca33d8af7ab8e2a356683f",
+    "feature__token_bonds": "17093e521750c8ac2ecfe6c6d366e3f7fd43758573571dec17e1f6741b1b2cdb",
+    "feature__token_index": "da07d96adab4a6aa0306b553e729a31fbb975dd41be21dc4742433e24d917251",
+    "hidden__lm": "ac4ce184d0e69365d00ee2394c0fdc28a2b2dc2da34f18fd6cedba5ad527c3f5",
+    "noise__initial_standard_normal": "d001ab2ad141e3a6b9668a1bcca4c6b187193cda7f242af45e944290bc3333ba",
+    "output__atom_pad_mask": "ffcb8e7cdbac0c7d728416672f665bc6d49144d6e89bd98cf8f9d1759f01db34",
+    "output__distogram_logits": "bafa6b4e7323c0940ed9d16e246a305c5551f67641c50bd8c20df36d93ad4c3f",
+    "output__entity_id": "60d8b4ed60f591fead6ac23089395eac185d930d1a10522e6965a7718ef48f46",
+    "output__residue_index": "da07d96adab4a6aa0306b553e729a31fbb975dd41be21dc4742433e24d917251",
+    "output__sample_atom_coords": "3cdf266474e330a2796b904a09743be82ca0df8b20faabc23ac646371a659058",
+    "projection__base_z_mlp_input": "7e820c092585b5651010235016c77cc64e0765ee968b4b8046a26aa9c92e6b37"
+  },
+  "tensor_keys": [
+    "feature__asym_id",
+    "feature__atom_attention_mask",
+    "feature__atom_to_token",
+    "feature__deletion_mean",
+    "feature__deletion_value",
+    "feature__distogram_atom_idx",
+    "feature__entity_id",
+    "feature__has_deletion",
+    "feature__input_ids",
+    "feature__mol_type",
+    "feature__msa",
+    "feature__msa_attention_mask",
+    "feature__ref_atom_name_chars",
+    "feature__ref_charge",
+    "feature__ref_element",
+    "feature__ref_pos",
+    "feature__ref_space_uid",
+    "feature__res_type",
+    "feature__residue_index",
+    "feature__sym_id",
+    "feature__token_attention_mask",
+    "feature__token_bonds",
+    "feature__token_index",
+    "hidden__lm",
+    "noise__initial_standard_normal",
+    "output__atom_pad_mask",
+    "output__distogram_logits",
+    "output__entity_id",
+    "output__residue_index",
+    "output__sample_atom_coords",
+    "projection__base_z_mlp_input"
+  ]
+}

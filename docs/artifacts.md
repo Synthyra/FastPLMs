@@ -215,6 +215,22 @@ This prevents path replacement and in-place source mutation across the trust
 boundary. Offline execution requires the exact verified cache object and does
 not fetch a substitute.
 
+The experimental ESMFold2-300 and ESMFold2-600 artifacts retain their native
+Biohub checkpoint identifiers as source records while using the corresponding
+standard ESM++ small and large backbones. CPU tensor checks found exact BF16
+equality after the native-to-ESM++ layout conversion for all 308 tensors in the
+300M checkpoint and all 368 tensors in the 600M checkpoint. The native files
+store BF16-rounded values promoted to FP32, while standard ESM++ retains its
+original FP32 values. This establishes BF16 tensor equality for the checked
+states, not FP32 identity or folding inference equivalence. The 300M
+single-protein comparison passed, as documented in
+[ESMFold2-300 validation](validation/esmfold2_small.md). This is not the full
+structure benchmark, which remains pending. The published mirrors are pinned to
+revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). Inference validation is
+unavailable for 600M. The reloaded 300M artifact also passed the same isolated
+comparison; see [artifact reload evidence](validation/esmfold2_300_artifact_reload.json).
+
 ## Generated cards and support data
 
 Run `PYTHONPATH=src python -m tools.artifacts.generate_docs` to render model

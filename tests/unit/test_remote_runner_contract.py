@@ -347,19 +347,31 @@ def test_compliance_runs_native_services_before_candidate_comparison() -> None:
     assert "biohub-biotraj-wheel" in suite.bake_targets
 
 
-def test_host_hardware_preflight_binds_exact_gh200_arm64_identity() -> None:
+@pytest.mark.parametrize(
+    ("machine", "gpu_name", "expected_architecture", "expected_platform"),
+    (
+        ("aarch64", "NVIDIA GH200 480GB", "arm64", "linux/arm64"),
+        ("x86_64", "NVIDIA RTX 4070 Laptop GPU", "amd64", "linux/amd64"),
+    ),
+)
+def test_host_hardware_preflight_accepts_any_gpu_and_native_platform(
+    machine: str,
+    gpu_name: str,
+    expected_architecture: str,
+    expected_platform: str,
+) -> None:
     preflight = _host_hardware_preflight(
-        "aarch64\n",
-        "NVIDIA GH200 480GB, GPU-1234, 580.1, 97871\n",
+        machine + "\n",
+        f"{gpu_name}, GPU-1234, 580.1, 97871\n",
     )
 
     assert preflight["status"] == "passed"
-    assert preflight["uname_machine"] == "aarch64"
-    assert preflight["architecture"] == "arm64"
-    assert preflight["container_platform"] == "linux/arm64"
+    assert preflight["uname_machine"] == machine
+    assert preflight["architecture"] == expected_architecture
+    assert preflight["container_platform"] == expected_platform
     assert preflight["gpus"] == [
         {
-            "name": "NVIDIA GH200 480GB",
+            "name": gpu_name,
             "uuid": "GPU-1234",
             "driver_version": "580.1",
             "memory_total_mib": 97871,
@@ -368,7 +380,7 @@ def test_host_hardware_preflight_binds_exact_gh200_arm64_identity() -> None:
     assert len(str(preflight["identity_sha256"])) == 64
 
 
-def test_every_suite_accepts_the_bound_gh200_hardware_contract() -> None:
+def test_every_suite_accepts_a_bound_native_hardware_contract() -> None:
     preflight = _host_hardware_preflight(
         "aarch64",
         "NVIDIA GH200 480GB, GPU-1234, 580.1, 97871\n",
@@ -387,7 +399,7 @@ def test_every_suite_accepts_the_bound_gh200_hardware_contract() -> None:
         }.intersection(SUITES[suite_name].bake_targets)
 
 
-def test_gh200_kernel_policy_is_explicit_no_download_and_fail_closed() -> None:
+def test_kernel_policy_is_explicit_no_download_and_fail_closed() -> None:
     hardware = _host_hardware_preflight(
         "aarch64",
         "NVIDIA GH200 480GB, GPU-1234, 580.1, 97871\n",
@@ -464,7 +476,7 @@ def test_reference_container_identity_is_stable_and_excludes_ephemeral_fields() 
     assert "ephemeral-hostname" not in str(identity)
 
 
-def test_gh200_hardware_binding_happens_before_archive_or_build(
+def test_hardware_binding_happens_before_archive_or_build(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -557,7 +569,7 @@ def test_gpu_golden_smoke_uses_checked_in_results_without_reference_images() -> 
     assert suite.bake_targets == ("candidate-structure",)
     assert suite.pre_commands == ()
     command = " ".join(suite.command)
-    assert "test_release_hopper_sm90_gpu_is_available_without_running_a_model" in command
+    assert "test_release_cuda_gpu_is_available_without_running_a_model" in command
     assert "tests/integration/test_official_goldens.py" in command
     assert "tests/structure/test_structure_official_goldens.py" in command
     assert "gpu and not large" in command
@@ -613,17 +625,17 @@ def test_benchmark_requires_a_tracked_baseline_and_capture_is_descriptive() -> N
         assert suite.pre_command_timeout_seconds >= 14_400
 
 
-def test_live_release_and_benchmark_suites_enforce_hopper_sm90_hardware() -> None:
+def test_live_release_and_benchmark_suites_validate_cuda_environment() -> None:
     compliance = " ".join(SUITES["compliance"].command)
     benchmark = " ".join(SUITES["benchmark"].command)
 
-    assert "test_release_hopper_sm90_gpu_is_available_without_running_a_model" in compliance
+    assert "test_release_cuda_gpu_is_available_without_running_a_model" in compliance
     assert "benchmarks/baselines/h100.json" in benchmark  # Legacy compatibility filename.
     source = (Path(__file__).resolve().parents[2] / "benchmarks" / "suite.py").read_text(
         encoding="utf-8"
     )
-    assert "validate_hopper_sm90_environment(environment)" in source
-    assert '"validated_hopper_sm90_exact_device"' in source
+    assert "validate_benchmark_environment(environment)" in source
+    assert '"validated_cuda_exact_environment"' in source
 
 
 def test_unit_suite_uses_the_structure_dependency_superset() -> None:

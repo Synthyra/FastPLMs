@@ -9,6 +9,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from typing import Any, ClassVar
 from torch import Tensor
+from tqdm.auto import tqdm
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
@@ -572,10 +573,19 @@ class Boltz2InferenceCore(nn.Module):
         max_parallel_samples: int | None = None,
         run_confidence_sequentially: bool = True,
         detach_confidence: bool = True,
+        verbose: bool = False,
     ) -> dict[str, Tensor]:
         # b is the batch size, t the token count, a the padded atom count,
         # d_s the token width, d_z the pair width, and m the diffusion multiplicity.
-        s_inputs = self.input_embedder(feats)  # (b, t, d_s)
+        with tqdm(
+            total=1,
+            desc="Boltz2: Input embeddings",
+            disable=not verbose,
+            dynamic_ncols=True,
+            leave=False,
+        ) as progress:
+            s_inputs = self.input_embedder(feats)  # (b, t, d_s)
+            progress.update()
         s_init = self.s_init(s_inputs)  # (b, t, d_s)
 
         z_init = (
@@ -598,7 +608,14 @@ class Boltz2InferenceCore(nn.Module):
         pair_mask = mask[:, :, None] * mask[:, None, :]  # (b, t, t)
 
         if self.run_trunk_and_structure:
-            for _ in range(recycling_steps + 1):
+            for _ in tqdm(
+                range(recycling_steps + 1),
+                desc="Boltz2: Recycling",
+                unit="cycle",
+                disable=not verbose,
+                dynamic_ncols=True,
+                leave=False,
+            ):
                 s = s_init + self.s_recycle(self.s_norm(s))  # (b, t, d_s)
                 z = z_init + self.z_recycle(self.z_norm(z))  # (b, t, t, d_z)
                 z = z + self.msa_module(
@@ -650,6 +667,7 @@ class Boltz2InferenceCore(nn.Module):
                     max_parallel_samples=max_parallel_samples,
                     steering_args=self.steering_args,
                     diffusion_conditioning=diffusion_conditioning,
+                    verbose=verbose,
                 )  # tensor values include sample_atom_coords: (b * m, a, 3)
             output.update(struct_out)
 
@@ -676,19 +694,27 @@ class Boltz2InferenceCore(nn.Module):
                 x_pred_c = x_pred  # (b * m, ..., a, 3)
                 pdist_c = output["pdistogram"][:, :, :, 0]  # (b, t, t, n_bin)
 
-            output.update(
-                self.confidence_module(
-                    s_inputs=s_inputs_c,
-                    s=s_c,
-                    z=z_c,
-                    x_pred=x_pred_c,
-                    feats=feats,
-                    pred_distogram_logits=pdist_c,
-                    multiplicity=diffusion_samples,
-                    run_sequentially=run_confidence_sequentially,
-                    use_kernels=self.use_kernels,
+            with tqdm(
+                total=1,
+                desc="Boltz2: Confidence",
+                disable=not verbose,
+                dynamic_ncols=True,
+                leave=False,
+            ) as progress:
+                output.update(
+                    self.confidence_module(
+                        s_inputs=s_inputs_c,
+                        s=s_c,
+                        z=z_c,
+                        x_pred=x_pred_c,
+                        feats=feats,
+                        pred_distogram_logits=pdist_c,
+                        multiplicity=diffusion_samples,
+                        run_sequentially=run_confidence_sequentially,
+                        use_kernels=self.use_kernels,
+                    )
                 )
-            )
+                progress.update()
 
         return output  # named tensors retain the shapes traced above
 
@@ -836,6 +862,7 @@ class Boltz2Model(PreTrainedModel):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
+        verbose: bool = False,
     ) -> Boltz2ModelOutput | tuple[Any, ...]:
         # Feature shapes follow build_boltz2_features; b and t are batch and token counts.
         output_attentions = (
@@ -866,6 +893,7 @@ class Boltz2Model(PreTrainedModel):
             max_parallel_samples=max_parallel_samples,
             run_confidence_sequentially=run_confidence_sequentially,
             detach_confidence=detach_confidence,
+            verbose=verbose,
         )  # named tensors use the Boltz2InferenceCore.forward shapes
         token_state = raw_output.get("s")  # (b, t, d_s) or None
         pair_state = raw_output.get("z")  # (b, t, t, d_z) or None
@@ -907,6 +935,7 @@ class Boltz2Model(PreTrainedModel):
         run_confidence_sequentially: bool = True,
         float_dtype: torch.dtype = torch.float32,
         seed: int | None = None,
+        verbose: bool = False,
     ) -> Boltz2StructureOutput:
         if float_dtype != torch.float32:
             raise ValueError(
@@ -923,16 +952,24 @@ class Boltz2Model(PreTrainedModel):
             )
 
         with _seed_context(seed):
-            feats, template = build_boltz2_features(
-                amino_acid_sequence=amino_acid_sequence,
-                num_bins=self.config.num_bins,
-                atoms_per_window_queries=(
-                    self.core.input_embedder.atom_encoder.atoms_per_window_queries
-                ),
-            )  # feature shapes are traced in build_boltz2_features
-            feats = self._to_model_device(
-                feats, float_dtype=torch.float32
-            )  # unchanged feature shapes
+            with tqdm(
+                total=1,
+                desc="Boltz2: Prepare features",
+                disable=not verbose,
+                dynamic_ncols=True,
+                leave=False,
+            ) as progress:
+                feats, template = build_boltz2_features(
+                    amino_acid_sequence=amino_acid_sequence,
+                    num_bins=self.config.num_bins,
+                    atoms_per_window_queries=(
+                        self.core.input_embedder.atom_encoder.atoms_per_window_queries
+                    ),
+                )  # feature shapes are traced in build_boltz2_features
+                feats = self._to_model_device(
+                    feats, float_dtype=torch.float32
+                )  # unchanged feature shapes
+                progress.update()
             autocast_context = (
                 torch.autocast(device_type="cuda", dtype=torch.bfloat16)
                 if self.device.type == "cuda"
@@ -947,6 +984,7 @@ class Boltz2Model(PreTrainedModel):
                     max_parallel_samples=max_parallel_samples,
                     run_confidence_sequentially=run_confidence_sequentially,
                     return_dict=True,
+                    verbose=verbose,
                 )  # named tensors use Boltz2InferenceCore.forward shapes
 
         sample_atom_coords_value = output.get(

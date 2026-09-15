@@ -62,7 +62,7 @@ AutoClasses, attention backends, precision paths, and release tiers.
 | DPLM2 | Amino-acid and structure co-generation | Amino-acid and structure token tracks | Separate structure and amino-acid boundary tokens |
 | ANKH | T5 protein encoding and sequence-to-sequence modeling | Amino-acid sequences tokenized for encoder or seq2seq use | The 1.0 artifact contract is one full official-compatible encoder-decoder checkpoint with encoder-default embeddings |
 | ESMFold | Sequence-to-structure inference | Raw amino-acid sequences | Meta ESMFold contract with FastPLMs ESM2 backbone |
-| ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Full variants have 48 folding blocks and optional MSA conditioning; Fast variants have 24 blocks and no MSA conditioning |
+| ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Full variants have 48 folding blocks and optional MSA conditioning; Fast variants have 24 blocks and no MSA conditioning; experimental base300M/base600M variants disable confidence outputs |
 | Boltz2 | Structure prediction | Raw amino-acid sequences or prepared model features | Provisional end-to-end numerical-equivalence status |
 
 The model manifest controls support, not this summary. A backend or AutoClass
@@ -491,6 +491,23 @@ single-sequence mode. See the official description in
 [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf). The quick start
 below uses Fast and no MSA.
 
+FastPLMs also exposes the experimental `Synthyra/ESMFold2-300` and
+`Synthyra/ESMFold2-600` mirrors. Their pinned configs use 24 folding blocks,
+no MSA conditioning, and disabled confidence heads. The 300M backbone is
+`960 x 30`; its single-protein comparison passed, as documented in
+[ESMFold2-300 validation](docs/validation/esmfold2_small.md). That case is not
+the full structure benchmark, which remains pending. The published mirrors are pinned
+to revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M backbone is
+`1152 x 36` and has no inference validation result. These variants do not
+produce pLDDT, pTM, iPTM, or PAE fields.
+
+Folding progress is disabled by default (`verbose=False`). Set `verbose=True` on
+ESMFold `infer`, ESMFold2 `fold` or `infer_protein`, or Boltz2
+`predict_structure` to display preparation, recycling, sampling, and confidence
+stages where available. The ESMFold2 model cards start with a two-protein
+example that writes `complex.cif`.
+
 ```python
 from transformers import AutoModel
 
@@ -547,9 +564,16 @@ multimolecule, modification, and bond paths and the pocket and distogram
 rejection contracts. Its ESMFold2 MSA path needs a full checkpoint, not a Fast
 checkpoint.
 
-The learned sequence representation combines 81 ordered ESMC hidden states with
-the folding checkpoint projection. Use the public embedding API to get the
-residue representation:
+The experimental `Synthyra/ESMFold2-300` and `Synthyra/ESMFold2-600` variants
+disable their confidence heads. Their folding results therefore do not contain
+pLDDT, pTM, iPTM, or PAE fields. The confidence fields shown in the examples
+above apply to variants with an enabled confidence head.
+
+The learned sequence representation combines the ordered hidden-state stack of
+each declared ESMFold2 backbone with the folding checkpoint projection. The
+established variants use 81 ESMC-6B states at width 2560; the experimental
+base300M and base600M variants use `(b, l, 31, 960)` and `(b, l, 37, 1152)`.
+Use the public embedding API to get the residue representation:
 
 ```python
 representations = folder.embed_dataset(
@@ -564,19 +588,23 @@ For lower-level integrations that already have the ordered ESMC hidden-state
 stack, use the projection directly:
 
 ```python
-# H: (b, l, 81, 2560)
+# H: (b, l, 81, 2560) for the established variants
 Z = folder.project_esmc_hidden_states(H)  # Z: (b, l, 256)
 ```
 
-Here, `H` is the 81-state ESMC representation for a prepared sequence batch. It
-is not a target structure. Use the dataset embedding API for normal sequences.
+For base300M and base600M, pass the corresponding `(b, l, 31, 960)` or
+`(b, l, 37, 1152)` stack. `H` is a backbone representation for a prepared
+sequence batch, not a target structure. Use the dataset embedding API for
+normal sequences.
 
 `folder.embed_dataset(..., full_embeddings=True)` returns one `(l, 256)` tensor
 for each single-chain sequence. It rejects complexes, ligands, MSAs,
 chain-separated inputs, `cls`, and `parti`.
 
 `esmc_precision="auto"` always uses BF16. Explicit FP8 is experimental,
-inference-only, and strict:
+inference-only, and strict for the ESMC-6B variants. The experimental
+base300M and base600M variants reject FP8 because their ESM++ small and large
+backbones do not advertise that path:
 
 ```python
 folder.reload_esmc(precision="fp8", device="cuda:0")
@@ -618,10 +646,11 @@ ESMFold2 structural objectives and an ESM++ sequence prior:
 Install the `binder` dependency profile, which includes the structure runtime
 and the example-only table and antibody dependencies. The published workflow
 requires Python 3.11-3.14, PyTorch 2.13,
-Transformers 5.13, the verified ESMFold2 runtime assets, and a CUDA device. The
-current release evidence target is the exact containerized Linux aarch64
-environment on the NVIDIA GH200 workstation. CPU-only, x86-64, Windows, macOS,
-H100, and H200 binder runs do not substitute for that evidence.
+Transformers 5.13, the verified ESMFold2 runtime assets, and a CUDA device.
+Docker execution with the required capabilities and numerical tests is valid
+on any compatible host. Record the actual accelerator and software stack in
+the run manifest. Historical release measurements from the containerized Linux
+aarch64 NVIDIA GH200 workstation remain tied to that environment.
 
 ```bash
 uv pip install \
@@ -712,13 +741,11 @@ family, dtype, padding, and numerical contracts.
 
 For ESMC, SDPA is the recommended highest-fidelity path. Flex Attention and
 FlashAttention 3 remain supported, non-experimental backends whose numerical
-deviations are diagnostic rather than strict parity failures. The current
-frozen-head release report is produced on the exact GH200/aarch64 validation
-target and must publish relative L2, Q99.9, residue and pooled cosine, top-1,
-and Jensen-Shannon distributions for each backend, dtype, exact hardware, and
-sequence panel. H100 and H200 remain supported Hopper-class devices, but their
-results are not interchangeable with or accepted as the current GH200 release
-evidence. Pending measurements are
+deviations are diagnostic rather than strict parity failures. The frozen-head
+release report must publish relative L2, Q99.9, residue and pooled cosine,
+top-1, and Jensen-Shannon distributions for each backend, dtype, exact
+hardware, and sequence panel. Results from different accelerator models remain
+separate. Pending measurements are
 labeled pending in every ESMC card; no number is inferred from a threshold or
 another checkpoint.
 

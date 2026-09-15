@@ -1,9 +1,10 @@
 # Benchmarking
 
-Performance measurements run outside pytest on the validated NVIDIA GH200
-workstation in the exact containerized Linux aarch64 environment. H100 and H200
-are supported Hopper-class devices, but they are not interchangeable with the
-current release benchmark evidence.
+Performance measurements run outside pytest on a compatible accelerator host in
+its containerized native environment. Each report records the exact hardware,
+platform, and software stack, and results from different devices remain
+separate. Historical release measurements identify an NVIDIA GH200 workstation
+running Linux aarch64 and remain tied to that environment.
 Pytest contains only a short CUDA-event smoke test for the harness. Correctness,
 parity, and structure compliance remain separate release gates.
 
@@ -11,10 +12,10 @@ Every report records the exact Python, PyTorch, CUDA, Transformers, FastPLMs,
 Hugging Face `kernels`, Transformer Engine, driver, and accelerator environment.
 Performance claims apply only when the current report exactly matches its
 baseline's accelerator name, compute capability, total GPU memory, driver, and
-software environment. Results are not transferable between GH200, H100, and
-H200, or between aarch64 and x86-64 environments. Remote orchestration resolves
-Bake to native `linux/arm64` on the GH200 and verifies every loaded image's
-architecture and content digest; Docker does not erase ABI differences.
+software environment. Results are not transferable between accelerator models
+or platforms. Remote orchestration resolves Bake to the host's native platform
+and verifies every loaded image's architecture and content digest; Docker does
+not erase ABI differences.
 
 ## Fixed release matrix
 
@@ -121,8 +122,9 @@ ESMFold2 keeps three representation measurements distinct:
   because this operation does not run ESMC.
 - `esmc_projection` receives preallocated residue tensors, runs ESMC with all 81
   hidden states, and applies the learned projection. This is the end-to-end
-  representation path measured separately in BF16 and FP8 across every ESMFold2
-  attention backend and each fixed shape. `esmc_reload_ms` records construction
+  representation path measured separately in BF16 and, for ESMC-6B variants,
+  FP8 across every declared attention backend and each fixed shape.
+  `esmc_reload_ms` records construction
   of runtime precision modules from canonical BF16 weights.
 - `esmfold2_embed` measures one complete call through the shared embedding API,
   including residue encoding, ESMC inference, learned projection, residue-only
@@ -131,6 +133,14 @@ ESMFold2 keeps three representation measurements distinct:
 None of these modes runs the folding trunk or diffusion sampler. Full ESMFold2
 folding remains in the structure suite, where geometry and confidence metrics
 are meaningful.
+
+The experimental ESMFold2-300 and ESMFold2-600 configs disable the confidence
+head. Folding benchmarks for those variants therefore do not report pLDDT, pTM,
+iPTM, or PAE. The 300M single-protein comparison passed, but the full
+structure benchmark remains pending. The mirrors are published at revisions
+`a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
+inference validation result.
 
 Run a single ESMC-plus-projection case with:
 
@@ -170,8 +180,7 @@ python -m benchmarks.suite \
 ```
 
 This legacy output name does not mean H100 execution. Current release reports
-must identify the exact GH200/aarch64 target. H100 and H200 reports are not
-GH200-equivalent.
+must identify the exact hardware and platform target.
 
 Exhaustive records use `matrix_kind="exhaustive"`,
 `claim_scope="descriptive_only"`, and `claim_eligible=false`. The command rejects
@@ -223,7 +232,7 @@ python -m benchmarks.regression \
 The command never updates a baseline. A baseline change is a separate,
 reviewable file change supported by raw results and a matching environment.
 The `benchmarks/baselines/h100.json` path is retained for compatibility, but the
-current release baseline must identify the exact GH200 device and Linux aarch64
+current release baseline must identify the exact device, platform, and
 environment that produced it.
 The regression gate rejects missing or different machine architecture, GPU
 name, compute capability, total memory, NVIDIA driver, Python/Torch/CUDA/cuDNN,

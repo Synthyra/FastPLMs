@@ -17,8 +17,8 @@ from fastplms.registry import get_model_registry
 from tests.structure.support import boltz2_bundle
 from tests.structure.support.boltz2_bundle import load_bundle, load_request
 from tests.structure.support.hardware import (
-    assert_same_hopper_sm90_device,
-    hopper_sm90_fingerprint,
+    assert_same_device,
+    device_fingerprint,
 )
 from tests.structure.support.state_contract import semantic_config_contract
 
@@ -133,7 +133,7 @@ def _assert_bundle_identity(
     assert metadata["attention_backend"] == "eager"
     environment = metadata["environment"]
     assert isinstance(environment, Mapping)
-    hopper_sm90_fingerprint(environment)
+    device_fingerprint(environment)
     if producer == "candidate":
         assert str(environment["torch"]).split("+", maxsplit=1)[0] == "2.13.0"
         packages = environment["packages"]
@@ -469,7 +469,7 @@ def test_boltz2_live_folding_matches_pinned_official() -> None:
     candidate_environment = candidate_metadata["environment"]
     assert isinstance(reference_environment, Mapping)
     assert isinstance(candidate_environment, Mapping)
-    assert_same_hopper_sm90_device(candidate_environment, reference_environment)
+    assert_same_device(candidate_environment, reference_environment)
     expected_keys = set(candidate_metadata["state"]["tensors"])
     canonical_reference = boltz2_bundle.canonicalize_reference_state_contract(
         reference_metadata["state"],

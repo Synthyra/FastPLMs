@@ -14,7 +14,6 @@ import inspect
 import json
 import platform
 import random
-import re
 import statistics
 import subprocess
 import sys
@@ -27,8 +26,6 @@ from typing import Any
 
 
 CANONICAL_AAS = "ACDEFGHIKLMNPQRSTVWY"
-HOPPER_SM90_CAPABILITY = (9, 0)
-_HOPPER_PRODUCT_PATTERN = re.compile(r"(?<![A-Z0-9])(GH200|H200|H100)(?![A-Z0-9])")
 
 
 @dataclass(frozen=True)
@@ -125,18 +122,24 @@ def environment_fingerprint(torch: Any) -> dict[str, Any]:
     }
 
 
-def validate_hopper_sm90_environment(environment: Mapping[str, Any]) -> None:
-    """Require an allowed Hopper product for a release-claim benchmark matrix."""
+def validate_benchmark_environment(environment: Mapping[str, Any]) -> None:
+    """Require complete CUDA metadata for a release benchmark matrix."""
 
     gpu = environment.get("gpu")
-    if not isinstance(gpu, str) or _HOPPER_PRODUCT_PATTERN.search(gpu.upper()) is None:
-        raise RuntimeError(
-            f"Release-claim benchmarks require an NVIDIA H100, H200, or GH200 GPU; got {gpu!r}."
-        )
+    if not isinstance(gpu, str) or not gpu.strip():
+        raise RuntimeError("Release-claim benchmarks require a non-empty CUDA GPU name.")
     capability = environment.get("gpu_capability")
-    if capability != list(HOPPER_SM90_CAPABILITY):
+    if (
+        not isinstance(capability, Sequence)
+        or isinstance(capability, (str, bytes))
+        or len(capability) != 2
+        or any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in capability
+        )
+    ):
         raise RuntimeError(
-            f"Release-claim benchmarks require compute capability 9.0; got {capability!r}."
+            "Release-claim benchmarks require two non-negative CUDA capability components."
         )
 
 

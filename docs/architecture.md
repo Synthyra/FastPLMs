@@ -8,7 +8,7 @@ Tests and container build contexts enforce this separation.
 ```text
 src/fastplms/       runtime source copied into Hugging Face artifacts
 tests/              unit, integration, parity, structure, and release tests
-benchmarks/         standalone, exact-device Hopper/SM90 performance harness
+benchmarks/         standalone, exact-device performance harness
 docker/             candidate, runtime, and reference container definitions
 examples/           runnable training and protein-design workflows
 tools/              artifact, conversion, remote, and debugging commands
@@ -89,6 +89,17 @@ branch.
 persistence, and resume. Model-specific adapters only prepare the representation
 and residue mask. E1 keeps its tokenizer-free raw-sequence adapter. ESMFold2
 produces its learned width-256 representation through a dedicated mixin.
+
+ESMFold2 structure variants retain the semantics declared by their pinned
+configs. The experimental Fast base300M and base600M variants use 24 folding
+blocks, no MSA conditioning, and backbone dimensions `960 x 30` and `1152 x
+36`, respectively. Their disabled confidence heads mean that pLDDT, pTM, iPTM,
+and PAE are not produced. Configuration facts do not imply inference
+validation; the 300M single-protein comparison passed, but the full benchmark
+remains pending. The published mirrors are pinned to revisions
+`a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
+inference result.
 
 `fastplms.models` contains model-family implementations. Parameter names remain
 compatible with existing checkpoints where possible. If a schema must change,

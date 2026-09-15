@@ -23,7 +23,7 @@ def test_model_manifest_is_complete_and_typed() -> None:
         "LICENSE",
         "THIRD_PARTY_NOTICES.md",
     }
-    assert len(registry) == 29
+    assert len(registry) == 31
     assert set(registry.upstreams) == {
         "ankh",
         "biohub-esm",
@@ -621,12 +621,14 @@ def test_manifest_rejects_invalid_hub_license_metadata(
         load_model_registry(path)
 
 
-def test_esmfold2_support_is_exactly_the_approved_four() -> None:
+def test_esmfold2_support_is_exactly_the_approved_six() -> None:
     registry = load_model_registry()
     family = registry.by_family("esmfold2")[0].family
     assert {model.official.repo_id for model in registry.by_family("esmfold2")} == {
         "biohub/ESMFold2",
         "biohub/ESMFold2-Fast",
+        "biohub/ESMFold2-Experimental-Fast-base300M-step1500k",
+        "biohub/ESMFold2-Experimental-Fast-base600M-step1500k",
         "biohub/ESMFold2-Experimental-Cutoff2025",
         "biohub/ESMFold2-Experimental-Fast-Cutoff2025",
     }
@@ -697,7 +699,10 @@ def test_checkpoint_provenance_is_explicit_and_release_gated() -> None:
     unresolved_count = 0
     for model in registry.values():
         for checkpoint in (model.fast, model.official):
-            assert len(checkpoint.revision) == 40
+            if checkpoint is model.fast and model.publication_status == "pending":
+                assert checkpoint.revision == "unpublished"
+            else:
+                assert len(checkpoint.revision) == 40
             assert checkpoint.files
             assert all(item.algorithm in {"git-sha1", "sha256"} for item in checkpoint.files)
             assert set(checkpoint.file_map).isdisjoint(checkpoint.unresolved_files)
@@ -712,7 +717,12 @@ def test_checkpoint_provenance_is_explicit_and_release_gated() -> None:
     )
     registry.require_resolved("esm2_8m")
     registry.require_resolved("esm2_35m")
-    registry.require_resolved()
+    pending = [spec.id for spec in registry.values() if spec.publication_status == "pending"]
+    if pending:
+        with pytest.raises(RegistryError, match="unpublished"):
+            registry.require_resolved()
+    else:
+        registry.require_resolved()
 
 
 def test_runtime_paths_cannot_include_official_sources() -> None:
@@ -744,11 +754,11 @@ def test_manifest_rejects_an_alternative_pinned_esmfold2_repository(tmp_path: Pa
     path = tmp_path / "models.toml"
     path.write_text(alternative, encoding="utf-8")
 
-    with pytest.raises(RegistryError, match="exactly the four approved"):
+    with pytest.raises(RegistryError, match="exactly the six approved"):
         load_model_registry(path)
 
 
-def test_manifest_rejects_a_fifth_esmfold2_checkpoint(tmp_path: Path) -> None:
+def test_manifest_rejects_an_unregistered_esmfold2_checkpoint(tmp_path: Path) -> None:
     manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
     invalid = manifest.replace(
         'id = "esmfold"\nfamily = "esmfold"',
@@ -768,7 +778,7 @@ def test_manifest_rejects_a_fifth_esmfold2_checkpoint(tmp_path: Path) -> None:
     path = tmp_path / "models.toml"
     path.write_text(invalid, encoding="utf-8")
 
-    with pytest.raises(RegistryError, match="exactly the four approved"):
+    with pytest.raises(RegistryError, match="exactly the six approved"):
         load_model_registry(path)
 
 

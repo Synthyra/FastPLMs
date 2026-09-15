@@ -19,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
+from tqdm.auto import tqdm
 
 from .configuration_esmfold2 import ESMFold2Config
 from .reproducibility import seed_context
@@ -2615,6 +2616,7 @@ class DiffusionStructureHead(nn.Module):
         return_atom_repr: bool = False,
         use_inference_cache: bool = True,
         denoising_early_exit_rmsd: float | None = None,
+        verbose: bool = False,
     ) -> dict[str, Tensor | None]:
         """Diffusion sampling (Algorithm 18).
 
@@ -2656,7 +2658,16 @@ class DiffusionStructureHead(nn.Module):
         step_pairs = list(zip(schedule[:-1], schedule[1:], gammas[1:], strict=True))
         num_steps = len(step_pairs)
 
-        for step_idx, (sigma_tm, sigma_t, gamma) in enumerate(step_pairs):
+        step_iterator = step_pairs
+        if verbose:
+            step_iterator = tqdm(
+                step_pairs,
+                total=num_steps if denoising_early_exit_rmsd is None else None,
+                desc="ESMFold2 diffusion",
+                unit="step",
+            )
+
+        for step_idx, (sigma_tm, sigma_t, gamma) in enumerate(step_iterator):
             x, x_denoised_prev = self._center_random_augmentation(
                 x, atom_mask, second_coords=x_denoised_prev
             )

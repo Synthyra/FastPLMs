@@ -1076,6 +1076,8 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
         all other operations and all SAE weights remain BF16.
         """
 
+        if self.config.hidden_size != 2560 or self.config.num_hidden_layers != 80:
+            raise ValueError("FP8 is supported only for the ESMC-6B backbone.")
         if self._esmc_fp8:
             return self._esmc_precision_status
         if self.training:

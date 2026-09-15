@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import torch
 from torch import Tensor
+from tqdm.auto import tqdm
 
 from .esmfold2_conformers import load_ccd
 from .esmfold2_molecular_complex import MolecularComplexResult
@@ -240,15 +241,19 @@ class ESMFold2InputBuilder:
 
     def _decode_sample(
         self,
-        output: Mapping[str, Tensor],
+        output: Mapping[str, Tensor | None],
         features: dict[str, Tensor],
         chain_infos: list[ChainInfo],
         sample: int,
         complex_id: str,
     ) -> MolecularComplexResult:
-        plddt = output["plddt"][sample]
+        plddt_output = output.get("plddt")
+        plddt = None if plddt_output is None else plddt_output[sample]
+        coords_output = output.get("sample_atom_coords")
+        if coords_output is None:
+            raise ValueError("ESMFold2 output omitted sample_atom_coords.")
         molecular_complex = build_molecular_complex_from_features(
-            coords=output["sample_atom_coords"][sample],
+            coords=coords_output[sample],
             plddt=plddt,
             atom_mask=features["atom_attention_mask"][0],
             ref_element=features["ref_element"][0],
@@ -269,7 +274,7 @@ class ESMFold2InputBuilder:
         iptm = output.get("iptm")
         return MolecularComplexResult(
             complex=molecular_complex,
-            plddt=plddt.detach().cpu(),
+            plddt=None if plddt is None else plddt.detach().cpu(),
             ptm=float(ptm[sample].item()) if ptm is not None else None,
             iptm=float(iptm[sample].item()) if iptm is not None else None,
             pae=sample_tensor("pae"),
@@ -281,16 +286,19 @@ class ESMFold2InputBuilder:
 
     def decode(
         self,
-        output: Mapping[str, Tensor],
+        output: Mapping[str, Tensor | None],
         features: dict[str, Tensor],
         chain_infos: list[ChainInfo],
         *,
         num_diffusion_samples: int = 1,
         complex_id: str = "pred",
     ) -> MolecularComplexResult | list[MolecularComplexResult]:
+        coords_output = output.get("sample_atom_coords")
+        if coords_output is None:
+            raise ValueError("ESMFold2 output omitted sample_atom_coords.")
         results = [
             self._decode_sample(output, features, chain_infos, sample, complex_id)
-            for sample in range(output["sample_atom_coords"].shape[0])
+            for sample in range(coords_output.shape[0])
         ]
         return results[0] if num_diffusion_samples == 1 and len(results) == 1 else results
 
@@ -308,13 +316,24 @@ class ESMFold2InputBuilder:
         max_inference_sigma: int | None = None,
         early_exit: bool = False,
         complex_id: str = "pred",
+        verbose: bool = False,
     ) -> MolecularComplexResult | list[MolecularComplexResult]:
-        features, chain_infos = self.prepare_model_input(
-            model,
-            input,
-            seed=seed,
-            device=model.device,
-        )
+        if verbose:
+            with tqdm(total=1, desc="ESMFold2 typed features", unit="stage") as progress:
+                features, chain_infos = self.prepare_model_input(
+                    model,
+                    input,
+                    seed=seed,
+                    device=model.device,
+                )
+                progress.update()
+        else:
+            features, chain_infos = self.prepare_model_input(
+                model,
+                input,
+                seed=seed,
+                device=model.device,
+            )
         overrides = _sampler_overrides(noise_scale, step_scale, max_inference_sigma)
         with torch.no_grad(), seed_context(seed):
             output = model(
@@ -324,8 +343,20 @@ class ESMFold2InputBuilder:
                 num_diffusion_samples=num_diffusion_samples,
                 early_exit=early_exit,
                 return_dict=True,
+                verbose=verbose,
                 **overrides,
             )
+        if verbose:
+            with tqdm(total=1, desc="ESMFold2 decode", unit="stage") as progress:
+                result = self.decode(
+                    output,
+                    features,
+                    chain_infos,
+                    num_diffusion_samples=num_diffusion_samples,
+                    complex_id=complex_id,
+                )
+                progress.update()
+            return result
         return self.decode(
             output,
             features,

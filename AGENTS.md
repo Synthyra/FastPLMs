@@ -6,7 +6,7 @@ FastPLMs maintains the runtime source uploaded to Hugging Face protein language
 and structure model repositories. This repository is a source, test, artifact,
 and dependency workspace, not an installable Python distribution. Changes must
 preserve biological conventions, Transformers behavior, reproducibility, legal
-provenance, and the evidence boundary of each model family.
+source records, and the evidence boundary of each model family.
 
 Start with [README.md](README.md) for user-facing behavior and
 [docs/README.md](docs/README.md) for documentation routing.
@@ -38,7 +38,7 @@ unused code path when the manifest or current tests say otherwise.
 - `examples/` contains runnable research and training examples. Keep examples
   directly in this directory rather than creating a tutorial subtree.
 - `model_cards/` contains generated checkpoint cards.
-- `LICENSES/` contains distributable third-party legal texts and provenance.
+- `LICENSES/` contains distributable third-party legal texts and source records.
 
 Do not place license files, model cards, or READMEs beside runtime model
 modules. Do not hand-edit generated model cards or
@@ -55,10 +55,21 @@ modules. Do not hand-edit generated model cards or
   and MSA semantics where applicable.
 - A requested attention backend either executes the named implementation or
   raises. Never add a silent fallback.
+- Folding progress is disabled by default (`verbose=False`). Progress display must
+  preserve outputs and random-number state; confidence-disabled ESMFold2
+  exports must retain unknown confidence values.
 - Official repositories are isolated references, not build inputs for runtime
   source. Production imports must not change `sys.path`, download code, compile
   a kernel, initialize a model, or mutate global Torch state.
 - State transformations are named, deterministic, and covered by exact tests.
+- ESMFold2 experimental Fast base300M and base600M variants retain their pinned
+  24-block, no-MSA contracts and use backbone dimensions `960 x 30` and
+  `1152 x 36`; their disabled confidence heads do not produce pLDDT, pTM, iPTM,
+  or PAE. The 300M single-protein comparison passed, but this is not the full
+  structure benchmark, which remains pending. The published mirrors are pinned to
+  revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+  `71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
+  inference validation result.
 - Boltz2 remains provisional until its declared native end-to-end equivalence
   limits pass. Do not broaden its claims from partial contracts.
 

@@ -18,7 +18,10 @@ EXPECTED_FP8_PROJECTIONS = 80
 
 
 def _esmfold2_specs() -> tuple[ModelSpec, ...]:
-    return get_model_registry().by_family("esmfold2")
+    return tuple(
+        spec for spec in get_model_registry().by_family("esmfold2")
+        if spec.backbone_model is None
+    )
 
 
 def _parameter(spec: ModelSpec) -> object:

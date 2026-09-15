@@ -79,7 +79,7 @@ class _ComplexRecords:
 
 def build_molecular_complex_from_features(
     coords: torch.Tensor,
-    plddt: torch.Tensor,
+    plddt: torch.Tensor | None,
     atom_mask: torch.Tensor,
     ref_element: torch.Tensor,
     ref_atom_name_chars: torch.Tensor,
@@ -96,7 +96,7 @@ def build_molecular_complex_from_features(
     X = coords.float().cpu().numpy()
     atom_names = ref_atom_name_chars.cpu().numpy()
     elements = ref_element.cpu().numpy()
-    confidence = plddt.float().cpu().numpy()
+    confidence = None if plddt is None else plddt.float().cpu().numpy()
     records = _ComplexRecords()
 
     def decode_atoms(tokens: Iterable[Any]):
@@ -117,8 +117,8 @@ def build_molecular_complex_from_features(
         if is_nonpolymer:
             mean_confidence = (
                 float(np.mean([confidence[token.token_index] for token in chain.tokens]))
-                if chain.tokens
-                else 0.0
+                if confidence is not None and chain.tokens
+                else float("nan")
             )
             records.add_token(
                 residue_name=chain.tokens[0].residue_name if chain.tokens else "LIG",
@@ -135,7 +135,11 @@ def build_molecular_complex_from_features(
             records.add_token(
                 residue_name=residue_tokens[0].residue_name,
                 asym_id=chain.asym_id,
-                plddt=float(np.mean([confidence[token.token_index] for token in residue_tokens])),
+                plddt=(
+                    float(np.mean([confidence[token.token_index] for token in residue_tokens]))
+                    if confidence is not None
+                    else float("nan")
+                ),
                 atoms=decode_atoms(residue_tokens),
                 hetero=False,
             )

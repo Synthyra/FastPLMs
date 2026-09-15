@@ -14,8 +14,8 @@ from fastplms.registry import get_model_registry
 from tests.structure.support import esmfold_bundle
 from tests.structure.support.esmfold_bundle import load_bundle, load_request
 from tests.structure.support.hardware import (
-    assert_same_hopper_sm90_device,
-    hopper_sm90_fingerprint,
+    assert_same_device,
+    device_fingerprint,
 )
 
 
@@ -265,7 +265,7 @@ def _assert_bundle_identity(
     assert metadata["execution"] == expected_execution
     environment = metadata["environment"]
     assert isinstance(environment, Mapping)
-    hopper_sm90_fingerprint(environment)
+    device_fingerprint(environment)
     if producer == "candidate":
         assert str(environment["torch"]).split("+", maxsplit=1)[0] == "2.13.0"
         assert str(environment["cuda_runtime"]).startswith("13.0")
@@ -347,7 +347,7 @@ def test_esmfold_live_official_structure_parity(precision: str) -> None:
     candidate_environment = candidate_metadata["environment"]
     assert isinstance(reference_environment, Mapping)
     assert isinstance(candidate_environment, Mapping)
-    assert_same_hopper_sm90_device(candidate_environment, reference_environment)
+    assert_same_device(candidate_environment, reference_environment)
     assert candidate_metadata["semantic_config"] == reference_metadata["semantic_config"]
     assert candidate_metadata["state"] == reference_metadata["state"]
     assert reference_tensors.keys() == candidate_tensors.keys()

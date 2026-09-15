@@ -13,7 +13,7 @@ from benchmarks.run import (
     _resolve_bf16_execution,
     _uses_bf16_autocast,
     run_case,
-    validate_hopper_sm90_environment,
+    validate_benchmark_environment,
 )
 from benchmarks.suite import (
     ESMFOLD2_DEDICATED_MODE,
@@ -151,7 +151,7 @@ def test_full_matrix_covers_fixed_shapes_for_each_sequence_backend() -> None:
         assert embedding[0].suite_profile == SEQUENCE_FORWARD_PROFILE
 
 
-def test_gh200_matrix_explicitly_selects_eager_sdpa_and_flex_only() -> None:
+def test_portable_matrix_explicitly_selects_eager_sdpa_and_flex_only() -> None:
     selected = ("eager", "sdpa", "flex_attention")
     cases = list(
         benchmark_cases(
@@ -329,26 +329,29 @@ def test_quick_matrix_is_one_short_case() -> None:
 
 
 @pytest.mark.parametrize(
-    "gpu",
-    ("NVIDIA H100 PCIe", "NVIDIA H200 NVL", "NVIDIA GH200 480GB"),
+    ("gpu", "capability"),
+    (("NVIDIA RTX 4070 Laptop GPU", [8, 9]), ("NVIDIA H100 PCIe", [9, 0])),
 )
-def test_release_benchmark_accepts_named_hopper_sm90_products(gpu: str) -> None:
-    validate_hopper_sm90_environment({"gpu": gpu, "gpu_capability": [9, 0]})
+def test_release_benchmark_accepts_any_named_cuda_device(
+    gpu: str,
+    capability: list[int],
+) -> None:
+    validate_benchmark_environment({"gpu": gpu, "gpu_capability": capability})
 
 
 @pytest.mark.parametrize(
     "environment",
     (
-        {"gpu": "NVIDIA A100-SXM4-80GB", "gpu_capability": [8, 0]},
-        {"gpu": "NVIDIA B200", "gpu_capability": [10, 0]},
-        {"gpu": "NVIDIA H100 PCIe", "gpu_capability": [8, 0]},
+        {"gpu": "", "gpu_capability": [8, 0]},
+        {"gpu": "NVIDIA RTX 4070 Laptop GPU", "gpu_capability": [8]},
+        {"gpu": "NVIDIA RTX 4070 Laptop GPU", "gpu_capability": [8, "9"]},
     ),
 )
-def test_release_benchmark_rejects_non_hopper_sm90_hardware(
+def test_release_benchmark_rejects_malformed_cuda_identity(
     environment: dict[str, object],
 ) -> None:
     with pytest.raises(RuntimeError):
-        validate_hopper_sm90_environment(environment)
+        validate_benchmark_environment(environment)
 
 
 def test_benchmark_load_class_is_manifest_advertised() -> None:

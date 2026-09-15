@@ -144,8 +144,8 @@ dtype; optimizer; seed; and data fingerprint.
 The example exposes `eager`, `sdpa`, and `flex_attention` with
 `--attn-backend`. It uses `sdpa` by default. It rejects FlashAttention because
 the CLI does not provide the explicit BF16 CUDA model-load and placement policy
-that Flash training needs. The GH200/aarch64 validation environment does not
-normally provide compatible bundled Flash kernels. This workflow does not
+that Flash training needs. A validation environment may not provide compatible
+bundled Flash kernels. This workflow does not
 recommend building them from source. Use SDPA for the default training path.
 Use Flex only on supported Torch platforms. Flash gradient evidence is a
 separate, device-specific compliance result. `--output-dir` names a parent

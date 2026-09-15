@@ -39,10 +39,11 @@ hashes, package version, and source-relative import identity in the versioned
 
 Bake does not set a CPU architecture. Direct calls use the native builder
 platform. `tools/remote/run.py` passes the platform found during preflight and
-checks the OS, architecture, and content digest of each loaded image. The GH200
-oracle uses the hash-attested `linux/arm64` dependency lock, including
-source-built wheels when needed. Containers do not remove ABI boundaries. Do
-not transfer evidence across platforms. Biohub suites build and load the tagged
+checks the OS, architecture, and content digest of each loaded image. The
+configured oracle lock may target a specific platform, including
+source-built wheels when needed. Containers do not remove ABI boundaries. Each
+report must identify the actual platform and hardware; do not transfer
+evidence across platforms. Biohub suites build and load the tagged
 `biohub-biotraj-wheel` target with the reference images. Before an oracle runs,
 remote orchestration stores its content digest with other targets in
 `artifacts/reference/environment/container-images.json`. Tags and creation

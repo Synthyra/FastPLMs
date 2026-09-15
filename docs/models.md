@@ -128,10 +128,10 @@ high-fidelity path. Flex Attention and FlashAttention 3 are supported,
 non-experimental backends. They report diagnostic numerical-deviation warnings
 instead of strict parity gates. Every checkpoint card gives the required
 relative L2, Q99.9, residue-cosine, pooled-cosine, top-1, and Jensen-Shannon
-table. A cell remains pending until a frozen-head report is available from the
-exact GH200/aarch64 validation target for the backend, dtype, software stack,
-and sequence panel. H100 and H200 are supported Hopper-class devices. Their
-measurements are not interchangeable with current GH200 release evidence.
+table. A cell remains pending until a frozen-head report is available from one
+explicitly recorded compatible hardware target for the backend, dtype, software
+stack, and sequence panel. Results from different accelerator models remain
+separate. Historical GH200/aarch64 measurements remain tied to that target.
 
 ### ESM3
 
@@ -384,12 +384,14 @@ single-label classification, and multi-label classification.
 
 Supported variants are restricted to:
 
-| Official checkpoint | Folding blocks | MSA conditioning | Intended path |
-| --- | ---: | --- | --- |
-| `biohub/ESMFold2` | 48 | Optional | Full sequence or complex inference, including MSA-conditioned requests |
-| `biohub/ESMFold2-Fast` | 24 | None; MSA-derived inputs are rejected | Inference-optimized single-sequence use |
-| `biohub/ESMFold2-Experimental-Cutoff2025` | 48 | Optional | Experimental-cutoff full inference, including MSA-conditioned requests |
-| `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; MSA-derived inputs are rejected | Experimental-cutoff, inference-optimized single-sequence use |
+| Official checkpoint | Folding blocks | MSA conditioning | Confidence head | Intended path |
+| --- | ---: | --- | --- | --- |
+| `biohub/ESMFold2` | 48 | Optional | Enabled | Full sequence or complex inference, including MSA-conditioned requests |
+| `biohub/ESMFold2-Fast` | 24 | None; MSA-derived inputs are rejected | Enabled | Inference-optimized single-sequence use |
+| `biohub/ESMFold2-Experimental-Cutoff2025` | 48 | Optional | Enabled | Experimental-cutoff full inference, including MSA-conditioned requests |
+| `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; MSA-derived inputs are rejected | Enabled | Experimental-cutoff, inference-optimized single-sequence use |
+| `biohub/ESMFold2-Experimental-Fast-base300M-step1500k` | 24 | None; MSA-derived inputs are rejected | Disabled; backbone `960 x 30` | Experimental single-sequence architecture; published; single-protein comparison passed; full benchmark pending |
+| `biohub/ESMFold2-Experimental-Fast-base600M-step1500k` | 24 | None; MSA-derived inputs are rejected | Disabled; backbone `1152 x 36` | Experimental single-sequence architecture; published; not inference validated |
 
 Fast is an architectural distinction, not only a speed label. Biohub
 [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf) describes Fast as a
@@ -400,19 +402,29 @@ multimolecule requests remain available, but each protein chain uses
 single-sequence mode. Fast variants reject MSA-derived inputs. Use a full
 variant when the request includes optional MSA conditioning.
 
-All four expose the learned ESMC projection and the `auto`, `bf16`, `fp32`, and
-`fp8` ESMC precision policy. The manifest marks `fp8` as experimental. It is an
-explicit inference-only opt-in. It does not claim release numerical parity. See
+All six expose the learned backbone projection. The established four variants
+use the `auto`, `bf16`, `fp32`, and experimental `fp8` ESMC precision policy.
+The base300M and base600M variants support `auto`, `bf16`, and `fp32`; their
+`fp8` requests fail because FP8 support is limited to ESMC-6B. See
 [ESMFold2](esmfold2.md) for the exact embedding, reload, and folding contracts.
 
-All four also advertise sequence and residue prediction AutoClasses. These
-single-chain, residue-only paths freeze ESMC and bypass every folding trunk. They
-train a transformer probe on the learned 81-state projection. Projection scope
+All six also advertise sequence and residue prediction AutoClasses. These
+single-chain, residue-only paths freeze the declared ESMC or ESM++ backbone and
+bypass every folding trunk. They train a transformer probe on the learned
+backbone-state projection. Projection scope
 also trains `base_z_combine` and `base_z_linear`; it does not fine-tune ESMC.
 
 The ESMFold2 folding checkpoint remains FP32. Folding computation uses CUDA
 BF16 autocast. Requested ESMC precision controls the ESMC backbone separately.
 Therefore, selecting BF16 or FP8 ESMC does not change folding-parameter storage.
+The base300M and base600M configs disable the confidence head. Their folding
+outputs therefore do not contain pLDDT, pTM, iPTM, or PAE fields. The 300M
+variant has a passed single-protein comparison, documented in
+[ESMFold2-300 validation](validation/esmfold2_small.md). This is not the full
+structure benchmark, which remains pending. The mirrors are published at revisions
+`a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
+inference validation result.
 
 ### Boltz2
 

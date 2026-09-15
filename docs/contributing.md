@@ -20,11 +20,12 @@ cuEquivariance and FP8 profiles belong in separate environments.
 
 Official submodules are not required for routine CPU work. Initialize them only
 for a live compliance run with `git submodule update --init --recursive`. Run
-release GPU verification on the configured Linux aarch64 GH200 host through
-`tools/remote/run.py`. H100 and H200 are supported Hopper-class devices, but do
-not substitute for the current exact-device release evidence. The runner binds
-Bake to native `linux/arm64` and records the GPU UUID; never use emulated images
-for CUDA evidence.
+GPU verification through `tools/remote/run.py` on a compatible host. Docker
+execution with the required capabilities and numerical tests is valid on any
+compatible accelerator. The runner binds Bake to the host's native platform
+and records the GPU UUID, architecture, and software stack; never use emulated
+images for CUDA evidence. Historical GH200/aarch64 reports remain tied to that
+hardware.
 Candidate PyTorch containers must use `ipc: host`.
 
 ## Code rules

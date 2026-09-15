@@ -34,6 +34,13 @@ def _tiny_config(*, num_hidden_layers: int = 2) -> ESMplusplusConfig:
     )
 
 
+def _declare_6b_fp8_eligibility(model: ESMplusplusModel) -> None:
+    """Mark a tiny tensor fixture as ESMC-6B without allocating 6B tensors."""
+
+    model.config.hidden_size = 2560
+    model.config.num_hidden_layers = 80
+
+
 def test_fp8_is_experimental_for_every_esmplusplus_checkpoint() -> None:
     models = load_model_registry().by_family("esm_plusplus")
 
@@ -122,6 +129,7 @@ def test_enable_fp8_requires_eval_mode_before_capability_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = ESMplusplusModel(_tiny_config()).train()
+    _declare_6b_fp8_eligibility(model)
     monkeypatch.setattr(
         esmpp_module,
         "_te_fp8_capability",
@@ -136,6 +144,7 @@ def test_enable_fp8_rejects_non_bf16_canonical_parameters(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = ESMplusplusModel(_tiny_config()).eval()
+    _declare_6b_fp8_eligibility(model)
     monkeypatch.setattr(
         esmpp_module,
         "_te_fp8_capability",
@@ -192,11 +201,20 @@ def test_enable_fp8_records_conversion_and_is_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model = ESMplusplusModel(_tiny_config()).to(dtype=torch.bfloat16).eval()
+    _declare_6b_fp8_eligibility(model)
     _install_fake_transformer_engine(monkeypatch)
     monkeypatch.setattr(
         esmpp_module,
         "_te_fp8_capability",
         lambda device: (True, f"FP8 available on {device}"),
+    )
+    monkeypatch.setattr(
+        esmpp_module,
+        "_convert_esmc_attention_outputs_to_te",
+        lambda module, *, expected_projections: _convert_esmc_attention_outputs_to_te(
+            module,
+            expected_projections=2,
+        ),
     )
 
     status = model.enable_fp8()
@@ -211,6 +229,25 @@ def test_enable_fp8_records_conversion_and_is_idempotent(
         "transformer.blocks.0.attn.out_proj",
         "transformer.blocks.1.attn.out_proj",
     )
+
+
+@pytest.mark.parametrize("hidden_size,num_hidden_layers", ((960, 30), (1152, 36)))
+def test_small_esmplusplus_fp8_rejection_precedes_runtime_access(
+    monkeypatch: pytest.MonkeyPatch,
+    hidden_size: int,
+    num_hidden_layers: int,
+) -> None:
+    model = SimpleNamespace(
+        config=SimpleNamespace(hidden_size=hidden_size, num_hidden_layers=num_hidden_layers),
+    )
+    monkeypatch.setattr(
+        esmpp_module,
+        "_te_fp8_capability",
+        lambda _device: pytest.fail("small-backbone FP8 validation reached runtime access"),
+    )
+
+    with pytest.raises(ValueError, match="only for the ESMC-6B backbone"):
+        ESMplusplusModel.enable_fp8(model)
 
 
 def test_fp8_context_requires_inference_mode() -> None:

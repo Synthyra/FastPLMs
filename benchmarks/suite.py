@@ -1,4 +1,4 @@
-"""Run the manifest-declared Hopper/SM90 benchmark matrix outside pytest."""
+"""Run the manifest-declared CUDA benchmark matrix outside pytest."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .run import (
     _require_torch,
     environment_fingerprint,
     run_case,
-    validate_hopper_sm90_environment,
+    validate_benchmark_environment,
 )
 
 
@@ -845,8 +845,8 @@ def build_parser() -> argparse.ArgumentParser:
             "flash_attention_3",
         ),
         help=(
-            "Restrict the matrix to this explicit backend subset. The GH200 release "
-            "runner passes eager, SDPA, and Flex and never downloads Flash kernels."
+            "Restrict the matrix to this explicit backend subset. The release runner "
+            "passes eager, SDPA, and Flex and never downloads Flash kernels."
         ),
     )
     parser.add_argument(
@@ -903,7 +903,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     torch = _require_torch()
     environment = environment_fingerprint(torch)
     if not arguments.quick and not arguments.exhaustive:
-        validate_hopper_sm90_environment(environment)
+        validate_benchmark_environment(environment)
     report: dict[str, Any] = {
         "schema_version": 3,
         "status": "running",
@@ -916,7 +916,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             if arguments.exhaustive
             else "smoke_only"
             if arguments.quick
-            else "validated_hopper_sm90_exact_device"
+            else "validated_cuda_exact_environment"
         ),
         "artifact_load_mode": (
             "validated_local_build" if arguments.artifact_root is not None else "hub"

@@ -17,6 +17,7 @@ import gc
 import importlib
 import importlib.metadata
 import math
+from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -26,6 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from tqdm.auto import tqdm
 from transformers.modeling_outputs import ModelOutput
 from transformers.modeling_utils import PreTrainedModel
 
@@ -79,6 +81,7 @@ from .modeling_esmfold2_common import (
 
 _ESMC_FP8_LINEAR_SUFFIX = ".attn.out_proj"
 _ESMC_FP8_EXPECTED_PROJECTIONS = 80
+_ESMC_BF16_ROUNDED_SHAPES = frozenset({(960, 30), (1152, 36)})
 _EPS = 1e-6
 _NONPOLYMER_ID = 4
 
@@ -143,9 +146,7 @@ def _resolve_structure_output_controls(
             "trunk. output_attentions=True is unsupported."
         )
     resolved_hidden_states = (
-        config.output_hidden_states
-        if output_hidden_states is None
-        else output_hidden_states
+        config.output_hidden_states if output_hidden_states is None else output_hidden_states
     )
     resolved_return_dict = config.use_return_dict if return_dict is None else return_dict
     return bool(resolved_hidden_states), bool(resolved_return_dict)
@@ -234,9 +235,16 @@ def _load_fastplms_esmplusplus_for_esmfold2(
         revision_kwargs["revision"] = source_revision
     esmc_config = ESMplusplusConfig.from_pretrained(normalized_path, **revision_kwargs)
     set_config_attn_implementation(esmc_config, attn_backend)
+    # The smaller folding checkpoints pin BF16-rounded frozen backbone values.
+    # Retain that rounding if a caller explicitly requests FP32 execution.
+    small_backbone = (
+        esmc_config.hidden_size,
+        esmc_config.num_hidden_layers,
+    ) in _ESMC_BF16_ROUNDED_SHAPES
+    checkpoint_dtype = torch.bfloat16 if small_backbone else dtype
     load_kwargs: dict[str, Any] = {
         "config": esmc_config,
-        "torch_dtype": dtype,
+        "torch_dtype": checkpoint_dtype,
         **revision_kwargs,
     }
     if device.type == "cuda":
@@ -244,7 +252,7 @@ def _load_fastplms_esmplusplus_for_esmfold2(
         # of materializing the 6B backbone in host memory first.
         load_kwargs["device_map"] = {"": str(device)}
     esmc = ESMplusplusModel.from_pretrained(normalized_path, **load_kwargs)
-    if device.type != "cuda":
+    if device.type != "cuda" or checkpoint_dtype != dtype:
         esmc = esmc.to(device=device, dtype=dtype)
     else:
         loaded_device = next(esmc.parameters()).device
@@ -280,15 +288,25 @@ def _manifest_esmc_checkpoint_contract(
     if backbone_model is None:
         raise RuntimeError("families.esmfold2 must declare backbone_model.")
     spec = registry[backbone_model]
-    for checkpoint in (spec.fast, spec.official):
+    checkpoints = (
+        spec.fast,
+        spec.official,
+        *(
+            checkpoint
+            for model in registry.by_family("esmfold2")
+            if model.backbone_model is not None
+            for checkpoint in (
+                registry[model.backbone_model].fast,
+                registry[model.backbone_model].official,
+            )
+        ),
+    )
+    for checkpoint in checkpoints:
         if checkpoint.repo_id == normalized_path:
-            return checkpoint.revision, {
-                item.path: item.encoded for item in checkpoint.files
-            }
+            return checkpoint.revision, {item.path: item.encoded for item in checkpoint.files}
     if "/" in normalized_path:
         raise ValueError(
-            f"Remote ESMC source {normalized_path!r} is not the manifest-declared "
-            f"ESMFold2 backbone {spec.fast.repo_id!r}."
+            f"Remote ESMC source {normalized_path!r} is not a manifest-declared ESMFold2 backbone."
         )
     return None, {}
 
@@ -419,6 +437,8 @@ def _install_esmc_backbone(
     device: str | torch.device | None = None,
     local_files_only: bool = False,
 ) -> None:
+    if precision == "fp8" and (model.config.lm_num_layers != 80 or model.config.lm_d_model != 2560):
+        raise ValueError("ESMFold2 FP8 is supported only for the ESMC-6B backbone.")
     target_device = torch.device(device) if device is not None else model.device
     if target_device.type == "cuda" and target_device.index is None and torch.cuda.is_available():
         target_device = torch.device("cuda", torch.cuda.current_device())
@@ -1011,9 +1031,7 @@ class ESMFold2Model(
             precision=precision,
             device=device,
             local_files_only=(
-                self._esmc_local_files_only
-                if local_files_only is None
-                else local_files_only
+                self._esmc_local_files_only if local_files_only is None else local_files_only
             ),
         )
 
@@ -1249,6 +1267,7 @@ class ESMFold2Model(
         mol_type: Tensor,
         tok_mask: Tensor,
         lm_mask_pct: float = 0.0,
+        verbose: bool = False,
     ) -> Tensor:
         if self._esmc_fp8 and torch.is_grad_enabled():
             _reload_esmc_bf16_for_gradients(
@@ -1263,6 +1282,21 @@ class ESMFold2Model(
         # Transformer Engine FP8 kernels require l to be a multiple of 16.
         pad_to = 16 if self._esmc_fp8 else None
         with _lm_precision_context(self._esmc_precision_status.resolved, self.device):
+            if verbose:
+                with tqdm(total=1, desc="ESMFold2 backbone", unit="stage") as progress:
+                    result = compute_lm_hidden_states(
+                        self._esmc,
+                        input_ids,
+                        asym_id,
+                        residue_index,
+                        mol_type,
+                        tok_mask,
+                        pad_to_multiple=pad_to,
+                        lm_mask_pct=lm_mask_pct,
+                        mask_token_id=SEQUENCE_MASK_TOKEN,
+                    )
+                    progress.update()
+                return result
             return compute_lm_hidden_states(
                 self._esmc,
                 input_ids,
@@ -1298,6 +1332,7 @@ class ESMFold2Model(
         b_mat: Tensor,
         tok_mask: Tensor,
         total_steps: int,
+        verbose: bool = False,
     ) -> Tensor:
         # Helper method (not inline) so per-iter locals free on return:
         # otherwise leaks about 2 GB of l^2 * c_z data into distogram/sample scope.
@@ -1311,7 +1346,16 @@ class ESMFold2Model(
         )
         _lm_dropout_p = getattr(lm_cfg, "lm_dropout", 0.0)
 
-        for _ in range(total_steps):
+        loop_iterator = range(total_steps)
+        if verbose:
+            loop_iterator = tqdm(
+                loop_iterator,
+                total=total_steps,
+                desc="ESMFold2 recycling",
+                unit="loop",
+            )
+
+        for _ in loop_iterator:
             if _per_loop_lm_dropout:
                 if lm_z is None:
                     raise RuntimeError("Per-loop LM dropout requires LM pair features.")
@@ -1424,6 +1468,7 @@ class ESMFold2Model(
         frames_idx: Tensor | None = None,
         disto_cond: Tensor | None = None,
         disto_cond_mask: Tensor | None = None,
+        verbose: bool = False,
     ) -> ESMFold2Output | tuple[Any, ...]:
         output_hidden_states, return_dict = _resolve_structure_output_controls(
             self.config,
@@ -1525,6 +1570,7 @@ class ESMFold2Model(
                     mol_type,
                     tok_mask,
                     lm_mask_pct=(self.config.lm_mask_pct if lm_mask_pct is None else lm_mask_pct),
+                    verbose=verbose,
                 )
             lm_z: Tensor | None = None
             if lm_hidden_states is not None:
@@ -1566,6 +1612,7 @@ class ESMFold2Model(
                 b_mat=b_mat,
                 tok_mask=tok_mask,
                 total_steps=total_steps,
+                verbose=verbose,
             )
             del z_init, lm_z, _msa_inputs, a, b_mat
 
@@ -1600,6 +1647,7 @@ class ESMFold2Model(
             step_scale=step_scale,
             return_atom_repr=False,
             denoising_early_exit_rmsd=(0.10 if early_exit else None),
+            verbose=verbose,
         )
 
         sample_coords = structure_output["sample_atom_coords"]
@@ -1608,20 +1656,46 @@ class ESMFold2Model(
         output: dict[str, Tensor] = {"distogram_logits": distogram_logits}
         output["sample_atom_coords"] = sample_coords
 
-        confidence_output = self.confidence_head(
-            s_inputs=x_inputs.detach(),
-            z=z.detach().float(),
-            x_pred=sample_coords.detach(),
-            distogram_atom_idx=disto_idx,
-            token_attention_mask=tok_mask,
-            atom_to_token=atom_to_token,
-            atom_attention_mask=atm_mask,
-            asym_id=asym_id,
-            mol_type=mol_type,
-            num_diffusion_samples=n_samples,
-            relative_position_encoding=relative_position_encoding.detach(),
-            token_bonds_encoding=token_bonds_encoding.detach(),
+        confidence_config = self.config.confidence_head
+        confidence_enabled = (
+            confidence_config.get("enabled", True)
+            if isinstance(confidence_config, Mapping)
+            else getattr(confidence_config, "enabled", True)
         )
+        confidence_output: dict[str, Tensor] = {}
+        if confidence_enabled:
+            if verbose:
+                with tqdm(total=1, desc="ESMFold2 confidence", unit="stage") as progress:
+                    confidence_output = self.confidence_head(
+                        s_inputs=x_inputs.detach(),
+                        z=z.detach().float(),
+                        x_pred=sample_coords.detach(),
+                        distogram_atom_idx=disto_idx,
+                        token_attention_mask=tok_mask,
+                        atom_to_token=atom_to_token,
+                        atom_attention_mask=atm_mask,
+                        asym_id=asym_id,
+                        mol_type=mol_type,
+                        num_diffusion_samples=n_samples,
+                        relative_position_encoding=relative_position_encoding.detach(),
+                        token_bonds_encoding=token_bonds_encoding.detach(),
+                    )
+                    progress.update()
+            else:
+                confidence_output = self.confidence_head(
+                    s_inputs=x_inputs.detach(),
+                    z=z.detach().float(),
+                    x_pred=sample_coords.detach(),
+                    distogram_atom_idx=disto_idx,
+                    token_attention_mask=tok_mask,
+                    atom_to_token=atom_to_token,
+                    atom_attention_mask=atm_mask,
+                    asym_id=asym_id,
+                    mol_type=mol_type,
+                    num_diffusion_samples=n_samples,
+                    relative_position_encoding=relative_position_encoding.detach(),
+                    token_bonds_encoding=token_bonds_encoding.detach(),
+                )
         output.update(confidence_output)
         output["atom_pad_mask"] = atm_mask.unsqueeze(0) if atm_mask.dim() == 1 else atm_mask
         output["residue_index"] = residue_index
@@ -1642,7 +1716,12 @@ class ESMFold2Model(
             raise ValueError(
                 "infer_protein always returns a mapping; return_dict=False is invalid."
             )
-        features = prepare_protein_features(seq)
+        if forward_kwargs.get("verbose", False):
+            with tqdm(total=1, desc="ESMFold2 features", unit="stage") as progress:
+                features = prepare_protein_features(seq)
+                progress.update()
+        else:
+            features = prepare_protein_features(seq)
         if not self.config.msa_conditioning:
             for name in MSA_CONDITIONING_INPUT_NAMES:
                 features.pop(name, None)
@@ -1684,6 +1763,7 @@ class ESMFold2Model(
         max_inference_sigma: int | None = None,
         early_exit: bool = False,
         complex_id: str = "pred",
+        verbose: bool = False,
     ):
         return self.input_builder.fold(
             self,
@@ -1697,6 +1777,7 @@ class ESMFold2Model(
             max_inference_sigma=max_inference_sigma,
             early_exit=early_exit,
             complex_id=complex_id,
+            verbose=verbose,
         )
 
     def _fold_protein_no_ttt(
@@ -1712,6 +1793,7 @@ class ESMFold2Model(
         num_diffusion_samples: int = 1,
         seed: int | None = None,
         complex_id: str = "pred",
+        verbose: bool = False,
     ):
         from .esmfold2_types import MSA, ProteinInput, StructurePredictionInput
 
@@ -1737,6 +1819,7 @@ class ESMFold2Model(
             num_diffusion_samples=num_diffusion_samples,
             seed=seed,
             complex_id=complex_id,
+            verbose=verbose,
         )
 
     @staticmethod
@@ -1792,6 +1875,7 @@ class ESMFold2Model(
         num_diffusion_samples: int = 1,
         seed: int | None = None,
         complex_id: str = "pred",
+        verbose: bool = False,
         ttt: bool = False,
         ttt_config: TTTConfig | dict[str, Any] | None = None,
     ):
@@ -1807,6 +1891,7 @@ class ESMFold2Model(
                 num_diffusion_samples=num_diffusion_samples,
                 seed=seed,
                 complex_id=complex_id,
+                verbose=verbose,
                 ttt_config=ttt_config,
             )
         return self._fold_protein_no_ttt(
@@ -1820,6 +1905,7 @@ class ESMFold2Model(
             num_diffusion_samples=num_diffusion_samples,
             seed=seed,
             complex_id=complex_id,
+            verbose=verbose,
         )
 
     def fold_protein_ttt(
@@ -1836,6 +1922,7 @@ class ESMFold2Model(
         seed: int | None = None,
         complex_id: str = "pred",
         ttt_config: TTTConfig | dict[str, Any] | None = None,
+        verbose: bool = False,
     ):
         self._ensure_ttt_bf16()
         if self._esmc is None:
@@ -1850,6 +1937,7 @@ class ESMFold2Model(
             "num_diffusion_samples": num_diffusion_samples,
             "seed": seed,
             "complex_id": complex_id,
+            "verbose": verbose,
         }
         baseline = self._ttt_select_result(self._fold_protein_no_ttt(sequence, **fold_kwargs))
         baseline_plddt = self._ttt_mean_plddt(baseline)

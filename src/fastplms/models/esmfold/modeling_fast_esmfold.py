@@ -16,10 +16,13 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+from collections.abc import Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass
+from contextlib import contextmanager
 from typing import Any
 from einops import rearrange
+from tqdm.auto import tqdm
 from torch.nn import functional as F
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.esm.configuration_esm import EsmConfig
@@ -140,6 +143,78 @@ _ESMFOLD_CAPTURED_ATTENTIONS: ContextVar[
     "fastplms_esmfold_captured_attentions",
     default=None,
 )
+
+
+@contextmanager
+def _folding_progress(
+    model: nn.Module,
+    *,
+    num_recycles: int | None,
+    verbose: bool,
+) -> Iterator[None]:
+    """Report actual embedding, recycling, and confidence stages."""
+
+    if not verbose:
+        yield
+        return
+
+    trunk = getattr(model, "trunk", None)
+    blocks = getattr(trunk, "blocks", None)
+    structure_module = getattr(trunk, "structure_module", None)
+    embedding = getattr(model, "esm", None)
+    confidence_heads = tuple(
+        getattr(model, name, None)
+        for name in ("distogram_head", "lm_head", "lddt_head", "ptm_head")
+    )
+    if not isinstance(blocks, nn.ModuleList) or not isinstance(structure_module, nn.Module):
+        raise RuntimeError("ESMFold progress requires the standard folding trunk modules.")
+
+    if num_recycles is None:
+        recycle_passes = getattr(getattr(trunk, "config", None), "max_recycles", 0)
+    else:
+        recycle_passes = num_recycles + 1
+    confidence_modules = tuple(
+        head for head in confidence_heads if isinstance(head, nn.Module)
+    )
+    total = (
+        int(isinstance(embedding, nn.Module))
+        + max(int(recycle_passes), 0) * (len(blocks) + 1)
+        + len(confidence_modules)
+    )
+    progress = tqdm(total=total, desc="ESMFold embeddings", unit="stage")
+
+    def update_progress(stage: str, *_args: Any) -> None:
+        progress.set_description(f"ESMFold {stage}")
+        progress.update(1)
+
+    handles = []
+    try:
+        if isinstance(embedding, nn.Module):
+            handles.append(
+                embedding.register_forward_hook(
+                    lambda *_args: update_progress("embeddings", *_args)
+                )
+            )
+        for block in blocks:
+            handles.append(
+                block.register_forward_hook(
+                    lambda *_args: update_progress("recycling", *_args)
+                )
+            )
+        handles.append(
+            structure_module.register_forward_hook(
+                lambda *_args: update_progress("recycling", *_args)
+            )
+        )
+        handles.extend(
+            head.register_forward_hook(lambda *_args: update_progress("confidence", *_args))
+            for head in confidence_modules
+        )
+        yield
+    finally:
+        for handle in handles:
+            handle.remove()
+        progress.close()
 
 
 def _align_internal_esm_attentions(
@@ -674,8 +749,13 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
+        verbose: bool = False,
     ) -> FastEsmForProteinFoldingOutput | tuple[Any, ...]:
-        """Run folding with Meta ESMFold's 0-to-100 pLDDT convention."""
+        """Run folding with Meta ESMFold's 0-to-100 pLDDT convention.
+
+        Set ``verbose=True`` to display progress for embeddings, recycling, and
+        confidence heads. The default keeps the call silent.
+        """
 
         config = getattr(self, "config", None)
         resolved_attentions = (
@@ -698,14 +778,19 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
         capture_token = _ESMFOLD_CAPTURED_ATTENTIONS.set(None)
         captured_attentions: tuple[torch.Tensor, ...] | None = None
         try:
-            output = super().forward(
-                input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                masking_pattern=masking_pattern,
+            with _folding_progress(
+                self,
                 num_recycles=num_recycles,
-                output_hidden_states=resolved_hidden_states,
-            )
+                verbose=verbose,
+            ):
+                output = super().forward(
+                    input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    masking_pattern=masking_pattern,
+                    num_recycles=num_recycles,
+                    output_hidden_states=resolved_hidden_states,
+                )
             captured_attentions = _ESMFOLD_CAPTURED_ATTENTIONS.get()
         finally:
             _ESMFOLD_CAPTURED_ATTENTIONS.reset(capture_token)
@@ -743,12 +828,14 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
         num_recycles: int | None = None,
         residue_index_offset: int | None = 512,
         chain_linker: str | None = "G" * 25,
+        verbose: bool = False,
     ):
         """Fold raw sequences through Meta ESMFold's public input contract.
 
         Transformers v5 narrows ``infer`` even though ``forward`` retains the
         required controls. This adapter restores recycle selection, explicit
         residue indices, masking, and colon-delimited multimer preparation.
+        Set ``verbose=True`` to display folding progress.
         """
 
         sequence_batch = [sequences] if isinstance(sequences, str) else sequences
@@ -816,6 +903,7 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
             position_ids=residx,
             masking_pattern=masking_pattern,
             num_recycles=num_recycles,
+            verbose=verbose,
         )
         output["atom37_atom_exists"] = output["atom37_atom_exists"] * linker_mask.unsqueeze(2)
         output["mean_plddt"] = (output["plddt"] * output["atom37_atom_exists"]).sum(

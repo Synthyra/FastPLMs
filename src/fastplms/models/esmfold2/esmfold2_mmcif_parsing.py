@@ -58,7 +58,7 @@ def round_mmcif_columns(cif_file: CIFFile) -> None:
         original = atom_site[name]
         values = original.as_array(np.float64)
         strings = np.asarray(
-            [f"{value:.{decimals}f}" for value in values],
+            ["?" if not np.isfinite(value) else f"{value:.{decimals}f}" for value in values],
             dtype=np.str_,
         )
         atom_site[name] = CIFColumn(

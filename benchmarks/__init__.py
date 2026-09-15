@@ -1,4 +1,4 @@
-"""Reproducible, exact-device Hopper/SM90 benchmarks for FastPLMs."""
+"""Reproducible CUDA benchmarks for FastPLMs."""
 
 from .regression import GateResult, GateThresholds, compare_reports
 

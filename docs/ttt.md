@@ -78,11 +78,13 @@ require a model-specific export and do not silently drop adaptation.
 
 ## Folding
 
-ESMFold2 exposes a family-specific opt-in folding helper. Adaptation affects
-only its language-model backbone. ESMFold2 uses canonical BF16 ESMC weights
-before a gradient-enabled path. If serving selected FP8, entering TTT reloads
-canonical BF16 weights while preserving the requested serving policy in
-configuration and status metadata.
+The non-experimental standard and Fast ESMFold2 variants expose a family-specific
+opt-in folding helper. Adaptation affects only their language-model backbone. ESMFold2 uses
+canonical BF16 ESMC weights before a gradient-enabled path. If serving selected
+FP8, entering TTT reloads canonical BF16 weights while preserving the requested
+serving policy in configuration and status metadata. Experimental ESMFold2
+variants, including the Cutoff2025 and base300M/base600M checkpoints, do not
+expose folding TTT.
 
 Meta ESMFold does not expose TTT. Its pinned checkpoint contains the folding
 language model but no trained masked-language-model head for the ProteinTTT

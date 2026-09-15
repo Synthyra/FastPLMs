@@ -36,6 +36,7 @@ MARKDOWN_ROOTS = (
     ROOT / "README.md",
     ROOT / "THIRD_PARTY_NOTICES.md",
     ROOT / "LICENSES",
+    ROOT / "requirements" / "README.md",
     ROOT / "benchmarks" / "README.md",
     ROOT / "docker" / "README.md",
     ROOT / "docs",
@@ -50,6 +51,7 @@ FENCE_PATTERN = re.compile(
     re.MULTILINE | re.DOTALL,
 )
 LINK_PATTERN = re.compile(r"!?\[[^\]]*\]\((?P<target>[^)]+)\)")
+BANNED_DOCUMENT_TERM_PATTERN = re.compile(r"\bprovenance\b", re.IGNORECASE)
 UNBACKED_CLAIM_PATTERNS = (
     re.compile(
         r"\b(?:is|are|has been|have been)\s+"
@@ -87,6 +89,19 @@ def _markdown_files() -> tuple[Path, ...]:
             paths.append(candidate)
         elif candidate.is_dir():
             paths.extend(sorted(candidate.rglob("*.md")))
+    return tuple(paths)
+
+
+def _first_party_markdown_files() -> tuple[Path, ...]:
+    excluded_roots = {"LICENSES", "vendor"}
+    paths: list[Path] = []
+    for path in _markdown_files():
+        relative = path.relative_to(ROOT)
+        if relative.name == "THIRD_PARTY_NOTICES.md":
+            continue
+        if relative.parts and relative.parts[0] in excluded_roots:
+            continue
+        paths.append(path)
     return tuple(paths)
 
 
@@ -137,6 +152,16 @@ def test_shape_notation_detector_rejects_square_and_uppercase_dimensions() -> No
 def test_repository_documentation_uses_canonical_shape_notation() -> None:
     violations = scan_repository(ROOT)
     assert not violations, "\n" + "\n".join(violation.render(ROOT) for violation in violations)
+
+
+def test_first_party_markdown_avoids_banned_document_term() -> None:
+    violations: list[str] = []
+    for path in _first_party_markdown_files():
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if BANNED_DOCUMENT_TERM_PATTERN.search(line):
+                relative = path.relative_to(ROOT).as_posix()
+                violations.append(f"{relative}:{line_number}: {line.strip()}")
+    assert not violations, "Banned term found in first-party Markdown:\n" + "\n".join(violations)
 
 
 def test_notation_inventory_includes_container_and_provenance_docs() -> None:
@@ -322,6 +347,9 @@ def test_capability_evidence_selectors_resolve_to_their_declared_jobs() -> None:
             assert path.exists(), f"Evidence selector target does not exist: {relative}"
             if selector.tier == "cpu_contract":
                 assert relative.startswith("tests/cpu/")
+            elif selector.tier == "check":
+                assert relative.startswith("tests/unit/")
+                assert "tests/unit" in commands["check"]
             elif selector.tier in {"feature", "nightly", "compliance"}:
                 assert relative in commands[selector.tier]
             elif selector.tier == "artifact":
@@ -353,9 +381,8 @@ def test_generated_esmc_cards_state_mask_precedence_and_route_hopper_scope_to_do
     attention_docs = " ".join(
         (ROOT / "docs/attention_backends.md").read_text(encoding="utf-8").split()
     )
-    assert "exact GH200/aarch64 workstation" in attention_docs
-    assert "H100 and H200" in attention_docs
-    assert "not current release evidence" in attention_docs
+    assert "Docker execution" in attention_docs
+    assert "Historical measurements from the GH200/aarch64 workstation" in attention_docs
 
 
 def test_generated_cards_keep_integrity_digests_in_machine_records() -> None:
@@ -565,7 +592,27 @@ def test_generated_cards_put_installation_before_hub_quick_start() -> None:
         if path.name == "README.md":
             continue
         text = path.read_text(encoding="utf-8")
-        assert text.index("## Install and platform requirements") < text.index("## Quick start")
+        if path.stem.startswith("esmfold2"):
+            assert text.index("## Quick start") < text.index("## Install and platform requirements")
+            assert text.index("## Quick start") < text.index("## Model overview")
+            assert 'dtype=torch.float32' in text
+            assert 'device_map="cuda"' in text
+            assert 'esmc_precision="bf16"' in text
+            assert "model.set_chunk_size(32)" in text
+            assert "types.StructurePredictionInput" in text
+            assert 'Path("complex.cif").write_text' in text
+            assert "num_diffusion_samples=1" in text
+            assert "seed=17" in text
+            assert "verbose=True" in text
+            if path.stem in {"esmfold2_300", "esmfold2_600"}:
+                assert "num_sampling_steps=15" in text
+            else:
+                quick_start = text.split("## Quick start", maxsplit=1)[1].split(
+                    "## Install and platform requirements", maxsplit=1
+                )[0]
+                assert "num_sampling_steps=" not in quick_start
+        else:
+            assert text.index("## Install and platform requirements") < text.index("## Quick start")
         assert "resolve/main/requirements.txt" in text
         assert "fastplms @ git+" not in text
         assert "implementation itself is embedded in the model repository" in text
@@ -577,10 +624,15 @@ def test_generated_cards_put_installation_before_hub_quick_start() -> None:
         "esmfold2_fast.md",
         "esmfold2_experimental_cutoff2025.md",
         "esmfold2_experimental_fast_cutoff2025.md",
+        "esmfold2_300.md",
+        "esmfold2_600.md",
     ):
         text = (ROOT / "model_cards" / name).read_text(encoding="utf-8")
-        assert "exact NVIDIA GH200 on Linux aarch64" in text
+        assert "Validation runs in Docker on any compatible CUDA device" in text
         assert "validated release target is Linux x86-64" not in text
+
+    assert "verbose=False" in (ROOT / "model_cards" / "boltz2.md").read_text(encoding="utf-8")
+    assert "verbose=False" in (ROOT / "model_cards" / "esmfold.md").read_text(encoding="utf-8")
 
 
 def test_esmfold2_cards_match_checkpoint_specific_msa_contracts() -> None:
@@ -588,6 +640,8 @@ def test_esmfold2_cards_match_checkpoint_specific_msa_contracts() -> None:
     for name in (
         "esmfold2_fast.md",
         "esmfold2_experimental_fast_cutoff2025.md",
+        "esmfold2_300.md",
+        "esmfold2_600.md",
     ):
         path = ROOT / "model_cards" / name
         text = path.read_text(encoding="utf-8")

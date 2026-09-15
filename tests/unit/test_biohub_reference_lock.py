@@ -416,6 +416,42 @@ def test_reference_environment_evidence_is_exact_and_deterministic() -> None:
         )
 
 
+def test_reference_environment_rejects_malformed_gpu_evidence() -> None:
+    payload = _reference_environment_payload()
+    runtime = payload["runtime"]
+    assert isinstance(runtime, dict)
+    gpu = runtime["gpu"]
+    assert isinstance(gpu, dict)
+    gpu["capability"] = [8, "9"]
+
+    with pytest.raises(BiohubReferenceEnvironmentError, match="GPU identity"):
+        validate_biohub_reference_environment_evidence(
+            payload,
+            repository_root=_ROOT,
+            contract_path=_CONTRACT,
+        )
+
+
+def test_reference_environment_rejects_image_platform_drift() -> None:
+    payload = _reference_environment_payload()
+    container = payload["container_identity"]
+    assert isinstance(container, dict)
+    images = container["images"]
+    assert isinstance(images, dict)
+    image = images["reference-biohub-esm"]
+    assert isinstance(image, dict)
+    image["architecture"] = "amd64"
+    image["resolved_platform"] = "linux/amd64"
+    payload["container_identity_sha256"] = _canonical_digest(container)
+
+    with pytest.raises(BiohubReferenceEnvironmentError, match="platform differs"):
+        validate_biohub_reference_environment_evidence(
+            payload,
+            repository_root=_ROOT,
+            contract_path=_CONTRACT,
+        )
+
+
 def test_biohub_environment_image_validation_survives_python_optimized_mode() -> None:
     source = (_ROOT / "tools/remote/biohub_reference_environment.py").read_text(encoding="utf-8")
 

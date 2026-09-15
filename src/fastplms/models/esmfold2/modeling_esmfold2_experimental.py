@@ -9,6 +9,7 @@ re-injection and a different confidence/MSA stack.
 from __future__ import annotations
 
 import gc
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
@@ -16,6 +17,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from tqdm.auto import tqdm
 from transformers.modeling_utils import PreTrainedModel
 
 from .attention import ESMFold2AttentionMixin
@@ -569,9 +571,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             precision=precision,
             device=device,
             local_files_only=(
-                self._esmc_local_files_only
-                if local_files_only is None
-                else local_files_only
+                self._esmc_local_files_only if local_files_only is None else local_files_only
             ),
         )
 
@@ -627,6 +627,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         residue_index: Tensor,
         mol_type: Tensor,
         tok_mask: Tensor,
+        verbose: bool = False,
     ) -> Tensor:
         if self._esmc_fp8 and torch.is_grad_enabled():
             _reload_esmc_bf16_for_gradients(
@@ -640,6 +641,19 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             raise RuntimeError("ESMFold2 language-model features require load_esmc=True.")
         pad_to = 16 if self._esmc_fp8 else None
         with _lm_precision_context(self._esmc_precision_status.resolved, self.device):
+            if verbose:
+                with tqdm(total=1, desc="ESMFold2 backbone", unit="stage") as progress:
+                    result = compute_lm_hidden_states(
+                        self._esmc,
+                        input_ids,
+                        asym_id,
+                        residue_index,
+                        mol_type,
+                        tok_mask,
+                        pad_to_multiple=pad_to,
+                    )
+                    progress.update()
+                return result
             return compute_lm_hidden_states(
                 self._esmc,
                 input_ids,
@@ -696,6 +710,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         frames_idx: Tensor | None = None,
         disto_cond: Tensor | None = None,
         disto_cond_mask: Tensor | None = None,
+        verbose: bool = False,
     ) -> ESMFold2Output | tuple[Any, ...]:
         output_hidden_states, return_dict = _resolve_structure_output_controls(
             self.config,
@@ -796,7 +811,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
 
             if lm_hidden_states is None and input_ids is not None and self._esmc is not None:
                 lm_hidden_states = self._compute_lm_hidden_states(
-                    input_ids, asym_id, residue_index, mol_type, tok_mask
+                    input_ids, asym_id, residue_index, mol_type, tok_mask, verbose=verbose
                 )
             if lm_hidden_states is not None:
                 lm_dropout = (
@@ -845,7 +860,16 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             z = torch.zeros_like(z_init)
             prev_pair: Tensor | None = None
             prev_disto_probs: Tensor | None = None
-            for loop_num in range(n_loops + 1):
+            loop_iterator = range(n_loops + 1)
+            if verbose:
+                loop_iterator = tqdm(
+                    loop_iterator,
+                    total=n_loops + 1 if not early_exit else None,
+                    desc="ESMFold2 recycling",
+                    unit="loop",
+                )
+
+            for loop_num in loop_iterator:
                 z = z_init + self.pair_loop_proj(z)
                 if msa_kwargs is not None and self.msa_encoder is not None:
                     z = z + self.msa_encoder(x_pair=z, **msa_kwargs).to(z.dtype)
@@ -899,6 +923,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 step_scale=step_scale,
                 return_atom_repr=False,
                 denoising_early_exit_rmsd=(0.10 if early_exit else None),
+                verbose=verbose,
             )
         sample_coords = structure_output["sample_atom_coords"]
         if sample_coords is None:
@@ -924,21 +949,45 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             "sample_atom_coords": sample_coords,
             "representative_atom_coords": representative_atom_coords,
         }
-        if calculate_confidence and self.confidence_head is not None:
-            confidence_output = self.confidence_head(
-                s_inputs=x_inputs.detach(),
-                z=z.detach().float(),
-                x_pred=sample_coords.detach(),
-                distogram_atom_idx=distogram_atom_idx,
-                token_attention_mask=tok_mask,
-                atom_to_token=atom_to_token,
-                atom_attention_mask=atm_mask,
-                asym_id=asym_id,
-                mol_type=mol_type,
-                num_diffusion_samples=n_samples,
-                relative_position_encoding=relative_position_encoding.detach(),
-                token_bonds_encoding=token_bonds_encoding.detach(),
-            )
+        confidence_config = self.config.confidence_head
+        confidence_enabled = (
+            confidence_config.get("enabled", True)
+            if isinstance(confidence_config, Mapping)
+            else getattr(confidence_config, "enabled", True)
+        )
+        if calculate_confidence and confidence_enabled and self.confidence_head is not None:
+            if verbose:
+                with tqdm(total=1, desc="ESMFold2 confidence", unit="stage") as progress:
+                    confidence_output = self.confidence_head(
+                        s_inputs=x_inputs.detach(),
+                        z=z.detach().float(),
+                        x_pred=sample_coords.detach(),
+                        distogram_atom_idx=distogram_atom_idx,
+                        token_attention_mask=tok_mask,
+                        atom_to_token=atom_to_token,
+                        atom_attention_mask=atm_mask,
+                        asym_id=asym_id,
+                        mol_type=mol_type,
+                        num_diffusion_samples=n_samples,
+                        relative_position_encoding=relative_position_encoding.detach(),
+                        token_bonds_encoding=token_bonds_encoding.detach(),
+                    )
+                    progress.update()
+            else:
+                confidence_output = self.confidence_head(
+                    s_inputs=x_inputs.detach(),
+                    z=z.detach().float(),
+                    x_pred=sample_coords.detach(),
+                    distogram_atom_idx=distogram_atom_idx,
+                    token_attention_mask=tok_mask,
+                    atom_to_token=atom_to_token,
+                    atom_attention_mask=atm_mask,
+                    asym_id=asym_id,
+                    mol_type=mol_type,
+                    num_diffusion_samples=n_samples,
+                    relative_position_encoding=relative_position_encoding.detach(),
+                    token_bonds_encoding=token_bonds_encoding.detach(),
+                )
             output.update(confidence_output)
         output["atom_pad_mask"] = atm_mask.unsqueeze(0) if atm_mask.dim() == 1 else atm_mask
         output["residue_index"] = residue_index
@@ -981,7 +1030,12 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             raise ValueError(
                 "infer_protein always returns a mapping; return_dict=False is invalid."
             )
-        features = prepare_protein_features(seq)
+        if forward_kwargs.get("verbose", False):
+            with tqdm(total=1, desc="ESMFold2 features", unit="stage") as progress:
+                features = prepare_protein_features(seq)
+                progress.update()
+        else:
+            features = prepare_protein_features(seq)
         if not self.config.msa_conditioning:
             for name in MSA_CONDITIONING_INPUT_NAMES:
                 features.pop(name, None)
@@ -1011,6 +1065,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         max_inference_sigma: int | None = None,
         early_exit: bool = False,
         complex_id: str = "pred",
+        verbose: bool = False,
     ):
         return self.input_builder.fold(
             self,
@@ -1024,6 +1079,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             max_inference_sigma=max_inference_sigma,
             early_exit=early_exit,
             complex_id=complex_id,
+            verbose=verbose,
         )
 
     def fold_protein(
@@ -1036,6 +1092,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         num_diffusion_samples: int = 1,
         seed: int | None = None,
         complex_id: str = "pred",
+        verbose: bool = False,
     ):
         from .esmfold2_types import ProteinInput, StructurePredictionInput
 
@@ -1047,6 +1104,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             num_diffusion_samples=num_diffusion_samples,
             seed=seed,
             complex_id=complex_id,
+            verbose=verbose,
         )
 
     @staticmethod

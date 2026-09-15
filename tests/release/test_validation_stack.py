@@ -1,4 +1,4 @@
-"""Exact, low-cost validation-stack checks for Hopper/SM90 release hardware."""
+"""Exact, low-cost validation-stack checks for CUDA release hardware."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import torch
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
-from tests.structure.support.hardware import hopper_sm90_fingerprint
+from tests.structure.support.hardware import device_fingerprint
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,11 +52,11 @@ def test_gpu_validation_stack_is_exactly_pinned() -> None:
 
 
 @pytest.mark.gpu
-def test_release_hopper_sm90_gpu_is_available_without_running_a_model() -> None:
+def test_release_cuda_gpu_is_available_without_running_a_model() -> None:
     assert torch.cuda.is_available()
     assert torch.cuda.device_count() >= 1
     properties = torch.cuda.get_device_properties(0)
-    hopper_sm90_fingerprint(
+    device_fingerprint(
         {
             "cuda_device": properties.name,
             "cuda_device_capability": list(torch.cuda.get_device_capability(0)),

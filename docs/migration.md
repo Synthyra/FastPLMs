@@ -262,8 +262,9 @@ that previously treated element zero as sequence logits.
 
 ## ESMFold2 and structure dependencies
 
-Only the standard, fast, experimental cutoff 2025, and experimental fast
-cutoff 2025 ESMFold2 variants remain supported. Dataset embeddings accept a
+The standard, fast, experimental cutoff 2025, experimental fast cutoff 2025,
+experimental Fast base300M, and experimental Fast base600M ESMFold2 variants
+remain supported. Dataset embeddings accept a
 single protein chain and expose the learned width-256 representation.
 
 The full `ESMFold2` and `ESMFold2-Experimental-Cutoff2025` checkpoints have 48
@@ -272,7 +273,15 @@ have 24 folding blocks and were trained without MSA conditioning, so they
 reject MSA-derived inputs rather than silently ignoring them. This includes
 `ProteinInput.msa` and low-level MSA-derived features. Fast still supports the
 declared multichain and multimolecule inputs when every protein chain uses
-`msa=None`. This distinction follows the official model description in
+`msa=None`. The base300M and base600M configs also disable the confidence head
+and use backbone dimensions `960 x 30` and `1152 x 36`, respectively. They do
+not produce pLDDT, pTM, iPTM, or PAE fields. The 300M single-protein
+comparison passed, but the full structure benchmark remains pending. The
+published mirrors are pinned to revisions
+`a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
+inference validation result. This
+distinction follows the official model description in
 [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf).
 
 `esmc_precision="auto"` resolves to BF16. FP8 is an explicit, experimental,

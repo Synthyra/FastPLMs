@@ -43,6 +43,8 @@ def test_esmfold2_msa_conditioning_is_manifest_typed() -> None:
     } == {
         "esmfold2": True,
         "esmfold2_fast": False,
+        "esmfold2_300": False,
+        "esmfold2_600": False,
         "esmfold2_experimental_cutoff2025": True,
         "esmfold2_experimental_fast_cutoff2025": False,
     }

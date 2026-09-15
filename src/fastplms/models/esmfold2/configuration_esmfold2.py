@@ -44,8 +44,18 @@ def _esmc_backbone_checkpoint_ids() -> tuple[str, str]:
 def normalize_esmc_id(esmc_id: str) -> str:
     """Resolve an official ESMC identifier to its FastPLMs checkpoint mirror."""
 
+    from fastplms.registry import get_model_registry
+
     official_repo, fast_repo = _esmc_backbone_checkpoint_ids()
-    return fast_repo if esmc_id == official_repo else esmc_id
+    if esmc_id == official_repo:
+        return fast_repo
+    registry = get_model_registry()
+    for spec in registry.by_family("esmfold2"):
+        if spec.backbone is not None and spec.backbone_model is not None:
+            backbone = registry[spec.backbone_model]
+            if esmc_id in {spec.backbone.repo_id, backbone.official.repo_id}:
+                return backbone.fast.repo_id
+    return esmc_id
 
 
 def normalize_esmc_attention_implementation(

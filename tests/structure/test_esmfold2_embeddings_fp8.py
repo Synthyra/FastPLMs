@@ -504,9 +504,10 @@ def test_fp8_language_model_input_is_padded_to_multiple_of_16() -> None:
     assert torch.equal(H[0, 0, :, 0], torch.arange(81, dtype=H.dtype))
 
 
-def test_supported_variants_are_exactly_the_four_approved_sources() -> None:
+def test_fp8_variants_are_exactly_the_four_6b_sources() -> None:
     official_repositories = {
         spec.official.repo_id for spec in get_model_registry().by_family("esmfold2")
+        if spec.backbone_model is None
     }
     assert official_repositories == {
         "biohub/ESMFold2",

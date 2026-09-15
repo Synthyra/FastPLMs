@@ -18,7 +18,7 @@ selectable. Strict-parity exceptions are documented in the checkpoint cards.
 | `ankh` | ANKH | 5 | Amino-acid sequences tokenized for encoder or sequence-to-sequence use | `AutoConfig`, `AutoModel`, `AutoModelForMaskedLM`, `AutoModelForSeq2SeqLM`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
 | `boltz2` | Boltz2 | 1 | Raw amino-acid sequences through the convenience API, or prepared model features | `AutoConfig`, `AutoModel` | `n/a` |
 | `esmfold` | ESMFold | 1 | Raw amino-acid sequences through folding helpers, or prepared residue tensors | `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
-| `esmfold2` | ESMFold2 | 4 | Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors | `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
+| `esmfold2` | ESMFold2 | 6 | Raw amino-acid sequences or typed molecular-complex specifications; low-level forward accepts prepared feature tensors | `AutoConfig`, `AutoModel`, `AutoModelForSequenceClassification`, `AutoModelForTokenClassification` | `n/a` |
 
 ## AutoClass weight status
 
@@ -141,6 +141,8 @@ selectable. Strict-parity exceptions are documented in the checkpoint cards.
 | `esmfold2_fast` | `esmfold2` | `structure` | [Synthyra/ESMFold2-Fast](https://huggingface.co/Synthyra/ESMFold2-Fast) | [biohub/ESMFold2-Fast](https://huggingface.co/biohub/ESMFold2-Fast) | `fast` | `identity` | `not_applicable` | `none` (Fast; MSA inputs rejected) | 0 |
 | `esmfold2_experimental_cutoff2025` | `esmfold2` | `structure` | [Synthyra/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Cutoff2025) | [biohub/ESMFold2-Experimental-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Cutoff2025) | `fast` | `identity` | `not_applicable` | `optional` (full checkpoint) | 0 |
 | `esmfold2_experimental_fast_cutoff2025` | `esmfold2` | `structure` | [Synthyra/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/Synthyra/ESMFold2-Experimental-Fast-Cutoff2025) | [biohub/ESMFold2-Experimental-Fast-Cutoff2025](https://huggingface.co/biohub/ESMFold2-Experimental-Fast-Cutoff2025) | `fast` | `identity` | `not_applicable` | `none` (Fast; MSA inputs rejected) | 0 |
+| `esmfold2_300` | `esmfold2` | `structure` | [Synthyra/ESMFold2-300](https://huggingface.co/Synthyra/ESMFold2-300) | [biohub/ESMFold2-Experimental-Fast-base300M-step1500k](https://huggingface.co/biohub/ESMFold2-Experimental-Fast-base300M-step1500k) | `fast` | `identity` | `not_applicable` | `none` (Fast; MSA inputs rejected) | 0 |
+| `esmfold2_600` | `esmfold2` | `structure` | [Synthyra/ESMFold2-600](https://huggingface.co/Synthyra/ESMFold2-600) | [biohub/ESMFold2-Experimental-Fast-base600M-step1500k](https://huggingface.co/biohub/ESMFold2-Experimental-Fast-base600M-step1500k) | `fast` | `identity` | `not_applicable` | `none` (Fast; MSA inputs rejected) | 0 |
 
 A nonzero unresolved-file count blocks release. It is not permission to
 omit that file from checkpoint, tokenizer, artifact, or compliance checks.

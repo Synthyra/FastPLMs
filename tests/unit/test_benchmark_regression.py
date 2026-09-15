@@ -39,7 +39,7 @@ def _report(values: list[float], *, memory: int = 1_000_000_000) -> dict:
         "status": "complete",
         "environment": ENVIRONMENT,
         "matrix_kind": "fixed",
-        "claim_scope": "validated_hopper_sm90_exact_device",
+        "claim_scope": "validated_cuda_exact_environment",
         "backend_policy": {
             "requested": ["eager", "sdpa", "flex_attention"],
             "selection": "explicit_subset",
