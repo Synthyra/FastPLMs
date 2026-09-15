@@ -90,7 +90,7 @@
     "transformer_engine_version": null
   },
   "repository": "Synthyra/ESMFold2-300",
-  "revision": "d28d60c7ebe32c793d7e5387b258df3f2b3d093d",
+  "revision": "c5ab9623368b223111791a6c7017e6dfdc95da46",
   "schema_version": 1,
   "seed": 17,
   "sequence": "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE",

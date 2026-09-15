@@ -1,0 +1,26 @@
+{
+  "repositories": {
+    "Synthyra/ESMFold2-300": {
+      "file_count": 70,
+      "parent_commit": "d28d60c7ebe32c793d7e5387b258df3f2b3d093d",
+      "payload_inventory_sha256": "846b1c0067b0c7586d1715cb472d4938aef8f20b21c488c642e181da7ef13b62",
+      "preexisting_unplanned_files_preserved": true,
+      "revision": "c5ab9623368b223111791a6c7017e6dfdc95da46",
+      "status": "verified",
+      "weights_uploaded": false
+    },
+    "Synthyra/ESMFold2-600": {
+      "file_count": 70,
+      "parent_commit": "8fee248af8267a0778ca995500c7a3630a315791",
+      "payload_inventory_sha256": "c6e235a7782eff184e628714d1a591b502d27391784373fa31dfa6a646fe7745",
+      "preexisting_unplanned_files_preserved": true,
+      "revision": "d41470d3654c8dbace5440f3a04b876c00dea156",
+      "status": "verified",
+      "weights_uploaded": false
+    }
+  },
+  "schema_version": 1,
+  "scope": "files-only",
+  "source_git_commit": "929b75b0b85807b9cd89a6711300f18a98d97e0d",
+  "status": "verified"
+}

@@ -103,7 +103,7 @@ expand the case into a full benchmark.
 Automatic loading and inference from the published 300M repository also
 passed. The run used checkpoint revision
 `a38a62ae930d157484b331c2bf4241684573adba` and runtime revision
-`d28d60c7ebe32c793d7e5387b258df3f2b3d093d`. The raw result is recorded in
+`c5ab9623368b223111791a6c7017e6dfdc95da46`. The raw result is recorded in
 [published loading evidence](esmfold2_300_published_loading.json).
 
 ## Evidence files
@@ -122,3 +122,4 @@ The raw comparison and metadata are tracked beside this report:
 - [artifact reload comparison](esmfold2_300_artifact_reload.json)
 - [published artifact evidence](esmfold2_small_publication.json)
 - [published loading evidence](esmfold2_300_published_loading.json)
+- [verified files-only updates](fastplms_files_only_publication.json)
