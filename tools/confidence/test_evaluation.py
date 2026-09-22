@@ -13,19 +13,18 @@ import hashlib
 import multiprocessing
 import tempfile
 import warnings
-
 import numpy as np
 import torch
 
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
 from safetensors.torch import load_file
 
-from .labels import _masked_cross_entropy
 from .experiment_artifacts import write_new_json
+from .labels import _masked_cross_entropy
 from .online_training import head_output, structure
 from .ranking import expected_mean_plddt, expected_tm_scores
 from .rollouts import (
@@ -119,9 +118,15 @@ def structure_scores(structures: SampleStructures) -> dict[str, float | None]:
     warnings.filterwarnings("ignore", category=ResourceWarning)
 
     alignment = tm_align(
-        structures.predicted_ca, structures.true_ca, structures.ca_sequence, structures.ca_sequence
+        structures.predicted_ca,
+        structures.true_ca,
+        structures.ca_sequence,
+        structures.ca_sequence,
     )
-    scores: dict[str, float | None] = {"tm_score": float(alignment.tm_norm_chain2), "dockq": None}
+    scores: dict[str, float | None] = {
+        "tm_score": float(alignment.tm_norm_chain2),
+        "dockq": None,
+    }
     # PDB chain ids hold one character, so DockQ is skipped for complexes above 26 chains.
     if 1 < len(structures.chain_ids) <= 26:
         from DockQ.DockQ import load_PDB, run_on_all_native_interfaces
@@ -159,9 +164,14 @@ def _summaries(
         plddt_logits.float().softmax(-1)
         * ((torch.arange(50, device=plddt_logits.device) + 0.5) / 50)
     ).sum(-1)[0]  # (a,)
-    ptm, iptm = expected_tm_scores(pae_logits, inputs["asym_id"], inputs["token_attention_mask"])  # each (1,)
+    ptm, iptm = expected_tm_scores(
+        pae_logits, inputs["asym_id"], inputs["token_attention_mask"]
+    )  # each (1,)
     labeled = targets["plddt_mask"]  # (a,)
-    atom_plddt, atom_lddt = per_atom[labeled], targets["plddt_score"][labeled].float()  # (n,), (n,)
+    atom_plddt, atom_lddt = (
+        per_atom[labeled],
+        targets["plddt_score"][labeled].float(),
+    )  # (n,), (n,)
     # Per-bin sums let bootstrap draws add samples instead of concatenating millions of atoms.
     bins = (atom_plddt * CALIBRATION_BINS).long().clamp(0, CALIBRATION_BINS - 1)  # (n,)
     bin_zeros = torch.zeros(CALIBRATION_BINS, device=atom_plddt.device)  # (bins,)
@@ -195,6 +205,49 @@ def _summaries(
     }
 
 
+def _write_partial_target(
+    directory: Path, index: int, target_id: str, records: list[dict[str, object]]
+) -> None:
+    """Publish one complete target atomically without marking the evaluation complete."""
+    path = directory / f"{index:06d}.json"
+    if path.exists():
+        raise FileExistsError(f"Partial target already exists: {path}")
+    temporary = path.with_name(f".{path.name}.tmp")
+    write_new_json(
+        temporary,
+        {
+            "status": "partial_evaluation",
+            "target_index": index,
+            "target_id": target_id,
+            "skipped_out_of_memory": not records,
+            "records": records,
+        },
+    )
+    temporary.replace(path)
+
+
+@dataclass
+class _PendingTarget:
+    target_id: str
+    records: list[dict[str, object]]
+    scores: list[Future[dict[str, float | None]]]
+
+    def save(self, directory: Path, index: int) -> None:
+        for record, future in zip(self.records, self.scores, strict=True):
+            record.update(future.result())
+        _write_partial_target(directory, index, self.target_id, self.records)
+
+
+def _save_finished_targets(pending: dict[int, _PendingTarget], directory: Path) -> None:
+    for index, target in list(pending.items()):
+        if all(
+            future.done() and not future.cancelled() and future.exception() is None
+            for future in target.scores
+        ):
+            target.save(directory, index)
+            del pending[index]
+
+
 def fold_and_score(
     model: torch.nn.Module,
     pool_dir: Path,
@@ -209,74 +262,102 @@ def fold_and_score(
     for path in (output_path, skipped_path):
         if path.exists():
             raise FileExistsError(f"Evaluation output already exists: {path}")
-    records: list[dict[str, object]] = []
-    futures = []
-    skipped: list[str] = []
-    with ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn")) as executor:
-        for index, target in enumerate(targets):
-            sequences = list(target["sequences"])  # type: ignore[arg-type]
-            try:
-                native_structure = structure(pool_dir, target)
-                positions = native_structure.positions  # (residues, 14, 3)
-                positions_identity = {
-                    "sha256": hashlib.sha256(memoryview(positions).cast("B")).hexdigest(),
-                    "shape": list(positions.shape),
-                    "dtype": str(positions.dtype),
-                }
-                rollout = fold(
-                    model,
-                    native_structure,
-                    EVALUATION_SAMPLES,
-                    EVALUATION_SEED_OFFSET + index,
-                    INFERENCE_LOOPS,
-                    INFERENCE_SAMPLING_STEPS,
-                    native_confidence=heads is None,
-                )
-            except torch.OutOfMemoryError:
-                # The largest targets can exhaust the device; the gates then compare heads on the
-                # targets every evaluation kept, rather than losing the whole run.
-                skipped.append(str(target["target_id"]))
-                log(f"skipped {target['target_id']} ({target['num_tokens']} tokens): out of memory")
-                torch.cuda.empty_cache()
-                continue
-            for sample in range(EVALUATION_SAMPLES):
-                if heads is None:
-                    native = rollout.native_confidence or {}
-                    predictions = {
-                        "production": _summaries(
-                            native["plddt_logits"][sample : sample + 1],
-                            native["pae_logits"][sample : sample + 1],
-                            rollout,
-                            sample,
-                        )
-                    }
-                else:
-                    predictions = {
-                        name: head_sample_predictions(head, rollout, sample)
-                        for name, head in heads.items()
-                    }
-                records.append(
-                    {
-                        "target_id": target["target_id"],
-                        "stratum": target["stratum"],
-                        "num_chains": len(sequences),
-                        "num_tokens": int(target["num_tokens"]),
-                        "sample": sample,
-                        "target_positions": positions_identity,
-                        **{
-                            f"true_{name}": value for name, value in rollout.quality[sample].items()
-                        },
-                        "predictions": predictions,
-                    }
-                )
-                futures.append(
-                    executor.submit(structure_scores, sample_structures(rollout, sequences, sample))
-                )
-            if (index + 1) % 25 == 0:
-                log(f"folded {index + 1}/{len(targets)} test targets")
-        for record, future in zip(records, futures, strict=True):
-            record.update(future.result())
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    partial_dir = output_path.parent / "partial-records"
+    partial_dir.mkdir(exist_ok=False)
+    records: list[dict[str, object]] = []
+    pending: dict[int, _PendingTarget] = {}
+    skipped: list[str] = []
+    rollout = None
+    try:
+        with ProcessPoolExecutor(
+            workers, mp_context=multiprocessing.get_context("spawn")
+        ) as executor:
+            for index, target in enumerate(targets):
+                _save_finished_targets(pending, partial_dir)
+                sequences = list(target["sequences"])  # type: ignore[arg-type]
+                try:
+                    native_structure = structure(pool_dir, target)
+                    positions = native_structure.positions  # (residues, 14, 3)
+                    positions_identity = {
+                        "sha256": hashlib.sha256(memoryview(positions).cast("B")).hexdigest(),
+                        "shape": list(positions.shape),
+                        "dtype": str(positions.dtype),
+                    }
+                    rollout = fold(
+                        model,
+                        native_structure,
+                        EVALUATION_SAMPLES,
+                        EVALUATION_SEED_OFFSET + index,
+                        INFERENCE_LOOPS,
+                        INFERENCE_SAMPLING_STEPS,
+                        native_confidence=heads is None,
+                    )
+                except torch.OutOfMemoryError:
+                    rollout = None
+                    skipped.append(str(target["target_id"]))
+                    log(
+                        f"skipped {target['target_id']} ({target['num_tokens']} tokens): out of memory"
+                    )
+                    torch.cuda.empty_cache()
+                    _write_partial_target(partial_dir, index, str(target["target_id"]), [])
+                    continue
+                target_records: list[dict[str, object]] = []
+                futures: list[Future[dict[str, float | None]]] = []
+                native = None
+                try:
+                    for sample in range(EVALUATION_SAMPLES):
+                        if heads is None:
+                            native = rollout.native_confidence or {}
+                            predictions = {
+                                "production": _summaries(
+                                    native["plddt_logits"][sample : sample + 1],
+                                    native["pae_logits"][sample : sample + 1],
+                                    rollout,
+                                    sample,
+                                )
+                            }
+                        else:
+                            predictions = {
+                                name: head_sample_predictions(head, rollout, sample)
+                                for name, head in heads.items()
+                            }
+                        record = {
+                            "target_id": target["target_id"],
+                            "stratum": target["stratum"],
+                            "num_chains": len(sequences),
+                            "num_tokens": int(target["num_tokens"]),
+                            "sample": sample,
+                            "target_positions": positions_identity,
+                            **{
+                                f"true_{name}": value
+                                for name, value in rollout.quality[sample].items()
+                            },
+                            "predictions": predictions,
+                        }
+                        target_records.append(record)
+                        records.append(record)
+                        futures.append(
+                            executor.submit(
+                                structure_scores,
+                                sample_structures(rollout, sequences, sample),
+                            )
+                        )
+                finally:
+                    # A previous target must not occupy GPU memory while the next fold runs.
+                    rollout = None
+                    native = None
+                pending[index] = _PendingTarget(str(target["target_id"]), target_records, futures)
+                _save_finished_targets(pending, partial_dir)
+                if (index + 1) % 25 == 0:
+                    log(f"folded {index + 1}/{len(targets)} test targets")
+            for index in list(pending):
+                pending[index].save(partial_dir, index)
+                del pending[index]
+    finally:
+        rollout = None
+        # Executor shutdown finishes submitted CPU scores even when a later target fails.
+        _save_finished_targets(pending, partial_dir)
     write_new_json(output_path, records)
     write_new_json(skipped_path, skipped)
     if skipped:

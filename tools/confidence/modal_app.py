@@ -25,7 +25,7 @@ REMOTE_ROOT = Path("/vol/confidence")
 app = modal.App("fastplms-confidence-pilot")
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 credentials = modal.Secret.from_local_environ(["HF_TOKEN", "WANDB_API_KEY"])
-image = (
+base_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "libgomp1", "mmseqs2")
     .uv_pip_install("torch==2.13.0", index_url="https://download.pytorch.org/whl/cu130")
@@ -58,27 +58,36 @@ image = (
         }
     )
     .workdir("/workspace")
-    .add_local_dir(str(ROOT / "src"), "/workspace/src")
-    .add_local_dir(str(ROOT / "tools"), "/workspace/tools")
-    .add_local_dir(str(ROOT / "model_cards"), "/workspace/model_cards")
-    .add_local_dir(str(ROOT / "docs"), "/workspace/docs")
-    .add_local_dir(str(ROOT / "benchmarks"), "/workspace/benchmarks")
-    .add_local_dir(str(ROOT / "LICENSES"), "/workspace/LICENSES")
-    .add_local_dir(str(ROOT / "requirements"), "/workspace/requirements")
-    .add_local_dir(str(ROOT / "docker/constraints"), "/workspace/docker/constraints")
-    .add_local_dir(str(ROOT / "tests/parity/fixtures"), "/workspace/tests/parity/fixtures")
-    .add_local_file(str(ROOT / "LICENSE"), "/workspace/LICENSE")
-    .add_local_file(str(ROOT / "README.md"), "/workspace/README.md")
-    .add_local_file(str(ROOT / "AGENTS.md"), "/workspace/AGENTS.md")
-    .add_local_file(str(ROOT / "CLAUDE.md"), "/workspace/CLAUDE.md")
-    .add_local_file(str(ROOT / "THIRD_PARTY_NOTICES.md"), "/workspace/THIRD_PARTY_NOTICES.md")
-    .add_local_dir(str(ROOT / "tests/unit"), "/workspace/tests/unit")
-    .add_local_dir(
-        str(ROOT / "tests/fixtures/esmfold2_small"), "/workspace/tests/fixtures/esmfold2_small"
+)
+
+
+def with_source_files(environment: modal.Image) -> modal.Image:
+    return (
+        environment
+        .add_local_dir(str(ROOT / "src"), "/workspace/src")
+        .add_local_dir(str(ROOT / "tools"), "/workspace/tools")
+        .add_local_dir(str(ROOT / "model_cards"), "/workspace/model_cards")
+        .add_local_dir(str(ROOT / "docs"), "/workspace/docs")
+        .add_local_dir(str(ROOT / "benchmarks"), "/workspace/benchmarks")
+        .add_local_dir(str(ROOT / "LICENSES"), "/workspace/LICENSES")
+        .add_local_dir(str(ROOT / "requirements"), "/workspace/requirements")
+        .add_local_dir(str(ROOT / "docker/constraints"), "/workspace/docker/constraints")
+        .add_local_dir(str(ROOT / "tests/parity/fixtures"), "/workspace/tests/parity/fixtures")
+        .add_local_file(str(ROOT / "LICENSE"), "/workspace/LICENSE")
+        .add_local_file(str(ROOT / "README.md"), "/workspace/README.md")
+        .add_local_file(str(ROOT / "AGENTS.md"), "/workspace/AGENTS.md")
+        .add_local_file(str(ROOT / "CLAUDE.md"), "/workspace/CLAUDE.md")
+        .add_local_file(str(ROOT / "THIRD_PARTY_NOTICES.md"), "/workspace/THIRD_PARTY_NOTICES.md")
+        .add_local_dir(str(ROOT / "tests/unit"), "/workspace/tests/unit")
+        .add_local_dir(
+            str(ROOT / "tests/fixtures/esmfold2_small"), "/workspace/tests/fixtures/esmfold2_small"
     )
     .add_local_file(str(ROOT / "pytest.ini"), "/workspace/pytest.ini")
     .add_local_file(str(ROOT / "tests/conftest.py"), "/workspace/tests/conftest.py")
-)
+    )
+
+
+image = with_source_files(base_image)
 
 
 @app.function(

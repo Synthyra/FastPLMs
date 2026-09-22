@@ -1,10 +1,13 @@
 """Online confidence training schedules, EMA, selection, ranking gradients, and sampling."""
 
+import hashlib
+import json
 import math
 import pytest
 import torch
 
 from types import SimpleNamespace
+from pathlib import Path
 
 from tools.confidence import online_training
 from tools.confidence.online_training import (
@@ -135,6 +138,7 @@ def test_failed_target_restarts_accumulation_without_partial_gradients(
     )
     sampler = SimpleNamespace(draw=lambda: next(draws))
     logs = []
+    publications = []
     run = SimpleNamespace(
         settings=SimpleNamespace(mode="online"),
         log=lambda values, **kwargs: logs.append(values),
@@ -168,6 +172,14 @@ def test_failed_target_restarts_accumulation_without_partial_gradients(
     monkeypatch.setattr(online_training, "build_validation_cache", lambda *args: None)
     monkeypatch.setattr(online_training, "validate", lambda *args: {"total_ce": 1.0})
     monkeypatch.setattr(online_training, "_rng_state", lambda *args: {})
+    monkeypatch.setattr(online_training, "_training_provenance", lambda *args: {})
+    monkeypatch.setattr(
+        online_training,
+        "publish_checkpoint",
+        lambda run, directory, config, update, provenance, **kwargs: publications.append(
+            (update, kwargs.get("final", False))
+        ),
+    )
     monkeypatch.setattr(online_training.wandb, "init", lambda **kwargs: run)
     monkeypatch.setattr(online_training.torch.optim, "AdamW", RecordingOptimizer)
     monkeypatch.setattr(online_training.torch.cuda, "empty_cache", lambda: None)
@@ -185,6 +197,8 @@ def test_failed_target_restarts_accumulation_without_partial_gradients(
     train_log = next(values for values in logs if "train/plddt_ce" in values)
     assert train_log["train/plddt_ce"] == pytest.approx(4.0)
     assert train_log["train/skipped_targets"] == 1
+    assert publications == [(0, False), (1, True)]
+    assert set(report["checkpoint_files"]) == {"best-ema.safetensors", "final-ema.safetensors"}
 
 
 def test_sampler_balances_chain_counts_then_follows_weights():
@@ -197,3 +211,122 @@ def test_sampler_balances_chain_counts_then_follows_weights():
     draws = [sampler.draw()["target_id"] for _ in range(20_000)]
     assert draws.count("dimer") / len(draws) == pytest.approx(0.5, abs=0.02)
     assert draws.count("monomer-heavy") / len(draws) == pytest.approx(0.375, abs=0.02)
+
+
+@pytest.mark.parametrize("final", [False, True])
+def test_checkpoint_upload_waits_for_immutable_snapshot_with_identities(
+    monkeypatch, tmp_path: Path, final: bool
+) -> None:
+    names = ["last.pt", "best-ema.safetensors", "wandb-id.txt"]
+    if final:
+        names.extend(("final-ema.safetensors", "report.json"))
+    for name in names:
+        (tmp_path / name).write_bytes(name.encode())
+    (tmp_path / "unrelated.txt").write_text("excluded")
+    files = {}
+    observed = {}
+
+    def artifact(name, *, type, metadata):
+        observed.update(name=name, type=type, metadata=metadata)
+        return SimpleNamespace(add_file=lambda path, name: files.update({name: Path(path)}))
+
+    def wait(*, timeout: int) -> None:
+        assert timeout == online_training.CHECKPOINT_UPLOAD_TIMEOUT_SECONDS
+        assert files["last.pt"].read_bytes() == b"last.pt"
+        manifest = json.loads(files["checkpoint-manifest.json"].read_text())
+        assert manifest["model_id"] == "esmfold2_300"
+        assert manifest["update"] == 17
+        assert manifest["provenance"] == {"base_revision": "pinned-revision"}
+        assert manifest["config"]["seed"] == 17
+        assert manifest["files"]["last.pt"]["sha256"] == hashlib.sha256(b"last.pt").hexdigest()
+        observed["waited"] = True
+
+    def log_artifact(record, *, aliases):
+        (tmp_path / "last.pt").write_bytes(b"new local checkpoint")
+        observed["aliases"] = aliases
+        return SimpleNamespace(wait=wait, qualified_name="entity/project/checkpoint:v1")
+
+    run = SimpleNamespace(
+        id="run123", url="https://wandb.ai/test/run123", summary={}, log_artifact=log_artifact
+    )
+    monkeypatch.setattr(online_training.wandb, "Artifact", artifact)
+    online_training.publish_checkpoint(
+        run,
+        tmp_path,
+        OnlineTrainingConfig(model_id="esmfold2_300"),
+        17,
+        {"base_revision": "pinned-revision"},
+        final=final,
+    )
+
+    assert observed["waited"]
+    assert observed["name"] == "esmfold2_300-run123-checkpoints"
+    assert observed["metadata"] == {"model_id": "esmfold2_300", "update": 17, "final": final}
+    assert observed["aliases"] == ["latest", "update-17", *(["final"] if final else [])]
+    assert set(files) == {*names, "checkpoint-manifest.json"}
+    assert all(not path.exists() for path in files.values())
+    assert (tmp_path / "last.pt").read_bytes() == b"new local checkpoint"
+    assert run.summary["checkpoint_artifact"] == "entity/project/checkpoint:v1"
+
+
+def test_checkpoint_upload_failure_is_visible_and_keeps_resume_files(
+    monkeypatch, tmp_path: Path
+) -> None:
+    for name in ("last.pt", "best-ema.safetensors", "wandb-id.txt"):
+        (tmp_path / name).write_text(name)
+
+    def fail(*, timeout: int) -> None:
+        raise RuntimeError("storage unavailable")
+
+    monkeypatch.setattr(
+        online_training.wandb,
+        "Artifact",
+        lambda *args, **kwargs: SimpleNamespace(add_file=lambda *args, **kwargs: None),
+    )
+    run = SimpleNamespace(
+        id="run123",
+        url="test-run",
+        summary={},
+        log_artifact=lambda *args, **kwargs: SimpleNamespace(wait=fail),
+    )
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        online_training.publish_checkpoint(
+            run, tmp_path, OnlineTrainingConfig(model_id="esmfold2_600"), 20, {}
+        )
+    assert run.summary["checkpoint_upload_status"] == "failed"
+    assert (tmp_path / "last.pt").read_text() == "last.pt"
+    assert not list(tmp_path.glob("checkpoint-upload-*"))
+
+
+@pytest.mark.parametrize("missing", ["best-ema.safetensors", "final-ema.safetensors", "report.json"])
+def test_final_checkpoint_upload_requires_both_ema_choices_and_report(
+    tmp_path: Path, missing: str
+) -> None:
+    run = SimpleNamespace(summary={})
+    for name in (
+        "last.pt", "best-ema.safetensors", "final-ema.safetensors", "report.json", "wandb-id.txt"
+    ):
+        if name != missing:
+            (tmp_path / name).write_text(name)
+    with pytest.raises(ValueError, match="regular file"):
+        online_training.publish_checkpoint(
+            run, tmp_path, OnlineTrainingConfig(model_id="esmfold2_300"), 1, {}, final=True
+        )
+    assert run.summary["checkpoint_upload_status"] == "failed"
+
+
+def test_training_provenance_records_model_sources_and_exact_target_sets(monkeypatch) -> None:
+    monkeypatch.setattr(online_training, "source_identity", lambda root: {"training.py": "hash"})
+    config = OnlineTrainingConfig(model_id="esmfold2_300")
+    train = [{"target_id": "train-a", "num_tokens": 512}]
+    validation = [{"target_id": "validation-a", "num_tokens": 1024}]
+    provenance = online_training._training_provenance(config, train, validation)
+    assert provenance["model_id"] == config.model_id
+    assert provenance["base_repo"] == "Synthyra/ESMFold2-300"
+    assert len(provenance["base_weight_sha256"]) == 64
+    assert provenance["donor_weight_sha256"] == online_training.DONOR_WEIGHT_SHA256
+    assert provenance["source_files"] == {"training.py": "hash"}
+    assert provenance["targets"]["train"]["count"] == 1
+    assert provenance["targets"]["train"]["sha256"] != provenance["targets"]["validation"]["sha256"]
+    changed = online_training._training_provenance(config, validation, validation)
+    assert provenance["targets"]["train"]["sha256"] != changed["targets"]["train"]["sha256"]

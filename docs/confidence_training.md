@@ -418,6 +418,74 @@ weight update rather than a files-only update. Until those conditions are met,
 existing model cards and generated support reports accurately describe the
 300M and 600M mirrors as confidence-disabled.
 
+## Modal reproduction of v2
+
+The September 22, 2026 rerun reconstructs the v2 protocol after the GH200
+checkpoints could not be recovered. Its campaign ID is
+`v2-reproduction-20260922`. Data preparation runs once; two H200 workers then
+train the 300M and 600M heads in parallel. A separate H200 evaluates production
+ESMFold2 on the same target list. Each trained head proceeds to evaluation after
+all 780 updates finish. The focused Modal CPU verification passed 108 tests.
+The three GPU calls were dispatched in
+[Modal app ap-gychkbFztaotEvmFcCSfAA](https://modal.com/apps/synthyra/main/ap-gychkbFztaotEvmFcCSfAA).
+The initial inputs and verification reports are archived at
+[HF revision c7aa9df](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/c7aa9df21f9142e8a0c3303ba4340c0a16674e66/confidence-v2/v2-reproduction-20260922).
+
+The rerun retains four fresh samples per training target, 16 targets per update,
+three recycling loops, 50 diffusion steps, 78 warmup updates, and the original
+learning-rate and EMA schedules. Training includes monomers and diverse
+complexes up to 1,024 tokens. The 512 standard test targets and 64 long targets
+up to 2,048 tokens receive five samples each. Validation, test correlations,
+paired bootstrap intervals, and production agreement use the corrected metrics.
+Long-target results remain separate from the headline estimates.
+
+AtlasFold input files are pinned to
+`98b5212fd04cc34e3cdcb43c9bc6a66639ef4041`. The original campaign did not record
+its dataset revision or MMseqs binary version, so exact split reproduction must
+be checked against its archived table hash. The rebuilt table, pilot exclusions,
+input hashes, MMseqs version, and actual source identities are retained. The test
+set remains designated **spent**; this rerun does not restore an untouched test
+claim or guarantee identical weights across GPU architectures.
+
+Preparation recovered the same 545,078-target pool and 106,860 unique sequences.
+Clustering produced 35,543 clusters, four more than the historical run, and
+475,969 training targets rather than 475,959. Validation and test stratum quotas
+are unchanged. The new split table SHA-256 is
+`f6b98315720fe663ac282c665ebf79b3996ad038d8a6034da39c5dc7af24f727`.
+The rerun therefore reproduces the protocol with a reconstructed split, not the
+exact original target assignment.
+
+Runs and validation caches live in the persistent Modal volume
+`fastplms-confidence-v2`, in an isolated campaign directory. Initial, periodic,
+validation, and final checkpoints upload to W&B synchronously, including a
+hashed file inventory and model, donor, source, and target identities. An upload
+failure stops training visibly. Completed target-level evaluation records are
+saved incrementally; only a finished, verified evaluation receives a completion
+manifest. Final EMA weights, selected-head reports, raw evaluations, and
+acceptance results are archived under `confidence-v2/<campaign>/` in the public
+`Synthyra/FastPLMs-artifacts` dataset. Model checkpoint publication remains a
+separate step after reviewing the new results.
+
+Hard Modal limits allow 22 hours per training invocation, four hours per small
+model evaluation, and five hours for production evaluation, with no automatic
+retries. Preparation has a six-hour CPU limit. Individual model ledgers avoid
+concurrent writes to a shared budget file. The dispatcher refuses to launch the
+same campaign twice.
+
+With authenticated Modal, Hugging Face, and W&B SDKs, launch a new campaign:
+
+```bash
+PYTHONPATH=src:. python -m tools.confidence.launch_v2 prepare --campaign <new-campaign>
+PYTHONPATH=src:. python -m tools.confidence.launch_v2 start --campaign <new-campaign>
+```
+
+`start` runs focused CPU checks, waits for prepared data, archives the inputs,
+and dispatches training and reference evaluation. Subsequent evaluation and
+artifact uploads are chained to successful training completion. Dispatch
+receipts are saved locally under `artifacts/confidence-v2/<campaign>/` and on
+the Modal volume. No credentials are included in source uploads or public
+artifacts.
+
 ## Confidence heads v2 on a GH200 workstation
 
 **Metrics review: recomputation required.** The validation, test, agreement,
@@ -425,7 +493,7 @@ and gate results below are historical, uncorrected records. The original
 Spearman implementation assigned distinct ranks to tied values, including
 ties introduced by bootstrap resampling. Corrected correlations, intervals,
 and acceptance gates cannot be recovered from aggregates. The GH200
-workstation is closed, and neither W&B run contains logged artifacts or raw
+workstation is closed, and neither W&B run contains checkpoint artifacts or raw
 per-target predictions. Retain these tables as historical records only; do not cite
 them as corrected quality or acceptance results. Model cards withhold the
 numerical tables pending raw prediction recovery.

@@ -9,9 +9,12 @@ early stopping.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import random
+import shutil
+import tempfile
 import time
 import uuid
 
@@ -25,7 +28,11 @@ from pathlib import Path
 
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
+from wandb.sdk.wandb_run import Run
 
+from fastplms.registry import get_model_spec
+from .config import DONOR_REPO, DONOR_REVISION, DONOR_WEIGHT_SHA256
+from .experiment_artifacts import file_identity, source_identity
 from .labels import _masked_cross_entropy
 from .ranking import expected_mean_plddt, expected_tm_scores, ranking_pairs, sample_ranking_loss
 from .rollouts import (
@@ -54,6 +61,7 @@ EMA_HORIZON_FRACTION = 0.1
 MAX_SKIPPED_TARGETS = 20
 MAX_SKIPPED_FRACTION = 0.01
 PROGRESS_LOG_UPDATES = 10
+CHECKPOINT_UPLOAD_TIMEOUT_SECONDS = 600
 
 
 @dataclass(frozen=True)
@@ -414,6 +422,89 @@ def _rng_state(sampler: TargetSampler, rollout_rng: np.random.Generator) -> dict
     }
 
 
+def _training_provenance(
+    config: OnlineTrainingConfig,
+    train_targets: Sequence[Mapping[str, object]],
+    validation_targets: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    spec = get_model_spec(config.model_id)
+    targets = {}
+    for split, records in (("train", train_targets), ("validation", validation_targets)):
+        payload = json.dumps(list(records), sort_keys=True, separators=(",", ":")).encode()
+        targets[split] = {"count": len(records), "sha256": hashlib.sha256(payload).hexdigest()}
+    return {
+        "model_id": config.model_id,
+        "base_repo": spec.fast.repo_id,
+        "base_revision": spec.fast.revision,
+        "base_weight_sha256": spec.fast.file_map["model.safetensors"].digest,
+        "donor_repo": DONOR_REPO,
+        "donor_revision": DONOR_REVISION,
+        "donor_weight_sha256": DONOR_WEIGHT_SHA256,
+        "targets": targets,
+        "source_files": source_identity(Path(__file__).resolve().parents[2]),
+    }
+
+
+def publish_checkpoint(
+    run: Run,
+    run_dir: Path,
+    config: OnlineTrainingConfig,
+    update: int,
+    provenance: Mapping[str, object],
+    *,
+    final: bool = False,
+) -> None:
+    """Wait for a recoverable checkpoint artifact before training overwrites local files."""
+    names = ["last.pt", "best-ema.safetensors", "wandb-id.txt"]
+    if final:
+        names.extend(("final-ema.safetensors", "report.json"))
+    run.summary["checkpoint_upload_status"] = "uploading"
+    try:
+        # Copies remain immutable until W&B confirms persistence; last.pt remains resumable.
+        with tempfile.TemporaryDirectory(prefix="checkpoint-upload-", dir=run_dir) as temporary:
+            snapshot = Path(temporary)
+            inventory = {}
+            for name in names:
+                source = run_dir / name
+                file_identity(source)
+                shutil.copyfile(source, snapshot / name)
+                inventory[name] = asdict(file_identity(snapshot / name))
+            manifest = {
+                "schema_version": 1,
+                "model_id": config.model_id,
+                "update": update,
+                "final": final,
+                "wandb_url": run.url,
+                "config": asdict(config),
+                "provenance": dict(provenance),
+                "files": inventory,
+            }
+            manifest_path = snapshot / "checkpoint-manifest.json"
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            artifact = wandb.Artifact(
+                f"{config.model_id}-{run.id}-checkpoints",
+                type="confidence-checkpoint",
+                metadata={"model_id": config.model_id, "update": update, "final": final},
+            )
+            for name in (*names, manifest_path.name):
+                artifact.add_file(str(snapshot / name), name=name)
+            uploaded = run.log_artifact(
+                artifact, aliases=["latest", f"update-{update}", *(["final"] if final else [])]
+            )
+            uploaded.wait(timeout=CHECKPOINT_UPLOAD_TIMEOUT_SECONDS)
+            run.summary.update(
+                {
+                    "checkpoint_upload_status": "complete",
+                    "checkpoint_artifact": uploaded.qualified_name,
+                    "checkpoint_update": update,
+                }
+            )
+    except Exception:
+        # Upload errors must stop the run instead of leaving its only checkpoint on the host.
+        run.summary["checkpoint_upload_status"] = "failed"
+        raise
+
+
 def train_online(
     model: nn.Module,
     pool_dir: Path,
@@ -433,6 +524,7 @@ def train_online(
     if deadline_seconds <= 0:
         raise RuntimeError("no GPU time is left for this training invocation")
     run_dir.mkdir(parents=True, exist_ok=True)
+    provenance = _training_provenance(config, train_targets, validation_targets)
     torch.manual_seed(config.seed)
     context = HeadContext(config.model_id)
     context.head.train()
@@ -504,7 +596,7 @@ def train_online(
     started = time.monotonic() - elapsed
     last_validation = last_checkpoint = time.monotonic()
 
-    def save_checkpoint() -> None:
+    def save_checkpoint(*, publish: bool = True) -> None:
         state = {
             "config": asdict(config),
             "head": context.head.state_dict(),
@@ -515,11 +607,14 @@ def train_online(
             "history": history,
             "best": best,
             "rng": _rng_state(sampler, rollout_rng),
+            "provenance": provenance,
         }
         torch.save(state, run_dir / "last.tmp")
         (run_dir / "last.tmp").replace(checkpoint_path)
+        if publish:
+            publish_checkpoint(run, run_dir, config, update, provenance)
 
-    def run_validation() -> dict[str, float]:
+    def run_validation(*, checkpoint: bool = True) -> dict[str, float]:
         nonlocal best
         replaced = ema.swapped_into(context.head)
         metrics = validate(context, validation_dir, config.validation_limit, config.pae_weight)
@@ -536,6 +631,8 @@ def train_online(
             f"validation at update {update}: "
             + ", ".join(f"{name}={value:.4f}" for name, value in metrics.items())
         )
+        if checkpoint:
+            save_checkpoint()
         return metrics
 
     if update == 0 and not history:
@@ -630,14 +727,14 @@ def train_online(
             save_checkpoint()
             last_checkpoint = time.monotonic()
 
-    final = run_validation()
+    final = run_validation(checkpoint=False)
     replaced = ema.swapped_into(context.head)
     save_file(
         {name: value.contiguous() for name, value in context.head.state_dict().items()},
         str(run_dir / "final-ema.safetensors"),
     )
     restore(context.head, replaced)
-    save_checkpoint()
+    save_checkpoint(publish=False)
     selected = selected_checkpoint(final, best)
     if update >= config.planned_updates:
         stopped_by = "planned_updates"
@@ -656,8 +753,14 @@ def train_online(
         "selected_checkpoint": f"{selected}.safetensors",
         "wandb_url": run.url,
         "config": asdict(config),
+        "provenance": provenance,
+        "checkpoint_files": {
+            name: asdict(file_identity(run_dir / name))
+            for name in ("best-ema.safetensors", "final-ema.safetensors")
+        },
     }
     (run_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    publish_checkpoint(run, run_dir, config, update, provenance, final=True)
     run.summary.update({"status": "complete", "selected_checkpoint": selected})
     run.finish()
     return report
