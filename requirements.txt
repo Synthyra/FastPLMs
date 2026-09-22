@@ -1,0 +1,4 @@
+# Runtime dependencies for sequence and structure models.
+# Keep version ranges in the shared declarations under requirements/.
+-r requirements/profiles/runtime.in
+-r requirements/features/structure.in

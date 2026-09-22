@@ -9,6 +9,19 @@ combine those declarations for repository environments. Validation commands
 constrain Torch and Transformers with
 `constraints/validation.txt`.
 
+From the repository root, install sequence and structure runtime dependencies
+with:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+The root `requirements.txt` includes `profiles/runtime.in` and
+`features/structure.in`, keeping their version ranges in one place. Training,
+reporting, binder design, development tools, and hardware-specific kernels
+remain optional profiles. This installs dependencies; repository code still
+uses `PYTHONPATH=src`.
+
 Create a local validation environment with:
 
 ```bash

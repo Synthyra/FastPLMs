@@ -85,8 +85,19 @@ python -m pip install \
   "transformers>=5.13,<5.14"
 ```
 
-For a source checkout that builds or checks artifacts, install the required
-dependency profile. Put `src` on `PYTHONPATH` when you run repository code:
+For a source checkout, install the sequence and structure runtime dependencies
+with:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+The root file includes the maintained dependency declarations under
+`requirements/`. Training, reporting, binder design, and hardware-specific
+kernels use the optional profiles described below.
+
+For a checkout that builds or checks artifacts, install the validation profile.
+Put `src` on `PYTHONPATH` when you run repository code:
 
 ```bash
 git clone https://github.com/Synthyra/FastPLMs.git
