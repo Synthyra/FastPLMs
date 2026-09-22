@@ -257,3 +257,9 @@ for behavior changes, unnecessary movement, stale imports, and unrelated churn.
   biological claim.
 - Never inspect or print credential files. Pass credential paths opaquely to
   the trusted command that needs them.
+
+## Canonical Agent Guidance
+
+Maintain agent instructions only in AGENTS.md. Treat AGENTS.md as the canonical, cumulative source of repository guidance; do not create or expand separate CLAUDE.md guidance. Preserve existing information when updating this file.## Preserved Claude Code Guidance
+
+The imported repository guidance is authoritative. In particular, apply its Python coding standards to all generated, edited, and reviewed code.
