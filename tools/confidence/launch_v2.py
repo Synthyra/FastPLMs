@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 
 def main() -> None:
@@ -21,7 +22,16 @@ def main() -> None:
             raise RuntimeError("Authenticate with W&B before launching the campaign")
         os.environ["WANDB_API_KEY"] = key
 
-    from .modal_v2 import main as dispatch
+    if len(sys.argv) > 1 and sys.argv[1] == "benchmark":
+        from .modal_gpu_benchmark import main as dispatch
+
+        del sys.argv[1]
+    elif len(sys.argv) > 1 and sys.argv[1] == "resume":
+        from .modal_resume import main as dispatch
+
+        del sys.argv[1]
+    else:
+        from .modal_v2 import main as dispatch
 
     dispatch()
 

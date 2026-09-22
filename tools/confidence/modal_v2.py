@@ -18,11 +18,17 @@ from .v2_campaign import MODEL_IDS, PLANNED_UPDATES, prepare_data, write_json
 
 ROOT = Path(__file__).resolve().parents[2]
 VOLUME_NAME = "fastplms-confidence-v2"
+TRAINING_GPU = "RTX-PRO-6000"
 REMOTE_ROOT = Path("/experiment")
 app = modal.App("fastplms-confidence-v2")
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 image = with_source_files(
     base_image
+    .uv_pip_install("datasets>=4,<5", "cuequivariance==0.10.0", "cuequivariance-torch==0.10.0", "cuequivariance-ops-torch-cu13==0.10.0")
+    .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
+)
+training_image = with_source_files(
+    base_image.uv_pip_install("torch==2.13.0+cu132", index_url="https://download.pytorch.org/whl/cu132")
     .uv_pip_install("datasets>=4,<5", "cuequivariance==0.10.0", "cuequivariance-torch==0.10.0", "cuequivariance-ops-torch-cu13==0.10.0")
     .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
 )
@@ -70,7 +76,7 @@ def verify(campaign: str) -> dict[str, object]:
     return result
 
 
-@app.function(image=image, cpu=4, memory=65536, gpu="H200", timeout=79200, startup_timeout=900, volumes=MOUNTS, secrets=[credentials], max_containers=2)
+@app.function(image=training_image, cpu=4, memory=65536, gpu=TRAINING_GPU, timeout=79200, startup_timeout=900, volumes=MOUNTS, secrets=[credentials], max_containers=2)
 def train(campaign: str, model_id: str) -> dict[str, object]:
     from .v2_campaign import train_model
 

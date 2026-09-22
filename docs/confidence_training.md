@@ -422,11 +422,11 @@ existing model cards and generated support reports accurately describe the
 
 The September 22, 2026 rerun reconstructs the v2 protocol after the GH200
 checkpoints could not be recovered. Its campaign ID is
-`v2-reproduction-20260922`. Data preparation runs once; two H200 workers then
-train the 300M and 600M heads in parallel. A separate H200 evaluates production
+`v2-reproduction-20260922`. Data preparation runs once; two RTX PRO 6000 workers
+train the 300M and 600M heads in parallel after the GPU comparison below. A separate H200 evaluates production
 ESMFold2 on the same target list. Each trained head proceeds to evaluation after
 all 780 updates finish. The focused Modal CPU verification passed 108 tests.
-The three GPU calls were dispatched in
+The initial H200 calls were dispatched in
 [Modal app ap-gychkbFztaotEvmFcCSfAA](https://modal.com/apps/synthyra/main/ap-gychkbFztaotEvmFcCSfAA).
 The initial inputs and verification reports are archived at
 [HF revision c7aa9df](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/c7aa9df21f9142e8a0c3303ba4340c0a16674e66/confidence-v2/v2-reproduction-20260922).
@@ -485,6 +485,79 @@ artifact uploads are chained to successful training completion. Dispatch
 receipts are saved locally under `artifacts/confidence-v2/<campaign>/` and on
 the Modal volume. No credentials are included in source uploads or public
 artifacts.
+
+### GPU cost comparison and training migration
+
+On September 22, 2026, seven GPU types ran the same 16-target training panel
+sampled from the reconstructed training split with seed 101 and equal monomer
+and complex sampling probability. Each target used four samples, three loops,
+50 diffusion steps, FP32 parameters and BF16 autocast. Timing includes folding,
+confidence-head forward/backward, gradient clipping, AdamW and EMA. All workers
+used PyTorch 2.13.0 with CUDA 13.2 and cuEquivariance 0.10.0. Benchmark weights
+are discarded; the training recipe and target split are unchanged.
+The raw results, environment and source identities, dispatch receipts and
+selection record are pinned at
+[HF revision 1e0efe9](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/1e0efe9637e3850065a1831dcb4ecc142e9852ca/confidence-v2/v2-reproduction-20260922).
+
+The first screen used one 256-token warmup target. RTX PRO 6000, H200, B200 and
+B300 then repeated the measured panel twice in fresh workers. Their table
+entries use the second update to reduce first-use compilation effects. Other
+entries retain screening measurements. This is a bounded panel comparison,
+not a full-epoch estimate or a statistically established hardware ranking.
+
+| GPU | Measurement | 300M seconds/update | 600M seconds/update | 300M $/update | 600M $/update |
+| --- | --- | ---: | ---: | ---: | ---: |
+| A100 80GB | Screen | 142.06 | 135.83 | 0.1262 | 0.1207 |
+| RTX PRO 6000 Blackwell | Second update | 86.32 | 86.62 | 0.0895 | 0.0898 |
+| L40S | Screen | 194.08 | 184.62 | 0.1429 | 0.1360 |
+| H100 | Screen, strict H100 request | 89.59 | 80.08 | 0.1157 | 0.1034 |
+| H200 | Second update, replacement worker | 68.48 | 67.28 | 0.0997 | 0.0979 |
+| B200 | Second update | 52.16 | 52.02 | 0.1007 | 0.1004 |
+| B300 | Second update | 51.08 | 51.46 | 0.1107 | 0.1115 |
+
+Costs use [Modal prices](https://modal.com/pricing) checked September 22, 2026,
+including four physical CPU cores and 64 GiB of host RAM. They exclude startup,
+validation, checkpoint uploads, idle time and final evaluation. One confirmation
+app logged a GPU hardware fault; its stalled H200 call was cancelled and the
+replacement H200 result is used above.
+
+RTX PRO 6000 has the lowest measured cost per update for both models and is now
+the training default. B200 is about 40% faster on this panel for about 12% more
+per update. All GPUs passed a 1,024-token complex training guard. The five-sample
+2,048-token evaluation probe passed on every GPU except L40S, which ran out of
+memory. RTX PRO 6000 peaked at 40.2 GiB for the training guard and 69.3 GiB for
+the evaluation probe. These checks do not establish full evaluation parity.
+
+The original two training calls were stopped before their first optimizer
+updates. Resumption verifies their terminal status, checkpoint identity when
+present, and the target identities and tensor shapes in partial validation
+caches. Cache payload hashes are not verified. The same campaign, W&B IDs,
+target assignments and budget ledgers are retained. Training now uses CUDA
+13.2; cached initial H200 rollouts and downstream H200 evaluations use CUDA
+13.0. This migration does not promise bitwise reproduction across GPUs.
+The replacement calls were dispatched in
+[Modal app ap-3VzXRZhoijTCcSzUdcISJZ](https://modal.com/apps/synthyra/main/ap-3VzXRZhoijTCcSzUdcISJZ),
+retaining 229 cached validation targets for 300M and 243 for 600M. Twelve CPU
+tests cover migration inputs and receipts, including malformed or truncated
+cache headers. Header inspection avoids loading the large tensor payloads.
+
+Run a new bounded comparison with:
+
+```bash
+PYTHONPATH=src:. python -m tools.confidence.launch_v2 benchmark --campaign <campaign>
+PYTHONPATH=src:. python -m tools.confidence.launch_v2 benchmark --campaign <campaign> --benchmark-id <new-id> --gpus RTX-PRO-6000 H200 B200 B300 --rounds 2 --skip-long-probe
+```
+
+After explicitly stopping the two original training calls, resume once with:
+
+```bash
+PYTHONPATH=src:. python -m tools.confidence.launch_v2 resume --campaign <campaign> --gpu RTX-PRO-6000
+```
+
+Keep the local dispatch receipts. If dispatch is interrupted after spawning a
+worker, recover from the recorded call IDs; do not rerun the controller or
+launch concurrent resume controllers. Migration receipts and raw benchmark
+reports belong in the public artifact dataset, not Git.
 
 ## Confidence heads v2 on a GH200 workstation
 
