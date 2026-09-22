@@ -6,6 +6,7 @@ models, so they live in a separate test file with the `structure` marker.
 
 import pytest
 import torch
+
 from transformers import AutoConfig, AutoModel
 
 from fastplms.registry import get_model_registry
@@ -131,7 +132,7 @@ def test_esmfold_forward() -> None:
         output = model.infer(sequence)
 
     assert "plddt" in output
-    # plddt: (...)
+    # plddt retains this structure family's native atom/token confidence layout.
     plddt = output["plddt"]
     assert not torch.isnan(plddt).any(), "NaN in pLDDT"
 

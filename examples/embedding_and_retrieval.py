@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ def configure_offline() -> None:
 def run_embeddings(
     model: Any,
     tokenizer: Any,
-    inputs: Any,
+    inputs: Path | list[str],
     *,
     output: Path | None,
     output_format: str,
@@ -69,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"Not a local artifact: {artifact}")
     if arguments.select_id and (arguments.output is None or arguments.output_format != "sqlite"):
         raise SystemExit("--select-id requires both --output and --format sqlite")
-    inputs: Any = arguments.fasta if arguments.fasta is not None else arguments.sequences
+    inputs: Path | list[str] = arguments.fasta if arguments.fasta is not None else arguments.sequences
     try:
         device, dtype = resolve_execution(arguments.device, arguments.dtype)
     except ValueError as error:

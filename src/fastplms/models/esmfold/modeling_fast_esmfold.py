@@ -16,14 +16,15 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+
 from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from contextlib import contextmanager
 from typing import Any
 from einops import rearrange
-from tqdm.auto import tqdm
 from torch.nn import functional as F
+from tqdm.auto import tqdm
 from transformers.modeling_outputs import ModelOutput
 from transformers.models.esm.configuration_esm import EsmConfig
 from transformers.models.esm.modeling_esm import (
@@ -39,6 +40,7 @@ from transformers.models.esm.modeling_esmfold import (
 from transformers.models.esm.openfold_utils import residue_constants
 
 from fastplms.models._esm_rotary import RotaryEmbedding
+
 
 try:
     from fastplms.models.classification_probe import (
@@ -388,9 +390,9 @@ class EsmSelfAttention(nn.Module):
         value_heads: torch.Tensor,
         attention_mask_2d: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, None]:
-        query_tokens = query_heads.transpose(1, 2).contiguous()
-        key_tokens = key_heads.transpose(1, 2).contiguous()
-        value_tokens = value_heads.transpose(1, 2).contiguous()
+        query_tokens = query_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
+        key_tokens = key_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
+        value_tokens = value_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
         # Q is pre-scaled by self.scale in forward() -- pass softmax_scale=1.0
         # to prevent the kernel from applying its default 1/sqrt(head_dim).
         attn_output = kernels_flash_attention_func(
@@ -713,14 +715,14 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
                 device=device,
             )
 
-        bos = esmaa.new_full((batch_size, 1), self.esm_dict_cls_idx)
-        eos = esmaa.new_full((batch_size, 1), self.esm_dict_padding_idx)
-        residue_mask = esmaa != self.esm_dict_padding_idx
-        with_special_tokens = torch.cat([bos, esmaa, eos], dim=1)
+        bos = esmaa.new_full((batch_size, 1), self.esm_dict_cls_idx)  # (b, 1)
+        eos = esmaa.new_full((batch_size, 1), self.esm_dict_padding_idx)  # (b, 1)
+        residue_mask = esmaa != self.esm_dict_padding_idx  # (b, l)
+        with_special_tokens = torch.cat([bos, esmaa, eos], dim=1)  # (b, l + 2)
         with_special_tokens[
             range(batch_size),
             (with_special_tokens != self.esm_dict_padding_idx).sum(1),
-        ] = self.esm_dict_eos_idx
+        ] = self.esm_dict_eos_idx  # EOS position in each row of (b, l + 2)
         esm_output = self.esm(
             with_special_tokens,
             attention_mask=with_special_tokens != self.esm_dict_padding_idx,
@@ -857,15 +859,15 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
                     for residue in joined_sequence
                 ],
                 dtype=torch.int64,
-            )
-            sequence_residx = torch.arange(len(encoded), dtype=torch.int64)
+            )  # (n_residues_with_linkers,)
+            sequence_residx = torch.arange(len(encoded), dtype=torch.int64)  # (n_residues_with_linkers,)
             cursor = 0
             for chain_number, chain in enumerate(chains):
                 segment_length = len(chain) + len(linker)
                 sequence_residx[cursor : cursor + segment_length] += chain_number * index_offset
                 cursor += segment_length
 
-            linker_mask = torch.ones_like(encoded, dtype=torch.float32)
+            linker_mask = torch.ones_like(encoded, dtype=torch.float32)  # (n_residues_with_linkers,)
             chain_indices: list[int] = []
             cursor = 0
             for chain_number, chain in enumerate(chains):
@@ -1080,7 +1082,7 @@ class _FastEsmFoldClassificationMixin:
                 f"{tuple(input_ids.shape)}."
             )
         if attention_mask is None:
-            attention_mask = torch.ones_like(input_ids)
+            attention_mask = torch.ones_like(input_ids)  # (b, l)
         elif attention_mask.shape != input_ids.shape:
             raise ValueError(
                 "attention_mask must match input_ids, got "
@@ -1090,18 +1092,18 @@ class _FastEsmFoldClassificationMixin:
         if torch.any(attention_mask.sum(dim=-1) == 0):
             raise ValueError("Every classifier input must contain at least one residue.")
 
-        esmaa = self.af2_idx_to_esm_idx(input_ids, attention_mask)
-        layer_states = self.compute_language_model_representations(esmaa)
-        layer_states = layer_states.to(self.esm_s_combine.dtype).detach()
+        esmaa = self.af2_idx_to_esm_idx(input_ids, attention_mask)  # (b, l)
+        layer_states = self.compute_language_model_representations(esmaa)  # (b, l, n_layers, d_esm)
+        layer_states = layer_states.to(self.esm_s_combine.dtype).detach()  # (b, l, n_layers, d_esm)
         if self.config.esmfold_config.esm_ablate_sequence:
-            layer_states = layer_states * 0
+            layer_states = layer_states * 0  # (b, l, n_layers, d_esm)
         mixed_states = (
             self.esm_s_combine.softmax(0).unsqueeze(0) @ layer_states
-        ).squeeze(2)
-        residue_embeddings = self.esm_s_mlp(mixed_states)
+        ).squeeze(2)  # (b, l, d_esm)
+        residue_embeddings = self.esm_s_mlp(mixed_states)  # (b, l, d_trunk)
         residue_embeddings = residue_embeddings * attention_mask.unsqueeze(-1).to(
             residue_embeddings.dtype
-        )
+        )  # (b, l, d_trunk)
         return residue_embeddings, attention_mask
 
     def forward(

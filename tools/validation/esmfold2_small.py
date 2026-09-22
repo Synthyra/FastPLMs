@@ -17,12 +17,12 @@ import json
 import os
 import platform
 import tempfile
+import torch
+
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
-
-import torch
 from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
@@ -537,7 +537,7 @@ def _metric(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
     if actual.shape != expected.shape:
         raise ValueError(f"Tensor shapes differ: {tuple(actual.shape)} != {tuple(expected.shape)}")
     difference = actual.float() - expected.float()  # (...)
-    denominator = expected.float().norm().clamp_min(torch.finfo(torch.float32).tiny)
+    denominator = expected.float().norm().clamp_min(torch.finfo(torch.float32).tiny)  # ()
     return {
         "relative_l2": float(difference.norm() / denominator),
         "max_abs": float(difference.abs().max()),
@@ -550,6 +550,7 @@ def _esmc_metric(
     expected: torch.Tensor,
     residue_mask: torch.Tensor,
 ) -> dict[str, float]:
+    # actual/expected: (b, l, ...); mask: (b, l); n selected residues; d flattened channels.
     if actual.shape != expected.shape or actual.ndim < 3:
         raise ValueError("ESMC tensors must have equal shape and at least three dimensions")
     if residue_mask.shape != actual.shape[:2]:
@@ -561,18 +562,18 @@ def _esmc_metric(
         residue_mask
     ]  # (n, d)
     difference = actual_residues - expected_residues  # (n, d)
-    denominator = expected_residues.norm().clamp_min(torch.finfo(torch.float32).tiny)
-    reference_q999 = torch.quantile(expected_residues.abs().reshape(-1), 0.999)
+    denominator = expected_residues.norm().clamp_min(torch.finfo(torch.float32).tiny)  # ()
+    reference_q999 = torch.quantile(expected_residues.abs().reshape(-1), 0.999)  # ()
     residue_cosines = torch.nn.functional.cosine_similarity(
         actual_residues, expected_residues, dim=-1
-    )
-    mask = residue_mask.unsqueeze(-1)
+    )  # (n,)
+    mask = residue_mask.unsqueeze(-1)  # (b, l, 1)
     actual_full = actual.float().reshape(actual.shape[0], actual.shape[1], -1)  # (b, l, d)
     expected_full = expected.float().reshape(expected.shape[0], expected.shape[1], -1)  # (b, l, d)
-    count = mask.sum(dim=1).clamp_min(1)
+    count = mask.sum(dim=1).clamp_min(1)  # (b, 1)
     actual_pooled = torch.where(mask, actual_full, 0.0).sum(dim=1) / count  # (b, d)
     expected_pooled = torch.where(mask, expected_full, 0.0).sum(dim=1) / count  # (b, d)
-    pooled_cosines = torch.nn.functional.cosine_similarity(actual_pooled, expected_pooled, dim=-1)
+    pooled_cosines = torch.nn.functional.cosine_similarity(actual_pooled, expected_pooled, dim=-1)  # (b,)
     return {
         "relative_l2": float(difference.norm() / denominator),
         "relative_q999": float(
@@ -585,53 +586,56 @@ def _esmc_metric(
 
 
 def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
-    names = tensors["feature__ref_atom_name_chars"][0]
-    atom_mask = tensors["feature__atom_attention_mask"][0].bool()
-    ca_mask = names.eq(torch.tensor([35, 33, 0, 0])).all(dim=-1) & atom_mask
-    coords = tensors["output__sample_atom_coords"].float()
+    # a atoms; l residues; b batches; s diffusion samples.
+    names = tensors["feature__ref_atom_name_chars"][0]  # (a, 4)
+    atom_mask = tensors["feature__atom_attention_mask"][0].bool()  # (a,)
+    ca_mask = names.eq(torch.tensor([35, 33, 0, 0])).all(dim=-1) & atom_mask  # (a,)
+    coords = tensors["output__sample_atom_coords"].float()  # (b, a, 3) or (b, s, a, 3)
     if coords.ndim == 4:
-        coords = coords[0, 0]
+        coords = coords[0, 0]  # (a, 3)
     elif coords.ndim == 3:
-        coords = coords[0]
+        coords = coords[0]  # (a, 3)
     if coords.ndim != 2 or coords.shape[-1] != 3:
         raise ValueError(f"Unexpected sample_atom_coords shape: {tuple(coords.shape)}")
-    selected = coords[ca_mask]
+    selected = coords[ca_mask]  # (l, 3), validated below
     if selected.shape != (len(SEQUENCE), 3):
         raise ValueError(
             f"Expected {len(SEQUENCE)} C-alpha coordinates, got {tuple(selected.shape)}"
         )
     if not torch.isfinite(selected).all():
         raise ValueError("C-alpha coordinates contain NaN or infinity")
-    return selected
+    return selected  # (l, 3)
 
 
 def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
     if actual.shape != expected.shape or actual.ndim != 2 or actual.shape[-1] != 3:
         raise ValueError("C-alpha coordinate shapes differ")
-    actual_centered = actual - actual.mean(dim=0, keepdim=True)
-    expected_centered = expected - expected.mean(dim=0, keepdim=True)
-    covariance = actual_centered.T @ expected_centered
-    left, _, right = torch.linalg.svd(covariance)
-    correction = torch.eye(3)
-    correction[-1, -1] = torch.sign(torch.det(left @ right))
-    rotation = left @ correction @ right
-    aligned = actual_centered @ rotation
-    value = torch.sqrt(torch.mean(torch.sum((aligned - expected_centered) ** 2, dim=-1)))
+    # actual, expected: (l, 3), one C-alpha atom per residue.
+    actual_centered = actual - actual.mean(dim=0, keepdim=True)  # (l, 3)
+    expected_centered = expected - expected.mean(dim=0, keepdim=True)  # (l, 3)
+    covariance = actual_centered.T @ expected_centered  # (3, 3)
+    left, _, right = torch.linalg.svd(covariance)  # left/right: (3, 3); singular values: (3,)
+    correction = torch.eye(3)  # (3, 3)
+    correction[-1, -1] = torch.sign(torch.det(left @ right))  # scalar entry; matrix stays (3, 3)
+    rotation = left @ correction @ right  # (3, 3)
+    aligned = actual_centered @ rotation  # (l, 3)
+    value = torch.sqrt(torch.mean(torch.sum((aligned - expected_centered) ** 2, dim=-1)))  # ()
     if not torch.isfinite(value):
         raise ValueError("C-alpha RMSD is not finite")
     return float(value)
 
 
 def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    actual_distances = torch.cdist(actual, actual)
-    expected_distances = torch.cdist(expected, expected)
-    pair_mask = expected_distances.lt(15.0)
-    pair_mask.fill_diagonal_(False)
+    # actual, expected: (l, 3), one C-alpha atom per residue.
+    actual_distances = torch.cdist(actual, actual)  # (l, l)
+    expected_distances = torch.cdist(expected, expected)  # (l, l)
+    pair_mask = expected_distances.lt(15.0)  # (l, l)
+    pair_mask.fill_diagonal_(False)  # (l, l), excludes self-distances
     if not pair_mask.any():
         raise ValueError("No valid C-alpha pairs for lDDT")
-    errors = (actual_distances - expected_distances).abs()
-    score = torch.stack([errors.lt(limit).float() for limit in (0.5, 1.0, 2.0, 4.0)]).mean(dim=0)
-    value = score[pair_mask].mean()
+    errors = (actual_distances - expected_distances).abs()  # (l, l)
+    score = torch.stack([errors.lt(limit).float() for limit in (0.5, 1.0, 2.0, 4.0)]).mean(dim=0)  # (l, l)
+    value = score[pair_mask].mean()  # ()
     if not torch.isfinite(value):
         raise ValueError("C-alpha lDDT is not finite")
     return float(value)
@@ -660,11 +664,11 @@ def _validate_candidate_outputs(tensors: Mapping[str, torch.Tensor]) -> list[str
         elif not torch.isfinite(representative).all():
             failures.append("representative_atom_coords contains NaN or infinity")
         elif "output__sample_atom_coords" in tensors and "feature__distogram_atom_idx" in tensors:
-            sample_coords = tensors["output__sample_atom_coords"].float()
+            sample_coords = tensors["output__sample_atom_coords"].float()  # (b, a, 3) or (b, s, a, 3)
             if sample_coords.ndim == 4:
-                sample_coords = sample_coords[:, 0]
-            indices = tensors["feature__distogram_atom_idx"].long()
-            expected = torch.gather(sample_coords, 1, indices.unsqueeze(-1).expand(-1, -1, 3))
+                sample_coords = sample_coords[:, 0]  # (b, a, 3)
+            indices = tensors["feature__distogram_atom_idx"].long()  # (b, l)
+            expected = torch.gather(sample_coords, 1, indices.unsqueeze(-1).expand(-1, -1, 3))  # (b, l, 3)
             if not torch.equal(representative.float(), expected):
                 failures.append(
                     "representative_atom_coords is not gathered from sample_atom_coords"
@@ -673,10 +677,10 @@ def _validate_candidate_outputs(tensors: Mapping[str, torch.Tensor]) -> list[str
 
 
 def _validate_bundle_geometry(tensors: Mapping[str, torch.Tensor], label: str) -> None:
-    atom_mask = tensors["feature__atom_attention_mask"].bool()
-    coordinates = tensors["output__sample_atom_coords"].float()
+    atom_mask = tensors["feature__atom_attention_mask"].bool()  # (b, a)
+    coordinates = tensors["output__sample_atom_coords"].float()  # (b, a, 3) or (b, s, a, 3)
     if coordinates.ndim == 4:
-        coordinates = coordinates[:, 0]
+        coordinates = coordinates[:, 0]  # (b, a, 3)
     if coordinates.ndim != 3 or coordinates.shape[-1] != 3:
         raise ValueError(f"{label}: unexpected coordinate shape {tuple(coordinates.shape)}")
     if not torch.isfinite(coordinates[atom_mask]).all():
@@ -686,8 +690,8 @@ def _validate_bundle_geometry(tensors: Mapping[str, torch.Tensor], label: str) -
         atom_pad_mask.bool().reshape_as(atom_mask), atom_mask
     ):
         raise ValueError(f"{label}: atom_pad_mask differs from atom_attention_mask")
-    ca = _ca_coordinates(tensors)
-    distances = torch.linalg.vector_norm(ca[1:] - ca[:-1], dim=-1)
+    ca = _ca_coordinates(tensors)  # (l, 3)
+    distances = torch.linalg.vector_norm(ca[1:] - ca[:-1], dim=-1)  # (l - 1,)
     if (
         not torch.isfinite(distances).all()
         or not distances.gt(2.0).all()

@@ -10,6 +10,7 @@ import torch
 
 from pathlib import Path
 from typing import Any
+
 from transformers import AutoModel
 
 
@@ -26,7 +27,7 @@ def _validate_outputs(output: Any, samples: int, atoms: int, tokens: int) -> dic
     }
     shapes = {}
     for name, (shape, maximum) in expected.items():
-        value = output[name]
+        value = output[name]  # expected[name] shape; validated below
         if value is None or tuple(value.shape) != shape:
             raise ValueError(f"Invalid confidence output shape: {name}")
         if not torch.isfinite(value).all() or (value < 0).any() or (value > maximum).any():

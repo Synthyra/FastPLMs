@@ -10,19 +10,20 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+
+import numpy as np
+import torch
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import torch
 from safetensors.torch import load_file, save_file
 from torch import Tensor
 
 from fastplms.models.esmfold2.esmfold2_input_builder import ProteinInput, StructurePredictionInput
 from fastplms.models.esmfold2.modeling_esmfold2_experimental import ESMFold2ExperimentalModel
 from fastplms.registry import get_model_spec
-
 from .data import validate_structure_npz
 
 
@@ -60,39 +61,41 @@ def _record_hash(record: Mapping[str, object]) -> str:
 
 
 def _backbone_indices(features: Mapping[str, Tensor]) -> Tensor:
-    atom_to_token = features["atom_to_token"].reshape(-1).long()
-    atom_mask = features["atom_attention_mask"].reshape(-1).bool()
+    # Native feature axes: atoms, tokens, and four encoded atom-name characters.
+    atom_to_token = features["atom_to_token"].reshape(-1).long()  # (atoms,)
+    atom_mask = features["atom_attention_mask"].reshape(-1).bool()  # (atoms,)
     names = [_decode_atom_name(row) for row in features["ref_atom_name_chars"].reshape(-1, 4)]
     token_count = int(features["token_attention_mask"].reshape(-1).shape[0])
-    indices = torch.full((token_count, 3), -1, dtype=torch.long)
+    indices = torch.full((token_count, 3), -1, dtype=torch.long)  # (tokens, 3), N/CA/C atom indices
     for atom_index, token in enumerate(atom_to_token.tolist()):
         if not atom_mask[atom_index] or token >= token_count:
             continue
         slot = {"N": 0, "CA": 1, "C": 2}.get(names[atom_index])
         if slot is not None:
-            indices[token, slot] = atom_index
-    return indices
+            indices[token, slot] = atom_index  # scalar slot in (tokens, 3)
+    return indices  # (tokens, 3)
 
 
 def _decode_atom_name(chars: Tensor) -> str:
+    # chars: (4,) encoded atom-name characters.
     values = chars.detach().cpu().tolist()
     return "".join(" " if value == 0 else chr(int(value) + 32) for value in values).rstrip()
 
 
 def _kabsch_aligned(predicted: Tensor, target: Tensor) -> Tensor:
-    """Return RMSD after the optimal rigid alignment of target onto predicted."""
+    """Return target coordinates aligned onto predicted; both inputs are (points, 3)."""
     if predicted.shape != target.shape or predicted.shape[0] < 3:
-        return target
-    predicted_centered = predicted - predicted.mean(0, keepdim=True)
-    target_centered = target - target.mean(0, keepdim=True)
-    covariance = target_centered.transpose(0, 1) @ predicted_centered
-    left, _, right = torch.linalg.svd(covariance)
-    correction = torch.eye(3, device=predicted.device, dtype=predicted.dtype)
-    correction[-1, -1] = torch.linalg.det(left @ right).sign()
+        return target  # unchanged input shape on unsupported alignment inputs
+    predicted_centered = predicted - predicted.mean(0, keepdim=True)  # (points, 3)
+    target_centered = target - target.mean(0, keepdim=True)  # (points, 3)
+    covariance = target_centered.transpose(0, 1) @ predicted_centered  # (3, 3)
+    left, _, right = torch.linalg.svd(covariance)  # (3, 3), (3,), (3, 3)
+    correction = torch.eye(3, device=predicted.device, dtype=predicted.dtype)  # (3, 3)
+    correction[-1, -1] = torch.linalg.det(left @ right).sign()  # scalar orientation correction
     # Coordinates are row vectors: target @ rotation aligns to predicted.
-    rotation = left @ correction @ right
-    aligned = target_centered @ rotation + predicted.mean(0, keepdim=True)
-    return aligned
+    rotation = left @ correction @ right  # (3, 3)
+    aligned = target_centered @ rotation + predicted.mean(0, keepdim=True)  # (points, 3)
+    return aligned  # (points, 3)
 
 
 def _chain_assignment(
@@ -105,6 +108,8 @@ def _chain_assignment(
     atom_to_token: Tensor,
 ) -> list[int]:
     """Match equivalent two-chain records to native chain order by CA RMSD."""
+    # predicted/true: (atoms, 3); atom_mask/atom_to_token: (atoms,).
+    # chain_atoms contains one (chain atoms,) index vector per chain.
     if len(chain_atoms) != 2 or chain_sequences[0] != chain_sequences[1]:
         return [0, 1] if len(chain_atoms) == 2 else list(range(len(chain_atoms)))
     candidates: list[float] = []
@@ -112,8 +117,8 @@ def _chain_assignment(
         pred_points: list[Tensor] = []
         true_points: list[Tensor] = []
         for native_chain, record_chain in enumerate(assignment):
-            native = chain_atoms[native_chain]
-            record = chain_atoms[record_chain]
+            native = chain_atoms[native_chain]  # (atoms in native chain,)
+            record = chain_atoms[record_chain]  # (atoms in record chain,)
             native_ca = [index for index in native.tolist() if atom_names[index] == "CA"]
             record_ca = [index for index in record.tolist() if atom_names[index] == "CA"]
             for native_index, record_index in zip(native_ca, record_ca, strict=False):
@@ -122,12 +127,12 @@ def _chain_assignment(
                     and torch.isfinite(predicted[native_index]).all()
                     and torch.isfinite(true[record_index]).all()
                 ):
-                    pred_points.append(predicted[native_index])
-                    true_points.append(true[record_index])
+                    pred_points.append(predicted[native_index])  # (3,)
+                    true_points.append(true[record_index])  # (3,)
         if len(pred_points) < 3:
             candidates.append(float("inf"))
         else:
-            aligned = _kabsch_aligned(torch.stack(pred_points), torch.stack(true_points))
+            aligned = _kabsch_aligned(torch.stack(pred_points), torch.stack(true_points))  # (resolved CA atoms, 3)
             candidates.append(
                 float(torch.sqrt((aligned - torch.stack(pred_points)).square().mean()).item())
             )
@@ -143,13 +148,14 @@ def _resolve_ambiguous_atoms(
     token_residue_names: Mapping[int, str],
 ) -> Tensor:
     """Choose crystallographic equivalent-atom labels by predicted distance."""
-    valid = resolved & torch.isfinite(predicted).all(-1) & torch.isfinite(true).all(-1)
+    # predicted/true: (atoms, 3); resolved/atom_to_token: (atoms,).
+    valid = resolved & torch.isfinite(predicted).all(-1) & torch.isfinite(true).all(-1)  # (atoms,)
     if int(valid.sum()) < 3:
-        return true
-    aligned_valid = _kabsch_aligned(predicted[valid], true[valid])
-    aligned = torch.full_like(true, float("nan"))
-    aligned[valid] = aligned_valid
-    output = true.clone()
+        return true  # (atoms, 3)
+    aligned_valid = _kabsch_aligned(predicted[valid], true[valid])  # (valid atoms, 3)
+    aligned = torch.full_like(true, float("nan"))  # (atoms, 3)
+    aligned[valid] = aligned_valid  # update (valid atoms, 3)
+    output = true.clone()  # (atoms, 3)
     for token_value, residue_name in token_residue_names.items():
         pairs = _AMBIGUOUS_ATOM_PAIRS.get(residue_name)
         if pairs is None:
@@ -168,16 +174,16 @@ def _resolve_ambiguous_atoms(
             (predicted[left] - aligned[left]).square().sum()
             + (predicted[right] - aligned[right]).square().sum()
             for left, right in pairs
-        )
+        )  # ()
         swapped = sum(
             (predicted[left] - aligned[right]).square().sum()
             + (predicted[right] - aligned[left]).square().sum()
             for left, right in pairs
-        )
+        )  # ()
         if swapped < direct:
             for left, right in pairs:
-                output[left], output[right] = true[right].clone(), true[left].clone()
-    return output
+                output[left], output[right] = true[right].clone(), true[left].clone()  # each (3,)
+    return output  # (atoms, 3)
 
 
 def _structure_input(record: Mapping[str, object]) -> StructurePredictionInput:
@@ -205,15 +211,16 @@ def _aligned_true_coordinates(
     predicted_coords: Tensor,
 ) -> tuple[Tensor, Tensor]:
     """Map atom14 coordinates onto the native padded atom order."""
+    # predicted_coords: (atoms, 3); structure arrays use residue and atom14 axes.
     with np.load(structure_path, allow_pickle=False) as arrays:
-        coordinates = np.asarray(arrays["coordinates"], dtype=np.float32)
-        atom_names = np.asarray(arrays["atom_names"])
-        chain_index = np.asarray(arrays["chain_index"])
-        residue_index = np.asarray(arrays["residue_index"])
+        coordinates = np.asarray(arrays["coordinates"], dtype=np.float32)  # (residues, 14, 3)
+        atom_names = np.asarray(arrays["atom_names"])  # (residues, 14)
+        chain_index = np.asarray(arrays["chain_index"])  # (residues,)
+        residue_index = np.asarray(arrays["residue_index"])  # (residues,)
 
-    atom_to_token = features["atom_to_token"].reshape(-1).long()
-    atom_mask = features["atom_attention_mask"].reshape(-1).bool()
-    chars = features["ref_atom_name_chars"].reshape(-1, 4)
+    atom_to_token = features["atom_to_token"].reshape(-1).long()  # (atoms,)
+    atom_mask = features["atom_attention_mask"].reshape(-1).bool()  # (atoms,)
+    chars = features["ref_atom_name_chars"].reshape(-1, 4)  # (atoms, 4)
     decoded_names = [_decode_atom_name(chars[index]) for index in range(chars.shape[0])]
     token_locations: dict[int, tuple[int, int]] = {}
     for chain_number, chain_info in enumerate(chain_infos):
@@ -221,8 +228,8 @@ def _aligned_true_coordinates(
             # Native token residues are zero-based; normalized structure records
             # retain one-based residue positions within each complete chain.
             token_locations[int(token.token_index)] = (chain_number, int(token.residue_index) + 1)
-    true = torch.full((atom_to_token.numel(), 3), float("nan"), dtype=torch.float32)
-    resolved = torch.zeros(atom_to_token.numel(), dtype=torch.bool)
+    true = torch.full((atom_to_token.numel(), 3), float("nan"), dtype=torch.float32)  # (atoms, 3)
+    resolved = torch.zeros(atom_to_token.numel(), dtype=torch.bool)  # (atoms,)
     for atom_index in range(atom_to_token.numel()):
         if not atom_mask[atom_index]:
             continue
@@ -230,21 +237,22 @@ def _aligned_true_coordinates(
         if location is None:
             continue
         chain_number, local_residue = location
+        # (matching residues,)
         matches = np.flatnonzero((chain_index == chain_number) & (residue_index == local_residue))
         if matches.size != 1:
             continue
-        names = atom_names[matches[0]]
+        names = atom_names[matches[0]]  # (14,)
         name = _decode_atom_name(chars[atom_index])
         normalized_names = np.asarray(
             [item.decode() if isinstance(item, bytes) else str(item).strip() for item in names]
-        )
-        name_matches = np.flatnonzero(normalized_names == name)
+        )  # (14,)
+        name_matches = np.flatnonzero(normalized_names == name)  # (matching atom slots,)
         if name_matches.size != 1:
             continue
-        xyz = coordinates[matches[0], name_matches[0]]
+        xyz = coordinates[matches[0], name_matches[0]]  # (3,)
         if np.isfinite(xyz).all():
-            true[atom_index] = torch.from_numpy(xyz)
-            resolved[atom_index] = True
+            true[atom_index] = torch.from_numpy(xyz)  # (3,)
+            resolved[atom_index] = True  # scalar atom mask entry
     chain_atoms = [
         torch.tensor(
             [
@@ -256,7 +264,7 @@ def _aligned_true_coordinates(
             dtype=torch.long,
         )
         for chain_number in range(len(chain_infos))
-    ]
+    ]  # per chain (chain atoms,)
     sequences = [str(chain.get("sequence", "")) for chain in record.get("chains", [])]
     assignment = _chain_assignment(
         predicted_coords,
@@ -268,11 +276,11 @@ def _aligned_true_coordinates(
         atom_to_token,
     )
     if assignment == [1, 0]:
-        reordered = true.clone()
-        reordered[chain_atoms[0]] = true[chain_atoms[1]]
-        reordered[chain_atoms[1]] = true[chain_atoms[0]]
-        true = reordered
-        resolved = torch.isfinite(true).all(-1) & atom_mask
+        reordered = true.clone()  # (atoms, 3)
+        reordered[chain_atoms[0]] = true[chain_atoms[1]]  # (chain atoms, 3)
+        reordered[chain_atoms[1]] = true[chain_atoms[0]]  # (chain atoms, 3)
+        true = reordered  # (atoms, 3)
+        resolved = torch.isfinite(true).all(-1) & atom_mask  # (atoms,)
     token_residue_names = {
         int(token.token_index): str(token.residue_name)
         for chain in chain_infos
@@ -285,8 +293,8 @@ def _aligned_true_coordinates(
         atom_to_token,
         decoded_names,
         token_residue_names,
-    )
-    return true, resolved
+    )  # (atoms, 3)
+    return true, resolved  # (atoms, 3), (atoms,)
 
 
 def load_folding_model(
@@ -322,10 +330,10 @@ def load_folding_model(
 
 
 def _output_tensor(output: Any, name: str) -> Tensor:
-    value = output[name] if isinstance(output, Mapping) else getattr(output, name)
+    value = output[name] if isinstance(output, Mapping) else getattr(output, name)  # field-specific shape
     if value is None:
         raise RuntimeError(f"model output omitted {name}")
-    return value
+    return value  # shape unchanged; the caller selects and validates the field
 
 
 def _single_sample_coordinates(prediction: Tensor) -> Tensor:
@@ -335,7 +343,7 @@ def _single_sample_coordinates(prediction: Tensor) -> Tensor:
     coordinates = prediction.reshape(-1, prediction.shape[-2], 3)  # [sample, atom, xyz]
     if coordinates.shape[0] != 1:
         raise ValueError("Each confidence cache requires exactly one target and sample")
-    return coordinates
+    return coordinates  # (1, atoms, 3)
 
 
 @torch.no_grad()
@@ -383,7 +391,7 @@ def cache_target(
     prepared_cpu = {name: value.detach().cpu() for name, value in prepared.items()}
     true_coords, resolved_mask = _aligned_true_coordinates(
         prepared_cpu, chain_infos, record, structure_path, prediction[0]
-    )
+    )  # (atoms, 3), (atoms,)
     tensor_cache: dict[str, Tensor] = {
         "s_inputs": hidden_states[0].detach().float().cpu(),
         "z": hidden_states[1].detach().float().cpu(),
@@ -466,8 +474,8 @@ def load_cache(
     for name, rank in expected_ranks.items():
         if tensors[name].ndim != rank:
             raise ValueError(f"confidence cache tensor {name!r} must have rank {rank}")
-    token_mask = tensors["token_attention_mask"].reshape(-1)
-    atom_mask = tensors["atom_attention_mask"].reshape(-1)
+    token_mask = tensors["token_attention_mask"].reshape(-1)  # (tokens,)
+    atom_mask = tensors["atom_attention_mask"].reshape(-1)  # (atoms,)
     if (
         tensors["s_inputs"].shape[0] != 1
         or tensors["s_inputs"].shape[1] != token_mask.numel()
@@ -484,7 +492,7 @@ def load_cache(
         raise ValueError("confidence cache resolved_mask shape is inconsistent")
     if tensors["backbone_indices"].shape != (token_mask.numel(), 3):
         raise ValueError("confidence cache backbone_indices shape is inconsistent")
-    atom_to_token = tensors["atom_to_token"].reshape(-1)
+    atom_to_token = tensors["atom_to_token"].reshape(-1)  # (atoms,)
     if atom_to_token.numel() != atom_count or atom_to_token.dtype not in (torch.int32, torch.int64):
         raise ValueError("confidence cache atom_to_token shape or dtype is inconsistent")
     if atom_to_token.numel() and (
@@ -509,10 +517,10 @@ def confidence_inputs(model: Any, cache: Mapping[str, Tensor]) -> dict[str, Tens
             sym_id=tensors["sym_id"],
             entity_id=tensors["entity_id"],
             token_index=tensors["token_index"],
-        )
-        bonds = model.token_bonds(tensors["token_bonds"].float())
-    relative = relative.float()
-    bonds = bonds.float()
+        )  # (1, tokens, tokens, pair channels)
+        bonds = model.token_bonds(tensors["token_bonds"].float())  # (1, tokens, tokens, pair channels)
+    relative = relative.float()  # (1, tokens, tokens, pair channels)
+    bonds = bonds.float()  # (1, tokens, tokens, pair channels)
     return {
         "s_inputs": tensors["s_inputs"],
         "z": tensors["z"],

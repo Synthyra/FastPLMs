@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
+
 if TYPE_CHECKING:
     from .configuration_esmfold2 import ESMFold2Config as ESMFold2Config
     from .modeling_esmfold2 import ESMFold2Model as ESMFold2Model

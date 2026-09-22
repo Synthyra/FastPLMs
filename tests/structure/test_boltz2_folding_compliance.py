@@ -9,6 +9,7 @@ import os
 import pytest
 import torch
 import torch.nn.functional as F
+
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -152,14 +153,14 @@ def _assert_exact_features(
     expected = _features(expected_tensors)
     assert actual.keys() == expected.keys() == set(boltz2_bundle._feature_names)
     for name in boltz2_bundle._exact_features:
-        # X: (...)
+        # X and X_ref retain the named feature's shape, checked below.
         X = actual[name]
         X_ref = expected[name]
         assert X.dtype == X_ref.dtype, f"{name}: dtype"
         assert X.shape == X_ref.shape, f"{name}: shape"
         assert torch.equal(X, X_ref), f"{name}: values"
     for name in set(actual).difference(boltz2_bundle._exact_features):
-        # X: (...)
+        # X and X_ref retain the named feature's shape, checked below.
         X = actual[name]
         X_ref = expected[name]
         assert X.dtype == X_ref.dtype, f"{name}: dtype"
@@ -176,15 +177,15 @@ def _assert_exact_features(
 
 
 def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual: (...), expected: (...)
+    # actual and expected share the named output's arbitrary shape.
     difference = torch.linalg.vector_norm(actual.float() - expected.float())
-    # scale: (...)
+    # scale: (), the norm over every reference element.
     scale = torch.linalg.vector_norm(expected.float()).clamp_min(torch.finfo(torch.float32).tiny)
     return (difference / scale).item()
 
 
 def _first_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
-    # X: (...)
+    # X: (*s, a, 3), where s contains sample/batch axes and a counts atoms.
     X = _output(tensors, "sample_atom_coords").float()
     return X.reshape(-1, X.shape[-2], 3)[0]
 
@@ -193,11 +194,11 @@ def _ca_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
     features = _features(tensors)
     # encoded: (4,)
     encoded = torch.tensor([ord("C") - 32, ord("A") - 32, 0, 0])
-    # atom_names: (...)
+    # atom_names: (a, 4), four encoded characters per atom.
     atom_names = features["ref_atom_name_chars"][0].argmax(dim=-1)
-    # atom_mask: (...)
+    # atom_mask: (a,), covering the atoms in the first batch element.
     atom_mask = features["atom_pad_mask"][0].bool()
-    # ca_mask: (...)
+    # ca_mask: (a,), selecting the resolved C-alpha atoms.
     ca_mask = atom_names.eq(encoded).all(dim=-1) & atom_mask
     assert ca_mask.sum().item() == len(boltz2_bundle.fold_sequence)
     return ca_mask
@@ -208,30 +209,30 @@ def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
 
 
 def _aligned_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual: (...), expected: (...)
-    # X: (...)
+    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
+    # X: (n, 3)
     X = actual.float() - actual.float().mean(dim=0, keepdim=True)
-    X_ref = expected.float() - expected.float().mean(dim=0, keepdim=True)
-    covariance = X.T @ X_ref
+    X_ref = expected.float() - expected.float().mean(dim=0, keepdim=True)  # (n, 3)
+    covariance = X.T @ X_ref  # (3, 3)
     U, _, Vh = torch.linalg.svd(covariance)
     # correction: (3, 3)
     correction = torch.eye(3)
     correction[-1, -1] = torch.sign(torch.det(U @ Vh))
-    rotation = U @ correction @ Vh
-    aligned = X @ rotation
+    rotation = U @ correction @ Vh  # (3, 3)
+    aligned = X @ rotation  # (n, 3)
     return torch.sqrt(torch.mean(torch.sum((aligned - X_ref) ** 2, dim=-1))).item()
 
 
 def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual: (...), expected: (...)
-    actual_distances = torch.cdist(actual.float(), actual.float())
-    expected_distances = torch.cdist(expected.float(), expected.float())
-    # pair_mask: (...)
+    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
+    actual_distances = torch.cdist(actual.float(), actual.float())  # (n, n)
+    expected_distances = torch.cdist(expected.float(), expected.float())  # (n, n)
+    # pair_mask: (n, n)
     pair_mask = expected_distances.lt(15.0)
     pair_mask.fill_diagonal_(False)
     assert pair_mask.any()
-    errors = (actual_distances - expected_distances).abs()
-    # scores: (...)
+    errors = (actual_distances - expected_distances).abs()  # (n, n)
+    # scores: (n, n)
     scores = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
         dim=0
     )
@@ -243,7 +244,8 @@ def _probability_jsd(
     expected_logits: torch.Tensor,
     mask: torch.Tensor,
 ) -> torch.Tensor:
-    # actual_logits: (..., c), expected_logits: (..., c), mask: (...)
+    # Logits: (*s, c), where s contains batch/sample and atom or token-pair axes.
+    # mask covers the trailing axes of s; c is the number of confidence bins.
     actual_log_prob = F.log_softmax(actual_logits.float(), dim=-1)
     expected_log_prob = F.log_softmax(expected_logits.float(), dim=-1)
     actual_prob = actual_log_prob.exp()
@@ -255,7 +257,7 @@ def _probability_jsd(
         + (expected_prob * (expected_log_prob - log_mean_prob)).sum(dim=-1)
     )
     while mask.ndim < divergence.ndim:
-        # mask: (...)
+        # Prepend one singleton sample/batch axis until the mask has shape rank len(s).
         mask = mask.unsqueeze(0)
     mask = torch.broadcast_to(mask, divergence.shape)
     return divergence[mask].mean()
@@ -266,9 +268,9 @@ def _metrics(
     expected: Mapping[str, torch.Tensor],
 ) -> tuple[dict[str, float], dict[str, float]]:
     features = _features(actual)
-    # token_mask: (...)
+    # token_mask: (b, l), covering the batch's token positions.
     token_mask = features["token_pad_mask"].bool()
-    # pair_mask: (...)
+    # pair_mask: (b, l, l)
     pair_mask = token_mask[:, :, None] & token_mask[:, None, :]
     plddt_actual = _output(actual, "plddt").float().reshape_as(token_mask)
     plddt_expected = _output(expected, "plddt").float().reshape_as(token_mask)
@@ -324,7 +326,7 @@ def _metrics(
 
 def _assert_valid_outputs(tensors: Mapping[str, torch.Tensor], *, context: str) -> None:
     features = _features(tensors)
-    # atom_mask: (...)
+    # atom_mask: (a,), covering the atoms in the first batch element.
     atom_mask = features["atom_pad_mask"][0].bool()
     coordinates = _first_coordinates(tensors)
     assert torch.isfinite(coordinates[atom_mask]).all(), f"{context}: coordinates"

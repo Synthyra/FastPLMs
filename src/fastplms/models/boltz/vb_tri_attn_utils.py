@@ -8,6 +8,7 @@ the public function names expected by converted checkpoints.
 from __future__ import annotations
 
 import torch
+
 from collections.abc import Callable, Sequence
 from functools import partial
 from math import prod
@@ -27,6 +28,7 @@ def add(left: torch.Tensor, right: torch.Tensor, inplace: bool) -> torch.Tensor:
 def permute_final_dims(tensor: torch.Tensor, inds: Sequence[int]) -> torch.Tensor:
     """Permute only the final ``len(inds)`` axes of ``tensor``."""
 
+    # tensor: (..., d_0, ..., d_n); inds reorders the named final axes.
     final_count = len(inds)
     leading = list(range(tensor.ndim - final_count))
     final = [tensor.ndim - final_count + index for index in inds]
@@ -192,6 +194,7 @@ def _chunk_slice(
 ) -> torch.Tensor:
     """Slice a flattened batch interval without flattening the full tensor."""
 
+    # tensor: (*batch_shape, *feature_shape).
     batch_shape = tuple(tensor.shape[:no_batch_dims])
     start = _flat_idx_to_idx(flat_start, batch_shape)
     end = _flat_idx_to_idx(flat_end - 1, batch_shape)
@@ -336,5 +339,3 @@ def chunk_layer(
         lambda tensor: tensor.reshape(batch_shape + tuple(tensor.shape[1:])),
         output,
     )  # each tensor: (*batch_shape, *output_feature_shape)
-    # tensor: (..., d_0, ..., d_n); only the named final dimensions are reordered.
-    # tensor: (*batch_shape, *feature_shape)

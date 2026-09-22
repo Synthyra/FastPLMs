@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fastplms.registry import ModelSpec
 
+
 FOLDING_COST_EVIDENCE = Path("docs/evidence/esmfold2/folding_cost.json")
 
 

@@ -9,13 +9,13 @@ re-injection and a different confidence/MSA stack.
 from __future__ import annotations
 
 import gc
-from collections.abc import Mapping
-from pathlib import Path
-from typing import Any, ClassVar, cast
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, ClassVar, cast
 from torch import Tensor
 from tqdm.auto import tqdm
 from transformers.modeling_utils import PreTrainedModel
@@ -66,6 +66,7 @@ from .modeling_esmfold2_common import (
     validate_prepared_auxiliary_inputs,
 )
 
+
 _EPS = 1e-5
 _NONPOLYMER_ID = 3
 
@@ -82,8 +83,8 @@ class ConfidenceHead(nn.Module):
         d_pair = config.d_pair
         d_inputs = config.inputs.d_inputs
 
-        boundaries = torch.linspace(ch.min_dist, ch.max_dist, ch.distogram_bins - 1)
-        self.register_buffer("boundaries", boundaries)
+        boundaries = torch.linspace(ch.min_dist, ch.max_dist, ch.distogram_bins - 1)  # (distogram_bins - 1,)
+        self.register_buffer("boundaries", boundaries)  # (distogram_bins - 1,)
         self.dist_bin_pairwise_embed = nn.Embedding(ch.distogram_bins, d_pair)
 
         self.s_norm = nn.LayerNorm(d_single)
@@ -105,7 +106,7 @@ class ConfidenceHead(nn.Module):
         max_atoms_per_token = 23
         self.plddt_weight = nn.Parameter(
             torch.zeros(max_atoms_per_token, d_single, ch.num_plddt_bins)
-        )
+        )  # (23, d_single, n_plddt_bins)
         self.pae_head = nn.Linear(d_pair, ch.num_pae_bins, bias=False)
 
     def set_kernel_backend(self, backend: str | None) -> None:
@@ -117,16 +118,18 @@ class ConfidenceHead(nn.Module):
 
     @staticmethod
     def _repeat_batch(x: Tensor, num_diffusion_samples: int) -> Tensor:
+        # x: (b, ...); output repeats the batch axis by samples.
         if num_diffusion_samples == 1:
-            return x
-        return x.repeat_interleave(num_diffusion_samples, 0)
+            return x  # (b * samples, ...), including samples = 1
+        return x.repeat_interleave(num_diffusion_samples, 0)  # (b * samples, ...), including samples = 1
 
     @staticmethod
     def _flatten_sample_axis(x: Tensor) -> Tensor:
+        # x: (b, samples, n, c) or an already flattened tensor.
         if x.ndim == 4:
             b, mult, n, c = x.shape
-            return x.reshape(b * mult, n, c)
-        return x
+            return x.reshape(b * mult, n, c)  # (b * samples, n, c) for 4D input; otherwise x.shape
+        return x  # (b * samples, n, c) for 4D input; otherwise x.shape
 
     def forward(
         self,
@@ -143,109 +146,110 @@ class ConfidenceHead(nn.Module):
         relative_position_encoding: Tensor | None = None,
         token_bonds_encoding: Tensor | None = None,
     ) -> dict[str, Tensor]:
-        s_inputs_normed = self.s_inputs_norm(s_inputs)
-        z_base = self.z_norm(z)
+        # s_inputs: (b, l, d_inputs); z: (b, l, l, d_pair); x_pred: (bs, a, 3) or (b, samples, a, 3). bs = b * samples.
+        s_inputs_normed = self.s_inputs_norm(s_inputs)  # (b, l, d_inputs)
+        z_base = self.z_norm(z)  # (b, l, l, d_pair)
         if relative_position_encoding is not None:
-            z_base = z_base + relative_position_encoding
+            z_base = z_base + relative_position_encoding  # (b, l, l, d_pair)
         if token_bonds_encoding is not None:
-            z_base = z_base + token_bonds_encoding
-        z_base = z_base + self.s_to_z(s_inputs_normed).unsqueeze(2)
-        z_base = z_base + self.s_to_z_transpose(s_inputs_normed).unsqueeze(1)
+            z_base = z_base + token_bonds_encoding  # (b, l, l, d_pair)
+        z_base = z_base + self.s_to_z(s_inputs_normed).unsqueeze(2)  # (b, l, l, d_pair)
+        z_base = z_base + self.s_to_z_transpose(s_inputs_normed).unsqueeze(1)  # (b, l, l, d_pair)
         z_base = z_base + self.s_to_z_prod_out(
             self.s_to_z_prod_in1(s_inputs_normed)[:, :, None, :]
             * self.s_to_z_prod_in2(s_inputs_normed)[:, None, :, :]
-        )
+        )  # (b, l, l, d_pair)
 
-        pair = self._repeat_batch(z_base, num_diffusion_samples)
-        x_pred_flat = self._flatten_sample_axis(x_pred)
-        atom_to_token_m = self._repeat_batch(atom_to_token, num_diffusion_samples)
-        atom_mask_m = self._repeat_batch(atom_attention_mask, num_diffusion_samples)
-        rep_idx_m = self._repeat_batch(distogram_atom_idx, num_diffusion_samples).long()
-        mask = self._repeat_batch(token_attention_mask, num_diffusion_samples)
+        pair = self._repeat_batch(z_base, num_diffusion_samples)  # (bs, l, l, d_pair)
+        x_pred_flat = self._flatten_sample_axis(x_pred)  # (bs, a, 3)
+        atom_to_token_m = self._repeat_batch(atom_to_token, num_diffusion_samples)  # (bs, a)
+        atom_mask_m = self._repeat_batch(atom_attention_mask, num_diffusion_samples)  # (bs, a)
+        rep_idx_m = self._repeat_batch(distogram_atom_idx, num_diffusion_samples).long()  # (bs, l)
+        mask = self._repeat_batch(token_attention_mask, num_diffusion_samples)  # (bs, l)
         batch_mult = pair.shape[0]
 
-        rep_coords = gather_rep_atom_coords(x_pred_flat, rep_idx_m)
+        rep_coords = gather_rep_atom_coords(x_pred_flat, rep_idx_m)  # (bs, l, 3)
         rep_distances = torch.cdist(
             rep_coords, rep_coords, compute_mode="donot_use_mm_for_euclid_dist"
-        )
-        distogram_bins = (rep_distances.unsqueeze(-1) > self.boundaries).sum(dim=-1).long()
-        pair = pair + self.dist_bin_pairwise_embed(distogram_bins)
+        )  # (bs, l, l)
+        distogram_bins = (rep_distances.unsqueeze(-1) > self.boundaries).sum(dim=-1).long()  # (bs, l, l)
+        pair = pair + self.dist_bin_pairwise_embed(distogram_bins)  # (bs, l, l, d_pair)
 
-        pair_mask = mask[:, :, None].float() * mask[:, None, :].float()
-        pair = pair + self.folding_trunk(pair, pair_attention_mask=pair_mask)
-        single = self.row_attention_pooling(pair, mask)
+        pair_mask = mask[:, :, None].float() * mask[:, None, :].float()  # (bs, l, l)
+        pair = pair + self.folding_trunk(pair, pair_attention_mask=pair_mask)  # (bs, l, l, d_pair)
+        single = self.row_attention_pooling(pair, mask)  # (bs, l, d_single)
 
-        atom_mask_f = atom_mask_m.float()
-        s_at_atoms = gather_token_to_atom(single, atom_to_token_m)
-        s_at_atoms = self.plddt_ln(s_at_atoms)
-        intra_idx = _compute_intra_token_idx(atom_to_token_m)
-        intra_idx = intra_idx.clamp(max=self.plddt_weight.shape[0] - 1)
-        plddt_weight = self.plddt_weight[intra_idx]
-        plddt_logits = torch.einsum("...c,...cb->...b", s_at_atoms, plddt_weight)
-        plddt_per_atom = _categorical_mean(plddt_logits, start=0.0, end=1.0)
+        atom_mask_f = atom_mask_m.float()  # (bs, a)
+        s_at_atoms = gather_token_to_atom(single, atom_to_token_m)  # (bs, a, d_single)
+        s_at_atoms = self.plddt_ln(s_at_atoms)  # (bs, a, d_single)
+        intra_idx = _compute_intra_token_idx(atom_to_token_m)  # (bs, a)
+        intra_idx = intra_idx.clamp(max=self.plddt_weight.shape[0] - 1)  # (bs, a)
+        plddt_weight = self.plddt_weight[intra_idx]  # (bs, a, d_single, n_plddt_bins)
+        plddt_logits = torch.einsum("...c,...cb->...b", s_at_atoms, plddt_weight)  # (bs, a, n_plddt_bins)
+        plddt_per_atom = _categorical_mean(plddt_logits, start=0.0, end=1.0)  # (bs, a)
 
         length = single.shape[1]
         plddt_sum = torch.zeros(
             batch_mult, length, device=single.device, dtype=plddt_per_atom.dtype
-        )
+        )  # (bs, l)
         atom_count = torch.zeros(
             batch_mult, length, device=single.device, dtype=plddt_per_atom.dtype
-        )
-        atom_mask_t = atom_mask_f.to(plddt_per_atom.dtype)
-        plddt_sum.scatter_add_(1, atom_to_token_m, plddt_per_atom * atom_mask_t)
-        atom_count.scatter_add_(1, atom_to_token_m, atom_mask_t)
-        plddt = plddt_sum / atom_count.clamp(min=1e-6)
+        )  # (bs, l)
+        atom_mask_t = atom_mask_f.to(plddt_per_atom.dtype)  # (bs, a)
+        plddt_sum.scatter_add_(1, atom_to_token_m, plddt_per_atom * atom_mask_t)  # (bs, l)
+        atom_count.scatter_add_(1, atom_to_token_m, atom_mask_t)  # (bs, l)
+        plddt = plddt_sum / atom_count.clamp(min=1e-6)  # (bs, l)
 
         complex_plddt = (plddt_per_atom * atom_mask_f).sum(dim=-1) / (
             atom_mask_f.sum(dim=-1) + _EPS
-        )
+        )  # (bs,)
 
-        expanded_type = self._repeat_batch(mol_type, num_diffusion_samples)
-        expanded_asym = self._repeat_batch(asym_id, num_diffusion_samples)
-        is_ligand = (expanded_type == _NONPOLYMER_ID).float()
-        inter_chain = (expanded_asym.unsqueeze(-1) != expanded_asym.unsqueeze(-2)).float()
-        near_contact = (rep_distances < 8).float()
+        expanded_type = self._repeat_batch(mol_type, num_diffusion_samples)  # (bs, l)
+        expanded_asym = self._repeat_batch(asym_id, num_diffusion_samples)  # (bs, l)
+        is_ligand = (expanded_type == _NONPOLYMER_ID).float()  # (bs, l)
+        inter_chain = (expanded_asym.unsqueeze(-1) != expanded_asym.unsqueeze(-2)).float()  # (bs, l, l)
+        near_contact = (rep_distances < 8).float()  # (bs, l, l)
         interface_per_token = (near_contact * inter_chain * (1.0 - is_ligand).unsqueeze(-1)).amax(
             dim=-1
-        )
+        )  # (bs, l)
         iplddt_weight = torch.where(
             is_ligand.bool(),
             torch.full_like(interface_per_token, 2.0),
             interface_per_token,
-        )
+        )  # (bs, l)
         iplddt_weight_atoms = gather_token_to_atom(
             iplddt_weight.unsqueeze(-1), atom_to_token_m
-        ).squeeze(-1)
-        atom_iplddt_w = atom_mask_f * iplddt_weight_atoms
+        ).squeeze(-1)  # (bs, a)
+        atom_iplddt_w = atom_mask_f * iplddt_weight_atoms  # (bs, a)
         complex_iplddt = (plddt_per_atom * atom_iplddt_w).sum(dim=-1) / (
             atom_iplddt_w.sum(dim=-1) + _EPS
-        )
-        plddt_ca = plddt_per_atom.gather(1, rep_idx_m)
+        )  # (bs,)
+        plddt_ca = plddt_per_atom.gather(1, rep_idx_m)  # (bs, l)
 
-        pae_logits = self.pae_head(pair)
-        pae = _categorical_mean(pae_logits, start=0.0, end=32.0).detach()
+        pae_logits = self.pae_head(pair)  # (bs, l, l, n_pae_bins)
+        pae = _categorical_mean(pae_logits, start=0.0, end=32.0).detach()  # (bs, l, l)
 
         n_bins = pae_logits.shape[-1]
         bin_width = 32.0 / n_bins
-        bin_centers = torch.arange(0.5 * bin_width, 32.0, bin_width, device=pae_logits.device)
-        mask_f = mask.float()
-        n_res = mask_f.sum(dim=-1, keepdim=True)
-        d0 = 1.24 * (n_res.clamp(min=19) - 15) ** (1 / 3) - 1.8
-        tm_per_bin = 1 / (1 + (bin_centers / d0) ** 2)
-        pae_probs = F.softmax(pae_logits, dim=-1)
-        tm_expected = (pae_probs * tm_per_bin[:, None, None, :]).sum(dim=-1)
+        bin_centers = torch.arange(0.5 * bin_width, 32.0, bin_width, device=pae_logits.device)  # (n_pae_bins,)
+        mask_f = mask.float()  # (bs, l)
+        n_res = mask_f.sum(dim=-1, keepdim=True)  # (bs, 1)
+        d0 = 1.24 * (n_res.clamp(min=19) - 15) ** (1 / 3) - 1.8  # (bs, 1)
+        tm_per_bin = 1 / (1 + (bin_centers / d0) ** 2)  # (bs, n_pae_bins)
+        pae_probs = F.softmax(pae_logits, dim=-1)  # (bs, l, l, n_pae_bins)
+        tm_expected = (pae_probs * tm_per_bin[:, None, None, :]).sum(dim=-1)  # (bs, l, l)
 
-        pair_mask_2d = mask_f.unsqueeze(-1) * mask_f.unsqueeze(-2)
-        ptm_per_row = (tm_expected * pair_mask_2d).sum(dim=-1) / (pair_mask_2d.sum(dim=-1) + _EPS)
-        ptm = ptm_per_row.max(dim=-1).values
+        pair_mask_2d = mask_f.unsqueeze(-1) * mask_f.unsqueeze(-2)  # (bs, l, l)
+        ptm_per_row = (tm_expected * pair_mask_2d).sum(dim=-1) / (pair_mask_2d.sum(dim=-1) + _EPS)  # (bs, l)
+        ptm = ptm_per_row.max(dim=-1).values  # (bs,)
 
         inter_chain_mask = (
             expanded_asym.unsqueeze(-1) != expanded_asym.unsqueeze(-2)
-        ).float() * pair_mask_2d
+        ).float() * pair_mask_2d  # (bs, l, l)
         iptm_per_row = (tm_expected * inter_chain_mask).sum(dim=-1) / (
             inter_chain_mask.sum(dim=-1) + _EPS
-        )
-        iptm = iptm_per_row.max(dim=-1).values
+        )  # (bs, l)
+        iptm = iptm_per_row.max(dim=-1).values  # (bs,)
 
         max_chain_id = int(expanded_asym.max().item()) if batch_mult > 0 else 0
         n_chains = max_chain_id + 1
@@ -255,16 +259,16 @@ class ConfidenceHead(nn.Module):
             n_chains,
             device=tm_expected.device,
             dtype=tm_expected.dtype,
-        )
+        )  # (bs, n_chains, n_chains)
         for c1 in range(n_chains):
-            chain_c1 = (expanded_asym == c1).float() * mask_f
+            chain_c1 = (expanded_asym == c1).float() * mask_f  # (bs, l)
             if chain_c1.sum() == 0:
                 continue
             for c2 in range(n_chains):
-                chain_c2 = (expanded_asym == c2).float() * mask_f
-                pair_m = chain_c1.unsqueeze(-1) * chain_c2.unsqueeze(-2)
-                denom = pair_m.sum(dim=(-1, -2)) + _EPS
-                pair_chains_iptm[:, c1, c2] = (tm_expected * pair_m).sum(dim=(-1, -2)) / denom
+                chain_c2 = (expanded_asym == c2).float() * mask_f  # (bs, l)
+                pair_m = chain_c1.unsqueeze(-1) * chain_c2.unsqueeze(-2)  # (bs, l, l)
+                denom = pair_m.sum(dim=(-1, -2)) + _EPS  # (bs,)
+                pair_chains_iptm[:, c1, c2] = (tm_expected * pair_m).sum(dim=(-1, -2)) / denom  # (bs,)
 
         return {
             "plddt_logits": plddt_logits,
@@ -278,7 +282,7 @@ class ConfidenceHead(nn.Module):
             "ptm": ptm.detach(),
             "iptm": iptm.detach(),
             "pair_chains_iptm": pair_chains_iptm.detach(),
-        }
+        }  # mapping of confidence tensors with shapes traced above
 
 
 class _TransitionFFN(nn.Module):
@@ -288,7 +292,8 @@ class _TransitionFFN(nn.Module):
         self.ffn = SwiGLUMLP(d_model, expansion_ratio=expansion_ratio, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.ffn(self.norm(x))
+        # x: (..., d_model).
+        return self.ffn(self.norm(x))  # x.shape
 
 
 class MSAEncoderBlock(nn.Module):
@@ -327,44 +332,45 @@ class MSAEncoderBlock(nn.Module):
         pair_attention_mask: Tensor,
         msa_track_mask: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
+        # msa_repr: (b, l, m, d_msa); pair_repr: (b, l, l, d_pair); msa_track_mask: (b,) or None.
         mask4d = (
             msa_track_mask[:, None, None, None].to(dtype=msa_repr.dtype)
             if msa_track_mask is not None
             else None
-        )
+        )  # (b, 1, 1, 1) or None
 
-        pair_mask4d = mask4d[:, :, :1] if mask4d is not None else None
+        pair_mask4d = mask4d[:, :, :1] if mask4d is not None else None  # (b, 1, 1, 1) or None
 
-        msa_update = self.msa_pair_weighted_averaging(msa_repr, pair_repr, pair_attention_mask)
+        msa_update = self.msa_pair_weighted_averaging(msa_repr, pair_repr, pair_attention_mask)  # (b, l, m, d_msa)
         if mask4d is not None:
-            msa_update = msa_update * mask4d
-        msa_repr = msa_repr + msa_update
+            msa_update = msa_update * mask4d  # (b, l, m, d_msa)
+        msa_repr = msa_repr + msa_update  # (b, l, m, d_msa)
 
-        msa_transition = self.msa_transition(msa_repr)
+        msa_transition = self.msa_transition(msa_repr)  # (b, l, m, d_msa)
         if mask4d is not None:
-            msa_transition = msa_transition * mask4d
-        msa_repr = msa_repr + msa_transition
+            msa_transition = msa_transition * mask4d  # (b, l, m, d_msa)
+        msa_repr = msa_repr + msa_transition  # (b, l, m, d_msa)
 
-        pair_opm = self.outer_product_mean(msa_repr, msa_attention_mask)
+        pair_opm = self.outer_product_mean(msa_repr, msa_attention_mask)  # (b, l, l, d_pair)
         if pair_mask4d is not None:
-            pair_opm = pair_opm * pair_mask4d
-        pair_repr = pair_repr + pair_opm
+            pair_opm = pair_opm * pair_mask4d  # (b, l, l, d_pair)
+        pair_repr = pair_repr + pair_opm  # (b, l, l, d_pair)
 
-        pair_out = self.tri_mul_out(pair_repr, mask=pair_attention_mask)
+        pair_out = self.tri_mul_out(pair_repr, mask=pair_attention_mask)  # (b, l, l, d_pair)
         if pair_mask4d is not None:
-            pair_out = pair_out * pair_mask4d
-        pair_repr = pair_repr + pair_out
+            pair_out = pair_out * pair_mask4d  # (b, l, l, d_pair)
+        pair_repr = pair_repr + pair_out  # (b, l, l, d_pair)
 
-        pair_in = self.tri_mul_in(pair_repr, mask=pair_attention_mask)
+        pair_in = self.tri_mul_in(pair_repr, mask=pair_attention_mask)  # (b, l, l, d_pair)
         if pair_mask4d is not None:
-            pair_in = pair_in * pair_mask4d
-        pair_repr = pair_repr + pair_in
+            pair_in = pair_in * pair_mask4d  # (b, l, l, d_pair)
+        pair_repr = pair_repr + pair_in  # (b, l, l, d_pair)
 
-        pair_transition = self.pair_transition(pair_repr)
+        pair_transition = self.pair_transition(pair_repr)  # (b, l, l, d_pair)
         if pair_mask4d is not None:
-            pair_transition = pair_transition * pair_mask4d
-        pair_repr = pair_repr + pair_transition
-        return msa_repr, pair_repr
+            pair_transition = pair_transition * pair_mask4d  # (b, l, l, d_pair)
+        pair_repr = pair_repr + pair_transition  # (b, l, l, d_pair)
+        return msa_repr, pair_repr  # (b, l, m, d_msa), (b, l, l, d_pair)
 
 
 class MSAEncoder(nn.Module):
@@ -407,18 +413,19 @@ class MSAEncoder(nn.Module):
         deletion_value: Tensor,
         msa_attention_mask: Tensor,
     ) -> Tensor:
+        # x_pair: (b, l, l, d_pair); x_inputs: (b, l, d_inputs); MSA features: (b, l, m, 33), deletion/mask: (b, l, m).
         batch_size, _, depth = msa_attention_mask.shape
         m_feat = torch.cat(
             [msa_oh, has_deletion.unsqueeze(-1), deletion_value.unsqueeze(-1)],
             dim=-1,
-        )
-        m = self.embed(m_feat) + self.project_inputs(x_inputs).unsqueeze(2)
+        )  # (b, l, m, 35)
+        m = self.embed(m_feat) + self.project_inputs(x_inputs).unsqueeze(2)  # (b, l, m, d_msa)
         if depth > 1:
-            msa_track_mask = msa_attention_mask[:, :, 1:].any(dim=(1, 2))
+            msa_track_mask = msa_attention_mask[:, :, 1:].any(dim=(1, 2))  # (b,)
         else:
-            msa_track_mask = torch.zeros(batch_size, dtype=torch.bool, device=x_pair.device)
-        tok_mask = msa_attention_mask[:, :, 0]
-        pair_attention_mask = tok_mask.unsqueeze(2) * tok_mask.unsqueeze(1)
+            msa_track_mask = torch.zeros(batch_size, dtype=torch.bool, device=x_pair.device)  # (b,)
+        tok_mask = msa_attention_mask[:, :, 0]  # (b, l)
+        pair_attention_mask = tok_mask.unsqueeze(2) * tok_mask.unsqueeze(1)  # (b, l, l)
         for block in self.blocks:
             m, x_pair = cast(MSAEncoderBlock, block)(
                 m,
@@ -426,8 +433,8 @@ class MSAEncoder(nn.Module):
                 msa_attention_mask,
                 pair_attention_mask,
                 msa_track_mask,
-            )
-        return x_pair * msa_track_mask[:, None, None, None].to(dtype=x_pair.dtype)
+            )  # (b, l, m, d_msa), (b, l, l, d_pair)
+        return x_pair * msa_track_mask[:, None, None, None].to(dtype=x_pair.dtype)  # (b, l, l, d_pair)
 
 
 class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, PreTrainedModel):
@@ -477,7 +484,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         self.pair_loop_proj = nn.Sequential(
             nn.LayerNorm(d_pair), nn.Linear(d_pair, d_pair, bias=False)
         )
-        nn.init.zeros_(cast(nn.Linear, self.pair_loop_proj[1]).weight)
+        nn.init.zeros_(cast(nn.Linear, self.pair_loop_proj[1]).weight)  # (d_pair, d_pair)
 
         self.structure_head = DiffusionStructureHead(config)
         self.distogram_head = nn.Linear(d_pair, config.structure_head.distogram_bins, bias=True)
@@ -648,6 +655,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         tok_mask: Tensor,
         verbose: bool = False,
     ) -> Tensor:
+        # Input tensors: (b, l); n_states and d_lm come from the loaded backbone.
         if self._esmc_fp8 and torch.is_grad_enabled():
             _reload_esmc_bf16_for_gradients(
                 self,
@@ -670,9 +678,9 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                         mol_type,
                         tok_mask,
                         pad_to_multiple=pad_to,
-                    )
+                    )  # (b, l, n_states, d_lm)
                     progress.update()
-                return result
+                return result  # (b, l, n_states, d_lm)
             return compute_lm_hidden_states(
                 self._esmc,
                 input_ids,
@@ -681,7 +689,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 mol_type,
                 tok_mask,
                 pad_to_multiple=pad_to,
-            )
+            )  # (b, l, n_states, d_lm)
 
     def forward(
         self,
@@ -731,6 +739,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         disto_cond_mask: Tensor | None = None,
         verbose: bool = False,
     ) -> ESMFold2Output | tuple[Any, ...]:
+        # Token IDs/masks: (b, l); atom IDs/masks: (b, a); ref_pos: (b, a, 3); chars: (b, a, 4); MSA: (b, m, l); bs = b * samples.
         output_hidden_states, return_dict = _resolve_structure_output_controls(
             self.config,
             output_attentions=output_attentions,
@@ -751,8 +760,8 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             disto_cond_mask=disto_cond_mask,
         )
         del gt_coords, is_resolved, frames_idx
-        tok_mask = token_attention_mask
-        atm_mask = atom_attention_mask
+        tok_mask = token_attention_mask  # (b, l)
+        atm_mask = atom_attention_mask  # (b, a)
         n_loops = num_loops if num_loops is not None else self.config.num_loops
         n_samples = (
             num_diffusion_samples
@@ -761,46 +770,46 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         )
 
         if res_type.dim() == 2:
-            res_type_oh = F.one_hot(res_type.long(), num_classes=NUM_RES_TYPES).float()
-            res_type_oh = res_type_oh * tok_mask.unsqueeze(-1).float()
+            res_type_oh = F.one_hot(res_type.long(), num_classes=NUM_RES_TYPES).float()  # (b, l, 33)
+            res_type_oh = res_type_oh * tok_mask.unsqueeze(-1).float()  # (b, l, 33)
         else:
-            res_type_oh = res_type.float()
+            res_type_oh = res_type.float()  # (b, l, 33)
 
         if msa is not None:
-            msa_oh_profile = F.one_hot(msa.long(), num_classes=NUM_RES_TYPES).float()
+            msa_oh_profile = F.one_hot(msa.long(), num_classes=NUM_RES_TYPES).float()  # (b, m, l, 33)
             if msa_attention_mask is not None:
-                mask_f = msa_attention_mask.float().unsqueeze(-1)
-                msa_oh_profile = msa_oh_profile * mask_f
-                valid_seq_count = msa_attention_mask.float().sum(dim=1).clamp(min=1)
-                profile = msa_oh_profile.sum(dim=1) / valid_seq_count.unsqueeze(-1)
+                mask_f = msa_attention_mask.float().unsqueeze(-1)  # (b, m, l, 1)
+                msa_oh_profile = msa_oh_profile * mask_f  # (b, m, l, 33)
+                valid_seq_count = msa_attention_mask.float().sum(dim=1).clamp(min=1)  # (b, l)
+                profile = msa_oh_profile.sum(dim=1) / valid_seq_count.unsqueeze(-1)  # (b, l, 33)
             else:
-                profile = msa_oh_profile.mean(dim=1)
+                profile = msa_oh_profile.mean(dim=1)  # (b, l, 33)
         else:
-            profile = res_type_oh
+            profile = res_type_oh  # (b, l, 33)
 
         if res_type_soft is not None:
-            res_type_oh = res_type_soft.float()
+            res_type_oh = res_type_soft.float()  # (b, l, 33)
             if not self.config.disable_msa_features and provide_soft_sequence_to_msa_and_profile:
-                profile = res_type_oh
-                msa = res_type_oh.unsqueeze(1)
-                msa_attention_mask = tok_mask.unsqueeze(1)
+                profile = res_type_oh  # (b, l, 33)
+                msa = res_type_oh.unsqueeze(1)  # (b, 1, l, 33)
+                msa_attention_mask = tok_mask.unsqueeze(1)  # (b, 1, l)
 
         if deletion_mean is None:
             deletion_mean = torch.zeros(
                 res_type.shape[0], res_type.shape[1], device=res_type.device
-            )
+            )  # (b, l)
         if self.config.disable_msa_features:
-            profile = torch.zeros_like(profile)
-            deletion_mean = torch.zeros_like(deletion_mean)
+            profile = torch.zeros_like(profile)  # (b, l, 33)
+            deletion_mean = torch.zeros_like(deletion_mean)  # (b, l)
 
-        ref_element_oh = F.one_hot(ref_element.long(), num_classes=MAX_ATOMIC_NUMBER).float()
+        ref_element_oh = F.one_hot(ref_element.long(), num_classes=MAX_ATOMIC_NUMBER).float()  # (b, a, 128)
         ref_atom_name_chars_oh = F.one_hot(
             ref_atom_name_chars.long(), num_classes=CHAR_VOCAB_SIZE
-        ).float()
-        atm_mask_f = atm_mask.float()
-        ref_element_oh = ref_element_oh * atm_mask_f.unsqueeze(-1)
-        ref_atom_name_chars_oh = ref_atom_name_chars_oh * atm_mask_f.unsqueeze(-1).unsqueeze(-1)
-        atom_to_token = atom_to_token * atm_mask.long()
+        ).float()  # (b, a, 4, 64)
+        atm_mask_f = atm_mask.float()  # (b, a)
+        ref_element_oh = ref_element_oh * atm_mask_f.unsqueeze(-1)  # (b, a, 128)
+        ref_atom_name_chars_oh = ref_atom_name_chars_oh * atm_mask_f.unsqueeze(-1).unsqueeze(-1)  # (b, a, 4, 64)
+        atom_to_token = atom_to_token * atm_mask.long()  # (b, a)
 
         use_amp = ref_pos.device.type == "cuda"
         with torch.amp.autocast("cuda", enabled=use_amp, dtype=torch.bfloat16):
@@ -815,58 +824,58 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 ref_element=ref_element_oh,
                 ref_atom_name_chars=ref_atom_name_chars_oh,
                 atom_to_token=atom_to_token,
-            )
+            )  # (b, l, d_inputs)
 
-            z_init = self.z_init_1(x_inputs).unsqueeze(2) + self.z_init_2(x_inputs).unsqueeze(1)
+            z_init = self.z_init_1(x_inputs).unsqueeze(2) + self.z_init_2(x_inputs).unsqueeze(1)  # (b, l, l, d_pair)
             relative_position_encoding = self.rel_pos(
                 residue_index=residue_index,
                 asym_id=asym_id,
                 sym_id=sym_id,
                 entity_id=entity_id,
                 token_index=token_index,
-            )
-            token_bonds_encoding = self.token_bonds(token_bonds.float())
-            z_init = z_init + relative_position_encoding + token_bonds_encoding
+            )  # (b, l, l, d_pair)
+            token_bonds_encoding = self.token_bonds(token_bonds.float())  # (b, l, l, d_pair)
+            z_init = z_init + relative_position_encoding + token_bonds_encoding  # (b, l, l, d_pair)
 
             if lm_hidden_states is None and input_ids is not None and self._esmc is not None:
                 lm_hidden_states = self._compute_lm_hidden_states(
                     input_ids, asym_id, residue_index, mol_type, tok_mask, verbose=verbose
-                )
+                )  # (b, l, n_states, d_lm)
             if lm_hidden_states is not None:
                 lm_dropout = (
                     self.config.lm_dropout
                     if self.config.force_lm_dropout_during_inference or self.training
                     else 0.0
                 )
-                lm_z = self.language_model(lm_hidden_states.detach(), lm_dropout=lm_dropout)
-                z_init = z_init + lm_z.to(z_init.dtype)
+                lm_z = self.language_model(lm_hidden_states.detach(), lm_dropout=lm_dropout)  # (b, l, l, d_pair) or None
+                z_init = z_init + lm_z.to(z_init.dtype)  # (b, l, l, d_pair)
 
             msa_kwargs: dict[str, Tensor] | None = None
             if self.msa_encoder is not None and msa is not None:
                 if msa.dim() == 4:
                     batch_msa, depth, length_msa, _ = msa.shape
-                    msa_oh = msa.permute(0, 2, 1, 3).float()
+                    msa_oh = msa.permute(0, 2, 1, 3).float()  # (b, l, m, 33)
                 else:
                     batch_msa, depth, length_msa = msa.shape
                     msa_oh = F.one_hot(
                         msa.permute(0, 2, 1).long(), num_classes=NUM_RES_TYPES
-                    ).float()
+                    ).float()  # (b, l, m, 33)
                 msa_attn = (
                     msa_attention_mask.permute(0, 2, 1).float()
                     if msa_attention_mask is not None
                     else tok_mask[:, :, None].expand(-1, -1, depth).float()
-                )
-                msa_oh = msa_oh * msa_attn.unsqueeze(-1)
+                )  # (b, l, m)
+                msa_oh = msa_oh * msa_attn.unsqueeze(-1)  # (b, l, m, 33)
                 hd = (
                     has_deletion.permute(0, 2, 1).float()
                     if has_deletion is not None
                     else torch.zeros(batch_msa, length_msa, depth, device=msa.device)
-                )
+                )  # (b, l, m)
                 dv = (
                     deletion_value.permute(0, 2, 1).float()
                     if deletion_value is not None
                     else torch.zeros(batch_msa, length_msa, depth, device=msa.device)
-                )
+                )  # (b, l, m)
                 msa_kwargs = {
                     "x_inputs": x_inputs,
                     "msa_oh": msa_oh,
@@ -875,10 +884,10 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                     "msa_attention_mask": msa_attn,
                 }
 
-            pair_mask = tok_mask[:, :, None].float() * tok_mask[:, None, :].float()
-            z = torch.zeros_like(z_init)
-            prev_pair: Tensor | None = None
-            prev_disto_probs: Tensor | None = None
+            pair_mask = tok_mask[:, :, None].float() * tok_mask[:, None, :].float()  # (b, l, l)
+            z = torch.zeros_like(z_init)  # (b, l, l, d_pair)
+            prev_pair: Tensor | None = None  # (b, l, l, d_pair) or None
+            prev_disto_probs: Tensor | None = None  # (b, l, l, n_distogram_bins) or None
             loop_iterator = range(n_loops + 1)
             if verbose:
                 loop_iterator = tqdm(
@@ -889,32 +898,32 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 )
 
             for loop_num in loop_iterator:
-                z = z_init + self.pair_loop_proj(z)
+                z = z_init + self.pair_loop_proj(z)  # (b, l, l, d_pair)
                 if msa_kwargs is not None and self.msa_encoder is not None:
-                    z = z + self.msa_encoder(x_pair=z, **msa_kwargs).to(z.dtype)
-                z = self.folding_trunk(z, pair_attention_mask=pair_mask)
+                    z = z + self.msa_encoder(x_pair=z, **msa_kwargs).to(z.dtype)  # (b, l, l, d_pair)
+                z = self.folding_trunk(z, pair_attention_mask=pair_mask)  # (b, l, l, d_pair)
 
                 if early_exit and loop_num < n_loops:
                     l2_converged = False
                     if prev_pair is not None and loop_num > 0:
                         rel_l2 = (
                             z.float() - prev_pair.float()
-                        ).norm() / prev_pair.float().norm().clamp(min=1e-8)
+                        ).norm() / prev_pair.float().norm().clamp(min=1e-8)  # ()
                         l2_converged = rel_l2.item() < 0.25
-                    prev_pair = z.detach().clone()
-                    sym_z = z.float() + z.float().transpose(-2, -3)
-                    cur_probs = F.softmax(self.distogram_head(sym_z).float(), dim=-1)
+                    prev_pair = z.detach().clone()  # (b, l, l, d_pair) or None
+                    sym_z = z.float() + z.float().transpose(-2, -3)  # (b, l, l, d_pair)
+                    cur_probs = F.softmax(self.distogram_head(sym_z).float(), dim=-1)  # (b, l, l, n_distogram_bins)
                     if prev_disto_probs is not None and loop_num > 0:
                         kl_per_pair = (
                             cur_probs
                             * (cur_probs.clamp(min=1e-8) / prev_disto_probs.clamp(min=1e-8)).log()
-                        ).sum(-1)
-                        kl = (kl_per_pair + kl_per_pair.transpose(-1, -2)).mean() / 2
+                        ).sum(-1)  # (b, l, l)
+                        kl = (kl_per_pair + kl_per_pair.transpose(-1, -2)).mean() / 2  # ()
                         if l2_converged or kl.item() < 0.05:
                             break
-                    prev_disto_probs = cur_probs.detach()
+                    prev_disto_probs = cur_probs.detach()  # (b, l, l, n_distogram_bins) or None
 
-            distogram_logits = self.distogram_head(z + z.transpose(-2, -3))
+            distogram_logits = self.distogram_head(z + z.transpose(-2, -3))  # (b, l, l, n_distogram_bins)
 
         with torch.no_grad(), _seed_context(seed):
             structure_output = self.structure_head.sample(
@@ -943,8 +952,8 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 return_atom_repr=False,
                 denoising_early_exit_rmsd=(0.10 if early_exit else None),
                 verbose=verbose,
-            )
-        sample_coords = structure_output["sample_atom_coords"]
+            )  # tensor mapping follows the called head's shape contract
+        sample_coords = structure_output["sample_atom_coords"]  # (bs, a, 3), or explicit (b, samples, a, 3)
         if sample_coords is None:
             raise RuntimeError("ESMFold2 structure sampling did not return coordinates.")
         if sample_coords.ndim == 4:
@@ -953,15 +962,15 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                 batch * sample_count,
                 atom_count,
                 coord_dim,
-            )
-            rep_idx = distogram_atom_idx.repeat_interleave(sample_count, 0).long()
+            )  # (bs, a, 3)
+            rep_idx = distogram_atom_idx.repeat_interleave(sample_count, 0).long()  # (bs, l) for explicit sample axis, otherwise distogram_atom_idx.shape
         else:
-            sample_coords_for_gather = sample_coords
-            rep_idx = distogram_atom_idx.long()
+            sample_coords_for_gather = sample_coords  # (bs, a, 3)
+            rep_idx = distogram_atom_idx.long()  # (bs, l) for explicit sample axis, otherwise distogram_atom_idx.shape
         representative_atom_coords = gather_rep_atom_coords(
             sample_coords_for_gather,
             rep_idx,
-        )
+        )  # (*rep_idx.shape, 3); gather retains the index batch size
 
         output: dict[str, Tensor] = {
             "distogram_logits": distogram_logits,
@@ -990,7 +999,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                         num_diffusion_samples=n_samples,
                         relative_position_encoding=relative_position_encoding.detach(),
                         token_bonds_encoding=token_bonds_encoding.detach(),
-                    )
+                    )  # tensor mapping follows the called head's shape contract
                     progress.update()
             else:
                 confidence_output = self.confidence_head(
@@ -1006,18 +1015,18 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
                     num_diffusion_samples=n_samples,
                     relative_position_encoding=relative_position_encoding.detach(),
                     token_bonds_encoding=token_bonds_encoding.detach(),
-                )
+                )  # tensor mapping follows the called head's shape contract
             output.update(confidence_output)
-        output["atom_pad_mask"] = atm_mask.unsqueeze(0) if atm_mask.dim() == 1 else atm_mask
-        output["residue_index"] = residue_index
-        output["entity_id"] = entity_id
+        output["atom_pad_mask"] = atm_mask.unsqueeze(0) if atm_mask.dim() == 1 else atm_mask  # (b, a)
+        output["residue_index"] = residue_index  # (b, l)
+        output["entity_id"] = entity_id  # (b, l)
         return _finalize_structure_output(
             output,
             token_input_state=x_inputs,
             pair_state=z,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-        )
+        )  # ESMFold2Output/tuple retaining the traced tensor shapes
 
     @property
     def input_builder(self):
@@ -1058,7 +1067,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         if not self.config.msa_conditioning:
             for name in MSA_CONDITIONING_INPUT_NAMES:
                 features.pop(name, None)
-        features = {name: tensor.to(self.device) for name, tensor in features.items()}
+        features = {name: tensor.to(self.device) for name, tensor in features.items()}  # every feature retains its shape
         output = self(**features, **forward_kwargs, return_dict=True)
         for name in (
             "res_type",

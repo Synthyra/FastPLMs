@@ -10,6 +10,7 @@ oracle while preserving the public class names used by converted checkpoints.
 from __future__ import annotations
 
 import torch
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -531,7 +532,7 @@ def _atom_chain_ids(feats: dict[str, torch.Tensor]) -> torch.Tensor:
 
 
 class PoseBustersPotential(FlatBottomPotential, DistancePotential):
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         # rdkit_bounds_index: (1, 2, n); bound and mask features: (1, n).
         pair_index = feats["rdkit_bounds_index"][0]  # (2, n)
         lower = feats["rdkit_lower_bounds"][0].clone()  # (n,)
@@ -557,7 +558,7 @@ class PoseBustersPotential(FlatBottomPotential, DistancePotential):
 
 
 class ConnectionsPotential(FlatBottomPotential, DistancePotential):
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         # connected_atom_index: (1, 2, n).
         pair_index = feats["connected_atom_index"][0]  # (2, n)
         upper = torch.full(
@@ -570,7 +571,7 @@ class ConnectionsPotential(FlatBottomPotential, DistancePotential):
 
 
 class VDWOverlapPotential(FlatBottomPotential, DistancePotential):
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         atom_chain_id = _atom_chain_ids(feats)  # (a,)
         atom_pad_mask = feats["atom_pad_mask"][0].bool()  # (a,)
         chain_sizes = torch.bincount(atom_chain_id[atom_pad_mask])  # (n_chain,)
@@ -608,7 +609,7 @@ class VDWOverlapPotential(FlatBottomPotential, DistancePotential):
 
 
 class SymmetricChainCOMPotential(FlatBottomPotential, DistancePotential):
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         atom_chain_id = _atom_chain_ids(feats)  # (a,)
         atom_pad_mask = feats["atom_pad_mask"][0].bool()  # (a,)
         nonion_chain = torch.bincount(atom_chain_id[atom_pad_mask]) > 1  # (n_chain,)
@@ -649,7 +650,7 @@ def _oriented_bounds(
 
 
 class StereoBondPotential(FlatBottomPotential, AbsDihedralPotential):
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         # stereo_bond_index: (1, 4, n); orientations: (1, n).
         index = feats["stereo_bond_index"][0]  # (4, n)
         orientation = feats["stereo_bond_orientations"][0].bool()  # (n,)
@@ -663,7 +664,7 @@ class StereoBondPotential(FlatBottomPotential, AbsDihedralPotential):
 
 
 class ChiralAtomPotential(FlatBottomPotential, DihedralPotential):
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         # chiral_atom_index: (1, 4, n); orientations: (1, n).
         index = feats["chiral_atom_index"][0]  # (4, n)
         orientation = feats["chiral_atom_orientations"][0].bool()  # (n,)
@@ -677,7 +678,7 @@ class ChiralAtomPotential(FlatBottomPotential, DihedralPotential):
 
 
 class PlanarBondPotential(FlatBottomPotential, AbsDihedralPotential):
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         # The feature stores two atom-index rows for each six-entry bond pattern.
         bond_index = feats["planar_bond_index"][0].T  # (2, n_bond_entry)
         improper_pattern = torch.tensor(
@@ -702,7 +703,7 @@ class PlanarBondPotential(FlatBottomPotential, AbsDihedralPotential):
 
 
 class TemplateReferencePotential(FlatBottomPotential, ReferencePotential):
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         del parameters
         if "template_mask_cb" not in feats or "template_force" not in feats:
             # Empty sentinel index: (1, 0).
@@ -765,7 +766,7 @@ class TemplateReferencePotential(FlatBottomPotential, ReferencePotential):
 class ContactPotentital(FlatBottomPotential, DistancePotential):
     """Contact-union potential retaining the historical checkpoint name."""
 
-    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]):
+    def compute_args(self, feats: dict[str, torch.Tensor], parameters: dict[str, Any]) -> tuple[Any, ...]:
         del parameters
         # pair index: (1, 2, n); threshold/operator features: (1, n).
         index = feats["contact_pair_index"][0]  # (2, n)

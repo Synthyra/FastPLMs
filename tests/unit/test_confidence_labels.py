@@ -17,12 +17,12 @@ def _example() -> tuple[torch.Tensor, ...]:
             [4.0, 1.0, 0.0],
         ],
         dtype=torch.float32,
-    )
-    predicted = true.clone()
-    resolved = torch.ones(6, dtype=torch.bool)
-    atom_to_token = torch.tensor([0, 0, 0, 1, 1, 1])
-    backbone = torch.tensor([[0, 1, 2], [3, 4, 5]])
-    token_mask = torch.ones(2, dtype=torch.bool)
+    )  # (6, 3)
+    predicted = true.clone()  # (6, 3)
+    resolved = torch.ones(6, dtype=torch.bool)  # (6,)
+    atom_to_token = torch.tensor([0, 0, 0, 1, 1, 1])  # (6,)
+    backbone = torch.tensor([[0, 1, 2], [3, 4, 5]])  # (2, 3)
+    token_mask = torch.ones(2, dtype=torch.bool)  # (2,)
     return predicted, true, resolved, atom_to_token, backbone, token_mask
 
 
@@ -35,8 +35,8 @@ def test_identity_has_perfect_scores_and_zero_pae() -> None:
 
 def test_rigid_transform_preserves_targets() -> None:
     predicted, true, resolved, atom_to_token, backbone, token_mask = _example()
-    rotation = torch.tensor([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
-    shift = torch.tensor([3.0, -2.0, 4.0])
+    rotation = torch.tensor([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])  # (3, 3)
+    shift = torch.tensor([3.0, -2.0, 4.0])  # (3,)
     transformed = true @ rotation.T + shift
     original = compute_targets(predicted, true, resolved, atom_to_token, backbone, token_mask)
     changed = compute_targets(
@@ -65,12 +65,12 @@ def test_pae_matches_atlasfold_frame_projection_for_unequal_bond_angles() -> Non
             [4.0, 2.0, 1.0],
             [3.0, 3.0, 1.0],
         ]
-    )
-    predicted = true.clone()
-    predicted[2] = torch.tensor([0.0, 1.0, 1.0])
-    resolved = torch.ones(6, dtype=torch.bool)
-    atom_to_token = torch.tensor([0, 0, 0, 1, 1, 1])
-    backbone = torch.tensor([[0, 1, 2], [3, 4, 5]])
+    )  # (6, 3)
+    predicted = true.clone()  # (6, 3)
+    predicted[2] = torch.tensor([0.0, 1.0, 1.0])  # (3,)
+    resolved = torch.ones(6, dtype=torch.bool)  # (6,)
+    atom_to_token = torch.tensor([0, 0, 0, 1, 1, 1])  # (6,)
+    backbone = torch.tensor([[0, 1, 2], [3, 4, 5]])  # (2, 3)
     targets = compute_targets(
         predicted, true, resolved, atom_to_token, backbone, torch.ones(2, dtype=torch.bool)
     )
@@ -120,8 +120,8 @@ def test_empty_labels_raise() -> None:
 
 def test_loss_backpropagates_only_through_logits() -> None:
     targets = compute_targets(*_example())
-    plddt_logits = torch.zeros((1, 6, 50), requires_grad=True)
-    pae_logits = torch.zeros((1, 2, 2, 64), requires_grad=True)
+    plddt_logits = torch.zeros((1, 6, 50), requires_grad=True)  # (1, 6, 50)
+    pae_logits = torch.zeros((1, 2, 2, 64), requires_grad=True)  # (1, 2, 2, 64)
     loss = confidence_loss({"plddt_logits": plddt_logits, "pae_logits": pae_logits}, targets)
     loss["total"].backward()
     assert plddt_logits.grad is not None
@@ -132,7 +132,7 @@ def test_loss_backpropagates_only_through_logits() -> None:
 
 def test_uneven_token_mask_excludes_pae_rows_and_columns() -> None:
     example = list(_example())
-    example[-1] = torch.tensor([True, False])
+    example[-1] = torch.tensor([True, False])  # (2,)
     targets = compute_targets(*example)
     assert targets["pae_mask"].tolist() == [[True, False], [False, False]]
 
@@ -147,15 +147,15 @@ def test_pae_target_needs_only_ca_but_source_needs_full_frame() -> None:
 
 def test_invalid_token_mask_excludes_atom_labels() -> None:
     example = list(_example())
-    example[-1] = torch.tensor([False, True])
+    example[-1] = torch.tensor([False, True])  # (2,)
     targets = compute_targets(*example)
     assert not targets["plddt_mask"][:3].any()
     assert targets["plddt_mask"][3:].all()
 
 
 def test_strict_cutoff_excludes_fifteen_angstrom_pairs() -> None:
-    predicted = torch.tensor([[0.0, 0.0, 0.0], [15.0, 0.0, 0.0]])
-    resolved = torch.ones(2, dtype=torch.bool)
+    predicted = torch.tensor([[0.0, 0.0, 0.0], [15.0, 0.0, 0.0]])  # (2, 3)
+    resolved = torch.ones(2, dtype=torch.bool)  # (2,)
     targets = compute_targets(
         predicted,
         predicted,

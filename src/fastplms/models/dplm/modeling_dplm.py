@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import torch
 import torch.nn as nn
+
 from dataclasses import dataclass
 from typing import ClassVar
 from einops import rearrange
@@ -797,23 +798,23 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor
     ) -> torch.Tensor:
         attns = self(input_ids, attention_mask=attention_mask, output_attentions=True).attentions
-        attns = torch.stack(attns, dim=1)
-        attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
-        attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(4)
+        attns = torch.stack(attns, dim=1)  # (b, n_layers, h, l, l)
+        attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)  # (b, n_layers, h, l, l)
+        attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(4)  # (b, n_layers, h, l, l)
         return self.contact_head(input_ids, attns)
 
     def _convert_head_mask_to_5d(
         self, head_mask: torch.Tensor, num_hidden_layers: int
     ) -> torch.Tensor:
         if head_mask.dim() == 1:
-            head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
-            head_mask = head_mask.expand(num_hidden_layers, -1, -1, -1, -1)
+            head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)  # (1, 1, h, 1, 1)
+            head_mask = head_mask.expand(num_hidden_layers, -1, -1, -1, -1)  # (n_layers, 1, h, 1, 1)
         elif head_mask.dim() == 2:
-            head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)
+            head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)  # (n_layers, 1, h, 1, 1)
         if head_mask.dim() != 5:
             raise ValueError(f"head_mask.dim != 5, got {head_mask.dim()}")
-        head_mask = head_mask.to(dtype=self.dtype)
-        return head_mask
+        head_mask = head_mask.to(dtype=self.dtype)  # five-dimensional mask; dimensions unchanged
+        return head_mask  # five-dimensional mask
 
     def get_head_mask(
         self,
@@ -823,10 +824,10 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
     ) -> torch.Tensor | list[None]:
         if head_mask is None:
             return [None] * num_hidden_layers
-        head_mask = self._convert_head_mask_to_5d(head_mask, num_hidden_layers)
+        head_mask = self._convert_head_mask_to_5d(head_mask, num_hidden_layers)  # five-dimensional mask
         if is_attention_chunked:
-            head_mask = head_mask.unsqueeze(-1)
-        return head_mask
+            head_mask = head_mask.unsqueeze(-1)  # five-dimensional mask with an appended singleton axis
+        return head_mask  # five-dimensional mask
 
     def forward(
         self,
@@ -883,7 +884,7 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
 
         expected_attention_mask_shape = (batch_size, seq_length)
         if attention_mask is None:
-            attention_mask_2d = torch.ones((batch_size, seq_length), device=device).bool()
+            attention_mask_2d = torch.ones((batch_size, seq_length), device=device).bool()  # (b, l)
         elif attention_mask.dim() == 4:
             raise ValueError(
                 "DPLM accepts a two-dimensional padding mask. Passing a four-dimensional "
@@ -899,14 +900,14 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
                 f"received {tuple(attention_mask.shape)}."
             )
         else:
-            attention_mask_2d = attention_mask.to(device=device, dtype=torch.bool)
+            attention_mask_2d = attention_mask.to(device=device, dtype=torch.bool)  # (b, l)
 
         encoder_extended_attention_mask = encoder_attention_mask
         if self.config.is_decoder and encoder_hidden_states is not None:
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
             if encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)
+                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)  # (encoder_batch_size, encoder_sequence_length)
             encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
 
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
@@ -916,7 +917,7 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
             position_ids=position_ids,
             attention_mask=attention_mask_2d,
             inputs_embeds=inputs_embeds,
-        )
+        )  # (b, l, d)
         encoder_outputs = self.encoder(
             embedding_output,
             attention_mask=attention_mask_2d,

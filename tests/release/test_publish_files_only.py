@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import sys
 import pytest
+
 from collections.abc import Iterable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
 from huggingface_hub import CommitOperationAdd
 
 from fastplms.registry import ModelSpec, get_model_registry

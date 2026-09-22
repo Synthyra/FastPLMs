@@ -125,10 +125,10 @@ def run_smoke(expected_python: str, source_root: Path) -> dict[str, object]:
         attn_backend="eager",
     )
     model = FastEsmModel(config, add_pooling_layer=False).eval()
-    input_ids = torch.tensor(((0, 5, 6, 2, 1),), dtype=torch.long, device="cpu")
-    attention_mask = input_ids.ne(1)
+    input_ids = torch.tensor(((0, 5, 6, 2, 1),), dtype=torch.long, device="cpu")  # (b=1, l=5)
+    attention_mask = input_ids.ne(1)  # (b=1, l=5)
     with torch.inference_mode():
-        # H is the hidden-state tensor with shape (b, l, d).
+        # Hidden states: (b=1, l=5, d=16).
         hidden_states = model(
             input_ids=input_ids,
             attention_mask=attention_mask,

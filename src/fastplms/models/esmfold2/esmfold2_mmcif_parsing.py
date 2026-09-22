@@ -5,16 +5,17 @@ from __future__ import annotations
 import functools
 import io
 import os
-from contextlib import suppress
-from dataclasses import dataclass
-from datetime import datetime
-
 import biotite.structure as bs
 import biotite.structure.io.pdbx as pdbx
 import numpy as np
+
+from contextlib import suppress
+from dataclasses import dataclass
+from datetime import datetime
 from biotite.structure.io.pdbx import CIFColumn, CIFData, CIFFile
 
 from . import esmfold2_residue_constants as residue_constants
+
 
 PathOrBuffer = str | os.PathLike | io.StringIO
 

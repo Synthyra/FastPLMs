@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import os
 import tempfile
-from pathlib import Path
-
 import numpy as np
+
+from pathlib import Path
 
 from .esmfold2_system import run_subprocess_with_errorcheck
 
@@ -14,12 +14,14 @@ from .esmfold2_system import run_subprocess_with_errorcheck
 def _byte_matrix(array: np.ndarray) -> np.ndarray:
     """Return a two-dimensional byte view used for Hamming comparisons."""
 
-    matrix = np.asarray(array).view(np.uint8)
-    return matrix.reshape(matrix.shape[0], -1)
+    # array: (n, l); w is its row width in bytes after viewing its dtype.
+    matrix = np.asarray(array).view(np.uint8)  # (n, w)
+    return matrix.reshape(matrix.shape[0], -1)  # (n, w)
 
 
 def _hamming_to_all(query: np.ndarray, sequences: np.ndarray) -> np.ndarray:
-    return np.not_equal(sequences, query).mean(axis=1, dtype=np.float64)
+    # query: (w,); sequences: (n, w).
+    return np.not_equal(sequences, query).mean(axis=1, dtype=np.float64)  # (n,)
 
 
 def greedy_select_indices(array: np.ndarray, num_seqs: int, mode: str = "max") -> list[int]:
@@ -48,20 +50,20 @@ def greedy_select_indices(array: np.ndarray, num_seqs: int, mode: str = "max") -
     if depth <= num_seqs:
         return list(range(depth))
 
-    sequences = _byte_matrix(array)
+    sequences = _byte_matrix(array)  # (n, w)
     selected = [0]
-    available = np.ones(depth, dtype=bool)
-    available[0] = False
-    distance_sum = _hamming_to_all(sequences[0], sequences)
+    available = np.ones(depth, dtype=bool)  # (n,)
+    available[0] = False  # ()
+    distance_sum = _hamming_to_all(sequences[0], sequences)  # (n,)
     choose = np.argmax if mode == "max" else np.argmin
 
     while len(selected) < num_seqs:
-        candidates = np.flatnonzero(available)
-        candidate_scores = distance_sum[candidates] / len(selected)
+        candidates = np.flatnonzero(available)  # (n_remaining,)
+        candidate_scores = distance_sum[candidates] / len(selected)  # (n_remaining,)
         next_index = int(candidates[int(choose(candidate_scores))])
         selected.append(next_index)
-        available[next_index] = False
-        distance_sum += _hamming_to_all(sequences[next_index], sequences)
+        available[next_index] = False  # ()
+        distance_sum += _hamming_to_all(sequences[next_index], sequences)  # (n,)
     return sorted(selected)
 
 

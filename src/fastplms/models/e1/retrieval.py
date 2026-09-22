@@ -21,6 +21,7 @@ import urllib.parse
 import urllib.request
 import numpy as np
 import torch
+
 from collections import defaultdict, namedtuple
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -32,8 +33,8 @@ from tqdm.auto import tqdm
 from transformers import PreTrainedModel
 from transformers.utils import logging
 
-from fastplms.embeddings import Pooler
 from .cache import KVCache
+from fastplms.embeddings import Pooler
 from .preparation import DataPrepConfig, E1BatchPreparer, get_context
 
 

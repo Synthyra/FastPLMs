@@ -67,7 +67,7 @@ def sample_metrics(records: Sequence[EvaluationRecord], head: str) -> dict[str, 
         [values["calibration_true_sum"] for values in predictions], axis=0
     )  # (bins,)
     # Atom-weighted mean over bins of |mean predicted pLDDT - mean true lDDT|; empty bins add zero.
-    calibration = np.abs(predicted_sums - true_sums).sum() / counts.sum()
+    calibration = np.abs(predicted_sums - true_sums).sum() / counts.sum()  # ()
     resolved = np.sum(
         [values["resolved_residue_histogram"] for values in predictions], axis=0
     )  # (bins,)

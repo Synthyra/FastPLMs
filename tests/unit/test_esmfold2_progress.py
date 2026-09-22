@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import inspect
-from types import SimpleNamespace
-
 import pytest
 import torch
+
+from types import SimpleNamespace
 from torch import Tensor, nn
 
 from fastplms.models.esmfold2 import modeling_esmfold2 as standard

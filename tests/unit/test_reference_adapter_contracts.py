@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 import torch.nn as nn
+
 from types import SimpleNamespace
 
 from tests.parity.support.native_reference import (

@@ -11,20 +11,20 @@ import os
 import pickle
 import stat
 import tempfile
+import numpy as np
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from hashlib import file_digest
 from pathlib import Path
 from typing import Any, BinaryIO
-
-import numpy as np
 from huggingface_hub import hf_hub_download
 from huggingface_hub.constants import HF_HUB_CACHE
 
 from fastplms.registry import RuntimeAsset, get_model_registry
-
 from .esmfold2_constants import RES_TYPE_TO_CCD
+
 
 _CCD_ENVIRONMENT_VARIABLE = "ESMCFOLD_CCD_PATH"
 _CCD_ASSET_ID = "esmfold2_ccd"

@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import pytest
 import torch
+
+import fastplms.models.ankh.modeling_ankh as ankh_module
+
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier, Lock
@@ -13,7 +16,6 @@ from typing import ClassVar
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers, processors
 from transformers import AutoTokenizer, GenerationConfig
 
-import fastplms.models.ankh.modeling_ankh as ankh_module
 from fastplms.models.ankh.modeling_ankh import (
     FAST_ANKH_ENCODER,
     FastAnkhConfig,

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from operator import attrgetter
 from typing import Any
-
-import numpy as np
 
 from .esmfold2_protein_structure import index_by_atom_name
 
@@ -19,7 +19,7 @@ class AtomIndexer:
 
     __slots__ = ("_get_property", "dim", "property", "structure")
 
-    def __init__(self, structure: Any, property: str, dim: int):
+    def __init__(self, structure: Any, property: str, dim: int) -> None:
         self.structure = structure
         self.property = property
         self.dim = dim

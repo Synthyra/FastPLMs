@@ -1,8 +1,11 @@
+"""T5-compatible ANKH encoders and task heads for Hugging Face artifacts."""
+
 from __future__ import annotations
 
 import math
 import torch
 import torch.nn as nn
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from numbers import Real
@@ -493,34 +496,34 @@ class AnkhSelfAttention(nn.Module):
         """Bidirectional log-bucketed relative position mapping (T5 style)."""
         # Bidirectional: half buckets for negative, half for positive
         num_buckets //= 2
-        relative_buckets = (relative_position > 0).to(torch.long) * num_buckets
-        relative_position = torch.abs(relative_position)
+        relative_buckets = (relative_position > 0).to(torch.long) * num_buckets  # (...), same shape as relative_position
+        relative_position = torch.abs(relative_position)  # (...)
 
         max_exact = num_buckets // 2
-        is_small = relative_position < max_exact
+        is_small = relative_position < max_exact  # (...)
 
         relative_position_if_large = max_exact + (
             torch.log(relative_position.float() / max_exact)
             / math.log(max_distance / max_exact)
             * (num_buckets - max_exact)
-        ).to(torch.long)
-        relative_position_if_large = torch.clamp(relative_position_if_large, max=num_buckets - 1)
+        ).to(torch.long)  # (...)
+        relative_position_if_large = torch.clamp(relative_position_if_large, max=num_buckets - 1)  # (...)
 
-        relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)
-        return relative_buckets
+        relative_buckets += torch.where(is_small, relative_position, relative_position_if_large)  # (...)
+        return relative_buckets  # (...)
 
     def compute_bias(
         self, query_length: int, key_length: int, device: torch.device
     ) -> torch.Tensor:
         """Compute the position-bias tensor A with shape (1, h, q, k)."""
-        context_position = torch.arange(query_length, dtype=torch.long, device=device)[:, None]
-        memory_position = torch.arange(key_length, dtype=torch.long, device=device)[None, :]
-        relative_position = memory_position - context_position
+        context_position = torch.arange(query_length, dtype=torch.long, device=device)[:, None]  # (q, 1)
+        memory_position = torch.arange(key_length, dtype=torch.long, device=device)[None, :]  # (1, k)
+        relative_position = memory_position - context_position  # (q, k)
         buckets = self._relative_position_bucket(
             relative_position,
             num_buckets=self.relative_attention_num_buckets,
             max_distance=self.relative_attention_max_distance,
-        )
+        )  # (q, k)
         values = self.relative_attention_bias(buckets)  # (q, k, h)
         return values.permute(2, 0, 1).unsqueeze(0)  # (1, h, q, k)
 
@@ -609,21 +612,21 @@ class AnkhSelfAttention(nn.Module):
             torch.matmul(query_heads, key_heads.transpose(-1, -2)) * self.scale
         )  # (b, h, l, l)
         if position_bias is not None:
-            attn_weights = attn_weights + position_bias
-        attn_weights = F.softmax(attn_weights.float(), dim=-1).type_as(attn_weights)
+            attn_weights = attn_weights + position_bias  # (b, h, l, l)
+        attn_weights = F.softmax(attn_weights.float(), dim=-1).type_as(attn_weights)  # (b, h, l, l)
         if self.dropout_prob > 0 and self.training:
             attn_weights = F.dropout(
                 attn_weights,
                 p=self.dropout_prob,
                 training=self.training,
-            )
+            )  # (b, h, l, l)
         context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, l, d_h)
         attn_output = (
             context_heads.transpose(1, 2)
             .contiguous()
             .view(query_heads.shape[0], -1, self.inner_dim)
-        )
-        return attn_output, attn_weights
+        )  # (b, l, h * d_h)
+        return attn_output, attn_weights  # (b, l, h * d_h), (b, h, l, l)
 
 
 # ---------------------------------------------------------------------------
@@ -1137,7 +1140,7 @@ class FastAnkhForMaskedLMExtension(
             output_attentions=output_attentions,
             return_dict=True,
         )
-        sequence_output = outputs.last_hidden_state
+        sequence_output = outputs.last_hidden_state  # (b, l, d)
         logits = self.lm_head(sequence_output)
 
         loss = None
@@ -1524,13 +1527,13 @@ class FastAnkhForSequenceClassification(AnkhPreTrainedModel, EmbeddingMixin):
             return_dict=True,
         )
         # Pool: mean over non-padding tokens
-        sequence_output = outputs.last_hidden_state
+        sequence_output = outputs.last_hidden_state  # (b, l, d)
         if attention_mask is not None:
-            mask = attention_mask.unsqueeze(-1).to(sequence_output.dtype)
-            pooled = (sequence_output * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            mask = attention_mask.unsqueeze(-1).to(sequence_output.dtype)  # (b, l, 1)
+            pooled = (sequence_output * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)  # (b, d)
         else:
-            pooled = sequence_output.mean(dim=1)
-        logits = self.classifier(pooled)
+            pooled = sequence_output.mean(dim=1)  # (b, d)
+        logits = self.classifier(pooled)  # (b, num_labels)
 
         loss = None
         if labels is not None:
@@ -1627,7 +1630,7 @@ class FastAnkhForTokenClassification(AnkhPreTrainedModel, EmbeddingMixin):
             output_attentions=output_attentions,
             return_dict=True,
         )
-        sequence_output = outputs.last_hidden_state
+        sequence_output = outputs.last_hidden_state  # (b, l, d)
         logits = self.classifier(sequence_output)
 
         loss = None

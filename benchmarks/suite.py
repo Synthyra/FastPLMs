@@ -9,13 +9,14 @@ import json
 import os
 import re
 import xml.etree.ElementTree as ET
+
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
-from .regression import compare_reports
+from .regression import GateResult, compare_reports
 from .run import (
     _load_model,
     _require_torch,
@@ -793,7 +794,7 @@ def _write_junit(
     temporary.replace(path)
 
 
-def _gate_failures(gate: Any) -> tuple[str, ...]:
+def _gate_failures(gate: GateResult) -> tuple[str, ...]:
     failures = [
         *gate.report_mismatches,
         *gate.environment_mismatches,

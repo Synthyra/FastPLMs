@@ -17,6 +17,7 @@ import os
 import platform
 import tempfile
 import torch
+
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
@@ -99,8 +100,7 @@ def _request_fingerprint(request: Mapping[str, Any]) -> str:
 
 
 def _tensor_bytes(tensor: torch.Tensor) -> bytes:
-    # tensor: (...)
-    # value: (...)
+    # tensor and value share the caller's arbitrary tensor shape through the CPU copy.
     value = tensor.detach().cpu().contiguous()
     return value.view(torch.uint8).numpy().tobytes()
 
@@ -108,7 +108,7 @@ def _tensor_bytes(tensor: torch.Tensor) -> bytes:
 def tensor_sha256(tensor: torch.Tensor) -> str:
     """Return the content digest of one tensor without dtype coercion."""
 
-    # tensor: (...)
+    # Retain the named tensor's arbitrary shape; the digest includes its byte representation.
     return hashlib.sha256(_tensor_bytes(tensor)).hexdigest()
 
 
@@ -117,7 +117,7 @@ def tensor_set_sha256(tensors: Mapping[str, torch.Tensor]) -> str:
 
     digest = hashlib.sha256()
     for name in sorted(tensors):
-        # tensor: (...)
+        # Retain the named tensor's arbitrary shape; the digest includes its byte representation.
         tensor = tensors[name].detach().cpu().contiguous()
         digest.update(name.encode("utf-8"))
         digest.update(str(tensor.dtype).encode("ascii"))
@@ -326,12 +326,12 @@ def _run_fold(
         f"feature__{name}": tensor.detach().cpu().contiguous().clone()
         for name, tensor in cpu_features.items()
     }
-    # tensors['noise__initial_standard_normal']: (...)
+    # Preserve the recorded sampler draw's shape, including sample and atom axes.
     tensors["noise__initial_standard_normal"] = captured_noise[0]
     for name in (*_required_outputs, *_optional_outputs):
         value = output.get(name)
         if torch.is_tensor(value):
-            # tensors[f'output__{name}']: (...)
+            # Preserve this named model output's shape in the CPU snapshot.
             tensors[f"output__{name}"] = value.detach().cpu().contiguous().clone()
     return tensors
 

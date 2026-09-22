@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+
 from transformers.modeling_outputs import SequenceClassifierOutput, TokenClassifierOutput
 
 from fastplms.models.dplm.modeling_dplm import (
@@ -251,7 +252,7 @@ def test_dplm_task_heads_honor_config_and_explicit_return_dict(
     model = model_class(config).eval()
     # input_ids: (1, 4)
     input_ids = torch.tensor([[0, 6, 7, 2]])
-    # label_tensor: (...)
+    # label_tensor follows the parametrized sequence/token classification label layout.
     label_tensor = torch.tensor(labels)
 
     with torch.inference_mode():
@@ -330,7 +331,7 @@ def test_dplm2_base_and_mlm_preserve_full_structured_tuple_contract(
         "output_s_max": True,
     }
     if model_class is DPLM2ForMaskedLM:
-        call_kwargs["labels"] = input_ids
+        call_kwargs["labels"] = input_ids  # (1, 4)
 
     with torch.inference_mode():
         structured = model(**call_kwargs, return_dict=True)
@@ -411,7 +412,7 @@ def test_dplm2_public_models_validate_mask_and_type_shapes_before_forward(
     argument: str,
     value: torch.Tensor,
 ) -> None:
-    # value: (...)
+    # value deliberately uses an invalid shape selected by the test parametrization.
     model = model_class(DPLM2Config(**_common_config(64))).eval()
 
     with pytest.raises(ValueError, match=rf"{argument} must have shape \(1, 4\)"):
@@ -432,7 +433,7 @@ def test_dplm_masked_lm_rejects_decoder_and_cross_attention_arguments(
     argument: str,
     value: torch.Tensor,
 ) -> None:
-    # value: (...)
+    # value deliberately uses an invalid shape selected by the test parametrization.
     model = DPLMForMaskedLM(DPLMConfig(**_common_config(33)), dropout=0.0).eval()
     # input_ids: (1, 3)
     input_ids = torch.tensor([[0, 6, 2]])
@@ -465,7 +466,7 @@ def test_dplm2_rotary_cache_follows_frequency_buffer_dtype() -> None:
     rotary = ModifiedRotaryEmbedding(dim=8, aa_type=1, struct_type=0, pad_type=2)
     # Q and K are query and key tensors with shape (b, h, l, d).
     query = torch.randn(1, 2, 4, 8, dtype=torch.bfloat16)
-    key = torch.randn_like(query)
+    key = torch.randn_like(query)  # (1, 2, 4, 8)
     # type_ids: (1, 4)
     type_ids = torch.ones(1, 4, dtype=torch.long)
 
@@ -512,7 +513,7 @@ def test_dplm2_automodel_infers_official_multimodal_types_and_returns_pooling() 
     model.config = DPLM2Config(**_common_config(64))
     # input_ids: (1, 8)
     input_ids = torch.tensor([[33, 50, 34, 1, 0, 6, 2, 1]])
-    # expected_mask: (...)
+    # expected_mask has the same (batch, token) shape as input_ids.
     expected_mask = input_ids.ne(model.config.pad_token_id)
     # expected_types: (1, 8)
     expected_types = torch.tensor([[0, 0, 0, 2, 1, 1, 1, 2]])
@@ -522,7 +523,7 @@ def test_dplm2_automodel_infers_official_multimodal_types_and_returns_pooling() 
         def forward(self, **kwargs: object) -> DPLM2EncoderOutput:
             # observed['attention_mask']: (b, l)
             observed["attention_mask"] = kwargs["attention_mask"].detach().clone()
-            # observed['type_ids']: (...)
+            # observed['type_ids']: (1, 8), one modality ID per packed token.
             observed["type_ids"] = kwargs["type_ids"].detach().clone()
             return DPLM2EncoderOutput(
                 last_hidden_state=torch.zeros(
@@ -545,7 +546,7 @@ def test_dplm2_predict_contacts_derives_padding_mask_when_omitted() -> None:
     model = DPLM2ForMaskedLM(DPLM2Config(**_common_config(64)), dropout=0.0).eval()
     # input_ids: (1, 5)
     input_ids = torch.tensor([[0, 6, 7, 2, 1]])
-    # expected_mask: (...)
+    # expected_mask has the same (batch, token) shape as input_ids.
     expected_mask = input_ids.ne(model.config.pad_token_id)
     observed: dict[str, torch.Tensor] = {}
 
@@ -578,7 +579,7 @@ def test_dplm2_argmax_generation_preserves_modalities_and_fixed_positions() -> N
         _args: tuple[object, ...],
         kwargs: dict[str, object],
     ) -> None:
-        # input_tensor: (...)
+        # input_tensor retains the model hook's (batch, token) input layout.
         input_tensor = kwargs["input_ids"]
         assert torch.is_tensor(input_tensor)
         model_inputs.append(input_tensor.detach().clone())

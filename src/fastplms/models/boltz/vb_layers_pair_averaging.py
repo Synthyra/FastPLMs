@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from torch import Tensor, nn
 
 from . import vb_layers_initialize as init
@@ -34,7 +35,7 @@ class PairWeightedAveraging(nn.Module):
         init.final_init_(self.proj_o.weight)
 
     def _attention_weights(self, pair_states: Tensor, mask: Tensor) -> Tensor:
-        # pair_states: (b, l, l, d_z); mask: (b, l).
+        # pair_states: (b, l, l, d_z); mask: (b, l, l).
         logits = self.proj_z(pair_states).permute(0, 3, 1, 2)  # (b, h, l, l)
         logits = logits + (1 - mask[:, None]) * -self.inf  # (b, h, l, l)
         return torch.softmax(logits, dim=-1)  # (b, h, l, l)
@@ -92,7 +93,7 @@ class PairWeightedAveraging(nn.Module):
     ) -> Tensor:
         """Return updated M with shape ``(b, s, l, d_m)``."""
 
-        # m: (b, s, l, d_m); z: (b, l, l, d_z); mask: (b, l).
+        # m: (b, s, l, d_m); z: (b, l, l, d_z); mask: (b, l, l).
         msa_states = self.norm_m(m)  # (b, s, l, d_m)
         pair_states = self.norm_z(z)  # (b, l, l, d_z)
         if not chunk_heads or self.training:

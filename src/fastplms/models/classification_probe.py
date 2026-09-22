@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
-from typing import Any
-
 import torch
+
+from typing import Any
 from torch import nn
 from torch.nn import functional as F
 from transformers.modeling_outputs import (
@@ -13,6 +13,7 @@ from transformers.modeling_outputs import (
     SequenceClassifierOutput,
     TokenClassifierOutput,
 )
+
 
 try:
     from fastplms.attention import (
@@ -145,7 +146,7 @@ def token_classification_loss(
     if problem_type == "regression":
         targets = labels.to(logits.dtype)
         if num_labels == 1 and targets.ndim == logits.ndim - 1:
-            targets = targets.unsqueeze(-1)
+            targets = targets.unsqueeze(-1)  # (..., 1), matching single-target logits
         if targets.shape != logits.shape:
             raise ValueError(
                 "Token regression labels must match logits, except that the final "
@@ -210,7 +211,7 @@ class ProbeSelfAttention(nn.Module):
             sequence_length,
             self.num_heads,
             self.head_size,
-        ).transpose(1, 2)
+        ).transpose(1, 2)  # (b, h, l, d_h)
 
     def forward(
         self,
@@ -220,11 +221,11 @@ class ProbeSelfAttention(nn.Module):
         output_attentions: bool,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         batch_size, sequence_length, _ = hidden_states.shape
-        query, key, value = self.qkv(hidden_states).chunk(3, dim=-1)
-        query = self._reshape(query)
-        key = self._reshape(key)
-        value = self._reshape(value)
-        query, key = self.rotary(query, key)
+        query, key, value = self.qkv(hidden_states).chunk(3, dim=-1)  # each (b, l, d)
+        query = self._reshape(query)  # (b, h, l, d_h)
+        key = self._reshape(key)  # (b, h, l, d_h)
+        value = self._reshape(value)  # (b, h, l, d_h)
+        query, key = self.rotary(query, key)  # each (b, h, l, d_h)
         if output_attentions and self.backend != AttentionBackend.EAGER:
             raise ValueError(
                 f"output_attentions=True is unavailable for {self.backend.value!r}; "
@@ -241,11 +242,11 @@ class ProbeSelfAttention(nn.Module):
         dropout = self.dropout if self.training else 0.0
         attention_weights = None
         if self.backend == AttentionBackend.EAGER:
-            scores = query @ key.transpose(-2, -1) / math.sqrt(self.head_size)
+            scores = query @ key.transpose(-2, -1) / math.sqrt(self.head_size)  # (b, h, l, l)
             if attention_mask_4d is not None:
-                scores = scores.masked_fill(~attention_mask_4d, float("-inf"))
-            attention_weights = scores.softmax(dim=-1)
-            context = F.dropout(attention_weights, p=dropout, training=self.training) @ value
+                scores = scores.masked_fill(~attention_mask_4d, float("-inf"))  # (b, h, l, l)
+            attention_weights = scores.softmax(dim=-1)  # (b, h, l, l)
+            context = F.dropout(attention_weights, p=dropout, training=self.training) @ value  # (b, h, l, d_h)
         elif self.backend == AttentionBackend.SDPA:
             context = F.scaled_dot_product_attention(
                 query,
@@ -253,7 +254,7 @@ class ProbeSelfAttention(nn.Module):
                 value,
                 attn_mask=attention_mask_4d,
                 dropout_p=dropout,
-            )
+            )  # (b, h, l, d_h)
         elif self.backend == AttentionBackend.FLEX_ATTENTION:
             if flex_attention is None:
                 raise RuntimeError("'flex_attention' was requested but is unavailable.")
@@ -272,15 +273,15 @@ class ProbeSelfAttention(nn.Module):
                 block_mask=flex_block_mask,
                 scale=1.0 / math.sqrt(self.head_size),
                 kernel_options={"PRESCALE_QK": True, "BLOCK_N": 32},
-            )
+            )  # (b, h, l, d_h)
         else:
             raise AssertionError(f"Unhandled attention backend {self.backend.value!r}.")
         context = context.transpose(1, 2).contiguous().view(
             batch_size,
             sequence_length,
             self.hidden_size,
-        )
-        return self.output(context), attention_weights
+        )  # (b, l, d)
+        return self.output(context), attention_weights  # (b, l, d), optional (b, h, l, l)
 
 
 class ProteinTransformerProbe(nn.Module):
@@ -451,7 +452,7 @@ class SequenceClassificationProbe(_ClassificationProbe):
                 embeddings.shape[:2],
                 device=embeddings.device,
                 dtype=torch.bool,
-            )
+            )  # (b, l)
         outputs = self._forward_transformer(
             embeddings,
             attention_mask,
@@ -460,8 +461,8 @@ class SequenceClassificationProbe(_ClassificationProbe):
         )
         if self.pooler is None:
             raise AssertionError("Sequence classification requires a configured pooler.")
-        pooled = self.pooler(outputs.last_hidden_state, attention_mask)
-        logits = self.classifier(pooled)
+        pooled = self.pooler(outputs.last_hidden_state, attention_mask)  # (b, d)
+        logits = self.classifier(pooled)  # (b, num_labels)
         loss = None
         if labels is not None:
             problem_type = resolve_problem_type(self.config, labels, num_labels=self.num_labels)

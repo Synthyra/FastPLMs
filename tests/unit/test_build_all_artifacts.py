@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import pytest
+
 from pathlib import Path
 from types import SimpleNamespace
-
 from benchmarks.suite import benchmark_artifact_model_ids
+
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
 from tools.artifacts import build as build_module
 from tools.artifacts import build_all as build_all_module

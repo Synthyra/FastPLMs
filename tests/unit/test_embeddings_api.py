@@ -6,6 +6,7 @@ import sqlite3
 import struct
 import pytest
 import torch
+
 from pathlib import Path
 from types import SimpleNamespace
 from torch import nn
@@ -47,8 +48,8 @@ class SyntheticEmbeddingModel(nn.Module):
     def _embedding_batch(self, sequences: list[str]) -> EmbeddingBatch:
         b = len(sequences)
         sequence_length = max(map(len, sequences)) + 2
-        X = torch.zeros(b, sequence_length, 2)
-        M = torch.zeros(b, sequence_length, dtype=torch.bool)
+        X = torch.zeros(b, sequence_length, 2)  # (b, sequence_length, 2)
+        M = torch.zeros(b, sequence_length, dtype=torch.bool)  # (b, sequence_length)
         for batch_index, sequence in enumerate(sequences):
             for residue_index, residue in enumerate(sequence, start=1):
                 X[batch_index, residue_index] = torch.tensor(
@@ -230,8 +231,8 @@ def test_invalid_storage_and_pooling_fail_before_input_consumption(tmp_path: Pat
 def test_decoder_companions_are_fingerprinted_and_bucket_aligned() -> None:
     model = SyntheticDecoderEmbeddingModel()
     inputs = ["A", "BBBB", "CC"]
-    decoder_input_ids = torch.tensor([[11, 11], [22, 22], [33, 33]])
-    decoder_attention_mask = torch.ones_like(decoder_input_ids)
+    decoder_input_ids = torch.tensor([[11, 11], [22, 22], [33, 33]])  # (3, 2)
+    decoder_attention_mask = torch.ones_like(decoder_input_ids)  # (3, 2)
 
     result = embed_dataset(
         model,
@@ -784,8 +785,8 @@ def test_all_poolers_and_output_slices() -> None:
 
 
 def test_poolers_ignore_nonfinite_excluded_positions_and_reject_nonfinite_output() -> None:
-    X = torch.tensor([[[1.0, 2.0], [3.0, 4.0], [torch.nan, torch.inf]]])
-    M = torch.tensor([[True, True, False]])
+    X = torch.tensor([[[1.0, 2.0], [3.0, 4.0], [torch.nan, torch.inf]]])  # (1, 3, 2)
+    M = torch.tensor([[True, True, False]])  # (1, 3)
 
     pooled = Pooler(("mean", "norm", "std", "var"))(X, M)
 
@@ -853,7 +854,7 @@ def test_parti_rejects_overlength_input_before_model_inference() -> None:
 
 
 def test_torch_pagerank_handles_dangling_rows() -> None:
-    A = torch.tensor([[0.0, 1.0], [0.0, 0.0]])
+    A = torch.tensor([[0.0, 1.0], [0.0, 0.0]])  # (2, 2)
     w = pagerank_weights(A)
     assert torch.isclose(w.sum(), torch.tensor(1.0))
     assert bool((w > 0).all())
@@ -1081,7 +1082,7 @@ def test_legacy_sqlite_converter_accepts_compact_blobs_without_pickle(
 ) -> None:
     source = tmp_path / "legacy.sqlite"
     output = tmp_path / "converted.sqlite"
-    tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)
+    tensor = torch.tensor([[1.0, 2.0], [3.0, 4.0]], dtype=torch.float32)  # (2, 2)
     shape = tuple(tensor.shape)
     blob = (
         struct.pack(
@@ -2042,7 +2043,7 @@ class CraftedBatchModel(SyntheticEmbeddingModel):
 def _two_residue_batch() -> tuple[torch.Tensor, torch.Tensor]:
     # X: (b=2, l=3, d=2); M: (b=2, l=3) with one excluded position per sample.
     X = torch.arange(12, dtype=torch.float32).reshape(2, 3, 2)
-    M = torch.tensor([[True, True, False], [True, True, False]])
+    M = torch.tensor([[True, True, False], [True, True, False]])  # (2, 3)
     return X, M
 
 
@@ -2116,7 +2117,7 @@ def test_embedding_batch_guard_accepts_finite_values_whose_sum_overflows() -> No
     # Every element is finite, but an FP32 reduction over them is not. A guard
     # that tests a sum instead of the elements would reject this valid batch.
     X = torch.full((2, 3, 2), torch.finfo(torch.float32).max)
-    M = torch.tensor([[True, True, False], [True, True, False]])
+    M = torch.tensor([[True, True, False], [True, True, False]])  # (2, 3)
     assert not torch.isfinite(X.sum())
 
     result = embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)

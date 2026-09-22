@@ -26,7 +26,6 @@ from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.modeling_esmfold2_common import ResIdxAsymIdSymIdEntityIdEncoding
 from fastplms.models.esmfold2.modeling_esmfold2_experimental import ConfidenceHead
 from fastplms.registry import get_model_spec
-
 from .cache import _structure_input, cache_target, confidence_inputs, load_cache, load_folding_model
 from .config import (
     DONOR_REPO,
@@ -52,6 +51,7 @@ def _file_hash(path: Path) -> str:
 
 def _state_hash(module: nn.Module) -> str:
     digest = hashlib.sha256()
+    # Parameter-specific shapes become a contiguous byte view only for hashing.
     for name, tensor in sorted(module.state_dict().items()):
         digest.update(name.encode())
         digest.update(tensor.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes())
@@ -125,6 +125,7 @@ def _records(root: Path) -> list[dict]:
 
 
 def _targets(cache: dict[str, Tensor]) -> dict[str, Tensor]:
+    # Label fields retain their atom, token, or token-pair axes from compute_targets.
     stored = {
         name.removeprefix("target/"): value
         for name, value in cache.items()
@@ -250,6 +251,7 @@ def _generate_caches(
 
 
 def _forward(context: HeadContext, cache: dict[str, Tensor]) -> dict[str, Tensor]:
+    # Single-target output logits: (1, atoms, 50) pLDDT and (1, tokens, tokens, 64) PAE.
     inputs = confidence_inputs(context, cache)
     with torch.autocast("cuda", dtype=torch.bfloat16):
         return context.head(**inputs)
@@ -273,12 +275,12 @@ def _load_example(root: Path, model_id: str, record: dict, seed: int = 17) -> tu
 def _prediction_record(
     record: dict, cache: dict, targets: dict, output: dict, quality: dict
 ) -> dict:
-    losses = confidence_loss(output, targets)
-    atom_mask = targets["plddt_mask"]
-    ca_mask = targets["lddt_ca_mask"]
-    ca_indices = cache["backbone_indices"][:, 1].long().cuda()
-    atom_prediction = output["plddt_per_atom"].reshape(-1).float()
-    pae_mask = targets["pae_mask"]
+    losses = confidence_loss(output, targets)  # scalar tensors () per loss
+    atom_mask = targets["plddt_mask"]  # (atoms,)
+    ca_mask = targets["lddt_ca_mask"]  # (tokens,)
+    ca_indices = cache["backbone_indices"][:, 1].long().cuda()  # (tokens,)
+    atom_prediction = output["plddt_per_atom"].reshape(-1).float()  # (atoms,)
+    pae_mask = targets["pae_mask"]  # (tokens, tokens)
     return {
         "target_id": record["id"],
         "kind": record["kind"],
@@ -481,11 +483,11 @@ def _benchmark(root: Path, model_id: str, maximum_seconds: int) -> dict:
     targets = {key: value.cuda() for key, value in _targets(cache).items()}
     started_head = time.monotonic()
     output = _forward(context, cache)
-    loss = confidence_loss(output, targets)["total"]
+    loss = confidence_loss(output, targets)["total"]  # ()
     loss.backward()
     gradients = [
         parameter.grad for parameter in context.head.parameters() if parameter.grad is not None
-    ]
+    ]  # each parameter gradient retains that parameter shape
     if not gradients or not all(torch.isfinite(gradient).all() for gradient in gradients):
         raise FloatingPointError("Confidence smoke check produced missing or nonfinite gradients")
     if initial_context_hash != _state_hash(context):
@@ -681,7 +683,7 @@ def train_head(
                     loss_values[key] += float(losses[key].detach()) / accumulated
             gradient_norm = nn.utils.clip_grad_norm_(
                 context.head.parameters(), config.gradient_clip, error_if_nonfinite=True
-            )
+            )  # ()
             optimizer.step()
             update += 1
             run.log(

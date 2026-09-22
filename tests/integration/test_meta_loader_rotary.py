@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from transformers import PreTrainedModel
 
 from fastplms.models.e1.modeling_e1 import E1Config, E1ForMaskedLM

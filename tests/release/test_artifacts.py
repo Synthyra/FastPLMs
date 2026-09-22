@@ -10,6 +10,7 @@ import sys
 import textwrap
 import pytest
 import torch
+
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -486,7 +487,6 @@ def test_weight_snapshot_rejects_concurrent_replacement(
 ) -> None:
     snapshot = tmp_path / "snapshot"
     snapshot.mkdir()
-    # weights: (...)
     weights = snapshot / "model.safetensors"
     save_file({"weight": torch.arange(8, dtype=torch.float32)}, weights)
     source = CheckpointSource(
@@ -2290,7 +2290,7 @@ def test_artifact_rejects_self_attested_forged_canonical_weight(
 
     shard = next(artifact.glob("model-*.safetensors"))
     forged_state = load_file(shard)
-    # forged_state['linear.bias']: (...)
+    # linear.bias retains its checkpoint vector shape before changing one element.
     forged_state["linear.bias"] = forged_state["linear.bias"].clone()
     forged_state["linear.bias"][0] += 1
     save_file(forged_state, shard, metadata={"format": "pt"})

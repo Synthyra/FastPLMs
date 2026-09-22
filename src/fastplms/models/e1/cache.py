@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from typing import Any
 from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
@@ -47,17 +48,14 @@ class DynamicCache:
         if len(self.key_cache) <= layer_idx:
             # Empty tensors preserve skipped layer indices until those layers receive state.
             for _ in range(len(self.key_cache), layer_idx):
-                self.key_cache.append(torch.tensor([]))
-                self.value_cache.append(torch.tensor([]))
+                self.key_cache.append(torch.tensor([]))  # (0,) placeholder
+                self.value_cache.append(torch.tensor([]))  # (0,) placeholder
             self.key_cache.append(key_states)
             self.value_cache.append(value_states)
-        elif (
-            not self.key_cache[
-                layer_idx
-            ].numel()  # prefers not t.numel() to len(t) == 0 to export the model
-        ):  # fills previously skipped layers; checking for tensor causes errors
-            self.key_cache[layer_idx] = key_states
-            self.value_cache[layer_idx] = value_states
+        elif not self.key_cache[layer_idx].numel():
+            # A zero-element placeholder marks a skipped layer without a tensor truth test.
+            self.key_cache[layer_idx] = key_states  # (b, l_new, h, d)
+            self.value_cache[layer_idx] = value_states  # (b, l_new, h, d)
         else:
             self.key_cache[layer_idx] = torch.cat(  # (b, l_cached + l_new, h, d)
                 [self.key_cache[layer_idx], key_states],
@@ -75,10 +73,9 @@ class DynamicCache:
     def get_seq_length(self, layer_idx: int = 0) -> int:
         """Return the cached sequence length for one layer."""
         is_empty_layer = (
-            len(self.key_cache) == 0  # no cache in any layer
-            or len(self.key_cache)
-            <= layer_idx  # skipped `layer_idx` and hasn't run a layer with cache after it
-            or not self.key_cache[layer_idx].numel()  # the layer has no cache
+            len(self.key_cache) == 0
+            or len(self.key_cache) <= layer_idx
+            or not self.key_cache[layer_idx].numel()
         )
         layer_seq_length = self.key_cache[layer_idx].shape[1] if not is_empty_layer else 0
         return layer_seq_length
@@ -93,8 +90,8 @@ class DynamicCache:
 
         for layer_idx in range(len(self.key_cache)):
             if self.key_cache[layer_idx].numel():
-                self.key_cache[layer_idx] = self.key_cache[layer_idx][:, :max_length, ...]
-                self.value_cache[layer_idx] = self.value_cache[layer_idx][:, :max_length, ...]
+                self.key_cache[layer_idx] = self.key_cache[layer_idx][:, :max_length, ...]  # (b, min(l, max_length), h, d)
+                self.value_cache[layer_idx] = self.value_cache[layer_idx][:, :max_length, ...]  # (b, min(l, max_length), h, d)
 
     def batch_repeat_interleave(self, repeats: int) -> None:
         """Repeat the cache `repeats` times in the batch dimension. Used in contrastive search."""

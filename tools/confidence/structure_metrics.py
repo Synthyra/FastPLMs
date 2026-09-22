@@ -36,23 +36,23 @@ _ONE_TO_THREE = {
 
 def _array(value: Any) -> Any:
     if hasattr(value, "detach"):
-        value = value.detach().cpu()
+        value = value.detach().cpu()  # same shape as input; tensor/array boundary
     if hasattr(value, "numpy"):
-        value = value.numpy()
+        value = value.numpy()  # same shape as input; tensor/array boundary
     return value
 
 
 def _squeeze_coordinates(value: Any) -> Any:
-    array = _array(value)
+    array = _array(value)  # leading singleton axes removed until (atoms, 3); validated below
     while len(array.shape) > 2 and array.shape[0] == 1:
-        array = array[0]
+        array = array[0]  # leading singleton axes removed until (atoms, 3); validated below
     if len(array.shape) != 2 or array.shape[1] != 3:
         raise ValueError("coordinates must have shape (A, 3) after singleton removal")
     return array
 
 
 def _atom_names(value: Any, atom_count: int) -> list[str]:
-    array = _array(value)
+    array = _array(value)  # reshaped below to (atoms, characters)
     names: list[str] = []
     for row in array.reshape(atom_count, -1):
         chars = []
@@ -86,26 +86,26 @@ def _chain_layout(record: dict[str, Any]) -> tuple[list[str], list[str], list[in
 def _ca_coordinates(cache: Mapping[str, Any], record: dict[str, Any]) -> tuple[Any, Any, str, str]:
     import numpy as np
 
-    predicted = _squeeze_coordinates(cache["x_pred"])
-    truth = _squeeze_coordinates(cache["true_coords"])
+    predicted = _squeeze_coordinates(cache["x_pred"])  # (atoms, 3)
+    truth = _squeeze_coordinates(cache["true_coords"])  # (atoms, 3)
     if predicted.shape != truth.shape:
         raise ValueError("predicted and true coordinates must have equal shape")
-    resolved = _array(cache["resolved_mask"]).reshape(-1).astype(bool)
+    resolved = _array(cache["resolved_mask"]).reshape(-1).astype(bool)  # (atoms,)
     if len(resolved) != len(predicted):
         raise ValueError("resolved_mask must match coordinate count")
     if not np.isfinite(predicted[resolved]).all() or not np.isfinite(truth[resolved]).all():
         raise ValueError("resolved structure coordinates must be finite")
-    backbone = _array(cache["backbone_indices"])
+    backbone = _array(cache["backbone_indices"])  # (1, tokens, 3) or (tokens, 3); optional batch removed below
     atom_count = predicted.shape[0]
     if backbone.ndim == 3:
-        backbone = backbone[0]
+        backbone = backbone[0]  # (tokens, 3), validated below
     if backbone.ndim != 2 or backbone.shape[1] != 3:
         raise ValueError("backbone_indices must have shape (L, 3)")
     token_mask = (
         _array(cache.get("token_attention_mask", np.ones(backbone.shape[0], dtype=bool)))
         .reshape(-1)
         .astype(bool)
-    )
+    )  # (tokens,)
     if len(token_mask) != backbone.shape[0]:
         raise ValueError("token_attention_mask must match backbone token count")
     chain_ids, sequences, token_chain = _chain_layout(record)
@@ -113,10 +113,10 @@ def _ca_coordinates(cache: Mapping[str, Any], record: dict[str, Any]) -> tuple[A
         raise ValueError("chain sequences exceed cache token count")
     if token_mask[len(token_chain) :].any():
         raise ValueError("padded backbone tokens must be masked")
-    ca_indices = backbone[:, 1].astype(int)
-    safe_ca_indices = np.clip(ca_indices, 0, max(atom_count - 1, 0))
-    real_token = np.arange(backbone.shape[0]) < len(token_chain)
-    finite = np.isfinite(predicted).all(axis=1) & np.isfinite(truth).all(axis=1)
+    ca_indices = backbone[:, 1].astype(int)  # (tokens,)
+    safe_ca_indices = np.clip(ca_indices, 0, max(atom_count - 1, 0))  # (tokens,)
+    real_token = np.arange(backbone.shape[0]) < len(token_chain)  # (tokens,)
+    finite = np.isfinite(predicted).all(axis=1) & np.isfinite(truth).all(axis=1)  # (atoms,)
     valid = (
         token_mask
         & real_token
@@ -124,9 +124,9 @@ def _ca_coordinates(cache: Mapping[str, Any], record: dict[str, Any]) -> tuple[A
         & (ca_indices < atom_count)
         & resolved[safe_ca_indices]
         & finite[safe_ca_indices]
-    )
-    predicted_ca = predicted[ca_indices[valid]]
-    truth_ca = truth[ca_indices[valid]]
+    )  # (tokens,)
+    predicted_ca = predicted[ca_indices[valid]]  # (valid CA atoms, 3)
+    truth_ca = truth[ca_indices[valid]]  # (valid CA atoms, 3)
     sequence = "".join(sequence for sequence in sequences)
     filtered_sequence = "".join(
         residue for residue, keep in zip(sequence, valid, strict=False) if keep
@@ -146,19 +146,19 @@ def _write_pdb(
 ) -> None:
     import numpy as np
 
-    coords = _squeeze_coordinates(coordinates)
-    resolved = _array(cache["resolved_mask"]).reshape(-1).astype(bool)
+    coords = _squeeze_coordinates(coordinates)  # (atoms, 3)
+    resolved = _array(cache["resolved_mask"]).reshape(-1).astype(bool)  # (atoms,)
     atom_mask = (
         _array(cache.get("atom_attention_mask", np.ones(len(resolved), dtype=bool)))
         .reshape(-1)
         .astype(bool)
-    )
-    atom_to_token = _array(cache["atom_to_token"]).reshape(-1).astype(int)
+    )  # (atoms,)
+    atom_to_token = _array(cache["atom_to_token"]).reshape(-1).astype(int)  # (atoms,)
     names = _atom_names(cache["ref_atom_name_chars"], len(coords))
     atom_count = len(coords)
     if any(len(values) != atom_count for values in (resolved, atom_mask, atom_to_token, names)):
         raise ValueError("cache atom-axis fields must match coordinate count")
-    emitted = resolved & atom_mask
+    emitted = resolved & atom_mask  # (atoms,)
     if not np.isfinite(coords[emitted]).all():
         raise ValueError("emitted structure coordinates must be finite")
     chain_ids, sequences, token_chain = _chain_layout(record)
@@ -207,6 +207,7 @@ def compute_structure_metrics(
     import numpy as np
     from tmtools import tm_align
 
+    # coordinate arrays each (valid CA atoms, 3); strings match their order
     predicted_ca, truth_ca, sequence, _ = _ca_coordinates(cache, record)
     if len(sequence) < 2:
         raise ValueError("at least two resolved C-alpha atoms are required")

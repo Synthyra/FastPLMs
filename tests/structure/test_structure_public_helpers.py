@@ -6,6 +6,7 @@ import random
 import numpy as np
 import pytest
 import torch
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
@@ -235,7 +236,7 @@ def test_boltz_flat_bottom_potential_rejects_invalid_negation_masks(
     error_type: type[Exception],
     message: str,
 ) -> None:
-    # negation_mask: (...)
+    # negation_mask: (1,) or (2,), as selected by the invalid-input cases.
     with pytest.raises(error_type, match=message):
         FlatBottomPotential.compute_function(
             object(),
@@ -443,7 +444,7 @@ def test_boltz_real_features_flow_through_tiny_core_and_structure_loss() -> None
     # reference_positions: (..., 3)
     reference_positions = features["ref_pos"]
     predicted_positions = tiny_core(reference_positions)
-    # atom_mask: (...)
+    # atom_mask: (b, a), matching the batch and atom axes of the coordinates.
     atom_mask = features["atom_pad_mask"].bool()
     loss = smooth_lddt_loss(
         predicted_positions,

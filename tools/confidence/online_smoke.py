@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import tempfile
 import time
+
 import numpy as np
 import torch
 
@@ -233,11 +234,12 @@ def parity(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, object]
         with tempfile.TemporaryDirectory() as work:
             path = Path(work, "structure.npz")
             _pilot_structure_file(path, target_structure.sequences, target_structure.positions)
+            # (atoms, 3), (atoms,)
             pilot_true, pilot_resolved = _aligned_true_coordinates(features_cpu, chain_infos, record, path, rollout.x_pred[0].cpu())
         ours = rollout.true_coords[0].cpu()  # (a, 3)
-        atom_mask = features_cpu["atom_attention_mask"].reshape(-1).bool()
-        our_resolved = torch.isfinite(ours).all(-1) & atom_mask
-        both = our_resolved & pilot_resolved
+        atom_mask = features_cpu["atom_attention_mask"].reshape(-1).bool()  # (atoms,)
+        our_resolved = torch.isfinite(ours).all(-1) & atom_mask  # (atoms,)
+        both = our_resolved & pilot_resolved  # (atoms,)
         coordinate_difference = float((ours[both] - pilot_true[both]).abs().max()) if both.any() else 0.0
         pilot_targets = compute_targets(
             rollout.x_pred[0].cpu(),

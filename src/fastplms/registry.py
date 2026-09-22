@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import tomllib
+
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import lru_cache

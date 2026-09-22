@@ -8,6 +8,7 @@ import contextlib
 import warnings
 import torch
 import torch.nn as nn
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar
@@ -810,7 +811,7 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
         if attentions is None:
             raise RuntimeError("DPLM2 did not return attention maps for contact prediction.")
         # A is the layer/head attention tensor; M marks valid tokens.
-        attention_tensor = torch.stack(attentions, dim=1)
+        attention_tensor = torch.stack(attentions, dim=1)  # (b, n_layers, h, l, l)
         residue_mask = attention_mask.to(dtype=attention_tensor.dtype)
         attention_tensor = (
             attention_tensor

@@ -5,9 +5,13 @@ from __future__ import annotations
 
 import argparse
 import os
+
 from pathlib import Path
 from typing import Any
 
+
+# Shapes: b = batch, l = residues, l_t = tokens including special tokens.
+# ESM3 conditioning uses l for its encoded token axis, including special tokens.
 
 if __package__:
     from ._runtime import add_execution_arguments, resolve_execution

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import torch
+
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -45,8 +46,8 @@ def _canonical_json(value: object) -> bytes:
 def tensor_sha256(X: torch.Tensor) -> str:
     """Hash one tensor exactly, including scalar tensors."""
 
-    # X: (...)
-    # value: (-1,)
+    # X has the named state entry's shape; flatten only for byte hashing.
+    # value: (X.numel(),)
     value = X.detach().to(device="cpu").contiguous().reshape(-1)
     return hashlib.sha256(value.view(torch.uint8).numpy().tobytes()).hexdigest()
 

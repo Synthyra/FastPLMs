@@ -10,6 +10,7 @@ import tokenize
 import types
 import numpy as np
 import pytest
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -199,9 +200,9 @@ def test_one_hot_failures_match_pinned_behavior(
 def test_rigid_transform_and_mapping_builders_match_exactly(
     official_residues: types.ModuleType,
 ) -> None:
-    ex = np.asarray((1.25, -0.5, 0.75), dtype=np.float64)
-    ey = np.asarray((-0.25, 1.5, 0.125), dtype=np.float64)
-    translation = np.asarray((7.0, -3.0, 2.0), dtype=np.float64)
+    ex = np.asarray((1.25, -0.5, 0.75), dtype=np.float64)  # (3,)
+    ey = np.asarray((-0.25, 1.5, 0.125), dtype=np.float64)  # (3,)
+    translation = np.asarray((7.0, -3.0, 2.0), dtype=np.float64)  # (3,)
     _assert_exact(
         local_residues._make_rigid_transformation_4x4(ex, ey, translation),
         official_residues._make_rigid_transformation_4x4(ex, ey, translation),
@@ -215,7 +216,7 @@ def test_rigid_transform_and_mapping_builders_match_exactly(
             getattr(local_residues, function_name)(),
             getattr(official_residues, function_name)(),
         )
-    indices = np.asarray((0, 4, 7, 20, 2), dtype=np.int64)
+    indices = np.asarray((0, 4, 7, 20, 2), dtype=np.int64)  # (5,)
     assert local_residues.aatype_to_str_sequence(indices) == (
         official_residues.aatype_to_str_sequence(indices)
     )

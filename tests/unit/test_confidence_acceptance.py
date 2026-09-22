@@ -3,7 +3,6 @@
 import pytest
 
 from tools.confidence import acceptance
-
 from .test_confidence_test_evaluation import _calibration_fields
 
 

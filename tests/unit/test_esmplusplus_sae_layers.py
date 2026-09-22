@@ -13,8 +13,8 @@ import torch
 import torch.nn as nn
 
 from pathlib import Path
-from safetensors.torch import save_file
 from types import SimpleNamespace
+from safetensors.torch import save_file
 
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import ESMplusplusModel
 from fastplms.models.esm_plusplus.modeling_esm_plusplus_sae import (
@@ -22,7 +22,6 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus_sae import (
     ESMplusplusSAEParams,
     load_esmc_sae_layers,
 )
-
 from .test_esmplusplus_sae import _config, _input_ids, _load_pinned_biohub_sae_layer
 
 
@@ -56,7 +55,7 @@ def _hidden_states(seed: int = 5) -> tuple[torch.Tensor, torch.Tensor]:
     generator = torch.Generator().manual_seed(seed)
     # layer_states: (2, 5, d) for d = D_MODEL; token_mask: (2, 5)
     layer_states = torch.randn((2, 5, D_MODEL), generator=generator)
-    token_mask = torch.tensor(((True, True, True, True, False), (True, True, True, False, False)))
+    token_mask = torch.tensor(((True, True, True, True, False), (True, True, True, False, False)))  # (2, 5)
     return layer_states, token_mask
 
 

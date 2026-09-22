@@ -102,11 +102,13 @@ Residue labels have shape `(b, l)` and use `-100` outside biological positions.
 
 ```python
 import torch
+
 from transformers import AutoTokenizer
 from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
 )
+
 
 model_id = "Synthyra/ESM3_small"
 sequence_model = AutoModelForSequenceClassification.from_pretrained(
@@ -118,13 +120,13 @@ token_model = AutoModelForTokenClassification.from_pretrained(
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
 batch = tokenizer(sequences, padding=True, return_tensors="pt")
-biological = batch["attention_mask"].bool()
+biological = batch["attention_mask"].bool()  # (b, l)
 for special_id in tokenizer.all_special_ids:
-    biological &= batch["input_ids"].ne(special_id)
+    biological &= batch["input_ids"].ne(special_id)  # (b, l)
 
-sequence_labels = torch.zeros(len(sequences), dtype=torch.long)
-token_labels = torch.full_like(batch["input_ids"], -100)
-token_labels[biological] = 0
+sequence_labels = torch.zeros(len(sequences), dtype=torch.long)  # (b,)
+token_labels = torch.full_like(batch["input_ids"], -100)  # (b, l)
+token_labels[biological] = 0  # selected biological positions; labels stay (b, l)
 
 with torch.inference_mode():
     sequence_output = sequence_model(**batch, labels=sequence_labels)
@@ -143,6 +145,7 @@ python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
 
 ```python
 from peft import LoraConfig, TaskType, get_peft_model
+
 
 peft_model = get_peft_model(
     sequence_model,
@@ -171,6 +174,7 @@ adapters. Base checkpoint weights stay frozen:
 ```python
 from transformers import AutoModel
 
+
 ttt_model = AutoModel.from_pretrained(
     "Synthyra/ESM3_small",
     trust_remote_code=True,
@@ -196,6 +200,7 @@ multimodal helpers:
 ```python
 import torch
 
+
 batch = model.tokenize_sequences(
     ["MKTAYIAKQ", "GGGG"],
     device=model.device,
@@ -217,6 +222,7 @@ Generate masked sequence positions with an explicit seed:
 
 ```python
 from fastplms.models.esm3.modeling_esm3 import FastESM3GenerationConfig
+
 
 config = FastESM3GenerationConfig(
     num_steps=8,

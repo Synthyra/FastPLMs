@@ -10,11 +10,13 @@ import sys
 import textwrap
 import pytest
 import torch
+
+import fastplms.models.esm3.modeling_esm3 as esm3_module
+
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 from transformers import AutoModel
 
-import fastplms.models.esm3.modeling_esm3 as esm3_module
 from fastplms.models.esm3.modeling_esm3 import (
     _MAX_SAVED_RUNTIME_FILE_BYTES,
     _SAVED_RUNTIME_FILES,
@@ -326,7 +328,7 @@ def test_esm3_resize_updates_sequence_input_and_output_embeddings() -> None:
 def test_esm3_accepts_function_tokens_argument() -> None:
     model = _small_model()
     batch = model.tokenize_sequences(["MKTAYIAKQ"], device=model.device)
-    # function_tokens: (...)
+    # function_tokens: (b, l, 8); eight function-code slots per sequence token.
     function_tokens = batch["input_ids"].new_zeros((*batch["input_ids"].shape, 8))
 
     with torch.inference_mode():

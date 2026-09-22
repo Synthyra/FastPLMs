@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import os
 import torch
+
 from dataclasses import dataclass
 from tokenizers import Tokenizer
 from torch.nn.utils.rnn import pad_sequence

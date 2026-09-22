@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 import pytest
 import torch
+
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+
 from types import SimpleNamespace
 
 from fastplms.models.esmfold2.esmfold2_constants import (
@@ -68,7 +69,7 @@ def test_feature_output_groups_modified_residues_and_ligand_atoms() -> None:
     ]
     # X: (6, 3)
     X = torch.arange(18, dtype=torch.float32).reshape(6, 3)
-    # atom_names: (...)
+    # atom_names: (6, 4), four encoded characters per atom.
     atom_names = torch.tensor([_encoded_name(name) for name in ("N", "CA", "C", "O", "C1", "N1")])
 
     complex_record = build_molecular_complex_from_features(

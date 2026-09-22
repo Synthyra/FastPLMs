@@ -40,6 +40,7 @@ def test_failure_keeps_outputs_and_later_batches(tmp_path, monkeypatch) -> None:
 
     def run(command, **kwargs):
         calls.append(command)
+        assert command[4:6] == ["-m", "not gpu"]
         junit = Path(command[-1].split("=", 1)[1])
         junit.write_text('<testsuite tests="1" failures="1"/>', encoding="utf-8")
         return subprocess.CompletedProcess(command, 1 if len(calls) == 1 else 0, "stdout", "stderr")

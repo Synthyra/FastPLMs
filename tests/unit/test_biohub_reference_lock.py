@@ -8,10 +8,12 @@ import json
 import shutil
 import subprocess
 import pytest
+
+import tools.remote.biohub_reference_lock as biohub_reference_lock
+
 from dataclasses import asdict
 from pathlib import Path
 
-import tools.remote.biohub_reference_lock as biohub_reference_lock
 from tools.remote.biohub_reference_environment import (
     BiohubReferenceEnvironmentError,
     validate_biohub_reference_environment_evidence,

@@ -24,12 +24,13 @@ exactly against the pinned Biohub implementation.
 from __future__ import annotations
 
 import functools
+import numpy as np
+
 from collections import defaultdict, namedtuple
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
-import numpy as np
 
 ca_ca = 3.80209737096
 chi_angles_atoms = {

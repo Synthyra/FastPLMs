@@ -10,14 +10,14 @@ from __future__ import annotations
 
 import math
 import warnings
+import numpy as np
+import torch
+
 from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass, field
 from itertools import combinations
 from typing import Any
-
-import numpy as np
-import torch
 
 from .esmfold2_conformers import (
     get_ccd_leaving_atoms,
@@ -61,6 +61,7 @@ from .esmfold2_types import (
     RNAInput,
     StructurePredictionInput,
 )
+
 
 _ZERO_POS = np.zeros(3, dtype=np.float32)
 _ENCODE_ATOM_NAME_CACHE: dict[str, list[int]] = {}

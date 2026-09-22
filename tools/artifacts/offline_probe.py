@@ -98,7 +98,7 @@ def _require_artifact_isolation() -> None:
 
 
 def _tensor_digest(tensor: Any) -> str:
-    value = tensor.detach().cpu().contiguous()
+    value = tensor.detach().cpu().contiguous()  # checkpoint-defined shape (...)
     digest = hashlib.sha256()
     digest.update(str(value.dtype).encode())
     digest.update(json.dumps(list(value.shape)).encode())
@@ -309,15 +309,15 @@ def _exercise(
         with torch.inference_mode(), numeric_context:
             return model.fold_protein(sequence, return_pdb_string=False)
     if family == "esmfold2":
-        # H follows Biohub's embedding-plus-80-block ordering and has shape
+        # Hidden states follow Biohub's embedding-plus-80-block ordering and have shape
         # (b, l, 81, 2560). This exercises the advertised learned projection
         # without loading the separately pinned 6B ESMC checkpoint.
         hidden_states = torch.arange(
             2 * 81 * 2560,
             device="cuda",
             dtype=torch.bfloat16,
-        ).reshape(1, 2, 81, 2560)
-        residue_mask = torch.tensor([[True, False]], device="cuda")
+        ).reshape(1, 2, 81, 2560)  # (b=1, l=2, n_states=81, d=2560)
+        residue_mask = torch.tensor([[True, False]], device="cuda")  # (b=1, l=2)
         with torch.inference_mode(), numeric_context:
             return model.project_esmc_hidden_states(hidden_states, residue_mask)
 
@@ -341,7 +341,7 @@ def _exercise(
         # inference validates each advertised AutoClass without imposing those
         # token-level labels on unrelated sequence-classification heads.
         inputs.pop("labels", None)
-        inputs["attention_mask"] = batch["sequence_ids"].ne(-1).long()
+        inputs["attention_mask"] = batch["sequence_ids"].ne(-1).long()  # (b=1, l)
     else:
         encoded = _tokenizer(artifact, model.config)(
             [sequence],
@@ -352,14 +352,14 @@ def _exercise(
             name: value.to("cuda") for name, value in encoded.items() if torch.is_tensor(value)
         }
     if family == "esm_plusplus":
-        inputs["sequence_id"] = inputs["attention_mask"].bool()
+        inputs["sequence_id"] = inputs["attention_mask"].bool()  # (b=1, l)
     # AutoModel intentionally exposes the encoder-only ANKH view while
     # retaining the official T5 ``is_encoder_decoder`` configuration value.
     # Decoder inputs belong only to models that actually allocate a decoder,
     # such as AutoModelForSeq2SeqLM.
     if getattr(model.config, "is_encoder_decoder", False) and hasattr(model, "decoder"):
-        inputs["decoder_input_ids"] = inputs["input_ids"]
-        inputs["decoder_attention_mask"] = inputs["attention_mask"]
+        inputs["decoder_input_ids"] = inputs["input_ids"]  # (b=1, l)
+        inputs["decoder_attention_mask"] = inputs["attention_mask"]  # (b=1, l)
     with torch.inference_mode(), numeric_context:
         return model(**inputs)
 
@@ -812,27 +812,27 @@ def _cpu_sequence_inputs(
     """Return tiny tensor-only inputs and whether the advertised head owns a loss."""
 
     if family == "e1":
-        input_ids = torch.tensor([[1, 5, 6, 2]], dtype=torch.long)
+        input_ids = torch.tensor([[1, 5, 6, 2]], dtype=torch.long)  # (b=1, l=4)
         inputs: dict[str, Any] = {
             "input_ids": input_ids,
             "within_seq_position_ids": torch.arange(4).unsqueeze(0),
             "global_position_ids": torch.arange(4).unsqueeze(0),
             "sequence_ids": torch.zeros((1, 4), dtype=torch.long),
         }
-        attention_mask = torch.ones_like(input_ids, dtype=torch.bool)
+        attention_mask = torch.ones_like(input_ids, dtype=torch.bool)  # (b=1, l=4)
     elif family == "ankh":
-        input_ids = torch.tensor([[2, 3, 1, 0], [4, 5, 1, 0]], dtype=torch.long)
-        attention_mask = input_ids.ne(0)
+        input_ids = torch.tensor([[2, 3, 1, 0], [4, 5, 1, 0]], dtype=torch.long)  # (b=2, l=4)
+        attention_mask = input_ids.ne(0)  # (b=2, l=4)
         inputs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
         }
     else:
-        input_ids = torch.tensor(
+        input_ids = torch.tensor(  # (b=2, l=5)
             [[0, 3, 4, 2, 1], [0, 6, 2, 1, 1]],
             dtype=torch.long,
         )
-        attention_mask = input_ids.ne(1)
+        attention_mask = input_ids.ne(1)  # (b=2, l=5)
         inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
         if family == "esm3":
             inputs = {
@@ -844,18 +844,18 @@ def _cpu_sequence_inputs(
 
     has_loss = auto_class != "AutoModel"
     if auto_class == "AutoModelForSequenceClassification":
-        inputs["labels"] = torch.arange(input_ids.shape[0], dtype=torch.long).remainder(
+        inputs["labels"] = torch.arange(input_ids.shape[0], dtype=torch.long).remainder(  # (b,)
             int(config.num_labels)
         )
     elif auto_class == "AutoModelForTokenClassification":
-        labels = input_ids.remainder(int(config.num_labels))
-        inputs["labels"] = labels.masked_fill(~attention_mask, -100)
+        labels = input_ids.remainder(int(config.num_labels))  # (b, l)
+        inputs["labels"] = labels.masked_fill(~attention_mask, -100)  # (b, l)
     elif auto_class == "AutoModelForSeq2SeqLM":
-        decoder_input_ids = torch.tensor(
+        decoder_input_ids = torch.tensor(  # (b=2, l_decoder=4)
             [[0, 5, 1, 0], [0, 6, 1, 0]],
             dtype=torch.long,
         )
-        decoder_attention_mask = decoder_input_ids.ne(0)
+        decoder_attention_mask = decoder_input_ids.ne(0)  # (b=2, l_decoder=4)
         inputs.update(
             {
                 "decoder_input_ids": decoder_input_ids,
@@ -865,7 +865,7 @@ def _cpu_sequence_inputs(
             }
         )
     elif auto_class == "AutoModelForMaskedLM":
-        inputs["labels"] = input_ids.masked_fill(~attention_mask, -100)
+        inputs["labels"] = input_ids.masked_fill(~attention_mask, -100)  # (b, l)
     else:
         has_loss = False
     return inputs, has_loss
@@ -930,7 +930,7 @@ def _probe_tiny_cpu_model(
         class _TinyBoltzCore(nn.Module):
             def __init__(self, width: int = 3) -> None:
                 super().__init__()
-                self.weight = nn.Parameter(torch.linspace(0.5, 1.0, width))
+                self.weight = nn.Parameter(torch.linspace(0.5, 1.0, width))  # (width,)
 
         module = sys.modules.get("fastplms.models.boltz.modeling_boltz2")
         if module is None:
@@ -987,9 +987,9 @@ def _probe_tiny_cpu_model(
     if has_loss:
         if loss is None or not torch.isfinite(loss):
             raise AssertionError("Advertised task AutoClass did not return a finite loss.")
-        objective = loss
+        objective = loss  # ()
     else:
-        objective = _cpu_primary_tensor(structured, torch).float().square().mean()
+        objective = _cpu_primary_tensor(structured, torch).float().square().mean()  # ()
     objective.backward()
     gradients = [
         parameter.grad

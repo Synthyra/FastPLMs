@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import importlib
 import json
-from pathlib import Path
-from types import SimpleNamespace
-
 import pytest
 import torch
+
+from pathlib import Path
+from types import SimpleNamespace
 from safetensors.torch import save_file
 from torch import Tensor, nn
 

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import Field, dataclass, fields, replace
 from typing import Any, Self
 
-import numpy as np
-
 from .esmfold2_misc import concat_objects, slice_any_object
+
 
 Index = int | list[int] | slice | np.ndarray
 

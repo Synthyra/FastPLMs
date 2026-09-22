@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import numpy as np
+import torch
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-import numpy as np
-import torch
 from torch import Tensor
 from tqdm.auto import tqdm
 
@@ -19,6 +19,7 @@ from .esmfold2_prepare_input import ChainInfo, prepare_esmfold2_input
 from .esmfold2_types import MSA, Modification, ProteinInput, StructurePredictionInput
 from .modeling_esmfold2_common import MSA_CONDITIONING_INPUT_NAMES
 from .reproducibility import seed_context
+
 
 # Backward-compatible private alias for the pinned parity helpers. New callers
 # should import ``seed_context`` from the public ``fastplms.models.esmfold2``

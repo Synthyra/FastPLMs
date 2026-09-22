@@ -21,6 +21,7 @@ import subprocess
 import tempfile
 import torch
 import torch.nn as nn
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -64,8 +65,7 @@ _TOKENIZER_SETTINGS = (
 
 
 def _tensor_digest(tensor: torch.Tensor) -> dict[str, Any]:
-    # tensor: (...)
-    # value: (...)
+    # tensor and value share the caller's arbitrary tensor shape through the CPU copy.
     value = tensor.detach().cpu().contiguous()
     raw = value.view(torch.uint8).numpy().tobytes()
     return {
@@ -322,10 +322,10 @@ def _prepare_dplm2_inputs(
             *(vocabulary[residue] for residue in sequence),
             vocabulary["<eos_aa>"],
         ]
-        # input_ids[row_index, :len(structure)]: (...)
+        # The structure-track slice and source vector both have shape (len(structure),).
         input_ids[row_index, : len(structure)] = torch.tensor(structure, device=device)
         aa_start = track_length
-        # input_ids[row_index, aa_start:aa_start + len(amino_acids)]: (...)
+        # The sequence-track slice and source vector both have shape (len(amino_acids),).
         input_ids[row_index, aa_start : aa_start + len(amino_acids)] = torch.tensor(
             amino_acids,
             device=device,
@@ -526,7 +526,7 @@ def _ankh_generation_contract(
         )
         if not isinstance(decoder_start_token_id, int):
             raise RuntimeError("Official ANKH config omits decoder_start_token_id.")
-        # decoder_input_ids: (...)
+        # decoder_input_ids: (b, prompt_length + 1), including the start token.
         decoder_input_ids = torch.cat(
             (
                 prompt_ids.new_full((prompt_ids.shape[0], 1), decoder_start_token_id),
@@ -606,7 +606,7 @@ def _generation_contract(
     max_iter = 4
     if family == "dplm":
         encoded = tokenizer("ACDEFG", return_tensors="pt")
-        # input_tokens: (...)
+        # input_tokens: (1, l), where l includes the tokenizer's special tokens.
         input_tokens = encoded["input_ids"].to(device)
         kwargs: dict[str, Any] = {
             "max_iter": max_iter,

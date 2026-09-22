@@ -6,9 +6,12 @@ from __future__ import annotations
 import argparse
 import os
 import warnings
+
 from pathlib import Path
 from typing import Any
 
+
+# Shapes: b = batch, l = padded tokens, d = hidden width, h = attention heads.
 
 FLASH_BACKENDS = frozenset({"flash_attention_2", "flash_attention_3"})
 DTYPE_NAMES = ("float32", "bfloat16")

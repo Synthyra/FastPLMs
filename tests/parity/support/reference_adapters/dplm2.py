@@ -10,6 +10,7 @@ import inspect
 import sys
 import torch
 import torch.nn as nn
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -177,7 +178,7 @@ def _call_checkpoint_generate(
     Other DPLM2 checkpoints retain the multimodal wrapper's public sampler.
     """
 
-    # input_tokens: (...)
+    # input_tokens: (b, l), containing the caller's packed modality tracks.
     oracle_generate = cast(_DPLM2Generative, oracle).generate
     generate = getattr(network, "generate", None)
     if _accepts_type_ids(network) or not callable(generate):
@@ -274,7 +275,7 @@ class _OfficialDPLM2ForwardWrapper(nn.Module):
     def generate(self, input_tokens: torch.Tensor, **kwargs: Any) -> Any:
         """Invoke the checkpoint-selected implementation's public sampler."""
 
-        # input_tokens: (...)
+        # input_tokens: (b, l), containing the caller's packed modality tracks.
         return _call_checkpoint_generate(
             self.oracle,
             self.model,

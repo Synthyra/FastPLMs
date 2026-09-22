@@ -69,8 +69,8 @@ def test_confidence_inputs_reconstructs_derived_embeddings() -> None:
 
 
 def test_kabsch_alignment_handles_nontrivial_rigid_rotation() -> None:
-    predicted = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 1.0]])
-    rotation = torch.tensor([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+    predicted = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 2.0, 1.0]])  # (3, 3)
+    rotation = torch.tensor([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])  # (3, 3)
     target = (predicted - predicted.mean(0)) @ rotation.T + torch.tensor([4.0, -2.0, 1.0])
     assert torch.allclose(_kabsch_aligned(predicted, target), predicted, atol=1e-5)
 
@@ -111,9 +111,9 @@ def test_load_cache_round_trips_tensor_contract(tmp_path) -> None:
 
 
 def test_ile_branch_atoms_are_not_swapped() -> None:
-    true = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+    true = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])  # (2, 3)
     predicted = true.flip(0)
-    resolved = torch.ones(2, dtype=torch.bool)
+    resolved = torch.ones(2, dtype=torch.bool)  # (2,)
     result = _resolve_ambiguous_atoms(
         predicted, true, resolved, torch.zeros(2, dtype=torch.long), ["CG1", "CG2"], {0: "ILE"}
     )
@@ -121,8 +121,8 @@ def test_ile_branch_atoms_are_not_swapped() -> None:
 
 
 def test_homodimer_assignment_ignores_padded_atoms() -> None:
-    chain_a = torch.tensor([[10.0, 0.0, 0.0], [10.0, 1.0, 0.0], [10.0, 0.0, 1.0]])
-    chain_b = torch.tensor([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    chain_a = torch.tensor([[10.0, 0.0, 0.0], [10.0, 1.0, 0.0], [10.0, 0.0, 1.0]])  # (3, 3)
+    chain_b = torch.tensor([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])  # (3, 3)
     true = torch.cat(
         (
             chain_a,
@@ -140,7 +140,7 @@ def test_homodimer_assignment_ignores_padded_atoms() -> None:
         )
     )
     atoms = [torch.tensor([0, 1, 2, 3]), torch.tensor([4, 5, 6, 7])]
-    mask = torch.tensor([True, True, True, False, True, True, True, False])
+    mask = torch.tensor([True, True, True, False, True, True, True, False])  # (8,)
     assignment = _chain_assignment(
         predicted, true, atoms, ["AAA", "AAA"], ["CA"] * 8, mask, torch.arange(8)
     )
@@ -158,9 +158,9 @@ def test_phe_aromatic_pairs_swap_jointly() -> None:
             [2.0, 1.0, 1.0],
             [-1.0, 2.0, 2.0],
         ]
-    )
+    )  # (7, 3)
     predicted = true[[1, 0, 3, 2, 4, 5, 6]]
-    resolved = torch.ones(7, dtype=torch.bool)
+    resolved = torch.ones(7, dtype=torch.bool)  # (7,)
     result = _resolve_ambiguous_atoms(
         predicted,
         true,
@@ -175,7 +175,7 @@ def test_phe_aromatic_pairs_swap_jointly() -> None:
 def test_native_zero_based_residues_map_to_complete_structure_positions(tmp_path) -> None:
     sequence = "AC"
     names = _atom14_names(sequence)
-    coordinates = np.full((2, 14, 3), np.nan, dtype=np.float32)
+    coordinates = np.full((2, 14, 3), np.nan, dtype=np.float32)  # (2, 14, 3)
     expected, atom_names, token_indices = [], [], []
     for residue in range(2):
         for atom, name in enumerate(names[residue]):
@@ -285,7 +285,7 @@ def test_cache_target_aligns_on_cpu_after_gpu_model_features(tmp_path, monkeypat
 
 
 def test_aligned_true_coordinates_forced_swapped_homodimer(tmp_path) -> None:
-    coordinates = np.full((6, 14, 3), np.nan, dtype=np.float32)
+    coordinates = np.full((6, 14, 3), np.nan, dtype=np.float32)  # (6, 14, 3)
     chain_a = ((10, 0, 0), (10, 1, 0), (10, 0, 1))
     chain_b = ((0, 0, 0), (0, 1, 0), (0, 0, 1))
     for row, xyz in enumerate((*chain_a, *chain_b)):

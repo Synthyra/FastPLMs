@@ -16,16 +16,16 @@ import os
 import shutil
 import stat
 import tempfile
+import einops
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import ClassVar
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
-
-import einops
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from einops import rearrange
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
@@ -968,7 +968,7 @@ def rbf(values: torch.Tensor, v_min: float, v_max: float, n_bins: int = 16) -> t
         n_bins,
         device=values.device,
         dtype=values.dtype,
-    )
+    )  # (n_bins,)
     centers = centers.view([1] * len(values.shape) + [-1])  # (..., n)
     std = (v_max - v_min) / n_bins
     z = (values.unsqueeze(-1) - centers) / std  # (..., n)
@@ -1078,12 +1078,12 @@ class RotaryEmbedding(nn.Module):
         return result
 
     def reset_parameters(self) -> None:
-        inv_freq = self._compute_inv_freq(self.device)
+        inv_freq = self._compute_inv_freq(self.device)  # (d / 2,)
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        arange = torch.arange(0, self.dim, 2, device=self.device, dtype=torch.float32)
+        arange = torch.arange(0, self.dim, 2, device=self.device, dtype=torch.float32)  # (d / 2,)
         scale = (
             (arange + 0.4 * self.dim) / (1.4 * self.dim) if self.scale_base is not None else None
-        )
+        )  # (d / 2,) or None
         self.register_buffer("scale", scale)
 
     def _compute_inv_freq(self, device: torch.device | None = None) -> torch.Tensor:
@@ -1109,22 +1109,22 @@ class RotaryEmbedding(nn.Module):
             # ``inv_freq`` is non-persistent and may have been materialized
             # without values after Transformers constructs this module on the
             # meta device. Recreate it deterministically on the first forward.
-            self.inv_freq = self._compute_inv_freq(device)
+            self.inv_freq = self._compute_inv_freq(device)  # (d / 2,)
             if self.pos_idx_in_fp32:
                 t = torch.arange(seqlen, device=device, dtype=torch.float32)  # (l,)
-                t /= self.scaling_factor
-                inv_freq = self.inv_freq
+                t /= self.scaling_factor  # (l,)
+                inv_freq = self.inv_freq  # (d / 2,)
             else:
                 t = torch.arange(
                     seqlen, device=device, dtype=self.inv_freq.dtype
                 )  # (l,)
-                t /= self.scaling_factor
-                inv_freq = self.inv_freq
+                t /= self.scaling_factor  # (l,)
+                inv_freq = self.inv_freq  # (d / 2,)
             freqs = torch.outer(t, inv_freq)  # (l, d / 2)
 
             if self.scale is None:
-                self._cos_cached = torch.cos(freqs).to(dtype)
-                self._sin_cached = torch.sin(freqs).to(dtype)
+                self._cos_cached = torch.cos(freqs).to(dtype)  # (l, d / 2)
+                self._sin_cached = torch.sin(freqs).to(dtype)  # (l, d / 2)
             else:
                 raise NotImplementedError("Scaled rotary embeddings are not used by ESM3.")
 
@@ -1169,19 +1169,19 @@ def fp32_autocast_context(device_type: str):
 class RotationMatrix:
     def __init__(self, rots: torch.Tensor) -> None:
         if rots.ndim >= 1 and rots.shape[-1] == 9:
-            rots = rots.unflatten(-1, (3, 3))
+            rots = rots.unflatten(-1, (3, 3))  # (..., 3, 3)
         if rots.ndim < 2 or tuple(rots.shape[-2:]) != (3, 3):
             raise ValueError(
                 "Rotation matrices must have trailing shape (3, 3) or flattened "
                 f"shape (9,); got {tuple(rots.shape)}."
             )
-        self._rots = rots.to(torch.float32)
+        self._rots = rots.to(torch.float32)  # (..., 3, 3)
 
     @classmethod
     def identity(cls, shape: tuple[int, ...], **tensor_kwargs) -> RotationMatrix:
-        rots = torch.eye(3, **tensor_kwargs)
-        rots = rots.view(*[1 for _ in range(len(shape))], 3, 3)
-        rots = rots.expand(*shape, -1, -1)
+        rots = torch.eye(3, **tensor_kwargs)  # (3, 3)
+        rots = rots.view(*[1 for _ in range(len(shape))], 3, 3)  # (1, ..., 1, 3, 3), with len(shape) leading singleton axes
+        rots = rots.expand(*shape, -1, -1)  # (*shape, 3, 3)
         return cls(rots)
 
     def __getitem__(self, idx) -> RotationMatrix:
@@ -1194,7 +1194,7 @@ class RotationMatrix:
 
     @property
     def tensor(self) -> torch.Tensor:
-        return self._rots.flatten(-2)
+        return self._rots.flatten(-2)  # (..., 9)
 
     @property
     def device(self) -> torch.device:
@@ -1220,15 +1220,15 @@ class RotationMatrix:
         eps: float = 1e-12,
     ) -> RotationMatrix:
         with fp32_autocast_context(x_axis.device.type):
-            e1 = xy_plane
-            denom = torch.sqrt((x_axis**2).sum(dim=-1, keepdim=True) + eps)
-            x_axis = x_axis / denom
-            dot = (x_axis * e1).sum(dim=-1, keepdim=True)
-            e1 = e1 - x_axis * dot
-            denom = torch.sqrt((e1**2).sum(dim=-1, keepdim=True) + eps)
-            e1 = e1 / denom
-            e2 = torch.cross(x_axis, e1, dim=-1)
-            return RotationMatrix(torch.stack([x_axis, e1, e2], dim=-1))
+            e1 = xy_plane  # (..., 3)
+            denom = torch.sqrt((x_axis**2).sum(dim=-1, keepdim=True) + eps)  # (..., 1)
+            x_axis = x_axis / denom  # (..., 3)
+            dot = (x_axis * e1).sum(dim=-1, keepdim=True)  # (..., 1)
+            e1 = e1 - x_axis * dot  # (..., 3)
+            denom = torch.sqrt((e1**2).sum(dim=-1, keepdim=True) + eps)  # (..., 1)
+            e1 = e1 / denom  # (..., 3)
+            e2 = torch.cross(x_axis, e1, dim=-1)  # (..., 3)
+            return RotationMatrix(torch.stack([x_axis, e1, e2], dim=-1))  # rotation tensor: (..., 3, 3)
 
 
 @dataclass(frozen=True)
@@ -1401,10 +1401,10 @@ class MultiHeadAttention(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         # x: (b, l, d); attention_mask: (b, 1, l, l) or (b, 1, 1, l)
         qkv = self.layernorm_qkv(x)  # (b, l, 3 * d)
-        query, key, value = torch.chunk(qkv, 3, dim=-1)
-        query = self.q_ln(query).to(query.dtype)
-        key = self.k_ln(key).to(query.dtype)
-        query, key = self._apply_rotary(query, key)
+        query, key, value = torch.chunk(qkv, 3, dim=-1)  # each (b, l, d)
+        query = self.q_ln(query).to(query.dtype)  # (b, l, d)
+        key = self.k_ln(key).to(query.dtype)  # (b, l, d)
+        query, key = self._apply_rotary(query, key)  # each (b, l, d)
 
         reshaper = functools.partial(
             einops.rearrange,
@@ -1428,9 +1428,9 @@ class MultiHeadAttention(nn.Module):
                     ~mask,
                     torch.finfo(attn_scores.dtype).min,
                 )
-            attn_weights = torch.softmax(attn_scores, dim=-1)
+            attn_weights = torch.softmax(attn_scores, dim=-1)  # (b, h, l, l)
             if mask is not None:
-                attn_weights = attn_weights.masked_fill(~mask, 0.0)
+                attn_weights = attn_weights.masked_fill(~mask, 0.0)  # (b, h, l, l)
             context = torch.einsum(
                 "bhls,bhsd->bhld", attn_weights, value
             )  # (b, h, l, d_h)
@@ -1494,8 +1494,8 @@ class GeometricReasoningOriginalImpl(nn.Module):
         self.s_norm = nn.LayerNorm(c_s, bias=bias)
         self.proj = nn.Linear(c_s, projection_width, bias=bias)
         self.out_proj = nn.Linear(output_width, c_s, bias=bias)
-        self.distance_scale_per_head = nn.Parameter(torch.zeros(v_heads))
-        self.rotation_scale_per_head = nn.Parameter(torch.zeros(v_heads))
+        self.distance_scale_per_head = nn.Parameter(torch.zeros(v_heads))  # (h,), where h = v_heads
+        self.rotation_scale_per_head = nn.Parameter(torch.zeros(v_heads))  # (h,)
 
     def forward(
         self,
@@ -1505,28 +1505,30 @@ class GeometricReasoningOriginalImpl(nn.Module):
         sequence_id: torch.Tensor | None,
         chain_id: torch.Tensor,
     ) -> torch.Tensor:
+        # s: (b, l, c_s); masks and IDs: (b, l); affine frames: (b, l).
+        # h = v_heads; m = num_vector_messages; each vector has three xyz coordinates.
         if sequence_id is None:
-            sequence_id = torch.zeros_like(s[..., 0], dtype=torch.int64)
-        attn_bias = sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)
-        attn_bias = attn_bias.unsqueeze(1).float()
+            sequence_id = torch.zeros_like(s[..., 0], dtype=torch.int64)  # (b, l)
+        attn_bias = sequence_id.unsqueeze(-1) == sequence_id.unsqueeze(-2)  # (b, l, l)
+        attn_bias = attn_bias.unsqueeze(1).float()  # (b, 1, l, l)
         attn_bias = attn_bias.masked_fill(
             ~affine_mask[:, None, None, :],
             torch.finfo(attn_bias.dtype).min,
-        )
-        chain_id_mask = chain_id.unsqueeze(1) != chain_id.unsqueeze(2)
+        )  # (b, 1, l, l)
+        chain_id_mask = chain_id.unsqueeze(1) != chain_id.unsqueeze(2)  # (b, l, l)
         attn_bias = attn_bias.masked_fill(
             chain_id_mask.unsqueeze(1),
             torch.finfo(s.dtype).min,
-        )
+        )  # (b, 1, l, l)
 
-        ns = self.s_norm(s)
+        ns = self.s_norm(s)  # (b, l, c_s)
         vec_rot, vec_dist = self.proj(ns).split(
             [
                 self.v_heads * 2 * 3 + self.v_heads * 3 * self.num_vector_messages,
                 self.v_heads * 2 * 3,
             ],
             dim=-1,
-        )
+        )  # (b, l, 3 * h * (2 + m)), (b, l, 6 * h)
 
         query_rot, key_rot, value = (
             affine.rot[..., None]
@@ -1535,43 +1537,43 @@ class GeometricReasoningOriginalImpl(nn.Module):
                 [self.v_heads, self.v_heads, self.v_heads * self.num_vector_messages],
                 dim=-2,
             )
-        )
+        )  # (b, l, h, 3), (b, l, h, 3), (b, l, h * m, 3)
         query_dist, key_dist = (
             affine[..., None]
             .apply(rearrange(vec_dist, "... (h c) -> ... h c", c=3))
             .chunk(2, dim=-2)
-        )
+        )  # each (b, l, h, 3)
 
-        query_dist = rearrange(query_dist, "b s h d -> b h s 1 d")
-        key_dist = rearrange(key_dist, "b s h d -> b h 1 s d")
-        query_rot = rearrange(query_rot, "b s h d -> b h s d")
-        key_rot = rearrange(key_rot, "b s h d -> b h d s")
+        query_dist = rearrange(query_dist, "b s h d -> b h s 1 d")  # (b, h, l, 1, 3)
+        key_dist = rearrange(key_dist, "b s h d -> b h 1 s d")  # (b, h, 1, l, 3)
+        query_rot = rearrange(query_rot, "b s h d -> b h s d")  # (b, h, l, 3)
+        key_rot = rearrange(key_rot, "b s h d -> b h d s")  # (b, h, 3, l)
         value = rearrange(
             value,
             "b s (h m) d -> b h s (m d)",
             m=self.num_vector_messages,
-        )
+        )  # (b, h, l, m * 3)
 
-        distance_term = (query_dist - key_dist).norm(dim=-1) / math.sqrt(3)
-        rotation_term = query_rot.matmul(key_rot) / math.sqrt(3)
+        distance_term = (query_dist - key_dist).norm(dim=-1) / math.sqrt(3)  # (b, h, l, l)
+        rotation_term = query_rot.matmul(key_rot) / math.sqrt(3)  # (b, h, l, l)
         distance_term_weight = rearrange(
             F.softplus(self.distance_scale_per_head),
             "h -> h 1 1",
-        )
+        )  # (h, 1, 1)
         rotation_term_weight = rearrange(
             F.softplus(self.rotation_scale_per_head),
             "h -> h 1 1",
-        )
-        attn_weight = rotation_term * rotation_term_weight - distance_term * distance_term_weight
+        )  # (h, 1, 1)
+        attn_weight = rotation_term * rotation_term_weight - distance_term * distance_term_weight  # (b, h, l, l)
 
         s_q = attn_weight.size(2)
         s_k = attn_weight.size(3)
         offset_q = max(0, attn_bias.size(2) - s_q)
         offset_k = max(0, attn_bias.size(3) - s_k)
-        attn_bias = attn_bias[:, :, offset_q:, offset_k:]
-        attn_weight = torch.softmax(attn_weight + attn_bias, dim=-1)
+        attn_bias = attn_bias[:, :, offset_q:, offset_k:]  # (b, 1, s_q, s_k)
+        attn_weight = torch.softmax(attn_weight + attn_bias, dim=-1)  # (b, h, s_q, s_k)
 
-        attn_out = attn_weight.matmul(value)
+        attn_out = attn_weight.matmul(value)  # (b, h, s_q, m * 3)
         attn_out = (
             affine.rot[..., None]
             .invert()
@@ -1582,16 +1584,16 @@ class GeometricReasoningOriginalImpl(nn.Module):
                     m=self.num_vector_messages,
                 )
             )
-        )
+        )  # (b, s_q, h * m, 3)
         attn_out = rearrange(
             attn_out,
             "b s (h m) d -> b s (h m d)",
             m=self.num_vector_messages,
-        )
+        )  # (b, s_q, h * m * 3)
         if self.mask_and_zero_frameless:
-            attn_out = attn_out.masked_fill(~affine_mask[..., None], 0.0)
-        attn_out = attn_out.to(self.out_proj.weight.dtype)
-        return self.out_proj(attn_out)
+            attn_out = attn_out.masked_fill(~affine_mask[..., None], 0.0)  # (b, s_q, h * m * 3)
+        attn_out = attn_out.to(self.out_proj.weight.dtype)  # (b, s_q, h * m * 3)
+        return self.out_proj(attn_out)  # (b, s_q, c_s)
 
 
 def swiglu_correction_fn(expansion_ratio: float, d_model: int) -> int:
@@ -1770,7 +1772,7 @@ class TransformerStack(nn.Module):
     ]:
         *batch_dims, _ = x.shape
         if chain_id is None:
-            chain_id = torch.ones(size=batch_dims, dtype=torch.int64, device=x.device)
+            chain_id = torch.ones(size=batch_dims, dtype=torch.int64, device=x.device)  # (*batch_dims), matching x without its feature axis
         if affine is None or affine_mask is None:
             raise ValueError("affine and affine_mask are required for ESM3 transformer calls.")
         attention_mask, flex_block_mask, affine_mask, mask_semantics, effective_backend = (
@@ -1947,17 +1949,17 @@ class EncodeInputs(nn.Module):
         function_tokens: torch.Tensor,
         residue_annotation_tokens: torch.Tensor,
     ) -> torch.Tensor:
-        sequence_embed = self.sequence_embed(sequence_tokens)
+        sequence_embed = self.sequence_embed(sequence_tokens)  # (b, l, d)
         rbf_16_fn = functools.partial(rbf, v_min=0.0, v_max=1.0, n_bins=16)
         plddt_embed = self.plddt_projection(
             rbf_16_fn(average_plddt).to(self.plddt_projection.weight.dtype)
-        )
+        )  # (..., d), broadcast over residues when supplied once per sequence
         structure_per_res_plddt = self.structure_per_res_plddt_projection(
             rbf_16_fn(per_res_plddt).to(self.structure_per_res_plddt_projection.weight.dtype)
-        )
-        structure_embed = self.structure_tokens_embed(structure_tokens)
-        ss8_embed = self.ss8_embed(ss8_tokens)
-        sasa_embed = self.sasa_embed(sasa_tokens)
+        )  # (b, l, d)
+        structure_embed = self.structure_tokens_embed(structure_tokens)  # (b, l, d)
+        ss8_embed = self.ss8_embed(ss8_tokens)  # (b, l, d)
+        sasa_embed = self.sasa_embed(sasa_tokens)  # (b, l, d)
         function_embed = torch.cat(
             [
                 embed_fn(funcs)
@@ -1968,7 +1970,7 @@ class EncodeInputs(nn.Module):
                 )
             ],
             -1,
-        )
+        )  # (b, l, d)
 
         batch_size, seq_len, num_annotations = residue_annotation_tokens.shape
         residue_embed = self.residue_embed(
@@ -1979,13 +1981,13 @@ class EncodeInputs(nn.Module):
                 l=seq_len,
                 n=num_annotations,
             )
-        )
+        )  # (b * l, d)
         residue_embed = rearrange(
             residue_embed,
             "(b l) d -> b l d",
             b=batch_size,
             l=seq_len,
-        )
+        )  # (b, l, d)
 
         return (
             sequence_embed
@@ -2029,8 +2031,8 @@ class OutputHeads(nn.Module):
         hidden_states: tuple[torch.Tensor, ...] | None = None,
         attentions: tuple[torch.Tensor, ...] | None = None,
     ) -> ESM3CoreOutput:
-        function_logits = self.function_head(x)
-        function_logits = rearrange(function_logits, "... (k v) -> ... k v", k=8)
+        function_logits = self.function_head(x)  # (..., 8 * 260)
+        function_logits = rearrange(function_logits, "... (k v) -> ... k v", k=8)  # (..., 8, 260)
         return ESM3CoreOutput(
             sequence_logits=self.sequence_head(x),
             structure_logits=self.structure_head(x),
@@ -2123,23 +2125,23 @@ class ESM3Core(nn.Module):
                 RESIDUE_PAD_TOKEN,
                 dtype=torch.long,
                 device=device,
-            )
+            )  # (1, l, MAX_RESIDUE_ANNOTATIONS)
         if function_tokens is None:
             function_tokens = torch.full(
                 (1, seq_len, FUNCTION_TOKENS_DEPTH),
                 INTERPRO_PAD_TOKEN,
                 dtype=torch.long,
                 device=device,
-            )
+            )  # (1, l, FUNCTION_TOKENS_DEPTH)
         if structure_coords is None:
             structure_coords = torch.full(
                 (1, seq_len, 3, 3),
                 float("nan"),
                 dtype=torch.float,
                 device=device,
-            )
+            )  # (1, l, 3, 3): residue, backbone atom, xyz axes
 
-        structure_coords = structure_coords[..., :3, :]
+        structure_coords = structure_coords[..., :3, :]  # (..., 3, 3): first three backbone atoms
         affine, affine_mask = build_affine3d_from_coordinates(structure_coords)
 
         structure_tokens = defaults(structure_tokens, STRUCTURE_MASK_TOKEN)
@@ -2379,7 +2381,7 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
         token_ids = inputs["input_ids"] if isinstance(inputs, dict) else inputs
         single = token_ids.ndim == 1
         if single:
-            token_ids = token_ids.unsqueeze(0)
+            token_ids = token_ids.unsqueeze(0)  # (1, l)
         sequences = self.tokenizer.batch_decode(token_ids, skip_special_tokens=True)
         sequences = [sequence.replace(" ", "") for sequence in sequences]
         return sequences[0] if single else sequences
@@ -2449,7 +2451,7 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
         single_tensor = token_ids.ndim == 1
         if single_tensor:
             sequence_length = token_ids.shape[0]
-            token_ids = token_ids.unsqueeze(0)
+            token_ids = token_ids.unsqueeze(0)  # (1, l)
             conditioning = {
                 name: (
                     value.unsqueeze(0)
@@ -2462,7 +2464,7 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
         initial_mask = sampled_ids.eq(SEQUENCE_MASK_TOKEN)
         n_masked = int(initial_mask.sum().item())
         if n_masked == 0:
-            result = sampled_ids.squeeze(0) if single_tensor else sampled_ids
+            result = sampled_ids.squeeze(0) if single_tensor else sampled_ids  # (l,) for one input, otherwise (b, l)
             if return_strings:
                 decoded = self.decode(result)
                 return decoded[0] if single_string and isinstance(decoded, list) else decoded
@@ -2487,7 +2489,7 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
                     **conditioning,
                 )
             amino_acid_logits = output.sequence_logits[..., 4:29] / config.temperature
-            probabilities = amino_acid_logits.softmax(dim=-1)
+            probabilities = amino_acid_logits.softmax(dim=-1)  # (b, l, amino_acid_vocab_size)
             sampled = (
                 torch.multinomial(
                     probabilities.reshape(-1, probabilities.shape[-1]),
@@ -2495,21 +2497,21 @@ class FastESM3Model(FastPLMTestTimeTrainingMixin, FastESM3PreTrainedModel, Embed
                     generator=generator,
                 ).reshape_as(sampled_ids)
                 + 4
-            )
+            )  # (b, l)
 
             remaining_count = int(remaining.sum().item())
             steps_left = n_steps - step
             fill_count = max(1, (remaining_count + steps_left - 1) // steps_left)
-            confidence = probabilities.max(dim=-1).values.masked_fill(~remaining, -1.0)
-            selected = torch.zeros_like(remaining)
-            flat_selected = selected.reshape(-1)
-            chosen = confidence.reshape(-1).topk(min(fill_count, remaining_count)).indices
-            flat_selected[chosen] = True
-            sampled_ids[selected] = sampled[selected]
+            confidence = probabilities.max(dim=-1).values.masked_fill(~remaining, -1.0)  # (b, l)
+            selected = torch.zeros_like(remaining)  # (b, l)
+            flat_selected = selected.reshape(-1)  # (b * l,)
+            chosen = confidence.reshape(-1).topk(min(fill_count, remaining_count)).indices  # (min(fill_count, remaining_count),)
+            flat_selected[chosen] = True  # chosen positions in (b * l,) storage
+            sampled_ids[selected] = sampled[selected]  # selected positions in (b, l) storage
 
         if bool(sampled_ids.eq(SEQUENCE_MASK_TOKEN).any()):
             raise RuntimeError("generation ended before all sequence masks were filled")
-        result = sampled_ids.squeeze(0) if single_tensor else sampled_ids
+        result = sampled_ids.squeeze(0) if single_tensor else sampled_ids  # (l,) for one input, otherwise (b, l)
         if return_strings:
             decoded = self.decode(result)
             return decoded[0] if single_string and isinstance(decoded, list) else decoded
@@ -2650,19 +2652,19 @@ def _esm3_residue_mask(
 
     tokens = sequence_tokens if sequence_tokens is not None else input_ids
     if attention_mask is None:
-        mask = torch.ones(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)
+        mask = torch.ones(hidden_states.shape[:2], dtype=torch.bool, device=hidden_states.device)  # (b, l)
     else:
-        mask = attention_mask.to(device=hidden_states.device, dtype=torch.bool)
+        mask = attention_mask.to(device=hidden_states.device, dtype=torch.bool)  # (b, l)
     if tokens is not None:
-        tokens = tokens.to(hidden_states.device)
+        tokens = tokens.to(hidden_states.device)  # (b, l)
         special = (
             tokens.eq(SEQUENCE_BOS_TOKEN)
             | tokens.eq(SEQUENCE_PAD_TOKEN)
             | tokens.eq(SEQUENCE_EOS_TOKEN)
             | tokens.eq(SEQUENCE_CHAINBREAK_TOKEN)
-        )
-        mask = mask & ~special
-    return mask
+        )  # (b, l)
+        mask = mask & ~special  # (b, l)
+    return mask  # (b, l)
 
 
 def _esm3_problem_type(
@@ -2724,13 +2726,13 @@ def _esm3_token_classification_loss(
         )
 
     if problem_type == "regression" and num_labels == 1 and labels.ndim == 2:
-        labels = labels.unsqueeze(-1)
+        labels = labels.unsqueeze(-1)  # (b, l, 1)
     if labels.shape != logits.shape:
         raise ValueError(
             "Token regression and multilabel targets must match the logits shape; "
             f"received {tuple(labels.shape)} and {tuple(logits.shape)}."
         )
-    valid = residue_mask.unsqueeze(-1) & labels.ne(-100)
+    valid = residue_mask.unsqueeze(-1) & labels.ne(-100)  # (b, l, num_labels)
     if not bool(valid.any()):
         raise ValueError("Token labels do not contain a supervised biological residue.")
     if problem_type == "regression":
@@ -2798,7 +2800,7 @@ class FastESM3ForSequenceClassification(FastESM3Model):
             return_dict=True,
             **kwargs,
         )
-        hidden_states = output.last_hidden_state
+        hidden_states = output.last_hidden_state  # (b, l, d)
         if hidden_states is None:
             raise RuntimeError("ESM3 did not return final residue embeddings.")
         residue_mask = _esm3_residue_mask(
@@ -2806,13 +2808,13 @@ class FastESM3ForSequenceClassification(FastESM3Model):
             classifier_attention_mask,
             input_ids,
             sequence_tokens,
-        )
-        residue_counts = residue_mask.sum(dim=1, keepdim=True)
+        )  # (b, l)
+        residue_counts = residue_mask.sum(dim=1, keepdim=True)  # (b, 1)
         if not bool(residue_counts.all()):
             raise ValueError("Sequence classification requires one biological residue per row.")
-        pooled = (hidden_states * residue_mask.unsqueeze(-1)).sum(dim=1)
-        pooled = pooled / residue_counts.to(hidden_states.dtype)
-        logits = self.classifier(self.dropout(pooled))
+        pooled = (hidden_states * residue_mask.unsqueeze(-1)).sum(dim=1)  # (b, d)
+        pooled = pooled / residue_counts.to(hidden_states.dtype)  # (b, d)
+        logits = self.classifier(self.dropout(pooled))  # (b, num_labels)
 
         loss = None
         if labels is not None:
@@ -2892,7 +2894,7 @@ class FastESM3ForTokenClassification(FastESM3Model):
             return_dict=True,
             **kwargs,
         )
-        hidden_states = output.last_hidden_state
+        hidden_states = output.last_hidden_state  # (b, l, d)
         if hidden_states is None:
             raise RuntimeError("ESM3 did not return final residue embeddings.")
         residue_mask = _esm3_residue_mask(
@@ -2900,7 +2902,7 @@ class FastESM3ForTokenClassification(FastESM3Model):
             classifier_attention_mask,
             input_ids,
             sequence_tokens,
-        )
+        )  # (b, l)
         logits = self.classifier(self.dropout(hidden_states))
 
         loss = None

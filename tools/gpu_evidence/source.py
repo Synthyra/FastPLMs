@@ -46,7 +46,6 @@ SOURCE_DIRECTORIES = (
 )
 SOURCE_FILES = (
     "pytest.ini",
-    "ruff.toml",
     "mypy.ini",
     "kernels.lock",
     "evidence.toml",

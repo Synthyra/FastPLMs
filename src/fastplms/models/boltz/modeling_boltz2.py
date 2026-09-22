@@ -1,9 +1,12 @@
+"""Transformers interfaces and checkpoint conversion for the Boltz2 runtime."""
+
 import copy
 import inspect
 import random
 import numpy as np
 import torch
 import torch.nn as nn
+
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -245,7 +248,7 @@ class Boltz2ModelOutput(ModelOutput):
 class Boltz2StructureOutput(ModelOutput):
     sample_atom_coords: torch.Tensor | None = None  # (m, a_p, 3) or None
     atom_pad_mask: torch.Tensor | None = None  # (a_p,) or None
-    plddt: torch.Tensor | None = None  # (m, a_p) or None
+    plddt: torch.Tensor | None = None  # (m, t) or (m, a_p), depending on confidence resolution
     confidence_score: torch.Tensor | None = None  # (m,) or None
     complex_plddt: torch.Tensor | None = None  # (m,) or None
     iptm: torch.Tensor | None = None  # (m,) or None
@@ -1004,7 +1007,7 @@ class Boltz2Model(PreTrainedModel):
         atom_pad_mask = feats["atom_pad_mask"][0].detach().cpu()  # (a_p,)
         plddt = (
             output["plddt"].detach().cpu() if "plddt" in output else None
-        )  # (m, a_p) or None
+        )  # (m, t) or (m, a_p), depending on confidence resolution
         complex_plddt = (
             output["complex_plddt"].detach().cpu() if "complex_plddt" in output else None
         )  # (m,) or None

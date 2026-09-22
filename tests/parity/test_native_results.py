@@ -17,6 +17,7 @@ import warnings
 import pytest
 import torch
 import transformers
+
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -660,7 +661,7 @@ def _case_metric_distributions(
             )
         candidate_case = _slice_output(candidate, index)
         official_case = _slice_output(official, index)
-        # case_mask: (...)
+        # case_mask: (1, l), retaining the batch axis for this sequence.
         case_mask = residue_mask[index : index + 1]
         records, logits = _collect_output_metrics(
             spec,
@@ -1843,7 +1844,7 @@ def test_native_dplm_generation(spec: ModelSpec) -> None:
     assert isinstance(contract, dict), f"{spec.id}: native result omits generation"
     device = torch.device("cuda")
     fast = _load_package_generation_model(spec, device)
-    # input_tokens: (...)
+    # input_tokens: (b, l), from the recorded generation prompt batch.
     input_tokens = torch.tensor(contract["input_tokens"], device=device)
     torch.manual_seed(int(contract["seed"]))
     torch.cuda.manual_seed_all(int(contract["seed"]))
@@ -1851,7 +1852,7 @@ def test_native_dplm_generation(spec: ModelSpec) -> None:
         generated = fast.generate(input_tokens=input_tokens, **contract["kwargs"])
     if isinstance(generated, dict):
         generated = generated["output_tokens"]
-    # expected: (...)
+    # expected: (b, generated_length), from the recorded generated token batch.
     expected = torch.tensor(contract["output_tokens"], device=device)
     assert torch.equal(generated, expected), f"{spec.id}: generated tokens differ"
     del fast, generated
@@ -1873,13 +1874,13 @@ def test_native_ankh_explicit_decoder_prompt_generation(spec: ModelSpec) -> None
     assert contract["decoder_prompt_contract"] == "explicit-task-prompt"
     device = torch.device("cuda")
     fast = _load_package_generation_model(spec, device)
-    # input_ids: (...)
+    # input_ids: (b, encoder_length), from the recorded encoder prompt batch.
     input_ids = torch.tensor(contract["input_ids"], device=device)
-    # attention_mask: (...)
+    # attention_mask: (b, encoder_length).
     attention_mask = torch.tensor(contract["attention_mask"], device=device)
-    # decoder_input_ids: (...)
+    # decoder_input_ids: (b, decoder_length).
     decoder_input_ids = torch.tensor(contract["decoder_input_ids"], device=device)
-    # decoder_attention_mask: (...)
+    # decoder_attention_mask: (b, decoder_length).
     decoder_attention_mask = torch.tensor(
         contract["decoder_attention_mask"],
         device=device,
@@ -1895,7 +1896,7 @@ def test_native_ankh_explicit_decoder_prompt_generation(spec: ModelSpec) -> None
             decoder_attention_mask=decoder_attention_mask,
             **contract["kwargs"],
         )
-    # expected: (...)
+    # expected: (b, generated_length), from the recorded generated token batch.
     expected = torch.tensor(contract["output_tokens"], device=device)
     assert torch.equal(generated, expected), f"{spec.id}: generated tokens differ"
     del fast, generated

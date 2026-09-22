@@ -10,19 +10,20 @@
 from __future__ import annotations
 
 import importlib
-from functools import partial
-from importlib.util import find_spec
-from typing import Any, ClassVar, cast
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from functools import partial
+from importlib.util import find_spec
+from typing import Any, ClassVar, cast
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 from tqdm.auto import tqdm
 
 from .configuration_esmfold2 import ESMFold2Config
 from .reproducibility import seed_context
+
 
 _seed_context = seed_context
 
@@ -197,15 +198,16 @@ class DropoutResidual(nn.Module):
             self._impl = nn.Dropout(r)
 
     def forward(self, residual: Tensor, delta: Tensor) -> Tensor:
+        # residual, delta: same shape; dropout shares delta axis self._batch_dim.
         if self._use_fused_kernels:
-            return self._impl(residual, delta)
-        # The unfused path broadcasts a row/column-shared mask M with shape (1, ...).
+            return self._impl(residual, delta)  # delta.shape
+        # The unfused mask shares the selected row/column axis and retains the other dimensions.
         if self._r == 0.0 or not self.training:
-            return residual + delta
+            return residual + delta  # delta.shape
         shape = list(delta.shape)
         shape[self._batch_dim] = 1
-        mask = self._impl(delta.new_ones(shape))
-        return residual + delta * mask
+        mask = self._impl(delta.new_ones(shape))  # delta.shape with shared axis set to 1
+        return residual + delta * mask  # delta.shape
 
 
 # ---------------------------------------------------------------------------
@@ -217,7 +219,7 @@ XYZ_DIMS: int = 3
 MAX_ATOMIC_NUMBER: int = 128
 
 # Input feature dim = 3 + 1 + 1 + 128 + 64*4 = 389
-ATOM_FEATURE_DIM: int = XYZ_DIMS + 1 + 1 + MAX_ATOMIC_NUMBER + CHAR_VOCAB_SIZE * MAX_CHARS
+ATOM_FEATURE_DIM: int = XYZ_DIMS + 1 + 1 + MAX_ATOMIC_NUMBER + CHAR_VOCAB_SIZE * MAX_CHARS  # d_atom_features
 
 
 NUM_RES_TYPES: int = 33
@@ -246,39 +248,41 @@ def maybe_subsample_msa(
     max_depth: int | None,
     enabled: bool,
 ) -> tuple[Tensor, Tensor | None, Tensor | None, Tensor | None]:
+    # MSA tensors: (b, m, l); k = max_depth for subsampled rows.
     if not enabled or max_depth is None:
-        return msa, msa_attention_mask, has_deletion, deletion_value
+        return msa, msa_attention_mask, has_deletion, deletion_value  # MSA tensors retain (b, selected_depth, l); optional tensors remain None
 
     depth = msa.size(1)
     if depth <= 1 or depth <= max_depth:
-        return msa, msa_attention_mask, has_deletion, deletion_value
+        return msa, msa_attention_mask, has_deletion, deletion_value  # MSA tensors retain (b, selected_depth, l); optional tensors remain None
 
-    indices = torch.zeros(max_depth, dtype=torch.long, device=msa.device)
-    indices[1:] = torch.randperm(depth - 1, device=msa.device)[: max_depth - 1] + 1
-    indices = indices.sort().values
+    indices = torch.zeros(max_depth, dtype=torch.long, device=msa.device)  # (k,)
+    indices[1:] = torch.randperm(depth - 1, device=msa.device)[: max_depth - 1] + 1  # (k - 1,)
+    indices = indices.sort().values  # (k,)
 
-    msa = msa[:, indices]
+    msa = msa[:, indices]  # (b, k, l)
     if msa_attention_mask is not None:
-        msa_attention_mask = msa_attention_mask[:, indices]
+        msa_attention_mask = msa_attention_mask[:, indices]  # (b, k, l)
     if has_deletion is not None:
-        has_deletion = has_deletion[:, indices]
+        has_deletion = has_deletion[:, indices]  # (b, k, l)
     if deletion_value is not None:
-        deletion_value = deletion_value[:, indices]
-    return msa, msa_attention_mask, has_deletion, deletion_value
+        deletion_value = deletion_value[:, indices]  # (b, k, l)
+    return msa, msa_attention_mask, has_deletion, deletion_value  # MSA tensors retain (b, selected_depth, l); optional tensors remain None
 
 
 def maybe_apply_msa_column_masking(
     msa_attention_mask: Tensor | None,
     rate: float,
 ) -> Tensor | None:
+    # msa_attention_mask: (b, m, l) or None.
     if msa_attention_mask is None or rate <= 0.0 or msa_attention_mask.size(1) <= 1:
-        return msa_attention_mask
+        return msa_attention_mask  # (b, m, l) or None
 
     batch_size, _, length = msa_attention_mask.shape
-    col_keep = torch.rand(batch_size, length, device=msa_attention_mask.device) >= rate
-    col_keep = col_keep.unsqueeze(1).expand_as(msa_attention_mask).clone()
-    col_keep[:, 0, :] = True
-    return msa_attention_mask.bool() & col_keep
+    col_keep = torch.rand(batch_size, length, device=msa_attention_mask.device) >= rate  # (b, l)
+    col_keep = col_keep.unsqueeze(1).expand_as(msa_attention_mask).clone()  # (b, m, l)
+    col_keep[:, 0, :] = True  # (b, l)
+    return msa_attention_mask.bool() & col_keep  # (b, m, l) or None
 
 
 # ===========================================================================
@@ -296,8 +300,8 @@ def gather_token_to_atom(token_features: Tensor, atom_to_token_idx: Tensor) -> T
     Returns:
         X with shape (b, a, d).
     """
-    idx = atom_to_token_idx.unsqueeze(-1).expand(-1, -1, token_features.size(-1))
-    return torch.gather(token_features, 1, idx)
+    idx = atom_to_token_idx.unsqueeze(-1).expand(-1, -1, token_features.size(-1))  # (b, a, d)
+    return torch.gather(token_features, 1, idx)  # (b, a, d)
 
 
 def scatter_atom_to_token(
@@ -319,20 +323,20 @@ def scatter_atom_to_token(
     """
     batch_size, n_atoms, d_model = atom_features.shape
     n_out = n_tokens
-    idx = atom_to_token_idx
+    idx = atom_to_token_idx  # (b, a)
     if atom_mask is not None:
-        idx = torch.where(atom_mask, atom_to_token_idx, n_tokens)
+        idx = torch.where(atom_mask, atom_to_token_idx, n_tokens)  # (b, a)
         n_out = n_tokens + 1
-    idx_expanded = idx.unsqueeze(-1).expand(batch_size, n_atoms, d_model)
+    idx_expanded = idx.unsqueeze(-1).expand(batch_size, n_atoms, d_model)  # (b, a, d)
     out = torch.zeros(
         batch_size,
         n_out,
         d_model,
         device=atom_features.device,
         dtype=atom_features.dtype,
-    )
-    out.scatter_reduce_(1, idx_expanded, atom_features, reduce="mean", include_self=False)
-    return out[:, :n_tokens, :]
+    )  # (b, n_out, d)
+    out.scatter_reduce_(1, idx_expanded, atom_features, reduce="mean", include_self=False)  # (b, n_out, d)
+    return out[:, :n_tokens, :]  # (b, l, d)
 
 
 def gather_rep_atom_coords(coords: Tensor, rep_atom_idx: Tensor) -> Tensor:
@@ -345,8 +349,8 @@ def gather_rep_atom_coords(coords: Tensor, rep_atom_idx: Tensor) -> Tensor:
     Returns:
         X with shape (b, l, 3).
     """
-    idx = rep_atom_idx.unsqueeze(-1).expand(-1, -1, coords.size(-1))
-    return torch.gather(coords, 1, idx)
+    idx = rep_atom_idx.unsqueeze(-1).expand(-1, -1, coords.size(-1))  # (b, l, 3)
+    return torch.gather(coords, 1, idx)  # (b, l, 3)
 
 
 def _compute_intra_token_idx(atom_to_token: Tensor) -> Tensor:
@@ -362,12 +366,12 @@ def _compute_intra_token_idx(atom_to_token: Tensor) -> Tensor:
         Index tensor I with shape (b, a) and values from zero through
         ``max_atoms_per_token - 1``.
     """
-    same_as_prev = F.pad(atom_to_token[:, 1:] == atom_to_token[:, :-1], (1, 0), value=False)
-    ones = torch.ones_like(atom_to_token)
-    cumsum = torch.cumsum(ones, dim=-1)
-    group_start = cumsum.masked_fill(same_as_prev, 0)
-    group_start = torch.cummax(group_start, dim=-1).values
-    return cumsum - group_start
+    same_as_prev = F.pad(atom_to_token[:, 1:] == atom_to_token[:, :-1], (1, 0), value=False)  # (b, a)
+    ones = torch.ones_like(atom_to_token)  # (b, a)
+    cumsum = torch.cumsum(ones, dim=-1)  # (b, a)
+    group_start = cumsum.masked_fill(same_as_prev, 0)  # (b, a)
+    group_start = torch.cummax(group_start, dim=-1).values  # (b, a)
+    return cumsum - group_start  # (b, a)
 
 
 def _categorical_mean(logits: Tensor, start: float, end: float) -> Tensor:
@@ -384,9 +388,9 @@ def _categorical_mean(logits: Tensor, start: float, end: float) -> Tensor:
         Expected value tensor Y with shape (...).
     """
     n_bins = logits.shape[-1]
-    edges = torch.linspace(start, end, n_bins + 1, device=logits.device, dtype=torch.float32)
+    edges = torch.linspace(start, end, n_bins + 1, device=logits.device, dtype=torch.float32)  # (n_bins + 1,)
     v_bins = (edges[:-1] + edges[1:]) / 2  # V_bin has shape (n_bins,).
-    return (logits.float().softmax(-1) @ v_bins.unsqueeze(1)).squeeze(-1)
+    return (logits.float().softmax(-1) @ v_bins.unsqueeze(1)).squeeze(-1)  # logits.shape[:-1]
 
 
 # ===========================================================================
@@ -403,16 +407,17 @@ class RowAttentionPooling(nn.Module):
         self.out_proj = nn.Linear(d_pair, d_single, bias=False)
 
     def forward(self, z: Tensor, mask: Tensor) -> Tensor:
-        scores = self.attn_proj(z).squeeze(-1)
+        # z: (b, l, l, d_pair); mask: (b, l).
+        scores = self.attn_proj(z).squeeze(-1)  # (b, l, l)
         mask_bias = torch.where(
             mask[:, None, :].bool(),
             torch.zeros_like(scores),
             torch.full_like(scores, -1e9),
-        )
-        scores = scores + mask_bias
-        weights = F.softmax(scores, dim=-1)
-        pooled = torch.einsum("bnm,bnmd->bnd", weights, z)
-        return self.out_proj(pooled)
+        )  # (b, l, l)
+        scores = scores + mask_bias  # (b, l, l)
+        weights = F.softmax(scores, dim=-1)  # (b, l, l)
+        pooled = torch.einsum("bnm,bnmd->bnd", weights, z)  # (b, l, d_pair)
+        return self.out_proj(pooled)  # (b, l, d_single)
 
 
 # ===========================================================================
@@ -460,6 +465,7 @@ class InputsEmbedder(nn.Module):
             X with shape (b, l, d_inputs), concatenating atom encoding,
             aatype, profile, and deletion mean.
         """
+        # aatype/profile: (b, l, 33); deletion_mean: (b, l); atom features use a atoms.
         a, _q, _c, _attn_params, _intermediates = self.atom_attention_encoder(
             ref_pos=ref_pos,
             atom_attention_mask=atom_attention_mask,
@@ -468,8 +474,8 @@ class InputsEmbedder(nn.Module):
             ref_element=ref_element,
             ref_atom_name_chars=ref_atom_name_chars,
             atom_to_token=atom_to_token,
-        )
-        return torch.cat([a, aatype, profile, deletion_mean.unsqueeze(-1)], dim=-1)
+        )  # a: (b, l, d_token / 2); _q/_c: (b, a, d_atom)
+        return torch.cat([a, aatype, profile, deletion_mean.unsqueeze(-1)], dim=-1)  # (b, l, d_token / 2 + 67)
 
 
 # ===========================================================================
@@ -511,38 +517,39 @@ class ResIdxAsymIdSymIdEntityIdEncoding(nn.Module):
         entity_id: Tensor,
         token_index: Tensor,
     ) -> Tensor:
-        bij_same_chain = asym_id.unsqueeze(2) == asym_id.unsqueeze(1)
-        bij_same_residue = residue_index.unsqueeze(2) == residue_index.unsqueeze(1)
-        bij_same_entity = entity_id.unsqueeze(2) == entity_id.unsqueeze(1)
+        # All input IDs: (b, l); r/c are relative residue/chain bin counts.
+        bij_same_chain = asym_id.unsqueeze(2) == asym_id.unsqueeze(1)  # (b, l, l)
+        bij_same_residue = residue_index.unsqueeze(2) == residue_index.unsqueeze(1)  # (b, l, l)
+        bij_same_entity = entity_id.unsqueeze(2) == entity_id.unsqueeze(1)  # (b, l, l)
 
-        dij_residue = residue_index.unsqueeze(2) - residue_index.unsqueeze(1)
+        dij_residue = residue_index.unsqueeze(2) - residue_index.unsqueeze(1)  # (b, l, l)
         dij_residue = torch.clip(
             dij_residue + self.n_relative_residx_bins,
             0,
             2 * self.n_relative_residx_bins,
-        )
-        dij_residue = torch.where(bij_same_chain, dij_residue, 2 * self.n_relative_residx_bins + 1)
-        aij_rel_pos = F.one_hot(dij_residue, 2 * self.n_relative_residx_bins + 2)
+        )  # (b, l, l)
+        dij_residue = torch.where(bij_same_chain, dij_residue, 2 * self.n_relative_residx_bins + 1)  # (b, l, l)
+        aij_rel_pos = F.one_hot(dij_residue, 2 * self.n_relative_residx_bins + 2)  # (b, l, l, 2 * r + 2)
 
         dij_token = torch.clip(
             token_index.unsqueeze(2) - token_index.unsqueeze(1) + self.n_relative_residx_bins,
             0,
             2 * self.n_relative_residx_bins,
-        )
+        )  # (b, l, l)
         dij_token = torch.where(
             bij_same_chain & bij_same_residue,
             dij_token,
             2 * self.n_relative_residx_bins + 1,
-        )
-        aij_rel_token = F.one_hot(dij_token, 2 * self.n_relative_residx_bins + 2)
+        )  # (b, l, l)
+        aij_rel_token = F.one_hot(dij_token, 2 * self.n_relative_residx_bins + 2)  # (b, l, l, 2 * r + 2)
 
         dij_chain = torch.clip(
             sym_id.unsqueeze(2) - sym_id.unsqueeze(1) + self.n_relative_chain_bins,
             0,
             2 * self.n_relative_chain_bins,
-        )
-        dij_chain = torch.where(bij_same_chain, 2 * self.n_relative_chain_bins + 1, dij_chain)
-        aij_rel_chain = F.one_hot(dij_chain, 2 * self.n_relative_chain_bins + 2)
+        )  # (b, l, l)
+        dij_chain = torch.where(bij_same_chain, 2 * self.n_relative_chain_bins + 1, dij_chain)  # (b, l, l)
+        aij_rel_chain = F.one_hot(dij_chain, 2 * self.n_relative_chain_bins + 2)  # (b, l, l, 2 * c + 2)
 
         feats = torch.cat(
             [
@@ -552,9 +559,9 @@ class ResIdxAsymIdSymIdEntityIdEncoding(nn.Module):
                 aij_rel_chain.float(),
             ],
             dim=-1,
-        )
+        )  # (b, l, l, 2 * (2 * r + 2) + 1 + 2 * c + 2)
 
-        return self.embed(feats)
+        return self.embed(feats)  # (b, l, l, d_pair)
 
 
 # ===========================================================================
@@ -575,12 +582,13 @@ class SingleToPair(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        x = self.downproject(x)
+        # x: (b, l, input_dim); d_down is downproject.out_features.
+        x = self.downproject(x)  # (b, l, d_down)
         x = torch.cat(
             [(x.unsqueeze(2) * x.unsqueeze(1)), (x.unsqueeze(2) - x.unsqueeze(1))],
             dim=3,
-        )
-        return self.output_mlp(x)
+        )  # (b, l, l, 2 * d_down)
+        return self.output_mlp(x)  # (b, l, l, output_dim)
 
 
 # ===========================================================================
@@ -604,7 +612,7 @@ class LanguageModelShim(nn.Module):
         self.base_z_linear = nn.Sequential(
             nn.LayerNorm(d_model), nn.Linear(d_model, d_z, bias=False)
         )
-        self.base_z_combine = nn.Parameter(torch.zeros(num_layers + 1))
+        self.base_z_combine = nn.Parameter(torch.zeros(num_layers + 1))  # (num_layers + 1,)
 
     def project_sequence(
         self,
@@ -641,12 +649,12 @@ class LanguageModelShim(nn.Module):
         # Match the learned projection parameters at this explicit boundary;
         # this preserves the official BF16 path and leaves FP32 models exact.
         projection_dtype = cast(nn.LayerNorm, self.base_z_linear[0]).weight.dtype
-        hidden_states = hidden_states.to(dtype=projection_dtype)
-        projected_states = self.base_z_linear(hidden_states)
-        layer_weights = self.base_z_combine.softmax(dim=0)
+        hidden_states = hidden_states.to(dtype=projection_dtype)  # (b, l, n_layers + 1, d_model)
+        projected_states = self.base_z_linear(hidden_states)  # (b, l, n_layers + 1, d_z)
+        layer_weights = self.base_z_combine.softmax(dim=0)  # (n_layers + 1,)
         # Preserve Biohub's matmul path exactly so checkpoint inference does
         # not change through a different reduction order.
-        projected = layer_weights @ projected_states
+        projected = layer_weights @ projected_states  # (b, l, d_z)
         if residue_mask is not None:
             if residue_mask.shape != hidden_states.shape[:2]:
                 raise ValueError(
@@ -655,8 +663,8 @@ class LanguageModelShim(nn.Module):
                 )
             projected = projected * residue_mask.to(
                 device=projected.device, dtype=projected.dtype
-            ).unsqueeze(-1)
-        return projected
+            ).unsqueeze(-1)  # (b, l, d_z)
+        return projected  # (b, l, d_z)
 
     def forward(self, hidden_states: Tensor, *, lm_dropout: float = 0.0) -> Tensor:
         """Project pre-computed ESMC hidden states to pair representation.
@@ -669,11 +677,11 @@ class LanguageModelShim(nn.Module):
         Returns:
             Z_pair with shape ``(b, l, l, d_pair)``.
         """
-        lm_z = self.project_sequence(hidden_states)
-        lm_z = self.base_z_mlp(lm_z)
+        lm_z = self.project_sequence(hidden_states)  # (b, l, d_z)
+        lm_z = self.base_z_mlp(lm_z)  # (b, l, l, d_z)
         if lm_dropout > 0:
-            lm_z = F.dropout(lm_z, p=lm_dropout, training=True)
-        return lm_z
+            lm_z = F.dropout(lm_z, p=lm_dropout, training=True)  # (b, l, l, d_z)
+        return lm_z  # (b, l, l, d_z)
 
 
 # ===========================================================================
@@ -700,62 +708,63 @@ def compute_lm_hidden_states(
     was trained on per-residue inputs, not per-atom), then scatter the
     hidden states back to the per-token layout.
     """
+    # Input IDs/masks: (b, l). Per sample p protein tokens collapse to u residues; t is padded LM length.
     b_size, l_size = input_ids.shape
     device = input_ids.device
-    protein_mask = (mol_type == 0) & token_mask
+    protein_mask = (mol_type == 0) & token_mask  # (b, l)
 
     lm_input_list = []
     lm_lengths = []
     # Per-batch maps from (original protein-token index) to (LM input position).
     expand_maps: list[Tensor] = []
     for batch_index in range(b_size):
-        mask_b = protein_mask[batch_index]
-        ids_b = input_ids[batch_index][mask_b]
-        asym_b = asym_id[batch_index][mask_b]
-        res_b = residue_index[batch_index][mask_b]
+        mask_b = protein_mask[batch_index]  # (l,)
+        ids_b = input_ids[batch_index][mask_b]  # (p,)
+        asym_b = asym_id[batch_index][mask_b]  # (p,)
+        res_b = residue_index[batch_index][mask_b]  # (p,)
 
         # Collapse: keep first token per (asym_id, residue_index) key, in
         # input order. ``inverse`` maps each original protein-token to its
         # collapsed residue index.
-        keys = torch.stack((asym_b, res_b), dim=1)
-        unique_keys, inverse = torch.unique(keys, dim=0, return_inverse=True)
+        keys = torch.stack((asym_b, res_b), dim=1)  # (p, 2)
+        unique_keys, inverse = torch.unique(keys, dim=0, return_inverse=True)  # (u, 2), (p,)
         n_unique = unique_keys.size(0)
-        token_positions = torch.arange(keys.size(0), device=device, dtype=torch.long)
-        first_pos = torch.full((n_unique,), keys.size(0), device=device, dtype=torch.long)
-        first_pos.scatter_reduce_(0, inverse, token_positions, reduce="amin", include_self=True)
-        ordered = torch.argsort(first_pos)
-        first_pos_ordered = first_pos[ordered]
-        ids_collapsed = ids_b[first_pos_ordered]
-        asym_collapsed = asym_b[first_pos_ordered]
-        remap = torch.empty_like(ordered)
-        remap[ordered] = torch.arange(n_unique, device=device, dtype=torch.long)
-        inverse_ordered = remap[inverse]
+        token_positions = torch.arange(keys.size(0), device=device, dtype=torch.long)  # (p,)
+        first_pos = torch.full((n_unique,), keys.size(0), device=device, dtype=torch.long)  # (u,)
+        first_pos.scatter_reduce_(0, inverse, token_positions, reduce="amin", include_self=True)  # (u,)
+        ordered = torch.argsort(first_pos)  # (u,)
+        first_pos_ordered = first_pos[ordered]  # (u,)
+        ids_collapsed = ids_b[first_pos_ordered]  # (u,)
+        asym_collapsed = asym_b[first_pos_ordered]  # (u,)
+        remap = torch.empty_like(ordered)  # (u,)
+        remap[ordered] = torch.arange(n_unique, device=device, dtype=torch.long)  # (u,)
+        inverse_ordered = remap[inverse]  # (p,)
 
-        chain_ids = asym_collapsed.unique(sorted=True)
+        chain_ids = asym_collapsed.unique(sorted=True)  # (n_chains,)
         # [BOS] chain1 [EOS BOS] chain2 ... [EOS]
-        parts: list[Tensor] = [torch.tensor([0], device=device, dtype=ids_b.dtype)]
+        parts: list[Tensor] = [torch.tensor([0], device=device, dtype=ids_b.dtype)]  # list of 1D token tensors
         # Per-chain LM positions accumulate; track them for the expand map.
-        per_token_lm_pos = torch.empty(n_unique, device=device, dtype=torch.long)
+        per_token_lm_pos = torch.empty(n_unique, device=device, dtype=torch.long)  # (u,)
         cursor = 1  # position 0 is the leading BOS
         for i, cid in enumerate(chain_ids):
-            in_chain = (asym_collapsed == cid).nonzero(as_tuple=True)[0]
+            in_chain = (asym_collapsed == cid).nonzero(as_tuple=True)[0]  # (u_chain,)
             parts.append(ids_collapsed[in_chain])
             per_token_lm_pos[in_chain] = torch.arange(
                 cursor, cursor + in_chain.shape[0], device=device, dtype=torch.long
-            )
+            )  # (u_chain,)
             cursor += in_chain.shape[0]
             if i < len(chain_ids) - 1:
                 parts.append(torch.tensor([2, 0], device=device, dtype=ids_b.dtype))
                 cursor += 2  # EOS + BOS
         parts.append(torch.tensor([2], device=device, dtype=ids_b.dtype))
-        lm_seq = torch.cat(parts)
+        lm_seq = torch.cat(parts)  # (t_i,)
         lm_input_list.append(lm_seq)
         lm_lengths.append(lm_seq.shape[0])
 
         # Map each original protein-token position to its LM input position.
-        prot_pos_b = mask_b.nonzero(as_tuple=True)[0]
-        expand_map = torch.full((l_size,), -1, device=device, dtype=torch.long)
-        expand_map[prot_pos_b] = per_token_lm_pos[inverse_ordered]
+        prot_pos_b = mask_b.nonzero(as_tuple=True)[0]  # (p,)
+        expand_map = torch.full((l_size,), -1, device=device, dtype=torch.long)  # (l,)
+        expand_map[prot_pos_b] = per_token_lm_pos[inverse_ordered]  # (p,)
         expand_maps.append(expand_map)
 
     # Pad the language-model input to its longest sequence. FP8 callers round
@@ -768,32 +777,32 @@ def compute_lm_hidden_states(
         1,
         device=device,
         dtype=input_ids.dtype,  # PAD=1
-    )
+    )  # (b, t)
     for batch_index in range(b_size):
-        lm_input_ids[batch_index, : lm_lengths[batch_index]] = lm_input_list[batch_index]
+        lm_input_ids[batch_index, : lm_lengths[batch_index]] = lm_input_list[batch_index]  # (t_i,)
 
     # sequence_id for chain-aware attention; PAD tokens get -1 (no attention).
-    sequence_id = (lm_input_ids == 0).cumsum(dim=1) - 1  # BOS=0
-    sequence_id = sequence_id.masked_fill(lm_input_ids == 1, -1)  # PAD=1
+    sequence_id = (lm_input_ids == 0).cumsum(dim=1) - 1  # BOS=0; (b, t)
+    sequence_id = sequence_id.masked_fill(lm_input_ids == 1, -1)  # PAD=1; (b, t)
 
     if lm_mask_pct > 0.0:
-        special = (lm_input_ids == 0) | (lm_input_ids == 1) | (lm_input_ids == 2)
-        do_mask = (torch.rand(lm_input_ids.shape, device=device) < lm_mask_pct) & ~special
-        lm_input_ids = lm_input_ids.masked_fill(do_mask, mask_token_id)
+        special = (lm_input_ids == 0) | (lm_input_ids == 1) | (lm_input_ids == 2)  # (b, t)
+        do_mask = (torch.rand(lm_input_ids.shape, device=device) < lm_mask_pct) & ~special  # (b, t)
+        lm_input_ids = lm_input_ids.masked_fill(do_mask, mask_token_id)  # (b, t)
 
     with torch.inference_mode():
         esmc_out = esmc(input_ids=lm_input_ids, sequence_id=sequence_id, output_hidden_states=True)
 
-    hidden_stack = esmc_out.hidden_states
+    hidden_stack = esmc_out.hidden_states  # (n_states, b, t, d_model)
     n_states, _, _, d_model = hidden_stack.shape
-    result = torch.zeros(b_size, l_size, n_states, d_model, device=device, dtype=hidden_stack.dtype)
+    result = torch.zeros(b_size, l_size, n_states, d_model, device=device, dtype=hidden_stack.dtype)  # (b, l, n_states, d_model)
     for batch_index in range(b_size):
-        M_i = protein_mask[batch_index]
-        positions = expand_maps[batch_index][M_i]
-        gathered = hidden_stack[:, batch_index, positions, :].permute(1, 0, 2)
-        result[batch_index, M_i.nonzero(as_tuple=True)[0]] = gathered
+        M_i = protein_mask[batch_index]  # (l,)
+        positions = expand_maps[batch_index][M_i]  # (p,)
+        gathered = hidden_stack[:, batch_index, positions, :].permute(1, 0, 2)  # (p, n_states, d_model)
+        result[batch_index, M_i.nonzero(as_tuple=True)[0]] = gathered  # (p, n_states, d_model)
 
-    return result.detach()
+    return result.detach()  # (b, l, n_states, d_model)
 
 
 # ===========================================================================
@@ -844,7 +853,8 @@ class TriangleMultiplicativeBlock(nn.Module):
         return self.flow
 
     def _triangular_contract(self, left_stream: Tensor, right_stream: Tensor) -> Tensor:
-        return torch.einsum(self._einsum_equation, left_stream, right_stream)
+        # Streams: (b, l, l, d_latent); equation chooses incoming/outgoing contraction.
+        return torch.einsum(self._einsum_equation, left_stream, right_stream)  # (b, l, l, d_latent)
 
     def _triangular_contract_chunked(
         self, left_stream: Tensor, right_stream: Tensor, chunk_size: int
@@ -869,17 +879,18 @@ class TriangleMultiplicativeBlock(nn.Module):
         chunks = []
         for start in range(0, length, chunk_size):
             rows = left_rows[:, :, start : start + chunk_size]  # (b, d, i_c, k)
-            product = torch.bmm(rows.reshape(batch_size * channels, -1, inner), right_columns)
+            product = torch.bmm(rows.reshape(batch_size * channels, -1, inner), right_columns)  # (b * d, i_c, j)
             product = product.view(batch_size, channels, rows.shape[2], -1)  # (b, d, i_c, j)
             chunks.append(product.permute(0, 2, 3, 1))  # (b, i_c, j, d)
-        return torch.cat(chunks, dim=1)
+        return torch.cat(chunks, dim=1)  # (b, l, l, d)
 
     def forward(self, pair_grid: Tensor, visibility: Tensor | None = None) -> Tensor:
+        # pair_grid: (b, l, l, d_input); visibility: (b, l, l); d = latent_channels.
         if visibility is None:
-            visibility = pair_grid.new_ones(pair_grid.shape[:-1])
+            visibility = pair_grid.new_ones(pair_grid.shape[:-1])  # (b, l, l)
 
         if self._use_kernels:
-            p_in_weight, g_in_weight = self.split_kernel_weights()
+            p_in_weight, g_in_weight = self.split_kernel_weights()  # each (2 * d, d_input)
             return _cue_tri_mul(  # type: ignore[misc]
                 pair_grid,
                 direction=self._kernel_flow_direction(),
@@ -893,38 +904,38 @@ class TriangleMultiplicativeBlock(nn.Module):
                 p_out_weight=self.proj_emit.weight,
                 g_out_weight=self.proj_gate.weight,
                 eps=_EPS,
-            )
+            )  # (b, l, l, d_input)
 
         # Every tensor below is as large as the pair representation or larger, and this
         # block sets the peak memory of a fold. Each name is dropped once it is dead, so
         # the allocator can reuse its buffer. No value changes.
-        normalized_grid = self.norm_start(pair_grid)
+        normalized_grid = self.norm_start(pair_grid)  # (b, l, l, d_input)
         bundled = self.proj_bundle(normalized_grid)  # (b, l, l, 4 * d)
-        signal, gate_logits = bundled.split(2 * self.latent_channels, dim=-1)
+        signal, gate_logits = bundled.split(2 * self.latent_channels, dim=-1)  # each (b, l, l, 2 * d)
         routed = signal * torch.sigmoid(gate_logits)  # (b, l, l, 2 * d)
         # The two views would keep the whole projection alive.
         del bundled, signal, gate_logits
-        routed = routed * visibility.unsqueeze(-1)
+        routed = routed * visibility.unsqueeze(-1)  # (b, l, l, 2 * d)
 
         left_stream, right_stream = routed.float().chunk(2, dim=-1)  # each (b, l, l, d)
         if torch.is_autocast_enabled(left_stream.device.type):
             # The contraction is an autocast operation. Casting its inputs here, as it
             # would, lets the full-precision product go before the contraction runs.
             autocast_dtype = torch.get_autocast_dtype(left_stream.device.type)
-            left_stream = left_stream.to(autocast_dtype)
-            right_stream = right_stream.to(autocast_dtype)
+            left_stream = left_stream.to(autocast_dtype)  # (b, l, l, d)
+            right_stream = right_stream.to(autocast_dtype)  # (b, l, l, d)
         del routed
         if self._chunk_size is not None:
             contracted = self._triangular_contract_chunked(
                 left_stream, right_stream, self._chunk_size
-            )
+            )  # (b, l, l, d)
         else:
-            contracted = self._triangular_contract(left_stream, right_stream)
+            contracted = self._triangular_contract(left_stream, right_stream)  # (b, l, l, d)
         del left_stream, right_stream
-        mixed = self.proj_emit(self.norm_mix(contracted))
+        mixed = self.proj_emit(self.norm_mix(contracted))  # (b, l, l, d_input)
         del contracted
-        output_gate = torch.sigmoid(self.proj_gate(normalized_grid))
-        return mixed * output_gate
+        output_gate = torch.sigmoid(self.proj_gate(normalized_grid))  # (b, l, l, d_input)
+        return mixed * output_gate  # (b, l, l, d_input)
 
 
 class TriangleMultiplicativeUpdate(nn.Module):
@@ -947,7 +958,8 @@ class TriangleMultiplicativeUpdate(nn.Module):
         self._engine.set_chunk_size(chunk_size)
 
     def forward(self, z: Tensor, mask: Tensor | None = None) -> Tensor:
-        return self._engine(z, visibility=mask)
+        # z: (b, l, l, d_pair); mask: (b, l, l) or None.
+        return self._engine(z, visibility=mask)  # (b, l, l, d_pair)
 
 
 # ===========================================================================
@@ -989,11 +1001,11 @@ class Transition(nn.Module):
                 dtype=dtype,
             )
             with torch.no_grad():
-                fused.LN_W.copy_(self.norm.weight)
+                fused.LN_W.copy_(self.norm.weight)  # (d_model,)
                 if has_ln_bias:
                     fused.LN_B.copy_(self.norm.bias)  # type: ignore[union-attr]
                 # FusedLNLinearSwiGLU.W12 is (d_model, 2*d_inner); transpose nn.Linear once.
-                fused.W12.copy_(self.ffn.w12.weight.t().contiguous())
+                fused.W12.copy_(self.ffn.w12.weight.t().contiguous())  # (d_model, 2 * d_inner)
             self._fused_swiglu = fused.eval().requires_grad_(False)
         else:
             self._fused_swiglu = None
@@ -1005,50 +1017,53 @@ class Transition(nn.Module):
 
     def _swiglu_pre_w3(self, x_normed: Tensor) -> Tensor:
         """SwiGLU through silu(x1)*x2, before the final w3."""
+        # x_normed: (..., d_model); d_inner = ffn.hidden_features.
         ffn = self.ffn
-        x12 = ffn.w12(x_normed)
-        x1, x2 = x12.split(ffn.hidden_features, dim=-1)
-        return F.silu(x1) * x2
+        x12 = ffn.w12(x_normed)  # (..., 2 * d_inner)
+        x1, x2 = x12.split(ffn.hidden_features, dim=-1)  # each (..., d_inner)
+        return F.silu(x1) * x2  # (..., d_inner)
 
     def _addmm_residual(self, x: Tensor, hidden: Tensor) -> Tensor:
         """x + w3(hidden) via single cuBLAS addmm: avoids transition-output allocation."""
+        # x: (..., d_model); hidden: (..., d_inner).
         ffn = self.ffn
         x_shape = x.shape
         out = torch.addmm(
             x.contiguous().view(-1, x_shape[-1]),
             hidden.view(-1, hidden.shape[-1]),
             ffn.w3.weight.t(),
-        )
-        return out.view(x_shape)
+        )  # (product(x.shape[:-1]), d_model)
+        return out.view(x_shape)  # x.shape
 
     def forward(self, x: Tensor) -> Tensor:
         # Inference-only fast path (addmm-fused residual + pre-alloc out)
         #: diverges bit-exactly from ``x + ffn(norm(x))`` so we only use
         # it when grad is disabled (binder-design / bit-exact tests run
         # with grad on and need the reference path).
+        # x: (b, l, ..., d_model); chunk width l_c <= _chunk_size.
         if not torch.is_grad_enabled() and self._can_use_fused_path(x):
             fused = self._fused_swiglu
             assert fused is not None
             pre_w3 = fused
             if self._chunk_size is None or x.shape[1] <= self._chunk_size:
-                hidden = pre_w3(x)
-                return self._addmm_residual(x, hidden)
-            out = torch.empty_like(x)
+                hidden = pre_w3(x)  # (b, l, ..., d_inner)
+                return self._addmm_residual(x, hidden)  # x.shape
+            out = torch.empty_like(x)  # x.shape
             for s in range(0, x.shape[1], self._chunk_size):
                 e = min(s + self._chunk_size, x.shape[1])
-                sl = x[:, s:e]
-                hidden = pre_w3(sl)
-                out[:, s:e] = self._addmm_residual(sl, hidden)
-            return out
+                sl = x[:, s:e]  # (b, l_c, ..., d_model)
+                hidden = pre_w3(sl)  # (b, l_c, ..., d_inner)
+                out[:, s:e] = self._addmm_residual(sl, hidden)  # (b, l_c, ..., d_model)
+            return out  # x.shape
         # Reference path: bit-exact with main: x + ffn(norm(x)).
         if self._chunk_size is None or x.shape[1] <= self._chunk_size:
-            return x + self.ffn(self.norm(x))
+            return x + self.ffn(self.norm(x))  # x.shape
         out_list: list[Tensor] = []
         for s in range(0, x.shape[1], self._chunk_size):
             e = min(s + self._chunk_size, x.shape[1])
-            sl = x[:, s:e]
+            sl = x[:, s:e]  # (b, l_c, ..., d_model)
             out_list.append(sl + self.ffn(self.norm(sl)))
-        return torch.cat(out_list, dim=1)
+        return torch.cat(out_list, dim=1)  # x.shape
 
 
 class PairUpdateBlock(nn.Module):
@@ -1087,12 +1102,13 @@ class PairUpdateBlock(nn.Module):
         self, pair: Tensor, direction: str, pair_attention_mask: Tensor | None
     ) -> Tensor:
         """Fused TriMul+residual call; weights from the corresponding engine."""
+        # pair: (b, l, l, d_pair); pair_attention_mask: (b, l, l) or None.
         tri = self.tri_mul_out if direction == "outgoing" else self.tri_mul_in
         engine: TriangleMultiplicativeBlock = tri._engine  # type: ignore[assignment]
-        p_in_weight, g_in_weight = engine.split_kernel_weights()
+        p_in_weight, g_in_weight = engine.split_kernel_weights()  # each (2 * d_pair, d_pair)
 
         def _bf16(t: Tensor) -> Tensor:
-            return t if t.dtype == torch.bfloat16 else t.to(torch.bfloat16)
+            return t if t.dtype == torch.bfloat16 else t.to(torch.bfloat16)  # t.shape
 
         return _fused_trimul_with_residual(  # type: ignore[misc]
             pair,
@@ -1109,17 +1125,18 @@ class PairUpdateBlock(nn.Module):
             g_out_weight=_bf16(engine.proj_gate.weight),
             mask=pair_attention_mask,
             eps=_EPS,
-        )
+        )  # pair.shape
 
     def forward(self, pair: Tensor, pair_attention_mask: Tensor | None = None) -> Tensor:
+        # pair: (b, l, l, d_pair); pair_attention_mask: (b, l, l) or None.
         if self._can_use_fused_trimul_with_residual(pair):
-            pair = self._fused_trimul_with_residual(pair, "outgoing", pair_attention_mask)
-            pair = self._fused_trimul_with_residual(pair, "incoming", pair_attention_mask)
+            pair = self._fused_trimul_with_residual(pair, "outgoing", pair_attention_mask)  # (b, l, l, d_pair)
+            pair = self._fused_trimul_with_residual(pair, "incoming", pair_attention_mask)  # (b, l, l, d_pair)
         else:
-            pair = self.row_drop(pair, self.tri_mul_out(pair, mask=pair_attention_mask))
-            pair = self.row_drop(pair, self.tri_mul_in(pair, mask=pair_attention_mask))
-        pair = self.pair_transition(pair)
-        return pair
+            pair = self.row_drop(pair, self.tri_mul_out(pair, mask=pair_attention_mask))  # (b, l, l, d_pair)
+            pair = self.row_drop(pair, self.tri_mul_in(pair, mask=pair_attention_mask))  # (b, l, l, d_pair)
+        pair = self.pair_transition(pair)  # (b, l, l, d_pair)
+        return pair  # (b, l, l, d_pair)
 
 
 class FoldingTrunk(nn.Module):
@@ -1145,22 +1162,23 @@ class FoldingTrunk(nn.Module):
     def forward(self, pair: Tensor, pair_attention_mask: Tensor | None = None) -> Tensor:
         # Cast the pair tensor to BF16 when the fused triangle backend is enabled
         # (its bwd kernel requires bf16). Other backends keep the input dtype.
+        # pair: (b, l, l, d_pair); pair_attention_mask: (b, l, l) or None.
         orig_dtype = pair.dtype
         fused_on = (
             len(self.blocks) > 0
             and getattr(self.blocks[0], "_kernel_backend", None) == BACKEND_FUSED
         )
         if pair.is_cuda and fused_on and orig_dtype != torch.bfloat16:
-            pair = pair.to(torch.bfloat16)
+            pair = pair.to(torch.bfloat16)  # (b, l, l, d_pair)
         for block in self.blocks:
             fn = partial(block, pair_attention_mask=pair_attention_mask)
             if torch.is_grad_enabled():
-                pair = checkpoint(fn, pair, use_reentrant=False)  # pyright: ignore
+                pair = checkpoint(fn, pair, use_reentrant=False)  # pyright: ignore; (b, l, l, d_pair)
             else:
-                pair = fn(pair)
+                pair = fn(pair)  # (b, l, l, d_pair)
         if pair.dtype != orig_dtype:
-            pair = pair.to(orig_dtype)
-        return pair
+            pair = pair.to(orig_dtype)  # (b, l, l, d_pair)
+        return pair  # (b, l, l, d_pair)
 
 
 # ===========================================================================
@@ -1201,28 +1219,29 @@ class OuterProductMean(nn.Module):
         self._chunk_size = chunk_size
 
     def forward(self, m: Tensor, msa_attention_mask: Tensor) -> Tensor:
-        m_norm = self.norm(m)
-        x = self.W(m_norm) * msa_attention_mask.unsqueeze(-1).to(m_norm.dtype)
-        a, b = x.chunk(2, dim=-1)
-        mask_f = msa_attention_mask.to(a.dtype)
-        n_valid = (mask_f @ mask_f.transpose(-1, -2)).unsqueeze(-1).clamp(min=1.0)
+        # m: (b, l, m_depth, d_msa); msa_attention_mask: (b, l, m_depth); d_h = d_hidden.
+        m_norm = self.norm(m)  # (b, l, m_depth, d_msa)
+        x = self.W(m_norm) * msa_attention_mask.unsqueeze(-1).to(m_norm.dtype)  # (b, l, m_depth, 2 * d_h)
+        a, b = x.chunk(2, dim=-1)  # each (batch, l, m_depth, d_h)
+        mask_f = msa_attention_mask.to(a.dtype)  # (batch, l, m_depth)
+        n_valid = (mask_f @ mask_f.transpose(-1, -2)).unsqueeze(-1).clamp(min=1.0)  # (batch, l, l, 1)
         if self._chunk_size is None:
-            outer = torch.einsum("bimc,bjmd->bijcd", a, b).flatten(-2)
+            outer = torch.einsum("bimc,bjmd->bijcd", a, b).flatten(-2)  # (batch, l, l, d_h * d_h)
             if self.divide_outer_before_proj:
-                return self.Wout(outer / n_valid)
-            return self.Wout(outer) / n_valid
+                return self.Wout(outer / n_valid)  # (batch, l, l, d_pair)
+            return self.Wout(outer) / n_valid  # (batch, l, l, d_pair)
         # Chunk along the left (i) axis so the peak einsum intermediate is
         # X uses shape (b, chunk, l, c, d) instead of (b, l, l, c, d).
         length = a.shape[1]
         out_chunks: list[Tensor] = []
         for start in range(0, length, self._chunk_size):
             end = min(start + self._chunk_size, length)
-            outer_chunk = torch.einsum("bimc,bjmd->bijcd", a[:, start:end], b).flatten(-2)
+            outer_chunk = torch.einsum("bimc,bjmd->bijcd", a[:, start:end], b).flatten(-2)  # (batch, l_c, l, d_h * d_h)
             if self.divide_outer_before_proj:
                 out_chunks.append(self.Wout(outer_chunk / n_valid[:, start:end]))
             else:
                 out_chunks.append(self.Wout(outer_chunk) / n_valid[:, start:end])
-        return torch.cat(out_chunks, dim=1)
+        return torch.cat(out_chunks, dim=1)  # (batch, l, l, d_pair)
 
 
 class MSAPairWeightedAveraging(nn.Module):
@@ -1252,18 +1271,18 @@ class MSAPairWeightedAveraging(nn.Module):
         batch_size, length, depth, _ = msa_repr.shape
         n_heads, head_width = self.n_heads, self.head_width
 
-        msa_normed = self.norm_single(msa_repr)
+        msa_normed = self.norm_single(msa_repr)  # (b, l, m, d_msa)
         bias = self.compute_bias(pair_repr)  # A has shape (b, l, l, n_heads).
-        bias.masked_fill_(~pair_attention_mask.unsqueeze(-1).bool(), -1e5)
-        attn = torch.softmax(bias, dim=-2)  # softmax over j
+        bias.masked_fill_(~pair_attention_mask.unsqueeze(-1).bool(), -1e5)  # (b, l, l, n_heads)
+        attn = torch.softmax(bias, dim=-2)  # softmax over j; (b, l, l, n_heads)
 
-        v = self.Wv(msa_normed).reshape(batch_size, length, depth, n_heads, head_width)
+        v = self.Wv(msa_normed).reshape(batch_size, length, depth, n_heads, head_width)  # (b, l, m, n_heads, head_width)
         gate = torch.sigmoid(self.Wgate(msa_normed)).reshape(
             batch_size, length, depth, n_heads, head_width
-        )
+        )  # (b, l, m, n_heads, head_width)
 
-        output = torch.einsum("bijh,bjmhd,bimhd->bimhd", attn, v, gate)
-        return self.Wout(output.reshape(batch_size, length, depth, n_heads * head_width))
+        output = torch.einsum("bijh,bjmhd,bimhd->bimhd", attn, v, gate)  # (b, l, m, n_heads, head_width)
+        return self.Wout(output.reshape(batch_size, length, depth, n_heads * head_width))  # (b, l, m, d_msa)
 
 
 # ===========================================================================
@@ -1283,10 +1302,11 @@ class TransitionLayer(nn.Module):
         self.out_proj = nn.Linear(hidden, d_model, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = self.norm(x)
-        a = self.a_proj(x)
-        b = self.b_proj(x)
-        return self.out_proj(F.silu(a) * b)
+        # x: (..., d_model); d_hidden = n * d_model.
+        x = self.norm(x)  # (..., d_model)
+        a = self.a_proj(x)  # (..., d_hidden)
+        b = self.b_proj(x)  # (..., d_hidden)
+        return self.out_proj(F.silu(a) * b)  # (..., d_model)
 
 
 # ===========================================================================
@@ -1302,14 +1322,15 @@ class AdaptiveLayerNorm(nn.Module):
         self.d_model = d_model
         self.d_cond = d_cond
         self.eps = eps
-        self.s_scale = nn.Parameter(torch.ones(d_cond))
+        self.s_scale = nn.Parameter(torch.ones(d_cond))  # (d_cond,)
         self.s_gate = nn.Linear(d_cond, d_model, bias=True)
         self.s_shift = nn.Linear(d_cond, d_model, bias=False)
 
     def forward(self, a: Tensor, s: Tensor) -> Tensor:
-        a_norm = F.layer_norm(a, (self.d_model,), None, None, self.eps)
-        s_norm = F.layer_norm(s, (self.d_cond,), self.s_scale, None, self.eps)
-        return torch.sigmoid(self.s_gate(s_norm)) * a_norm + self.s_shift(s_norm)
+        # a: (..., d_model); s: (..., d_cond) with broadcast-compatible leading axes.
+        a_norm = F.layer_norm(a, (self.d_model,), None, None, self.eps)  # a.shape
+        s_norm = F.layer_norm(s, (self.d_cond,), self.s_scale, None, self.eps)  # s.shape
+        return torch.sigmoid(self.s_gate(s_norm)) * a_norm + self.s_shift(s_norm)  # broadcast leading shape + (d_model,)
 
 
 # ===========================================================================
@@ -1326,12 +1347,13 @@ class FourierEmbedding(nn.Module):
     def __init__(self, c: int) -> None:
         super().__init__()
         self.c = c
-        self.register_buffer("w", torch.randn(c))
-        self.register_buffer("b", torch.randn(c))
+        self.register_buffer("w", torch.randn(c))  # (c,)
+        self.register_buffer("b", torch.randn(c))  # (c,)
 
     def forward(self, t_hat: Tensor) -> Tensor:
-        t = torch.as_tensor(t_hat, device=self.w.device, dtype=self.w.dtype).reshape(-1)
-        return torch.cos(2.0 * torch.pi * (t[:, None] * self.w[None, :] + self.b[None, :]))
+        # t_hat: scalar or arbitrary noise-time tensor; n = t_hat.numel().
+        t = torch.as_tensor(t_hat, device=self.w.device, dtype=self.w.dtype).reshape(-1)  # (n,)
+        return torch.cos(2.0 * torch.pi * (t[:, None] * self.w[None, :] + self.b[None, :]))  # (n, c)
 
 
 # ===========================================================================
@@ -1360,14 +1382,15 @@ class SwiGLU(nn.Module):
         self.hidden_features = hidden_features
 
     def forward(self, x: Tensor) -> Tensor:
-        x12 = self.w12(x)
-        x1, x2 = x12.split(self.hidden_features, dim=-1)
-        hidden = F.silu(x1)
+        # x: (..., in_features); d_hidden = hidden_features.
+        x12 = self.w12(x)  # (..., 2 * d_hidden)
+        x1, x2 = x12.split(self.hidden_features, dim=-1)  # each (..., d_hidden)
+        hidden = F.silu(x1)  # (..., d_hidden)
         # Without autograd the product can reuse the activation's buffer. On a pair tensor
         # that buffer is twice the pair representation. The values are the same either way.
-        hidden = hidden * x2 if torch.is_grad_enabled() else hidden.mul_(x2)
+        hidden = hidden * x2 if torch.is_grad_enabled() else hidden.mul_(x2)  # (..., d_hidden)
         del x12, x1, x2
-        return self.w3(hidden)
+        return self.w3(hidden)  # (..., out_features)
 
 
 class SwiGLUMLP(SwiGLU):
@@ -1386,8 +1409,9 @@ class SwiGLUMLP(SwiGLU):
 
 
 def _rotate_half(x: Tensor) -> Tensor:
-    x1, x2 = x.chunk(2, dim=-1)
-    return torch.cat((-x2, x1), dim=-1)
+    # x: (..., d_rot), with an even final width.
+    x1, x2 = x.chunk(2, dim=-1)  # each (..., d_rot / 2)
+    return torch.cat((-x2, x1), dim=-1)  # x.shape
 
 
 def apply_rotary_emb_3d(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
@@ -1399,12 +1423,12 @@ def apply_rotary_emb_3d(x: Tensor, cos: Tensor, sin: Tensor) -> Tensor:
         sin: S with shape (b, l, d / 2).
     """
     ro_dim = cos.shape[-1] * 2
-    cos = cos.unsqueeze(2).repeat(1, 1, 1, 2)
-    sin = sin.unsqueeze(2).repeat(1, 1, 1, 2)
+    cos = cos.unsqueeze(2).repeat(1, 1, 1, 2)  # (b, l, 1, ro_dim)
+    sin = sin.unsqueeze(2).repeat(1, 1, 1, 2)  # (b, l, 1, ro_dim)
     return torch.cat(
         [x[..., :ro_dim] * cos + _rotate_half(x[..., :ro_dim]) * sin, x[..., ro_dim:]],
         dim=-1,
-    )
+    )  # (b, l, h, d)
 
 
 @torch.compiler.disable
@@ -1418,6 +1442,7 @@ def build_3d_rope(
     uid_base_freq: float = 10.0,
 ) -> tuple[Tensor, Tensor]:
     """Build cos/sin for 3D RoPE + UID RoPE."""
+    # ref_pos: (b, a, 3); ref_space_uid: (b, a); s/u = spatial/UID pair counts.
     device = ref_pos.device
     batch_size, n_atoms = ref_pos.shape[:2]
     half_dim = head_dim // 2
@@ -1429,21 +1454,21 @@ def build_3d_rope(
             torch.arange(0, n_spatial_per_axis, dtype=torch.float32, device=device)
             / n_spatial_per_axis
         )
-    )
+    )  # (s,)
     uid_inv_freq = 1.0 / (
         uid_base_freq
         ** (torch.arange(0, n_uid_pairs, dtype=torch.float32, device=device) / n_uid_pairs)
-    )
+    )  # (u,)
 
-    pos_f32 = ref_pos.float()
-    spatial_freqs = torch.einsum("bna,k->bnak", pos_f32, spatial_inv_freq)
-    spatial_freqs = spatial_freqs.reshape(batch_size, n_atoms, n_spatial_total)
+    pos_f32 = ref_pos.float()  # (b, a, 3)
+    spatial_freqs = torch.einsum("bna,k->bnak", pos_f32, spatial_inv_freq)  # (b, a, 3, s)
+    spatial_freqs = spatial_freqs.reshape(batch_size, n_atoms, n_spatial_total)  # (b, a, 3 * s)
 
-    uid_f32 = ref_space_uid.float()
-    uid_freqs = torch.einsum("bn,k->bnk", uid_f32, uid_inv_freq)
+    uid_f32 = ref_space_uid.float()  # (b, a)
+    uid_freqs = torch.einsum("bn,k->bnk", uid_f32, uid_inv_freq)  # (b, a, u)
 
     n_active = n_spatial_total + n_uid_pairs
-    freqs = torch.cat([spatial_freqs, uid_freqs], dim=-1)
+    freqs = torch.cat([spatial_freqs, uid_freqs], dim=-1)  # (b, a, 3 * s + u)
 
     if n_active < half_dim:
         padding = torch.zeros(
@@ -1452,16 +1477,17 @@ def build_3d_rope(
             half_dim - n_active,
             device=device,
             dtype=torch.float32,
-        )
-        freqs = torch.cat([freqs, padding], dim=-1)
+        )  # (b, a, half_dim - n_active)
+        freqs = torch.cat([freqs, padding], dim=-1)  # (b, a, half_dim)
 
-    cos = freqs.cos().to(torch.bfloat16)
-    sin = freqs.sin().to(torch.bfloat16)
-    return cos, sin
+    cos = freqs.cos().to(torch.bfloat16)  # freqs.shape
+    sin = freqs.sin().to(torch.bfloat16)  # freqs.shape
+    return cos, sin  # each (b, a, max(3 * s + u, half_dim))
 
 
 def qk_norm(x: Tensor) -> Tensor:
-    return F.rms_norm(x, (x.size(-1),)).to(x.dtype)
+    # x: arbitrary leading dimensions and a final head-width axis.
+    return F.rms_norm(x, (x.size(-1),)).to(x.dtype)  # x.shape
 
 
 # ===========================================================================
@@ -1479,9 +1505,10 @@ class SwiGLUFFN(nn.Module):
         self.w_down = nn.Linear(hidden_size, d_model, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = x.to(self.w_up.weight.dtype)
-        x1, x2 = self.w_up(x).chunk(2, dim=-1)
-        return self.w_down(F.silu(x1) * x2)
+        # x: (..., d_model); d_hidden = w_down.in_features.
+        x = x.to(self.w_up.weight.dtype)  # (..., d_model)
+        x1, x2 = self.w_up(x).chunk(2, dim=-1)  # each (..., d_hidden)
+        return self.w_down(F.silu(x1) * x2)  # (..., d_model)
 
 
 # ===========================================================================
@@ -1524,7 +1551,7 @@ class SWA3DRoPEAttention(nn.Module):
         # indices: (t,) flat positions of real atoms; cu_seqlens: (b + 1,) int32 row offsets.
         indices, cu_seqlens, max_seqlen = attention_params[2:5]
         flat_shape = (batch_size * n_atoms, self.n_heads, self.head_dim)
-        q, k, v = q.reshape(flat_shape), k.reshape(flat_shape), v.reshape(flat_shape)
+        q, k, v = q.reshape(flat_shape), k.reshape(flat_shape), v.reshape(flat_shape)  # each (b * n_atoms, h, d_h)
         has_padding = indices.shape[0] != batch_size * n_atoms
         if has_padding:
             q, k, v = q[indices], k[indices], v[indices]  # each (t, h, d_h)
@@ -1545,46 +1572,47 @@ class SWA3DRoPEAttention(nn.Module):
         )  # (t, h, d_h)
         if has_padding:
             out = attended.new_zeros(flat_shape)  # (b * n_atoms, h, d_h)
-            out[indices] = attended
+            out[indices] = attended  # (t, h, d_h)
         else:
-            out = attended
-        return out.view(batch_size, n_atoms, self.n_heads, self.head_dim)
+            out = attended  # (b * n_atoms, h, d_h)
+        return out.view(batch_size, n_atoms, self.n_heads, self.head_dim)  # (b, n_atoms, h, d_h)
 
     def forward(self, x: Tensor, attention_params: tuple) -> Tensor:
+        # x: (b, a, d_model); h = n_heads, d_h = head_dim; r is rotary-pair count.
         batch_size, n_atoms = x.shape[:2]
-        cos, sin = attention_params[0], attention_params[1]
+        cos, sin = attention_params[0], attention_params[1]  # each (b, a, r)
 
-        x_input = x
-        qkv = self.Wqkv(x)
-        qkv = qkv.view(batch_size, n_atoms, 3, self.n_heads, self.head_dim).permute(2, 0, 1, 3, 4)
-        q, k, v = qkv.unbind(0)
-        q, k = qk_norm(q), qk_norm(k)
+        x_input = x  # (b, a, d_model)
+        qkv = self.Wqkv(x)  # (b, a, 3 * d_model)
+        qkv = qkv.view(batch_size, n_atoms, 3, self.n_heads, self.head_dim).permute(2, 0, 1, 3, 4)  # (3, b, a, h, d_h)
+        q, k, v = qkv.unbind(0)  # each (b, a, h, d_h)
+        q, k = qk_norm(q), qk_norm(k)  # each (b, a, h, d_h)
 
-        q = apply_rotary_emb_3d(q, cos, sin)
-        k = apply_rotary_emb_3d(k, cos, sin)
+        q = apply_rotary_emb_3d(q, cos, sin)  # (b, a, h, d_h)
+        k = apply_rotary_emb_3d(k, cos, sin)  # (b, a, h, d_h)
 
         input_dtype = q.dtype
         if q.dtype not in (torch.float16, torch.bfloat16):
-            q, k, v = q.bfloat16(), k.bfloat16(), v.bfloat16()
+            q, k, v = q.bfloat16(), k.bfloat16(), v.bfloat16()  # each (b, a, h, d_h)
 
         # ESMFold2 does not advertise FlashAttention. Keep this atom path on
         # PyTorch. Models that advertise FlashAttention dispatch through the
         # precompiled Hugging Face kernels interface in fastplms.attention.
         if self._atom_attention == ATOM_ATTENTION_WINDOWED:
-            out = self._windowed_attention(q, k, v, attention_params)
+            out = self._windowed_attention(q, k, v, attention_params)  # (b, a, h, d_h)
         else:
-            q_t = q.transpose(1, 2)
-            k_t = k.transpose(1, 2)
-            v_t = v.transpose(1, 2)
-            attn = torch.matmul(q_t, k_t.transpose(-2, -1)) * self.scale
-            attn = F.softmax(attn, dim=-1)
-            out = torch.matmul(attn, v_t).transpose(1, 2)
+            q_t = q.transpose(1, 2)  # (b, h, a, d_h)
+            k_t = k.transpose(1, 2)  # (b, h, a, d_h)
+            v_t = v.transpose(1, 2)  # (b, h, a, d_h)
+            attn = torch.matmul(q_t, k_t.transpose(-2, -1)) * self.scale  # (b, h, a, a)
+            attn = F.softmax(attn, dim=-1)  # (b, h, a, a)
+            out = torch.matmul(attn, v_t).transpose(1, 2)  # (b, a, h, d_h)
 
         out = out.to(input_dtype).reshape(  # type: ignore[union-attr]
             batch_size, n_atoms, -1
-        )
-        out = out * torch.sigmoid(self.gate_proj(x_input))
-        return self.out_proj(out)
+        )  # (b, a, d_model)
+        out = out * torch.sigmoid(self.gate_proj(x_input))  # (b, a, d_model)
+        return self.out_proj(out)  # (b, a, d_model)
 
 
 # ===========================================================================
@@ -1593,11 +1621,13 @@ class SWA3DRoPEAttention(nn.Module):
 
 
 def _rms_adaln_raw(x: Tensor, scale: Tensor, shift: Tensor) -> Tensor:
-    return F.rms_norm(x, (x.shape[-1],)) * (1 + scale) + shift
+    # x, scale, shift: broadcast-compatible arrays; normalize x final axis.
+    return F.rms_norm(x, (x.shape[-1],)) * (1 + scale) + shift  # broadcast(x.shape, scale.shape, shift.shape)
 
 
 def _gated_residual_raw(x: Tensor, gate: Tensor, y: Tensor) -> Tensor:
-    return x + gate * y
+    # x, gate, y: broadcast-compatible arrays.
+    return x + gate * y  # broadcast(x.shape, gate.shape, y.shape)
 
 
 class SWAAtomBlock(nn.Module):
@@ -1619,7 +1649,7 @@ class SWAAtomBlock(nn.Module):
         self.ffn_norm = nn.RMSNorm(d_atom, elementwise_affine=False)
 
         adaln_linear = nn.Linear(d_atom, 6 * d_atom, bias=False)
-        nn.init.zeros_(adaln_linear.weight)
+        nn.init.zeros_(adaln_linear.weight)  # (6 * d_atom, d_atom)
         self.adaln_modulation = nn.Sequential(nn.SiLU(), adaln_linear)
 
         self.attn = SWA3DRoPEAttention(d_atom, n_heads, half_window=half_window)
@@ -1631,19 +1661,20 @@ class SWAAtomBlock(nn.Module):
         )
 
     def forward(self, x: Tensor, c_l: Tensor, attention_params: tuple) -> Tensor:
-        mod = self.adaln_modulation(c_l)
+        # x: (b, a, d_atom); c_l: (b, d_atom) or (b, a, d_atom).
+        mod = self.adaln_modulation(c_l)  # c_l.shape[:-1] + (6 * d_atom,)
         if mod.dim() == 2:
-            mod = mod.unsqueeze(1)
-        shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = mod.chunk(6, dim=-1)
+            mod = mod.unsqueeze(1)  # (b, 1, 6 * d_atom)
+        shift_a, scale_a, gate_a, shift_f, scale_f, gate_f = mod.chunk(6, dim=-1)  # each (b, 1 or a, d_atom)
 
-        attn_input = self._rms_adaln(x, scale_a, shift_a)
-        attn_out = self.attn(attn_input, attention_params)
-        x = self._gated_residual(x, gate_a, attn_out)
+        attn_input = self._rms_adaln(x, scale_a, shift_a)  # (b, a, d_atom)
+        attn_out = self.attn(attn_input, attention_params)  # (b, a, d_atom)
+        x = self._gated_residual(x, gate_a, attn_out)  # (b, a, d_atom)
 
-        ffn_input = self._rms_adaln(x, scale_f, shift_f)
-        ffn_out = self.ffn(ffn_input)
-        x = self._gated_residual(x, gate_f, ffn_out)
-        return x
+        ffn_input = self._rms_adaln(x, scale_f, shift_f)  # (b, a, d_atom)
+        ffn_out = self.ffn(ffn_input)  # (b, a, d_atom)
+        x = self._gated_residual(x, gate_f, ffn_out)  # (b, a, d_atom)
+        return x  # (b, a, d_atom)
 
 
 class SWAAtomTransformer(nn.Module):
@@ -1699,14 +1730,15 @@ class SWAAtomTransformer(nn.Module):
         attention_params: tuple,
         return_intermediates: bool = False,
     ) -> Tensor | tuple[Tensor, list[Tensor]]:
+        # q_l/c_l: (b, a, d_atom); each saved intermediate has the same shape.
         intermediates: list[Tensor] = []
         for block in self.blocks:
-            q_l = block(q_l, c_l, attention_params)
+            q_l = block(q_l, c_l, attention_params)  # (b, a, d_atom)
             if return_intermediates:
                 intermediates.append(q_l)
         if return_intermediates:
-            return q_l, intermediates
-        return q_l
+            return q_l, intermediates  # q_l: (b, a, d_atom); optional list contains tensors of that shape
+        return q_l  # q_l: (b, a, d_atom); optional list contains tensors of that shape
 
 
 # ===========================================================================
@@ -1721,13 +1753,14 @@ def _prepare_atom_encoder_metadata(
     num_diffusion_samples: int,
 ) -> tuple[Tensor, Tensor, Tensor, int, int]:
     """Prepare mask-derived atom metadata outside compiled diffusion graphs."""
-    mask_exp = atom_attention_mask.repeat_interleave(num_diffusion_samples, 0)
-    seqlens = mask_exp.sum(dim=-1, dtype=torch.int32)
-    indices = torch.nonzero(mask_exp.flatten(), as_tuple=False).flatten()
+    # atom_attention_mask/atom_to_token: (b, a); bs = b * num_diffusion_samples.
+    mask_exp = atom_attention_mask.repeat_interleave(num_diffusion_samples, 0)  # (bs, a)
+    seqlens = mask_exp.sum(dim=-1, dtype=torch.int32)  # (bs,)
+    indices = torch.nonzero(mask_exp.flatten(), as_tuple=False).flatten()  # (n_present,)
     max_seqlen = int(seqlens.max().item())
-    cu_seqlens = F.pad(torch.cumsum(seqlens, dim=0, dtype=torch.int32), (1, 0))
+    cu_seqlens = F.pad(torch.cumsum(seqlens, dim=0, dtype=torch.int32), (1, 0))  # (bs + 1,)
     n_tokens = int(atom_to_token.max().item()) + 1
-    return mask_exp, indices, cu_seqlens, max_seqlen, n_tokens
+    return mask_exp, indices, cu_seqlens, max_seqlen, n_tokens  # (bs, a), (n_present,), (bs + 1,), scalar integers
 
 
 class ESMFold2AtomEncoder(nn.Module):
@@ -1805,6 +1838,8 @@ class ESMFold2AtomEncoder(nn.Module):
         ``inference_cache`` caches step-invariant tensors (c_base, 3D RoPE,
         attention indices, n_tokens) across diffusion steps.
         """
+        # ref_pos: (b, a, 3); ref_element: (b, a, 128); chars: (b, a, 4, 64); other atom inputs: (b, a).
+        # bs = b * samples; d_out = d_token for structure prediction, otherwise d_token / 2.
         batch_size, n_atoms = ref_pos.shape[:2]
 
         layer_cache = None
@@ -1821,46 +1856,46 @@ class ESMFold2AtomEncoder(nn.Module):
                     ref_atom_name_chars.reshape(batch_size, n_atoms, MAX_CHARS * CHAR_VOCAB_SIZE),
                 ],
                 dim=-1,
-            )
-            c_base = self.atom_norm(self.atom_linear(atom_feats))
-            cos, sin = self.atom_transformer._build_3d_rope(ref_pos, ref_space_uid)
-            cos = cos.repeat_interleave(num_diffusion_samples, 0)
-            sin = sin.repeat_interleave(num_diffusion_samples, 0)
+            )  # (b, a, d_atom_features)
+            c_base = self.atom_norm(self.atom_linear(atom_feats))  # (b, a, d_atom)
+            cos, sin = self.atom_transformer._build_3d_rope(ref_pos, ref_space_uid)  # each (b, a, rotary_pairs)
+            cos = cos.repeat_interleave(num_diffusion_samples, 0)  # (bs, a, rotary_pairs)
+            sin = sin.repeat_interleave(num_diffusion_samples, 0)  # (bs, a, rotary_pairs)
             mask_exp, indices, cu_seqlens, max_seqlen, n_tokens = (
                 _prepare_atom_encoder_metadata(
                     atom_attention_mask,
                     atom_to_token,
                     num_diffusion_samples,
                 )
-            )
+            )  # (bs, a), (n_present,), (bs + 1,), integers
             attention_params = (cos, sin, indices, cu_seqlens, max_seqlen)
             if layer_cache is not None:
-                layer_cache["c_base"] = c_base
+                layer_cache["c_base"] = c_base  # (b, a, d_atom)
                 layer_cache["attention_params"] = attention_params
-                layer_cache["mask_exp"] = mask_exp
+                layer_cache["mask_exp"] = mask_exp  # (bs, a)
                 layer_cache["n_tokens"] = n_tokens
                 layer_cache["atom_to_token_exp"] = atom_to_token.repeat_interleave(
                     num_diffusion_samples, 0
-                )
+                )  # (bs, a)
         else:
-            c_base = layer_cache["c_base"]
+            c_base = layer_cache["c_base"]  # (b, a, d_atom)
             attention_params = layer_cache["attention_params"]
-            mask_exp = layer_cache["mask_exp"]
+            mask_exp = layer_cache["mask_exp"]  # (bs, a)
             n_tokens = layer_cache["n_tokens"]
 
-        c = c_base
+        c = c_base  # (b, a, d_atom)
 
-        q = c
+        q = c  # (b, a, d_atom)
 
         if self.structure_prediction and r_l is not None:
-            q = q.repeat_interleave(num_diffusion_samples, 0)
+            q = q.repeat_interleave(num_diffusion_samples, 0)  # (bs, a, d_atom)
             if pred_r1 is None:
-                pred_r1 = torch.zeros_like(r_l)
-            r_input = torch.cat([r_l, pred_r1], dim=-1)
-            r_to_q = self.coords_linear(r_input)
-            q = q + r_to_q
+                pred_r1 = torch.zeros_like(r_l)  # r_l.shape = (bs, a, 3)
+            r_input = torch.cat([r_l, pred_r1], dim=-1)  # (bs, a, 6)
+            r_to_q = self.coords_linear(r_input)  # (bs, a, d_atom)
+            q = q + r_to_q  # (bs, a, d_atom)
 
-        c = c.repeat_interleave(num_diffusion_samples, 0)
+        c = c.repeat_interleave(num_diffusion_samples, 0)  # (bs, a, d_atom)
 
         result = self.atom_transformer(
             q_l=q,
@@ -1869,19 +1904,19 @@ class ESMFold2AtomEncoder(nn.Module):
             return_intermediates=return_intermediates,
         )
         if return_intermediates:
-            q, intermediates = result
+            q, intermediates = result  # q: (bs, a, d_atom); list of same-shaped tensors
         else:
-            q = result
+            q = result  # (bs, a, d_atom)
             intermediates = []
 
-        q_to_a = F.relu(self.atom_to_token_linear(q))
+        q_to_a = F.relu(self.atom_to_token_linear(q))  # (bs, a, d_out)
         if layer_cache is not None and "atom_to_token_exp" in layer_cache:
-            atom_to_token_exp = layer_cache["atom_to_token_exp"]
+            atom_to_token_exp = layer_cache["atom_to_token_exp"]  # (bs, a)
         else:
-            atom_to_token_exp = atom_to_token.repeat_interleave(num_diffusion_samples, 0)
-        a = scatter_atom_to_token(q_to_a, atom_to_token_exp, n_tokens, atom_mask=mask_exp.bool())
+            atom_to_token_exp = atom_to_token.repeat_interleave(num_diffusion_samples, 0)  # (bs, a)
+        a = scatter_atom_to_token(q_to_a, atom_to_token_exp, n_tokens, atom_mask=mask_exp.bool())  # (bs, n_tokens, d_out)
 
-        return a, q, c, attention_params, intermediates
+        return a, q, c, attention_params, intermediates  # a: (bs, l, d_out); q/c: (bs, a, d_atom); metadata tuple and intermediate list
 
 
 # ===========================================================================
@@ -1935,10 +1970,11 @@ class ESMFold2AtomDecoder(nn.Module):
         return_intermediates: bool = False,
     ) -> tuple[Tensor, list[Tensor]]:
         """Returns (r_update, intermediates)."""
-        atom_to_token_exp = atom_to_token.repeat_interleave(num_diffusion_samples, 0)
-        a_to_q = self.token_to_atom_linear(a_i)
-        a_to_q = gather_token_to_atom(a_to_q, atom_to_token_exp)
-        q_l = q_l + a_to_q
+        # a_i: (bs, l, d_token); q_l/c_l: (bs, a, d_atom); atom_to_token: (b, a); bs = b * samples.
+        atom_to_token_exp = atom_to_token.repeat_interleave(num_diffusion_samples, 0)  # (bs, a)
+        a_to_q = self.token_to_atom_linear(a_i)  # (bs, l, d_atom)
+        a_to_q = gather_token_to_atom(a_to_q, atom_to_token_exp)  # (bs, a, d_atom)
+        q_l = q_l + a_to_q  # (bs, a, d_atom)
 
         result = self.atom_transformer(
             q_l=q_l,
@@ -1947,13 +1983,13 @@ class ESMFold2AtomDecoder(nn.Module):
             return_intermediates=return_intermediates,
         )
         if return_intermediates:
-            q_l, intermediates = result
+            q_l, intermediates = result  # q_l: (bs, a, d_atom); list of same-shaped tensors
         else:
-            q_l = result
+            q_l = result  # (bs, a, d_atom)
             intermediates = []
 
-        r_l = self.output_linear(self.norm(q_l))
-        return r_l, intermediates
+        r_l = self.output_linear(self.norm(q_l))  # (bs, a, 3)
+        return r_l, intermediates  # r_l: (bs, a, 3); intermediate tensors: (bs, a, d_atom)
 
 
 # ===========================================================================
@@ -1983,8 +2019,8 @@ class AttentionPairBias(nn.Module):
             self.adaln = AdaptiveLayerNorm(d_model, d_cond, eps=1e-5)
             self.out_gate = nn.Linear(d_cond, d_model, bias=True)
             # adaln init: weight=0, bias=-2
-            nn.init.zeros_(self.out_gate.weight)
-            nn.init.constant_(self.out_gate.bias, -2.0)
+            nn.init.zeros_(self.out_gate.weight)  # (d_model, d_cond)
+            nn.init.constant_(self.out_gate.bias, -2.0)  # (d_model,)
         else:
             self.pre_norm = nn.LayerNorm(d_model, eps=1e-5)
 
@@ -2043,22 +2079,23 @@ class AttentionPairBias(nn.Module):
         conditions every denoising step on the same ``z``, so the PyTorch path
         projects the bias on the first step and reuses that tensor afterwards.
         """
+        # a: (bs, l, d_model); s: (bs, l, d_cond) or None; z: (b, l, l, d_pair) or (bs, l, l); bs = b * samples.
         bsz, n_queries, d_model = a.shape
 
-        x = self.adaln(a, s) if s is not None else self.pre_norm(a)
+        x = self.adaln(a, s) if s is not None else self.pre_norm(a)  # (bs, l, d_model)
 
         n_keys = x.shape[1]
-        q = self.q_proj(x).view(bsz, n_queries, self.num_heads, self.head_dim)
-        kv = self.kv_proj(x)
-        k, v = kv.chunk(2, dim=-1)
-        k = k.view(bsz, n_keys, self.num_heads, self.head_dim)
-        v = v.view(bsz, n_keys, self.num_heads, self.head_dim)
+        q = self.q_proj(x).view(bsz, n_queries, self.num_heads, self.head_dim)  # (bs, l, h, d_h)
+        kv = self.kv_proj(x)  # (bs, l, 2 * d_model)
+        k, v = kv.chunk(2, dim=-1)  # each (bs, l, d_model)
+        k = k.view(bsz, n_keys, self.num_heads, self.head_dim)  # (bs, l, h, d_h)
+        v = v.view(bsz, n_keys, self.num_heads, self.head_dim)  # (bs, l, h, d_h)
 
         use_fused_kernel = self._can_use_fused_pair_bias(z, n_queries, beta)
         use_cueq_kernel = not use_fused_kernel and self._can_use_cueq_pair_bias(z, n_queries, beta)
-        cached_pair_bias = None
+        cached_pair_bias = None  # (bs, l, l, h) or None
         if step_cache is not None and not use_fused_kernel and not use_cueq_kernel:
-            cached_pair_bias = step_cache.get("pair_bias")
+            cached_pair_bias = step_cache.get("pair_bias")  # (bs, l, l, h) or None
 
         # Expand z for num_diffusion_samples, unless its projection is already cached.
         if (
@@ -2073,21 +2110,21 @@ class AttentionPairBias(nn.Module):
             and attention_mask.shape[0] != bsz
             and num_diffusion_samples > 1
         ):
-            attention_mask = attention_mask.repeat_interleave(num_diffusion_samples, dim=0)
+            attention_mask = attention_mask.repeat_interleave(num_diffusion_samples, dim=0)  # (bs, l)
 
         if use_fused_kernel:
             kernel_mask = (
                 attention_mask
                 if attention_mask is not None
                 else torch.ones(bsz, n_queries, device=a.device, dtype=torch.bool)
-            )
-            pair_norm_w = self.pair_norm.weight
+            )  # (bs, l)
+            pair_norm_w = self.pair_norm.weight  # (d_pair,)
             pair_norm_b = (
                 self.pair_norm.bias
                 if self.pair_norm.bias is not None
                 else torch.zeros_like(pair_norm_w)
-            )
-            z_bf = z if z.dtype == torch.bfloat16 else z.to(torch.bfloat16)
+            )  # (d_pair,)
+            z_bf = z if z.dtype == torch.bfloat16 else z.to(torch.bfloat16)  # (bs, l, l, d_pair)
             bias = _fused_pair_bias(  # type: ignore[misc]
                 z_bf,
                 kernel_mask,
@@ -2095,26 +2132,26 @@ class AttentionPairBias(nn.Module):
                 num_heads=self.num_heads,
                 pair_norm_w=pair_norm_w,
                 pair_norm_b=pair_norm_b,
-            )  # A has shape (b, h, q, k).
-            q_bhqd = q.transpose(1, 2)
-            k_bhqd = k.transpose(1, 2)
-            v_bhqd = v.transpose(1, 2)
+            )  # bias: (bs, h, l, l)
+            q_bhqd = q.transpose(1, 2)  # (bs, h, l, d_h)
+            k_bhqd = k.transpose(1, 2)  # (bs, h, l, d_h)
+            v_bhqd = v.transpose(1, 2)  # (bs, h, l, d_h)
             attn_out = F.scaled_dot_product_attention(
                 q_bhqd, k_bhqd, v_bhqd, attn_mask=bias.to(q_bhqd.dtype)
-            )
-            g = torch.sigmoid(self.g_proj(x)).view(bsz, n_queries, self.num_heads, self.head_dim)
-            ctx = g * attn_out.transpose(1, 2)
-            out = self.out_proj(ctx.reshape(bsz, n_queries, d_model))
+            )  # (bs, h, l, d_h)
+            g = torch.sigmoid(self.g_proj(x)).view(bsz, n_queries, self.num_heads, self.head_dim)  # (bs, l, h, d_h)
+            ctx = g * attn_out.transpose(1, 2)  # (bs, l, h, d_h)
+            out = self.out_proj(ctx.reshape(bsz, n_queries, d_model))  # (bs, l, d_model)
             if s is not None:
-                out = torch.sigmoid(self.out_gate(s)) * out
-            return out
+                out = torch.sigmoid(self.out_gate(s)) * out  # (bs, l, d_model)
+            return out  # (bs, l, d_model)
 
         if use_cueq_kernel:
             kernel_mask = (
                 attention_mask
                 if attention_mask is not None
                 else torch.ones(bsz, n_queries, device=a.device, dtype=torch.bool)
-            )
+            )  # (bs, l)
             out, _ = _cue_attn_pair_bias(  # type: ignore[misc]
                 s=x,
                 q=q.transpose(1, 2),
@@ -2130,36 +2167,36 @@ class AttentionPairBias(nn.Module):
                 b_ln_z=self.pair_norm.bias,
                 return_z_proj=False,
                 is_cached_z_proj=False,
-            )
+            )  # out: (bs, l, d_model); unused kernel auxiliary
         else:
             # Standard attention with pair bias
-            g = torch.sigmoid(self.g_proj(x)).view(bsz, n_queries, self.num_heads, self.head_dim)
+            g = torch.sigmoid(self.g_proj(x)).view(bsz, n_queries, self.num_heads, self.head_dim)  # (bs, l, h, d_h)
 
-            logits = torch.einsum("... i h d, ... j h d -> ... i j h", q, k) * self.scale
+            logits = torch.einsum("... i h d, ... j h d -> ... i j h", q, k) * self.scale  # (bs, l, l, h)
 
             if cached_pair_bias is not None:
                 pair_bias = cached_pair_bias  # (b * samples, n, n, h)
             elif z.dim() == 4:
                 pair_bias = self.pair_bias_proj(self.pair_norm(z))  # (b * samples, n, n, h)
                 if step_cache is not None:
-                    step_cache["pair_bias"] = pair_bias
+                    step_cache["pair_bias"] = pair_bias  # (bs, l, l, h)
             else:
                 pair_bias = z.unsqueeze(-1)  # (b * samples, n, n, 1), a precomputed bias
-            logits = logits + pair_bias.to(dtype=logits.dtype)
+            logits = logits + pair_bias.to(dtype=logits.dtype)  # (bs, l, l, h)
 
             if attention_mask is not None:
                 min_val = torch.finfo(logits.dtype).min
-                mask_bias = torch.where(attention_mask.bool()[:, None, :, None], 0.0, min_val)
-                logits = logits + mask_bias.to(dtype=logits.dtype)
+                mask_bias = torch.where(attention_mask.bool()[:, None, :, None], 0.0, min_val)  # (bs, 1, l, 1)
+                logits = logits + mask_bias.to(dtype=logits.dtype)  # (bs, l, l, h)
 
-            attn = torch.softmax(logits, dim=-2).to(dtype=v.dtype)
-            ctx = torch.einsum("... i j h, ... j h d -> ... i h d", attn, v)
-            ctx = g * ctx
-            out = self.out_proj(ctx.reshape(bsz, n_queries, d_model))
+            attn = torch.softmax(logits, dim=-2).to(dtype=v.dtype)  # (bs, l, l, h)
+            ctx = torch.einsum("... i j h, ... j h d -> ... i h d", attn, v)  # (bs, l, h, d_h)
+            ctx = g * ctx  # (bs, l, h, d_h)
+            out = self.out_proj(ctx.reshape(bsz, n_queries, d_model))  # (bs, l, d_model)
 
         if s is not None:
-            out = torch.sigmoid(self.out_gate(s)) * out
-        return out
+            out = torch.sigmoid(self.out_gate(s)) * out  # (bs, l, d_model)
+        return out  # (bs, l, d_model)
 
 
 # ===========================================================================
@@ -2184,8 +2221,8 @@ class ConditionedTransitionBlock(nn.Module):
         if use_conditioning:
             self.adaln = AdaptiveLayerNorm(d_model, d_cond, eps=1e-5)
             self.output_gate = nn.Linear(d_cond, d_model, bias=True)
-            nn.init.zeros_(self.output_gate.weight)
-            nn.init.constant_(self.output_gate.bias, -2.0)
+            nn.init.zeros_(self.output_gate.weight)  # (d_model, d_cond)
+            nn.init.constant_(self.output_gate.bias, -2.0)  # (d_model,)
         else:
             self.pre_norm = nn.LayerNorm(d_model, eps=1e-5)
 
@@ -2193,15 +2230,16 @@ class ConditionedTransitionBlock(nn.Module):
         self.lin_out = nn.Linear(hidden, d_model, bias=False)
 
     def forward(self, a: Tensor, s: Tensor | None) -> Tensor:
-        x = self.adaln(a, s) if s is not None else self.pre_norm(a)
+        # a: (..., d_model); s: (..., d_cond) or None; d_hidden = lin_out.in_features.
+        x = self.adaln(a, s) if s is not None else self.pre_norm(a)  # (..., d_model)
 
-        swish_a, swish_b = self.lin_swish(x).chunk(2, dim=-1)
-        b = F.silu(swish_a) * swish_b
-        out = self.lin_out(b)
+        swish_a, swish_b = self.lin_swish(x).chunk(2, dim=-1)  # each (..., d_hidden)
+        b = F.silu(swish_a) * swish_b  # (..., d_hidden)
+        out = self.lin_out(b)  # (..., d_model)
 
         if s is not None:
-            out = torch.sigmoid(self.output_gate(s)) * out
-        return out
+            out = torch.sigmoid(self.output_gate(s)) * out  # (..., d_model)
+        return out  # (..., d_model)
 
 
 # ===========================================================================
@@ -2269,11 +2307,12 @@ class DiffusionTransformer(nn.Module):
         ``inference_cache`` must span only calls that share ``z``, as one
         ``sample`` call does; each block then keeps its pair bias across steps.
         """
+        # a: (bs, l, d_model); s: (bs, l, d_cond) or None; z follows AttentionPairBias contract.
         intermediates: list[Tensor] = []
         block_caches: dict[int, dict[str, Tensor]] | None = None
         if inference_cache is not None:
             block_caches = inference_cache.setdefault("token_pair_bias", {})
-        x = a
+        x = a  # (bs, l, d_model)
         for block_index, (attn, transition) in enumerate(
             zip(self.attn_blocks, self.transition_blocks, strict=True)
         ):
@@ -2286,11 +2325,11 @@ class DiffusionTransformer(nn.Module):
                 attention_mask=attention_mask,
                 num_diffusion_samples=num_diffusion_samples,
                 step_cache=step_cache,
-            )
-            x = x + transition(x, s)
+            )  # (bs, l, d_model)
+            x = x + transition(x, s)  # (bs, l, d_model)
             if return_intermediates:
                 intermediates.append(x)
-        return x, intermediates
+        return x, intermediates  # x: (bs, l, d_model); list of same-shaped intermediate tensors
 
 
 # ===========================================================================
@@ -2343,45 +2382,46 @@ class DiffusionConditioning(nn.Module):
         num_diffusion_samples: int = 1,
         inference_cache: dict[str, Tensor] | None = None,
     ) -> tuple[Tensor, Tensor]:
+        # z_trunk/relative_position_encoding: (b, l, l, c_z); s_inputs: (b or bs, l, c_s_inputs); bs = b * samples.
         sigma = self.sigma_data if sigma_data is None else float(sigma_data)
         base_batch = z_trunk.shape[0]
         target_batch = base_batch * num_diffusion_samples
 
         # z conditioning (cached across diffusion steps: independent of t_hat)
         if inference_cache is not None and "z" in inference_cache:
-            z = inference_cache["z"]
+            z = inference_cache["z"]  # (b, l, l, c_z)
         else:
-            z_rel = relative_position_encoding.to(dtype=torch.float32)
-            z = torch.cat([z_trunk.to(dtype=torch.float32), z_rel], dim=-1)
-            z = self.z_proj(self.z_input_norm(z))
+            z_rel = relative_position_encoding.to(dtype=torch.float32)  # (b, l, l, c_z)
+            z = torch.cat([z_trunk.to(dtype=torch.float32), z_rel], dim=-1)  # (b, l, l, 2 * c_z)
+            z = self.z_proj(self.z_input_norm(z))  # (b, l, l, c_z)
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 for block in self.z_transitions:
-                    z = z + block(z)
+                    z = z + block(z)  # (b, l, l, c_z)
             if inference_cache is not None:
-                inference_cache["z"] = z
+                inference_cache["z"] = z  # (b, l, l, c_z)
 
         # s conditioning
-        s_inputs_eff = s_inputs
+        s_inputs_eff = s_inputs  # (b or bs, l, c_s_inputs)
         if s_inputs_eff.shape[0] != target_batch:
-            s_inputs_eff = s_inputs_eff.repeat_interleave(num_diffusion_samples, 0)
+            s_inputs_eff = s_inputs_eff.repeat_interleave(num_diffusion_samples, 0)  # (bs, l, c_s_inputs)
 
-        s = self.s_proj(self.s_input_norm(s_inputs_eff.to(dtype=torch.float32)))
+        s = self.s_proj(self.s_input_norm(s_inputs_eff.to(dtype=torch.float32)))  # (bs, l, c_s)
 
         # Noise embedding
-        t = torch.as_tensor(t_hat, dtype=torch.float32, device=s.device).reshape(-1)
+        t = torch.as_tensor(t_hat, dtype=torch.float32, device=s.device).reshape(-1)  # (t_hat.numel(),)
         if t.numel() == 1:
-            t = t.expand(target_batch)
+            t = t.expand(target_batch)  # (bs,)
         elif t.shape[0] != target_batch:
-            t = t.repeat_interleave(num_diffusion_samples, 0)
-        t_noise = 0.25 * torch.log((t / sigma).clamp(min=1e-20))
-        n = self.fourier(t_noise)
-        n = self.noise_proj(self.noise_norm(n))
-        s = s + n.unsqueeze(1)
+            t = t.repeat_interleave(num_diffusion_samples, 0)  # (bs,)
+        t_noise = 0.25 * torch.log((t / sigma).clamp(min=1e-20))  # (bs,)
+        n = self.fourier(t_noise)  # (bs, fourier_dim)
+        n = self.noise_proj(self.noise_norm(n))  # (bs, c_s)
+        s = s + n.unsqueeze(1)  # (bs, l, c_s)
 
         for block in self.s_transitions:
-            s = s + block(s)
+            s = s + block(s)  # (bs, l, c_s)
 
-        return s, z
+        return s, z  # s: (bs, l, c_s); z: (b, l, l, c_z)
 
 
 # ===========================================================================
@@ -2453,7 +2493,7 @@ class DiffusionModule(nn.Module):
         )
 
         self.s_to_token = nn.Linear(c_token, c_token, bias=False)
-        nn.init.zeros_(self.s_to_token.weight)
+        nn.init.zeros_(self.s_to_token.weight)  # (c_token, c_token)
 
         # Token transformer (DiffusionTransformer with pair bias)
         self.token_transformer = DiffusionTransformer(
@@ -2499,11 +2539,12 @@ class DiffusionModule(nn.Module):
         return_atom_repr: bool = False,
         inference_cache: dict[str, Tensor] | None = None,
     ) -> dict[str, Tensor | None]:
+        # x_noisy: (bs, a, 3); ref/ID tensors retain base batch b; bs = b * samples; l tokens.
         bsz = x_noisy.shape[0]
         sigma = self.sigma_data if sigma_data is None else float(sigma_data)
-        t = torch.as_tensor(t_hat, dtype=torch.float32, device=x_noisy.device).reshape(-1)
+        t = torch.as_tensor(t_hat, dtype=torch.float32, device=x_noisy.device).reshape(-1)  # (t_hat.numel(),)
         if t.numel() == 1:
-            t = t.expand(bsz)
+            t = t.expand(bsz)  # (bs,)
 
         # Step 1: conditioning (pair z is cached across diffusion steps)
         s, z = self.conditioning(
@@ -2515,11 +2556,11 @@ class DiffusionModule(nn.Module):
             sigma_data=sigma,
             num_diffusion_samples=num_diffusion_samples,
             inference_cache=inference_cache,
-        )
+        )  # (bs, l, c_token), (b, l, l, c_z)
 
         # Step 2: normalize noisy coords
-        denom = torch.sqrt(t * t + sigma * sigma)
-        r_noisy = x_noisy / denom[:, None, None]
+        denom = torch.sqrt(t * t + sigma * sigma)  # (bs,)
+        r_noisy = x_noisy / denom[:, None, None]  # (bs, a, 3)
 
         # Step 3: atom encoder
         a, q_skip, c_skip, p_skip, enc_intermediates = self.atom_encoder(
@@ -2535,10 +2576,10 @@ class DiffusionModule(nn.Module):
             num_diffusion_samples=num_diffusion_samples,
             return_intermediates=return_atom_repr,
             inference_cache=inference_cache,
-        )
+        )  # a: (bs, l, c_token); q/c: (bs, a, c_atom); metadata and atom intermediate list
 
         # Step 4: add conditioned s
-        a = a + self.s_to_token(self.s_step_norm(s))
+        a = a + self.s_to_token(self.s_step_norm(s))  # (bs, l, c_token)
 
         # Step 5: token transformer
         a, _ = self.token_transformer(
@@ -2549,10 +2590,10 @@ class DiffusionModule(nn.Module):
             attention_mask=token_attention_mask,
             num_diffusion_samples=num_diffusion_samples,
             inference_cache=inference_cache,
-        )
+        )  # a: (bs, l, c_token); unused intermediate list
 
         # Step 6: token norm
-        a = self.token_norm(a)
+        a = self.token_norm(a)  # (bs, l, c_token)
 
         # Step 7: atom decoder
         r_update, dec_intermediates = self.atom_decoder(
@@ -2564,26 +2605,26 @@ class DiffusionModule(nn.Module):
             atom_attention_mask=ref_mask,
             num_diffusion_samples=num_diffusion_samples,
             return_intermediates=return_atom_repr,
-        )
+        )  # r_update: (bs, a, 3); atom intermediate list
 
         # Step 8: compute denoised output
         sigma2 = sigma * sigma
-        t2 = t * t
-        out = (sigma2 / (sigma2 + t2))[:, None, None] * x_noisy
-        out = out + ((sigma * t) / torch.sqrt(sigma2 + t2))[:, None, None] * r_update
+        t2 = t * t  # (bs,)
+        out = (sigma2 / (sigma2 + t2))[:, None, None] * x_noisy  # (bs, a, 3)
+        out = out + ((sigma * t) / torch.sqrt(sigma2 + t2))[:, None, None] * r_update  # (bs, a, 3)
 
         # Collect atom intermediates from encoder + decoder
-        atom_intermediates: Tensor | None = None
+        atom_intermediates: Tensor | None = None  # (bs, a, n_atom_blocks, c_atom) or None
         if return_atom_repr:
             all_ints = enc_intermediates + dec_intermediates
             if all_ints:
-                atom_intermediates = torch.stack(all_ints, dim=2)
+                atom_intermediates = torch.stack(all_ints, dim=2)  # (bs, a, n_atom_blocks, c_atom) or None
 
         return {
             "x_denoised": out,
             "token_repr": a if return_token_repr else None,
             "atom_intermediates": atom_intermediates,
-        }
+        }  # mapping: x_denoised (bs, a, 3); token_repr (bs, l, c_token) or None; atom intermediates as above
 
 
 # ===========================================================================
@@ -2647,24 +2688,24 @@ class DiffusionStructureHead(nn.Module):
                 [self.inference_s_max * self.sigma_data, 0.0],
                 device=device,
                 dtype=torch.float32,
-            )
+            )  # (steps + 1,)
         p = float(self.inference_p)
         inv_p = 1.0 / p
-        k = torch.arange(steps, device=device, dtype=torch.float32)
+        k = torch.arange(steps, device=device, dtype=torch.float32)  # (steps,)
         base = self.inference_s_max**inv_p + (k / (steps - 1)) * (
             self.inference_s_min**inv_p - self.inference_s_max**inv_p
-        )
-        schedule = self.sigma_data * base.pow(p)
-        return F.pad(schedule, (0, 1), value=0.0)
+        )  # (steps,)
+        schedule = self.sigma_data * base.pow(p)  # (steps,)
+        return F.pad(schedule, (0, 1), value=0.0)  # (steps + 1,)
 
     @staticmethod
     def _random_rotations(n: int, dtype: torch.dtype, device: torch.device) -> Tensor:
-        q = torch.randn((n, 4), dtype=dtype, device=device)
-        scale = torch.sqrt((q * q).sum(dim=1))
-        signs = torch.where(q[:, 0] < 0, -scale, scale)
-        q = q / signs[:, None]
-        r, i, j, k = torch.unbind(q, dim=-1)
-        two_s = 2.0 / (q * q).sum(dim=-1)
+        q = torch.randn((n, 4), dtype=dtype, device=device)  # (n, 4)
+        scale = torch.sqrt((q * q).sum(dim=1))  # (n,)
+        signs = torch.where(q[:, 0] < 0, -scale, scale)  # (n,)
+        q = q / signs[:, None]  # (n, 4)
+        r, i, j, k = torch.unbind(q, dim=-1)  # each (n,)
+        two_s = 2.0 / (q * q).sum(dim=-1)  # (n,)
         return torch.stack(
             (
                 1 - two_s * (j * j + k * k),
@@ -2678,51 +2719,53 @@ class DiffusionStructureHead(nn.Module):
                 1 - two_s * (i * i + j * j),
             ),
             dim=-1,
-        ).reshape(n, 3, 3)
+        ).reshape(n, 3, 3)  # (n, 3, 3)
 
     def _center_random_augmentation(
         self, x: Tensor, atom_mask: Tensor, second_coords: Tensor | None = None
     ) -> tuple[Tensor, Tensor | None]:
         """Algorithm 19: center + random rotation + translation."""
+        # x/second_coords: (b, a, 3); atom_mask: (b, a).
         bsz = x.shape[0]
         mask = atom_mask.unsqueeze(-1)  # M has shape (b, a, 1).
-        denom = mask.sum(dim=1, keepdim=True).clamp(min=1)
-        mean = (x * mask).sum(dim=1, keepdim=True) / denom
-        x = x - mean
+        denom = mask.sum(dim=1, keepdim=True).clamp(min=1)  # (b, 1, 1)
+        mean = (x * mask).sum(dim=1, keepdim=True) / denom  # (b, 1, 3)
+        x = x - mean  # (b, a, 3)
         if second_coords is not None:
-            second_coords = second_coords - mean
+            second_coords = second_coords - mean  # (b, a, 3)
 
-        r = self._random_rotations(bsz, x.dtype, x.device)
-        x = torch.einsum("bmd,bds->bms", x, r)
+        r = self._random_rotations(bsz, x.dtype, x.device)  # (b, 3, 3)
+        x = torch.einsum("bmd,bds->bms", x, r)  # (b, a, 3)
         if second_coords is not None:
-            second_coords = torch.einsum("bmd,bds->bms", second_coords, r)
+            second_coords = torch.einsum("bmd,bds->bms", second_coords, r)  # (b, a, 3)
 
-        t = torch.randn_like(x[:, 0:1, :])
-        x = x + t
+        t = torch.randn_like(x[:, 0:1, :])  # (b, 1, 3)
+        x = x + t  # (b, a, 3)
         if second_coords is not None:
-            second_coords = second_coords + t
-        return x, second_coords
+            second_coords = second_coords + t  # (b, a, 3)
+        return x, second_coords  # each (b, a, 3), or second_coords None
 
     @staticmethod
     def _weighted_rigid_align(x: Tensor, x_gt: Tensor, w: Tensor, mask: Tensor) -> Tensor:
         """Kabsch alignment: align x to x_gt with weights w."""
+        # x/x_gt: (b, n, 3); w/mask: (b, n).
         w = (mask * w).unsqueeze(-1)  # W has shape (b, n, 1).
-        denom = w.sum(dim=-2, keepdim=True).clamp(min=1e-8)
-        mu = (x * w).sum(dim=-2, keepdim=True) / denom
-        mu_gt = (x_gt * w).sum(dim=-2, keepdim=True) / denom
-        x_c = x - mu
-        xgt_c = x_gt - mu_gt
-        covariance = torch.einsum("bni,bnj->bij", w * xgt_c, x_c)
-        covariance_f32 = covariance.float()
+        denom = w.sum(dim=-2, keepdim=True).clamp(min=1e-8)  # (b, 1, 1)
+        mu = (x * w).sum(dim=-2, keepdim=True) / denom  # (b, 1, 3)
+        mu_gt = (x_gt * w).sum(dim=-2, keepdim=True) / denom  # (b, 1, 3)
+        x_c = x - mu  # (b, n, 3)
+        xgt_c = x_gt - mu_gt  # (b, n, 3)
+        covariance = torch.einsum("bni,bnj->bij", w * xgt_c, x_c)  # (b, 3, 3)
+        covariance_f32 = covariance.float()  # (b, 3, 3)
         u, _, vh = torch.linalg.svd(
             covariance_f32, driver="gesvd" if covariance_f32.is_cuda else None
-        )
-        det = torch.linalg.det(u @ vh)
-        ones = torch.ones_like(det)
+        )  # (b, 3, 3), (b, 3), (b, 3, 3)
+        det = torch.linalg.det(u @ vh)  # (b,)
+        ones = torch.ones_like(det)  # (b,)
         rotation = (u @ torch.diag_embed(torch.stack([ones, ones, det], dim=-1)) @ vh).to(
             covariance.dtype
-        )
-        return x_c @ rotation.transpose(-1, -2) + mu_gt
+        )  # (b, 3, 3)
+        return x_c @ rotation.transpose(-1, -2) + mu_gt  # (b, n, 3)
 
     # ------------------------------------------------------------------
     # Sampling
@@ -2766,6 +2809,7 @@ class DiffusionStructureHead(nn.Module):
         so we inflate the underlying schedule length here to land back at the
         requested step count post-truncation.
         """
+        # z_trunk: (b, l, l, c_z); s_inputs: (b, l, c_s_inputs); atom features: b by a; bs = b * samples.
         n_atoms = tok_idx.shape[1]
         device = s_inputs.device
         target_batch = s_inputs.shape[0] * num_diffusion_samples
@@ -2774,26 +2818,26 @@ class DiffusionStructureHead(nn.Module):
 
         steps = self.inference_num_steps if num_sampling_steps is None else int(num_sampling_steps)
 
-        schedule = self.inference_noise_schedule(steps, device)
+        schedule = self.inference_noise_schedule(steps, device)  # (steps + 1,)
         if max_inference_sigma is not None:
-            schedule = schedule[schedule <= float(max_inference_sigma)]
-            schedule = F.pad(schedule, (1, 0), value=float(max_inference_sigma))
+            schedule = schedule[schedule <= float(max_inference_sigma)]  # (n_below_cap,)
+            schedule = F.pad(schedule, (1, 0), value=float(max_inference_sigma))  # (n_below_cap + 1,)
 
         lam = self.noise_scale if noise_scale is None else float(noise_scale)
         eta = self.step_scale if step_scale is None else float(step_scale)
 
-        x = schedule[0] * torch.randn(target_batch, n_atoms, 3, device=device, dtype=torch.float32)
-        atom_mask = ref_mask.repeat_interleave(num_diffusion_samples, 0).float()
+        x = schedule[0] * torch.randn(target_batch, n_atoms, 3, device=device, dtype=torch.float32)  # (bs, a, 3)
+        atom_mask = ref_mask.repeat_interleave(num_diffusion_samples, 0).float()  # (bs, a)
 
         gammas = torch.where(
             schedule > self.gamma_min,
             torch.full_like(schedule, self.gamma_0),
             torch.zeros_like(schedule),
-        )
+        )  # schedule.shape
 
-        x_denoised_prev: Tensor | None = None
-        token_repr: Tensor | None = None
-        diff_atom_intermediates: Tensor | None = None
+        x_denoised_prev: Tensor | None = None  # (bs, a, 3) or None
+        token_repr: Tensor | None = None  # (bs, l, c_token) or None
+        diff_atom_intermediates: Tensor | None = None  # (bs, a, n_blocks, c_atom) or None
 
         step_pairs = list(zip(schedule[:-1], schedule[1:], gammas[1:], strict=True))
         num_steps = len(step_pairs)
@@ -2810,12 +2854,12 @@ class DiffusionStructureHead(nn.Module):
         for step_idx, (sigma_tm, sigma_t, gamma) in enumerate(step_iterator):
             x, x_denoised_prev = self._center_random_augmentation(
                 x, atom_mask, second_coords=x_denoised_prev
-            )
+            )  # each (bs, a, 3), second may be None
 
             sigma_tm_val = float(sigma_tm.item())
             t_hat_val = sigma_tm_val * (1.0 + float(gamma.item()))
             eps_std = lam * max(t_hat_val**2 - sigma_tm_val**2, 0.0) ** 0.5
-            x_noisy = x + eps_std * torch.randn_like(x)
+            x_noisy = x + eps_std * torch.randn_like(x)  # (bs, a, 3)
 
             is_last_step = step_idx == num_steps - 1
             request_atom_repr = return_atom_repr and (
@@ -2846,24 +2890,24 @@ class DiffusionStructureHead(nn.Module):
                 return_token_repr=True,
                 return_atom_repr=request_atom_repr,
                 inference_cache=inference_cache,
-            )
+            )  # tensor mapping follows the called head's shape contract
 
-            x_denoised = dm_out["x_denoised"]
-            token_repr = dm_out["token_repr"]
+            x_denoised = dm_out["x_denoised"]  # (bs, a, 3)
+            token_repr = dm_out["token_repr"]  # (bs, l, c_token) or None
             if request_atom_repr:
-                diff_atom_intermediates = dm_out.get("atom_intermediates")
+                diff_atom_intermediates = dm_out.get("atom_intermediates")  # (bs, a, n_blocks, c_atom) or None
 
             # Reverse diffusion alignment (Kabsch)
             with torch.autocast(device_type="cuda", enabled=False):
                 x_noisy = self._weighted_rigid_align(
                     x_noisy.float(), x_denoised.float(), atom_mask, atom_mask
-                )
-            x_noisy = x_noisy.to(dtype=x_denoised.dtype)
+                )  # (bs, a, 3)
+            x_noisy = x_noisy.to(dtype=x_denoised.dtype)  # (bs, a, 3)
 
             # ODE/SDE step
             sigma_t_val = float(sigma_t.item())
-            denoised_over_sigma = (x_noisy - x_denoised) / t_hat_val
-            x = x_noisy + eta * (sigma_t_val - t_hat_val) * denoised_over_sigma
+            denoised_over_sigma = (x_noisy - x_denoised) / t_hat_val  # (bs, a, 3)
+            x = x_noisy + eta * (sigma_t_val - t_hat_val) * denoised_over_sigma  # (bs, a, 3)
 
             # Denoising early-exit: stop when consecutive predictions converge
             if (
@@ -2877,17 +2921,17 @@ class DiffusionStructureHead(nn.Module):
                         x_denoised.float(),
                         atom_mask,
                         atom_mask,
-                    )
-                diff = (x_denoised.float() - aligned) * atom_mask.unsqueeze(-1)
+                    )  # (bs, a, 3)
+                diff = (x_denoised.float() - aligned) * atom_mask.unsqueeze(-1)  # (bs, a, 3)
                 per_sample_rmsd = (
                     diff.pow(2).sum(dim=(-1, -2)) / atom_mask.sum(dim=-1).clamp(min=1)
-                ).sqrt()
+                ).sqrt()  # (bs,)
                 if per_sample_rmsd.max().item() < denoising_early_exit_rmsd:
-                    x = x_denoised
-                    x_denoised_prev = x_denoised
+                    x = x_denoised  # (bs, a, 3)
+                    x_denoised_prev = x_denoised  # (bs, a, 3) or None
                     break
 
-            x_denoised_prev = x_denoised
+            x_denoised_prev = x_denoised  # (bs, a, 3) or None
 
         result: dict[str, Tensor | None] = {
             "sample_atom_coords": x,
@@ -2895,4 +2939,4 @@ class DiffusionStructureHead(nn.Module):
         }
         if return_atom_repr:
             result["diff_atom_intermediates"] = diff_atom_intermediates
-        return result
+        return result  # coordinate/token/optional atom-intermediate mapping with the shapes above

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import Field, replace
-from typing import Any, ClassVar, Protocol, TypeVar
-
 import numpy as np
 import torch
+
+from dataclasses import Field, replace
+from typing import Any, ClassVar, Protocol, TypeVar
 from torch import Tensor
 
 from .esmfold2_protein_structure import compute_affine_and_rmsd
@@ -30,18 +30,19 @@ AlignableT = TypeVar("AlignableT", bound=Alignable)
 
 
 def _coordinate_batch(structure: Alignable) -> Tensor:
-    return torch.as_tensor(structure.atom37_positions, dtype=torch.double).unsqueeze(0)
+    # l is the residue count; the atom37 table has three Cartesian coordinates.
+    return torch.as_tensor(structure.atom37_positions, dtype=torch.double).unsqueeze(0)  # (1, l, 37, 3)
 
 
 def _shared_atom_mask(mobile: Alignable, target: Alignable, backbone_only: bool) -> Tensor:
     shared = np.asarray(mobile.atom37_mask, dtype=bool) & np.asarray(
         target.atom37_mask,
         dtype=bool,
-    )
+    )  # (l, 37)
     if backbone_only:
-        shared = shared.copy()
-        shared[:, 3:] = False
-    return torch.from_numpy(shared).unsqueeze(0)
+        shared = shared.copy()  # (l, 37)
+        shared[:, 3:] = False  # (l, 34); retain N, CA, C.
+    return torch.from_numpy(shared).unsqueeze(0)  # (1, l, 37)
 
 
 class Aligner:
@@ -57,16 +58,16 @@ class Aligner:
         if len(mobile) != len(target):
             raise AssertionError("mobile and target must contain the same residue count")
 
-        mobile_coordinates = _coordinate_batch(mobile)
-        target_coordinates = _coordinate_batch(target)
+        mobile_coordinates = _coordinate_batch(mobile)  # (1, l, 37, 3)
+        target_coordinates = _coordinate_batch(target)  # (1, l, 37, 3)
         if use_reflection:
-            target_coordinates = -target_coordinates
-        atom_mask = _shared_atom_mask(mobile, target, only_use_backbone)
+            target_coordinates = -target_coordinates  # (1, l, 37, 3)
+        atom_mask = _shared_atom_mask(mobile, target, only_use_backbone)  # (1, l, 37)
         self._affine3D, rmsd = compute_affine_and_rmsd(
             mobile_coordinates,
             target_coordinates,
             atom_exists_mask=atom_mask,
-        )
+        )  # affine shape: (1, 1); rmsd: ()
         self._rmsd = rmsd.item()
 
     @property
@@ -76,12 +77,12 @@ class Aligner:
     def apply(self, mobile: AlignableT) -> AlignableT:
         """Return a dataclass copy with all present atom coordinates aligned."""
 
-        present = np.asarray(mobile.atom37_mask, dtype=bool)
+        present = np.asarray(mobile.atom37_mask, dtype=bool)  # (l, 37)
         packed = torch.as_tensor(
             mobile.atom37_positions[present],
             dtype=torch.float32,
-        ).unsqueeze(0)
-        aligned = self._affine3D.apply(packed).squeeze(0).cpu().numpy()
-        atom37_positions = np.full_like(mobile.atom37_positions, np.nan)
-        atom37_positions[present] = aligned
+        ).unsqueeze(0)  # (1, n, 3), n is the number of present atoms.
+        aligned = self._affine3D.apply(packed).squeeze(0).cpu().numpy()  # (n, 3)
+        atom37_positions = np.full_like(mobile.atom37_positions, np.nan)  # (l, 37, 3)
+        atom37_positions[present] = aligned  # (n, 3)
         return replace(mobile, atom37_positions=atom37_positions)

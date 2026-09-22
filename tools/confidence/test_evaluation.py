@@ -13,6 +13,7 @@ import hashlib
 import multiprocessing
 import tempfile
 import warnings
+
 import numpy as np
 import torch
 
@@ -36,7 +37,6 @@ from .rollouts import (
     chain_label,
     fold,
 )
-
 from .v2_analysis import (
     BOOTSTRAP_SAMPLES as BOOTSTRAP_SAMPLES,
     CALIBRATION_BINS,
@@ -73,6 +73,7 @@ class SampleStructures:
 
 def _pdb_text(coordinates: np.ndarray, atoms: Sequence[tuple[int, int, str, int, str]]) -> str:
     """Format atoms given as (atom index, chain, residue letter, residue number, atom name)."""
+    # coordinates: (atoms, 3); indexing one atom produces its (3,) xyz vector.
     lines = []
     for serial, (atom_index, chain, letter, residue_number, name) in enumerate(atoms, start=1):
         x, y, z = (float(value) for value in coordinates[atom_index])
@@ -88,7 +89,7 @@ def sample_structures(rollout: Rollout, sequences: Sequence[str], sample: int) -
     predicted = rollout.x_pred[sample].cpu().numpy()  # (a, 3)
     true = rollout.true_coords[sample].cpu().numpy()  # (a, 3)
     resolved = np.isfinite(true).all(-1)  # (a,)
-    starts = np.cumsum([0, *[len(sequence) for sequence in sequences]])
+    starts = np.cumsum([0, *[len(sequence) for sequence in sequences]])  # (chains + 1,)
     true_index = rollout.layout.true_index.numpy()  # (a,)
     atoms, ca_atoms, ca_letters = [], [], []
     for atom_index in np.flatnonzero(resolved & (true_index >= 0)):
@@ -149,6 +150,8 @@ def head_sample_predictions(context: object, rollout: Rollout, sample: int) -> d
 def _summaries(
     plddt_logits: torch.Tensor, pae_logits: torch.Tensor, rollout: Rollout, sample: int
 ) -> dict[str, object]:
+    # plddt_logits: (1, a, 50); pae_logits: (1, t, t, 64).
+    # a: padded atoms; t: padded tokens; n: labeled atoms; r: real residues.
     targets = rollout.targets[sample]
     inputs = rollout.head_inputs
     atom_mask = inputs["atom_attention_mask"].reshape(1, -1)  # (1, a)
@@ -156,7 +159,7 @@ def _summaries(
         plddt_logits.float().softmax(-1)
         * ((torch.arange(50, device=plddt_logits.device) + 0.5) / 50)
     ).sum(-1)[0]  # (a,)
-    ptm, iptm = expected_tm_scores(pae_logits, inputs["asym_id"], inputs["token_attention_mask"])
+    ptm, iptm = expected_tm_scores(pae_logits, inputs["asym_id"], inputs["token_attention_mask"])  # each (1,)
     labeled = targets["plddt_mask"]  # (a,)
     atom_plddt, atom_lddt = per_atom[labeled], targets["plddt_score"][labeled].float()  # (n,), (n,)
     # Per-bin sums let bootstrap draws add samples instead of concatenating millions of atoms.
@@ -214,7 +217,7 @@ def fold_and_score(
             sequences = list(target["sequences"])  # type: ignore[arg-type]
             try:
                 native_structure = structure(pool_dir, target)
-                positions = native_structure.positions
+                positions = native_structure.positions  # (residues, 14, 3)
                 positions_identity = {
                     "sha256": hashlib.sha256(memoryview(positions).cast("B")).hexdigest(),
                     "shape": list(positions.shape),

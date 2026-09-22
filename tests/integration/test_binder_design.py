@@ -7,6 +7,7 @@ import os
 import random
 import pytest
 import torch
+
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -52,15 +53,15 @@ def _fake_fold(
     calculate_confidence: bool = False,
     seed: int | None = None,
 ) -> dict[str, Any]:
-    # target_one_hot: (...), design: (...)
+    # target_one_hot: (b, target_length, d); design: (b, binder_length, d).
     del model, num_loops, num_sampling_steps, calculate_confidence, seed
     b, binder_length, d = design.shape
     target_length = target_one_hot.size(1)
     # aa_weight: (n,)
     aa_weight = torch.linspace(-1.0, 1.0, d, device=design.device)
-    # binder_signal: (...)
+    # binder_signal: (b, binder_length), reducing the amino-acid channels.
     binder_signal = (design * aa_weight).sum(dim=-1)
-    # token_signal: (...)
+    # token_signal: (b, target_length + binder_length).
     token_signal = torch.cat(
         (torch.zeros(b, target_length, device=design.device), binder_signal),
         dim=1,
@@ -91,7 +92,7 @@ def _fake_pseudoperplexity(
     n_passes: int = 4,
     mask_fraction: float = binder.DEFAULT_ESMC_MASK_FRACTION,
 ) -> torch.Tensor:
-    # binder_design: (...), score_mask: (...)
+    # binder_design: (b, binder_length, d); this fake scorer ignores score_mask.
     del lm_model, score_mask, batch_size, n_passes, mask_fraction
     return binder_design.square().mean(dim=(1, 2))
 
@@ -470,7 +471,7 @@ def test_selected_sequence_loss_and_logits_share_the_same_optimization_step(
         calculate_confidence: bool = False,
         seed: int | None = None,
     ) -> dict[str, Any]:
-        # target_one_hot: (...), design: (...)
+        # target_one_hot: (b, target_length, d); design: (b, binder_length, d).
         result = _fake_fold(
             model,
             target_seq,

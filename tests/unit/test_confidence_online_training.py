@@ -61,8 +61,8 @@ def test_selection_keeps_final_weights_unless_they_trail_the_best_by_over_two_pe
 
 def test_per_sample_ranking_terms_sum_to_the_joint_pairwise_gradient():
     generator = torch.Generator().manual_seed(0)
-    weights = torch.randn(4, 3, generator=generator, requires_grad=True)
-    features = torch.randn(4, 3, generator=generator)
+    weights = torch.randn(4, 3, generator=generator, requires_grad=True)  # (4, 3)
+    features = torch.randn(4, 3, generator=generator)  # (4, 3)
     pairs = ranking_pairs([0.8, 0.5, 0.52, 0.9], margin=0.01)
     temperature = 0.5
     assert sorted(pairs) == [(0, 1), (0, 2), (2, 1), (3, 0), (3, 1), (3, 2)]
@@ -77,7 +77,7 @@ def test_per_sample_ranking_terms_sum_to_the_joint_pairwise_gradient():
     (joint_gradient,) = torch.autograd.grad(joint, weights)
 
     detached = scores.detach()
-    accumulated = torch.zeros_like(weights)
+    accumulated = torch.zeros_like(weights)  # (4, 3)
     summed = 0.0
     for sample in range(4):
         score = (weights[sample] * features[sample]).sum()
@@ -90,7 +90,7 @@ def test_per_sample_ranking_terms_sum_to_the_joint_pairwise_gradient():
 
 
 def test_ranking_loss_without_pairs_has_a_zero_gradient():
-    weight = torch.tensor(2.0, requires_grad=True)
+    weight = torch.tensor(2.0, requires_grad=True)  # ()
     loss = sample_ranking_loss(0, weight * 3.0, torch.tensor([6.0, 1.0]), [], temperature=0.05)
     loss.backward()
     assert float(loss) == 0.0

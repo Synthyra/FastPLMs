@@ -4,6 +4,7 @@ import json
 import re
 import pytest
 import torch
+
 from pathlib import Path
 
 from fastplms.registry import load_model_registry

@@ -16,12 +16,12 @@ import shutil
 import tarfile
 import zipfile
 
+import numpy as np
+
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from random import Random
-
-import numpy as np
 
 
 ATLASFOLD_REVISION = "444f376d85b9954a5f2f5f3f8b3cbcae1201ebb1"
@@ -208,10 +208,10 @@ def _atom14_names(sequence: str) -> np.ndarray:
         ),
         "Y": ("N", "CA", "C", "O", "CB", "CG", "CD1", "CD2", "CE1", "CE2", "CZ", "OH"),
     }
-    names = np.full((len(sequence), 14), "", dtype="U4")
+    names = np.full((len(sequence), 14), "", dtype="U4")  # (residues, 14)
     for residue_index, residue in enumerate(sequence):
-        names[residue_index, : len(atom14.get(residue, ()))] = atom14.get(residue, ())
-    return names
+        names[residue_index, : len(atom14.get(residue, ()))] = atom14.get(residue, ())  # (residue atoms,)
+    return names  # (residues, 14)
 
 
 def _decode_npz(value: bytes) -> dict[str, np.ndarray]:
@@ -229,7 +229,7 @@ def _normalize_chain(value: bytes, *, chain_index: int) -> tuple[str, dict[str, 
         raise UnsupportedStructureError(
             f"chain {chain_index} payload is missing arrays: {', '.join(missing)}"
         )
-    sequence_value = arrays["sequence"]
+    sequence_value = arrays["sequence"]  # one-element array; rank validated only by size
     if sequence_value.size != 1:
         raise UnsupportedStructureError(f"chain {chain_index} sequence must contain one string")
     sequence = sequence_value.item()
@@ -243,11 +243,11 @@ def _normalize_chain(value: bytes, *, chain_index: int) -> tuple[str, dict[str, 
             f"chain {chain_index} contains unsupported residues {unknown_residues}: "
             f"sequence={sequence[:32]!r}"
         )
-    compact_coordinates = arrays["coordinates"]
+    compact_coordinates = arrays["coordinates"]  # (atoms, 3), validated below
     if compact_coordinates.ndim != 2 or compact_coordinates.shape[1] != 3:
         raise UnsupportedStructureError("AtlasFold chain coordinates must have shape (atom, 3)")
-    coordinates = np.full((len(sequence), 14, 3), np.nan, dtype=np.float32)
-    atom_names = _atom14_names(sequence)
+    coordinates = np.full((len(sequence), 14, 3), np.nan, dtype=np.float32)  # (residues, 14, 3)
+    atom_names = _atom14_names(sequence)  # (residues, 14)
     expected_atoms = int((atom_names != "").sum())
     if len(compact_coordinates) != expected_atoms:
         raise UnsupportedStructureError(
@@ -256,9 +256,9 @@ def _normalize_chain(value: bytes, *, chain_index: int) -> tuple[str, dict[str, 
         )
     cursor = 0
     for residue_index, names in enumerate(atom_names):
-        valid = names != ""
+        valid = names != ""  # (14,)
         n_atoms = int(valid.sum())
-        coordinates[residue_index, valid] = compact_coordinates[cursor : cursor + n_atoms]
+        coordinates[residue_index, valid] = compact_coordinates[cursor : cursor + n_atoms]  # (n_atoms, 3)
         cursor += n_atoms
     if cursor != len(compact_coordinates):
         raise UnsupportedStructureError(
@@ -272,8 +272,8 @@ def _normalize_chain(value: bytes, *, chain_index: int) -> tuple[str, dict[str, 
     return sequence, {
         "coordinates": coordinates,
         "atom_names": atom_names,
-        "chain_index": np.full(len(sequence), chain_index, dtype=np.int32),
-        "residue_index": np.arange(1, len(sequence) + 1, dtype=np.int32),
+        "chain_index": np.full(len(sequence), chain_index, dtype=np.int32),  # (residues,)
+        "residue_index": np.arange(1, len(sequence) + 1, dtype=np.int32),  # (residues,)
     }
 
 
@@ -291,7 +291,7 @@ def _normalize_record(
                 f"AtlasFold payload has unsupported chain count: {len(chain_metadata)}"
             )
         arrays = _decode_npz(value)
-        payload_count = arrays.get("num_chains")
+        payload_count = arrays.get("num_chains")  # one-element integer array or None; validated below
         if (
             payload_count is None
             or payload_count.size != 1
@@ -346,6 +346,7 @@ def _normalize_record(
                     )
             sequences.append(sequence)
             chain_arrays.append(normalized)
+        # Concatenate the residue axis; retain (14, 3), (14,), or () per-field trailing axes.
         normalized_arrays = {
             key: np.concatenate([item[key] for item in chain_arrays], axis=0)
             for key in ("coordinates", "atom_names", "chain_index", "residue_index")
@@ -405,8 +406,8 @@ def _biologically_eligible(record: Mapping[str, object]) -> bool:
         record["structure_path"], sequences=[chain["sequence"] for chain in chains]
     )
     with np.load(str(record["structure_path"]), allow_pickle=False) as arrays:
-        coordinates = arrays["coordinates"]
-        chain_index = arrays["chain_index"]
+        coordinates = arrays["coordinates"]  # (residues, 14, 3)
+        chain_index = arrays["chain_index"]  # (residues,)
         for index in range(len(chains)):
             if int(np.isfinite(coordinates[chain_index == index, 1, :]).all(axis=-1).sum()) < 4:
                 return False
@@ -631,7 +632,9 @@ def validate_structure_npz(
         missing = [name for name in required if name not in arrays]
         if missing:
             raise ValueError(f"structure cache is missing arrays: {', '.join(missing)}")
+        # (residues, 14, 3), (residues, 14), validated below
         coordinates, atom_names = arrays["coordinates"], arrays["atom_names"]
+        # each (residues,), validated below
         chain_index, residue_index = arrays["chain_index"], arrays["residue_index"]
         if coordinates.ndim != 3 or coordinates.shape[1:] != (14, 3):
             raise ValueError("coordinates must have shape (residue, 14, 3)")
@@ -653,17 +656,17 @@ def validate_structure_npz(
         if observed_chains != list(range(len(observed_chains))):
             raise ValueError("chain_index values must be contiguous from zero")
         for chain in observed_chains:
-            rows = np.flatnonzero(chain_index == chain)
-            expected_residues = np.arange(1, len(rows) + 1, dtype=residue_index.dtype)
+            rows = np.flatnonzero(chain_index == chain)  # (chain residues,)
+            expected_residues = np.arange(1, len(rows) + 1, dtype=residue_index.dtype)  # (chain residues,)
             if not np.array_equal(residue_index[rows], expected_residues):
                 raise ValueError("residue_index must be contiguous and one-based per chain")
         if sequences is not None:
             if len(sequences) != len(observed_chains):
                 raise ValueError("structure chain count does not match record metadata")
             for chain, sequence in enumerate(sequences):
-                rows = np.flatnonzero(chain_index == chain)
-                expected = _atom14_names(sequence)
-                observed = atom_names[rows]
+                rows = np.flatnonzero(chain_index == chain)  # (chain residues,)
+                expected = _atom14_names(sequence)  # (chain residues, 14)
+                observed = atom_names[rows]  # (chain residues, 14)
                 if observed.shape != expected.shape:
                     raise ValueError("structure residue count does not match chain sequence")
                 for row in range(len(rows)):

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, TypeVar, cast
-
 from transformers.configuration_utils import PretrainedConfig
 
 from fastplms.attention import canonical_checkpoint_attention_backend

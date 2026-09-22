@@ -11,18 +11,18 @@ from __future__ import annotations
 import io
 import os
 import re
-from dataclasses import asdict, dataclass
-from pathlib import Path
-from subprocess import check_output
-from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any
-
 import biotite.structure as bs
 import biotite.structure.io.pdbx as pdbx
 import brotli
 import msgpack
 import numpy as np
 import torch
+
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from subprocess import check_output
+from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING, Any
 from biotite.structure.io.pdbx import (
     CIFCategory,
     CIFColumn,

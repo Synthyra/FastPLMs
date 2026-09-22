@@ -13,6 +13,7 @@ import sys
 import tempfile
 import numpy as np
 import pytest
+
 from collections.abc import Mapping
 from importlib import metadata
 from pathlib import Path

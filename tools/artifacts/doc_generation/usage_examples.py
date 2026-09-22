@@ -20,6 +20,7 @@ from tools.artifacts.doc_generation.esmc_rendering import (
     _esmc_diagnostic_table,
 )
 
+
 BINDER_IMAGE_URL = (
     "https://raw.githubusercontent.com/Synthyra/FastPLMs/main/"
     "docs/assets/egfr_fastplms_binder_design.png"
@@ -48,22 +49,22 @@ batch = sequence_model.prep_tokens.get_batch_kwargs(
     sequences,
     device=sequence_model.device,
 )
-biological = batch["sequence_ids"].ne(-1)
+biological = batch["sequence_ids"].ne(-1)  # (b, l), biological positions
 """
     elif spec.family.id in {"esmfold", "esmfold2"}:
         preparation = """\
 sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
 batch = sequence_model.prepare_classifier_inputs(sequences)
-biological = batch["attention_mask"].bool()
+biological = batch["attention_mask"].bool()  # (b, l)
 """
     else:
         preparation = """\
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
 batch = tokenizer(sequences, padding=True, return_tensors="pt")
-biological = batch["attention_mask"].bool()
+biological = batch["attention_mask"].bool()  # (b, l)
 for special_id in tokenizer.all_special_ids:
-    biological &= batch["input_ids"].ne(special_id)
+    biological &= batch["input_ids"].ne(special_id)  # (b, l)
 """
 
     tokenizer_import = (
@@ -94,11 +95,13 @@ for special_id in tokenizer.all_special_ids:
 
 ```python
 import torch
+
 {tokenizer_import}\
 from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
 )
+
 
 model_id = "{model_id}"
 sequence_model = AutoModelForSequenceClassification.from_pretrained(
@@ -108,9 +111,9 @@ token_model = AutoModelForTokenClassification.from_pretrained(
     model_id, num_labels=3, trust_remote_code=True
 ).eval()
 {preparation}
-sequence_labels = torch.zeros(len(sequences), dtype=torch.long)
-token_labels = torch.full_like(batch["input_ids"], -100)
-token_labels[biological] = 0
+sequence_labels = torch.zeros(len(sequences), dtype=torch.long)  # (b,)
+token_labels = torch.full_like(batch["input_ids"], -100)  # (b, l)
+token_labels[biological] = 0  # selected biological positions; labels stay (b, l)
 
 with torch.inference_mode():
     sequence_output = sequence_model(**batch, labels=sequence_labels)
@@ -154,6 +157,7 @@ python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
 ```python
 from peft import LoraConfig{task_import}, get_peft_model
 
+
 peft_model = get_peft_model(
     {model_name},
     LoraConfig(
@@ -187,6 +191,7 @@ adapters. Base checkpoint weights stay frozen:
 
 ```python
 from transformers import {auto_class}
+
 
 ttt_model = {auto_class}.from_pretrained(
     "{spec.fast.repo_id}",
@@ -247,6 +252,7 @@ protein strings without residue spaces:
 ```python
 import torch
 
+
 tokenizer = model.tokenizer
 batch = tokenizer(
     ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"],
@@ -269,7 +275,9 @@ shows padding explicitly:
 
 ```python
 import torch
+
 from transformers import AutoTokenizer
+
 
 model_id = "{spec.fast.repo_id}"
 tokenizer = AutoTokenizer.from_pretrained(
@@ -316,6 +324,7 @@ input. ANKH does not create a shifted target:
 
 ```python
 from transformers import AutoModelForSeq2SeqLM
+
 
 seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
     "{spec.fast.repo_id}",
@@ -399,10 +408,11 @@ Load the published model, fold two protein chains together, and write an mmCIF
 file. {step_note}
 
 ```python
-from pathlib import Path
-
 import torch
+
+from pathlib import Path
 from transformers import AutoModel
+
 
 model = AutoModel.from_pretrained(
     "{spec.fast.repo_id}",
@@ -454,7 +464,9 @@ Use the masked-language-model AutoClass when you need logits:
 
 ```python
 import torch
+
 from transformers import AutoModelForMaskedLM, AutoTokenizer
+
 
 model_id = "{model_id}"
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
@@ -465,7 +477,8 @@ masked_model = AutoModelForMaskedLM.from_pretrained(
 batch = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
 
 with torch.inference_mode():
-    logits = masked_model(**batch).logits
+    logits = masked_model(**batch).logits  # (b, l, vocabulary)
+    # Contacts omit boundary tokens: (b, residues, residues).
     contacts = masked_model.predict_contacts(
         batch["input_ids"],
         batch["attention_mask"],
@@ -492,7 +505,9 @@ inference option for ESMC-6B:
 
 ```python
 import torch
+
 from transformers import AutoModel
+
 
 fp8_model = AutoModel.from_pretrained(
     "{model_id}",
@@ -554,12 +569,13 @@ Select an SAE for this ESMC scale, then load only the layers you need:
 ```python
 import torch
 
+
 model.load_sae_models("{sae_id}", [{sae_layer}])
 
 with torch.inference_mode():
     output = model(**batch, normalize_sae=True)
 
-features = output.sae_outputs["layer{sae_layer}"]
+features = output.sae_outputs["layer{sae_layer}"]  # (valid_tokens, codebook_dim), sparse COO
 print(features.shape, features.layout)  # (valid_token_count, codebook_dim), sparse COO
 ```
 
@@ -596,6 +612,7 @@ multimodal helpers:
 ```python
 import torch
 
+
 batch = model.tokenize_sequences(
     ["MKTAYIAKQ", "GGGG"],
     device=model.device,
@@ -617,6 +634,7 @@ Generate masked sequence positions with an explicit seed:
 
 ```python
 from fastplms.models.esm3.modeling_esm3 import FastESM3GenerationConfig
+
 
 config = FastESM3GenerationConfig(
     num_steps=8,
@@ -664,7 +682,9 @@ It masks these positions and retains confident predictions at each iteration:
 
 ```python
 import torch
+
 from transformers import AutoModelForMaskedLM, AutoTokenizer
+
 
 model_id = "{model_id}"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -672,10 +692,10 @@ generator = AutoModelForMaskedLM.from_pretrained(
     model_id,
     trust_remote_code=True,
 ).cuda().eval()
-input_ids = tokenizer("A" * 64, return_tensors="pt")["input_ids"].cuda()
+input_ids = tokenizer("A" * 64, return_tensors="pt")["input_ids"].cuda()  # (b=1, tokens)
 
 with torch.inference_mode():
-    generated_ids = generator.generate(input_ids, max_iter=100)
+    generated_ids = generator.generate(input_ids, max_iter=100)  # (b=1, tokens)
 
 sequence = tokenizer.decode(
     generated_ids[0],
@@ -709,7 +729,9 @@ boundary and mask tokens:
 
 ```python
 import torch
+
 from transformers import AutoModelForMaskedLM, AutoTokenizer
+
 
 model_id = "{model_id}"
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
@@ -729,10 +751,10 @@ amino_acids = [
     *([vocab["<mask_aa>"]] * l),
     vocab["<eos_aa>"],
 ]
-input_ids = torch.tensor([structure + amino_acids], device="cuda")
+input_ids = torch.tensor([structure + amino_acids], device="cuda")  # (b=1, 2 * (l + 2))
 
 with torch.inference_mode():
-    generated = generator.generate(input_ids, max_iter=100)["output_tokens"]
+    generated = generator.generate(input_ids, max_iter=100)["output_tokens"]  # (b=1, 2 * (l + 2))
 print(generated.shape)
 ```
 
@@ -761,7 +783,9 @@ task-specific decoding:
 
 ```python
 import torch
+
 from transformers import AutoModel, AutoModelForSeq2SeqLM, AutoTokenizer
+
 
 repo_id = "{spec.fast.repo_id}"
 tokenizer = AutoTokenizer.from_pretrained(repo_id, trust_remote_code=True)
@@ -773,8 +797,8 @@ seq2seq = AutoModelForSeq2SeqLM.from_pretrained(
 batch = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
 
 with torch.inference_mode():
-    encoder_hidden = encoder(**batch).last_hidden_state
-    generated_ids = seq2seq.generate(**batch, max_new_tokens=16)
+    encoder_hidden = encoder(**batch).last_hidden_state  # (b=1, tokens, d)
+    generated_ids = seq2seq.generate(**batch, max_new_tokens=16)  # (b=1, generated_tokens)
 print(encoder_hidden.shape)
 print(tokenizer.batch_decode(generated_ids, skip_special_tokens=True))
 ```
@@ -793,6 +817,7 @@ inference core, and returns coordinates and confidence fields:
 
 ```python
 import torch
+
 
 model = model.cuda().eval()
 output = model.predict_structure(
@@ -823,6 +848,7 @@ ESMFold accepts a raw sequence and returns structure tensors and confidence:
 
 ```python
 import torch
+
 
 model = model.cuda().eval()
 with torch.inference_mode():
@@ -869,6 +895,7 @@ pinned ESM++ weights are tensor-exact in BF16 after layout conversion.
 
 ```python
 import torch
+
 
 model = model.cuda().eval()
 with torch.inference_mode():

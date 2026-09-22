@@ -29,7 +29,7 @@ def test_spatial_subset_is_empty_when_no_chain_fits():
 
 
 def test_monomers_split_into_standard_and_long_variants():
-    positions = np.zeros((1, 14, 3), dtype=np.float32)
+    positions = np.zeros((1, 14, 3), dtype=np.float32)  # (1, 14, 3)
     assert _targets_for_row("rcsb", "a", ["A" * 100], positions) == [("standard", ChainSubset((0,), 100))]
     assert _targets_for_row("rcsb", "a", ["A" * 1500], positions) == [("long", ChainSubset((0,), 1500))]
     assert _targets_for_row("rcsb", "a", ["A" * 3000], positions) == []

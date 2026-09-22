@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from torch import Tensor, nn
 
 from . import vb_layers_initialize as init

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 import types
-
 import torch
 
 from tools.confidence import training
@@ -38,7 +37,7 @@ def test_save_checkpoint_round_trips_training_state(monkeypatch, tmp_path) -> No
 
     context = types.SimpleNamespace(head=torch.nn.Linear(3, 2), base_weight_sha256="base-hash")
     optimizer = torch.optim.AdamW(context.head.parameters(), lr=1e-4)
-    input_tensor = torch.ones(1, 3)
+    input_tensor = torch.ones(1, 3)  # (1, 3)
     loss = context.head(input_tensor).sum()
     loss.backward()
     optimizer.step()

@@ -1,6 +1,9 @@
+"""Construct Boltz2 protein features from canonical atom tables and conformers."""
+
 import math
 import numpy as np
 import torch
+
 from torch.nn.functional import one_hot
 
 from . import vb_const as const

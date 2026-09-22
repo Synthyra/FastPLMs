@@ -2,10 +2,12 @@
 
 import pytest
 import torch
-from collections import OrderedDict
 
 import fastplms.attention.interfaces as attention_interfaces
 import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module
+
+from collections import OrderedDict
+
 from fastplms.attention import _core as attention_core
 from fastplms.models.esm2.modeling_fastesm import FastEsmConfig, FastEsmModel
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (

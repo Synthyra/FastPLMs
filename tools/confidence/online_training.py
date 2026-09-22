@@ -14,6 +14,7 @@ import math
 import random
 import time
 import uuid
+
 import numpy as np
 import torch
 import wandb
@@ -104,6 +105,7 @@ class ExponentialMovingAverage:
 
     def __init__(self, module: nn.Module, decay: float) -> None:
         self.decay = decay
+        # Each shadow tensor keeps its named parameter's shape, dtype, and device.
         self.shadow = {
             name: parameter.detach().clone()
             for name, parameter in module.named_parameters()
@@ -114,7 +116,7 @@ class ExponentialMovingAverage:
     def update(self, module: nn.Module) -> None:
         for name, parameter in module.named_parameters():
             if name in self.shadow:
-                self.shadow[name].mul_(self.decay).add_(parameter.detach(), alpha=1 - self.decay)
+                self.shadow[name].mul_(self.decay).add_(parameter.detach(), alpha=1 - self.decay)  # shape unchanged
 
     @torch.no_grad()
     def swapped_into(self, module: nn.Module) -> dict[str, Tensor]:
@@ -126,7 +128,7 @@ class ExponentialMovingAverage:
         }
         for name, parameter in module.named_parameters():
             if name in self.shadow:
-                parameter.copy_(self.shadow[name])
+                parameter.copy_(self.shadow[name])  # parameter shape unchanged
         return replaced
 
 
@@ -134,7 +136,7 @@ class ExponentialMovingAverage:
 def restore(module: nn.Module, weights: Mapping[str, Tensor]) -> None:
     for name, parameter in module.named_parameters():
         if name in weights:
-            parameter.copy_(weights[name])
+            parameter.copy_(weights[name])  # parameter shape unchanged
 
 
 class TargetSampler:
@@ -168,6 +170,8 @@ def head_output(
     context: HeadContext, inputs: Mapping[str, Tensor], x_pred: Tensor, sample: int
 ) -> dict[str, Tensor]:
     """Run the head on one diffusion sample; `x_pred` holds all samples, shape (k, a, 3)."""
+    # Head inputs keep batch size 1; the selected coordinates are (1, a, 3).
+    # Outputs include pLDDT logits (1, a, 50) and PAE logits (1, t, t, 64), t tokens.
     context.head.set_chunk_size(head_chunk_size(inputs["token_attention_mask"].shape[-1]))
     with torch.autocast("cuda", dtype=torch.bfloat16):
         return context.head(**inputs, x_pred=x_pred[sample : sample + 1], num_diffusion_samples=1)
@@ -177,21 +181,22 @@ def sample_scores(
     output: Mapping[str, Tensor], targets: Mapping[str, Tensor], inputs: Mapping[str, Tensor]
 ) -> tuple[Tensor, Tensor]:
     """Differentiable mean pLDDT over labeled atoms and ipTM of one sample; each has shape (1,)."""
-    plddt = expected_mean_plddt(output["plddt_logits"], targets["plddt_mask"][None])
+    plddt = expected_mean_plddt(output["plddt_logits"], targets["plddt_mask"][None])  # (1,)
     _, iptm = expected_tm_scores(
         output["pae_logits"], inputs["asym_id"], inputs["token_attention_mask"]
-    )
-    return plddt, iptm
+    )  # each (1,)
+    return plddt, iptm  # each (1,)
 
 
 def cross_entropy(
     output: Mapping[str, Tensor], targets: Mapping[str, Tensor], pae_weight: float
 ) -> tuple[Tensor, Tensor]:
+    # Logits: (1, atoms, 50), (1, tokens, tokens, 64); targets omit batch and bins.
     plddt = _masked_cross_entropy(
         output["plddt_logits"][0], targets["plddt_target"], targets["plddt_mask"]
-    )
-    pae = _masked_cross_entropy(output["pae_logits"][0], targets["pae_target"], targets["pae_mask"])
-    return plddt, pae * pae_weight
+    )  # ()
+    pae = _masked_cross_entropy(output["pae_logits"][0], targets["pae_target"], targets["pae_mask"])  # ()
+    return plddt, pae * pae_weight  # each ()
 
 
 def target_step(
@@ -225,23 +230,23 @@ def target_step(
     totals = {"plddt_ce": 0.0, "pae_ce": 0.0, "ranking": 0.0}
     for sample in range(samples):
         output = head_output(context, rollout.head_inputs, rollout.x_pred, sample)
-        plddt_ce, pae_ce = cross_entropy(output, rollout.targets[sample], config.pae_weight)
-        loss = (plddt_ce + pae_ce) / samples
+        plddt_ce, pae_ce = cross_entropy(output, rollout.targets[sample], config.pae_weight)  # each ()
+        loss = (plddt_ce + pae_ce) / samples  # ()
         if ranked:
             plddt_score, iptm_score = sample_scores(
                 output, rollout.targets[sample], rollout.head_inputs
-            )
+            )  # each (1,)
             ranking = sample_ranking_loss(
                 sample, plddt_score[0], detached_plddt, plddt_pairs, config.ranking_temperature
-            )
+            )  # ()
             if iptm_pairs:
                 ranking = 0.5 * (
                     ranking
                     + sample_ranking_loss(
                         sample, iptm_score[0], detached_iptm, iptm_pairs, config.ranking_temperature
                     )
-                )
-            loss = loss + config.ranking_weight * ranking
+                )  # ()
+            loss = loss + config.ranking_weight * ranking  # ()
             totals["ranking"] += (
                 float(ranking.detach()) / 2
             )  # each pair appears in two per-sample terms
@@ -291,7 +296,7 @@ def build_validation_cache(
             # Pair tensors come from bf16 autocast; verify lossless storage before halving.
             if torch.equal(tensors[name], tensors[name].bfloat16().float()):
                 tensors[name] = tensors[name].bfloat16()
-        tensors["x_pred"] = rollout.x_pred.contiguous().cpu()
+        tensors["x_pred"] = rollout.x_pred.contiguous().cpu()  # (samples, atoms, 3)
         for sample, sample_targets in enumerate(rollout.targets):
             for name in ("plddt_target", "plddt_mask", "plddt_score", "pae_target", "pae_mask"):
                 tensors[f"target/{sample}/{name}"] = sample_targets[name].contiguous().cpu()
@@ -346,16 +351,16 @@ def validate(
             losses = cross_entropy(output, targets, 1.0)
             plddt_ce.append(float(losses[0]))
             pae_ce.append(float(losses[1]))
-            plddt_score, iptm_score = sample_scores(output, targets, inputs)
+            plddt_score, iptm_score = sample_scores(output, targets, inputs)  # each (1,)
             predicted_plddt.append(float(plddt_score[0]))
             predicted_iptm.append(float(iptm_score[0]))
             per_atom = (
                 output["plddt_logits"][0].float().softmax(-1)
                 * ((torch.arange(50, device="cuda") + 0.5) / 50)
-            ).sum(-1)
-            mask = targets["plddt_mask"].bool()
-            calibration_predicted.append(per_atom[mask].cpu())
-            calibration_true.append(targets["plddt_score"][mask].float().cpu())
+            ).sum(-1)  # (atoms,)
+            mask = targets["plddt_mask"].bool()  # (atoms,)
+            calibration_predicted.append(per_atom[mask].cpu())  # (labeled atoms,)
+            calibration_true.append(targets["plddt_score"][mask].float().cpu())  # (labeled atoms,)
         true_lddt = [item["lddt"] for item in quality]
         target_predicted.append(float(np.mean(predicted_plddt)))
         target_true.append(float(np.mean(true_lddt)))
@@ -374,14 +379,14 @@ def validate(
     predicted_atoms, true_atoms = (
         torch.cat(calibration_predicted).numpy(),
         torch.cat(calibration_true).numpy(),
-    )
-    bins = np.clip((predicted_atoms * 10).astype(int), 0, 9)
+    )  # each (all labeled validation atoms,)
+    bins = np.clip((predicted_atoms * 10).astype(int), 0, 9)  # (all labeled validation atoms,)
     calibration = sum(
         (bins == index).mean()
         * abs(predicted_atoms[bins == index].mean() - true_atoms[bins == index].mean())
         for index in range(10)
         if (bins == index).any()
-    )
+    )  # ()
     context.head.train()
     return {
         "plddt_ce": float(np.mean(plddt_ce)),

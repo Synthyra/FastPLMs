@@ -10,6 +10,7 @@ from __future__ import annotations
 import sys
 import torch
 import torch.nn as nn
+
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -88,7 +89,7 @@ class _OfficialDPLMForwardWrapper(nn.Module):
     def generate(self, input_tokens: torch.Tensor, **kwargs: Any) -> torch.Tensor:
         """Invoke the pinned implementation's public diffusion sampler."""
 
-        # input_tokens: (...)
+        # input_tokens: (b, l), the generation prompt's batch and token axes.
         return self.oracle.generate(input_tokens=input_tokens, **kwargs)
 
 

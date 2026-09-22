@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import torch
+
+from collections.abc import Callable
 from torch import nn
 
 from .vb_modules_encodersv2 import AtomEncoder, PairwiseConditioning
@@ -103,7 +105,7 @@ class DiffusionConditioning(nn.Module):
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
-        torch.Tensor,
+        Callable[[torch.Tensor], torch.Tensor],
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,

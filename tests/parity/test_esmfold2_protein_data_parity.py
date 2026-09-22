@@ -10,6 +10,7 @@ import types
 import numpy as np
 import pytest
 import torch
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import cache
@@ -181,7 +182,6 @@ def _atom37_coordinates(offset: float = 0.0) -> np.ndarray:
     # X: (4, 37, 3)
     X = np.full((4, 37, 3), np.nan, dtype=np.float32)
     for residue_index in range(4):
-        # x: (...)
         x = offset + 3.8 * residue_index
         atoms = {
             "N": (x, 0.1, 0.0),
@@ -277,7 +277,7 @@ def test_chain_construction_slicing_and_atom_views_match_pinned_biohub() -> None
     actual = _make_chain(local_chain, chain_id="Q", entity_id=7, offset=0.0)
     expected = _make_chain(official, chain_id="Q", entity_id=7, offset=0.0)
     _assert_chain_equal(actual, expected)
-    selection = np.asarray([True, False, True, True])
+    selection = np.asarray([True, False, True, True])  # (4,)
     _assert_chain_equal(actual[selection], expected[selection])
     _assert_equal(actual.atoms[["N", "CA", "C"]], expected.atoms[["N", "CA", "C"]])
     _assert_equal(actual.atom_mask["CB"], expected.atom_mask["CB"])
@@ -354,7 +354,7 @@ def test_complex_construction_views_and_topology_match_pinned_biohub() -> None:
     _assert_equal(actual.chain_adjacency(), expected.chain_adjacency())
     _assert_equal(actual.chain_adjacency_by_index(0), expected.chain_adjacency_by_index(0))
     _assert_chain_equal(actual.get_chain_by_index(1), expected.get_chain_by_index(1))
-    mask = np.asarray([True, True, False, False, False, True, True, True, True])
+    mask = np.asarray([True, True, False, False, False, True, True, True, True])  # (9,)
     _assert_complex_equal(actual[mask], expected[mask])
 
 

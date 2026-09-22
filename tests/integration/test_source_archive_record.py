@@ -7,11 +7,13 @@ import json
 import subprocess
 import tarfile
 import pytest
+
+import tools.artifacts.build as artifact_build
+
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
-import tools.artifacts.build as artifact_build
 from tools.artifacts.build import (
     ArtifactError,
     _validate_vendor_revisions,

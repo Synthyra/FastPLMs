@@ -6,6 +6,7 @@ import copy
 import pytest
 import torch
 import torch.nn as nn
+
 from collections.abc import Callable
 
 from tests.structure.support.state_contract import (

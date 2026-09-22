@@ -10,6 +10,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 import transformers
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -210,12 +211,13 @@ def _assert_bf16_contract(
     has_logits: bool,
     contract: BF16Contract,
 ) -> None:
-    # candidate: (...), reference: (...), residue_mask: (b, l)
+    # candidate, reference: (b, l, d); residue_mask: (b, l).
+    # b is batch size, l is token length, and d is the compared feature width.
     assert candidate.shape == reference.shape
     assert candidate.ndim == 3
-    # candidate_f: (...)
+    # candidate_f: (b, l, d)
     candidate_f = candidate.float()
-    # reference_f: (...)
+    # reference_f: (b, l, d)
     reference_f = reference.float()
     valid_candidate = candidate_f[residue_mask]
     valid_reference = reference_f[residue_mask]
@@ -233,7 +235,7 @@ def _assert_bf16_contract(
         0.01,
     )
 
-    # M: (...)
+    # M: (b, l, 1)
     M = residue_mask.unsqueeze(-1).float()
     candidate_pooled = (candidate_f * M).sum(1) / M.sum(1).clamp_min(1)
     reference_pooled = (reference_f * M).sum(1) / M.sum(1).clamp_min(1)
@@ -250,14 +252,14 @@ def _assert_bf16_contract(
         f"{context}: per-sequence pooled cosine={pooled_cosine.tolist()}"
     )
     if has_logits:
-        # reference_probabilities: (...)
+        # reference_probabilities: (b, l, d), with d vocabulary classes.
         reference_probabilities = reference_f.softmax(-1)
-        # confidence: (...), reference_top1: (...)
+        # confidence, reference_top1: (b, l)
         confidence, reference_top1 = reference_probabilities.max(-1)
-        # confident_mask: (...)
+        # confident_mask: (b, l)
         confident_mask = residue_mask & confidence.ge(0.5)
         assert bool(confident_mask.any()), f"{context}: no confident biological positions"
-        # candidate_top1: (...)
+        # candidate_top1: (b, l)
         candidate_top1 = candidate_f.argmax(-1)
         # top1_agreement: ()
         top1_agreement = (

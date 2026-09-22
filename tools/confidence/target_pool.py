@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
+
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -54,13 +55,14 @@ class ChainSubset:
 
 def _row_positions(column: pa.Array) -> tuple[np.ndarray, np.ndarray]:
     """Flatten an Array3D batch column into (l_total, 14, 3) values and (n_rows + 1,) residue offsets."""
+    # Arrow column of n_rows variable-length residue lists
     storage = column.storage if isinstance(column, pa.ExtensionArray) else column
     offsets = storage.offsets.to_numpy()  # (n_rows + 1,)
-    values = storage.flatten()
+    values = storage.flatten()  # flattened Arrow array; list nesting decreases until scalar coordinates
     while pa.types.is_list(values.type):
-        values = values.flatten()
+        values = values.flatten()  # flattened Arrow array; list nesting decreases until scalar coordinates
     positions = values.to_numpy(zero_copy_only=False).reshape(-1, 14, 3)  # (l_total, 14, 3)
-    return positions, offsets - offsets[0]
+    return positions, offsets - offsets[0]  # (l_total, 14, 3), (n_rows + 1,)
 
 
 def spatial_chain_subset(chain_ca: list[np.ndarray], lengths: list[int], budget: int, seed: int) -> ChainSubset:
@@ -80,6 +82,7 @@ def spatial_chain_subset(chain_ca: list[np.ndarray], lengths: list[int], budget:
     while remaining:
         newest = chain_ca[chosen[-1]]  # (n_newest, 3)
         for index in remaining:
+            # () minimum distance between resolved CA coordinates
             gap = np.sqrt(((chain_ca[index][:, None, :] - newest[None, :, :]) ** 2).sum(-1)).min()
             distances[index] = min(distances[index], float(gap))
         fitting = [index for index in remaining if tokens + lengths[index] <= budget]
@@ -106,11 +109,11 @@ def _targets_for_row(source: str, identifier: str, sequences: list[str], positio
         return [("long", ChainSubset((0,), total))] if total <= LONG_TOKEN_BUDGET else []
     if len(sequences) < 2:
         return []
-    starts = np.cumsum([0, *lengths])
+    starts = np.cumsum([0, *lengths])  # (chains + 1,) cumulative residue offsets
     chain_ca = []
     for index in range(len(sequences)):
         ca = positions[starts[index] : starts[index + 1], 1]  # (l_c, 3)
-        chain_ca.append(ca[np.isfinite(ca).all(-1)])
+        chain_ca.append(ca[np.isfinite(ca).all(-1)])  # (resolved chain CA atoms, 3)
     choices = []
     standard = ChainSubset(tuple(range(len(sequences))), total) if total <= TOKEN_BUDGET else spatial_chain_subset(
         chain_ca, lengths, TOKEN_BUDGET, _row_seed(identifier)
@@ -127,6 +130,7 @@ def _targets_for_row(source: str, identifier: str, sequences: list[str], positio
 
 
 def _eligible(sequences: list[str], positions: np.ndarray, resolution: float | None) -> bool:
+    # positions: (residues across all chains, 14, 3).
     if resolution is None or not 0 < resolution <= MAX_RESOLUTION_ANGSTROM:
         return False
     if any(not set(sequence) <= STANDARD_RESIDUES for sequence in sequences):
@@ -150,6 +154,7 @@ def _pool_file(task: tuple[str, str, str]) -> dict[str, object]:
     offset = 0
     counts = {"rows": 0, "eligible": 0}
     for batch in pq.ParquetFile(parquet_path).iter_batches(batch_size=512, columns=COLUMNS):
+        # (batch residues, 14, 3), (batch rows + 1,)
         positions, residue_offsets = _row_positions(batch["atom14_positions"])
         for index in range(batch.num_rows):
             counts["rows"] += 1
@@ -160,8 +165,9 @@ def _pool_file(task: tuple[str, str, str]) -> dict[str, object]:
             if not _eligible(sequences, row_positions, resolution):
                 continue
             counts["eligible"] += 1
-            starts = np.cumsum([0, *[len(sequence) for sequence in sequences]])
+            starts = np.cumsum([0, *[len(sequence) for sequence in sequences]])  # (chains + 1,)
             for variant, subset in _targets_for_row(source, identifier, sequences, row_positions):
+                # per selected chain (chain residues, 14, 3)
                 selected = [row_positions[starts[chain] : starts[chain + 1]] for chain in subset.chain_indices]
                 chunks.extend(selected)
                 rows.append(
@@ -221,6 +227,7 @@ def build_pool(atlasfold_hub: Path, output_dir: Path, workers: int) -> dict[str,
 
 def load_positions(output_dir: Path, target: dict[str, object]) -> np.ndarray:
     """Return the (l, 14, 3) float32 positions of one pool target."""
+    # (file residues, 14, 3)
     array = np.load(output_dir / "positions" / str(target["positions_file"]), mmap_mode="r")
     start = int(target["residue_offset"])  # type: ignore[arg-type]
-    return np.array(array[start : start + int(target["num_tokens"])])  # type: ignore[arg-type]
+    return np.array(array[start : start + int(target["num_tokens"])])  # type: ignore[arg-type]  # (l, 14, 3)

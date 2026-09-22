@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 import torch.nn as nn
+
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
@@ -90,7 +91,7 @@ class DummyTokenizer:
         # input_ids: (len(encoded), max_len)
         input_ids = torch.full((len(encoded), max_len), self.pad_token_id)
         for row, ids in enumerate(encoded):
-            # input_ids[row, :len(ids)]: (...)
+            # One row slice and its source token vector both have shape (len(ids),).
             input_ids[row, : len(ids)] = torch.tensor(ids)
         return {"input_ids": input_ids.long()}
 

@@ -10,7 +10,6 @@ from datetime import datetime, UTC
 from pathlib import Path
 
 
-
 class BudgetExceeded(RuntimeError):
     """A dispatch bound prevented a requested reservation."""
 

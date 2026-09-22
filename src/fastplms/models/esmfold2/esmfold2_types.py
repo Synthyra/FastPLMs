@@ -6,6 +6,7 @@ from . import esmfold2_input_builder as _input_schema
 from .esmfold2_msa import MSA
 from .esmfold2_parsing import FastaEntry
 
+
 Modification = _input_schema.Modification
 ProteinInput = _input_schema.ProteinInput
 RNAInput = _input_schema.RNAInput

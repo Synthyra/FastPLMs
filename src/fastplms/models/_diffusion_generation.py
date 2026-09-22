@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import torch
+
 from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any, Protocol

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-
 import numpy as np
+
+from dataclasses import dataclass
 
 from .esmfold2_constants import (
     MSA_GAP_TOKEN_ID,
@@ -14,6 +14,7 @@ from .esmfold2_constants import (
     PROTEIN_UNK_RES_TYPE,
 )
 from .esmfold2_msa import MSA
+
 
 _TAXONOMY_PATTERN = re.compile(r"key=(-?\d+)")
 

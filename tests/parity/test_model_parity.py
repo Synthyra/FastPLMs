@@ -17,6 +17,7 @@ import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -336,9 +337,9 @@ def _assert_state_equal(spec: ModelSpec, fast: nn.Module, reference: nn.Module) 
         f"only_official={sorted(set(official_state) - set(fast_state))[:20]}"
     )
     for name in sorted(fast_state):
-        # candidate: (...)
+        # candidate: shape of the named state tensor, unchanged by detach/cpu.
         candidate = fast_state[name].detach().cpu()
-        # official: (...)
+        # official: the matching named reference state tensor's shape.
         official = official_state[name].detach().cpu()
         assert candidate.shape == official.shape, (
             f"{spec.id}:{name}: shape {tuple(candidate.shape)} != {tuple(official.shape)}"
@@ -522,37 +523,38 @@ def tensor_metrics(
 ) -> TensorMetrics:
     """Compute normalized errors and cosine metrics on valid residues."""
 
-    # candidate: (...), official: (...), residue_mask: (b, l)
+    # candidate, official: (b, l, d); residue_mask: (b, l).
+    # b is batch size, l is token length, and d is the compared feature width.
     assert candidate.shape == official.shape
     assert candidate.ndim == 3
-    valid_candidate = candidate.float()[residue_mask]
-    valid_official = official.float()[residue_mask]
+    valid_candidate = candidate.float()[residue_mask]  # (n, d); n valid tokens
+    valid_official = official.float()[residue_mask]  # (n, d)
     assert valid_candidate.numel() > 0, "Parity batch contains no biological residues"
-    difference = valid_candidate - valid_official
-    # denominator: (...)
+    difference = valid_candidate - valid_official  # (n, d)
+    # denominator: ()
     denominator = torch.linalg.vector_norm(valid_official).clamp_min(
         torch.finfo(torch.float32).tiny
     )
-    relative_l2 = torch.linalg.vector_norm(difference) / denominator
-    # reference_q999: (...)
+    relative_l2 = torch.linalg.vector_norm(difference) / denominator  # ()
+    # reference_q999: ()
     reference_q999 = torch.quantile(valid_official.abs().reshape(-1), 0.999)
     # difference_q999: ()
     difference_q999 = torch.quantile(difference.abs().reshape(-1), 0.999)
     relative_q999 = difference_q999 / reference_q999.clamp_min(torch.finfo(torch.float32).tiny)
-    residue_cosines = F.cosine_similarity(valid_candidate, valid_official, dim=-1)
+    residue_cosines = F.cosine_similarity(valid_candidate, valid_official, dim=-1)  # (n,)
     # residue_cosine_p01: ()
     residue_cosine_p01 = torch.quantile(residue_cosines, 0.01)
 
-    # mask: (...)
+    # mask: (b, l, 1)
     mask = residue_mask.unsqueeze(-1)
-    # denominator: (...)
+    # denominator: (b, 1)
     denominator = mask.sum(1).clamp_min(1)
-    # candidate_values: (...)
+    # candidate_values: (b, l, d)
     candidate_values = candidate.float()
-    # official_values: (...)
+    # official_values: (b, l, d)
     official_values = official.float()
-    candidate_pooled = torch.where(mask, candidate_values, 0.0).sum(1) / denominator
-    official_pooled = torch.where(mask, official_values, 0.0).sum(1) / denominator
+    candidate_pooled = torch.where(mask, candidate_values, 0.0).sum(1) / denominator  # (b, d)
+    official_pooled = torch.where(mask, official_values, 0.0).sum(1) / denominator  # (b, d)
     # pooled_cosine_min: ()
     pooled_cosine_min = F.cosine_similarity(candidate_pooled, official_pooled, dim=-1).min()
     return TensorMetrics(
@@ -580,7 +582,8 @@ def _assert_tensor_contract(
     contract: NumericContract,
     context: str,
 ) -> None:
-    # candidate: (...), official: (...), residue_mask: (b, l)
+    # candidate, official: (b, l, d); residue_mask: (b, l).
+    # b is batch size, l is token length, and d is the compared feature width.
     metrics = tensor_metrics(candidate, official, residue_mask)
     _assert_tensor_metrics(metrics, contract, context)
 
@@ -671,19 +674,20 @@ def _logits_metrics(
 ) -> LogitsMetrics:
     """Collect logits semantics before any numeric threshold is asserted."""
 
-    # candidate: (...), official: (...), residue_mask: (b, l)
-    # official_probabilities: (...)
+    # candidate, official: (b, l, d); residue_mask: (b, l).
+    # b is batch size, l is token length, and d is the compared feature width.
+    # official_probabilities: (b, l, d), with d vocabulary classes.
     official_probabilities = official.float().softmax(-1)
-    # candidate_probabilities: (...)
+    # candidate_probabilities: (b, l, d)
     candidate_probabilities = candidate.float().softmax(-1)
-    # confidence: (...), official_top1: (...)
+    # confidence, official_top1: (b, l)
     confidence, official_top1 = official_probabilities.max(-1)
-    # confident_mask: (...)
+    # confident_mask: (b, l)
     confident_mask = residue_mask & confidence.ge(0.5)
     assert bool(confident_mask.any()), (
         f"{context}: no positions meet the fixed confidence threshold"
     )
-    # candidate_top1: (...)
+    # candidate_top1: (b, l)
     candidate_top1 = candidate_probabilities.argmax(-1)
     # top1_agreement: ()
     top1_agreement = (
@@ -711,7 +715,8 @@ def _assert_logits_contract(
     contract: NumericContract,
     context: str,
 ) -> None:
-    # candidate: (...), official: (...), residue_mask: (b, l)
+    # candidate, official: (b, l, d); residue_mask: (b, l).
+    # b is batch size, l is token length, and d is the compared feature width.
     _assert_tensor_contract(candidate, official, residue_mask, contract, context)
     metrics = _logits_metrics(candidate, official, residue_mask, context)
     _assert_lower(

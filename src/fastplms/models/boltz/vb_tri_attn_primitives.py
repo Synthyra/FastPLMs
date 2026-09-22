@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import math
 import torch
+
 from collections.abc import Callable, Sequence
 from importlib.util import find_spec
 from torch import nn
@@ -120,6 +121,7 @@ class LayerNorm(nn.Module):
 def softmax_no_cast(tensor: torch.Tensor, dim: int = -1) -> torch.Tensor:
     """Apply softmax without promoting BF16 inputs under CUDA autocast."""
 
+    # tensor: (...); softmax preserves shape.
     if tensor.dtype is torch.bfloat16:
         with torch.autocast("cuda", enabled=False):
             return nn.functional.softmax(tensor, dim=dim)
@@ -262,4 +264,3 @@ class Attention(nn.Module):
         return self._wrap_up(
             output.transpose(-2, -3), q_x
         )  # (..., n_q, c_q)
-    # tensor: (...); softmax preserves shape.

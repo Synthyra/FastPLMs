@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 import torch
-from transformers.modeling_outputs import SequenceClassifierOutput, TokenClassifierOutput
 
 import fastplms.models.classification_probe as probe_module
+
+from types import SimpleNamespace
+from transformers.modeling_outputs import SequenceClassifierOutput, TokenClassifierOutput
+
 from fastplms.models.classification_probe import (
     ProteinTransformerProbe,
     SequenceClassificationProbe,
@@ -88,9 +89,9 @@ def test_classifier_bias_can_be_enabled_explicitly() -> None:
 
 def test_sequence_probe_returns_hf_output_and_standard_tuple() -> None:
     probe = SequenceClassificationProbe(_config(), input_size=8).eval()
-    embeddings = torch.randn(2, 4, 8)
-    mask = torch.tensor([[1, 1, 1, 0], [1, 1, 0, 0]])
-    labels = torch.tensor([1, 2])
+    embeddings = torch.randn(2, 4, 8)  # (2, 4, 8)
+    mask = torch.tensor([[1, 1, 1, 0], [1, 1, 0, 0]])  # (2, 4)
+    labels = torch.tensor([1, 2])  # (2,)
 
     output = probe(
         embeddings,
@@ -112,9 +113,9 @@ def test_sequence_probe_returns_hf_output_and_standard_tuple() -> None:
 
 def test_token_probe_returns_one_prediction_per_input_residue() -> None:
     probe = TokenClassificationProbe(_config(), input_size=8).eval()
-    embeddings = torch.randn(2, 5, 8)
-    mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]])
-    labels = torch.tensor([[0, 1, 2, 0, 1], [2, 1, 0, -100, -100]])
+    embeddings = torch.randn(2, 5, 8)  # (2, 5, 8)
+    mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]])  # (2, 5)
+    labels = torch.tensor([[0, 1, 2, 0, 1], [2, 1, 0, -100, -100]])  # (2, 5)
 
     output = probe(embeddings, mask, labels)
 
@@ -149,7 +150,7 @@ def test_sdpa_executes_named_backend_and_fails_closed_for_attentions(monkeypatch
 
     monkeypatch.setattr(probe_module.F, "scaled_dot_product_attention", tracked_sdpa)
     probe = ProteinTransformerProbe(_config(attn_backend="sdpa"), input_size=8).eval()
-    embeddings = torch.randn(2, 3, 8)
+    embeddings = torch.randn(2, 3, 8)  # (2, 3, 8)
 
     output = probe(embeddings)
 
@@ -165,8 +166,8 @@ def test_unsupported_attention_backend_is_rejected() -> None:
 
 
 def test_token_regression_excludes_ignored_elements() -> None:
-    logits = torch.tensor([[[1.0], [2.0], [9.0]]], requires_grad=True)
-    labels = torch.tensor([[1.0, 0.0, -100.0]])
+    logits = torch.tensor([[[1.0], [2.0], [9.0]]], requires_grad=True)  # (1, 3, 1)
+    labels = torch.tensor([[1.0, 0.0, -100.0]])  # (1, 3)
 
     loss = token_classification_loss(
         logits,
@@ -182,8 +183,8 @@ def test_token_regression_excludes_ignored_elements() -> None:
 
 
 def test_token_multilabel_excludes_ignored_elements() -> None:
-    logits = torch.zeros(1, 2, 3, requires_grad=True)
-    labels = torch.tensor([[[1.0, 0.0, -100.0], [-100.0, -100.0, -100.0]]])
+    logits = torch.zeros(1, 2, 3, requires_grad=True)  # (1, 2, 3)
+    labels = torch.tensor([[[1.0, 0.0, -100.0], [-100.0, -100.0, -100.0]]])  # (1, 2, 3)
 
     loss = token_classification_loss(
         logits,
@@ -200,8 +201,8 @@ def test_token_multilabel_excludes_ignored_elements() -> None:
 
 
 def test_all_ignored_token_regression_remains_differentiable() -> None:
-    logits = torch.randn(1, 2, 1, requires_grad=True)
-    labels = torch.full((1, 2), -100.0)
+    logits = torch.randn(1, 2, 1, requires_grad=True)  # (1, 2, 1)
+    labels = torch.full((1, 2), -100.0)  # (1, 2)
 
     loss = token_classification_loss(
         logits,

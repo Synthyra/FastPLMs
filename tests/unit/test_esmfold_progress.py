@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import inspect
-from types import SimpleNamespace
-from typing import ClassVar
-
 import pytest
 import torch
-from torch import nn
 
 import fastplms.models.esmfold.modeling_fast_esmfold as esmfold_module
+
+from types import SimpleNamespace
+from typing import ClassVar
+from torch import nn
+
 from fastplms.models.esmfold.modeling_fast_esmfold import FastEsmForProteinFolding
 
 
@@ -43,7 +44,7 @@ def _patch_tiny_forward(monkeypatch: pytest.MonkeyPatch) -> None:
         del input_ids
         num_recycles = kwargs["num_recycles"]
         passes = 1 if num_recycles is None else int(num_recycles) + 1
-        value = torch.ones(1)
+        value = torch.ones(1)  # (1,)
         self.esm(value)
         for _ in range(passes):
             for block in self.trunk.blocks:

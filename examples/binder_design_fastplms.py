@@ -22,6 +22,7 @@ import sys
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+
 from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -41,6 +42,11 @@ from fastplms.models.esmfold2.esmfold2_constants import (
     RES_TYPE_TO_CCD,
 )
 
+
+# Shapes: b = designs, l = residues, a = 20 amino acids, z = distance bins.
+# l_t/l_b/l_cdr = target/binder/CDR residues; v_f/v = folding/LM vocabularies.
+# p/p_c = masking passes/chunk passes, n = scored residues, m = masked residues.
+# d = hidden width; z_c = distance bins below the contact cutoff.
 
 logger = logging.getLogger(__name__)
 
@@ -382,9 +388,10 @@ def compute_contact_loss(
 def compute_intra_contact_loss(
     distogram_logits: torch.Tensor, binder_length: int, bin_distance: torch.Tensor
 ) -> torch.Tensor:
-    full_len = distogram_logits.shape[1]
-    is_binder = torch.ones(full_len, device=distogram_logits.device)  # (L,)
-    is_binder[:-binder_length] *= 0.0  # (L,)
+    # distogram_logits: (b, l, l, z); bin_distance: (z,)
+    full_len = distogram_logits.shape[1]  # l: total residues
+    is_binder = torch.ones(full_len, device=distogram_logits.device)  # (l,)
+    is_binder[:-binder_length] *= 0.0  # (l,)
     return compute_contact_loss(
         distogram_logits,
         bin_distance,
@@ -399,9 +406,10 @@ def compute_intra_contact_loss(
 def compute_inter_contact_loss(
     distogram_logits: torch.Tensor, binder_length: int, bin_distance: torch.Tensor
 ) -> torch.Tensor:
-    full_len = distogram_logits.shape[1]
-    is_binder = torch.ones(full_len, device=distogram_logits.device)  # (L,)
-    is_binder[:-binder_length] *= 0.0  # (L,)
+    # distogram_logits: (b, l, l, z); bin_distance: (z,)
+    full_len = distogram_logits.shape[1]  # l: total residues
+    is_binder = torch.ones(full_len, device=distogram_logits.device)  # (l,)
+    is_binder[:-binder_length] *= 0.0  # (l,)
     return compute_contact_loss(
         distogram_logits,
         bin_distance,
@@ -416,16 +424,16 @@ def compute_inter_contact_loss(
 def compute_globularity_loss(
     distogram_logits: torch.Tensor, binder_length: int, bin_distance: torch.Tensor
 ) -> torch.Tensor:
-    # distogram_logits: (b, l, l, z)
+    # distogram_logits: (b, l, l, z); bin_distance: (z,); l_b: binder residues
     binder_disto = distogram_logits[
         :, -binder_length:, -binder_length:, :
-    ]  # (b, l, l, z)
+    ]  # (b, l_b, l_b, z)
     n = binder_disto.shape[1]
-    disto_probs = torch.softmax(binder_disto, dim=-1)  # (b, l, l, z)
+    disto_probs = torch.softmax(binder_disto, dim=-1)  # (b, l_b, l_b, z)
     bin_distance = bin_distance.clamp(max=27)  # (z,)
     e_sq_dist = torch.sum(
         disto_probs * torch.square(bin_distance), dim=-1
-    )  # (b, l, l)
+    )  # (b, l_b, l_b)
     sum_sq_dist = torch.sum(
         torch.tril(e_sq_dist, diagonal=-1), dim=(1, 2)
     )  # (b,)
@@ -586,7 +594,7 @@ def _resize_tensor(tensor: torch.Tensor, *, dim: int, size: int) -> torch.Tensor
             "batch padding must preserve every prepared atom."
         )
     if current == size:
-        return tensor
+        return tensor  # (..., n_dim, ...)
     pad_shape = list(tensor.shape)
     pad_shape[dim] = size - current
     pad = torch.zeros(

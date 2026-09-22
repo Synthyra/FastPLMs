@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import importlib
 import inspect
-
 import pytest
 import torch
 
@@ -491,8 +490,8 @@ def test_compute_lm_hidden_states_pads_and_masks_non_special_tokens() -> None:
     asym_id = torch.tensor([[0, 0, 0]], dtype=torch.long)
     # residue_index: (1, 3)
     residue_index = torch.tensor([[0, 1, 2]], dtype=torch.long)
-    mol_type = torch.zeros_like(input_ids)
-    token_mask = torch.ones_like(input_ids, dtype=torch.bool)
+    mol_type = torch.zeros_like(input_ids)  # (1, 3)
+    token_mask = torch.ones_like(input_ids, dtype=torch.bool)  # (1, 3)
 
     result = compute_lm_hidden_states(
         esmc,

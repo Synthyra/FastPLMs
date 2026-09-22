@@ -107,9 +107,9 @@ def test_gradient_forward_rebuilds_inference_tables(seq_len: int, training: bool
         warm(probe, probe)
 
     query = torch.randn(1, 2, seq_len, head_dim, requires_grad=True)  # (b=1, h=2, l, d=16)
-    key = torch.randn_like(query, requires_grad=True)
-    cold_query = query.detach().clone().requires_grad_()
-    cold_key = key.detach().clone().requires_grad_()
+    key = torch.randn_like(query, requires_grad=True)  # (1, 2, seq_len, head_dim)
+    cold_query = query.detach().clone().requires_grad_()  # (1, 2, seq_len, head_dim)
+    cold_key = key.detach().clone().requires_grad_()  # (1, 2, seq_len, head_dim)
     expected = RotaryEmbedding(head_dim)(cold_query, cold_key)
     actual = warm(query, key)
 

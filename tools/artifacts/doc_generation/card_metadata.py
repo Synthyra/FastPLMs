@@ -11,6 +11,7 @@ from tools.artifacts.doc_generation.capabilities import (
 )
 from tools.artifacts.license_metadata import render_checkpoint_terms
 
+
 GENERATED_MARKER = "<!-- Generated from src/fastplms/models.toml. Do not edit. -->"
 
 

@@ -10,6 +10,7 @@ import time
 import modal
 
 from pathlib import Path
+from typing import Any
 
 from .config import (
     CAMPAIGN_TIMEOUT_SECONDS,
@@ -77,7 +78,6 @@ image = (
     )
     .add_local_file(str(ROOT / "pytest.ini"), "/workspace/pytest.ini")
     .add_local_file(str(ROOT / "tests/conftest.py"), "/workspace/tests/conftest.py")
-    .add_local_file(str(ROOT / "ruff.toml"), "/workspace/ruff.toml")
 )
 
 
@@ -90,7 +90,7 @@ image = (
     volumes={"/vol": volume},
     max_containers=1,
 )
-def cpu_stage(stage: str, options: dict) -> dict:
+def cpu_stage(stage: str, options: dict[str, Any]) -> dict[str, Any]:
     start = time.monotonic()
     options = dict(options)
     options.pop("controller_app_id", None)
@@ -120,6 +120,9 @@ def cpu_stage(stage: str, options: dict) -> dict:
                     "-m",
                     "ruff",
                     "check",
+                    "--isolated",
+                    "--select",
+                    "E4,E7,E9,F",
                     *(["--fix"] if options.get("fix") else []),
                     *map(str, paths),
                 ],
@@ -142,7 +145,10 @@ def cpu_stage(stage: str, options: dict) -> dict:
             formatted = {}
             for path in paths:
                 result = subprocess.run(
-                    [sys.executable, "-m", "ruff", "format", "--stdin-filename", str(path), "-"],
+                    [
+                        sys.executable, "-m", "ruff", "format", "--isolated",
+                        "--stdin-filename", str(path), "-",
+                    ],
                     input=path.read_text(),
                     capture_output=True,
                     text=True,
@@ -221,7 +227,7 @@ def cpu_stage(stage: str, options: dict) -> dict:
         volume.commit()
 
 
-def _gpu_stage(stage: str, model_id: str, options: dict) -> dict:
+def _gpu_stage(stage: str, model_id: str, options: dict[str, Any]) -> dict[str, Any]:
     started = time.monotonic()
     controller_app_id = options.pop("controller_app_id", None)
     controller_call_id = options.pop("controller_call_id", None)
@@ -284,7 +290,7 @@ gpu_workers = {
 
 
 @app.function(image=image, cpu=0.25, memory=512, timeout=120, volumes={"/vol": volume})
-def read_report(relative_path: str) -> dict:
+def read_report(relative_path: str) -> dict[str, Any]:
     path = (REMOTE_ROOT / relative_path).resolve()
     if not path.is_relative_to(REMOTE_ROOT):
         raise ValueError("Report path escapes the pilot directory")

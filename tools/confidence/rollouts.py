@@ -5,6 +5,9 @@ atom14 slot order (N, CA, C, O, CB, then the side chain), so true coordinates ma
 atoms through each token's atom span. Each sample receives its own chain permutation and
 symmetric-atom assignment before labels are computed, because different samples of one target
 can place equivalent chains and atoms differently.
+
+Shape symbols: k samples, a padded atoms, t padded tokens, l residues, p symmetric atom pairs,
+and g groups of symmetric pairs. A c suffix selects one chain; d_pair is pair-channel width.
 """
 
 from __future__ import annotations
@@ -14,13 +17,13 @@ import torch
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+
 from scipy.optimize import linear_sum_assignment
 from torch import Tensor
 
 from fastplms.models.esmfold2.esmfold2_constants import PROTEIN_HEAVY_ATOMS
 from fastplms.models.esmfold2.esmfold2_input_builder import ProteinInput, StructurePredictionInput
 from fastplms.models.esmfold2.reproducibility import seed_context
-
 from .labels import PAE_MAX_ANGSTROM, compute_targets
 
 
@@ -137,7 +140,7 @@ def chain_label(index: int) -> str:
 
 
 def atom_layout(chain_infos: Sequence[object], sequences: Sequence[str], num_atoms: int, num_tokens: int) -> AtomLayout:
-    residue_offsets = np.cumsum([0, *[len(sequence) for sequence in sequences]])
+    residue_offsets = np.cumsum([0, *[len(sequence) for sequence in sequences]])  # (chains + 1,)
     true_index = np.full(num_atoms, -1, dtype=np.int64)  # (a,)
     backbone = np.full((num_tokens, 3), -1, dtype=np.int64)  # (t, 3)
     chain_atoms, chain_ca, left, right, group = [], [], [], [], []
@@ -152,16 +155,16 @@ def atom_layout(chain_infos: Sequence[object], sequences: Sequence[str], num_ato
                 raise ValueError(f"residue {letter} has {token.atom_count} native atoms")
             span = np.arange(token.atom_start, token.atom_start + token.atom_count)  # (n_atom_residue,)
             residue = residue_offsets[chain_number] + token.residue_index
-            true_index[span] = residue * 14 + np.arange(token.atom_count)
-            backbone[token.token_index] = span[:3]
+            true_index[span] = residue * 14 + np.arange(token.atom_count)  # (residue atoms,)
+            backbone[token.token_index] = span[:3]  # (3,) N/CA/C indices
             atoms.append(span)
             cas.append(token.atom_start + 1)
             for left_slot, right_slot in AMBIGUOUS_SLOTS.get(letter, ()):
                 left.append(token.atom_start + left_slot)
                 right.append(token.atom_start + right_slot)
                 group.append(residue)
-        chain_atoms.append(torch.from_numpy(np.concatenate(atoms)))
-        chain_ca.append(torch.tensor(cas, dtype=torch.long))
+        chain_atoms.append(torch.from_numpy(np.concatenate(atoms)))  # (a_c,)
+        chain_ca.append(torch.tensor(cas, dtype=torch.long))  # (l_c,)
     entity_of: dict[str, list[int]] = {}
     for chain_number, sequence in enumerate(sequences):
         entity_of.setdefault(sequence, []).append(chain_number)
@@ -181,10 +184,10 @@ def kabsch_transform(mobile: np.ndarray, fixed: np.ndarray) -> tuple[np.ndarray,
     """Rotation and translation that map row-vector `mobile` (n, 3) onto `fixed` (n, 3)."""
     mobile_center, fixed_center = mobile.mean(0), fixed.mean(0)  # (3,), (3,)
     covariance = (mobile - mobile_center).T @ (fixed - fixed_center)  # (3, 3)
-    left, _, right = np.linalg.svd(covariance)
+    left, _, right = np.linalg.svd(covariance)  # (3, 3), (3,), (3, 3)
     correction = np.diag([1.0, 1.0, np.sign(np.linalg.det(left @ right))])  # (3, 3)
     rotation = left @ correction @ right  # (3, 3); x_aligned = x @ rotation + translation
-    return rotation, fixed_center - mobile_center @ rotation
+    return rotation, fixed_center - mobile_center @ rotation  # (3, 3), (3,)
 
 
 def chain_assignment(predicted_ca: Sequence[np.ndarray], true_ca: Sequence[np.ndarray], entity_chains: Sequence[Sequence[int]]) -> list[int]:
@@ -194,6 +197,7 @@ def chain_assignment(predicted_ca: Sequence[np.ndarray], true_ca: Sequence[np.nd
     fewest copies fixes the frame for each candidate; chains of every entity are then matched by
     resolved CA centroid distance, and the candidate with the lowest CA RMSD wins.
     """
+    # predicted_ca/true_ca contain per-chain (l_c, 3) coordinate arrays.
     num_chains = len(predicted_ca)
     identity = list(range(num_chains))
     if all(len(chains) == 1 for chains in entity_chains):
@@ -205,6 +209,7 @@ def chain_assignment(predicted_ca: Sequence[np.ndarray], true_ca: Sequence[np.nd
         resolved = np.isfinite(true_ca[candidate]).all(-1)  # (l_anchor,)
         if resolved.sum() < 3:
             continue
+        # (3, 3), (3,)
         rotation, translation = kabsch_transform(true_ca[candidate][resolved], predicted_ca[anchor][resolved])
         assignment = identity.copy()
         for chains in entity_chains:
@@ -214,15 +219,15 @@ def chain_assignment(predicted_ca: Sequence[np.ndarray], true_ca: Sequence[np.nd
                     mask = np.isfinite(true_ca[true_chain]).all(-1)  # (l_c,)
                     if mask.sum() == 0:
                         continue
-                    true_centroid = (true_ca[true_chain][mask] @ rotation + translation).mean(0)
-                    cost[row, column] = np.linalg.norm(predicted_ca[native][mask].mean(0) - true_centroid)
-            rows, columns = linear_sum_assignment(cost)
+                    true_centroid = (true_ca[true_chain][mask] @ rotation + translation).mean(0)  # (3,)
+                    cost[row, column] = np.linalg.norm(predicted_ca[native][mask].mean(0) - true_centroid)  # ()
+            rows, columns = linear_sum_assignment(cost)  # each (entity copies,)
             for row, column in zip(rows, columns, strict=True):
                 assignment[chains[row]] = chains[column]
         squared, count = 0.0, 0
         for native in range(num_chains):
-            mask = np.isfinite(true_ca[assignment[native]]).all(-1)
-            aligned = true_ca[assignment[native]][mask] @ rotation + translation
+            mask = np.isfinite(true_ca[assignment[native]]).all(-1)  # (chain residues,)
+            aligned = true_ca[assignment[native]][mask] @ rotation + translation  # (resolved chain residues, 3)
             squared += float(np.square(aligned - predicted_ca[native][mask]).sum())
             count += int(mask.sum())
         rmsd = np.sqrt(squared / max(count, 1))
@@ -235,7 +240,7 @@ def _aligned(mobile: Tensor, fixed: Tensor, valid: Tensor) -> Tensor:
     """Rigidly align `mobile` (a, 3) onto `fixed` (a, 3) using `valid` (a,) atoms."""
     rotation, translation = kabsch_transform(
         mobile[valid].double().cpu().numpy(), fixed[valid].double().cpu().numpy()
-    )
+    )  # (3, 3), (3,)
     rotation_t = torch.as_tensor(rotation, dtype=mobile.dtype, device=mobile.device)  # (3, 3)
     translation_t = torch.as_tensor(translation, dtype=mobile.dtype, device=mobile.device)  # (3,)
     return mobile @ rotation_t + translation_t  # (a, 3)
@@ -243,11 +248,12 @@ def _aligned(mobile: Tensor, fixed: Tensor, valid: Tensor) -> Tensor:
 
 def resolve_ambiguous_atoms(predicted: Tensor, true: Tensor, layout: AtomLayout) -> Tensor:
     """Swap symmetric atom labels of a residue when the swap sits closer to the prediction."""
+    # predicted/true: (a, 3); layout holds the per-atom and per-pair index vectors.
     if layout.ambiguous_left.numel() == 0:
-        return true
+        return true  # (a, 3)
     valid = torch.isfinite(true).all(-1) & torch.isfinite(predicted).all(-1)  # (a,)
     if int(valid.sum()) < 3:
-        return true
+        return true  # (a, 3)
     aligned = _aligned(torch.nan_to_num(true), predicted, valid)  # (a, 3)
     left, right = layout.ambiguous_left.to(true.device), layout.ambiguous_right.to(true.device)  # (p,)
     group = torch.unique(layout.ambiguous_group.to(true.device), return_inverse=True)[1]  # (p,)
@@ -260,21 +266,23 @@ def resolve_ambiguous_atoms(predicted: Tensor, true: Tensor, layout: AtomLayout)
     group_valid = torch.ones(num_groups, device=true.device).index_reduce_(0, group, pair_valid, "amin")  # (g,)
     swap = (group_valid > 0) & (group_swapped < group_direct)  # (g,)
     pair_swap = swap[group]  # (p,)
-    output = true.clone()
-    output[left[pair_swap]] = true[right[pair_swap]]
-    output[right[pair_swap]] = true[left[pair_swap]]
-    return output
+    output = true.clone()  # (a, 3)
+    output[left[pair_swap]] = true[right[pair_swap]]  # (swapped pairs, 3)
+    output[right[pair_swap]] = true[left[pair_swap]]  # (swapped pairs, 3)
+    return output  # (a, 3)
 
 
 def true_tm_scores(pae_error: Tensor, pae_mask: Tensor, asym_id: Tensor, token_mask: Tensor) -> tuple[float, float]:
     """pTM and ipTM of the true aligned errors, defined as the head defines its predictions."""
-    num_tokens = token_mask.float().sum()
-    d0 = 1.24 * (num_tokens.clamp(min=19) - 15) ** (1 / 3) - 1.8
+    # pae_error/pae_mask: (t, t); asym_id/token_mask: (t,).
+    num_tokens = token_mask.float().sum()  # ()
+    d0 = 1.24 * (num_tokens.clamp(min=19) - 15) ** (1 / 3) - 1.8  # ()
     tm = 1.0 / (1.0 + (pae_error.clamp(max=PAE_MAX_ANGSTROM) / d0) ** 2)  # (t, t)
     mask = pae_mask.float()  # (t, t)
     inter_chain = mask * (asym_id[:, None] != asym_id[None, :]).float()  # (t, t)
-    ptm = ((tm * mask).sum(-1) / mask.sum(-1).clamp(min=1)).max()
+    ptm = ((tm * mask).sum(-1) / mask.sum(-1).clamp(min=1)).max()  # ()
     rows = inter_chain.sum(-1) > 0  # (t,)
+    # ()
     iptm = ((tm * inter_chain).sum(-1)[rows] / inter_chain.sum(-1)[rows]).max() if rows.any() else torch.tensor(float("nan"))
     return float(ptm), float(iptm)
 
@@ -300,7 +308,7 @@ def fold(
         sequences=[ProteinInput(id=chain_label(index), sequence=sequence) for index, sequence in enumerate(structure.sequences)]
     )
     features, chain_infos = model.prepare_structure_input(inputs, seed=seed)
-    features = {name: value.to(device) for name, value in features.items()}
+    features = {name: value.to(device) for name, value in features.items()}  # per-field shapes unchanged
     if native_confidence:
         model.confidence_head.set_chunk_size(head_chunk_size(features["token_attention_mask"].shape[-1]))  # type: ignore[union-attr, operator]
     with torch.autocast(device.type, dtype=torch.bfloat16), seed_context(seed):
@@ -318,8 +326,8 @@ def fold(
             sym_id=features["sym_id"],
             entity_id=features["entity_id"],
             token_index=features["token_index"],
-        )
-        token_bonds = model.token_bonds(features["token_bonds"].float())
+        )  # (1, t, t, d_pair)
+        token_bonds = model.token_bonds(features["token_bonds"].float())  # (1, t, t, d_pair)
 
     atom_to_token = features["atom_to_token"].reshape(-1).long()  # (a,)
     atom_mask = features["atom_attention_mask"].reshape(-1).bool()  # (a,)
@@ -331,20 +339,22 @@ def fold(
     flat_positions = torch.from_numpy(structure.positions.reshape(-1, 3)).to(device)  # (l * 14, 3)
     true_base = torch.full_like(x_pred[0], float("nan"))  # (a, 3)
     mapped = layout.true_index >= 0  # (a,)
-    true_base[mapped.to(device)] = flat_positions[layout.true_index[mapped].to(device)]
+    true_base[mapped.to(device)] = flat_positions[layout.true_index[mapped].to(device)]  # (mapped atoms, 3)
     true_ca = [true_base[ca.to(device)].double().cpu().numpy() for ca in layout.chain_ca]  # per chain (l_c, 3)
 
     true_coords, targets, quality = [], [], []
     backbone = layout.backbone_indices.to(device)  # (t, 3)
     for sample in range(num_samples):
         predicted = x_pred[sample]  # (a, 3)
+        # per chain (l_c, 3)
         predicted_ca = [predicted[ca.to(device)].double().cpu().numpy() for ca in layout.chain_ca]
         assignment = chain_assignment(predicted_ca, true_ca, layout.entity_chains)
         true = true_base.clone()  # (a, 3)
         for native, true_chain in enumerate(assignment):
             if native != true_chain:
+                # (a_c, 3)
                 true[layout.chain_atoms[native].to(device)] = true_base[layout.chain_atoms[true_chain].to(device)]
-        true = resolve_ambiguous_atoms(predicted, true, layout)
+        true = resolve_ambiguous_atoms(predicted, true, layout)  # (a, 3)
         resolved = torch.isfinite(true).all(-1) & atom_mask  # (a,)
         sample_targets = compute_targets(predicted, true, resolved, atom_to_token, backbone, token_mask)
         ptm, iptm = true_tm_scores(sample_targets["pae_error"], sample_targets["pae_mask"], asym_id, token_mask)

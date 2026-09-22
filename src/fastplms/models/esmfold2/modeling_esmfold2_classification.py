@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
-
 import torch
 import torch.nn as nn
+
+from typing import Any, Literal
 from torch import Tensor
 
 from ..classification_probe import SequenceClassificationProbe, TokenClassificationProbe
@@ -94,46 +94,47 @@ class _ESMFold2ClassificationMixin:
         if not sequences:
             raise ValueError("prepare_classifier_inputs requires at least one sequence.")
         encoded = [_encode_single_chain(sequence) for sequence in sequences]
-        sequence_length = max(map(len, encoded))
+        sequence_length = max(map(len, encoded))  # l; b = len(encoded).
         input_ids = torch.full(
             (len(encoded), sequence_length),
             SEQUENCE_PAD_TOKEN,
             dtype=torch.long,
             device=self.device,
-        )
-        attention_mask = torch.zeros_like(input_ids, dtype=torch.bool)
+        )  # (b, l)
+        attention_mask = torch.zeros_like(input_ids, dtype=torch.bool)  # (b, l)
         for batch_index, token_ids in enumerate(encoded):
-            length = len(token_ids)
+            length = len(token_ids)  # l_i
             input_ids[batch_index, :length] = torch.tensor(
                 token_ids, dtype=torch.long, device=self.device
-            )
-            attention_mask[batch_index, :length] = True
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
+            )  # (l_i,)
+            attention_mask[batch_index, :length] = True  # (l_i,)
+        return {"input_ids": input_ids, "attention_mask": attention_mask}  # both (b, l)
 
     def _classifier_embeddings(
         self, input_ids: Tensor, attention_mask: Tensor | None
     ) -> tuple[Tensor, Tensor]:
+        # input_ids: (b, l); attention_mask: (b, l) or None.
         if input_ids.ndim != 2:
             raise ValueError(
                 "ESMFold2 classifier input_ids must have shape (batch, residue), "
                 f"got {tuple(input_ids.shape)}."
             )
         if attention_mask is None:
-            attention_mask = input_ids.ne(SEQUENCE_PAD_TOKEN)
+            attention_mask = input_ids.ne(SEQUENCE_PAD_TOKEN)  # (b, l)
         elif attention_mask.shape != input_ids.shape:
             raise ValueError(
                 "ESMFold2 classifier attention_mask must match input_ids, got "
                 f"{tuple(attention_mask.shape)} and {tuple(input_ids.shape)}."
             )
-        residue_mask = attention_mask.to(device=input_ids.device, dtype=torch.bool)
+        residue_mask = attention_mask.to(device=input_ids.device, dtype=torch.bool)  # (b, l)
         if not residue_mask.any(dim=1).all():
             raise ValueError("Every ESMFold2 classifier input must contain a protein residue.")
         if input_ids.masked_select(residue_mask).eq(SEQUENCE_PAD_TOKEN).any():
             raise ValueError("ESMFold2 classifier padding tokens cannot be attended residues.")
-        residue_ids = input_ids.masked_select(residue_mask)
+        residue_ids = input_ids.masked_select(residue_mask)  # (n_present,)
         valid_residue_ids = torch.tensor(
             sorted(_VALID_RESIDUE_IDS), dtype=input_ids.dtype, device=input_ids.device
-        )
+        )  # (n_valid_ids,)
         if not torch.isin(residue_ids, valid_residue_ids).all():
             raise ValueError(
                 "ESMFold2 classifiers accept residue-only single-chain protein inputs."
@@ -142,9 +143,9 @@ class _ESMFold2ClassificationMixin:
         batch_size, sequence_length = input_ids.shape
         residue_index = torch.arange(sequence_length, device=input_ids.device).expand(
             batch_size, -1
-        )
-        asym_id = torch.zeros_like(input_ids)
-        mol_type = torch.zeros_like(input_ids)
+        )  # (b, l)
+        asym_id = torch.zeros_like(input_ids)  # (b, l)
+        mol_type = torch.zeros_like(input_ids)  # (b, l)
         with torch.no_grad():
             hidden_states = self._compute_lm_hidden_states(
                 input_ids,
@@ -152,9 +153,9 @@ class _ESMFold2ClassificationMixin:
                 residue_index,
                 mol_type,
                 residue_mask,
-            )
-        embeddings = self.project_esmc_hidden_states(hidden_states, residue_mask)
-        return embeddings, residue_mask
+            )  # (b, l, n_states, d_lm)
+        embeddings = self.project_esmc_hidden_states(hidden_states, residue_mask)  # (b, l, d_pair)
+        return embeddings, residue_mask  # (b, l, d_pair), (b, l)
 
     def _classifier_forward(
         self,
@@ -165,7 +166,7 @@ class _ESMFold2ClassificationMixin:
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
     ):
-        embeddings, residue_mask = self._classifier_embeddings(input_ids, attention_mask)
+        embeddings, residue_mask = self._classifier_embeddings(input_ids, attention_mask)  # (b, l, d_pair), (b, l)
         return self.classifier(
             embeddings,
             attention_mask=residue_mask,

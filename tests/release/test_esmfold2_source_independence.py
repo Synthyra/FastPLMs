@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import pytest
+
 from difflib import SequenceMatcher
 from pathlib import Path
 

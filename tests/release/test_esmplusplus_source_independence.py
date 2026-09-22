@@ -7,6 +7,7 @@ import copy
 import importlib.util
 import pytest
 import torch
+
 from difflib import SequenceMatcher
 from pathlib import Path
 from types import ModuleType
@@ -198,16 +199,14 @@ def test_reimplemented_scaled_rotary_cache_is_exact(dtype: torch.dtype) -> None:
 def test_reimplemented_rotary_matches_transformers_cuda_policy() -> None:
     assert torch.cuda.is_available(), "ESM++ rotary parity requires CUDA"
     upstream_class = _load_upstream_rotary().RotaryEmbedding
-    # local: (...)
     local = FastRotaryEmbedding(dim=64).eval().to("cuda")
-    # upstream: (...)
     upstream = upstream_class(dim=64).eval().to("cuda")
 
     # The original Biohub SDK migrates CPU-computed frequencies. The pinned
     # Biohub Transformers oracle instead recomputes them on CUDA after a device
     # move. Reproduce that public AutoModel policy on the independent upstream
     # rotary implementation before comparing outputs.
-    # cpu_migrated: (...)
+    # cpu_migrated: (32,), one frequency per pair of the 64 rotary channels.
     cpu_migrated = upstream.inv_freq.clone()
     cuda_native = upstream._compute_inv_freq(torch.device("cuda"))
     assert not torch.equal(cpu_migrated, cuda_native)

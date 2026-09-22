@@ -11,7 +11,7 @@ def test_packaging_replaces_only_confidence_state():
     merged = merge_head(base, {"new": torch.zeros(2)})
     assert set(merged) == {"fold.weight", "confidence_head.new"}
     assert verify_folding_state(base, merged) == 1
-    merged["fold.weight"] = torch.tensor([1.0, 0.0])
+    merged["fold.weight"] = torch.tensor([1.0, 0.0])  # (2,)
     with pytest.raises(ValueError, match="tensor bytes"):
         verify_folding_state(base, merged)
 

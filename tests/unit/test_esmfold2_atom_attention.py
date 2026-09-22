@@ -18,7 +18,7 @@ from fastplms.models.esmfold2.modeling_esmfold2_experimental import ESMFold2Expe
 
 
 # The 3D rotary table needs 14 frequency pairs, so a head must be at least 28 wide.
-D_ATOM = 128
+D_ATOM = 128  # d_atom: atom-state width.
 N_HEADS = 4
 HALF_WINDOW = 2
 requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
@@ -81,7 +81,7 @@ def test_windowed_mode_rejects_cpu_tensors_instead_of_falling_back() -> None:
         pytest.skip("this PyTorch build has no variable-length attention")
     module = _attention()
     module.set_atom_attention("windowed")
-    atom_mask = torch.ones(1, 8, dtype=torch.bool)
+    atom_mask = torch.ones(1, 8, dtype=torch.bool)  # (1, 8)
     with pytest.raises(RuntimeError, match="requires CUDA tensors"), torch.no_grad():
         module(torch.randn(1, 8, D_ATOM), _attention_params(atom_mask))
 
@@ -118,8 +118,8 @@ def test_windowed_attention_matches_a_dense_window_over_real_atoms(padded: bool)
         value.to(device) if isinstance(value, torch.Tensor) else value
         for value in _attention_params(atom_mask)
     )
-    atom_mask = atom_mask.to(device)
-    x = torch.randn(3, 16, D_ATOM, generator=torch.Generator().manual_seed(1)).to(device)
+    atom_mask = atom_mask.to(device)  # (3, 16)
+    x = torch.randn(3, 16, D_ATOM, generator=torch.Generator().manual_seed(1)).to(device)  # (3, 16, d_atom)
 
     module.set_atom_attention("windowed")
     with torch.no_grad():
@@ -138,13 +138,13 @@ def test_windowed_attention_matches_a_dense_window_over_real_atoms(padded: bool)
 @pytest.mark.gpu
 def test_a_window_wider_than_the_sample_matches_dense_attention() -> None:
     device = torch.device("cuda")
-    atom_mask = torch.ones(2, 16, dtype=torch.bool)
+    atom_mask = torch.ones(2, 16, dtype=torch.bool)  # (2, 16)
     module = _attention(half_window=64).to(device)
     params = tuple(
         value.to(device) if isinstance(value, torch.Tensor) else value
         for value in _attention_params(atom_mask)
     )
-    x = torch.randn(2, 16, D_ATOM, generator=torch.Generator().manual_seed(2)).to(device)
+    x = torch.randn(2, 16, D_ATOM, generator=torch.Generator().manual_seed(2)).to(device)  # (2, 16, d_atom)
 
     with torch.no_grad():
         dense = module(x, params)

@@ -7,9 +7,12 @@ import argparse
 import json
 import math
 import os
+
 from pathlib import Path
 from typing import Any
 
+
+# Shapes: b = batch, l = encoded tokens, r = residues, v = vocabulary, c = classes.
 
 def configure_offline() -> None:
     os.environ["HF_HUB_OFFLINE"] = "1"

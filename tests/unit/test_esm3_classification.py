@@ -1,8 +1,8 @@
-from pathlib import Path
-
 import pytest
 import torch
 import torch.nn.functional as F
+
+from pathlib import Path
 from transformers.modeling_outputs import SequenceClassifierOutput, TokenClassifierOutput
 
 from fastplms.models.esm3.modeling_esm3 import (
@@ -58,8 +58,8 @@ def test_esm3_sequence_classifier_uses_final_residue_embeddings() -> None:
 
 def test_esm3_sequence_classifier_is_right_padding_invariant() -> None:
     model = FastESM3ForSequenceClassification(_config(num_labels=3)).eval()
-    unpadded = torch.tensor(((0, 4, 5, 2),), dtype=torch.long)
-    padded = torch.tensor(((0, 4, 5, 2, 1, 1),), dtype=torch.long)
+    unpadded = torch.tensor(((0, 4, 5, 2),), dtype=torch.long)  # (1, 4)
+    padded = torch.tensor(((0, 4, 5, 2, 1, 1),), dtype=torch.long)  # (1, 6)
 
     with torch.inference_mode():
         unpadded_logits = model(input_ids=unpadded).logits
@@ -103,13 +103,13 @@ def test_esm3_token_classifier_masks_special_padding_and_ignored_labels() -> Non
     labels = torch.tensor(
         ((2, 0, -100, 1, 0), (1, 2, 1, 0, 2)),
         dtype=torch.long,
-    )
+    )  # (2, 5)
 
     with torch.inference_mode():
         output = model(input_ids=input_ids, labels=labels)
 
     expected_logits = torch.cat((output.logits[0, 1:2], output.logits[1, 1:3]), dim=0)
-    expected_labels = torch.tensor((0, 2, 1), dtype=torch.long)
+    expected_labels = torch.tensor((0, 2, 1), dtype=torch.long)  # (3,)
     expected_loss = F.cross_entropy(expected_logits, expected_labels)
     assert isinstance(output, TokenClassifierOutput)
     assert output.logits.shape == (2, 5, 3)
@@ -236,8 +236,8 @@ def test_esm3_classifier_save_reload_round_trip(
 
 def test_esm3_sequence_classifier_preserves_multimodal_inputs() -> None:
     model = FastESM3ForSequenceClassification(_config(num_labels=2)).eval()
-    structure_tokens = torch.tensor(((4098, 10, 11, 4097),), dtype=torch.long)
-    attention_mask = torch.ones_like(structure_tokens)
+    structure_tokens = torch.tensor(((4098, 10, 11, 4097),), dtype=torch.long)  # (1, 4)
+    attention_mask = torch.ones_like(structure_tokens)  # (1, 4)
 
     with torch.inference_mode():
         output = model(

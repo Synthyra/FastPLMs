@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import gzip
 import io
+
 from collections.abc import Generator, Iterable
-from contextlib import nullcontext
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import NamedTuple, TextIO
 
@@ -45,7 +46,7 @@ def parse_fasta(text: str) -> Generator[FastaEntry, None, None]:
         raise ValueError("Found no sequences in input")
 
 
-def _open_reader(source: PathOrBuffer):
+def _open_reader(source: PathOrBuffer) -> AbstractContextManager[TextIO]:
     if isinstance(source, io.TextIOBase):
         return nullcontext(source)
     path = Path(source)
@@ -93,7 +94,7 @@ def append_fasta_sequence(header: str, sequence: str, path: str | Path) -> None:
         handle.write(f">{header}\n{sequence}\n")
 
 
-def _open_writer(destination: PathOrBuffer):
+def _open_writer(destination: PathOrBuffer) -> AbstractContextManager[TextIO]:
     if isinstance(destination, io.TextIOBase):
         return nullcontext(destination)
     path = Path(destination)

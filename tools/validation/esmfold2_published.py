@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import torch
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
-
-import torch
 
 from tools.validation.esmfold2_small import (
     CHUNK_SIZE,
@@ -87,9 +87,9 @@ def _validate_outputs(output: Mapping[str, Any]) -> dict[str, list[int]]:
     coordinate_tensor = output.get("sample_atom_coords")
     if not torch.is_tensor(coordinate_tensor):
         raise RuntimeError("Published ESMFold2 output omitted sample_atom_coords.")
-    coordinates = coordinate_tensor.float()  # (b, s, a, 3)
+    coordinates = coordinate_tensor.float()  # expected (b, a, 3) or (b, s, a, 3); checked below
     if coordinates.ndim == 3:
-        coordinates = coordinates.unsqueeze(1)
+        coordinates = coordinates.unsqueeze(1)  # (b, s=1, a, 3)
     if coordinates.ndim != 4 or coordinates.shape[-1] != 3:
         raise RuntimeError(f"Unexpected coordinate shape: {tuple(coordinates.shape)}")
     if not torch.isfinite(coordinates).all():

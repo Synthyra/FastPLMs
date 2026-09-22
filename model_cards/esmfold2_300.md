@@ -16,10 +16,11 @@ Load the published model, fold two protein chains together, and write an mmCIF
 file. This example uses 15 diffusion steps, matching the experimental config.
 
 ```python
-from pathlib import Path
-
 import torch
+
+from pathlib import Path
 from transformers import AutoModel
+
 
 model = AutoModel.from_pretrained(
     "Synthyra/ESMFold2-300",
@@ -112,10 +113,12 @@ state mixture and projection, followed by one trainable transformer probe.
 
 ```python
 import torch
+
 from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
 )
+
 
 model_id = "Synthyra/ESMFold2-300"
 sequence_model = AutoModelForSequenceClassification.from_pretrained(
@@ -126,11 +129,11 @@ token_model = AutoModelForTokenClassification.from_pretrained(
 ).eval()
 sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
 batch = sequence_model.prepare_classifier_inputs(sequences)
-biological = batch["attention_mask"].bool()
+biological = batch["attention_mask"].bool()  # (b, l)
 
-sequence_labels = torch.zeros(len(sequences), dtype=torch.long)
-token_labels = torch.full_like(batch["input_ids"], -100)
-token_labels[biological] = 0
+sequence_labels = torch.zeros(len(sequences), dtype=torch.long)  # (b,)
+token_labels = torch.full_like(batch["input_ids"], -100)  # (b, l)
+token_labels[biological] = 0  # selected biological positions; labels stay (b, l)
 
 with torch.inference_mode():
     sequence_output = sequence_model(**batch, labels=sequence_labels)
@@ -149,6 +152,7 @@ python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
 
 ```python
 from peft import LoraConfig, TaskType, get_peft_model
+
 
 peft_model = get_peft_model(
     sequence_model,
@@ -177,6 +181,7 @@ pinned ESM++ weights are tensor-exact in BF16 after layout conversion.
 
 ```python
 import torch
+
 
 model = model.cuda().eval()
 with torch.inference_mode():

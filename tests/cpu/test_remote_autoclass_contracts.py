@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import pytest
+
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,6 @@ from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.modeling_esmfold2_common import NUM_RES_TYPES
 from fastplms.registry import ModelFamily, get_model_registry
 from tools.artifacts.build import (
-    ArtifactError,
     _artifact_auto_map,
     _runtime_source_entries,
     _write_bootstrap,

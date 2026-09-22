@@ -17,6 +17,7 @@ import os
 import platform
 import tempfile
 import torch
+
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -93,8 +94,7 @@ def _request_fingerprint(request: Mapping[str, Any]) -> str:
 
 
 def _tensor_bytes(tensor: torch.Tensor) -> bytes:
-    # tensor: (...)
-    # value: (...)
+    # tensor and value share the caller's arbitrary tensor shape through the CPU copy.
     value = tensor.detach().cpu().contiguous()
     return value.reshape(-1).view(torch.uint8).numpy().tobytes()
 
@@ -102,7 +102,7 @@ def _tensor_bytes(tensor: torch.Tensor) -> bytes:
 def tensor_sha256(tensor: torch.Tensor) -> str:
     """Return the exact byte digest for one tensor."""
 
-    # tensor: (...)
+    # Retain the named tensor's arbitrary shape; the digest includes its byte representation.
     return hashlib.sha256(_tensor_bytes(tensor)).hexdigest()
 
 
@@ -294,7 +294,7 @@ def _normalize_output(output: object) -> dict[str, torch.Tensor]:
         value = output[name]
         if not torch.is_tensor(value):
             raise TypeError(f"ESMFold output {name!r} is not a tensor.")
-        # tensors[f'output__{name}']: (...)
+        # Preserve this named model output's shape in the CPU snapshot.
         tensors[f"output__{name}"] = value.detach().cpu().contiguous().clone()
     return tensors
 

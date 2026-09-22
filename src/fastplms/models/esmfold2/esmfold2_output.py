@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import numpy as np
+import torch
+
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import groupby
 from typing import Any
-
-import numpy as np
-import torch
 
 from .esmfold2_constants import ELEMENT_NUMBER_TO_SYMBOL, MOL_TYPE_NONPOLYMER
 from .esmfold2_molecular_complex import MolecularComplex, MolecularComplexMetadata
@@ -92,17 +92,18 @@ def build_molecular_complex_from_features(
     tokens are collapsed into one non-polymer residue per chain.
     """
 
-    M = atom_mask.bool().cpu().numpy()
-    X = coords.float().cpu().numpy()
-    atom_names = ref_atom_name_chars.cpu().numpy()
-    elements = ref_element.cpu().numpy()
-    confidence = None if plddt is None else plddt.float().cpu().numpy()
+    # a counts padded atoms; l counts model tokens (ligand tokens may be atoms).
+    present_atoms = atom_mask.bool().cpu().numpy()  # (a,)
+    X = coords.float().cpu().numpy()  # (a, 3)
+    atom_names = ref_atom_name_chars.cpu().numpy()  # (a, 4)
+    elements = ref_element.cpu().numpy()  # (a,)
+    confidence = None if plddt is None else plddt.float().cpu().numpy()  # (l,) or None
     records = _ComplexRecords()
 
-    def decode_atoms(tokens: Iterable[Any]):
+    def decode_atoms(tokens: Iterable[Any]) -> Iterable[tuple[list[float], str, str]]:
         for token in tokens:
             for atom_index in range(token.atom_start, token.atom_start + token.atom_count):
-                if M[atom_index]:
+                if present_atoms[atom_index]:
                     yield (
                         X[atom_index].tolist(),
                         get_element_symbol(int(elements[atom_index])),

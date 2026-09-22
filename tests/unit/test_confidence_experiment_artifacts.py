@@ -2,11 +2,10 @@
 
 import hashlib
 import json
+import pytest
 
 from dataclasses import asdict
 from pathlib import Path
-
-import pytest
 
 from tools.confidence import host
 from tools.confidence.experiment_artifacts import (

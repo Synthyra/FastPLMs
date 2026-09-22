@@ -7,6 +7,7 @@ import subprocess
 import sys
 import textwrap
 import pytest
+
 from pathlib import Path
 
 from tests.cpu.resource_telemetry import (

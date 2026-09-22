@@ -4,7 +4,6 @@ import hashlib
 import json
 import sys
 import copy
-
 import pytest
 
 from pathlib import Path

@@ -10,6 +10,7 @@ import sys
 import pytest
 import torch
 import transformers
+
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -617,7 +618,7 @@ class _GenerationExampleModel:
 
     def generate(self, input_ids: torch.Tensor, **kwargs: Any) -> Any:
         self.calls.append((input_ids.clone(), dict(kwargs)))
-        sampled = torch.randint(0, 100, (1, 1), device=input_ids.device)
+        sampled = torch.randint(0, 100, (1, 1), device=input_ids.device)  # (1, 1)
         output = torch.cat((input_ids, sampled), dim=1)
         return {"output_tokens": output} if self.multimodal else output
 
@@ -658,7 +659,7 @@ def test_generation_example_executes_seeded_dplm2_branch_offline() -> None:
     assert torch.equal(first, second)
     assert torch.equal(torch.random.get_rng_state(), caller_rng)
     assert len(model.calls) == 2
-    expected = torch.tensor([[10, 11, 11, 11, 12, 20, 21, 21, 21, 22]])
+    expected = torch.tensor([[10, 11, 11, 11, 12, 20, 21, 21, 21, 22]])  # (1, 10)
     for input_ids, kwargs in model.calls:
         assert torch.equal(input_ids, expected)
         assert kwargs == {
@@ -914,7 +915,7 @@ def test_migration_python_snippets_execute_against_tiny_offline_objects(
     (tmp_path / "embeddings.sqlite").unlink()
     save_safetensors_result(records, tmp_path / "embeddings")
     save_sqlite_result(records, tmp_path / "embeddings.sqlite")
-    tensor = torch.tensor([1.0, 2.0], dtype=torch.float32)
+    tensor = torch.tensor([1.0, 2.0], dtype=torch.float32)  # (2,)
     shape = tuple(tensor.shape)
     blob = struct.pack(f"<BBi{len(shape)}i", 1, 2, len(shape), *shape) + tensor.numpy().tobytes()
     with sqlite3.connect(tmp_path / "legacy.db") as connection:

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import io
 import subprocess
+
 from pathlib import Path
 from typing import Any, TypeAlias
+
 
 PathLike: TypeAlias = str | Path
 PathOrBuffer: TypeAlias = PathLike | io.StringIO

@@ -7,6 +7,7 @@ and attribution records are retained in ``THIRD_PARTY_NOTICES.md``.
 from __future__ import annotations
 
 import torch
+
 from collections.abc import Iterable, Mapping, Sequence
 from functools import partial
 from typing import Any

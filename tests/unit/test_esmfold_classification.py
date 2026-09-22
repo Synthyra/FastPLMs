@@ -136,10 +136,10 @@ def test_token_classifier_masks_ignored_regression_and_multilabel_targets(
     prepared = model.prepare_classifier_inputs(["ACD", "WY"])
     batch_size, residue_count = prepared["input_ids"].shape
     if num_labels == 1:
-        labels = torch.zeros(batch_size, residue_count)
+        labels = torch.zeros(batch_size, residue_count)  # (batch_size, residue_count)
         labels[0, 1] = -100
     else:
-        labels = torch.zeros(batch_size, residue_count, num_labels)
+        labels = torch.zeros(batch_size, residue_count, num_labels)  # (batch_size, residue_count, num_labels)
         labels[0, 1, :] = -100
 
     output = model(**prepared, labels=labels)

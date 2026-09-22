@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-
 import pytest
 import torch
+
+from collections.abc import Callable
 
 from fastplms.models.esmfold2.modeling_esmfold2_common import (
     CHAR_VOCAB_SIZE,

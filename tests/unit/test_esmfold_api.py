@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import pytest
 import torch
+
 from types import MethodType
 from transformers.models.esm.modeling_esmfold import EsmForProteinFolding
 

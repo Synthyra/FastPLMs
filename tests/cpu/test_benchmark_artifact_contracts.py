@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import xml.etree.ElementTree as ET
 import pytest
+import benchmarks.suite as benchmark_suite
+
 from pathlib import Path
 from types import SimpleNamespace
-
-import benchmarks.suite as benchmark_suite
 from benchmarks.suite import benchmark_cases, bind_local_artifacts
+
 from fastplms.registry import ModelSpec, get_model_registry
 
 

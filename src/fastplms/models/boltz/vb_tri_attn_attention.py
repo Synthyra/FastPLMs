@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from typing import cast
 from torch import Tensor, nn
 

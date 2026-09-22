@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import pytest
+
 from pathlib import Path
 
 from fastplms.registry import FileDigest, RegistryError, load_model_registry

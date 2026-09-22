@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import pytest
 import torch
+
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -62,7 +63,7 @@ def _tiny_model_spec(family_id: str) -> tuple[type[torch.nn.Module], Any]:
 
 
 def _assert_close(actual: torch.Tensor, expected: torch.Tensor) -> None:
-    # actual: (...), expected: (...)
+    # actual, expected: (b, l, d), compared over batch, token, and hidden axes.
     relative_l2 = torch.linalg.vector_norm(
         actual.float() - expected.float()
     ) / torch.linalg.vector_norm(expected.float()).clamp_min(1e-12)
@@ -109,7 +110,6 @@ def test_explicit_flash_from_pretrained_uses_only_pinned_kernels(
     )
     # attention_mask: (b, l)
     attention_mask = input_ids.ne(1)
-    # reference: (...)
     reference = (
         model_class.from_pretrained(
             model_path,
@@ -183,8 +183,8 @@ def test_precompiled_flash_attention_2_dense_and_varlen_backward(
         dtype=torch.bfloat16,
         requires_grad=True,
     )
-    key = torch.randn_like(query, requires_grad=True)
-    value = torch.randn_like(query, requires_grad=True)
+    key = torch.randn_like(query, requires_grad=True)  # (2, 17, 4, 16)
+    value = torch.randn_like(query, requires_grad=True)  # (2, 17, 4, 16)
     attention_mask = None
     if mixed_padding:
         # attention_mask: (2, 17)

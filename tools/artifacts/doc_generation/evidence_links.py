@@ -8,6 +8,7 @@ from urllib.parse import quote, unquote, urlsplit
 
 from tools.artifacts.evidence_store import load_manifest
 
+
 _LINK = re.compile(r"(?P<prefix>\]\()(?P<target>[^)\s]+)(?P<suffix>\))")
 _FENCED_CODE = re.compile(r"(^```[^\n]*\n.*?^```[^\n]*$)", re.MULTILINE | re.DOTALL)
 _GITHUB_SOURCE = "https://github.com/Synthyra/FastPLMs/blob/main/"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+
 from pathlib import Path
 from transformers.modeling_outputs import ModelOutput
 
@@ -110,7 +111,7 @@ def test_dplm2_multimodal_wrappers_require_types_with_precomputed_embeddings(
             num_labels=3,
         )
     ).eval()
-    input_ids = torch.tensor([[0, 6, 7, 2]])
+    input_ids = torch.tensor([[0, 6, 7, 2]])  # (1, 4)
     inputs_embeds = model.get_input_embeddings()(input_ids)
 
     with pytest.raises(ValueError, match="type_ids is required"):
@@ -272,7 +273,7 @@ def test_esm2_advertised_models_forward_loss_backward_resize_and_reload(
     if model_class is FastEsmForMaskedLM:
         labels = input_ids.masked_fill(~attention_mask, -100)
     elif model_class is FastEsmForSequenceClassification:
-        labels = torch.tensor([1, 2])
+        labels = torch.tensor([1, 2])  # (2,)
     elif model_class is FastEsmForTokenClassification:
         labels = input_ids.remainder(3).masked_fill(~attention_mask, -100)
     else:
@@ -387,7 +388,7 @@ def test_esmc_public_models_forward_loss_backward_resize_and_reload(
     if kind == "mlm":
         labels = input_ids.masked_fill(~attention_mask, -100)
     elif kind == "sequence":
-        labels = torch.tensor([1, 2])
+        labels = torch.tensor([1, 2])  # (2,)
     elif kind == "token":
         labels = input_ids.remainder(3).masked_fill(~attention_mask, -100)
     else:
@@ -527,7 +528,7 @@ def test_dplm_advertised_models_forward_loss_backward_resize_and_reload(
     if kind == "mlm":
         labels = input_ids.masked_fill(~attention_mask, -100)
     elif kind == "sequence":
-        labels = torch.tensor([1, 2])
+        labels = torch.tensor([1, 2])  # (2,)
     elif kind == "token":
         labels = input_ids.remainder(3).masked_fill(~attention_mask, -100)
     else:
@@ -626,7 +627,7 @@ def test_e1_advertised_models_forward_loss_backward_resize_and_reload(
     if kind == "mlm":
         labels = input_ids.clone()
     elif kind == "sequence":
-        labels = torch.tensor([1])
+        labels = torch.tensor([1])  # (1,)
     elif kind == "token":
         labels = input_ids.remainder(3)
     else:

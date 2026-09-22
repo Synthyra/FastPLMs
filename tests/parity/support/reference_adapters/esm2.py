@@ -9,6 +9,7 @@ import tempfile
 import urllib.request
 import torch
 import torch.nn as nn
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
@@ -118,7 +119,7 @@ class _AlphabetTokenizer:
                 self.pad_token_id,
                 dtype=input_ids.dtype,
             )
-            # input_ids: (...)
+            # input_ids: (b, max_length), after padding the shorter tokenized batch.
             input_ids = torch.cat((input_ids, pad), dim=1)
         # attention_mask: (b, l)
         attention_mask = input_ids.ne(self.pad_token_id).long()

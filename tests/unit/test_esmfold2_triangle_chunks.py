@@ -33,7 +33,7 @@ def _per_chunk_einsum(
 
 def _streams(device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     generator = torch.Generator().manual_seed(8)
-    routed = torch.randn(2, 11, 11, 2 * LATENT_CHANNELS, generator=generator).to(device)
+    routed = torch.randn(2, 11, 11, 2 * LATENT_CHANNELS, generator=generator).to(device)  # (2, 11, 11, 2 * LATENT_CHANNELS)
     left_stream, right_stream = routed.chunk(2, dim=-1)  # each (b, l, l, d), views as in forward
     return left_stream, right_stream
 
@@ -89,7 +89,7 @@ def test_swiglu_reuses_its_activation_buffer_without_changing_a_value() -> None:
     torch.manual_seed(4)
     ffn = common.SwiGLU(in_features=8, hidden_features=16).eval()
     pair = torch.randn(2, 5, 5, 8)  # (b, l, l, d)
-    original = pair.clone()
+    original = pair.clone()  # (2, 5, 5, 8)
     for autocast in (False, True):
         with torch.autocast("cpu", dtype=torch.bfloat16, enabled=autocast):
             with torch.enable_grad():

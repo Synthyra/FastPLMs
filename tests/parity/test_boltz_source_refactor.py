@@ -8,6 +8,7 @@ import sys
 import numpy as np
 import pytest
 import torch
+
 from difflib import SequenceMatcher
 from pathlib import Path
 from types import ModuleType
@@ -237,7 +238,7 @@ def test_chunk_layer_matches_upstream(
     }
 
     def layer(left: torch.Tensor, right: torch.Tensor) -> dict[str, torch.Tensor]:
-        # left: (...), right: (...)
+        # Each chunk has at most four flattened batch rows and four feature channels.
         return {"sum": left + right, "product": left * right}
 
     expected = upstream_attention_utils.chunk_layer(
@@ -761,7 +762,7 @@ def test_joint_and_pair_only_pairformer_layers_match_upstream(
     pair_states = torch.randn(2, 3, 3, 4, generator=generator)
     # mask: (2, 3)
     mask = torch.tensor([[1, 1, 1], [1, 1, 0]], dtype=torch.float32)
-    # pair_mask: (...)
+    # pair_mask: (2, 3, 3)
     pair_mask = mask[:, :, None] * mask[:, None, :]
     expected_s, expected_z = reference_joint(
         sequence_states,

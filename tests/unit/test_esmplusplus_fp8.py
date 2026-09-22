@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from types import SimpleNamespace
-
 import pytest
 import torch
-from torch import nn
 
 import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module
+
+from contextlib import contextmanager
+from types import SimpleNamespace
+from torch import nn
+
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
     ESMplusplusFP8Status,

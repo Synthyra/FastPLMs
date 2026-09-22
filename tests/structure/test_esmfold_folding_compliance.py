@@ -7,6 +7,7 @@ import inspect
 import os
 import pytest
 import torch
+
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -89,7 +90,7 @@ def _output(tensors: Mapping[str, torch.Tensor], name: str) -> torch.Tensor:
 
 
 def _residue_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
-    # atom37_mask: (...)
+    # atom37_mask: (b, l, 37); b is batch size and l is residue length.
     atom37_mask = _output(tensors, "atom37_atom_exists").bool()
     assert atom37_mask.ndim == 3 and atom37_mask.shape[-1] == 37
     return atom37_mask[0, :, 1]
@@ -105,29 +106,29 @@ def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
 
 
 def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual: (...), expected: (...)
-    actual_centered = actual.float() - actual.float().mean(dim=0, keepdim=True)
-    expected_centered = expected.float() - expected.float().mean(dim=0, keepdim=True)
-    covariance = actual_centered.T @ expected_centered
+    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
+    actual_centered = actual.float() - actual.float().mean(dim=0, keepdim=True)  # (n, 3)
+    expected_centered = expected.float() - expected.float().mean(dim=0, keepdim=True)  # (n, 3)
+    covariance = actual_centered.T @ expected_centered  # (3, 3)
     left, _, right = torch.linalg.svd(covariance)
     # correction: (3, 3)
     correction = torch.eye(3, dtype=torch.float32)
     correction[-1, -1] = torch.sign(torch.det(left @ right))
-    rotation = left @ correction @ right
-    aligned = actual_centered @ rotation
+    rotation = left @ correction @ right  # (3, 3)
+    aligned = actual_centered @ rotation  # (n, 3)
     return torch.sqrt(torch.mean(torch.sum((aligned - expected_centered) ** 2, dim=-1))).item()
 
 
 def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual: (...), expected: (...)
-    actual_distances = torch.cdist(actual.float(), actual.float())
-    expected_distances = torch.cdist(expected.float(), expected.float())
-    # pair_mask: (...)
+    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
+    actual_distances = torch.cdist(actual.float(), actual.float())  # (n, n)
+    expected_distances = torch.cdist(expected.float(), expected.float())  # (n, n)
+    # pair_mask: (n, n)
     pair_mask = expected_distances.lt(15.0)
     pair_mask.fill_diagonal_(False)
     assert pair_mask.any(), "No valid C-alpha pairs for ESMFold lDDT."
-    errors = (actual_distances - expected_distances).abs()
-    # scores: (...)
+    errors = (actual_distances - expected_distances).abs()  # (n, n)
+    # scores: (n, n)
     scores = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
         dim=0
     )
@@ -139,16 +140,16 @@ def _structure_metrics(
     expected: Mapping[str, torch.Tensor],
 ) -> dict[str, float]:
     residue_mask = _residue_mask(actual)
-    # pair_mask: (...)
+    # pair_mask: (l, l), covering valid residue pairs.
     pair_mask = residue_mask[:, None] & residue_mask[None, :]
     # Meta ESMFold reports pLDDT on (0, 100); compliance uses (0, 1).
-    # actual_plddt: (...)
+    # actual_plddt: (l,), using the C-alpha slot.
     actual_plddt = _output(actual, "plddt").float()[0, :, 1] / 100.0
-    # expected_plddt: (...)
+    # expected_plddt: (l,), using the C-alpha slot.
     expected_plddt = _output(expected, "plddt").float()[0, :, 1] / 100.0
-    # actual_pae: (...)
+    # actual_pae: (l, l)
     actual_pae = _output(actual, "predicted_aligned_error").float()[0]
-    # expected_pae: (...)
+    # expected_pae: (l, l)
     expected_pae = _output(expected, "predicted_aligned_error").float()[0]
     return {
         "ca_rmsd": _aligned_ca_rmsd(
@@ -178,9 +179,9 @@ def _relative_l2(
     expected: torch.Tensor,
     mask: torch.Tensor,
 ) -> float:
-    # actual: (...), expected: (...), mask: (...)
+    # actual and expected share shape s; mask covers the leading axes of s.
     while mask.ndim < actual.ndim:
-        # mask: (...)
+        # Append a singleton feature axis until mask can broadcast to shape s.
         mask = mask.unsqueeze(-1)
     mask = torch.broadcast_to(mask, actual.shape)
     difference = (actual.float() - expected.float())[mask]
@@ -196,7 +197,7 @@ def _logit_metrics(
     expected: Mapping[str, torch.Tensor],
 ) -> dict[str, float]:
     residue_mask = _residue_mask(actual)
-    # pair_mask: (...)
+    # pair_mask: (l, l), covering valid residue pairs.
     pair_mask = residue_mask[:, None] & residue_mask[None, :]
     return {
         "distogram_logits": _relative_l2(

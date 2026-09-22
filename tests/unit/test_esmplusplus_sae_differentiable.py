@@ -22,7 +22,6 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusForMaskedLM,
     ESMplusplusModel,
 )
-
 from .test_esmplusplus_sae import _SyntheticSAELayer, _config, _input_ids
 
 

@@ -19,6 +19,7 @@ import shutil
 import tarfile
 import tempfile
 import torch
+
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -192,8 +193,7 @@ def _request_fingerprint(request: Mapping[str, Any]) -> str:
 
 
 def _tensor_bytes(tensor: torch.Tensor) -> bytes:
-    # tensor: (...)
-    # value: (...)
+    # tensor and value share the caller's arbitrary tensor shape through the CPU copy.
     value = tensor.detach().cpu().contiguous()
     return value.reshape(-1).view(torch.uint8).numpy().tobytes()
 
@@ -201,7 +201,7 @@ def _tensor_bytes(tensor: torch.Tensor) -> bytes:
 def tensor_sha256(tensor: torch.Tensor) -> str:
     """Return the exact byte digest of one tensor."""
 
-    # tensor: (...)
+    # Retain the named tensor's arbitrary shape; the digest includes its byte representation.
     return hashlib.sha256(_tensor_bytes(tensor)).hexdigest()
 
 
@@ -210,7 +210,7 @@ def tensor_set_sha256(tensors: Mapping[str, torch.Tensor]) -> str:
 
     digest = hashlib.sha256()
     for name in sorted(tensors):
-        # tensor: (...)
+        # Retain the named tensor's arbitrary shape; the digest includes its byte representation.
         tensor = tensors[name].detach().cpu().contiguous()
         digest.update(name.encode("utf-8"))
         digest.update(str(tensor.dtype).encode("ascii"))
@@ -450,7 +450,7 @@ def _normalize_features(features: Mapping[str, object]) -> dict[str, torch.Tenso
         value = features[name]
         if not torch.is_tensor(value):
             raise TypeError(f"Boltz2 feature {name!r} is not a tensor.")
-        # tensors[f'feature__{name}']: (...)
+        # Preserve this named model feature's shape in the CPU snapshot.
         tensors[f"feature__{name}"] = value.detach().cpu().contiguous().clone()
     return tensors
 
@@ -659,9 +659,8 @@ def _portable_random_draws(seed: int):
 
     def portable_draw(template: torch.Tensor) -> torch.Tensor:
         # N is the portable normal tensor with shape matching the sampler draw.
-        # template: (...)
         N = portable_rng.standard_normal(tuple(template.shape), dtype=np.float32)
-        # result: (...)
+        # result: template.shape, unchanged by the device/dtype conversion.
         result = torch.from_numpy(N).to(device=template.device, dtype=template.dtype)
         result.requires_grad_(template.requires_grad)
         captured.append(result.detach().cpu().contiguous().clone())
@@ -675,7 +674,7 @@ def _portable_random_draws(seed: int):
         result = portable_draw(template)
         if out is not None:
             out.copy_(result)
-            # captured[-1]: (...)
+            # captured[-1]: out.shape, matching the supplied output buffer.
             captured[-1] = out.detach().cpu().contiguous().clone()
             return out
         return result
@@ -727,7 +726,7 @@ def _run_model(
     if missing:
         raise RuntimeError(f"Boltz2 forward omitted required outputs: {missing}")
     tensors = {f"feature__{name}": tensor for name, tensor in features.items()}
-    # tensors['noise__initial_standard_normal']: (...)
+    # Preserve the recorded sampler draw's shape, including sample and atom axes.
     tensors["noise__initial_standard_normal"] = captured_noise[0]
     for index, tensor in enumerate(captured_noise):
         tensors[f"noise__draw_{index:03d}"] = tensor
@@ -735,7 +734,7 @@ def _run_model(
         value = output[name]
         if not torch.is_tensor(value):
             raise TypeError(f"Boltz2 output {name!r} is not a tensor.")
-        # tensors[f'output__{name}']: (...)
+        # Preserve this named model output's shape in the CPU snapshot.
         tensors[f"output__{name}"] = value.detach().cpu().contiguous().clone()
     return tensors
 

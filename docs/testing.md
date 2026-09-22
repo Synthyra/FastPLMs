@@ -137,10 +137,14 @@ persistence; bounded disk-spooled generator and FASTA streaming; generation and
 TTT; PEFT; injected-core structure and binder flows; publication security; and
 curated offline documentation examples.
 
+Use the Python standards in `AGENTS.md` for imports, types, and numerical shape
+comments. Ruff runs with explicit syntax and undefined-name checks; its import
+sorter does not implement this repository's import grouping.
+
 Run the focused quality and source checks from the same environment:
 
 ```bash
-python -m ruff check src tests tools examples benchmarks
+python -m ruff check --isolated --select E4,E7,E9,F src tests tools examples benchmarks
 mapfile -t MYPY_TARGETS < tools/typing-critical-files.txt
 python -m mypy --python-version 3.12 --ignore-missing-imports \
   --explicit-package-bases --follow-imports=silent "${MYPY_TARGETS[@]}"

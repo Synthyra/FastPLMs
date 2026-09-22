@@ -19,7 +19,6 @@ from huggingface_hub import snapshot_download
 from safetensors.torch import load_file, save_file
 
 from fastplms.registry import get_model_spec
-
 from .config import DONOR_REPO, DONOR_REVISION, DONOR_WEIGHT_SHA256, MODEL_IDS
 from .training import HeadContext, _wandb_run
 
@@ -41,6 +40,7 @@ def merge_head(
     base: Mapping[str, torch.Tensor], head: Mapping[str, torch.Tensor]
 ) -> dict[str, torch.Tensor]:
     """Replace only the confidence subtree, preserving all folding tensors."""
+    # State tensors have parameter-specific shapes; replacement preserves each supplied shape.
     if not head or any(key.startswith("confidence_head.") for key in head):
         raise ValueError("Expected a nonempty native head state without a module prefix")
     if any(not torch.isfinite(value).all() for value in head.values()):
@@ -57,7 +57,7 @@ def verify_folding_state(
     if keys != {key for key in packaged if not key.startswith("confidence_head.")}:
         raise ValueError("Packaging changed folding tensor keys")
     for key in keys:
-        left, right = base[key], packaged[key]
+        left, right = base[key], packaged[key]  # parameter-specific shapes, checked below
         if left.dtype != right.dtype or left.shape != right.shape:
             raise ValueError(f"Packaging changed folding tensor schema: {key}")
         if not torch.equal(

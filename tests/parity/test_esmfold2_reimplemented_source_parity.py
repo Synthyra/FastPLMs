@@ -9,6 +9,7 @@ import types
 import numpy as np
 import pytest
 import torch
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -168,7 +169,7 @@ def _load_official_processor() -> types.ModuleType:
 
 
 def _assert_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
-    # actual: (...), expected: (...)
+    # This exact comparator accepts matching tensor shapes of any rank.
     torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
@@ -301,7 +302,7 @@ def test_structure_metrics_match_pinned_biohub_on_h100() -> None:
 
     # predictions: (2, 14, 14)
     predictions = torch.rand((2, 14, 14), generator=generator, device=device)
-    # targets: (...)
+    # targets: (2, 14, 14)
     targets = torch.randint(0, 2, (2, 14, 14), generator=generator, device=device).float()
     targets[1, 11:] = -1
     # lengths: (2,)

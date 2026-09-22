@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import torch
 import zstandard
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -130,7 +131,7 @@ def _official_mmcif() -> types.ModuleType:
 
 
 def _assert_tensor_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
-    # actual: (...), expected: (...)
+    # This exact comparator accepts matching tensor shapes of any rank.
     torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
@@ -213,7 +214,7 @@ def test_misc_tensor_contracts_match_pinned_biohub(device: str) -> None:
 
 def test_misc_python_contracts_match_pinned_biohub() -> None:
     official = _official_misc()
-    indices = np.asarray([True, False, True, False])
+    indices = np.asarray([True, False, True, False])  # (4,)
     for value in ("ABCD", [1, 2, 3, 4], (1, 2, 3, 4)):
         assert local_misc.slice_python_object_as_numpy(value, indices) == (
             official.slice_python_object_as_numpy(value, indices)
@@ -332,7 +333,7 @@ def test_affine_frames_and_coordinate_fallback_match_pinned_biohub() -> None:
     translation = torch.randn((2, 4, 3), generator=generator, device="cuda")
     # quaternion: (2, 4, 4)
     quaternion = torch.randn((2, 4, 4), generator=generator, device="cuda")
-    # encoded: (...)
+    # encoded: (2, 4, 7), with quaternion then translation components.
     encoded = torch.cat((quaternion, translation), dim=-1)
     actual = local_affine.Affine3D.from_tensor(encoded)
     expected = official.Affine3D.from_tensor(encoded)
@@ -374,11 +375,11 @@ def test_affine_encodings_and_collection_operations_match_pinned_biohub() -> Non
     compact_quat = torch.randn((2, 3), generator=generator, device="cuda")
     # full_quat: (2, 4)
     full_quat = torch.randn((2, 4), generator=generator, device="cuda")
-    # matrix: (...)
+    # matrix: (2, 3, 3)
     matrix = torch.eye(3, device="cuda").expand(2, -1, -1)
-    # matrix4: (...)
+    # matrix4: (2, 4, 4)
     matrix4 = torch.eye(4, device="cuda").expand(2, -1, -1).clone()
-    matrix4[..., :3, 3] = translations
+    matrix4[..., :3, 3] = translations  # (2, 3)
     encodings = (
         matrix4,
         torch.cat((compact_quat, translations), dim=-1),
@@ -553,12 +554,12 @@ def _structure() -> bs.AtomArray:
     atoms = bs.AtomArray(7)
     # coord: (7, 3)
     atoms.coord = np.arange(21, dtype=np.float32).reshape(7, 3)
-    atoms.chain_id = np.asarray(["A", "A", "A", "B", "B", "L", "L"])
-    atoms.res_id = np.asarray([10, 10, 11, 5, 6, 1, 1])
-    atoms.res_name = np.asarray(["ALA", "ALA", "CYS", "GLY", "SER", "ATP", "ATP"])
-    atoms.atom_name = np.asarray(["N", "CA", "N", "N", "N", "P", "O1"])
-    atoms.element = np.asarray(["N", "C", "N", "N", "N", "P", "O"])
-    atoms.hetero = np.asarray([False, False, False, False, False, True, True])
+    atoms.chain_id = np.asarray(["A", "A", "A", "B", "B", "L", "L"])  # (7,)
+    atoms.res_id = np.asarray([10, 10, 11, 5, 6, 1, 1])  # (7,)
+    atoms.res_name = np.asarray(["ALA", "ALA", "CYS", "GLY", "SER", "ATP", "ATP"])  # (7,)
+    atoms.atom_name = np.asarray(["N", "CA", "N", "N", "N", "P", "O1"])  # (7,)
+    atoms.element = np.asarray(["N", "C", "N", "N", "N", "P", "O"])  # (7,)
+    atoms.hetero = np.asarray([False, False, False, False, False, True, True])  # (7,)
     return atoms
 
 

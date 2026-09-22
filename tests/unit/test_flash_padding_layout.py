@@ -257,7 +257,7 @@ def test_gather_and_scatter_without_gradients_match_the_autograd_wrappers() -> N
     assert layout is not None
     for dtype in (torch.float32, torch.bfloat16):
         states = torch.randn(18, 2, 4, generator=generator).to(dtype)  # (b * l, h, d_h)
-        tracked = states.clone().requires_grad_()
+        tracked = states.clone().requires_grad_()  # (18, 2, 4)
 
         selected = _core._select_first_axis(states, layout.indices)  # (t, h, d_h)
         tracked_selected = _core._select_first_axis(tracked, layout.indices)  # (t, h, d_h)

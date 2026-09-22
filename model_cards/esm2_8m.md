@@ -79,7 +79,9 @@ shows padding explicitly:
 
 ```python
 import torch
+
 from transformers import AutoTokenizer
+
 
 model_id = "Synthyra/ESM2-8M"
 tokenizer = AutoTokenizer.from_pretrained(
@@ -129,11 +131,13 @@ Residue labels have shape `(b, l)` and use `-100` outside biological positions.
 
 ```python
 import torch
+
 from transformers import AutoTokenizer
 from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
 )
+
 
 model_id = "Synthyra/ESM2-8M"
 sequence_model = AutoModelForSequenceClassification.from_pretrained(
@@ -145,13 +149,13 @@ token_model = AutoModelForTokenClassification.from_pretrained(
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 sequences = ["MSTNPKPQRKTKRNT", "MKTIIALSYIFCLVFA"]
 batch = tokenizer(sequences, padding=True, return_tensors="pt")
-biological = batch["attention_mask"].bool()
+biological = batch["attention_mask"].bool()  # (b, l)
 for special_id in tokenizer.all_special_ids:
-    biological &= batch["input_ids"].ne(special_id)
+    biological &= batch["input_ids"].ne(special_id)  # (b, l)
 
-sequence_labels = torch.zeros(len(sequences), dtype=torch.long)
-token_labels = torch.full_like(batch["input_ids"], -100)
-token_labels[biological] = 0
+sequence_labels = torch.zeros(len(sequences), dtype=torch.long)  # (b,)
+token_labels = torch.full_like(batch["input_ids"], -100)  # (b, l)
+token_labels[biological] = 0  # selected biological positions; labels stay (b, l)
 
 with torch.inference_mode():
     sequence_output = sequence_model(**batch, labels=sequence_labels)
@@ -170,6 +174,7 @@ python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
 
 ```python
 from peft import LoraConfig, TaskType, get_peft_model
+
 
 peft_model = get_peft_model(
     sequence_model,
@@ -198,6 +203,7 @@ adapters. Base checkpoint weights stay frozen:
 ```python
 from transformers import AutoModelForMaskedLM
 
+
 ttt_model = AutoModelForMaskedLM.from_pretrained(
     "Synthyra/ESM2-8M",
     trust_remote_code=True,
@@ -220,7 +226,9 @@ Use the masked-language-model AutoClass when you need logits:
 
 ```python
 import torch
+
 from transformers import AutoModelForMaskedLM, AutoTokenizer
+
 
 model_id = "Synthyra/ESM2-8M"
 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
@@ -231,7 +239,8 @@ masked_model = AutoModelForMaskedLM.from_pretrained(
 batch = tokenizer("MSTNPKPQRKTKRNT", return_tensors="pt")
 
 with torch.inference_mode():
-    logits = masked_model(**batch).logits
+    logits = masked_model(**batch).logits  # (b, l, vocabulary)
+    # Contacts omit boundary tokens: (b, residues, residues).
     contacts = masked_model.predict_contacts(
         batch["input_ids"],
         batch["attention_mask"],

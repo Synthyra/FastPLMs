@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import io
 import warnings
-from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
-from functools import cached_property
-from pathlib import Path
-from typing import Any
-
 import biotite.structure as bs
 import brotli
 import msgpack
 import msgpack_numpy
 import numpy as np
 import torch
+
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
+from functools import cached_property
+from pathlib import Path
+from typing import Any
 from biotite.database import rcsb
 from biotite.structure.io.pdb import PDBFile
 from biotite.structure.io.pdbx import CIFCategory, CIFColumn, CIFData, CIFFile
@@ -41,6 +41,7 @@ from .esmfold2_normalize_coordinates import (
 )
 from .esmfold2_protein_structure import index_by_atom_name
 from .esmfold2_utils_types import PathOrBuffer
+
 
 CHAIN_ID_CONST = "A"
 
@@ -70,27 +71,30 @@ def infer_cb(
     dihedral: float = -2.143,
 ):
     """Infer C-beta coordinates from C, N, and C-alpha coordinates."""
+    # C, N, Ca: (..., 3); xyz coordinates with broadcast-compatible leading axes.
 
     def normalize(X: np.ndarray) -> np.ndarray:
-        return X / np.sqrt(np.square(X).sum(-1, keepdims=True) + 1e-8)
+        # X: (..., 3); normalize each xyz vector independently.
+        return X / np.sqrt(np.square(X).sum(-1, keepdims=True) + 1e-8)  # X.shape; normalized along xyz
 
     with np.errstate(invalid="ignore"):
-        n_to_ca = N - Ca
-        n_to_c = N - C
-    axis = normalize(n_to_ca)
-    normal = normalize(np.cross(n_to_c, axis))
-    basis = (axis, np.cross(normal, axis), normal)
+        n_to_ca = N - Ca  # (..., 3)
+        n_to_c = N - C  # (..., 3)
+    axis = normalize(n_to_ca)  # (..., 3)
+    normal = normalize(np.cross(n_to_c, axis))  # (..., 3)
+    basis = (axis, np.cross(normal, axis), normal)  # three arrays (..., 3)
     offsets = (
         bond_length * np.cos(bond_angle),
         bond_length * np.sin(bond_angle) * np.cos(dihedral),
         -bond_length * np.sin(bond_angle) * np.sin(dihedral),
-    )
-    return Ca + sum(vector * offset for vector, offset in zip(basis, offsets, strict=False))
+    )  # three NumPy scalars, each ()
+    return Ca + sum(vector * offset for vector, offset in zip(basis, offsets, strict=False))  # (..., 3)
 
 
 def chain_to_ndarray(
     atom_array: bs.AtomArray, mmcif: MmcifWrapper, chain_id: str, is_predicted=False
 ):
+    # atom_array: n input atoms; l is the selected chain's sequence length.
     if not isinstance(atom_array, bs.AtomArray):
         raise TypeError("atom_array must be a biotite AtomArray.")
     if not isinstance(mmcif, MmcifWrapper):
@@ -106,14 +110,14 @@ def chain_to_ndarray(
     num_res = len(mmcif.chain_to_seqres[chain_id])
     sequence = mmcif.chain_to_seqres[chain_id]
 
-    atom_positions = np.full([num_res, residue_constants.atom_type_num, 3], np.nan)
-    atom_mask = np.full([num_res, residue_constants.atom_type_num], False, dtype=bool)
-    residue_index = np.full([num_res], -1, dtype=np.int64)
-    insertion_code = np.full([num_res], "", dtype="<U4")
+    atom_positions = np.full([num_res, residue_constants.atom_type_num, 3], np.nan)  # (l, 37, 3)
+    atom_mask = np.full([num_res, residue_constants.atom_type_num], False, dtype=bool)  # (l, 37)
+    residue_index = np.full([num_res], -1, dtype=np.int64)  # (l,)
+    insertion_code = np.full([num_res], "", dtype="<U4")  # (l,)
 
-    confidence = np.ones([num_res], dtype=np.float32)
+    confidence = np.ones([num_res], dtype=np.float32)  # (l,)
 
-    chain = atom_array[atom_array.chain_id == chain_id]
+    chain = atom_array[atom_array.chain_id == chain_id]  # AtomArray with n_chain_atoms entries
     if not isinstance(chain, bs.AtomArray):
         raise RuntimeError("Biotite selection did not return an AtomArray.")
     for res_index in range(num_res):
@@ -122,13 +126,13 @@ def chain_to_ndarray(
         if res_at_position.residue_number is None:
             continue
 
-        residue_index[res_index] = res_at_position.residue_number
-        insertion_code[res_index] = res_at_position.insertion_code
+        residue_index[res_index] = res_at_position.residue_number  # scalar element in (l,)
+        insertion_code[res_index] = res_at_position.insertion_code  # scalar element in (l,)
         res = chain[
             (chain.res_id == res_at_position.residue_number)
             & (chain.ins_code == res_at_position.insertion_code)
             & (chain.hetero == res_at_position.hetflag)
-        ]
+        ]  # AtomArray with n_residue_atoms entries
         if not isinstance(res, bs.AtomArray):
             raise RuntimeError("Biotite residue selection did not return an AtomArray.")
 
@@ -140,10 +144,10 @@ def chain_to_ndarray(
                 atom_name = "SD"
 
             if atom_name in residue_constants.atom_order:
-                atom_positions[res_index, residue_constants.atom_order[atom_name]] = atom.coord
-                atom_mask[res_index, residue_constants.atom_order[atom_name]] = True
+                atom_positions[res_index, residue_constants.atom_order[atom_name]] = atom.coord  # (3,) xyz vector in (l, 37, 3)
+                atom_mask[res_index, residue_constants.atom_order[atom_name]] = True  # scalar element in (l, 37)
                 if is_predicted and atom_name == "CA":
-                    confidence[res_index] = atom.b_factor / PLDDT_B_FACTOR_SCALE
+                    confidence[res_index] = atom.b_factor / PLDDT_B_FACTOR_SCALE  # scalar element in (l,)
 
     if not sequence or not all(sequence):
         raise ValueError("Some residue name was not specified correctly.")
@@ -155,22 +159,23 @@ def chain_to_ndarray(
         insertion_code,
         confidence,
         entity_id,
-    )
+    )  # array fields: (l, 37, 3), (l, 37), (l,), (l,), (l,)
 
 
 @dataclass(frozen=True)
 class ProteinChain:
     """Dataclass with atom37 representation of a single protein chain."""
 
+    # l is len(sequence), including separator rows when present.
     id: str
     sequence: str
     chain_id: str  # author chain id - mutable
     entity_id: int | None
-    residue_index: np.ndarray
-    insertion_code: np.ndarray
-    atom37_positions: np.ndarray
-    atom37_mask: np.ndarray
-    confidence: np.ndarray
+    residue_index: np.ndarray  # (l,)
+    insertion_code: np.ndarray  # (l,)
+    atom37_positions: np.ndarray  # (l, 37, 3)
+    atom37_mask: np.ndarray  # (l, 37)
+    confidence: np.ndarray  # (l,)
     mmcif: MmcifWrapper | None = None
     atom37_confidence: np.ndarray | None = None  # P has shape (l, 37).
 
@@ -186,7 +191,7 @@ class ProteinChain:
         """Yield every protein chain represented in an mmCIF structure."""
         mmcif = path if isinstance(path, MmcifWrapper) else MmcifWrapper.read(path, id)
         for chain in bs.chain_iter(mmcif.structure):
-            chain = chain[bs.filter_amino_acids(chain) & ~chain.hetero]
+            chain = chain[bs.filter_amino_acids(chain) & ~chain.hetero]  # AtomArray with n_protein_atoms entries
             if len(chain) == 0:
                 continue
             chain_id = chain.chain_id[0]
@@ -206,7 +211,7 @@ class ProteinChain:
                 insertion_code,
                 confidence,
                 _,
-            ) = chain_to_ndarray(chain, mmcif, chain_id, is_predicted)
+            ) = chain_to_ndarray(chain, mmcif, chain_id, is_predicted)  # array fields: (l, 37, 3), (l, 37), (l,), (l,), (l,)
             if not all(sequence):
                 raise ValueError("Some residue name was not specified correctly.")
 
@@ -280,7 +285,7 @@ class ProteinChain:
                 stacklevel=2,
             )
 
-        atom_array = mmcif.structure
+        atom_array = mmcif.structure  # AtomArray with n_structure_atoms entries
         (
             sequence,
             atom_positions,
@@ -289,7 +294,7 @@ class ProteinChain:
             insertion_code,
             confidence,
             _,
-        ) = chain_to_ndarray(atom_array, mmcif, chain_id, is_predicted)
+        ) = chain_to_ndarray(atom_array, mmcif, chain_id, is_predicted)  # array fields: (l, 37, 3), (l, 37), (l,), (l,), (l,)
         if not all(sequence):
             raise ValueError("Some residue name was not specified correctly.")
 
@@ -319,15 +324,17 @@ class ProteinChain:
         insertion_code: np.ndarray | None = None,
         confidence: np.ndarray | torch.Tensor | None = None,
     ):
+        # atom37_positions: (l, 37, 3) or (1, l, 37, 3).
+        # Optional residue indices and confidence are (l,) or (1, l).
         if isinstance(atom37_positions, torch.Tensor):
-            atom37_positions = atom37_positions.cpu().numpy()
+            atom37_positions = atom37_positions.cpu().numpy()  # same incoming shape, (l, 37, 3) or (1, l, 37, 3)
             if atom37_positions.ndim == 4:
                 if atom37_positions.shape[0] != 1:
                     raise ValueError(
                         "Cannot handle batched inputs, atom37_positions has shape "
                         f"{atom37_positions.shape}"
                     )
-                atom37_positions = atom37_positions[0]
+                atom37_positions = atom37_positions[0]  # (l, 37, 3)
 
         if not isinstance(atom37_positions, np.ndarray):
             raise TypeError("atom37_positions must be a NumPy array or Torch tensor.")
@@ -338,7 +345,7 @@ class ProteinChain:
             )
         seqlen = atom37_positions.shape[0]
 
-        atom_mask = np.isfinite(atom37_positions).all(-1)
+        atom_mask = np.isfinite(atom37_positions).all(-1)  # (l, 37)
 
         if id is None:
             id = ""
@@ -350,32 +357,32 @@ class ProteinChain:
             chain_id = "A"
 
         if residue_index is None:
-            residue_index = np.arange(1, seqlen + 1)
+            residue_index = np.arange(1, seqlen + 1)  # (l,)
         elif isinstance(residue_index, torch.Tensor):
-            residue_index = residue_index.cpu().numpy()
+            residue_index = residue_index.cpu().numpy()  # same incoming index shape
             if residue_index.ndim == 2:
                 if residue_index.shape[0] != 1:
                     raise ValueError(
                         "Cannot handle batched inputs, residue_index has shape "
                         f"{residue_index.shape}"
                     )
-                residue_index = residue_index[0]
+                residue_index = residue_index[0]  # (l,)
         if not isinstance(residue_index, np.ndarray):
             raise TypeError("residue_index must be a NumPy array or Torch tensor.")
 
         if insertion_code is None:
-            insertion_code = np.array(["" for _ in range(seqlen)])
+            insertion_code = np.array(["" for _ in range(seqlen)])  # (l,)
 
         if confidence is None:
-            confidence = np.ones(seqlen, dtype=np.float32)
+            confidence = np.ones(seqlen, dtype=np.float32)  # (l,)
         elif isinstance(confidence, torch.Tensor):
-            confidence = confidence.cpu().numpy()
+            confidence = confidence.cpu().numpy()  # same incoming confidence shape
             if confidence.ndim == 2:
                 if confidence.shape[0] != 1:
                     raise ValueError(
                         f"Cannot handle batched inputs, confidence has shape {confidence.shape}"
                     )
-                confidence = confidence[0]
+                confidence = confidence[0]  # (l,)
         if not isinstance(confidence, np.ndarray):
             raise TypeError("confidence must be a NumPy array or Torch tensor.")
 
@@ -404,15 +411,16 @@ class ProteinChain:
 
         This function passes all kwargs to from_atom37.
         """
+        # backbone_atom_coordinates: (l, 3, 3) or (1, l, 3, 3), atom then xyz axes.
         if isinstance(backbone_atom_coordinates, torch.Tensor):
-            backbone_atom_coordinates = backbone_atom_coordinates.cpu().numpy()
+            backbone_atom_coordinates = backbone_atom_coordinates.cpu().numpy()  # same incoming shape, (l, 3, 3) or (1, l, 3, 3)
             if backbone_atom_coordinates.ndim == 4:
                 if backbone_atom_coordinates.shape[0] != 1:
                     raise ValueError(
                         f"Cannot handle batched inputs, backbone_atom_coordinates has "
                         f"shape {backbone_atom_coordinates.shape}"
                     )
-                backbone_atom_coordinates = backbone_atom_coordinates[0]
+                backbone_atom_coordinates = backbone_atom_coordinates[0]  # (l, 3, 3)
 
         if not isinstance(backbone_atom_coordinates, np.ndarray):
             raise TypeError(
@@ -431,8 +439,8 @@ class ProteinChain:
             (backbone_atom_coordinates.shape[0], 37, 3),
             np.inf,
             dtype=backbone_atom_coordinates.dtype,
-        )
-        atom37_positions[:, :3, :] = backbone_atom_coordinates
+        )  # (l, 37, 3)
+        atom37_positions[:, :3, :] = backbone_atom_coordinates  # (l, 3, 3) backbone slice
 
         return cls.from_atom37(atom37_positions=atom37_positions, **kwargs)
 
@@ -464,7 +472,7 @@ class ProteinChain:
                 case _:
                     file_id = "null"
 
-        atom_array = PDBFile.read(path).get_structure(model=1, extra_fields=["b_factor"])
+        atom_array = PDBFile.read(path).get_structure(model=1, extra_fields=["b_factor"])  # AtomArray with n_file_atoms entries
         if len(atom_array) == 0:
             raise ValueError("PDB contains no atoms.")
         if chain_id == "detect":
@@ -473,7 +481,7 @@ class ProteinChain:
             bs.filter_amino_acids(atom_array)
             & ~atom_array.hetero
             & (atom_array.chain_id == chain_id)
-        ]
+        ]  # AtomArray with n_selected_protein_atoms entries
         if len(atom_array) == 0:
             raise ValueError(f"PDB contains no amino-acid atoms for chain {chain_id!r}.")
 
@@ -487,17 +495,17 @@ class ProteinChain:
 
         atom_positions = np.full(
             [num_res, residue_constants.atom_type_num, 3], np.nan, dtype=np.float32
-        )
-        atom_mask = np.full([num_res, residue_constants.atom_type_num], False, dtype=bool)
-        residue_index = np.full([num_res], -1, dtype=np.int64)
-        insertion_code = np.full([num_res], "", dtype="<U4")
+        )  # (l, 37, 3)
+        atom_mask = np.full([num_res, residue_constants.atom_type_num], False, dtype=bool)  # (l, 37)
+        residue_index = np.full([num_res], -1, dtype=np.int64)  # (l,)
+        insertion_code = np.full([num_res], "", dtype="<U4")  # (l,)
 
-        confidence = np.ones([num_res], dtype=np.float32)
+        confidence = np.ones([num_res], dtype=np.float32)  # (l,)
 
         for i, res in enumerate(bs.residue_iter(atom_array)):
             res_index = res[0].res_id
-            residue_index[i] = res_index
-            insertion_code[i] = res[0].ins_code
+            residue_index[i] = res_index  # scalar element in (l,)
+            insertion_code[i] = res[0].ins_code  # scalar element in (l,)
 
             # Atom level features
             for atom in res:
@@ -507,10 +515,10 @@ class ProteinChain:
                     atom_name = "SD"
 
                 if atom_name in residue_constants.atom_order:
-                    atom_positions[i, residue_constants.atom_order[atom_name]] = atom.coord
-                    atom_mask[i, residue_constants.atom_order[atom_name]] = True
+                    atom_positions[i, residue_constants.atom_order[atom_name]] = atom.coord  # (3,) xyz vector in (l, 37, 3)
+                    atom_mask[i, residue_constants.atom_order[atom_name]] = True  # scalar element in (l, 37)
                     if is_predicted and atom_name == "CA":
-                        confidence[i] = atom.b_factor / PLDDT_B_FACTOR_SCALE
+                        confidence[i] = atom.b_factor / PLDDT_B_FACTOR_SCALE  # scalar element in (l,)
 
         if not sequence or not all(sequence):
             raise ValueError("Some residue name was not specified correctly.")
@@ -567,7 +575,7 @@ class ProteinChain:
     ) -> ProteinChain:
         """A simple converter from bs.AtomArray -> ProteinChain.
         Uses PDB file format as intermediate."""
-        atom_array = atom_array.copy()
+        atom_array = atom_array.copy()  # AtomArray copy with unchanged atom count
         atom_array.box = None  # remove surrounding box, from_pdb won't handle this
         pdb_file = PDBFile()  # pyright: ignore
         pdb_file.set_structure(atom_array)
@@ -596,7 +604,7 @@ class ProteinChain:
             "residue_index": self.residue_index,
             "insertion_code": self.insertion_code,
             "confidence": self.confidence,
-        }
+        }  # arrays share l: positions (l, 37, 3), masks (l, 37), residue fields (l,)
         for name, values in aligned.items():
             if not isinstance(values, np.ndarray):
                 raise TypeError(f"{name} must be a NumPy array, got {type(values).__name__}.")
@@ -636,7 +644,7 @@ class ProteinChain:
                 )
         if not np.issubdtype(self.confidence.dtype, np.number):
             raise TypeError("confidence must use a numeric dtype.")
-        atom37_confidence = self.atom37_confidence
+        atom37_confidence = self.atom37_confidence  # (l, 37) or None
         if atom37_confidence is not None and not isinstance(atom37_confidence, np.ndarray):
             raise TypeError("atom37_confidence must be a NumPy array when provided.")
         if (
@@ -686,7 +694,7 @@ class ProteinChain:
                     self.atom37_confidence[res_idx_i, i]
                     if self.atom37_confidence is not None
                     else conf
-                )
+                )  # scalar atom confidence
                 atom = bs.Atom(
                     coord=pos,
                     chain_id="A" if self.chain_id is None else self.chain_id,
@@ -700,7 +708,7 @@ class ProteinChain:
                     occupancy=1.0,
                 )
                 atoms.append(atom)
-        return bs.array(atoms)
+        return bs.array(atoms)  # AtomArray with n_present_atoms entries
 
     # Coordinate transformations and dataset adapters
     def get_normalization_frame(self) -> Affine3D:
@@ -711,8 +719,8 @@ class ProteinChain:
         Returns:
             Affine3D: [] tensor of Affine3D frame
         """
-        coords = torch.from_numpy(self.atom37_positions)
-        frame = get_protein_normalization_frame(coords)
+        coords = torch.from_numpy(self.atom37_positions)  # (l, 37, 3)
+        frame = get_protein_normalization_frame(coords)  # one normalization frame
 
         return frame
 
@@ -725,9 +733,10 @@ class ProteinChain:
         Returns:
             ProteinChain: Transformed protein chain
         """
-        coords = torch.from_numpy(self.atom37_positions).to(frame.trans.dtype)
-        coords = apply_frame_to_coords(coords, frame)
-        atom37_positions = coords.numpy()
+        # frame is a rigid transform broadcast-compatible with (l, 37, 3) coordinates.
+        coords = torch.from_numpy(self.atom37_positions).to(frame.trans.dtype)  # (l, 37, 3)
+        coords = apply_frame_to_coords(coords, frame)  # (l, 37, 3)
+        atom37_positions = coords.numpy()  # (l, 37, 3)
         return replace(self, atom37_positions=atom37_positions)
 
     def normalize_coordinates(self) -> ProteinChain:
@@ -736,36 +745,36 @@ class ProteinChain:
 
     def infer_oxygen(self) -> ProteinChain:
         """Oxygen position is fixed given N, CA, C atoms. Infer it if not provided."""
-        O_missing_indices = np.argwhere(~np.isfinite(self.atoms["O"]).all(axis=1)).squeeze()
+        O_missing_indices = np.argwhere(~np.isfinite(self.atoms["O"]).all(axis=1)).squeeze()  # (n_missing,) or () when exactly one oxygen is missing
 
-        O_vector = torch.tensor([0.6240, -1.0613, 0.0103], dtype=torch.float32)
-        N, CA, C = torch.from_numpy(self.atoms[["N", "CA", "C"]]).float().unbind(dim=1)
-        N = torch.roll(N, -3)
-        N[..., -1, :] = torch.nan
+        O_vector = torch.tensor([0.6240, -1.0613, 0.0103], dtype=torch.float32)  # (3,)
+        N, CA, C = torch.from_numpy(self.atoms[["N", "CA", "C"]]).float().unbind(dim=1)  # each (l, 3)
+        N = torch.roll(N, -3)  # (l, 3); torch.roll keeps the original shape
+        N[..., -1, :] = torch.nan  # (3,) xyz row
 
         # Get the frame defined by the CA-C-N atom
-        frames = Affine3D.from_graham_schmidt(CA, C, N)
-        oxygen_coordinates = frames.apply(O_vector)
-        atom37_positions = self.atom37_positions.copy()
-        atom37_mask = self.atom37_mask.copy()
+        frames = Affine3D.from_graham_schmidt(CA, C, N)  # affine batch shape: (l,)
+        oxygen_coordinates = frames.apply(O_vector)  # (l, 3)
+        atom37_positions = self.atom37_positions.copy()  # (l, 37, 3)
+        atom37_mask = self.atom37_mask.copy()  # (l, 37)
 
         atom37_positions[O_missing_indices, residue_constants.atom_order["O"]] = oxygen_coordinates[
             O_missing_indices
-        ].numpy()
+        ].numpy()  # (n_missing, 3) or (3,) selected oxygen coordinates
         atom37_mask[O_missing_indices, residue_constants.atom_order["O"]] = ~np.isnan(
             atom37_positions[O_missing_indices, residue_constants.atom_order["O"]]
-        ).any(-1)
+        ).any(-1)  # (n_missing,) or () selected oxygen mask
         new_chain = replace(self, atom37_positions=atom37_positions, atom37_mask=atom37_mask)
         return new_chain
 
     @cached_property
     def inferred_cbeta(self) -> np.ndarray:
         """Infer cbeta positions based on N, C, CA."""
-        N, CA, C = np.moveaxis(self.atoms[["N", "CA", "C"]], 1, 0)
+        N, CA, C = np.moveaxis(self.atoms[["N", "CA", "C"]], 1, 0)  # each (l, 3)
         # See usage in trDesign codebase.
         # https://github.com/gjoni/trDesign/blob/f2d5930b472e77bfacc2f437b3966e7a708a8d37/02-GD/utils.py#L140
-        CB = infer_cb(C, N, CA, 1.522, 1.927, -2.143)
-        return CB
+        CB = infer_cb(C, N, CA, 1.522, 1.927, -2.143)  # (l, 3)
+        return CB  # (l, 3)
 
     def infer_cbeta(self, infer_cbeta_for_glycine: bool = False) -> ProteinChain:
         """Return a new chain with inferred CB atoms at all residues except GLY.
@@ -780,30 +789,30 @@ class ProteinChain:
                 calculation between two designs for a given structural template, w/
                 CB atoms.
         """
-        atom37_positions = self.atom37_positions.copy()
-        atom37_mask = self.atom37_mask.copy()
+        atom37_positions = self.atom37_positions.copy()  # (l, 37, 3)
+        atom37_mask = self.atom37_mask.copy()  # (l, 37)
 
-        inferred_cbeta_positions = self.inferred_cbeta
+        inferred_cbeta_positions = self.inferred_cbeta  # (l, 3)
         if not infer_cbeta_for_glycine:
-            inferred_cbeta_positions[np.array(list(self.sequence)) == "G", :] = np.nan
+            inferred_cbeta_positions[np.array(list(self.sequence)) == "G", :] = np.nan  # (n_glycine, 3) selected rows
 
-        atom37_positions[:, residue_constants.atom_order["CB"]] = inferred_cbeta_positions
+        atom37_positions[:, residue_constants.atom_order["CB"]] = inferred_cbeta_positions  # (l, 3) C-beta slice
         atom37_mask[:, residue_constants.atom_order["CB"]] = ~np.isnan(
             atom37_positions[:, residue_constants.atom_order["CB"]]
-        ).any(-1)
+        ).any(-1)  # (l,) C-beta mask
         new_chain = replace(self, atom37_positions=atom37_positions, atom37_mask=atom37_mask)
         return new_chain
 
     @cached_property
     def pdist_CA(self) -> np.ndarray:
-        CA = self.atoms["CA"]
-        pdist_CA = squareform(pdist(CA))
-        return pdist_CA
+        CA = self.atoms["CA"]  # (l, 3)
+        pdist_CA = squareform(pdist(CA))  # (l, l)
+        return pdist_CA  # (l, l)
 
     @cached_property
     def pdist_CB(self) -> np.ndarray:
-        pdist_CB = squareform(pdist(self.inferred_cbeta))
-        return pdist_CB
+        pdist_CB = squareform(pdist(self.inferred_cbeta))  # (l, l)
+        return pdist_CB  # (l, l)
 
     @classmethod
     def as_complex(cls, chains: Sequence[ProteinChain]):
@@ -824,23 +833,24 @@ class ProteinChain:
             "atom37_positions": np.full([1, 37, 3], np.inf),
             "atom37_mask": np.zeros([1, 37], dtype=bool),
             "confidence": np.array([0]),
-        }
+        }  # one-residue separator arrays: (1,), (1, 37, 3), or (1, 37)
 
         def join_arrays(arrays: Sequence[np.ndarray], sep: np.ndarray):
+            # arrays: (l_i, *trailing_shape); separator: (1, *trailing_shape).
             if use_chainbreak:
                 full_array = []
                 for array in arrays:
                     full_array.append(array)
                     full_array.append(sep)
                 full_array = full_array[:-1]
-                return np.concatenate(full_array, 0)
+                return np.concatenate(full_array, 0)  # (sum(chain_lengths) + n_chains - 1, *trailing_shape)
             else:
-                return np.concatenate(arrays, 0)
+                return np.concatenate(arrays, 0)  # (sum(chain_lengths), *trailing_shape)
 
         array_args: dict[str, np.ndarray] = {
             name: join_arrays([getattr(chain, name) for chain in chains], sep)
             for name, sep in sep_tokens.items()
-        }
+        }  # each array retains its trailing atom/xyz axes
 
         chain_break = residue_constants.CHAIN_BREAK_TOKEN if use_chainbreak else ""
         return cls(
@@ -868,15 +878,15 @@ class ProteinChain:
                 raise ValueError(
                     f"Non-polymer {nonpolymer.comp_id!r} has no coordinate table."
                 )
-            chain_coords = self.atom37_positions[self.atom37_mask]
-            distance = cdist(nonpolymer_array.coord, chain_coords)
+            chain_coords = self.atom37_positions[self.atom37_mask]  # (n_present_atoms, 3)
+            distance = cdist(nonpolymer_array.coord, chain_coords)  # (n_ligand_atoms, n_present_atoms)
 
-            is_contact = distance < 5
+            is_contact = distance < 5  # (n_ligand_atoms, n_present_atoms)
             if not is_contact.any():
                 continue
-            contacting_atoms = np.where(is_contact.any(0))[0]
-            chain_index = np.where(self.atom37_mask)[0]
-            contacting_residues = np.unique(chain_index[contacting_atoms])
+            contacting_atoms = np.where(is_contact.any(0))[0]  # (n_contacting_atoms,)
+            chain_index = np.where(self.atom37_mask)[0]  # (n_present_atoms,)
+            contacting_residues = np.unique(chain_index[contacting_atoms])  # (n_contacting_residues,)
 
             result = {
                 "ligand": nonpolymer.name,
@@ -890,7 +900,7 @@ class ProteinChain:
         self, indices: list[int | str], ignore_x_mismatch: bool = False
     ) -> ProteinChain:
         numeric_indices = [idx if isinstance(idx, int) else int(idx[1:]) for idx in indices]
-        mask = np.isin(self.residue_index, numeric_indices)
+        mask = np.isin(self.residue_index, numeric_indices)  # (l,)
         new = self[mask]
         mismatches = []
         for aa, idx in zip(new.sequence, indices, strict=False):
@@ -922,20 +932,22 @@ class ProteinChain:
         # Convert to tensors and add batch dimension
         coordinates = (
             torch.from_numpy(self.atom37_positions).float().unsqueeze(0)
-        )  # X has shape (1, l, 37, 3).
-        plddt = torch.from_numpy(self.confidence).float().unsqueeze(0)  # P: (1, l)
+        )  # X has shape (1, l, 37, 3).; (1, l, 37, 3)
+        plddt = torch.from_numpy(self.confidence).float().unsqueeze(0)  # P: (1, l); (1, l)
         residue_index = (
             torch.from_numpy(self.residue_index).long().unsqueeze(0)
-        )  # R has shape (1, l).
+        )  # R has shape (1, l).; (1, l)
 
-        return coordinates, plddt, residue_index
+        return coordinates, plddt, residue_index  # (1, l, 37, 3), (1, l), (1, l)
 
     # Sequence access, interchange, and compact storage
     def __getitem__(self, idx: int | list[int] | slice | np.ndarray | torch.Tensor):
+        # idx selects residues; an integer is promoted to a length-one index.
+        # Returned fields retain atom/xyz trailing axes with the selected residue count.
         if isinstance(idx, int):
             idx = [idx]
         if isinstance(idx, torch.Tensor):
-            idx = idx.cpu().numpy()
+            idx = idx.cpu().numpy()  # same index shape
 
         sequence = slice_python_object_as_numpy(self.sequence, idx)
         return replace(
@@ -955,11 +967,11 @@ class ProteinChain:
         return len(self.sequence)
 
     def cbeta_contacts(self, distance_threshold: float = 8.0) -> np.ndarray:
-        distance = self.pdist_CB
-        contacts = (distance < distance_threshold).astype(np.int64)
-        contacts[np.isnan(distance)] = -1
+        distance = self.pdist_CB  # (l, l)
+        contacts = (distance < distance_threshold).astype(np.int64)  # (l, l)
+        contacts[np.isnan(distance)] = -1  # (n_missing_pairs,) selected entries
         np.fill_diagonal(contacts, -1)
-        return contacts
+        return contacts  # (l, l)
 
     def to_pdb(self, path: PathOrBuffer, include_insertions: bool = True):
         """Dssp works better w/o insertions."""
@@ -989,7 +1001,7 @@ class ProteinChain:
                 "mode": CIFColumn(data=CIFData(array=np.array(["global", "local"]), dtype=np.str_)),
                 "name": CIFColumn(data=CIFData(array=np.array(["pLDDT", "pLDDT"]), dtype=np.str_)),
             },
-        )
+        )  # each CIF metric column has shape (2,)
 
         # table is a duplicate of data already in the atom array, but
         # needed by molstar to render pLDDT / confidence
@@ -1039,10 +1051,10 @@ class ProteinChain:
         need more than 2**32 residues..."""
         dct = {k: v for k, v in asdict(self).items() if k not in ["mmcif"]}
         if backbone_only:
-            dct["atom37_mask"][:, 3:] = False
-        dct["atom37_positions"] = dct["atom37_positions"][dct["atom37_mask"]]
+            dct["atom37_mask"][:, 3:] = False  # (l, 34) mask slice for atoms beyond N/CA/C
+        dct["atom37_positions"] = dct["atom37_positions"][dct["atom37_mask"]]  # (n_present_atoms, 3)
         if dct.get("atom37_confidence") is not None:
-            dct["atom37_confidence"] = dct["atom37_confidence"][dct["atom37_mask"]]
+            dct["atom37_confidence"] = dct["atom37_confidence"][dct["atom37_mask"]]  # (n_present_atoms,)
         else:
             dct.pop("atom37_confidence", None)
 
@@ -1050,9 +1062,9 @@ class ProteinChain:
             if isinstance(v, np.ndarray):
                 match v.dtype:
                     case np.int64:
-                        dct[k] = v.astype(np.int32)
+                        dct[k] = v.astype(np.int32)  # v.shape
                     case np.float64 | np.float32:
-                        dct[k] = v.astype(np.float16)
+                        dct[k] = v.astype(np.float16)  # v.shape
                     case _:
                         pass
                 if json_serializable:
@@ -1074,15 +1086,15 @@ class ProteinChain:
 
         for k, v in dct.items():
             if isinstance(v, list):
-                dct[k] = np.array(v)
+                dct[k] = np.array(v)  # shape inferred from serialized nested list
 
-        atom37 = np.full((*dct["atom37_mask"].shape, 3), np.nan)
-        atom37[dct["atom37_mask"]] = dct["atom37_positions"]
-        dct["atom37_positions"] = atom37
+        atom37 = np.full((*dct["atom37_mask"].shape, 3), np.nan)  # (l, 37, 3)
+        atom37[dct["atom37_mask"]] = dct["atom37_positions"]  # (n_present_atoms, 3) selected coordinates
+        dct["atom37_positions"] = atom37  # (l, 37, 3)
         if "atom37_confidence" in dct:
-            atom37_conf = np.full(dct["atom37_mask"].shape, np.nan, dtype=np.float32)
-            atom37_conf[dct["atom37_mask"]] = dct["atom37_confidence"]
-            dct["atom37_confidence"] = atom37_conf
+            atom37_conf = np.full(dct["atom37_mask"].shape, np.nan, dtype=np.float32)  # (l, 37)
+            atom37_conf[dct["atom37_mask"]] = dct["atom37_confidence"]  # (n_present_atoms,) selected confidence values
+            dct["atom37_confidence"] = atom37_conf  # (l, 37)
         dct = {
             k: (
                 v.astype(np.float32)
@@ -1091,7 +1103,7 @@ class ProteinChain:
             )
             for k, v in dct.items()
             if not (k == "atom37_confidence" and v is None)
-        }
+        }  # each converted array retains its serialized field shape
         return cls(**dct, mmcif=None)
 
     @classmethod
@@ -1111,10 +1123,10 @@ class ProteinChain:
 
     # Surface and structural comparison metrics
     def sasa(self, by_residue: bool = True):
-        arr = self.atom_array_no_insertions
+        arr = self.atom_array_no_insertions  # AtomArray with n_present_atoms entries
         if len(arr) == 0:
             raise ValueError("SASA requires at least one resolved atom.")
-        sasa_per_atom = bs.sasa(arr)  # type: ignore
+        sasa_per_atom = bs.sasa(arr)  # type: ignore; (n_present_atoms,)
         if by_residue:
             # Sum per-atom SASA into residue "bins", with np.bincount.
             if arr.res_id is None:
@@ -1127,12 +1139,12 @@ class ProteinChain:
                     np.bincount(arr.res_id, weights=sasa_per_atom)[1:],
                     np.zeros(num_trailing_residues),
                 ]
-            )
-            sasa_per_residue[~self.atom37_mask.any(-1)] = np.nan
+            )  # (l,)
+            sasa_per_residue[~self.atom37_mask.any(-1)] = np.nan  # (n_missing_residues,) selected entries
             if len(sasa_per_residue) != len(self):
                 raise RuntimeError("Residue SASA output does not align with the protein chain.")
-            return sasa_per_residue
-        return sasa_per_atom
+            return sasa_per_residue  # (l,)
+        return sasa_per_atom  # (n_present_atoms,)
 
     def sap_score(self, aggregation: str = "atom") -> np.ndarray:
         """Compute per-atom spatial aggregation propensity (SAP).
@@ -1141,7 +1153,7 @@ class ProteinChain:
         Protein aggregation sums positive atom scores, following Lauer et al. 2011.
         """
         sap_radius = 5.0
-        arr = self.atom_array_no_insertions
+        arr = self.atom_array_no_insertions  # AtomArray with n_present_atoms entries
         if len(arr) == 0:
             raise ValueError("SAP requires at least one resolved atom.")
 
@@ -1150,42 +1162,42 @@ class ProteinChain:
                 raise RuntimeError(f"Biotite AtomArray is missing required {name!r} data.")
 
         # compute SASA and residue-specific properties
-        sasa_per_atom = self.sasa(by_residue=False)
+        sasa_per_atom = self.sasa(by_residue=False)  # (n_present_atoms,)
         resid_to_resname = dict(zip(arr.res_id, arr.res_name, strict=False))
 
-        max_side_chain_asa = np.full(len(self), np.nan)
-        res_hydrophobicity = np.full(len(self), np.nan)
-        resolved_res_mask = self.atom37_mask.any(-1)
+        max_side_chain_asa = np.full(len(self), np.nan)  # (l,)
+        res_hydrophobicity = np.full(len(self), np.nan)  # (l,)
+        resolved_res_mask = self.atom37_mask.any(-1)  # (l,)
         num_trailing_residues = len(self) - arr.res_id.max()
 
         max_side_chain_asa[resolved_res_mask] = np.array(
             [residue_constants.side_chain_asa[resid_to_resname[i]] for i in np.unique(arr.res_id)]
-        )
+        )  # (n_resolved_residues,) selected entries
         res_hydrophobicity[resolved_res_mask] = np.array(
             [residue_constants.hydrophobicity[resid_to_resname[i]] for i in np.unique(arr.res_id)]
-        )
+        )  # (n_resolved_residues,) selected entries
 
         # compute SAP score
-        is_side_chain = ~bs.filter_peptide_backbone(arr)
-        sasa_per_atom[is_side_chain] = 0
+        is_side_chain = ~bs.filter_peptide_backbone(arr)  # (n_present_atoms,)
+        sasa_per_atom[is_side_chain] = 0  # (n_selected_atoms,) selected entries
         kdtree = KDTree(arr.coord)
         neighbors = kdtree.query_ball_tree(kdtree, sap_radius, p=2.0)
-        sap_by_atom = np.zeros_like(sasa_per_atom)
+        sap_by_atom = np.zeros_like(sasa_per_atom)  # (n_present_atoms,)
         for i, nn_list in enumerate(neighbors):
-            saa_nn = np.zeros_like(sasa_per_atom)
-            saa_nn[nn_list] = sasa_per_atom[nn_list]
+            saa_nn = np.zeros_like(sasa_per_atom)  # (n_present_atoms,)
+            saa_nn[nn_list] = sasa_per_atom[nn_list]  # (n_neighbors,) selected entries
             sasa_within_r = np.concatenate(
                 [
                     np.bincount(arr.res_id, weights=saa_nn)[1:],
                     np.zeros(num_trailing_residues),
                 ]
-            )
-            sap = np.nansum((sasa_within_r / max_side_chain_asa) * res_hydrophobicity)
-            sap_by_atom[i] = sap
+            )  # (l,)
+            sap = np.nansum((sasa_within_r / max_side_chain_asa) * res_hydrophobicity)  # scalar NumPy reduction
+            sap_by_atom[i] = sap  # scalar entry in (n_present_atoms,)
 
         match aggregation:
             case "atom":
-                return sap_by_atom
+                return sap_by_atom  # (n_present_atoms,)
             case "residue":
                 sap_by_residue = np.concatenate(
                     [
@@ -1195,11 +1207,11 @@ class ProteinChain:
                 ) / (
                     np.concatenate([np.bincount(arr.res_id)[1:], np.zeros(num_trailing_residues)])
                     + 1e-8
-                )
-                sap_by_residue[~resolved_res_mask] = np.nan
+                )  # (l,)
+                sap_by_residue[~resolved_res_mask] = np.nan  # (n_missing_residues,) selected entries
                 if len(sap_by_residue) != len(self):
                     raise RuntimeError("Residue SAP output does not align with the protein chain.")
-                return sap_by_residue
+                return sap_by_residue  # (l,)
             case "protein":
                 return sum(sap_by_atom[sap_by_atom > 0])  # pyright: ignore[reportReturnType]
             case _:
@@ -1216,19 +1228,19 @@ class ProteinChain:
 
         # https://www.mdpi.com/2073-4352/11/12/1539
         # The non-overlapping-atom approximation can produce globularity above one.
-        mask = self.atom37_mask.any(-1)
-        points = self.atom37_positions[self.atom37_mask]
+        mask = self.atom37_mask.any(-1)  # (l,)
+        points = self.atom37_positions[self.atom37_mask]  # (n_present_atoms, 3)
         sequence = [aa for aa, m in zip(self.sequence, mask, strict=False) if m]  # type: ignore
-        A, _ = self._mvee(points, tol=1e-3)
-        mvee_volume = (4 * np.pi) / (3 * np.sqrt(np.linalg.det(A)))
+        A, _ = self._mvee(points, tol=1e-3)  # A: (3, 3), center: (3, 1)
+        mvee_volume = (4 * np.pi) / (3 * np.sqrt(np.linalg.det(A)))  # NumPy scalar ()
         volume = sum(residue_constants.amino_acid_volumes[x] for x in sequence)
         ratio = volume / mvee_volume
 
         # The paper compares the ellipsoidal profile with scalar t, a measurement
         # of elongation. We want a single number, so we multiply by 1/(2t), so
         # that value is normalized between 0-1
-        eigenvalues = np.linalg.eigvals(A)
-        R = 1 / np.sqrt(eigenvalues)
+        eigenvalues = np.linalg.eigvals(A)  # (3,)
+        R = 1 / np.sqrt(eigenvalues)  # (3,)
         # ellipsoid radii length triangle inequality coefficient
         t = max(R[0] / (R[1] + R[2]), R[1] / (R[0] + R[2]), R[2] / (R[0] + R[1]))
         elongation_metric = 1 / max(t, 1)
@@ -1239,50 +1251,51 @@ class ProteinChain:
         # Finds minimum volume enclosing ellipsoid of a set of points.
         # Returns A, c where the ellipse is defined as:
         #    (x-c).T @ A @ (x-c) = 1
+        # P: (n_input_points, d); d is coordinate dimension. Hull selection changes only point count.
         hull = ConvexHull(P)
-        P = P[hull.vertices]
-        P = P.T
+        P = P[hull.vertices]  # (n_hull_vertices, d)
+        P = P.T  # (d, n); n = n_hull_vertices
 
         # Data points
         d, n = P.shape
-        Q = np.zeros((d + 1, n))
-        Q[:d, :] = P[:d, :n]
-        Q[d, :] = np.ones((1, n))
+        Q = np.zeros((d + 1, n))  # (d + 1, n)
+        Q[:d, :] = P[:d, :n]  # (d, n) slice
+        Q[d, :] = np.ones((1, n))  # (n,) row, assigned from (1, n)
 
         # Initializations
         count = 1
         err = 1.0
-        u = np.full((n, 1), 1 / n)  # First iteration.
+        u = np.full((n, 1), 1 / n)  # First iteration.; (n, 1)
 
         # Khachiyan Algorithm
         for _ in range(max_iter):
-            X = Q.dot(np.diag(u.squeeze())) @ Q.T
-            M = np.diag(Q.T @ np.linalg.inv(X) @ Q)
-            maximum, j = np.max(M), np.argmax(M)
+            X = Q.dot(np.diag(u.squeeze())) @ Q.T  # (d + 1, d + 1)
+            M = np.diag(Q.T @ np.linalg.inv(X) @ Q)  # (n,)
+            maximum, j = np.max(M), np.argmax(M)  # each NumPy scalar ()
             step_size = (maximum - d - 1) / ((d + 1) * (maximum - 1))
-            new_u = (1 - step_size) * u
-            new_u[j] += step_size
+            new_u = (1 - step_size) * u  # (n, 1)
+            new_u[j] += step_size  # (1,) selected row
             count += 1
-            err = np.linalg.norm(new_u - u)
-            u = new_u
+            err = np.linalg.norm(new_u - u)  # NumPy scalar ()
+            u = new_u  # (n, 1)
             if err < tol:
                 break
         else:
             raise ValueError("MVEE did not converge")
 
         d = P.shape[0]  # Fixed: use P.shape[0] instead of P.shape
-        U = np.diag(u.squeeze())
+        U = np.diag(u.squeeze())  # (n, n)
 
         # The A matrix for the ellipse
-        A = (1 / d) * np.linalg.inv(P @ U @ P.T - (P @ u) @ (P @ u).T)
+        A = (1 / d) * np.linalg.inv(P @ U @ P.T - (P @ u) @ (P @ u).T)  # (d, d)
 
         # Center of the ellipse
-        c = P @ u
+        c = P @ u  # (d, 1)
 
-        return A, c
+        return A, c  # (d, d), (d, 1)
 
     def radius_of_gyration(self):
-        arr = self.atom_array_no_insertions
+        arr = self.atom_array_no_insertions  # AtomArray with n_present_atoms entries
         return bs.gyration_radius(arr)
 
     def align(
@@ -1375,8 +1388,8 @@ class ProteinChain:
             torch.tensor(native.atom37_positions[target_inds]).unsqueeze(0),
             torch.tensor(native.atom37_mask[mobile_inds]).unsqueeze(0),
             **kwargs,
-        )
-        return float(lddt) if lddt.numel() == 1 else lddt.numpy().flatten()
+        )  # score shape follows selected coordinate axes and per_residue
+        return float(lddt) if lddt.numel() == 1 else lddt.numpy().flatten()  # scalar or (lddt.numel(),)
 
     def gdt_ts(
         self,
@@ -1409,12 +1422,12 @@ class ProteinChain:
                 & index_by_atom_name(target.atom37_mask[target_inds], "CA", dim=-1)
             ).unsqueeze(0),
             **kwargs,
-        )
-        return float(gdt_ts) if gdt_ts.numel() == 1 else gdt_ts.numpy().flatten()
+        )  # () or (n_samples,), selected by reduction
+        return float(gdt_ts) if gdt_ts.numel() == 1 else gdt_ts.numpy().flatten()  # scalar or (gdt_ts.numel(),)
 
     @cached_property
     def residue_index_no_insertions(self) -> np.ndarray:
-        return self.residue_index + np.cumsum(self.insertion_code != "")
+        return self.residue_index + np.cumsum(self.insertion_code != "")  # (l,)
 
     @cached_property
     def atom_array_no_insertions(self) -> bs.AtomArray:
@@ -1433,7 +1446,7 @@ class ProteinChain:
                     self.atom37_confidence[res_idx, i]
                     if self.atom37_confidence is not None
                     else conf
-                )
+                )  # scalar atom confidence
                 atom = bs.Atom(
                     coord=pos,
                     # hard coded to as we currently only support single chain structures
@@ -1447,4 +1460,4 @@ class ProteinChain:
                     occupancy=1.0,
                 )
                 atoms.append(atom)
-        return bs.array(atoms)
+        return bs.array(atoms)  # AtomArray with n_present_atoms entries

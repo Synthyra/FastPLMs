@@ -6,6 +6,7 @@ import hashlib
 import json
 import pytest
 import torch
+
 from dataclasses import replace
 from pathlib import Path
 from safetensors.torch import load_file, save_file
@@ -443,7 +444,7 @@ def test_native_structure_converter_requires_reference_hash_contract(
     save_file(tensors, native / "bundle.safetensors")
 
     def raw_hash(T: torch.Tensor) -> str:
-        # T: (...)
+        # T may have any serialized tensor shape; hashing preserves its byte order.
         value = T.contiguous().view(torch.uint8).numpy().tobytes()
         return hashlib.sha256(value).hexdigest()
 

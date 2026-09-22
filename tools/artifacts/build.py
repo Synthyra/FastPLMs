@@ -190,7 +190,7 @@ def _canonical_tensor_leaf(name: str, tensor: Any) -> bytes:
         raise ArtifactError(f"Canonical state contains an invalid tensor entry: {name!r}.")
     if tensor.layout != torch.strided:
         raise ArtifactError(f"Canonical state tensor {name!r} is not strided.")
-    canonical = tensor.detach().to(device="cpu").contiguous()
+    canonical = tensor.detach().to(device="cpu").contiguous()  # checkpoint-defined shape (...)
     raw = canonical.reshape(-1).view(torch.uint8).numpy().tobytes()
     leaf = hashlib.sha256()
     leaf.update(_CANONICAL_TENSOR_DOMAIN)
@@ -397,7 +397,7 @@ def _load_checkpoint_state(snapshot: Path, source: CheckpointSource) -> dict[str
         if any(not isinstance(name, str) or not name for name in loaded_keys):
             raise ArtifactError(f"Weight file contains an invalid parameter key: {path}")
         for name in sorted(loaded_keys):
-            tensor = loaded[name]
+            tensor = loaded[name]  # checkpoint-defined shape (...), validated below
             if name in state:
                 raise ArtifactError(f"Duplicate parameter {name!r} across checkpoint shards.")
             if not torch.is_tensor(tensor):
@@ -409,7 +409,7 @@ def _load_checkpoint_state(snapshot: Path, source: CheckpointSource) -> dict[str
             # Break shared storage deterministically because safetensors stores
             # each state key independently. Parameter alias contracts are tested
             # after model loading rather than encoded as shared file storage.
-            state[name] = tensor.detach().to(device="cpu").contiguous().clone()
+            state[name] = tensor.detach().to(device="cpu").contiguous().clone()  # (...)
         del loaded
     if not state:
         raise ArtifactError(f"Checkpoint {source.repo_id} contains an empty state dictionary.")

@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import argparse
 import os
+
 from pathlib import Path
 from typing import Any
 
+
+# Shapes: l_s = source tokens, l_p = prompt tokens, l_o = generated tokens.
 
 if __package__:
     from ._runtime import add_execution_arguments, resolve_execution

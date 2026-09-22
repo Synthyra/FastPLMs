@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field

@@ -18,12 +18,16 @@ import statistics
 import subprocess
 import sys
 import time
+
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
+
+# Shapes: b = batch, l = padded tokens/residues, l_i = residues in sequence i.
 
 CANONICAL_AAS = "ACDEFGHIKLMNPQRSTVWY"
 
@@ -57,7 +61,7 @@ class MeasurementBlock:
     padded_tokens_per_second: float
 
 
-def _require_torch(*, require_cuda: bool = True):
+def _require_torch(*, require_cuda: bool = True) -> ModuleType:
     try:
         import torch
     except ImportError as error:

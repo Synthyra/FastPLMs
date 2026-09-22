@@ -6,6 +6,7 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from collections import defaultdict
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -166,7 +167,7 @@ def _validate_biological_indices(
 ) -> RotaryLengths:
     """Validate E1's sequence and position conventions outside compiled graphs."""
 
-    lowest_position, highest_position = torch.aminmax(within_positions)
+    lowest_position, highest_position = torch.aminmax(within_positions)  # (), ()
     minimum_position = int(lowest_position.item())
     maximum_position = int(highest_position.item())
     if minimum_position < -1 or maximum_position >= config.max_num_positions_within_seq:
@@ -176,7 +177,7 @@ def _validate_biological_indices(
             f"{maximum_position} and min {minimum_position}"
         )
 
-    lowest_global, highest_global = torch.aminmax(global_positions)
+    lowest_global, highest_global = torch.aminmax(global_positions)  # (), ()
     minimum_global = int(lowest_global.item())
     maximum_global = int(highest_global.item())
     if minimum_global < -1 or maximum_global >= config.max_num_positions_global:
@@ -186,7 +187,7 @@ def _validate_biological_indices(
             f"{maximum_global} and min {minimum_global}"
         )
 
-    lowest_sequence, highest_sequence = torch.aminmax(sequence_numbers)
+    lowest_sequence, highest_sequence = torch.aminmax(sequence_numbers)  # (), ()
     minimum_sequence = int(lowest_sequence.item())
     maximum_sequence = int(highest_sequence.item())
     if minimum_sequence < -1 or maximum_sequence >= config.max_num_sequences:
@@ -355,7 +356,7 @@ class RotaryPositionalEmbedding(nn.Module):
         # a checkpoint. Precomputed non-persistent buffers would then be
         # materialized without values. Empty buffers make initialization lazy
         # and deterministic on the first real-device forward.
-        empty = torch.empty(0, dtype=torch.float32, device=device)
+        empty = torch.empty(0, dtype=torch.float32, device=device)  # (0,); populated lazily after checkpoint loading
         self.register_buffer("inv_freq", empty, persistent=False)
         self.register_buffer("cos_cached", empty.clone(), persistent=False)
         self.register_buffer("sin_cached", empty.clone(), persistent=False)
@@ -364,9 +365,9 @@ class RotaryPositionalEmbedding(nn.Module):
     @staticmethod
     def rotate_half(x: torch.Tensor) -> torch.Tensor:
         """Rotates half the hidden dims of the input."""
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2 :]
-        return torch.cat((-x2, x1), dim=-1)
+        x1 = x[..., : x.shape[-1] // 2]  # (..., floor(d / 2))
+        x2 = x[..., x.shape[-1] // 2 :]  # (..., d - floor(d / 2))
+        return torch.cat((-x2, x1), dim=-1)  # (..., d)
 
     def _set_sin_cos_cache(self, seq_len: int, device: torch.device) -> None:
         # Compute angles in FP32, matching the official cache constructed before
@@ -708,16 +709,16 @@ class Attention(nn.Module):
         if self.layer_type == AttentionLayerType.GLOBAL:
             q_sequence_ids = sequence_ids
             if q_len < kv_len:
-                first_token_id = sequence_ids[:, 0].unsqueeze(1)
+                first_token_id = sequence_ids[:, 0].unsqueeze(1)  # (b, 1)
                 k_sequence_ids = torch.cat(
                     [first_token_id.expand(bsz, kv_len - q_len), sequence_ids], dim=-1
-                )
+                )  # (b, kv_len)
             else:
                 k_sequence_ids = sequence_ids
         else:
             if q_len < kv_len:
-                key_states = key_states[:, -q_len:]
-                val_states = val_states[:, -q_len:]
+                key_states = key_states[:, -q_len:]  # (b, q_len, h_kv, d_h)
+                val_states = val_states[:, -q_len:]  # (b, q_len, h_kv, d_h)
             q_sequence_ids = k_sequence_ids = sequence_ids
 
         attn_output = kernels_flash_attention_func(
@@ -728,8 +729,8 @@ class Attention(nn.Module):
             k_sequence_ids=k_sequence_ids,
             causal=False,
             implementation=self.attn_backend.value,
-        )
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
+        )  # (b, q_len, h, d_h)
+        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()  # (b, q_len, hidden_size)
         return attn_output, None
 
     def _flex_attn(
@@ -746,8 +747,8 @@ class Attention(nn.Module):
         kv_len = key_states.shape[1]
         if is_cache_prefilled and q_len < kv_len:
             if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
-                key_states = key_states[:, -q_len:]
-                val_states = val_states[:, -q_len:]
+                key_states = key_states[:, -q_len:]  # (b, q_len, h_kv, d_h)
+                val_states = val_states[:, -q_len:]  # (b, q_len, h_kv, d_h)
                 block_mask = create_within_seq_block_mask(sequence_ids)
                 outputs = flex_attention_func(
                     query_states,
@@ -755,7 +756,7 @@ class Attention(nn.Module):
                     val_states,
                     block_mask=block_mask,
                     mask_semantics=effective_layer_type.value,
-                )
+                )  # (b, q_len, h, d_h)
             else:
                 q_sequence_ids, k_sequence_ids = self._cached_global_sequence_ids(
                     sequence_ids,
@@ -767,8 +768,8 @@ class Attention(nn.Module):
                     val_states,
                     q_sequence_ids=q_sequence_ids,
                     k_sequence_ids=k_sequence_ids,
-                )
-            outputs = outputs.reshape(bsz, q_len, self.hidden_size).contiguous()
+                )  # (b, q_len, h, d_h)
+            outputs = outputs.reshape(bsz, q_len, self.hidden_size).contiguous()  # (b, q_len, hidden_size)
             return outputs, None
 
         if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
@@ -785,8 +786,8 @@ class Attention(nn.Module):
             val_states,
             block_mask=block_mask,
             mask_semantics=effective_layer_type.value,
-        )
-        outputs = outputs.reshape(bsz, q_len, self.hidden_size).contiguous()
+        )  # (b, q_len, h, d_h)
+        outputs = outputs.reshape(bsz, q_len, self.hidden_size).contiguous()  # (b, q_len, hidden_size)
         return outputs, None
 
     @staticmethod
@@ -806,11 +807,11 @@ class Attention(nn.Module):
         cached_len = kv_len - q_len
         if cached_len < 0:
             raise ValueError(f"E1 cached KV length {kv_len} is shorter than query length {q_len}.")
-        first_sequence_id = query_sequence_ids[:, :1]
+        first_sequence_id = query_sequence_ids[:, :1]  # (b, 1)
         _validate_cached_global_query_start(first_sequence_id)
-        cached_sequence_ids = first_sequence_id.expand(-1, cached_len)
-        key_sequence_ids = torch.cat((cached_sequence_ids, query_sequence_ids), dim=-1)
-        return query_sequence_ids, key_sequence_ids
+        cached_sequence_ids = first_sequence_id.expand(-1, cached_len)  # (b, cached_len)
+        key_sequence_ids = torch.cat((cached_sequence_ids, query_sequence_ids), dim=-1)  # (b, kv_len)
+        return query_sequence_ids, key_sequence_ids  # (b, q_len), (b, kv_len)
 
     def _cached_attention_mask_4d(
         self,
@@ -824,28 +825,29 @@ class Attention(nn.Module):
             sequence_ids,
             kv_len,
         )
-        query_valid = query_sequence_ids.ne(-1)
-        key_valid = key_sequence_ids.ne(-1)
-        same_sequence = query_sequence_ids.unsqueeze(-1).eq(key_sequence_ids.unsqueeze(-2))
-        return (same_sequence & query_valid.unsqueeze(-1) & key_valid.unsqueeze(-2)).unsqueeze(1)
+        query_valid = query_sequence_ids.ne(-1)  # (b, q_len)
+        key_valid = key_sequence_ids.ne(-1)  # (b, kv_len)
+        same_sequence = query_sequence_ids.unsqueeze(-1).eq(key_sequence_ids.unsqueeze(-2))  # (b, q_len, kv_len)
+        return (same_sequence & query_valid.unsqueeze(-1) & key_valid.unsqueeze(-2)).unsqueeze(1)  # (b, 1, q_len, kv_len)
 
     def _sdpa_attn(
         self,
-        query_states: torch.Tensor,  # Q has shape (b, l, h, d).
-        key_states: torch.Tensor,  # K has shape (b, l, h_kv, d).
-        val_states: torch.Tensor,  # V has shape (b, l, h_kv, d).
+        query_states: torch.Tensor,  # Q: (b, q, h, d_h).
+        key_states: torch.Tensor,  # K: (b, kv_len, h_kv, d_h).
+        val_states: torch.Tensor,  # V: (b, kv_len, h_kv, d_h).
         sequence_ids: torch.Tensor,
         attention_args: AttentionArgs | None = None,
         effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
         is_cache_prefilled: bool = False,
     ) -> tuple[torch.Tensor, None]:
+        # q = q_len; k is kv_len or q_len after removing cached within-sequence keys.
         bsz, q_len = query_states.shape[:2]
         kv_len = key_states.shape[1]
 
         if is_cache_prefilled and q_len < kv_len:
             if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
-                key_states = key_states[:, -q_len:]
-                val_states = val_states[:, -q_len:]
+                key_states = key_states[:, -q_len:]  # (b, q_len, h_kv, d_h)
+                val_states = val_states[:, -q_len:]  # (b, q_len, h_kv, d_h)
             attention_mask_4d = self._cached_attention_mask_4d(
                 sequence_ids,
                 kv_len,
@@ -859,37 +861,38 @@ class Attention(nn.Module):
         else:
             attention_mask_4d = None
 
-        query_heads = query_states.transpose(1, 2).contiguous()  # (b, h, l, d_h)
-        key_heads = key_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
-        value_heads = val_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
+        query_heads = query_states.transpose(1, 2).contiguous()  # (b, h, q, d_h)
+        key_heads = key_states.transpose(1, 2).contiguous()  # (b, h_kv, k, d_h)
+        value_heads = val_states.transpose(1, 2).contiguous()  # (b, h_kv, k, d_h)
         key_heads = repeat_kv(key_heads, self.num_key_value_groups)
         value_heads = repeat_kv(value_heads, self.num_key_value_groups)
         context_heads = F.scaled_dot_product_attention(
             query_heads, key_heads, value_heads, attn_mask=attention_mask_4d
-        )  # (b, h, l, d_h)
+        )  # (b, h, q, d_h)
         attn_output = (
             context_heads.transpose(1, 2).reshape(bsz, q_len, self.hidden_size).contiguous()
-        )
+        )  # (b, q_len, hidden_size)
         return attn_output, None
 
     def _manual_attn(
         self,
-        query_states: torch.Tensor,  # Q has shape (b, l, h, d).
-        key_states: torch.Tensor,  # K has shape (b, l, h_kv, d).
-        val_states: torch.Tensor,  # V has shape (b, l, h_kv, d).
+        query_states: torch.Tensor,  # Q: (b, q, h, d_h).
+        key_states: torch.Tensor,  # K: (b, kv_len, h_kv, d_h).
+        val_states: torch.Tensor,  # V: (b, kv_len, h_kv, d_h).
         sequence_ids: torch.Tensor,
         attention_args: AttentionArgs | None = None,
         effective_layer_type: AttentionLayerType = AttentionLayerType.WITHIN_SEQ,
         output_s_max: bool = False,
         is_cache_prefilled: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor] | None]:
+        # q = q_len; k is kv_len or q_len after removing cached within-sequence keys.
         bsz, q_len = query_states.shape[:2]
         kv_len = key_states.shape[1]
 
         if is_cache_prefilled and q_len < kv_len:
             if effective_layer_type == AttentionLayerType.WITHIN_SEQ:
-                key_states = key_states[:, -q_len:]
-                val_states = val_states[:, -q_len:]
+                key_states = key_states[:, -q_len:]  # (b, q_len, h_kv, d_h)
+                val_states = val_states[:, -q_len:]  # (b, q_len, h_kv, d_h)
             attention_mask_4d = self._cached_attention_mask_4d(
                 sequence_ids,
                 kv_len,
@@ -903,15 +906,15 @@ class Attention(nn.Module):
         else:
             attention_mask_4d = None
 
-        query_heads = query_states.transpose(1, 2).contiguous()  # (b, h, l, d_h)
-        key_heads = key_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
-        value_heads = val_states.transpose(1, 2).contiguous()  # (b, h_kv, l, d_h)
+        query_heads = query_states.transpose(1, 2).contiguous()  # (b, h, q, d_h)
+        key_heads = key_states.transpose(1, 2).contiguous()  # (b, h_kv, k, d_h)
+        value_heads = val_states.transpose(1, 2).contiguous()  # (b, h_kv, k, d_h)
         key_heads = repeat_kv(key_heads, self.num_key_value_groups)
         value_heads = repeat_kv(value_heads, self.num_key_value_groups)
         scale = 1.0 / (self.head_dim**0.5)
         attn_weights = (
             torch.matmul(query_heads, key_heads.transpose(-2, -1)) * scale
-        )  # (b, h, l, l)
+        )  # (b, h, q, k)
         if attention_mask_4d is not None:
             attention_mask_4d = attention_mask_4d.to(dtype=torch.bool)
             attn_weights = attn_weights.masked_fill(
@@ -921,10 +924,10 @@ class Attention(nn.Module):
         attn_weights = F.softmax(attn_weights, dim=-1)
         if attention_mask_4d is not None:
             attn_weights = attn_weights.masked_fill(attention_mask_4d.logical_not(), 0.0)
-        context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, l, d_h)
+        context_heads = torch.matmul(attn_weights, value_heads)  # (b, h, q, d_h)
         attn_output = (
             context_heads.transpose(1, 2).reshape(bsz, q_len, self.hidden_size).contiguous()
-        )
+        )  # (b, q_len, hidden_size)
         s_max = self._compute_s_max(query_states, key_states) if output_s_max else None
         return attn_output, attn_weights, s_max
 
@@ -1384,13 +1387,13 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             default_positions = torch.arange(sequence_length, device=source.device).expand(
                 batch_size,
                 -1,
-            )
+            )  # (b, l)
             if within_seq_position_ids is None:
-                within_seq_position_ids = default_positions
+                within_seq_position_ids = default_positions  # (b, l)
             if global_position_ids is None:
-                global_position_ids = default_positions
+                global_position_ids = default_positions  # (b, l)
             if sequence_ids is None:
-                sequence_ids = torch.zeros_like(default_positions)
+                sequence_ids = torch.zeros_like(default_positions)  # (b, l)
 
         if within_seq_position_ids is None or global_position_ids is None or sequence_ids is None:
             raise ValueError("Position and sequence IDs are required when input_ids are provided.")
@@ -1877,7 +1880,7 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
             for seq in sequences
         ]
         context_ids = list(contexts.keys())
-        all_scores = torch.zeros(len(sequences), len(context_ids), device=self.device)
+        all_scores = torch.zeros(len(sequences), len(context_ids), device=self.device)  # (n_sequences, n_contexts)
 
         iterator = tqdm(context_ids, desc="Scoring with contexts", disable=not progress)
         for ctx_idx, ctx_id in enumerate(iterator):
@@ -2048,16 +2051,16 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
                 raise RuntimeError("E1 MSA embedding did not return every requested sequence.")
             max_residues = max(hidden.shape[0] for hidden in resolved)
             hidden_size = resolved[0].shape[-1]
-            X = resolved[0].new_zeros((len(resolved), max_residues, hidden_size))
+            X = resolved[0].new_zeros((len(resolved), max_residues, hidden_size))  # (b, max_residues, d)
             residue_mask = torch.zeros(
                 (len(resolved), max_residues),
                 dtype=torch.bool,
                 device=X.device,
-            )
+            )  # (b, max_residues)
             for position, hidden in enumerate(resolved):
                 residue_count = hidden.shape[0]
-                X[position, :residue_count] = hidden
-                residue_mask[position, :residue_count] = True
+                X[position, :residue_count] = hidden  # (residue_count, d) slice of X
+                residue_mask[position, :residue_count] = True  # (residue_count,) slice of residue_mask
             return EmbeddingBatch(X=X, residue_mask=residue_mask)
 
         resolved_pooling: str | list[str] | None = (
@@ -2141,23 +2144,23 @@ class E1ForMaskedLM(FastPLMTestTimeTrainingMixin, E1PreTrainedModel, EmbeddingMi
             return_dict=True,
         )
 
-        last_hidden_state = outputs.last_hidden_state
+        last_hidden_state = outputs.last_hidden_state  # (b, l, d)
         loss = None
 
-        mlm_logits = self.mlm_head(last_hidden_state).float()
+        mlm_logits = self.mlm_head(last_hidden_state).float()  # (b, l, vocab_size)
         mlm_loss = None
         if labels is not None:
-            mlm_logits_flat = mlm_logits.contiguous().view(-1, self.config.vocab_size)
-            mlm_labels_flat = labels.to(mlm_logits_flat.device).contiguous().view(-1)
+            mlm_logits_flat = mlm_logits.contiguous().view(-1, self.config.vocab_size)  # (b * l, vocab_size)
+            mlm_labels_flat = labels.to(mlm_logits_flat.device).contiguous().view(-1)  # (b * l,)
             mlm_loss = F.cross_entropy(
                 mlm_logits_flat,
                 mlm_labels_flat,
                 ignore_index=-100,
                 reduction="none",
-            )
-            mask = mlm_labels_flat.ne(-100) & mlm_labels_flat.ne(self.model.padding_idx)
-            n_mlm = mask.sum().clamp_min(1)
-            mlm_loss = (mlm_loss * mask.to(mlm_loss)).sum() / n_mlm
+            )  # (b * l,)
+            mask = mlm_labels_flat.ne(-100) & mlm_labels_flat.ne(self.model.padding_idx)  # (b * l,)
+            n_mlm = mask.sum().clamp_min(1)  # ()
+            mlm_loss = (mlm_loss * mask.to(mlm_loss)).sum() / n_mlm  # ()
             loss = 0.0
             loss += mlm_loss
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-
 import pytest
 
 from tools.confidence.evaluation import _sample_ranking, build_frequency_baseline

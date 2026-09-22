@@ -8,6 +8,7 @@ import os
 import pytest
 import torch
 import torch.nn.functional as F
+
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -192,9 +193,9 @@ def _ca_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
     # encoded_ca: (4,)
     encoded_ca = torch.tensor([ord("C") - 32, ord("A") - 32, 0, 0])
     atom_names = features["ref_atom_name_chars"][0]
-    # atom_mask: (...)
+    # atom_mask: (a,), one flag per atom in the first batch element.
     atom_mask = features["atom_attention_mask"][0].bool()
-    # mask: (...)
+    # mask: (a,), selecting resolved C-alpha atoms.
     mask = atom_names.eq(encoded_ca).all(dim=-1) & atom_mask
     token_ids = features["atom_to_token"][0, mask]
     valid_token_ids = features["token_attention_mask"][0].nonzero(as_tuple=True)[0]
@@ -209,29 +210,29 @@ def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
 
 
 def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual: (...), expected: (...)
-    actual_centered = actual.float() - actual.float().mean(dim=0, keepdim=True)
-    expected_centered = expected.float() - expected.float().mean(dim=0, keepdim=True)
-    covariance = actual_centered.T @ expected_centered
+    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
+    actual_centered = actual.float() - actual.float().mean(dim=0, keepdim=True)  # (n, 3)
+    expected_centered = expected.float() - expected.float().mean(dim=0, keepdim=True)  # (n, 3)
+    covariance = actual_centered.T @ expected_centered  # (3, 3)
     left, _, right = torch.linalg.svd(covariance)
     # correction: (3, 3)
     correction = torch.eye(3, dtype=torch.float32)
     correction[-1, -1] = torch.sign(torch.det(left @ right))
-    rotation = left @ correction @ right
-    aligned = actual_centered @ rotation
+    rotation = left @ correction @ right  # (3, 3)
+    aligned = actual_centered @ rotation  # (n, 3)
     return torch.sqrt(torch.mean(torch.sum((aligned - expected_centered) ** 2, dim=-1))).item()
 
 
 def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual: (...), expected: (...)
-    actual_distances = torch.cdist(actual.float(), actual.float())
-    expected_distances = torch.cdist(expected.float(), expected.float())
-    # pair_mask: (...)
+    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
+    actual_distances = torch.cdist(actual.float(), actual.float())  # (n, n)
+    expected_distances = torch.cdist(expected.float(), expected.float())  # (n, n)
+    # pair_mask: (n, n)
     pair_mask = expected_distances.lt(15.0)
     pair_mask.fill_diagonal_(False)
     assert pair_mask.any(), "No valid C-alpha pairs for lDDT."
-    errors = (actual_distances - expected_distances).abs()
-    # score: (...)
+    errors = (actual_distances - expected_distances).abs()  # (n, n)
+    # score: (n, n)
     score = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
         dim=0
     )
@@ -267,10 +268,10 @@ def _structure_metrics(
     expected: Mapping[str, torch.Tensor],
 ) -> dict[str, float]:
     actual_features = _feature_tensors(actual)
-    # token_mask: (...)
+    # token_mask: (l,), one flag per token in the first batch element.
     token_mask = actual_features["token_attention_mask"][0].bool()
     sequence_length = token_mask.numel()
-    # pair_mask: (...)
+    # pair_mask: (l, l)
     pair_mask = token_mask[:, None] & token_mask[None, :]
     return {
         "ca_rmsd": _aligned_ca_rmsd(
@@ -315,7 +316,8 @@ def _probability_jsd(
     expected_logits: torch.Tensor,
     mask: torch.Tensor,
 ) -> torch.Tensor:
-    # actual_logits: (..., c), expected_logits: (..., c), mask: (...)
+    # Logits: (*s, c), where s contains batch/sample and atom or token-pair axes.
+    # mask covers the trailing axes of s; c is the number of confidence bins.
     actual_log_prob = F.log_softmax(actual_logits.float(), dim=-1)
     expected_log_prob = F.log_softmax(expected_logits.float(), dim=-1)
     actual_prob = actual_log_prob.exp()
@@ -327,7 +329,7 @@ def _probability_jsd(
         + (expected_prob * (expected_log_prob - log_mean_prob)).sum(dim=-1)
     )
     while mask.ndim < jsd.ndim:
-        # mask: (...)
+        # Prepend one singleton sample/batch axis until the mask has shape rank len(s).
         mask = mask.unsqueeze(0)
     mask = torch.broadcast_to(mask, jsd.shape)
     assert mask.any()
@@ -339,11 +341,11 @@ def _mean_probability_jsd(
     expected: Mapping[str, torch.Tensor],
 ) -> float:
     features = _feature_tensors(actual)
-    # atom_mask: (...)
+    # atom_mask: (b, a), with batch and atom axes.
     atom_mask = features["atom_attention_mask"].bool()
-    # token_mask: (...)
+    # token_mask: (b, l), with batch and token axes.
     token_mask = features["token_attention_mask"].bool()
-    # pair_mask: (...)
+    # pair_mask: (b, l, l)
     pair_mask = token_mask[:, :, None] & token_mask[:, None, :]
     values = []
     for name in ("distogram_logits", "plddt_logits", "pae_logits", "pde_logits"):
@@ -363,7 +365,7 @@ def _assert_valid_geometry(
 ) -> None:
     features = _feature_tensors(tensors)
     coordinates = _first_coordinate_sample(tensors)
-    # atom_mask: (...)
+    # atom_mask: (a,), one flag per atom in the first batch element.
     atom_mask = features["atom_attention_mask"][0].bool()
     assert torch.equal(
         _output(tensors, "atom_pad_mask").bool().reshape_as(atom_mask),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from torch import Tensor, nn
 
 from . import vb_layers_initialize as init
@@ -41,9 +42,10 @@ class OuterProductMean(nn.Module):
 
     @staticmethod
     def _outer_product(left: Tensor, right: Tensor, counts: Tensor) -> Tensor:
-        # left/right: (b, s, l, d_h); counts: (b, l, l, 1).
-        outer = torch.einsum("bsic,bsjd->bijcd", left, right)  # (b, l, l, d_h, d_h)
-        return outer.reshape(*outer.shape[:3], -1) / counts  # (b, l, l, d_h**2)
+        # left: (b, s, l, d_left); right: (b, s, l, d_right).
+        # counts: (b, l, l, 1); chunked callers may use d_left < d_right.
+        outer = torch.einsum("bsic,bsjd->bijcd", left, right)  # (b, l, l, d_left, d_right)
+        return outer.reshape(*outer.shape[:3], -1) / counts  # (b, l, l, d_left * d_right)
 
     def _chunked_projection(
         self,

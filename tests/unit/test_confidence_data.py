@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import zipfile
 import io
-
 import numpy as np
 import pytest
 
@@ -87,7 +86,7 @@ def test_structure_schema_is_validated(tmp_path) -> None:
 
 def test_structure_indices_and_atom_names_are_checked_against_sequences(tmp_path) -> None:
     path = tmp_path / "structure.npz"
-    names = np.full((2, 14), "", dtype="U4")
+    names = np.full((2, 14), "", dtype="U4")  # (2, 14)
     names[0, :5] = ["N", "CA", "C", "O", "CB"]
     names[1, :5] = ["N", "CA", "C", "O", "CB"]
     np.savez(
@@ -132,8 +131,8 @@ def _multimer_payload(*, num_chains: int = 2, extra_chain: bool = False) -> byte
     for index in range(num_chains + int(extra_chain)):
         payload[f"{index}.name"] = np.array(f"chain{index}", dtype="S")
         payload[f"{index}.sequence"] = np.array("A" * 64, dtype="S")
-        payload[f"{index}.coordinates"] = np.zeros((64 * 5, 3), dtype=np.float32)
-        payload[f"{index}.b_factors"] = np.zeros(64 * 5, dtype=np.float32)
+        payload[f"{index}.coordinates"] = np.zeros((64 * 5, 3), dtype=np.float32)  # (64 * 5, 3)
+        payload[f"{index}.b_factors"] = np.zeros(64 * 5, dtype=np.float32)  # (64 * 5,)
     return np_to_npz_bytes(payload)
 
 

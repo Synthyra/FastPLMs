@@ -15,6 +15,7 @@ import hashlib
 import json
 import subprocess
 import tempfile
+
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -114,7 +115,7 @@ def build_splits(pool_dir: Path, pilot_records: Path, output_dir: Path, mmseqs: 
     component_sizes = Counter(target["component"] for target in targets if target["variant"] == "standard")
 
     rng = np.random.default_rng(SEED)
-    order = rng.permutation(len(targets))
+    order = rng.permutation(len(targets))  # (targets,) shuffled indices
     heldout_components: dict[int, str] = {}
     for split, quotas in (("test", TEST_QUOTAS), ("validation", VALIDATION_QUOTAS)):
         filled = Counter()

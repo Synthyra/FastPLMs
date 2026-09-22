@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import io
 import os
+
 from dataclasses import dataclass
 from typing import TypeAlias
+
 
 PathLike: TypeAlias = str | os.PathLike[str]
 PathOrBuffer: TypeAlias = PathLike | io.TextIOBase

@@ -13,6 +13,7 @@ import pytest
 import safetensors.torch
 import torch
 import transformers
+
 from pathlib import Path
 
 from tests.cpu.resource_telemetry import aggregate_process_memory

@@ -22,6 +22,7 @@ from tools.artifacts.doc_generation.esmc_evidence import (
     _esmc_require_object,
 )
 
+
 ESMC_RELEASE_DOCUMENTATION = """\
 Detailed backend measurements, release guardrails, and the GH200 package
 compatibility exception are maintained in the

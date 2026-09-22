@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import inspect
-
 import pytest
 import torch
+
 from torch import Tensor, nn
 
 from fastplms.models.boltz import modeling_boltz2

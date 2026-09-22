@@ -284,20 +284,21 @@ def representative_coordinates(
     """Return one representative atom per residue: (l, 3) in FP32 on the CPU."""
     module_name = type(model).__module__.rsplit(".", 1)[0] + ".protein_utils"
     features = __import__(module_name, fromlist=["prepare_protein_features"])
-    atom_index = features.prepare_protein_features(sequence)["distogram_atom_idx"].reshape(-1)
-    coordinates = output["sample_atom_coords"].float().reshape(-1, 3)  # first sample first
-    representative: torch.Tensor = coordinates[atom_index.to(coordinates.device)].cpu()
-    return representative
+    atom_index = features.prepare_protein_features(sequence)["distogram_atom_idx"].reshape(-1)  # (l,)
+    coordinates = output["sample_atom_coords"].float().reshape(-1, 3)  # (samples * atoms, 3), first sample first
+    representative: torch.Tensor = coordinates[atom_index.to(coordinates.device)].cpu()  # (l, 3)
+    return representative  # (l, 3)
 
 
 def aligned_rmsd(first: torch.Tensor, second: torch.Tensor) -> float:
     """Root-mean-square deviation after optimal rigid superposition (Kabsch)."""
-    first = first.double() - first.double().mean(0)
-    second = second.double() - second.double().mean(0)
-    u, _, vt = torch.linalg.svd(first.T @ second)
-    reflection = torch.sign(torch.linalg.det(u @ vt))
-    correction = torch.diag(torch.tensor([1.0, 1.0, float(reflection)], dtype=torch.float64))
-    rotated = first @ (u @ correction @ vt)
+    # first, second: (l, 3), one representative atom per residue.
+    first = first.double() - first.double().mean(0)  # (l, 3)
+    second = second.double() - second.double().mean(0)  # (l, 3)
+    left, _, right = torch.linalg.svd(first.T @ second)  # left/right: (3, 3); singular values: (3,)
+    reflection = torch.sign(torch.linalg.det(left @ right))  # ()
+    correction = torch.diag(torch.tensor([1.0, 1.0, float(reflection)], dtype=torch.float64))  # (3, 3)
+    rotated = first @ (left @ correction @ right)  # (l, 3)
     return float((rotated - second).pow(2).sum(-1).mean().sqrt())
 
 

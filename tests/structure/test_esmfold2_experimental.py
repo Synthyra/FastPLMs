@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 import torch.nn.functional as F
+
 from pathlib import Path
 
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
@@ -47,7 +48,7 @@ def test_esmfold2_experimental_res_type_soft_gradients() -> None:
     features = {
         name: tensor.cuda() for name, tensor in prepare_protein_features(TEST_SEQUENCE).items()
     }
-    # res_type_soft: (...)
+    # res_type_soft: (*features['res_type'].shape, NUM_RES_TYPES).
     res_type_soft = F.one_hot(features["res_type"].long(), num_classes=NUM_RES_TYPES).float()
     res_type_soft.requires_grad_(True)
 

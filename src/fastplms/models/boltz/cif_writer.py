@@ -1,5 +1,8 @@
+"""Write Boltz2 coordinates and confidence values as an mmCIF atom table."""
+
 import numpy as np
 import torch
+
 from pathlib import Path
 
 from .minimal_structures import ProteinStructureTemplate

@@ -8,6 +8,7 @@ import textwrap
 import pytest
 import torch
 import torch.nn.functional as F
+
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -452,7 +453,7 @@ def test_e1_loss_bearing_head_tuples_start_with_loss_then_logits(
     model = model_class(_tiny_e1_config()).eval()
     batch = _tiny_e1_batch()
     if model_class is E1ForSequenceClassification:
-        labels = torch.tensor([1], dtype=torch.long)
+        labels = torch.tensor([1], dtype=torch.long)  # (1,)
     elif model_class is E1ForTokenClassification:
         labels = batch["input_ids"].remainder(model.config.num_labels)
     else:
@@ -634,10 +635,10 @@ def test_e1_cached_sdpa_preserves_layer_attention_semantics(
 ) -> None:
     torch.manual_seed(11)
     attention = _tiny_attention(layer_type)
-    query = torch.randn(1, 2, 2, 4)
-    key = torch.randn(1, 5, 2, 4)
-    value = torch.randn(1, 5, 2, 4)
-    sequence_ids = torch.tensor([[1, 1]])
+    query = torch.randn(1, 2, 2, 4)  # (1, 2, 2, 4)
+    key = torch.randn(1, 5, 2, 4)  # (1, 5, 2, 4)
+    value = torch.randn(1, 5, 2, 4)  # (1, 5, 2, 4)
+    sequence_ids = torch.tensor([[1, 1]])  # (1, 2)
 
     actual, _ = attention._sdpa_attn(
         query,
@@ -679,9 +680,9 @@ def test_e1_cached_flex_dispatch_keeps_or_discards_context_by_layer(
     expected_kv_length: int,
 ) -> None:
     attention = _tiny_attention(layer_type)
-    query = torch.randn(1, 2, 2, 4)
-    key = torch.randn(1, 5, 2, 4)
-    value = torch.randn(1, 5, 2, 4)
+    query = torch.randn(1, 2, 2, 4)  # (1, 2, 2, 4)
+    key = torch.randn(1, 5, 2, 4)  # (1, 5, 2, 4)
+    value = torch.randn(1, 5, 2, 4)  # (1, 5, 2, 4)
     observed: list[tuple[str, int]] = []
 
     def fake_dense(q, k, v, **kwargs):

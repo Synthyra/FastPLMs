@@ -1,9 +1,9 @@
 """Fail-closed Hugging Face license metadata contracts for model cards."""
 
+import pytest
+
 from collections.abc import Callable
 from pathlib import Path
-
-import pytest
 
 from fastplms.registry import HUB_LICENSE_IDENTIFIERS, ModelSpec, load_model_registry
 from tools.artifacts.build import render_model_card as render_artifact_model_card

@@ -5,6 +5,7 @@ import subprocess
 import sys
 import pytest
 import torch
+
 from types import SimpleNamespace
 from torch import nn
 
@@ -115,12 +116,12 @@ class SyntheticESMFold2(ESMFold2EmbeddingMixin, nn.Module):
         mol_type: torch.Tensor,
         residue_mask: torch.Tensor,
     ) -> torch.Tensor:
-        # input_ids: (b, l); asym_id, residue_index, mol_type: (...)
+        # input_ids, asym_id, residue_index, mol_type: (b, l), one entry per token.
         # residue_mask: (b, l)
         del asym_id, residue_index, mol_type
         # H: (*input_ids.shape, 81, 4)
         H = torch.zeros(*input_ids.shape, 81, 4)
-        # H[..., 0]: (...)
+        # H[..., 0]: (b, l, 81), broadcasting input_ids from (b, l, 1).
         H[..., 0] = input_ids.unsqueeze(-1)
         return H * residue_mask[..., None, None]
 
@@ -485,11 +486,11 @@ def test_fp8_language_model_input_is_padded_to_multiple_of_16() -> None:
     sequence_length = 15
     # input_ids: (1, sequence_length)
     input_ids = torch.full((1, sequence_length), 4, dtype=torch.long)
-    asym_id = torch.zeros_like(input_ids)
-    # residue_index: (...)
+    asym_id = torch.zeros_like(input_ids)  # (1, sequence_length)
+    # residue_index: (1, sequence_length)
     residue_index = torch.arange(sequence_length).unsqueeze(0)
-    mol_type = torch.zeros_like(input_ids)
-    M = torch.ones_like(input_ids, dtype=torch.bool)
+    mol_type = torch.zeros_like(input_ids)  # (1, sequence_length)
+    M = torch.ones_like(input_ids, dtype=torch.bool)  # (1, sequence_length)
     H = compute_lm_hidden_states(
         esmc,
         input_ids,

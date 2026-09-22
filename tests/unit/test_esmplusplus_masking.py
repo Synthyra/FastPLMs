@@ -7,6 +7,7 @@ import inspect
 import textwrap
 import pytest
 import torch
+
 from pathlib import Path
 
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (

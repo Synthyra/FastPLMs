@@ -6,15 +6,17 @@ import functools
 import warnings
 import pytest
 import torch
-from collections.abc import Callable
-from types import SimpleNamespace
-from transformers.models.esm.configuration_esm import EsmConfig
 
 import fastplms.models.ankh.modeling_ankh as ankh_module
 import fastplms.models.e1.modeling_e1 as e1_module
 import fastplms.models.esm2.modeling_fastesm as esm2_module
 import fastplms.models.esm3.modeling_esm3 as esm3_module
 import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module
+
+from collections.abc import Callable
+from types import SimpleNamespace
+from transformers.models.esm.configuration_esm import EsmConfig
+
 from fastplms.attention import AttentionBackend, _core, _kernel_lock
 from fastplms.models.ankh.modeling_ankh import (
     AnkhSelfAttention,
@@ -602,7 +604,7 @@ def test_esm3_flex_mask_preparation_does_not_construct_dense_pairwise_mask(
             raise AssertionError("Flex mask preparation must not construct a dense pairwise mask")
 
     sequence_id = SequenceIdWithoutPairwiseOperations()
-    affine_mask = torch.ones(2, 4, dtype=torch.bool)
+    affine_mask = torch.ones(2, 4, dtype=torch.bool)  # (2, 4)
     expected_block_mask = object()
 
     def create_flex_block_mask(*args: object) -> object:
@@ -655,7 +657,7 @@ def test_esm3_builds_intersected_attention_masks_outside_torch_compile(
     structure_coords = torch.randn(2, 5, 3, 3)  # (b, l, backbone_atom=3, xyz=3)
     structure_coords[:, 2] = torch.nan
 
-    affine_mask = torch.tensor(((1, 1, 0, 1, 1), (1, 0, 1, 1, 1)), dtype=torch.bool)
+    affine_mask = torch.tensor(((1, 1, 0, 1, 1), (1, 0, 1, 1, 1)), dtype=torch.bool)  # (2, 5)
     dense_mask, block_mask, prepared_affine_mask, mask_semantics, effective_backend = (
         model.esm3.transformer._prepare_attention_masks(
             sequence_id=sequence_id,
@@ -1035,7 +1037,7 @@ def test_flash_attention_2_dense_and_varlen_preserve_lora_and_input_gradients(
     )
     attention_mask = torch.tensor(
         [[True, True, True, True], [True, True, False, False]],
-    )
+    )  # (2, 4)
     padded_output = _core.kernels_flash_attention_func(
         *project(padded_input),
         attention_mask_2d=attention_mask,

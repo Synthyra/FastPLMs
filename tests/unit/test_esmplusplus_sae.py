@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
-from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
-
 import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from dataclasses import dataclass
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
@@ -273,8 +273,8 @@ def test_sae_uses_sequence_id_instead_of_attention_mask_for_valid_tokens() -> No
     model = _model()
     sae = _SyntheticSAELayer(layer=0)
     model.add_sae_models([sae])
-    input_ids = torch.tensor(((0, 4, 5, 2),), dtype=torch.long)
-    sequence_id = torch.tensor(((0, 0, -1, -1),), dtype=torch.long)
+    input_ids = torch.tensor(((0, 4, 5, 2),), dtype=torch.long)  # (1, 4)
+    sequence_id = torch.tensor(((0, 0, -1, -1),), dtype=torch.long)  # (1, 4)
 
     output = model(
         input_ids=input_ids,

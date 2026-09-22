@@ -21,6 +21,7 @@ import tempfile
 import uuid
 import numpy as np
 import torch
+
 from collections.abc import Callable, Iterator, Mapping
 from functools import wraps
 from importlib import metadata
@@ -39,6 +40,9 @@ from transformers import (
     set_seed,
 )
 
+
+# Shapes: b = batch, b_v = verification batch, l = encoded tokens,
+# n = dataset rows, c = classes (one output for regression).
 
 DEFAULT_MODEL = "Synthyra/ESM2-8M"
 DEFAULT_MODEL_REVISION = "185ecbd45665d050a8dae326d91886d330c5f9d0"
@@ -187,21 +191,15 @@ def _ensure_classifier_persistence(lora_config: Any) -> Any:
 
 
 class PairDatasetHF(TorchDataset):
-    """
-    Dataset class for protein pair data (e.g., protein-protein interactions).
+    """Protein pairs with labels.
 
-    Args:
-        data: The dataset containing protein sequences and labels
-        col_a: Column name for the first protein sequence
-        col_b: Column name for the second protein sequence
-        label_col: Column name for the labels
-        max_length: Encoded token budget for the complete pair, including
-            tokenizer-added separator and special tokens
+    max_length: Encoded token budget including pair separators and special tokens.
+    The tokenizer-aware collator enforces this budget.
     """
 
     def __init__(
         self, dataset: Any, col_a: str, col_b: str, label_col: str, max_length: int = 2048
-    ):
+    ) -> None:
         self.seqs_a = dataset[col_a]
         self.seqs_b = dataset[col_b]
         self.labels = dataset[label_col]
@@ -222,14 +220,9 @@ class PairDatasetHF(TorchDataset):
 
 
 class SequenceDatasetHF(TorchDataset):
-    """
-    Dataset class for single protein sequence data.
+    """Protein sequences with labels.
 
-    Args:
-        dataset: The dataset containing protein sequences and labels
-        col_name: Column name for the protein sequences
-        label_col: Column name for the labels
-        max_length: Encoded token budget including tokenizer-added special tokens
+    max_length: Encoded token budget including tokenizer-added special tokens.
     """
 
     def __init__(
@@ -238,7 +231,7 @@ class SequenceDatasetHF(TorchDataset):
         col_name: str = "seqs",
         label_col: str = "labels",
         max_length: int = 2048,
-    ):
+    ) -> None:
         self.seqs = dataset[col_name]
         self.labels = dataset[label_col]
         self.max_length = max_length
@@ -301,22 +294,14 @@ def _fits_token_budget(
 
 
 class PairCollator:
-    """
-    Collator for protein pair data that handles tokenization and tensor conversion.
-
-    Args:
-        tokenizer: The tokenizer to use for encoding sequences
-        regression: Whether this is a regression task (True) or classification (False)
-        max_length: Encoded token budget for the complete pair, including
-            tokenizer-added separator and special tokens
-    """
+    """Tokenize pairs within one encoded token budget, including separator tokens."""
 
     def __init__(
         self,
         tokenizer: Any,
         regression: bool = False,
         max_length: int | None = None,
-    ):
+    ) -> None:
         self.tokenizer = tokenizer
         self.regression = regression
         self.max_length = max_length
@@ -338,21 +323,14 @@ class PairCollator:
 
 
 class SequenceCollator:
-    """
-    Collator for single protein sequence data that handles tokenization and tensor conversion.
-
-    Args:
-        tokenizer: The tokenizer to use for encoding sequences
-        regression: Whether this is a regression task (True) or classification (False)
-        max_length: Encoded token budget including tokenizer-added special tokens
-    """
+    """Tokenize sequences and convert labels to regression or class-target dtype."""
 
     def __init__(
         self,
         tokenizer: Any,
         regression: bool = False,
         max_length: int | None = None,
-    ):
+    ) -> None:
         self.tokenizer = tokenizer
         self.regression = regression
         self.max_length = max_length
@@ -610,20 +588,9 @@ def initialize_model(
     model_revision: str | None = None,
     attn_backend: str = "sdpa",
 ) -> tuple[Any, Any]:
-    """
-    Initialize a model with optional LoRA support
+    """Return a pinned model and tokenizer, retaining the task head with LoRA.
 
-    Args:
-        model_name: Name or path of the pretrained model
-        num_labels: Number of labels for the task (1 for regression)
-        use_lora: Whether to use LoRA for fine-tuning
-        lora_config: Custom LoRA configuration (optional)
-        model_revision: Immutable Hub commit for a remote model
-        attn_backend: Explicit eager, SDPA, or Flex implementation
-
-    Returns:
-        model: The initialized model
-        tokenizer: The model's tokenizer
+    num_labels=1 selects regression; model_revision pins remote model sources.
     """
     if attn_backend not in EXAMPLE_ATTENTION_BACKENDS:
         raise ValueError(
@@ -1002,7 +969,7 @@ def _held_out_reload_verification(
         prediction_values = prediction_output[0]
     expected = _primary_prediction_tensor(prediction_values)  # (b_v, c)
 
-    batch = data_collator(held_out_rows)
+    batch = data_collator(held_out_rows)  # input_ids/attention_mask: (b_v, l); labels: (b_v,)
     if not isinstance(batch, Mapping):
         raise TypeError("The verification data collator must return a mapping.")
     device = torch.device(getattr(trainer.args, "device", "cpu"))
@@ -1274,18 +1241,7 @@ def plot_regression_results(
     output_path: str | Path,
     task_name: str = "Regression",
 ) -> float:
-    """
-    Plot regression results with Spearman correlation
-
-    Args:
-        preds: Predicted values
-        labels: True values
-        output_path: New PNG path inside this task's reserved output directory
-        task_name: Name of the task for the plot title
-
-    Returns:
-        correlation: Spearman correlation coefficient
-    """
+    """Save a new 300 dpi scatter plot and return Spearman correlation."""
     import matplotlib.pyplot as plt
     import seaborn as sns
     from scipy.stats import spearmanr
@@ -1324,18 +1280,7 @@ def plot_classification_results(
     output_path: str | Path,
     task_name: str = "Classification",
 ) -> float:
-    """
-    Plot classification results with confusion matrix
-
-    Args:
-        trainer: The trained model trainer
-        test_dataset: Dataset to evaluate on
-        output_path: New PNG path inside this task's reserved output directory
-        task_name: Name of the task for the plot title
-
-    Returns:
-        accuracy: Classification accuracy
-    """
+    """Save a new 300 dpi confusion matrix and return classification accuracy."""
     import matplotlib.pyplot as plt
     from sklearn.metrics import ConfusionMatrixDisplay, confusion_matrix
 
@@ -1347,10 +1292,10 @@ def plot_classification_results(
 
     accuracy = (pred_values == labels).mean()  # ()
 
-    cm = confusion_matrix(labels, pred_values)  # (c, c)
+    confusion = confusion_matrix(labels, pred_values)  # (c, c)
 
     figure, axis = plt.subplots(figsize=(10, 8))
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    disp = ConfusionMatrixDisplay(confusion_matrix=confusion)
     disp.plot(cmap=plt.cm.Blues, ax=axis)
 
     axis.set_title(f"{task_name} - Accuracy: {accuracy:.3f}")
@@ -1390,30 +1335,10 @@ def train_regression_model(
     attn_backend: str = "sdpa",
     output_dir: str | Path | None = None,
 ) -> tuple[Trainer, Any]:
-    """
-    Train a regression model for protein-protein affinity prediction
+    """Train protein-pair regression and return the trainer and test dataset.
 
-    Args:
-        model_name: Name or path of the pretrained model
-        use_lora: Whether to use LoRA for fine-tuning
-        custom_lora_config: Custom LoRA configuration (optional)
-        batch_size: Batch size for training
-        learning_rate: Learning rate for training
-        num_epochs: Number of epochs for training
-        max_length: Encoded token budget for the complete protein pair,
-            including tokenizer-added separator and special tokens
-        gradient_accumulation_steps: Number of gradient accumulation steps
-        patience: Number of evaluation calls without improvement before
-            training stops
-        seed: Shared model, data-loader, and training seed
-        full_determinism: Request Transformers deterministic algorithms
-        plot_results: Generate a reporting-extra scatter plot after training
-        attn_backend: Explicit eager, SDPA, or Flex implementation
-        output_dir: New task-specific output directory; existing paths are rejected
-
-    Returns:
-        trainer: The trained model trainer
-        test_dataset: The test dataset used for evaluation
+    max_length: Encoded token budget including pair separators and special tokens.
+    patience counts evaluations without improvement. output_dir must be new.
     """
     print("Loading datasets for regression task...")
     if max_length <= 0:
@@ -1600,28 +1525,10 @@ def train_classification_model(
     attn_backend: str = "sdpa",
     output_dir: str | Path | None = None,
 ) -> Trainer:
-    """
-    Train a classification model for protein solubility prediction
+    """Train protein solubility classification and return the trainer.
 
-    Args:
-        model_name: Name or path of the pretrained model
-        use_lora: Whether to use LoRA for fine-tuning
-        custom_lora_config: Custom LoRA configuration (optional)
-        batch_size: Batch size for training
-        learning_rate: Learning rate for training
-        num_epochs: Number of epochs for training
-        max_length: Encoded token budget including tokenizer-added special tokens
-        gradient_accumulation_steps: Number of gradient accumulation steps
-        patience: Number of evaluation calls without improvement before
-            training stops
-        seed: Shared model, data-loader, and training seed
-        full_determinism: Request Transformers deterministic algorithms
-        plot_results: Generate a reporting-extra confusion matrix after training
-        attn_backend: Explicit eager, SDPA, or Flex implementation
-        output_dir: New task-specific output directory; existing paths are rejected
-
-    Returns:
-        trainer: The trained model trainer
+    max_length: Encoded token budget including tokenizer-added special tokens.
+    patience counts evaluations without improvement. output_dir must be new.
     """
     print("Loading datasets for classification task...")
     if max_length <= 0:

@@ -96,9 +96,9 @@ def test_symmetric_atom_labels_follow_the_prediction():
 
 def test_true_tm_scores_of_an_exact_prediction():
     tokens = 30
-    errors = torch.zeros(tokens, tokens)
-    pair_mask = torch.ones(tokens, tokens, dtype=torch.bool)
-    token_mask = torch.ones(tokens, dtype=torch.bool)
+    errors = torch.zeros(tokens, tokens)  # (tokens, tokens)
+    pair_mask = torch.ones(tokens, tokens, dtype=torch.bool)  # (tokens, tokens)
+    token_mask = torch.ones(tokens, dtype=torch.bool)  # (tokens,)
     ptm, iptm = true_tm_scores(errors, pair_mask, torch.tensor([0] * 15 + [1] * 15), token_mask)
     assert ptm == pytest.approx(1.0) and iptm == pytest.approx(1.0)
     _, monomer_iptm = true_tm_scores(errors, pair_mask, torch.zeros(tokens, dtype=torch.long), token_mask)

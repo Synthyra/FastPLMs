@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-
 import pytest
 
 from tools.confidence.metrics import evaluate_acceptance, summarize

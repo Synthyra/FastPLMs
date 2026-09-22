@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-
 import pytest
 
 from tools.confidence.release import _inventory, prepare_release

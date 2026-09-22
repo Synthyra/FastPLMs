@@ -28,9 +28,9 @@ def _config() -> ESMFold2Config:
 def _head_inputs() -> tuple[dict[str, torch.Tensor], tuple[torch.Tensor, ...]]:
     torch.manual_seed(11)
     length, atoms, d_inputs, d_pair = 3, 9, 4, 8
-    s_inputs = torch.randn(1, length, d_inputs)
-    z = torch.randn(1, length, length, d_pair)
-    x_pred = torch.randn(1, atoms, 3)
+    s_inputs = torch.randn(1, length, d_inputs)  # (1, length, d_inputs)
+    z = torch.randn(1, length, length, d_pair)  # (1, length, length, d_pair)
+    x_pred = torch.randn(1, atoms, 3)  # (1, atoms, 3)
     atom_to_token = torch.arange(length).repeat_interleave(3).reshape(1, atoms)
     return (
         {

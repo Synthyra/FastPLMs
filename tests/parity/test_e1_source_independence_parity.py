@@ -7,6 +7,7 @@ import sys
 import pytest
 import torch
 import torch.nn as nn
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -189,7 +190,7 @@ def test_e1_block_classification_and_mask_are_exact(
     q_lengths: torch.Tensor,
     k_lengths: torch.Tensor,
 ) -> None:
-    # q_lengths: (...), k_lengths: (...)
+    # q_lengths, k_lengths: (n,), one length per packed sequence.
     _, official_flex, _ = official_e1
     candidate_full, candidate_partial = get_overlapping_blocks(q_lengths, k_lengths)
     official_full, official_partial = official_flex.get_overlapping_blocks(q_lengths, k_lengths)
@@ -219,7 +220,7 @@ def test_e1_block_classification_and_mask_are_exact(
 
     q_index = torch.arange(int(q_lengths.sum().item()))[:, None]
     k_index = torch.arange(int(k_lengths.sum().item()))[None, :]
-    # zero: (...)
+    # zero: (), the scalar batch/head index for the mask probe.
     zero = torch.tensor(0)
     assert torch.equal(
         candidate_mask.mask_mod(zero, zero, q_index, k_index),
@@ -349,7 +350,7 @@ def test_e1_refactored_forward_is_exact_on_h100(attn_backend: str) -> None:
         expected_last, expected_history = _manual_encoder_forward(model, batch)
         output = model(**batch, output_hidden_states=True)
         combined_embeddings = model.embed_tokens(batch["input_ids"])
-        # combined_embeddings: (...)
+        # combined_embeddings: (b, l, d), retaining token and hidden axes after addition.
         combined_embeddings = combined_embeddings + model.embed_seq_id(
             batch["sequence_ids"].clamp_min(0)
         )

@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import pytest
+
 from pathlib import Path
 from typing import Any, Self
 from urllib.parse import unquote, urlsplit

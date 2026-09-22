@@ -11,6 +11,7 @@ import torch
 import torch.nn.functional as functional
 
 from collections.abc import Sequence
+
 from torch import Tensor
 
 from .labels import PAE_MAX_ANGSTROM, PLDDT_BINS
@@ -21,6 +22,7 @@ EPSILON = 1e-8
 
 def expected_mean_plddt(plddt_logits: Tensor, atom_mask: Tensor) -> Tensor:
     """Mean expected pLDDT in [0, 1]; logits (b, a, 50) and mask (b, a) give (b,)."""
+    # b: batch items; a: atoms.
     centers = (torch.arange(PLDDT_BINS, device=plddt_logits.device) + 0.5) / PLDDT_BINS  # (50,)
     per_atom = (plddt_logits.float().softmax(-1) * centers).sum(-1)  # (b, a)
     mask = atom_mask.float()  # (b, a)
@@ -29,6 +31,7 @@ def expected_mean_plddt(plddt_logits: Tensor, atom_mask: Tensor) -> Tensor:
 
 def expected_tm_scores(pae_logits: Tensor, asym_id: Tensor, token_mask: Tensor) -> tuple[Tensor, Tensor]:
     """pTM and ipTM from PAE logits (b, t, t, bins), as the head computes them; returns (b,), (b,)."""
+    # b: batch items; t: tokens; asym_id/token_mask: (b, t).
     bins = pae_logits.shape[-1]
     width = PAE_MAX_ANGSTROM / bins
     centers = torch.arange(0.5 * width, PAE_MAX_ANGSTROM, width, device=pae_logits.device)  # (bins,)
@@ -40,7 +43,7 @@ def expected_tm_scores(pae_logits: Tensor, asym_id: Tensor, token_mask: Tensor) 
     inter_chain = pair * (asym_id[:, :, None] != asym_id[:, None, :]).float()  # (b, t, t)
     ptm = ((tm * pair).sum(-1) / (pair.sum(-1) + EPSILON)).max(-1).values  # (b,)
     iptm = ((tm * inter_chain).sum(-1) / (inter_chain.sum(-1) + EPSILON)).max(-1).values  # (b,)
-    return ptm, iptm
+    return ptm, iptm  # each (b,)
 
 
 def ranking_pairs(qualities: Sequence[float], margin: float) -> list[tuple[int, int]]:
@@ -66,6 +69,7 @@ def sample_ranking_loss(
     loss `mean(softplus(-(s_better - s_worse) / temperature))`, while each backward pass only
     holds one sample's activations. The summed value is twice that loss.
     """
+    # score: (); detached_scores: (samples,); each appended loss term is ().
     terms = []
     for better, worse in pairs:
         if better == sample:
@@ -73,5 +77,5 @@ def sample_ranking_loss(
         elif worse == sample:
             terms.append(functional.softplus(-(detached_scores[better] - score) / temperature))
     if not terms:
-        return score.sum() * 0.0
-    return torch.stack(terms).sum() / len(pairs)
+        return score.sum() * 0.0  # ()
+    return torch.stack(terms).sum() / len(pairs)  # (participating pairs,) -> ()

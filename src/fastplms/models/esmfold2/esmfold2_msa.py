@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import dataclasses
 import string
+import numpy as np
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from itertools import islice
 from typing import Any
-
-import numpy as np
 from Bio import SeqIO
 from scipy.spatial.distance import cdist
 
@@ -19,6 +19,7 @@ from .esmfold2_msa_filter_sequences import greedy_select_indices, hhfilter
 from .esmfold2_parsing import FastaEntry, read_sequences, write_sequences
 from .esmfold2_sequential_dataclass import SequentialDataclass
 from .esmfold2_system import PathOrBuffer
+
 
 _A3M_INSERTION_DELETE_TABLE = str.maketrans(
     dict.fromkeys(string.ascii_lowercase + ".")

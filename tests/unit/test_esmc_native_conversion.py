@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
 import pytest
 import torch
+
+from pathlib import Path
 from safetensors.torch import load_file, save_file
 
 from tools.conversion.esmc_native import (
@@ -65,7 +65,7 @@ def test_native_conversion_preserves_names_and_fuses_in_declared_order() -> None
 
 def test_native_conversion_rejects_unexpected_keys() -> None:
     state = _native_state()
-    state["unexpected.weight"] = torch.ones(1)
+    state["unexpected.weight"] = torch.ones(1)  # (1,)
 
     with pytest.raises(ValueError, match="Unrecognized native ESMC checkpoint keys"):
         esmc_native_to_fastplms_v1(state, num_layers=1)

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import pytest
+import benchmarks.suite as benchmark_suite
+
 from pathlib import Path
 from types import SimpleNamespace
-
-import benchmarks.suite as benchmark_suite
 from benchmarks.run import (
     _benchmark_load_dtype,
     _resolve_bf16_execution,
@@ -31,6 +31,7 @@ from benchmarks.suite import (
     build_parser,
     exhaustive_benchmark_cases,
 )
+
 from fastplms.registry import ModelSpec, get_model_registry
 
 

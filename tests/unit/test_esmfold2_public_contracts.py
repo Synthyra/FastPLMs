@@ -4,7 +4,6 @@ import inspect
 import os
 import subprocess
 import sys
-
 import pytest
 import torch
 
@@ -264,7 +263,7 @@ def test_fast_model_forward_rejects_every_msa_input_before_computation(
             "distogram_atom_idx",
         )
     }
-    required[provided_name] = tensor
+    required[provided_name] = tensor  # (1,)
     with pytest.raises(ValueError, match=provided_name):
         model_type.forward(model, **required)
 

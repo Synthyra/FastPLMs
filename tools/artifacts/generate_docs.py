@@ -21,6 +21,7 @@ from tools.artifacts.doc_generation.support import (
     render_support,
 )
 
+
 # Retained entry points used by callers predating the package split.
 __all__ = [
     "expected_outputs",

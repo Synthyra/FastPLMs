@@ -8,6 +8,7 @@ import sys
 import types
 import pytest
 import torch
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -76,7 +77,7 @@ def official() -> types.ModuleType:
 
 
 def _assert_tensor_exact(actual: Tensor, expected: Tensor) -> None:
-    # actual: (...), expected: (...)
+    # This exact comparator accepts any shared shape, checked before comparing values.
     assert actual.shape == expected.shape
     assert actual.dtype == expected.dtype
     assert actual.device == expected.device
@@ -138,9 +139,7 @@ def _paired_modules(
     *args: Any,
     **kwargs: Any,
 ) -> tuple[nn.Module, nn.Module]:
-    # expected: (...)
     expected = getattr(official, name)(*args, **kwargs).eval().cuda()
-    # actual: (...)
     actual = getattr(local, name)(*args, **kwargs).eval().cuda()
     actual.load_state_dict(expected.state_dict(), strict=True)
     return actual, expected
@@ -163,7 +162,7 @@ def test_projection_and_pair_blocks_match_exactly(
         hidden_states = torch.randn(2, 5, 3, 12, device="cuda", dtype=dtype)
         _assert_tensor_exact(actual_lm(hidden_states), expected_lm(hidden_states))
         sequence_projection = actual_lm.project_sequence(hidden_states)
-        # expected_projection: (...)
+        # expected_projection: (2, 5, 8), after combining the three language-model layers.
         expected_projection = (
             expected_lm.base_z_combine.softmax(0) @ expected_lm.base_z_linear(hidden_states)
         ).squeeze(-2)

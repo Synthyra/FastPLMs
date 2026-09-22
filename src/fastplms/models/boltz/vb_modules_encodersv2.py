@@ -12,6 +12,7 @@ implementations under MIT terms.  See ``THIRD_PARTY_NOTICES.md``.
 from __future__ import annotations
 
 import torch
+
 from collections.abc import Callable
 from functools import partial
 from math import pi
@@ -534,7 +535,12 @@ class AtomAttentionEncoder(nn.Module):
         to_keys: Callable[[torch.Tensor], torch.Tensor],
         r: torch.Tensor | None = None,
         multiplicity: int = 1,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, Callable]:
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        Callable[[torch.Tensor], torch.Tensor],
+    ]:
         b, n, _ = feats["ref_pos"].shape
         del b, n
         # q/c: (b, a, atom_s); atom_enc_bias uses local-window attention axes.

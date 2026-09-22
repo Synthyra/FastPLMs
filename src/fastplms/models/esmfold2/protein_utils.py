@@ -9,11 +9,11 @@ lazily from a provenance-bearing declarative package asset.
 from __future__ import annotations
 
 import json
+import torch
+
 from functools import cache
 from importlib.resources import files
 from typing import Any
-
-import torch
 from torch import Tensor
 
 from .esmfold2_constants import (
@@ -26,6 +26,7 @@ from .esmfold2_constants import (
     PROTEIN_RESIDUE_TO_RES_TYPE,
     PROTEIN_UNK_RES_TYPE,
 )
+
 
 _GEOMETRY_ASSET = "protein_reference_geometry.json"
 _GEOMETRY_SCHEMA = "fastplms.esmfold2.reference_geometry.v1"
@@ -122,57 +123,57 @@ def prepare_protein_features(sequence: str) -> dict[str, Tensor]:
         raise ValueError("sequence must be non-empty")
 
     atoms, residue_types, input_ids, representative_atoms = _residue_records(sequence)
-    sequence_length = len(sequence)
+    sequence_length = len(sequence)  # l
     n_atoms = _padded_atom_count(len(atoms))
 
-    ref_pos = torch.zeros((n_atoms, 3), dtype=torch.float32)
-    ref_element = torch.zeros(n_atoms, dtype=torch.int64)
-    ref_charge = torch.zeros(n_atoms, dtype=torch.int8)
-    ref_atom_name_chars = torch.zeros((n_atoms, 4), dtype=torch.int64)
-    ref_space_uid = torch.zeros(n_atoms, dtype=torch.int64)
-    atom_attention_mask = torch.zeros(n_atoms, dtype=torch.bool)
-    atom_to_token = torch.zeros(n_atoms, dtype=torch.int64)
+    ref_pos = torch.zeros((n_atoms, 3), dtype=torch.float32)  # (n_atoms, 3)
+    ref_element = torch.zeros(n_atoms, dtype=torch.int64)  # (n_atoms,)
+    ref_charge = torch.zeros(n_atoms, dtype=torch.int8)  # (n_atoms,)
+    ref_atom_name_chars = torch.zeros((n_atoms, 4), dtype=torch.int64)  # (n_atoms, 4)
+    ref_space_uid = torch.zeros(n_atoms, dtype=torch.int64)  # (n_atoms,)
+    atom_attention_mask = torch.zeros(n_atoms, dtype=torch.bool)  # (n_atoms,)
+    atom_to_token = torch.zeros(n_atoms, dtype=torch.int64)  # (n_atoms,)
 
     for atom_index, atom in enumerate(atoms):
         token_index = atom["token_index"]
-        ref_pos[atom_index] = torch.tensor(atom["position"], dtype=torch.float32)
-        ref_element[atom_index] = ELEMENT_TO_ATOMIC_NUM[atom["element"]]
-        ref_charge[atom_index] = atom["charge"]
+        ref_pos[atom_index] = torch.tensor(atom["position"], dtype=torch.float32)  # (3,)
+        ref_element[atom_index] = ELEMENT_TO_ATOMIC_NUM[atom["element"]]  # ()
+        ref_charge[atom_index] = atom["charge"]  # ()
         ref_atom_name_chars[atom_index] = torch.tensor(
             _encode_atom_name(atom["name"]), dtype=torch.int64
-        )
-        ref_space_uid[atom_index] = token_index
-        atom_attention_mask[atom_index] = True
-        atom_to_token[atom_index] = token_index
+        )  # (4,)
+        ref_space_uid[atom_index] = token_index  # ()
+        atom_attention_mask[atom_index] = True  # ()
+        atom_to_token[atom_index] = token_index  # ()
 
-    residue_type_tensor = torch.tensor(residue_types, dtype=torch.int64)
-    msa = residue_type_tensor.unsqueeze(0)
+    residue_type_tensor = torch.tensor(residue_types, dtype=torch.int64)  # (l,)
+    msa = residue_type_tensor.unsqueeze(0)  # (1, l)
     features = {
-        "token_index": torch.arange(sequence_length, dtype=torch.int64),
-        "residue_index": torch.arange(sequence_length, dtype=torch.int64),
-        "asym_id": torch.zeros(sequence_length, dtype=torch.int64),
-        "sym_id": torch.zeros(sequence_length, dtype=torch.int64),
-        "entity_id": torch.ones(sequence_length, dtype=torch.int64),
-        "mol_type": torch.full((sequence_length,), MOL_TYPE_PROTEIN, dtype=torch.int64),
-        "res_type": residue_type_tensor,
-        "input_ids": torch.tensor(input_ids, dtype=torch.int64),
-        "token_bonds": torch.zeros((sequence_length, sequence_length, 1), dtype=torch.float32),
-        "token_attention_mask": torch.ones(sequence_length, dtype=torch.bool),
-        "ref_pos": ref_pos,
-        "ref_element": ref_element,
-        "ref_charge": ref_charge,
-        "ref_atom_name_chars": ref_atom_name_chars,
-        "ref_space_uid": ref_space_uid,
-        "atom_attention_mask": atom_attention_mask,
-        "atom_to_token": atom_to_token,
-        "distogram_atom_idx": torch.tensor(representative_atoms, dtype=torch.int64),
-        "msa": msa,
-        "msa_attention_mask": torch.ones_like(msa, dtype=torch.bool),
-        "has_deletion": torch.zeros_like(msa, dtype=torch.bool),
-        "deletion_value": torch.zeros_like(msa, dtype=torch.float32),
-        "deletion_mean": torch.zeros(sequence_length, dtype=torch.float32),
+        "token_index": torch.arange(sequence_length, dtype=torch.int64),  # (l,)
+        "residue_index": torch.arange(sequence_length, dtype=torch.int64),  # (l,)
+        "asym_id": torch.zeros(sequence_length, dtype=torch.int64),  # (l,)
+        "sym_id": torch.zeros(sequence_length, dtype=torch.int64),  # (l,)
+        "entity_id": torch.ones(sequence_length, dtype=torch.int64),  # (l,)
+        "mol_type": torch.full((sequence_length,), MOL_TYPE_PROTEIN, dtype=torch.int64),  # (l,)
+        "res_type": residue_type_tensor,  # (l,)
+        "input_ids": torch.tensor(input_ids, dtype=torch.int64),  # (l,)
+        "token_bonds": torch.zeros((sequence_length, sequence_length, 1), dtype=torch.float32),  # (l, l, 1)
+        "token_attention_mask": torch.ones(sequence_length, dtype=torch.bool),  # (l,)
+        "ref_pos": ref_pos,  # (n_atoms, 3)
+        "ref_element": ref_element,  # (n_atoms,)
+        "ref_charge": ref_charge,  # (n_atoms,)
+        "ref_atom_name_chars": ref_atom_name_chars,  # (n_atoms, 4)
+        "ref_space_uid": ref_space_uid,  # (n_atoms,)
+        "atom_attention_mask": atom_attention_mask,  # (n_atoms,)
+        "atom_to_token": atom_to_token,  # (n_atoms,)
+        "distogram_atom_idx": torch.tensor(representative_atoms, dtype=torch.int64),  # (l,)
+        "msa": msa,  # (1, l)
+        "msa_attention_mask": torch.ones_like(msa, dtype=torch.bool),  # (1, l)
+        "has_deletion": torch.zeros_like(msa, dtype=torch.bool),  # (1, l)
+        "deletion_value": torch.zeros_like(msa, dtype=torch.float32),  # (1, l)
+        "deletion_mean": torch.zeros(sequence_length, dtype=torch.float32),  # (l,)
     }
-    return {name: tensor.unsqueeze(0) for name, tensor in features.items()}
+    return {name: tensor.unsqueeze(0) for name, tensor in features.items()}  # each shape -> (1, *shape)
 
 
 __all__ = ["prepare_protein_features"]

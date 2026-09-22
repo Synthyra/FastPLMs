@@ -247,7 +247,7 @@ def _runner_full_embeddings(torch: Any, device: str, smoke: bool) -> Operation:
             self.config = config
 
         def _embedding_batch(self, sequences: list[str]) -> Any:
-            row_lengths = torch.tensor([len(sequence) for sequence in sequences], device=device)
+            row_lengths = torch.tensor([len(sequence) for sequence in sequences], device=device)  # (b,)
             positions = torch.arange(int(row_lengths.max()) + 2, device=device)  # (l,)
             # Position 0 is BOS and position r_i + 1 is EOS, so neither is a residue.
             residue_mask = (positions[None, :] >= 1) & (  # (b, l)

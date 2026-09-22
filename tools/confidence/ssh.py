@@ -29,7 +29,6 @@ SYNCED_PREFIXES = (
     "tests/",
     "requirements/",
     "pytest.ini",
-    "ruff.toml",
     "mypy.ini",
 )
 SENSITIVE_SUFFIXES = (".env", ".pem", ".key", ".p12", ".pfx")

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, TypeAlias
 
-import numpy as np
-
 from .esmfold2_msa import MSA
+
 
 MSAInput: TypeAlias = MSA | None
 

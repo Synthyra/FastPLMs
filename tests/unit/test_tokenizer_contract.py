@@ -6,6 +6,7 @@ import json
 import shutil
 import pytest
 import torch
+
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier
@@ -518,7 +519,7 @@ def test_dplm2_tokenizer_special_ids_normalize_in_range(model_key: str) -> None:
             ]
         ]
     )
-    expected = torch.tensor([[2, 3, 0, 32, -100]])
+    expected = torch.tensor([[2, 3, 0, 32, -100]])  # (1, 5)
     normalized_special_ids = _normalize_dplm2_input_ids(
         generic_special_ids,
         vocab_size=fast_config.vocab_size,

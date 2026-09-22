@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 import torch
+
+from types import SimpleNamespace
 
 from fastplms.models.esmfold2.esmfold2_constants import MOL_TYPE_PROTEIN
 from fastplms.models.esmfold2.esmfold2_processor import ESMFold2InputBuilder

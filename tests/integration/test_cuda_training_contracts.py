@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+
 from pathlib import Path
 
 from fastplms.attention import _core
@@ -195,8 +196,8 @@ def test_esmplusplus_flex_sequence_masks_reuse_on_cuda_and_match_sdpa(
 
     monkeypatch.setattr(_core, "create_block_mask", count_create_block_mask)
     _core.clear_flex_attention_caches()
-    flex_input = torch.randn(2, 5, 32, device="cuda", dtype=torch.bfloat16).requires_grad_()
-    sdpa_input = flex_input.detach().clone().requires_grad_()
+    flex_input = torch.randn(2, 5, 32, device="cuda", dtype=torch.bfloat16).requires_grad_()  # (2, 5, 32)
+    sdpa_input = flex_input.detach().clone().requires_grad_()  # (2, 5, 32)
 
     flex_output = flex(flex_input, sequence_id=pattern).last_hidden_state
     repeated = flex(flex_input.detach(), sequence_id=pattern.clone()).last_hidden_state
@@ -281,7 +282,7 @@ def test_eager_sdpa_and_flex_match_forward_and_backward_on_cuda() -> None:
             assert all(
                 torch.isfinite(gradient).all() for gradient in gradients.values()
             )
-            # outputs[backend]: (...)
+            # outputs[backend]: (b, l, d), retaining the model's batch/token/hidden axes.
             outputs[backend] = output.detach()
             parameter_gradients[backend] = gradients
 

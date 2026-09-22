@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import torch
 
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
-
-import torch
 from safetensors.torch import load_file
 
 from fastplms.registry import CheckpointSource, FileDigest, get_model_registry
@@ -104,14 +103,14 @@ def _compare_states(
     bf16_unequal_names: list[str] = []
     max_bf16_error = 0.0
     for name in sorted(native_keys & standard_keys):
-        native = native_state[name]
-        standard = standard_state[name]
+        native = native_state[name]  # checkpoint-defined shape (...)
+        standard = standard_state[name]  # matching checkpoint-defined shape (...)
         if native.shape != standard.shape:
             continue
         if not torch.equal(native, standard):
             fp32_unequal_names.append(name)
-        native_bf16 = native.bfloat16().float() if native.is_floating_point() else native
-        standard_bf16 = standard.bfloat16().float() if standard.is_floating_point() else standard
+        native_bf16 = native.bfloat16().float() if native.is_floating_point() else native  # (...)
+        standard_bf16 = standard.bfloat16().float() if standard.is_floating_point() else standard  # (...)
         if not torch.equal(native_bf16, standard_bf16):
             bf16_unequal_names.append(name)
         if native_bf16.is_floating_point():

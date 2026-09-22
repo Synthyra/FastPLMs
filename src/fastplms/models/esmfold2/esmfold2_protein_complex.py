@@ -7,6 +7,13 @@ import itertools
 import random
 import re
 import warnings
+import biotite.structure as bs
+import brotli
+import msgpack
+import msgpack_numpy
+import numpy as np
+import torch
+
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass, replace
 from functools import cached_property
@@ -14,13 +21,6 @@ from pathlib import Path
 from subprocess import check_output
 from tempfile import TemporaryDirectory
 from typing import Any
-
-import biotite.structure as bs
-import brotli
-import msgpack
-import msgpack_numpy
-import numpy as np
-import torch
 from biotite.database import rcsb
 from biotite.file import InvalidFileError
 from biotite.structure.io.pdb import PDBFile
@@ -50,6 +50,7 @@ from .esmfold2_protein_chain import (
 )
 from .esmfold2_utils_types import PathOrBuffer
 
+
 SINGLE_LETTER_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 
 
@@ -73,14 +74,15 @@ def _parse_operation_expression(expression: str) -> list[tuple[str, ...]]:
 
 def _apply_transformations_fast(chains, transformation_dict, operations):
     """Return transformed copies of each affected protein chain."""
+    # Each chain supplies coordinates (l, 37, 3); rotations are (3, 3), translations are (3,).
     transformed_chains = []
     for chain in chains:
         for operation in operations:
-            coordinates = chain.atom37_positions.copy()
+            coordinates = chain.atom37_positions.copy()  # (l, 37, 3)
             for op_step in operation:
                 transform = transformation_dict[op_step]
-                coordinates = matrix_rotate(coordinates, transform.rotation)
-                coordinates += transform.target_translation
+                coordinates = matrix_rotate(coordinates, transform.rotation)  # (l, 37, 3)
+                coordinates += transform.target_translation  # (l, 37, 3)
             transformed_chains.append(replace(chain, atom37_positions=coordinates))
     return transformed_chains
 
@@ -124,16 +126,17 @@ class DockQResult:
 class ProteinComplex:
     """Dataclass with atom37 representation of an entire protein complex."""
 
+    # l is len(sequence), including separator rows when present.
     id: str
     sequence: str
     entity_id: np.ndarray  # entities map to unique sequences
     chain_id: np.ndarray  # multiple chains might share an entity id
     sym_id: np.ndarray  # complexes might be copies of the same chain
-    residue_index: np.ndarray
-    insertion_code: np.ndarray
-    atom37_positions: np.ndarray
-    atom37_mask: np.ndarray
-    confidence: np.ndarray
+    residue_index: np.ndarray  # (l,)
+    insertion_code: np.ndarray  # (l,)
+    atom37_positions: np.ndarray  # (l, 37, 3)
+    atom37_mask: np.ndarray  # (l, 37)
+    confidence: np.ndarray  # (l,)
     # This metadata is parsed from the MMCIF file. For synthetic data, we do a best effort.
     metadata: ProteinComplexMetadata
     atom37_confidence: np.ndarray | None = None  # P has shape (l, 37).
@@ -141,25 +144,25 @@ class ProteinComplex:
     # Coordinate completion, concatenation, and comparison
     def infer_oxygen(self) -> ProteinComplex:
         """Oxygen position is fixed given N, CA, C atoms. Infer it if not provided."""
-        O_missing_indices = np.argwhere(~np.isfinite(self.atoms["O"]).all(axis=1)).squeeze()
+        O_missing_indices = np.argwhere(~np.isfinite(self.atoms["O"]).all(axis=1)).squeeze()  # (n_missing,) or () when exactly one oxygen is missing
 
-        O_vector = torch.tensor([0.6240, -1.0613, 0.0103], dtype=torch.float32)
-        N, CA, C = torch.from_numpy(self.atoms[["N", "CA", "C"]]).float().unbind(dim=1)
-        N = torch.roll(N, -3)
-        N[..., -1, :] = torch.nan
+        O_vector = torch.tensor([0.6240, -1.0613, 0.0103], dtype=torch.float32)  # (3,)
+        N, CA, C = torch.from_numpy(self.atoms[["N", "CA", "C"]]).float().unbind(dim=1)  # each (l, 3)
+        N = torch.roll(N, -3)  # (l, 3); torch.roll keeps the original shape
+        N[..., -1, :] = torch.nan  # (3,) xyz row
 
         # Get the frame defined by the CA-C-N atom
-        frames = Affine3D.from_graham_schmidt(CA, C, N)
-        oxygen_coordinates = frames.apply(O_vector)
-        atom37_positions = self.atom37_positions.copy()
-        atom37_mask = self.atom37_mask.copy()
+        frames = Affine3D.from_graham_schmidt(CA, C, N)  # affine batch shape: (l,)
+        oxygen_coordinates = frames.apply(O_vector)  # (l, 3)
+        atom37_positions = self.atom37_positions.copy()  # (l, 37, 3)
+        atom37_mask = self.atom37_mask.copy()  # (l, 37)
 
         atom37_positions[O_missing_indices, residue_constants.atom_order["O"]] = oxygen_coordinates[
             O_missing_indices
-        ].numpy()
+        ].numpy()  # (n_missing, 3) or (3,) selected oxygen coordinates
         atom37_mask[O_missing_indices, residue_constants.atom_order["O"]] = ~np.isnan(
             atom37_positions[O_missing_indices, residue_constants.atom_order["O"]]
-        ).any(-1)
+        ).any(-1)  # (n_missing,) or () selected oxygen mask
         new_chain = replace(self, atom37_positions=atom37_positions, atom37_mask=atom37_mask)
         return new_chain
 
@@ -176,20 +179,20 @@ class ProteinComplex:
                 calculation between two designs for a given structural template, w/
                 CB atoms.
         """
-        atom37_positions = self.atom37_positions.copy()
-        atom37_mask = self.atom37_mask.copy()
+        atom37_positions = self.atom37_positions.copy()  # (l, 37, 3)
+        atom37_mask = self.atom37_mask.copy()  # (l, 37)
 
-        N, CA, C = np.moveaxis(self.atoms[["N", "CA", "C"]], 1, 0)
+        N, CA, C = np.moveaxis(self.atoms[["N", "CA", "C"]], 1, 0)  # each (l, 3)
         # See usage in trDesign codebase.
         # https://github.com/gjoni/trDesign/blob/f2d5930b472e77bfacc2f437b3966e7a708a8d37/02-GD/utils.py#L140
-        inferred_cbeta_positions = infer_cb(C, N, CA, 1.522, 1.927, -2.143)
+        inferred_cbeta_positions = infer_cb(C, N, CA, 1.522, 1.927, -2.143)  # (l, 3)
         if not infer_cbeta_for_glycine:
-            inferred_cbeta_positions[np.array(list(self.sequence)) == "G", :] = np.nan
+            inferred_cbeta_positions[np.array(list(self.sequence)) == "G", :] = np.nan  # (n_glycine, 3) selected rows
 
-        atom37_positions[:, residue_constants.atom_order["CB"]] = inferred_cbeta_positions
+        atom37_positions[:, residue_constants.atom_order["CB"]] = inferred_cbeta_positions  # (l, 3) C-beta slice
         atom37_mask[:, residue_constants.atom_order["CB"]] = ~np.isnan(
             atom37_positions[:, residue_constants.atom_order["CB"]]
-        ).any(-1)
+        ).any(-1)  # (l,) C-beta mask
         new_chain = replace(self, atom37_positions=atom37_positions, atom37_mask=atom37_mask)
         return new_chain
 
@@ -281,8 +284,8 @@ class ProteinComplex:
             torch.tensor(target.atom37_positions[target_inds]).unsqueeze(0),
             torch.tensor(aligned.atom37_mask[mobile_inds]).unsqueeze(0),
             **kwargs,
-        )
-        return float(lddt) if lddt.numel() == 1 else lddt.numpy().flatten()
+        )  # score shape follows selected coordinate axes and per_residue
+        return float(lddt) if lddt.numel() == 1 else lddt.numpy().flatten()  # scalar or (lddt.numel(),)
 
     def gdt_ts(
         self,
@@ -317,8 +320,8 @@ class ProteinComplex:
                 & index_by_atom_name(target.atom37_mask[target_inds], "CA", dim=-1)
             ).unsqueeze(0),
             **kwargs,
-        )
-        return float(gdt_ts) if gdt_ts.numel() == 1 else gdt_ts.numpy().flatten()
+        )  # () or (n_samples,), selected by reduction
+        return float(gdt_ts) if gdt_ts.numel() == 1 else gdt_ts.numpy().flatten()  # scalar or (gdt_ts.numel(),)
 
     def dockq(self, native: ProteinComplex):
         # This function uses dockqv2 to compute the DockQ score. Because it does a mapping
@@ -452,7 +455,7 @@ class ProteinComplex:
             "entity_id": self.entity_id,
             "chain_id": self.chain_id,
             "sym_id": self.sym_id,
-        }
+        }  # arrays share l: positions (l, 37, 3), masks (l, 37), residue fields (l,)
         for name, values in aligned.items():
             if not isinstance(values, np.ndarray):
                 raise TypeError(f"{name} must be a NumPy array, got {type(values).__name__}.")
@@ -489,7 +492,7 @@ class ProteinComplex:
                 )
         if not np.issubdtype(self.confidence.dtype, np.number):
             raise TypeError("confidence must use a numeric dtype.")
-        atom37_confidence = self.atom37_confidence
+        atom37_confidence = self.atom37_confidence  # (l, 37) or None
         if atom37_confidence is not None and not isinstance(atom37_confidence, np.ndarray):
             raise TypeError("atom37_confidence must be a NumPy array when provided.")
         if (
@@ -506,6 +509,7 @@ class ProteinComplex:
         NOTE: When slicing with a boolean mask, it's possible that the output array won't
         be the expected length. This is because we do our best to preserve chainbreak tokens.
         """
+        # idx selects residue rows; masks retain separator rows before repeated separators are removed.
 
         if isinstance(idx, int):
             idx = [idx]
@@ -513,8 +517,8 @@ class ProteinComplex:
             raise ValueError("ProteinComplex doesn't supports indexing with lists of indices")
 
         if isinstance(idx, np.ndarray):
-            is_chainbreak = np.asarray([s == "|" for s in self.sequence])
-            idx = idx.astype(bool) | is_chainbreak
+            is_chainbreak = np.asarray([s == "|" for s in self.sequence])  # (l,)
+            idx = idx.astype(bool) | is_chainbreak  # (l,)
 
         complex = self._unsafe_slice(idx)
         if len(complex) == 0:
@@ -524,17 +528,18 @@ class ProteinComplex:
         chainbreak_runs = np.asarray(
             [complex.sequence[i : i + 2] == "||" for i in range(len(complex.sequence) - 1)]
             + [complex.sequence[-1] == "|"]
-        )
+        )  # (selected_length,)
         # We should remove as many chainbreaks as possible from the start of the sequence
         for i in range(len(chainbreak_runs)):
             if complex.sequence[i] == "|":
-                chainbreak_runs[i] = True
+                chainbreak_runs[i] = True  # scalar mask element
             else:
                 break
         complex = complex._unsafe_slice(~chainbreak_runs)
         return complex
 
     def _unsafe_slice(self, idx: int | list[int] | slice | np.ndarray):
+        # idx selects residue rows; atom/xyz trailing axes and aligned field lengths are retained.
         sequence = slice_python_object_as_numpy(self.sequence, idx)
         return replace(
             self,
@@ -569,7 +574,7 @@ class ProteinComplex:
 
     @cached_property
     def chain_lengths(self) -> np.ndarray:
-        return np.diff(self.chain_boundaries, axis=1).flatten()
+        return np.diff(self.chain_boundaries, axis=1).flatten()  # (n_chains,)
 
     @cached_property
     def chain_boundaries(self) -> list[tuple[int, int]]:
@@ -664,11 +669,11 @@ class ProteinComplex:
         # Iterate over chains, build KDTree for each chain
         kdtrees = []
 
-        CA = self.atoms["CA"]
+        CA = self.atoms["CA"]  # (l, 3)
 
         for start, end in self.chain_boundaries:
-            chain_CA = CA[start:end]
-            chain_CA = chain_CA[np.isfinite(chain_CA).all(axis=-1)]
+            chain_CA = CA[start:end]  # (chain_length, 3)
+            chain_CA = chain_CA[np.isfinite(chain_CA).all(axis=-1)]  # (n_finite_ca, 3)
             kdtrees.append(KDTree(chain_CA))
 
         return kdtrees
@@ -676,25 +681,25 @@ class ProteinComplex:
     def chain_adjacency(self, cutoff: float = 8.0) -> np.ndarray:
         # Compute adjacency matrix for protein complex
         num_chains = self.num_chains
-        adjacency = np.zeros((num_chains, num_chains), dtype=bool)
+        adjacency = np.zeros((num_chains, num_chains), dtype=bool)  # (n_chains, n_chains)
         for (i, kdtree), (j, kdtree2) in itertools.combinations(
             enumerate(self.per_chain_kd_trees), 2
         ):
             adj = kdtree.query_ball_tree(kdtree2, cutoff)
             any_is_adjacent = any(len(a) > 0 for a in adj)
-            adjacency[i, j] = any_is_adjacent
-            adjacency[j, i] = any_is_adjacent
-        return adjacency
+            adjacency[i, j] = any_is_adjacent  # scalar matrix entry
+            adjacency[j, i] = any_is_adjacent  # scalar matrix entry
+        return adjacency  # (n_chains, n_chains)
 
     def chain_adjacency_by_index(self, index: int, cutoff: float = 8.0) -> np.ndarray:
         num_chains = len(self.chain_boundaries)
-        adjacency = np.zeros(num_chains, dtype=bool)
+        adjacency = np.zeros(num_chains, dtype=bool)  # (n_chains,)
         for i, kdtree in enumerate(self.per_chain_kd_trees):
             if i == index:
                 continue
             adj = kdtree.query_ball_tree(self.per_chain_kd_trees[index], cutoff)
-            adjacency[i] = any(len(a) > 0 for a in adj)
-        return adjacency
+            adjacency[i] = any(len(a) > 0 for a in adj)  # scalar vector entry
+        return adjacency  # (n_chains,)
 
     def add_prefix_to_chain_ids(self, prefix: str) -> ProteinComplex:
         """Rename all chains in the complex with a given prefix.
@@ -715,7 +720,7 @@ class ProteinComplex:
 
     def sasa(self, by_residue: bool = True):
         chain = self.as_chain(force_conversion=True)
-        return chain.sasa(by_residue=by_residue)
+        return chain.sasa(by_residue=by_residue)  # (l,) if by_residue, otherwise (n_present_atoms,)
 
     def to_mmcif_string(self) -> str:
         """Convert the ProteinComplex to mmCIF format.
@@ -727,7 +732,7 @@ class ProteinComplex:
         # Collect all atoms from all chains
         all_atoms = []
         for chain in self.chain_iter():
-            chain_atom_array = chain.atom_array
+            chain_atom_array = chain.atom_array  # AtomArray with n_chain_atoms entries
             # Convert AtomArray to list of atoms and add to collection
             all_atoms.extend(chain_atom_array)
 
@@ -735,7 +740,7 @@ class ProteinComplex:
         if not all_atoms:
             raise ValueError("No atoms found in protein complex")
 
-        atom_array = bs.array(all_atoms)
+        atom_array = bs.array(all_atoms)  # AtomArray with total n_present_atoms entries
 
         # Create CIF file
         f = CIFFile()
@@ -786,7 +791,7 @@ class ProteinComplex:
                     data=CIFData(array=np.array(entity_descriptions), dtype=np.str_)
                 ),
             },
-        )
+        )  # each entity column has shape (n_entities,)
 
         # Create _entity_poly section
         poly_entity_ids = []
@@ -814,7 +819,7 @@ class ProteinComplex:
                     data=CIFData(array=np.array(poly_sequences), dtype=np.str_)
                 ),
             },
-        )
+        )  # each polymer column has shape (n_polymer_entities,)
 
         # Create _struct_asym section
         asym_ids = []
@@ -835,18 +840,18 @@ class ProteinComplex:
                 ),
                 "details": CIFColumn(data=CIFData(array=np.array(asym_details), dtype=np.str_)),
             },
-        )
+        )  # each asym column has shape (n_chains,)
 
     # Construction, PDB interchange, and compact storage
     @classmethod
     def from_pdb(
         cls, path: PathOrBuffer, id: str | None = None, is_predicted: bool = False
     ) -> ProteinComplex:
-        atom_array = PDBFile.read(path).get_structure(model=1, extra_fields=["b_factor"])
+        atom_array = PDBFile.read(path).get_structure(model=1, extra_fields=["b_factor"])  # AtomArray with n_file_atoms entries
 
         chains = []
         for chain in bs.chain_iter(atom_array):
-            chain = chain[~chain.hetero]
+            chain = chain[~chain.hetero]  # AtomArray with n_nonhetero_atoms entries
             if len(chain) == 0:
                 continue
             chains.append(ProteinChain.from_atomarray(chain, id, is_predicted))
@@ -855,8 +860,8 @@ class ProteinComplex:
     def to_pdb(self, path: PathOrBuffer, include_insertions: bool = True):
         atom_array = None
         for chain in self.chain_iter():
-            carr = chain.atom_array if include_insertions else chain.atom_array_no_insertions
-            atom_array = carr if atom_array is None else atom_array + carr
+            carr = chain.atom_array if include_insertions else chain.atom_array_no_insertions  # AtomArray with n_chain_atoms entries
+            atom_array = carr if atom_array is None else atom_array + carr  # AtomArray containing accumulated chain atoms
         f = PDBFile()
         f.set_structure(atom_array)
         f.write(path)
@@ -909,21 +914,21 @@ class ProteinComplex:
             # Frozen dataclasses do not make their NumPy members immutable.  Work on a
             # private mask so requesting a compact backbone payload cannot clear the
             # caller's side-chain atoms in-place.
-            atom37_mask = dct["atom37_mask"].copy()
-            atom37_mask[:, 3:] = False
-            dct["atom37_mask"] = atom37_mask
-        dct["atom37_positions"] = dct["atom37_positions"][dct["atom37_mask"]]
+            atom37_mask = dct["atom37_mask"].copy()  # (l, 37)
+            atom37_mask[:, 3:] = False  # (l, 34) mask slice for atoms beyond N/CA/C
+            dct["atom37_mask"] = atom37_mask  # (l, 37)
+        dct["atom37_positions"] = dct["atom37_positions"][dct["atom37_mask"]]  # (n_present_atoms, 3)
         if dct.get("atom37_confidence") is not None:
-            dct["atom37_confidence"] = dct["atom37_confidence"][dct["atom37_mask"]]
+            dct["atom37_confidence"] = dct["atom37_confidence"][dct["atom37_mask"]]  # (n_present_atoms,)
         else:
             dct.pop("atom37_confidence", None)
         for k, v in dct.items():
             if isinstance(v, np.ndarray):
                 match v.dtype:
                     case np.int64:
-                        dct[k] = v.astype(np.int32)
+                        dct[k] = v.astype(np.int32)  # v.shape
                     case np.float64 | np.float32:
-                        dct[k] = v.astype(np.float16)
+                        dct[k] = v.astype(np.float16)  # v.shape
                     case _:
                         pass
                 if json_serializable:
@@ -948,15 +953,15 @@ class ProteinComplex:
 
         for k, v in dct.items():
             if isinstance(v, list):
-                dct[k] = np.array(v)
+                dct[k] = np.array(v)  # shape inferred from serialized nested list
 
-        atom37 = np.full((*dct["atom37_mask"].shape, 3), np.nan)
-        atom37[dct["atom37_mask"]] = dct["atom37_positions"]
-        dct["atom37_positions"] = atom37
+        atom37 = np.full((*dct["atom37_mask"].shape, 3), np.nan)  # (l, 37, 3)
+        atom37[dct["atom37_mask"]] = dct["atom37_positions"]  # (n_present_atoms, 3) selected coordinates
+        dct["atom37_positions"] = atom37  # (l, 37, 3)
         if "atom37_confidence" in dct:
-            atom37_conf = np.full(dct["atom37_mask"].shape, np.nan, dtype=np.float32)
-            atom37_conf[dct["atom37_mask"]] = dct["atom37_confidence"]
-            dct["atom37_confidence"] = atom37_conf
+            atom37_conf = np.full(dct["atom37_mask"].shape, np.nan, dtype=np.float32)  # (l, 37)
+            atom37_conf[dct["atom37_mask"]] = dct["atom37_confidence"]  # (n_present_atoms,) selected confidence values
+            dct["atom37_confidence"] = atom37_conf  # (l, 37)
         dct = {
             k: (
                 v.astype(np.float32)
@@ -964,7 +969,7 @@ class ProteinComplex:
                 else v
             )
             for k, v in dct.items()
-        }
+        }  # each converted array retains its serialized field shape
         if "chain_boundaries" in dct:
             del dct["chain_boundaries"]
         if "chain_boundaries" in dct["metadata"]:
@@ -1030,12 +1035,13 @@ class ProteinComplex:
 
         # TODO(roshan): Make a proper protein complex class
         def join_arrays(arrays: Sequence[np.ndarray], sep: np.ndarray):
+            # arrays: (l_i, *trailing_shape); sep: (1, *trailing_shape).
             full_array = []
             for array in arrays:
                 full_array.append(array)
                 full_array.append(sep)
             full_array = full_array[:-1]
-            return np.concatenate(full_array, 0)
+            return np.concatenate(full_array, 0)  # (sum(chain_lengths) + n_chains - 1, *trailing_shape)
 
         sep_tokens = {
             "residue_index": np.array([-1]),
@@ -1043,22 +1049,22 @@ class ProteinComplex:
             "atom37_positions": np.full([1, 37, 3], np.nan),
             "atom37_mask": np.zeros([1, 37], dtype=bool),
             "confidence": np.array([0]),
-        }
+        }  # one-residue separator arrays: (1,), (1, 37, 3), or (1, 37)
 
         any_has_atom37_conf = any(c.atom37_confidence is not None for c in chains)
         if any_has_atom37_conf:
-            sep_tokens["atom37_confidence"] = np.full([1, 37], np.nan, dtype=np.float32)
+            sep_tokens["atom37_confidence"] = np.full([1, 37], np.nan, dtype=np.float32)  # (1, 37)
 
         def _get_chain_attr(chain: ProteinChain, name: str) -> np.ndarray:
-            val = getattr(chain, name)
+            val = getattr(chain, name)  # (chain_length, *field_trailing_shape) or None
             if val is None and name == "atom37_confidence":
-                return np.full([len(chain), 37], np.nan, dtype=np.float32)
-            return val
+                return np.full([len(chain), 37], np.nan, dtype=np.float32)  # (chain_length, 37)
+            return val  # (chain_length, *field_trailing_shape)
 
         array_args: dict[str, np.ndarray] = {
             name: join_arrays([_get_chain_attr(chain, name) for chain in chains], sep)
             for name, sep in sep_tokens.items()
-        }
+        }  # fields retain atom/xyz axes; first axis includes chain separators
 
         multimer_arrays = []
         chain2num_max = -1
@@ -1070,7 +1076,7 @@ class ProteinComplex:
             num_res = c.residue_index.shape[0]
             if c.chain_id not in chain2num:
                 chain2num[c.chain_id] = (chain2num_max := chain2num_max + 1)
-            chain_id_array = np.full([num_res], chain2num[c.chain_id], dtype=np.int64)
+            chain_id_array = np.full([num_res], chain2num[c.chain_id], dtype=np.int64)  # (chain_length,)
 
             if c.entity_id is None:
                 entity_num = (ent2num_max := ent2num_max + 1)
@@ -1078,9 +1084,9 @@ class ProteinComplex:
                 if c.entity_id not in ent2num:
                     ent2num[c.entity_id] = (ent2num_max := ent2num_max + 1)
                 entity_num = ent2num[c.entity_id]
-            entity_id_array = np.full([num_res], entity_num, dtype=np.int64)
+            entity_id_array = np.full([num_res], entity_num, dtype=np.int64)  # (chain_length,)
 
-            sym_id_array = np.full([num_res], i, dtype=np.int64)
+            sym_id_array = np.full([num_res], i, dtype=np.int64)  # (chain_length,)
 
             multimer_arrays.append(
                 {
@@ -1092,11 +1098,11 @@ class ProteinComplex:
 
             total_index += num_res + 1
 
-        sep = np.array([-1])
+        sep = np.array([-1])  # (1,)
         update = {
             name: join_arrays([dct[name] for dct in multimer_arrays], sep=sep)
             for name in ["chain_id", "entity_id", "sym_id"]
-        }
+        }  # each field: (sum(chain_lengths) + n_chains - 1,)
         array_args.update(update)
 
         metadata = ProteinComplexMetadata(
@@ -1153,7 +1159,7 @@ def get_assembly_fast(
     ]
     if len(structure) == 0:
         raise NoProteinError
-    unique_asym_ids = np.unique(structure.label_asym_id)  # type: ignore
+    unique_asym_ids = np.unique(structure.label_asym_id)  # type: ignore; (n_unique_asym_ids,)
     asym2chain = {}
     asym2auth = {}
     for asym_id in unique_asym_ids:
@@ -1167,7 +1173,7 @@ def get_assembly_fast(
             insertion_code,
             confidence,
             entity_id,
-        ) = chain_to_ndarray(sub_structure, mmcif, chain_id, False)
+        ) = chain_to_ndarray(sub_structure, mmcif, chain_id, False)  # array fields: (l, 37, 3), (l, 37), (l,), (l,), (l,)
 
         asym2chain[asym_id] = ProteinChain(
             id=mmcif.id or "unknown",
@@ -1217,12 +1223,13 @@ def get_assembly_fast(
 
 
 def protein_chain_to_protein_complex(chain: ProteinChain) -> ProteinComplex:
+    # chain fields share residue axis l; splitting removes chain-break separator rows.
     if "|" not in chain.sequence:
         return ProteinComplex.from_chains([chain])
-    chain_breaks = np.array(list(chain.sequence)) == "|"
-    chain_break_inds = np.where(chain_breaks)[0]
-    chain_break_inds = np.concatenate([[0], chain_break_inds, [len(chain)]])
-    chain_break_inds = np.array(list(itertools.pairwise(chain_break_inds)))
+    chain_breaks = np.array(list(chain.sequence)) == "|"  # (l,)
+    chain_break_inds = np.where(chain_breaks)[0]  # (n_chainbreaks,)
+    chain_break_inds = np.concatenate([[0], chain_break_inds, [len(chain)]])  # (n_chainbreaks + 2,)
+    chain_break_inds = np.array(list(itertools.pairwise(chain_break_inds)))  # (n_chainbreaks + 1, 2)
     complex_chains = []
     for start, end in chain_break_inds:
         if start != 0:

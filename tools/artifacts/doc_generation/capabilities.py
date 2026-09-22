@@ -9,6 +9,7 @@ from tools.artifacts.doc_generation.esmc_evidence import (
     ESMC_MEASURED_BACKENDS,
 )
 
+
 FAMILY_DOCUMENTATION = {
     "esm2": ("../models.md#esm2", "../../examples/embedding_and_retrieval.py"),
     "esm_plusplus": (

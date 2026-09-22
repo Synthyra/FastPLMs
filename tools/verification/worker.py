@@ -22,6 +22,23 @@ UNIT_PATTERNS = (
     "test_build_all_artifacts.py",
     "test_execution*.py",
     "test_verification_cpu.py",
+    "test_registry.py",
+    "test_import_hygiene.py",
+    "test_*rotary*.py",
+    "test_attention_interfaces.py",
+    "test_fine_tuning_example.py",
+    "test_binder_example_contracts.py",
+    "test_benchmark*.py",
+    "test_esmfold2_leaf_contracts.py",
+    "test_esmfold2_reimplemented_leaves.py",
+    "test_esmfold2_classification.py",
+    "test_esmfold2_public_contracts.py",
+    "test_esmfold2_progress.py",
+    "test_esmfold2_triangle_chunks.py",
+    "test_esmfold2_atom_attention.py",
+    "test_boltz_checkpoint_io.py",
+    "test_boltz_opm_diagnostic.py",
+    "test_boltz_progress.py",
 )
 RELEASE_FILES = (
     "test_doc_generation.py",
@@ -31,8 +48,14 @@ RELEASE_FILES = (
     "test_artifacts.py",
     "test_dependency_contracts.py",
     "test_production_source_boundary.py",
+    "test_publish_files_only.py",
+    "test_binder_example_contracts.py",
 )
-CPU_FILES = ("test_embedding_contracts.py", "test_documentation_contracts.py")
+CPU_FILES = (
+    "test_embedding_contracts.py",
+    "test_documentation_contracts.py",
+    "test_structure_contracts.py",
+)
 
 
 def test_batches(root: Path) -> dict[str, list[str]]:
@@ -62,7 +85,9 @@ def run_batches(root: Path, output: Path, maximum_seconds: float = 1050) -> dict
     batches = []
     for name, paths in test_batches(root).items():
         junit = output / f"{name}.xml"
-        command = [sys.executable, "-m", "pytest", "-q", *paths, f"--junitxml={junit}"]
+        command = [
+            sys.executable, "-m", "pytest", "-q", "-m", "not gpu", *paths, f"--junitxml={junit}"
+        ]
         remaining = maximum_seconds - (time.monotonic() - started)
         batch_started = time.monotonic()
         if remaining <= 0:

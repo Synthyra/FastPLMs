@@ -80,6 +80,7 @@ python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
 ```python
 from peft import LoraConfig, get_peft_model
 
+
 peft_model = get_peft_model(
     model,
     LoraConfig(
@@ -104,6 +105,7 @@ inference core, and returns coordinates and confidence fields:
 
 ```python
 import torch
+
 
 model = model.cuda().eval()
 output = model.predict_structure(

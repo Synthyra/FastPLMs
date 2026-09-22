@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from types import MethodType
-
 import pytest
 import torch
 import torch.nn as nn
+
+from types import MethodType
 
 from fastplms.models.classification_probe import (
     SequenceClassificationProbe,

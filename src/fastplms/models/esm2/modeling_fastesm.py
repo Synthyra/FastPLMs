@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
+
 from dataclasses import dataclass
 from typing import Any, ClassVar
 from einops import rearrange
@@ -735,7 +736,7 @@ class FAST_ESM_ENCODER(FastEsmPreTrainedModel, EmbeddingMixin):
             output_attentions=True,
             return_dict=True,
         ).attentions
-        attns = torch.stack(attns, dim=1)
+        attns = torch.stack(attns, dim=1)  # (b, n_layers, h, l, l)
         attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
         attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(4)
         return self.contact_head(input_ids, attns)

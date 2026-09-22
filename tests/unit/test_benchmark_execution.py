@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 import torch
 import transformers
+
 from pathlib import Path
 from types import SimpleNamespace
-
 from benchmarks.run import (
     _load_model,
     _prepare_esmfold2_inputs,
@@ -17,6 +17,7 @@ from benchmarks.run import (
     prepare_inputs,
     warm_until_stable,
 )
+
 from fastplms.registry import get_model_registry
 
 

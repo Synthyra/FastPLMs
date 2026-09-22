@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sys
 import types
-
 import numpy as np
 import pytest
 
@@ -101,8 +100,8 @@ def test_padded_tokens_are_masked() -> None:
     cache["backbone_indices"] = np.concatenate(
         [cache["backbone_indices"], np.asarray([[-1, -1, -1]])], axis=0
     )
-    cache["token_attention_mask"] = np.asarray([True, True, False])
-    cache["asym_id"] = np.asarray([1, 1])
+    cache["token_attention_mask"] = np.asarray([True, True, False])  # (3,)
+    cache["asym_id"] = np.asarray([1, 1])  # (2,)
     cache["x_pred"] = cache["x_pred"]
 
     import tools.confidence.structure_metrics as structure_metrics
@@ -148,6 +147,6 @@ def test_unmasked_padded_backbone_tokens_are_rejected() -> None:
     cache["backbone_indices"] = np.concatenate(
         [cache["backbone_indices"], np.asarray([[-1, -1, -1]])], axis=0
     )
-    cache["token_attention_mask"] = np.asarray([True, True, True])
+    cache["token_attention_mask"] = np.asarray([True, True, True])  # (3,)
     with pytest.raises(ValueError, match="padded backbone"):
         structure_metrics._ca_coordinates(cache, {"chains": [{"id": "A", "sequence": "AC"}]})

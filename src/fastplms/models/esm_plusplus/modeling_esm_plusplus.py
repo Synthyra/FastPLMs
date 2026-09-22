@@ -6,15 +6,15 @@ import importlib
 import importlib.metadata
 import math
 import os
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import partial
 from typing import Any, ClassVar
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 from einops import rearrange
 from tokenizers import Tokenizer
 from tokenizers.models import BPE
@@ -378,7 +378,7 @@ class RotaryEmbedding(torch.nn.Module):
         inv_freq = self._compute_inv_freq(buffer_device)
         self._clear_cache()
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        arange = torch.arange(0, self.dim, 2, device=buffer_device, dtype=torch.float32)
+        arange = torch.arange(0, self.dim, 2, device=buffer_device, dtype=torch.float32)  # (d / 2,)
         scale = (
             (arange + 0.4 * self.dim) / (1.4 * self.dim) if self.scale_base is not None else None
         )
@@ -446,18 +446,18 @@ class RotaryEmbedding(torch.nn.Module):
         cos_angles = torch.cos(angles)  # (l, d / 2)
         sin_angles = torch.sin(angles)  # (l, d / 2)
         if self.scale is None:
-            self._cos_cached = cos_angles.to(dtype)
-            self._sin_cached = sin_angles.to(dtype)
-            self._cos_full_cached = torch.cat((self._cos_cached, self._cos_cached), dim=-1)
-            self._sin_full_cached = torch.cat((self._sin_cached, self._sin_cached), dim=-1)
+            self._cos_cached = cos_angles.to(dtype)  # (l, d / 2)
+            self._sin_cached = sin_angles.to(dtype)  # (l, d / 2)
+            self._cos_full_cached = torch.cat((self._cos_cached, self._cos_cached), dim=-1)  # (l, d)
+            self._sin_full_cached = torch.cat((self._sin_cached, self._sin_cached), dim=-1)  # (l, d)
             return
 
         centered_positions = (
             torch.arange(seqlen, dtype=self.scale.dtype, device=self.scale.device) - seqlen // 2
-        ) / self.scale_base
-        scale = self.scale ** centered_positions.unsqueeze(-1)
-        self._cos_cached = (cos_angles * scale).to(dtype)
-        self._sin_cached = (sin_angles * scale).to(dtype)
+        ) / self.scale_base  # (l,)
+        scale = self.scale ** centered_positions.unsqueeze(-1)  # (l, d / 2)
+        self._cos_cached = (cos_angles * scale).to(dtype)  # (l, d / 2)
+        self._sin_cached = (sin_angles * scale).to(dtype)  # (l, d / 2)
         self._cos_k_cached = (cos_angles / scale).to(dtype)
         self._sin_k_cached = (sin_angles / scale).to(dtype)
 
@@ -574,12 +574,12 @@ class MultiHeadAttention(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         # x: (b, l, d)
         qkv = self.layernorm_qkv(x)  # (b, l, 3 * d)
-        query_sequence, key_sequence, value_sequence = torch.chunk(qkv, 3, dim=-1)
+        query_sequence, key_sequence, value_sequence = torch.chunk(qkv, 3, dim=-1)  # each (b, l, d)
         query_sequence, key_sequence = (
             self.q_ln(query_sequence).to(query_sequence.dtype),
             self.k_ln(key_sequence).to(query_sequence.dtype),
-        )
-        query_sequence, key_sequence = self._apply_rotary(query_sequence, key_sequence)
+        )  # each (b, l, d)
+        query_sequence, key_sequence = self._apply_rotary(query_sequence, key_sequence)  # each (b, l, d)
         query_heads, key_heads, value_heads = map(
             self.reshaper, (query_sequence, key_sequence, value_sequence)
         )  # each (b, h, l, d_h)
@@ -596,7 +596,7 @@ class MultiHeadAttention(nn.Module):
             flash_padding_layout=flash_padding_layout,
         )
 
-        output = self.out_proj(attn_output)
+        output = self.out_proj(attn_output)  # (b, l, d)
         return output, attn_weights, s_max
 
     def _attn(
@@ -682,9 +682,9 @@ class MultiHeadAttention(nn.Module):
         attention_mask_2d: torch.Tensor | None = None,
         flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, None]:
-        query_tokens = query_heads.transpose(1, 2).contiguous()
-        key_tokens = key_heads.transpose(1, 2).contiguous()
-        value_tokens = value_heads.transpose(1, 2).contiguous()
+        query_tokens = query_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
+        key_tokens = key_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
+        value_tokens = value_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
         attn_output = kernels_flash_attention_func(
             query_states=query_tokens,
             key_states=key_tokens,
@@ -693,8 +693,8 @@ class MultiHeadAttention(nn.Module):
             causal=False,
             implementation=self.attn_backend.value,
             padding_layout=flash_padding_layout,
-        )
-        return rearrange(attn_output, "b s h d -> b s (h d)"), None
+        )  # (b, l, h, d_h)
+        return rearrange(attn_output, "b s h d -> b s (h d)"), None  # (b, l, h * d_h), None
 
     def _flex_attn(
         self,
@@ -1015,11 +1015,11 @@ class TransformerStack(nn.Module):
             # finite without allowing their states to enter residue attention.
             attention_mask_4d = (
                 mask_pattern[:, None, :, None] == mask_pattern[:, None, None, :]
-            )
+            )  # (b, 1, l, l)
         else:
             attention_mask_4d = (
                 mask_pattern.unsqueeze(-1) == mask_pattern.unsqueeze(-2)
-            ).unsqueeze(1)
+            ).unsqueeze(1)  # (b, 1, l, l)
         backend = (
             resolve_attention_backend_for_call(
                 self.attention_backend,
@@ -1837,7 +1837,7 @@ class ESMplusplusForSequenceClassification(ESMplusplusForMaskedLM, EmbeddingMixi
                     inputs_embeds.shape[:2],
                     dtype=torch.bool,
                     device=inputs_embeds.device,
-                )
+                )  # (b, l)
 
         output = super().forward(
             input_ids=input_ids,

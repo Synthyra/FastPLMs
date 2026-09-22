@@ -51,8 +51,9 @@ def natural_lengths(generator: random.Random) -> list[int]:
 
 
 def rotate(states: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    first, second = states.chunk(2, dim=-1)
-    return states * cos + torch.cat((-second, first), dim=-1) * sin
+    # states: (..., tokens, h, d_h); cos/sin: (..., tokens, 1, d_h).
+    first, second = states.chunk(2, dim=-1)  # each (..., tokens, h, d_h / 2)
+    return states * cos + torch.cat((-second, first), dim=-1) * sin  # (..., tokens, h, d_h)
 
 
 class Layer(nn.Module):
@@ -70,12 +71,12 @@ class Layer(nn.Module):
         self, hidden: torch.Tensor, attend: Attend, cos: torch.Tensor, sin: torch.Tensor
     ) -> torch.Tensor:
         # hidden: (..., tokens, width); cos, sin broadcast over heads: (..., tokens, 1, d_h)
-        qkv = self.qkv(self.attention_norm(hidden))
-        q, k, v = qkv.view(*hidden.shape[:-1], 3, self.heads, -1).unbind(-3)
-        attended = attend(rotate(q, cos, sin), rotate(k, cos, sin), v)  # (..., tokens, h, d_h)
-        hidden = hidden + self.out(attended.reshape(hidden.shape))
-        updated: torch.Tensor = hidden + self.down(F.gelu(self.up(self.ffn_norm(hidden))))
-        return updated
+        qkv = self.qkv(self.attention_norm(hidden))  # (..., tokens, 3 * width)
+        Q, K, V = qkv.view(*hidden.shape[:-1], 3, self.heads, -1).unbind(-3)  # each (..., tokens, h, d_h)
+        attended = attend(rotate(Q, cos, sin), rotate(K, cos, sin), V)  # (..., tokens, h, d_h)
+        hidden = hidden + self.out(attended.reshape(hidden.shape))  # (..., tokens, width)
+        updated: torch.Tensor = hidden + self.down(F.gelu(self.up(self.ffn_norm(hidden))))  # (..., tokens, width)
+        return updated  # (..., tokens, width)
 
 
 class Encoder(nn.Module):
@@ -85,18 +86,19 @@ class Encoder(nn.Module):
     def __init__(self, layers: int, width: int, heads: int) -> None:
         super().__init__()
         self.layers = nn.ModuleList(Layer(width, heads) for _ in range(layers))
-        inverse = 1.0 / (10000 ** (torch.arange(0, width // heads, 2).float() / (width // heads)))
+        inverse = 1.0 / (10000 ** (torch.arange(0, width // heads, 2).float() / (width // heads)))  # (d_h / 2,)
         angles = torch.outer(torch.arange(MAX_LENGTH).float(), inverse)  # (l_max, d_h / 2)
-        self.register_buffer("cos", torch.cat((angles, angles), -1).cos()[:, None])
-        self.register_buffer("sin", torch.cat((angles, angles), -1).sin()[:, None])
+        self.register_buffer("cos", torch.cat((angles, angles), -1).cos()[:, None])  # (l_max, 1, d_h)
+        self.register_buffer("sin", torch.cat((angles, angles), -1).sin()[:, None])  # (l_max, 1, d_h)
 
     def run(self, hidden: torch.Tensor, attend: Attend, positions: torch.Tensor) -> torch.Tensor:
+        # hidden: (..., tokens, width); positions: (..., tokens).
         # BF16 tables keep Q and K in the dtype the variable-length kernel accepts.
         cos = self.cos[positions].bfloat16()  # (..., tokens, 1, d_h)
-        sin = self.sin[positions].bfloat16()
+        sin = self.sin[positions].bfloat16()  # (..., tokens, 1, d_h)
         for layer in self.layers:
-            hidden = layer(hidden, attend, cos, sin)
-        return hidden
+            hidden = layer(hidden, attend, cos, sin)  # (..., tokens, width)
+        return hidden  # (..., tokens, width)
 
 
 class Batch:
@@ -105,7 +107,8 @@ class Batch:
     def __init__(self, lengths: list[int], width: int, device: torch.device) -> None:
         self.lengths = lengths
         self.longest = max(lengths)
-        length_column = torch.tensor(lengths, device=device)[:, None]
+        # b proteins; l longest length; t real tokens; d channels.
+        length_column = torch.tensor(lengths, device=device)[:, None]  # (b, 1)
         self.mask = torch.arange(self.longest, device=device)[None] < length_column  # (b, l)
         self.hidden = torch.randn(len(lengths), self.longest, width, device=device)  # (b, l, d)
         self.indices = self.mask.flatten().nonzero().flatten()  # (t,)
@@ -117,51 +120,54 @@ class Batch:
 def sdpa_padded(encoder: Encoder, batch: Batch) -> torch.Tensor:
     key_mask = batch.mask[:, None, None, :]  # (b, 1, 1, l)
 
-    def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        out = F.scaled_dot_product_attention(
-            q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), attn_mask=key_mask
+    def attend(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
+        # Q, K, V: (b, l, h, d_h).
+        out = F.scaled_dot_product_attention(  # (b, h, l, d_h)
+            Q.transpose(1, 2), K.transpose(1, 2), V.transpose(1, 2), attn_mask=key_mask
         )
-        return out.transpose(1, 2)
+        return out.transpose(1, 2)  # (b, l, h, d_h)
 
-    positions = torch.arange(batch.longest, device=batch.hidden.device)
-    return encoder.run(batch.hidden, attend, positions)
+    positions = torch.arange(batch.longest, device=batch.hidden.device)  # (l,)
+    return encoder.run(batch.hidden, attend, positions)  # (b, l, d)
 
 
 def varlen_per_layer(encoder: Encoder, batch: Batch) -> torch.Tensor:
-    def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-        flat = (-1, *q.shape[2:])
-        packed = cast(
+    def attend(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
+        # Q, K, V: (b, l, h, d_h); packed real tokens: (t, h, d_h).
+        flat = (-1, *Q.shape[2:])
+        packed = cast(  # (t, h, d_h)
             torch.Tensor,
             varlen_attn(
-                q.reshape(flat)[batch.indices],
-                k.reshape(flat)[batch.indices],
-                v.reshape(flat)[batch.indices],
+                Q.reshape(flat)[batch.indices],
+                K.reshape(flat)[batch.indices],
+                V.reshape(flat)[batch.indices],
                 batch.cu_seqlens,
                 batch.cu_seqlens,
                 batch.longest,
                 batch.longest,
             ),
         )
-        out = packed.new_zeros(q.shape[0] * q.shape[1], *q.shape[2:])
-        out[batch.indices] = packed
-        return out.view(q.shape)
+        out = packed.new_zeros(Q.shape[0] * Q.shape[1], *Q.shape[2:])  # (b * l, h, d_h)
+        out[batch.indices] = packed  # selected rows: (t, h, d_h)
+        return out.view(Q.shape)  # (b, l, h, d_h)
 
-    positions = torch.arange(batch.longest, device=batch.hidden.device)
-    return encoder.run(batch.hidden, attend, positions)
+    positions = torch.arange(batch.longest, device=batch.hidden.device)  # (l,)
+    return encoder.run(batch.hidden, attend, positions)  # (b, l, d)
 
 
 def varlen_packed(encoder: Encoder, batch: Batch) -> torch.Tensor:
-    def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    def attend(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
+        # Q, K, V and return: (t, h, d_h).
         return cast(
             torch.Tensor,
-            varlen_attn(q, k, v, batch.cu_seqlens, batch.cu_seqlens, batch.longest, batch.longest),
+            varlen_attn(Q, K, V, batch.cu_seqlens, batch.cu_seqlens, batch.longest, batch.longest),
         )
 
     packed = batch.hidden.flatten(0, 1)[batch.indices]  # (t, d)
-    packed = encoder.run(packed, attend, batch.positions)
-    out = packed.new_zeros(batch.hidden.shape[0] * batch.longest, packed.shape[-1])
-    out[batch.indices] = packed
-    return out.view(batch.hidden.shape)
+    packed = encoder.run(packed, attend, batch.positions)  # (t, d)
+    out = packed.new_zeros(batch.hidden.shape[0] * batch.longest, packed.shape[-1])  # (b * l, d)
+    out[batch.indices] = packed  # selected rows: (t, d)
+    return out.view(batch.hidden.shape)  # (b, l, d)
 
 
 class FlexPacked:
@@ -173,12 +179,12 @@ class FlexPacked:
 
     def __call__(self, encoder: Encoder, batch: Batch) -> torch.Tensor:
         device = batch.hidden.device
-        padded_total = -(-batch.total // FLEX_TOTAL_MULTIPLE) * FLEX_TOTAL_MULTIPLE
+        padded_total = -(-batch.total // FLEX_TOTAL_MULTIPLE) * FLEX_TOTAL_MULTIPLE  # t_pad
         torch.cuda.synchronize()
         started = time.perf_counter()
         # Filler tokens get their own document, so no protein attends to them.
-        document = torch.full((padded_total,), len(batch.lengths), device=device)
-        document[: batch.total] = torch.repeat_interleave(
+        document = torch.full((padded_total,), len(batch.lengths), device=device)  # (t_pad,)
+        document[: batch.total] = torch.repeat_interleave(  # selected entries: (t,)
             torch.arange(len(batch.lengths), device=device),
             torch.tensor(batch.lengths, device=device),
         )
@@ -193,20 +199,21 @@ class FlexPacked:
         torch.cuda.synchronize()
         self.mask_seconds.append(time.perf_counter() - started)
 
-        def attend(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
-            out: torch.Tensor = self.compiled(
-                q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), block_mask=block_mask
+        def attend(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
+            # Q, K, V: (1, t_pad, h, d_h).
+            out: torch.Tensor = self.compiled(  # (1, h, t_pad, d_h)
+                Q.transpose(1, 2), K.transpose(1, 2), V.transpose(1, 2), block_mask=block_mask
             )
-            return out.transpose(1, 2)
+            return out.transpose(1, 2)  # (1, t_pad, h, d_h)
 
-        packed = batch.hidden.new_zeros(1, padded_total, batch.hidden.shape[-1])
-        packed[0, : batch.total] = batch.hidden.flatten(0, 1)[batch.indices]
-        positions = torch.zeros(padded_total, dtype=torch.long, device=device)
-        positions[: batch.total] = batch.positions
-        packed = encoder.run(packed, attend, positions[None])
-        out = packed.new_zeros(batch.hidden.shape[0] * batch.longest, packed.shape[-1])
-        out[batch.indices] = packed[0, : batch.total]
-        return out.view(batch.hidden.shape)
+        packed = batch.hidden.new_zeros(1, padded_total, batch.hidden.shape[-1])  # (1, t_pad, d)
+        packed[0, : batch.total] = batch.hidden.flatten(0, 1)[batch.indices]  # (t, d)
+        positions = torch.zeros(padded_total, dtype=torch.long, device=device)  # (t_pad,)
+        positions[: batch.total] = batch.positions  # selected positions: (t,)
+        packed = encoder.run(packed, attend, positions[None])  # (1, t_pad, d)
+        out = packed.new_zeros(batch.hidden.shape[0] * batch.longest, packed.shape[-1])  # (b * l, d)
+        out[batch.indices] = packed[0, : batch.total]  # selected rows: (t, d)
+        return out.view(batch.hidden.shape)  # (b, l, d)
 
 
 Strategy = Callable[[Encoder, Batch], torch.Tensor]
@@ -245,8 +252,8 @@ def probe(name: str, shape: tuple[int, int, int], device: torch.device) -> dict[
             rounds[label].append(seconds_for(strategy, encoder, batches))
 
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-        reference = sdpa_padded(encoder, batches[0])
-        real = batches[0].mask
+        reference = sdpa_padded(encoder, batches[0])  # (b, l, d)
+        real = batches[0].mask  # (b, l)
         deviation = {
             label: float((fn(encoder, batches[0])[real] - reference[real]).abs().max())
             for label, fn in strategies.items()

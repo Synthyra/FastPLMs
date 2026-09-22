@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+
 from pathlib import Path
 
 from fastplms.attention import _kernel_lock

@@ -9,6 +9,7 @@ import sys
 import warnings
 import pytest
 import torch
+
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import version
@@ -26,6 +27,7 @@ import fastplms.attention.interfaces as attention_interfaces  # noqa: E402
 import fastplms.models.ankh.modeling_ankh as ankh_module  # noqa: E402
 import fastplms.models.dplm.modeling_dplm as dplm_module  # noqa: E402
 import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module  # noqa: E402
+
 from fastplms.attention import (  # noqa: E402
     FASTPLMS_ATTENTION_FUNCTIONS,
     FASTPLMS_ATTENTION_MASKS,
@@ -469,7 +471,7 @@ def test_kernels_flash_rejects_fp32_before_loading(
         "_validate_kernels_flash_device",
         lambda *_args: torch.device("cuda"),
     )
-    X = torch.zeros(1, 4, 2, 8, dtype=torch.float32)
+    X = torch.zeros(1, 4, 2, 8, dtype=torch.float32)  # (1, 4, 2, 8)
     with pytest.raises(RuntimeError, match=r"bfloat16.*received float32"):
         _core.kernels_flash_attention_func(X, X, X, implementation="flash_attention_3")
 
@@ -486,9 +488,9 @@ def test_kernels_flash_rejects_mixed_qkv_dtypes_before_loading(
         "_validate_kernels_flash_device",
         lambda *_args: torch.device("cuda"),
     )
-    Q = torch.zeros(1, 4, 2, 8, dtype=torch.bfloat16)
-    K = torch.zeros(1, 4, 2, 8, dtype=torch.float32)
-    V = torch.zeros(1, 4, 2, 8, dtype=torch.bfloat16)
+    Q = torch.zeros(1, 4, 2, 8, dtype=torch.bfloat16)  # (1, 4, 2, 8)
+    K = torch.zeros(1, 4, 2, 8, dtype=torch.float32)  # (1, 4, 2, 8)
+    V = torch.zeros(1, 4, 2, 8, dtype=torch.bfloat16)  # (1, 4, 2, 8)
     with pytest.raises(RuntimeError, match="Q, K, and V to share one dtype"):
         _core.kernels_flash_attention_func(Q, K, V, implementation="flash_attention_3")
 
@@ -500,7 +502,7 @@ def test_kernels_flash_rejects_cpu_bf16_before_loading(
         raise AssertionError("CPU tensors must fail before kernel loading")
 
     monkeypatch.setattr(_core, "_ensure_flash_kernels_loaded", unexpected_load)
-    X = torch.zeros(1, 4, 2, 8, dtype=torch.bfloat16)
+    X = torch.zeros(1, 4, 2, 8, dtype=torch.bfloat16)  # (1, 4, 2, 8)
     with pytest.raises(RuntimeError, match=r"requires CUDA Q, K, and V.*cpu"):
         _core.kernels_flash_attention_func(X, X, X, implementation="flash_attention_2")
 
@@ -512,8 +514,8 @@ def test_kernels_flash_rejects_mixed_devices_before_loading(
         raise AssertionError("mixed devices must fail before kernel loading")
 
     monkeypatch.setattr(_core, "_ensure_flash_kernels_loaded", unexpected_load)
-    Q = torch.zeros(1, 4, 2, 8, dtype=torch.bfloat16)
-    K = torch.empty(1, 4, 2, 8, dtype=torch.bfloat16, device="meta")
+    Q = torch.zeros(1, 4, 2, 8, dtype=torch.bfloat16)  # (1, 4, 2, 8)
+    K = torch.empty(1, 4, 2, 8, dtype=torch.bfloat16, device="meta")  # (1, 4, 2, 8)
     with pytest.raises(RuntimeError, match=r"on one device.*cpu, meta, cpu"):
         _core.kernels_flash_attention_func(Q, K, Q, implementation="flash_attention_3")
 
@@ -545,8 +547,8 @@ def test_causal_masked_flash_uses_varlen_and_zeroes_padding(
             AssertionError("a masked causal call must not use dense FlashAttention")
         ),
     )
-    X = torch.zeros(2, 4, 2, 8, dtype=torch.bfloat16)
-    mask = torch.tensor([[1, 1, 0, 0], [1, 1, 1, 0]], dtype=torch.long)
+    X = torch.zeros(2, 4, 2, 8, dtype=torch.bfloat16)  # (2, 4, 2, 8)
+    mask = torch.tensor([[1, 1, 0, 0], [1, 1, 1, 0]], dtype=torch.long)  # (2, 4)
 
     output = _core.kernels_flash_attention_func(
         X,
@@ -578,7 +580,7 @@ def test_masked_flash_validates_padding_mask_shape_before_kernel_loading(
             AssertionError("invalid masks must fail before kernel loading")
         ),
     )
-    X = torch.zeros(2, 4, 2, 8, dtype=torch.bfloat16)
+    X = torch.zeros(2, 4, 2, 8, dtype=torch.bfloat16)  # (2, 4, 2, 8)
     with pytest.raises(ValueError, match=r"expected \(2, 4\), received \(2, 3\)"):
         _core.kernels_flash_attention_func(
             X,
@@ -792,7 +794,7 @@ def test_esm2_training_rejects_unsupported_attention_dropout(
             attn_backend=implementation,
         )
     )
-    heads = torch.randn(1, 2, 3, 4)
+    heads = torch.randn(1, 2, 3, 4)  # (1, 2, 3, 4)
 
     with pytest.raises(RuntimeError, match=r"inference-only.*dropout.*eager or SDPA"):
         attention._attn(heads, heads, heads)
@@ -843,7 +845,7 @@ def test_dplm_sdpa_uses_attention_dropout_only_during_training(
         )
     )
     attention.train(training)
-    heads = torch.randn(1, 2, 3, 4)
+    heads = torch.randn(1, 2, 3, 4)  # (1, 2, 3, 4)
     observed: dict[str, float] = {}
 
     def fake_sdpa(*args, **kwargs):
@@ -869,7 +871,7 @@ def test_dplm_manual_attention_applies_configured_training_dropout(
         )
     )
     attention.train()
-    heads = torch.randn(1, 2, 3, 4)
+    heads = torch.randn(1, 2, 3, 4)  # (1, 2, 3, 4)
     observed: dict[str, object] = {}
 
     def fake_dropout(tensor, *, p, training):
@@ -898,7 +900,7 @@ def test_dplm_training_rejects_unsupported_attention_dropout(
             attn_backend=implementation,
         )
     )
-    heads = torch.randn(1, 2, 3, 4)
+    heads = torch.randn(1, 2, 3, 4)  # (1, 2, 3, 4)
 
     with pytest.raises(RuntimeError, match=r"inference-only.*dropout.*eager or SDPA"):
         attention._attn(heads, heads, heads)
@@ -917,8 +919,8 @@ def test_dplm_cross_attention_executes_the_requested_supported_backend(
             attn_backend=implementation,
         )
     ).eval()
-    hidden_states = torch.randn(1, 3, 8)
-    encoder_hidden_states = torch.randn(1, 4, 8)
+    hidden_states = torch.randn(1, 3, 8)  # (1, 3, 8)
+    encoder_hidden_states = torch.randn(1, 4, 8)  # (1, 4, 8)
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -942,7 +944,7 @@ def test_dplm_eager_cross_attention_applies_additive_encoder_mask() -> None:
             attn_backend="eager",
         )
     ).eval()
-    additive_mask = torch.tensor([[[[0.0, 0.0, -10_000.0, -10_000.0]]]])
+    additive_mask = torch.tensor([[[[0.0, 0.0, -10_000.0, -10_000.0]]]])  # (1, 1, 1, 4)
 
     output, weights, _ = attention(
         torch.randn(1, 3, 8),
@@ -1217,7 +1219,7 @@ def test_ankh_sdpa_never_mutates_process_global_reduction_policy(
             attn_backend="sdpa",
         )
     )
-    query = torch.randn(1, 2, 3, 4)
+    query = torch.randn(1, 2, 3, 4)  # (1, 2, 3, 4)
     mutations: list[bool] = []
 
     monkeypatch.setattr(
@@ -1257,7 +1259,7 @@ def test_ankh_concurrent_fallback_and_sdpa_keep_backend_and_global_policy(
     ).eval()
     attention = model.encoder.block[0].layer[0].SelfAttention
     configured_backend = attention.attn_backend
-    input_ids = torch.tensor(((2, 3, 1, 0), (4, 1, 0, 0)))
+    input_ids = torch.tensor(((2, 3, 1, 0), (4, 1, 0, 0)))  # (2, 4)
     attention_mask = input_ids.ne(0)
     rendezvous = Barrier(2)
     global_policy_mutations: list[tuple[str, bool]] = []
@@ -1492,7 +1494,7 @@ def test_flex_block_mask_supports_disjoint_valid_spans_and_exact_cache_keys(
     monkeypatch.setattr(_core, "flex_attention", object())
     monkeypatch.setattr(_core, "create_block_mask", fake_create_block_mask)
     _core._flex_block_masks.clear()
-    first_pattern = torch.tensor(((1, 1, 0, 1), (1, 0, 1, 0)), dtype=torch.bool)
+    first_pattern = torch.tensor(((1, 1, 0, 1), (1, 0, 1, 0)), dtype=torch.bool)  # (2, 4)
 
     _, _, first = _core.get_attention_mask(
         _core.AttentionBackend.FLEX_ATTENTION,
@@ -1520,7 +1522,7 @@ def test_flex_block_mask_supports_disjoint_valid_spans_and_exact_cache_keys(
                     first_pattern[batch_index, key_index]
                 )
 
-    second_pattern = torch.tensor(((1, 0, 1, 1), (0, 1, 0, 1)), dtype=torch.bool)
+    second_pattern = torch.tensor(((1, 0, 1, 1), (0, 1, 0, 1)), dtype=torch.bool)  # (2, 4)
     _, _, second = _core.get_attention_mask(
         _core.AttentionBackend.FLEX_ATTENTION,
         batch_size=2,
@@ -1546,8 +1548,8 @@ def test_flex_block_mask_key_separates_equal_bytes_with_different_pattern_dtypes
 
     monkeypatch.setattr(_core, "create_block_mask", fake_create_block_mask)
     _core.clear_flex_attention_caches()
-    boolean_pattern = torch.tensor(((True, False), (False, True)))
-    byte_pattern = boolean_pattern.to(dtype=torch.uint8)
+    boolean_pattern = torch.tensor(((True, False), (False, True)))  # (2, 2)
+    byte_pattern = boolean_pattern.to(dtype=torch.uint8)  # (2, 2)
     assert boolean_pattern.view(torch.uint8).numpy().tobytes() == byte_pattern.numpy().tobytes()
 
     common = {
@@ -1599,7 +1601,7 @@ def test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache(
     )
     boolean_pattern = torch.tensor(
         ((True, True, False, False), (True, False, True, False))
-    )
+    )  # (2, 4)
 
     *_, first = stack._prepare_attention_masks(
         attention_mask=None,
@@ -1633,7 +1635,7 @@ def test_esmplusplus_flex_sequence_masks_share_exact_bounded_cache(
     )
     assert different_dtype is not first
 
-    chain_pattern = torch.tensor(((0, 0, -1, -1), (0, 1, 1, -1)))
+    chain_pattern = torch.tensor(((0, 0, -1, -1), (0, 1, 1, -1)))  # (2, 4)
     *_, chain_mask = stack._prepare_attention_masks(
         attention_mask=None,
         sequence_id=chain_pattern,

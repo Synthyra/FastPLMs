@@ -1,3 +1,5 @@
+"""Atom and residue metadata for sequence-only Boltz2 structure exports."""
+
 from dataclasses import dataclass
 
 
