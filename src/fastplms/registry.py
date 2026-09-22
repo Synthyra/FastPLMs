@@ -106,6 +106,8 @@ _FAMILY_FIELDS = frozenset(
         "reference_container",
         "reference_adapter",
         "attention",
+        "attention_auto_order",
+        "attention_auto_evidence",
         "dtypes",
         "bf16_execution",
         "precisions",
@@ -314,6 +316,8 @@ class AttentionKernelSpec:
     version: int
     expected_variant: str
     dtypes: tuple[DtypeName, ...]
+    # (major, minor) of the oldest CUDA architecture that automatic selection offers this kernel.
+    min_cuda_capability: tuple[int, int] = (8, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -349,6 +353,10 @@ class ModelFamily:
     hub_license_link: str | None = None
     conversion_provenance: str = ""
     backbone_model: str | None = None
+    # Preference order for ``attn_implementation="auto"``. Empty means the family rejects it.
+    attention_auto_order: tuple[str, ...] = ()
+    # Repository path of the measurement that justifies a FlashAttention-first order.
+    attention_auto_evidence: str | None = None
 
     @property
     def auto_map(self) -> Mapping[str, str]:
@@ -817,6 +825,51 @@ def _parse_official_golden(
     return OfficialGolden(metadata=parsed["metadata"], tensors=parsed["tensors"])
 
 
+def _parse_min_cuda_capability(table: Mapping[str, Any], context: str) -> tuple[int, int]:
+    value = table.get("min_cuda_capability", [8, 0])
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or any(isinstance(part, bool) or not isinstance(part, int) or part < 0 for part in value)
+    ):
+        raise RegistryError(
+            f"{context}.min_cuda_capability must be [major, minor] with non-negative integers."
+        )
+    return (value[0], value[1])
+
+
+def _parse_attention_auto_order(
+    table: Mapping[str, Any],
+    attention: tuple[str, ...],
+    context: str,
+) -> tuple[tuple[str, ...], str | None]:
+    """Validate the opt-in automatic preference order and the evidence it cites."""
+    order = _optional_str_list(table, "attention_auto_order", context)
+    evidence = _optional_str(table, "attention_auto_evidence", context)
+    if not order:
+        if evidence is not None:
+            raise RegistryError(f"{context}.attention_auto_evidence requires attention_auto_order.")
+        return (), None
+    if not set(order).issubset(attention):
+        raise RegistryError(f"{context}.attention_auto_order must be a subset of attention.")
+    # The last choice must run on every device and dtype so that a request always resolves.
+    if order[-1] not in {"eager", "sdpa"}:
+        raise RegistryError(f"{context}.attention_auto_order must end in 'eager' or 'sdpa'.")
+    prefers_flash = order[0].startswith("flash_attention")
+    if prefers_flash and evidence is None:
+        raise RegistryError(
+            f"{context}.attention_auto_order prefers {order[0]!r}, so it must cite "
+            "attention_auto_evidence."
+        )
+    if evidence is not None and (
+        not evidence.startswith("docs/evidence/") or ".." in evidence.split("/")
+    ):
+        raise RegistryError(
+            f"{context}.attention_auto_evidence must be a path under docs/evidence/."
+        )
+    return order, evidence
+
+
 def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
     if not isinstance(raw, list) or not raw:
         raise RegistryError("The manifest must contain [[attention_kernels]] entries.")
@@ -837,6 +890,7 @@ def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
                 "version",
                 "expected_variant",
                 "dtypes",
+                "min_cuda_capability",
             }
         )
         _reject_unknown_fields(value, expected_fields, context)
@@ -872,6 +926,7 @@ def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
             version=kernel_version,
             expected_variant=expected_variant,
             dtypes=cast(tuple[DtypeName, ...], dtypes),
+            min_cuda_capability=_parse_min_cuda_capability(value, context),
         )
     if set(kernels) != set(expected_variants):
         raise RegistryError("The manifest must pin both FlashAttention kernel versions.")
@@ -986,6 +1041,9 @@ def _parse_families(
         attention = _require_str_list(value, "attention", context)
         if not set(attention).issubset(_ALLOWED_ATTENTION):
             raise RegistryError(f"Unsupported attention implementation in {context}.")
+        attention_auto_order, attention_auto_evidence = _parse_attention_auto_order(
+            value, attention, context
+        )
         dtypes = _require_str_list(value, "dtypes", context)
         if not set(dtypes).issubset(_ALLOWED_DTYPES):
             raise RegistryError(f"Unsupported dtype in {context}.")
@@ -1129,6 +1187,8 @@ def _parse_families(
             hub_license_link=hub_license_link,
             conversion_provenance=conversion_provenance,
             backbone_model=backbone_model,
+            attention_auto_order=attention_auto_order,
+            attention_auto_evidence=attention_auto_evidence,
         )
     return families
 

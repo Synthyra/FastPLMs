@@ -32,9 +32,11 @@ try:
         AttentionBackend,
         BlockMask,
         FastPLMsAttentionMixin,
+        FlashPaddingLayout,
         _get_flex_attention_fn,
         flex_attention,
         get_attention_mask,
+        get_flash_padding_layout,
         kernels_flash_attention_func,
         resolve_attention_backend,
         resolve_attention_backend_for_call,
@@ -48,9 +50,11 @@ except ModuleNotFoundError as error:
         "EmbeddingMixin",
         "FastPLMsAttentionMixin",
         "FastPLMTestTimeTrainingMixin",
+        "FlashPaddingLayout",
         "_get_flex_attention_fn",
         "flex_attention",
         "get_attention_mask",
+        "get_flash_padding_layout",
         "kernels_flash_attention_func",
         "resolve_attention_backend",
         "resolve_attention_backend_for_call",
@@ -232,6 +236,7 @@ class EsmSelfAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         # hidden_states: (b, l, d); masks: (b, l) and (b, 1, 1, l)
         batch_size, seq_length = hidden_states.shape[:-1]
@@ -257,6 +262,7 @@ class EsmSelfAttention(nn.Module):
             flex_block_mask=flex_block_mask,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            flash_padding_layout=flash_padding_layout,
         )
         return attn_output, attn_weights, s_max  # (b, l, d), optional (b, h, l, l), heads
 
@@ -270,6 +276,7 @@ class EsmSelfAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if output_attentions:
             return self._manual_attn(
@@ -293,7 +300,7 @@ class EsmSelfAttention(nn.Module):
             return attn_output, None, s_max
         if self.attn_backend.is_flash:
             attn_output, attn_weights = self._kernels_flash_attn(
-                query_heads, key_heads, value_heads, attention_mask_2d
+                query_heads, key_heads, value_heads, attention_mask_2d, flash_padding_layout
             )
         elif self.attn_backend == AttentionBackend.FLEX:
             attn_output, attn_weights = self._flex_attn(
@@ -358,6 +365,7 @@ class EsmSelfAttention(nn.Module):
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
         attention_mask_2d: torch.Tensor | None = None,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, None]:
         query_tokens = query_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
         key_tokens = key_heads.transpose(1, 2).contiguous()  # (b, l, h, d_h)
@@ -374,6 +382,7 @@ class EsmSelfAttention(nn.Module):
             causal=False,
             softmax_scale=1.0,
             implementation=self.attn_backend.value,
+            padding_layout=flash_padding_layout,
         )
         return rearrange(attn_output, "b s h d -> b s (h d)"), None  # (b, l, d), None
 
@@ -431,6 +440,7 @@ class EsmAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         # hidden_states: (b, l, d)
         hidden_states_ln = self.LayerNorm(hidden_states)  # (b, l, d)
@@ -441,6 +451,7 @@ class EsmAttention(nn.Module):
             flex_block_mask=flex_block_mask,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            flash_padding_layout=flash_padding_layout,
         )
         attention_output = self.output(attn_output, hidden_states)  # (b, l, d)
         return attention_output, attn_weights, s_max  # (b, l, d), optional weights, heads
@@ -464,6 +475,7 @@ class EsmLayer(nn.Module):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         attention_output, attn_weights, s_max = self.attention(  # (b, l, d), weights, heads
             hidden_states,
@@ -472,6 +484,7 @@ class EsmLayer(nn.Module):
             flex_block_mask=flex_block_mask,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            flash_padding_layout=flash_padding_layout,
         )
         layer_output = self.feed_forward_chunk(attention_output)  # (b, l, d)
         return layer_output, attn_weights, s_max  # (b, l, d), weights, heads
@@ -519,6 +532,7 @@ class EsmEncoder(nn.Module):
             dtype=hidden_states.dtype,
             mask_semantics="padding",
         )
+        flash_padding_layout = get_flash_padding_layout(effective_backend, attention_mask_2d)
 
         for layer_module in self.layer:
             if output_hidden_states:
@@ -534,6 +548,7 @@ class EsmEncoder(nn.Module):
                     flex_block_mask,
                     output_attentions,
                     output_s_max,
+                    flash_padding_layout,
                 )
             else:
                 hidden_states, attn_weights, s_max = layer_module(  # (b, l, d), weights, heads
@@ -543,6 +558,7 @@ class EsmEncoder(nn.Module):
                     flex_block_mask=flex_block_mask,
                     output_attentions=output_attentions,
                     output_s_max=output_s_max,
+                    flash_padding_layout=flash_padding_layout,
                 )
 
             if all_attentions is not None:
@@ -584,6 +600,7 @@ class FastEsmPreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
         "flash_attention_2",
         "flash_attention_3",
     )
+    _fastplms_attention_auto_order = ("sdpa",)
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):

@@ -1,0 +1,1368 @@
+{
+  "description": "ESMFold2 single-chain folding cost by protein length. Each series ran in its own process on one worker, so ratios between series of one run are within-run. Sequences are fixed pseudo-random proteins; timings are medians of end-to-end infer_protein calls after a shortened warm-up fold at the same length. Points marked single_pass timed one instrumented fold without a warm-up.",
+  "run": "20260921T185614-fold-bench-3c16d294",
+  "extension_runs": [
+    "20260921T183419-fold-bench-long-1563df15"
+  ],
+  "cross_run_anchors": [
+    {
+      "label": "fastplms-esmfold2_300-windowed-unchunked",
+      "length": 1024,
+      "sweep_seconds": 10.431713275999982,
+      "extension_seconds": 10.5061530335
+    },
+    {
+      "label": "fastplms-esmfold2_600-windowed-unchunked",
+      "length": 1024,
+      "sweep_seconds": 10.414504541500037,
+      "extension_seconds": 10.492259121500012
+    },
+    {
+      "label": "fastplms-esmfold2-windowed-unchunked",
+      "length": 1024,
+      "sweep_seconds": 23.20849866900005,
+      "extension_seconds": 23.286405584999997
+    }
+  ],
+  "source": {
+    "revision": "d9a23718713905dd907add3d7b7a85d6e8e49f23",
+    "dirty": true,
+    "changed_paths": 113
+  },
+  "baseline_revision": "d9a23718713905dd907add3d7b7a85d6e8e49f23",
+  "environment": {
+    "python": "3.12.10",
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.36",
+    "torch": "2.13.0+cu130",
+    "transformers": "5.13.0",
+    "cuda": "13.0",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "compute_capability": [
+      9,
+      0
+    ]
+  },
+  "series": [
+    {
+      "status": "ok",
+      "label": "upstream-esmfold2",
+      "implementation": "upstream",
+      "repo": "biohub/ESMFold2",
+      "revision": "1ebf0e3481a5184eb6171d40615c79e384b48796",
+      "atom_attention": "dense",
+      "chunk_size": "default",
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 18.629620919,
+      "weights_bytes": 13735270400,
+      "lengths": [
+        {
+          "length": 64,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.0083784199999997,
+            0.9603611819999998
+          ],
+          "median_seconds": 0.9843698009999997,
+          "residues_per_second": 65.01621640056796,
+          "static_bytes": 13769562112,
+          "peak_allocated_bytes": 13938508800,
+          "peak_reserved_bytes": 14159970304,
+          "phase_seconds": {
+            "language_model": 0.07489373016357422,
+            "trunk_loop": 0.20049398803710938,
+            "coda": 0.0016886080503463745,
+            "diffusion_sampling": 0.5922059326171875,
+            "confidence": 0.006079328060150146
+          }
+        },
+        {
+          "length": 128,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.071956686,
+            1.005823980999999
+          ],
+          "median_seconds": 1.0388903334999995,
+          "residues_per_second": 123.20838482419094,
+          "static_bytes": 13770217472,
+          "peak_allocated_bytes": 14121550848,
+          "peak_reserved_bytes": 14382268416,
+          "phase_seconds": {
+            "language_model": 0.05851913452148438,
+            "trunk_loop": 0.32276666259765624,
+            "coda": 0.003011199951171875,
+            "diffusion_sampling": 0.7449805297851563,
+            "confidence": 0.009217120170593262
+          }
+        },
+        {
+          "length": 256,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.956608414999998,
+            1.8964862119999992
+          ],
+          "median_seconds": 1.9265473134999986,
+          "residues_per_second": 132.88020398259488,
+          "static_bytes": 13771528192,
+          "peak_allocated_bytes": 14851446272,
+          "peak_reserved_bytes": 15235809280,
+          "phase_seconds": {
+            "language_model": 0.057603809356689455,
+            "trunk_loop": 1.167335205078125,
+            "coda": 0.01027132797241211,
+            "diffusion_sampling": 0.5702406616210938,
+            "confidence": 0.022849311828613283
+          }
+        },
+        {
+          "length": 384,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            3.910120091000003,
+            3.8345405530000036
+          ],
+          "median_seconds": 3.8723303220000034,
+          "residues_per_second": 99.16509390182124,
+          "static_bytes": 13772838912,
+          "peak_allocated_bytes": 16198520320,
+          "peak_reserved_bytes": 16647192576,
+          "phase_seconds": {
+            "language_model": 0.07791340637207031,
+            "trunk_loop": 2.98266748046875,
+            "coda": 0.02640239906311035,
+            "diffusion_sampling": 0.623266845703125,
+            "confidence": 0.05666860961914062
+          }
+        },
+        {
+          "length": 512,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            7.862338969999996,
+            7.825847536999987
+          ],
+          "median_seconds": 7.844093253499992,
+          "residues_per_second": 65.27204400222402,
+          "static_bytes": 13774149632,
+          "peak_allocated_bytes": 18082438656,
+          "peak_reserved_bytes": 18847105024,
+          "phase_seconds": {
+            "language_model": 0.055266849517822264,
+            "trunk_loop": 6.68284130859375,
+            "coda": 0.0592789421081543,
+            "diffusion_sampling": 0.79095361328125,
+            "confidence": 0.12472649383544922
+          }
+        },
+        {
+          "length": 768,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            37.13839046799998,
+            37.068903696999996
+          ],
+          "median_seconds": 37.10364708249999,
+          "residues_per_second": 20.69877385078484,
+          "static_bytes": 13776771072,
+          "peak_allocated_bytes": 23463890944,
+          "peak_reserved_bytes": 24582815744,
+          "phase_seconds": {
+            "language_model": 0.05805660629272461,
+            "trunk_loop": 34.3865,
+            "coda": 0.30621762084960935,
+            "diffusion_sampling": 1.5129910888671876,
+            "confidence": 0.6258532104492187
+          }
+        },
+        {
+          "length": 1024,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            87.135237695,
+            87.176630096
+          ],
+          "median_seconds": 87.1559338955,
+          "residues_per_second": 11.749056595822568,
+          "static_bytes": 13779392512,
+          "peak_allocated_bytes": 30994826752,
+          "peak_reserved_bytes": 34116468736,
+          "phase_seconds": {
+            "language_model": 0.06138198471069336,
+            "trunk_loop": 82.1973984375,
+            "coda": 0.7319942016601563,
+            "diffusion_sampling": 2.442093017578125,
+            "confidence": 1.4887479248046875
+          }
+        },
+        {
+          "length": 2048,
+          "status": "out_of_memory",
+          "run": "20260921T183419-fold-bench-long-1563df15"
+        }
+      ]
+    },
+    {
+      "status": "ok",
+      "label": "fastplms-baseline-esmfold2",
+      "implementation": "fastplms",
+      "repo": "Synthyra/ESMFold2",
+      "revision": "cd5a0927cec585a778d983b99a8db23d2e9b281e",
+      "atom_attention": "dense",
+      "chunk_size": "default",
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1,
+        "max_inference_sigma": 256.0
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 18.013334965000013,
+      "weights_bytes": 13748721152,
+      "lengths": [
+        {
+          "length": 256,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            2.011839387000009,
+            1.8825064610000481
+          ],
+          "median_seconds": 1.9471729240000286,
+          "residues_per_second": 131.4726580493455,
+          "static_bytes": 13784978944,
+          "peak_allocated_bytes": 15049073664,
+          "peak_reserved_bytes": 15428747264,
+          "phase_seconds": {
+            "language_model": 0.05626291275024414,
+            "trunk_loop": 1.1529984130859374,
+            "coda": 0.010191840171813965,
+            "diffusion_sampling": 0.5415770263671875,
+            "confidence": 0.022584447860717772
+          }
+        },
+        {
+          "length": 768,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            37.15081153400001,
+            37.04223192199993
+          ],
+          "median_seconds": 37.09652172799997,
+          "residues_per_second": 20.702749590140783,
+          "static_bytes": 13790221824,
+          "peak_allocated_bytes": 23661518336,
+          "peak_reserved_bytes": 24784142336,
+          "phase_seconds": {
+            "language_model": 0.055128990173339845,
+            "trunk_loop": 34.37065234375,
+            "coda": 0.30583062744140627,
+            "diffusion_sampling": 1.5047943115234375,
+            "confidence": 0.6250010986328125
+          }
+        }
+      ]
+    },
+    {
+      "status": "ok",
+      "label": "fastplms-esmfold2-dense",
+      "implementation": "fastplms",
+      "repo": "Synthyra/ESMFold2",
+      "revision": "cd5a0927cec585a778d983b99a8db23d2e9b281e",
+      "atom_attention": "dense",
+      "chunk_size": "default",
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1,
+        "max_inference_sigma": 256.0
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 11.044045188000041,
+      "weights_bytes": 13748721152,
+      "lengths": [
+        {
+          "length": 64,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.9657343290000426,
+            0.7973941679999825
+          ],
+          "median_seconds": 0.8815642485000126,
+          "residues_per_second": 72.59822538050565,
+          "static_bytes": 13784405504,
+          "peak_allocated_bytes": 14032966144,
+          "peak_reserved_bytes": 14334033920,
+          "phase_seconds": {
+            "language_model": 0.04882313537597656,
+            "trunk_loop": 0.18154421997070314,
+            "coda": 0.0017572159767150878,
+            "diffusion_sampling": 0.530906494140625,
+            "confidence": 0.0061595520973205566
+          }
+        },
+        {
+          "length": 128,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.9665178120000064,
+            0.8689660069999263
+          ],
+          "median_seconds": 0.9177419094999664,
+          "residues_per_second": 139.4727631755872,
+          "static_bytes": 13786371584,
+          "peak_allocated_bytes": 14191954944,
+          "peak_reserved_bytes": 14531166208,
+          "phase_seconds": {
+            "language_model": 0.05095990371704102,
+            "trunk_loop": 0.2574705810546875,
+            "coda": 0.002249824047088623,
+            "diffusion_sampling": 0.5400426025390626,
+            "confidence": 0.007429599761962891
+          }
+        },
+        {
+          "length": 256,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.7966380599999638,
+            1.7650913479999417
+          ],
+          "median_seconds": 1.7808647039999528,
+          "residues_per_second": 143.75039239365304,
+          "static_bytes": 13790303744,
+          "peak_allocated_bytes": 14852314624,
+          "peak_reserved_bytes": 15233712128,
+          "phase_seconds": {
+            "language_model": 0.048465248107910155,
+            "trunk_loop": 1.091849365234375,
+            "coda": 0.009639712333679199,
+            "diffusion_sampling": 0.5182341918945312,
+            "confidence": 0.021552896499633788
+          }
+        },
+        {
+          "length": 384,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            3.5549717629999122,
+            3.458440405000033
+          ],
+          "median_seconds": 3.5067060839999726,
+          "residues_per_second": 109.50447251683697,
+          "static_bytes": 13794235904,
+          "peak_allocated_bytes": 15949531136,
+          "peak_reserved_bytes": 16548626432,
+          "phase_seconds": {
+            "language_model": 0.049557247161865235,
+            "trunk_loop": 2.7336240234375,
+            "coda": 0.024154848098754882,
+            "diffusion_sampling": 0.4907654724121094,
+            "confidence": 0.05210950469970703
+          }
+        },
+        {
+          "length": 512,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            7.2881051499999785,
+            6.969440504999966
+          ],
+          "median_seconds": 7.128772827499972,
+          "residues_per_second": 71.82161816475727,
+          "static_bytes": 13798168064,
+          "peak_allocated_bytes": 17482633728,
+          "peak_reserved_bytes": 18777899008,
+          "phase_seconds": {
+            "language_model": 0.048401985168457035,
+            "trunk_loop": 6.10298974609375,
+            "coda": 0.0540431022644043,
+            "diffusion_sampling": 0.54375830078125,
+            "confidence": 0.11458467102050782
+          }
+        },
+        {
+          "length": 768,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            34.480820896999944,
+            34.49123251200001
+          ],
+          "median_seconds": 34.48602670449998,
+          "residues_per_second": 22.269889383916357,
+          "static_bytes": 13806032384,
+          "peak_allocated_bytes": 21859579392,
+          "peak_reserved_bytes": 24196939776,
+          "phase_seconds": {
+            "language_model": 0.05808579254150391,
+            "trunk_loop": 32.4308515625,
+            "coda": 0.2882565612792969,
+            "diffusion_sampling": 1.0045828857421875,
+            "confidence": 0.5897864990234375
+          }
+        },
+        {
+          "length": 1024,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            81.37166200500008,
+            81.31792861200006
+          ],
+          "median_seconds": 81.34479530850007,
+          "residues_per_second": 12.588389903945064,
+          "static_bytes": 13813896704,
+          "peak_allocated_bytes": 27982176256,
+          "peak_reserved_bytes": 33265025024,
+          "phase_seconds": {
+            "language_model": 0.05309692764282226,
+            "trunk_loop": 77.4153984375,
+            "coda": 0.6897422485351562,
+            "diffusion_sampling": 1.5190911865234376,
+            "confidence": 1.4023331298828126
+          }
+        },
+        {
+          "length": 2048,
+          "status": "ok",
+          "single_pass": true,
+          "seconds": [
+            595.915410886
+          ],
+          "median_seconds": 595.915410886,
+          "residues_per_second": 3.4367293790154845,
+          "static_bytes": 13748721152,
+          "peak_allocated_bytes": 69930544128,
+          "peak_reserved_bytes": 75814141952,
+          "phase_seconds": {
+            "language_model": 0.36826739501953126,
+            "trunk_loop": 574.5386875,
+            "coda": 5.11341943359375,
+            "diffusion_sampling": 4.49510107421875,
+            "confidence": 10.321755859375
+          },
+          "run": "20260921T183419-fold-bench-long-1563df15"
+        }
+      ],
+      "atom_attention_comparison": [
+        {
+          "protein": "ubiquitin",
+          "length": 76,
+          "rmsd_dense_seed0_vs_windowed_seed0": 0.3208394307880574,
+          "rmsd_dense_seed0_vs_dense_seed1": 1.216772090332296,
+          "rmsd_windowed_seed0_vs_windowed_seed1": 0.9819202303064112,
+          "mean_plddt_dense_seed0": 0.8124094605445862,
+          "mean_plddt_dense_seed1": 0.8107101917266846,
+          "mean_plddt_windowed_seed0": 0.803772509098053,
+          "mean_plddt_windowed_seed1": 0.7999487519264221
+        },
+        {
+          "protein": "t4_lysozyme",
+          "length": 163,
+          "rmsd_dense_seed0_vs_windowed_seed0": 0.6114353814051593,
+          "rmsd_dense_seed0_vs_dense_seed1": 0.6015516484673378,
+          "rmsd_windowed_seed0_vs_windowed_seed1": 0.3263962672200549,
+          "mean_plddt_dense_seed0": 0.930585503578186,
+          "mean_plddt_dense_seed1": 0.9296666979789734,
+          "mean_plddt_windowed_seed0": 0.9381417632102966,
+          "mean_plddt_windowed_seed1": 0.9380736351013184
+        },
+        {
+          "protein": "gfp",
+          "length": 238,
+          "rmsd_dense_seed0_vs_windowed_seed0": 5.9505474365870095,
+          "rmsd_dense_seed0_vs_dense_seed1": 4.696364385315897,
+          "rmsd_windowed_seed0_vs_windowed_seed1": 7.889492396414811,
+          "mean_plddt_dense_seed0": 0.3821070194244385,
+          "mean_plddt_dense_seed1": 0.3695257604122162,
+          "mean_plddt_windowed_seed0": 0.4841562807559967,
+          "mean_plddt_windowed_seed1": 0.35728350281715393
+        }
+      ]
+    },
+    {
+      "status": "ok",
+      "label": "fastplms-esmfold2-windowed-unchunked",
+      "implementation": "fastplms",
+      "repo": "Synthyra/ESMFold2",
+      "revision": "cd5a0927cec585a778d983b99a8db23d2e9b281e",
+      "atom_attention": "windowed",
+      "chunk_size": null,
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1,
+        "max_inference_sigma": 256.0
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 9.853451923999955,
+      "weights_bytes": 13748721152,
+      "lengths": [
+        {
+          "length": 64,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.8188809680000304,
+            0.7845365779999156
+          ],
+          "median_seconds": 0.801708772999973,
+          "residues_per_second": 79.82948691020768,
+          "static_bytes": 13784405504,
+          "peak_allocated_bytes": 14032966144,
+          "peak_reserved_bytes": 14313062400,
+          "phase_seconds": {
+            "language_model": 0.04972822570800781,
+            "trunk_loop": 0.17335929870605468,
+            "coda": 0.0017474240064620972,
+            "diffusion_sampling": 0.5248321533203125,
+            "confidence": 0.0058306241035461425
+          }
+        },
+        {
+          "length": 128,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.9278618579999147,
+            0.8470659870001782
+          ],
+          "median_seconds": 0.8874639225000465,
+          "residues_per_second": 144.2312152131382,
+          "static_bytes": 13786371584,
+          "peak_allocated_bytes": 14225968128,
+          "peak_reserved_bytes": 14535360512,
+          "phase_seconds": {
+            "language_model": 0.05098403167724609,
+            "trunk_loop": 0.2394185028076172,
+            "coda": 0.002099488019943237,
+            "diffusion_sampling": 0.6042045288085938,
+            "confidence": 0.006651391983032226
+          }
+        },
+        {
+          "length": 256,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.6183939489999375,
+            1.5419953190000797
+          ],
+          "median_seconds": 1.5801946340000086,
+          "residues_per_second": 162.00535965115714,
+          "static_bytes": 13790303744,
+          "peak_allocated_bytes": 14986532352,
+          "peak_reserved_bytes": 15416164352,
+          "phase_seconds": {
+            "language_model": 0.04902268981933594,
+            "trunk_loop": 0.9001454467773438,
+            "coda": 0.007953951835632325,
+            "diffusion_sampling": 0.4931875915527344,
+            "confidence": 0.01802406311035156
+          }
+        },
+        {
+          "length": 384,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            2.7209397610001815,
+            2.709024745999841
+          ],
+          "median_seconds": 2.714982253500011,
+          "residues_per_second": 141.43738858880846,
+          "static_bytes": 13794235904,
+          "peak_allocated_bytes": 16251521024,
+          "peak_reserved_bytes": 17165189120,
+          "phase_seconds": {
+            "language_model": 0.05094985580444336,
+            "trunk_loop": 1.9890665283203126,
+            "coda": 0.01752332878112793,
+            "diffusion_sampling": 0.49900341796875,
+            "confidence": 0.038655136108398436
+          }
+        },
+        {
+          "length": 512,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            4.4625172559999555,
+            4.477478787000109
+          ],
+          "median_seconds": 4.469998021500032,
+          "residues_per_second": 114.54143772264672,
+          "static_bytes": 13798168064,
+          "peak_allocated_bytes": 18019504640,
+          "peak_reserved_bytes": 19342032896,
+          "phase_seconds": {
+            "language_model": 0.050283775329589844,
+            "trunk_loop": 3.664196533203125,
+            "coda": 0.032274463653564456,
+            "diffusion_sampling": 0.5195702514648437,
+            "confidence": 0.07032755279541016
+          }
+        },
+        {
+          "length": 768,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            12.328751688000011,
+            12.310818439000059
+          ],
+          "median_seconds": 12.319785063500035,
+          "residues_per_second": 62.3387499084998,
+          "static_bytes": 13806032384,
+          "peak_allocated_bytes": 23067538944,
+          "peak_reserved_bytes": 26067599360,
+          "phase_seconds": {
+            "language_model": 0.05393721771240234,
+            "trunk_loop": 11.0007041015625,
+            "coda": 0.097257568359375,
+            "diffusion_sampling": 0.79142236328125,
+            "confidence": 0.20639231872558594
+          }
+        },
+        {
+          "length": 1024,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            23.237809596000034,
+            23.179187742000067
+          ],
+          "median_seconds": 23.20849866900005,
+          "residues_per_second": 44.12176826275164,
+          "static_bytes": 13813896704,
+          "peak_allocated_bytes": 30129659904,
+          "peak_reserved_bytes": 36628856832,
+          "phase_seconds": {
+            "language_model": 0.05392272186279297,
+            "trunk_loop": 21.192814453125,
+            "coda": 0.18725523376464845,
+            "diffusion_sampling": 1.147546630859375,
+            "confidence": 0.39527276611328127
+          }
+        },
+        {
+          "length": 2048,
+          "status": "out_of_memory",
+          "run": "20260921T183419-fold-bench-long-1563df15"
+        }
+      ]
+    },
+    {
+      "status": "ok",
+      "label": "fastplms-esmfold2_600-dense",
+      "implementation": "fastplms",
+      "repo": "Synthyra/ESMFold2-600",
+      "revision": "71c67d0b2b73dc245ea7c3cc0d0476439a882d08",
+      "atom_attention": "dense",
+      "chunk_size": "default",
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1,
+        "max_inference_sigma": 256.0
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 6.9947806969998965,
+      "weights_bytes": 1865217024,
+      "lengths": [
+        {
+          "length": 64,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.7016087320000679,
+            0.6587904470000012
+          ],
+          "median_seconds": 0.6801995895000346,
+          "residues_per_second": 94.09003032042664,
+          "static_bytes": 1899729920,
+          "peak_allocated_bytes": 2036980224,
+          "peak_reserved_bytes": 2206203904,
+          "phase_seconds": {
+            "language_model": 0.02415123176574707,
+            "diffusion_sampling": 0.5501965942382813
+          }
+        },
+        {
+          "length": 128,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.7458731169999737,
+            0.6927949639998587
+          ],
+          "median_seconds": 0.7193340404999162,
+          "residues_per_second": 177.94236445566196,
+          "static_bytes": 1900614656,
+          "peak_allocated_bytes": 2155123200,
+          "peak_reserved_bytes": 2411724800,
+          "phase_seconds": {
+            "language_model": 0.021915231704711914,
+            "diffusion_sampling": 0.5381033935546875
+          }
+        },
+        {
+          "length": 256,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.098738529000002,
+            1.065803411999923
+          ],
+          "median_seconds": 1.0822709704999625,
+          "residues_per_second": 236.5396531718291,
+          "static_bytes": 1902384128,
+          "peak_allocated_bytes": 2707392000,
+          "peak_reserved_bytes": 3036676096,
+          "phase_seconds": {
+            "language_model": 0.02371014404296875,
+            "diffusion_sampling": 0.5426353759765625
+          }
+        },
+        {
+          "length": 384,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.7969696520001435,
+            1.7889586430001145
+          ],
+          "median_seconds": 1.792964147500129,
+          "residues_per_second": 214.17048441007512,
+          "static_bytes": 1904153600,
+          "peak_allocated_bytes": 3676087296,
+          "peak_reserved_bytes": 4192206848,
+          "phase_seconds": {
+            "language_model": 0.02372115135192871,
+            "diffusion_sampling": 0.5051408386230469
+          }
+        },
+        {
+          "length": 512,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            3.290321838999944,
+            3.293323409999857
+          ],
+          "median_seconds": 3.2918226244999005,
+          "residues_per_second": 155.53693452051778,
+          "static_bytes": 1905923072,
+          "peak_allocated_bytes": 5023321088,
+          "peak_reserved_bytes": 5742002176,
+          "phase_seconds": {
+            "language_model": 0.02417215919494629,
+            "diffusion_sampling": 0.5661536254882813
+          }
+        },
+        {
+          "length": 768,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            15.059345113000063,
+            15.043336095999848
+          ],
+          "median_seconds": 15.051340604499956,
+          "residues_per_second": 51.02535516141254,
+          "static_bytes": 1909462016,
+          "peak_allocated_bytes": 8853486080,
+          "peak_reserved_bytes": 10250878976,
+          "phase_seconds": {
+            "language_model": 0.02294745635986328,
+            "diffusion_sampling": 1.013615478515625
+          }
+        },
+        {
+          "length": 1024,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            34.97215388200016,
+            34.99143281800002
+          ],
+          "median_seconds": 34.98179335000009,
+          "residues_per_second": 29.27237005131978,
+          "static_bytes": 1913000960,
+          "peak_allocated_bytes": 14192117248,
+          "peak_reserved_bytes": 16519266304,
+          "phase_seconds": {
+            "language_model": 0.025216768264770508,
+            "diffusion_sampling": 1.563876220703125
+          }
+        }
+      ]
+    },
+    {
+      "status": "ok",
+      "label": "fastplms-esmfold2_600-windowed-unchunked",
+      "implementation": "fastplms",
+      "repo": "Synthyra/ESMFold2-600",
+      "revision": "71c67d0b2b73dc245ea7c3cc0d0476439a882d08",
+      "atom_attention": "windowed",
+      "chunk_size": null,
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1,
+        "max_inference_sigma": 256.0
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 6.372647376000032,
+      "weights_bytes": 1865217024,
+      "lengths": [
+        {
+          "length": 64,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.7428003889999673,
+            0.6548344519999318
+          ],
+          "median_seconds": 0.6988174204999495,
+          "residues_per_second": 91.58329217696516,
+          "static_bytes": 1899729920,
+          "peak_allocated_bytes": 2036980224,
+          "peak_reserved_bytes": 2206203904,
+          "phase_seconds": {
+            "language_model": 0.02435980796813965,
+            "diffusion_sampling": 0.5571863403320313
+          }
+        },
+        {
+          "length": 128,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.7864776320000146,
+            0.7240929560000495
+          ],
+          "median_seconds": 0.7552852940000321,
+          "residues_per_second": 169.4723848283938,
+          "static_bytes": 1900614656,
+          "peak_allocated_bytes": 2188677632,
+          "peak_reserved_bytes": 2449473536,
+          "phase_seconds": {
+            "language_model": 0.02387763214111328,
+            "diffusion_sampling": 0.5618558349609375
+          }
+        },
+        {
+          "length": 256,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.019667416999937,
+            0.9980335860000196
+          ],
+          "median_seconds": 1.0088505014999782,
+          "residues_per_second": 253.75414852782876,
+          "static_bytes": 1902384128,
+          "peak_allocated_bytes": 2768652800,
+          "peak_reserved_bytes": 3170893824,
+          "phase_seconds": {
+            "language_model": 0.023146528244018555,
+            "diffusion_sampling": 0.5512258911132812
+          }
+        },
+        {
+          "length": 384,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.47924639200005,
+            1.482770470999867
+          ],
+          "median_seconds": 1.4810084314999585,
+          "residues_per_second": 259.2827912607402,
+          "static_bytes": 1904153600,
+          "peak_allocated_bytes": 3717392896,
+          "peak_reserved_bytes": 4498391040,
+          "phase_seconds": {
+            "language_model": 0.022691808700561523,
+            "diffusion_sampling": 0.5237606201171875
+          }
+        },
+        {
+          "length": 512,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            2.224953891999803,
+            2.2161634750000303
+          ],
+          "median_seconds": 2.2205586834999167,
+          "residues_per_second": 230.57260490545337,
+          "static_bytes": 1905923072,
+          "peak_allocated_bytes": 5035237888,
+          "peak_reserved_bytes": 6259998720,
+          "phase_seconds": {
+            "language_model": 0.023932607650756835,
+            "diffusion_sampling": 0.54321337890625
+          }
+        },
+        {
+          "length": 768,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            5.664368687999968,
+            5.679573061999918
+          ],
+          "median_seconds": 5.671970874999943,
+          "residues_per_second": 135.40266988765308,
+          "static_bytes": 1909462016,
+          "peak_allocated_bytes": 8853486080,
+          "peak_reserved_bytes": 10913579008,
+          "phase_seconds": {
+            "language_model": 0.024333183288574218,
+            "diffusion_sampling": 0.8087135620117187
+          }
+        },
+        {
+          "length": 1024,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            10.413966555000115,
+            10.415042527999958
+          ],
+          "median_seconds": 10.414504541500037,
+          "residues_per_second": 98.32440860912139,
+          "static_bytes": 1913000960,
+          "peak_allocated_bytes": 14192117248,
+          "peak_reserved_bytes": 17714642944,
+          "phase_seconds": {
+            "language_model": 0.02415830421447754,
+            "diffusion_sampling": 1.183564697265625
+          }
+        },
+        {
+          "length": 2048,
+          "status": "ok",
+          "single_pass": true,
+          "seconds": [
+            40.206578415999985
+          ],
+          "median_seconds": 40.206578415999985,
+          "residues_per_second": 50.93693819977006,
+          "static_bytes": 1913000960,
+          "peak_allocated_bytes": 50660635648,
+          "peak_reserved_bytes": 64506298368,
+          "phase_seconds": {
+            "language_model": 0.10570486450195313,
+            "diffusion_sampling": 3.255398193359375
+          },
+          "run": "20260921T183419-fold-bench-long-1563df15"
+        }
+      ]
+    },
+    {
+      "status": "ok",
+      "label": "fastplms-esmfold2_300-dense",
+      "implementation": "fastplms",
+      "repo": "Synthyra/ESMFold2-300",
+      "revision": "a38a62ae930d157484b331c2bf4241684573adba",
+      "atom_attention": "dense",
+      "chunk_size": "default",
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1,
+        "max_inference_sigma": 256.0
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 6.573876259000144,
+      "weights_bytes": 1378536448,
+      "lengths": [
+        {
+          "length": 64,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.7535146559998793,
+            0.6345819569999094
+          ],
+          "median_seconds": 0.6940483064998944,
+          "residues_per_second": 92.21260163107932,
+          "static_bytes": 1412889600,
+          "peak_allocated_bytes": 1547829760,
+          "peak_reserved_bytes": 1581252608,
+          "phase_seconds": {
+            "language_model": 0.019536479949951172,
+            "diffusion_sampling": 0.5338244018554688
+          }
+        },
+        {
+          "length": 128,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.7807706700000381,
+            0.701068209999903
+          ],
+          "median_seconds": 0.7409194399999706,
+          "residues_per_second": 172.75832309111107,
+          "static_bytes": 1413626880,
+          "peak_allocated_bytes": 1661965824,
+          "peak_reserved_bytes": 1728053248,
+          "phase_seconds": {
+            "language_model": 0.019897056579589845,
+            "diffusion_sampling": 0.5320398559570313
+          }
+        },
+        {
+          "length": 256,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.1100021480001487,
+            1.042940205999912
+          ],
+          "median_seconds": 1.0764711770000304,
+          "residues_per_second": 237.8140775802609,
+          "static_bytes": 1415101440,
+          "peak_allocated_bytes": 2207017472,
+          "peak_reserved_bytes": 2405433344,
+          "phase_seconds": {
+            "language_model": 0.019480319976806642,
+            "diffusion_sampling": 0.5430467529296875
+          }
+        },
+        {
+          "length": 384,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.8271232500001133,
+            1.7807516580000993
+          ],
+          "median_seconds": 1.8039374540001063,
+          "residues_per_second": 212.8676906998669,
+          "static_bytes": 1416576000,
+          "peak_allocated_bytes": 3168734208,
+          "peak_reserved_bytes": 3558866944,
+          "phase_seconds": {
+            "language_model": 0.019923871994018554,
+            "diffusion_sampling": 0.533782958984375
+          }
+        },
+        {
+          "length": 512,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            3.30649111799994,
+            3.2998979379999582
+          ],
+          "median_seconds": 3.303194527999949,
+          "residues_per_second": 155.0014677185878,
+          "static_bytes": 1418050560,
+          "peak_allocated_bytes": 4509103104,
+          "peak_reserved_bytes": 5108662272,
+          "phase_seconds": {
+            "language_model": 0.02090870475769043,
+            "diffusion_sampling": 0.5689089965820312
+          }
+        },
+        {
+          "length": 768,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            15.061311480999848,
+            15.059881068999857
+          ],
+          "median_seconds": 15.060596274999853,
+          "residues_per_second": 50.99399691596922,
+          "static_bytes": 1420999680,
+          "peak_allocated_bytes": 8324578816,
+          "peak_reserved_bytes": 9630121984,
+          "phase_seconds": {
+            "language_model": 0.01817919921875,
+            "diffusion_sampling": 1.0195720825195314
+          }
+        },
+        {
+          "length": 1024,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            34.96550417599997,
+            34.93262273300002
+          ],
+          "median_seconds": 34.94906345449999,
+          "residues_per_second": 29.29978370759893,
+          "static_bytes": 1423948800,
+          "peak_allocated_bytes": 13650235904,
+          "peak_reserved_bytes": 15902703616,
+          "phase_seconds": {
+            "language_model": 0.018916576385498048,
+            "diffusion_sampling": 1.5634296875
+          }
+        }
+      ],
+      "atom_attention_comparison": [
+        {
+          "protein": "ubiquitin",
+          "length": 76,
+          "rmsd_dense_seed0_vs_windowed_seed0": 0.3160745869417739,
+          "rmsd_dense_seed0_vs_dense_seed1": 0.5446246713289298,
+          "rmsd_windowed_seed0_vs_windowed_seed1": 0.4670902113241117
+        },
+        {
+          "protein": "t4_lysozyme",
+          "length": 163,
+          "rmsd_dense_seed0_vs_windowed_seed0": 0.22335862260764486,
+          "rmsd_dense_seed0_vs_dense_seed1": 0.21499337720307155,
+          "rmsd_windowed_seed0_vs_windowed_seed1": 0.15805422379624756
+        },
+        {
+          "protein": "gfp",
+          "length": 238,
+          "rmsd_dense_seed0_vs_windowed_seed0": 0.7515473638478966,
+          "rmsd_dense_seed0_vs_dense_seed1": 1.49142555750865,
+          "rmsd_windowed_seed0_vs_windowed_seed1": 1.809103458805594
+        }
+      ]
+    },
+    {
+      "status": "ok",
+      "label": "fastplms-esmfold2_300-windowed-unchunked",
+      "implementation": "fastplms",
+      "repo": "Synthyra/ESMFold2-300",
+      "revision": "a38a62ae930d157484b331c2bf4241684573adba",
+      "atom_attention": "windowed",
+      "chunk_size": null,
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1,
+        "max_inference_sigma": 256.0
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 6.93025978799983,
+      "weights_bytes": 1378536448,
+      "lengths": [
+        {
+          "length": 64,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.6420386509998934,
+            0.6177964000000884
+          ],
+          "median_seconds": 0.6299175254999909,
+          "residues_per_second": 101.60060231567715,
+          "static_bytes": 1412889600,
+          "peak_allocated_bytes": 1547518464,
+          "peak_reserved_bytes": 1581252608,
+          "phase_seconds": {
+            "language_model": 0.019601472854614256,
+            "diffusion_sampling": 0.5241182861328125
+          }
+        },
+        {
+          "length": 128,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.7332866700000977,
+            0.6823279389998333
+          ],
+          "median_seconds": 0.7078073044999655,
+          "residues_per_second": 180.84017950397717,
+          "static_bytes": 1413626880,
+          "peak_allocated_bytes": 1695520256,
+          "peak_reserved_bytes": 1744830464,
+          "phase_seconds": {
+            "language_model": 0.01837177658081055,
+            "diffusion_sampling": 0.5182318115234374
+          }
+        },
+        {
+          "length": 256,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            0.9704897729998265,
+            0.9413749420000386
+          ],
+          "median_seconds": 0.9559323574999326,
+          "residues_per_second": 267.8013752662599,
+          "static_bytes": 1415101440,
+          "peak_allocated_bytes": 2267958784,
+          "peak_reserved_bytes": 2537553920,
+          "phase_seconds": {
+            "language_model": 0.019218496322631836,
+            "diffusion_sampling": 0.5127119750976562
+          }
+        },
+        {
+          "length": 384,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            1.501012252999999,
+            1.4262268459999632
+          ],
+          "median_seconds": 1.463619549499981,
+          "residues_per_second": 262.36326245518285,
+          "static_bytes": 1416576000,
+          "peak_allocated_bytes": 3209515520,
+          "peak_reserved_bytes": 3844079616,
+          "phase_seconds": {
+            "language_model": 0.019792896270751953,
+            "diffusion_sampling": 0.4981151123046875
+          }
+        },
+        {
+          "length": 512,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            2.225080981000019,
+            2.1876427930001228
+          ],
+          "median_seconds": 2.206361887000071,
+          "residues_per_second": 232.05622024959476,
+          "static_bytes": 1418050560,
+          "peak_allocated_bytes": 4520921600,
+          "peak_reserved_bytes": 5425332224,
+          "phase_seconds": {
+            "language_model": 0.019299583435058595,
+            "diffusion_sampling": 0.5200664672851563
+          }
+        },
+        {
+          "length": 768,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            5.801848607000011,
+            5.623493416999963
+          ],
+          "median_seconds": 5.712671011999987,
+          "residues_per_second": 134.43798853229003,
+          "static_bytes": 1420999680,
+          "peak_allocated_bytes": 8324578816,
+          "peak_reserved_bytes": 10292822016,
+          "phase_seconds": {
+            "language_model": 0.020100351333618163,
+            "diffusion_sampling": 0.7990032348632813
+          }
+        },
+        {
+          "length": 1024,
+          "status": "ok",
+          "single_pass": false,
+          "seconds": [
+            10.459831014999963,
+            10.403595537000001
+          ],
+          "median_seconds": 10.431713275999982,
+          "residues_per_second": 98.16220719523558,
+          "static_bytes": 1423948800,
+          "peak_allocated_bytes": 13650412032,
+          "peak_reserved_bytes": 17121148928,
+          "phase_seconds": {
+            "language_model": 0.018861536026000977,
+            "diffusion_sampling": 1.168448974609375
+          }
+        },
+        {
+          "length": 2048,
+          "status": "ok",
+          "single_pass": true,
+          "seconds": [
+            40.287960447
+          ],
+          "median_seconds": 40.287960447,
+          "residues_per_second": 50.83404514095977,
+          "static_bytes": 1423948800,
+          "peak_allocated_bytes": 50064497664,
+          "peak_reserved_bytes": 63851986944,
+          "phase_seconds": {
+            "language_model": 0.10339769744873047,
+            "diffusion_sampling": 3.28558935546875
+          },
+          "run": "20260921T183419-fold-bench-long-1563df15"
+        }
+      ]
+    },
+    {
+      "status": "ok",
+      "label": "fastplms-esmfold2-windowed-chunk512",
+      "implementation": "fastplms",
+      "repo": "Synthyra/ESMFold2",
+      "revision": "cd5a0927cec585a778d983b99a8db23d2e9b281e",
+      "atom_attention": "windowed",
+      "chunk_size": 512,
+      "settings": {
+        "num_loops": 3,
+        "num_sampling_steps": 50,
+        "num_diffusion_samples": 1,
+        "max_inference_sigma": 256.0
+      },
+      "gpu": "NVIDIA H100 80GB HBM3",
+      "torch": "2.13.0+cu130",
+      "load_seconds": 11.172538067000005,
+      "weights_bytes": 13748721152,
+      "lengths": [
+        {
+          "length": 2048,
+          "status": "ok",
+          "single_pass": true,
+          "seconds": [
+            138.969890121
+          ],
+          "median_seconds": 138.969890121,
+          "residues_per_second": 14.73700524780456,
+          "static_bytes": 13748721152,
+          "peak_allocated_bytes": 69930544128,
+          "peak_reserved_bytes": 80388030464,
+          "phase_seconds": {
+            "language_model": 0.43021337890625,
+            "trunk_loop": 130.3764296875,
+            "coda": 1.149343017578125,
+            "diffusion_sampling": 3.523469482421875,
+            "confidence": 2.388107421875
+          }
+        }
+      ],
+      "run": "20260921T183419-fold-bench-long-1563df15"
+    }
+  ]
+}

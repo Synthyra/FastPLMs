@@ -17,6 +17,7 @@ evidence, and contributor workflows for FastPLMs 1.0. The model manifest at
 | Run parity, structure, or release tests | [Testing](testing.md) |
 | Measure throughput or memory | [Benchmarking](benchmarking.md) |
 | Review ESMFold2-300 validation evidence | [ESMFold2-300 validation](validation/esmfold2_small.md) |
+| Fold long proteins faster with ESMFold2, with measured cost | [ESMFold2](esmfold2.md#measured-folding-cost) |
 | Train or review ESMFold2 confidence heads | [Confidence-head training](confidence_training.md) |
 
 ## Model and research workflows

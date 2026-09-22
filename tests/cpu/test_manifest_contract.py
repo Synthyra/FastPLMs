@@ -47,6 +47,8 @@ _CPU_CHECKPOINTS = frozenset(
         "esmc_small",
         "esmfold",
         "esmfold2",
+        "esmfold2_300",
+        "esmfold2_600",
         "esmfold2_experimental_cutoff2025",
         "esmfold2_experimental_fast_cutoff2025",
         "esmfold2_fast",

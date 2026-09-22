@@ -529,6 +529,22 @@ pdb_text = folder.result_to_pdb(result)
 print(result.ptm, result.plddt.mean().item())
 ```
 
+Two opt-in runtime settings trade a little memory or exactness for speed on long
+proteins, with no extra package and no compilation:
+
+```python
+folder.set_chunk_size(None)            # unchunked pair updates
+folder.set_atom_attention("windowed")  # the official flash-attn atom window, through PyTorch
+```
+
+In one measured run on an H100, a 1,024-residue fold took 23 s with both settings
+against 87 s for the official implementation, at 0.97 times its peak memory, and
+a 64-residue fold took 0.80 s against 0.98 s. At 2,048 residues the official
+implementation ran out of the GPU's 80 GB, while FastPLMs folded in 596 s with its
+bitwise-exact defaults and 139 s with windowed atoms and 512-row chunks. The
+conditions, the dense-versus-windowed comparison, and the figure are in
+[ESMFold2](docs/esmfold2.md#measured-folding-cost).
+
 Build complexes with input types from the loaded artifact:
 
 ```python
@@ -736,7 +752,11 @@ model.set_attn_implementation("sdpa")
 | `flash_attention_2` | A supported ESM2 or ESM++ BF16 CUDA path needs a precompiled kernel | BF16-only and family-limited |
 | `flash_attention_3` | A supported ESM2, ESM++, or DPLM BF16 CUDA path needs a precompiled kernel | BF16-only and family-limited |
 
-FastPLMs does not implement an `auto` backend. An unavailable request raises.
+An unavailable named request raises. `attn_implementation="auto"` is an opt-in
+request: FastPLMs selects the first implementation in the family's measured
+preference order that the machine can execute, and `model.attention_resolution`
+records the choice and the reasons. See
+[automatic selection](docs/attention_backends.md#automatic-selection).
 When an optimized implementation cannot return attention matrices,
 `output_attentions=True` emits one warning naming the configured backend,
 effective eager backend, and reason, then runs a correctly masked eager call.

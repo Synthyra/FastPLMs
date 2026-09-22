@@ -127,6 +127,28 @@ def test_a3m_dot_insertions_and_raw_rows_have_consistent_metadata() -> None:
     assert raw_rows.deletions is None
 
 
+def test_msa_rows_align_on_match_columns_not_raw_a3m_length() -> None:
+    from fastplms.models.esmfold2.esmfold2_msa import MSA, FastaEntry
+
+    # Insertions lengthen a raw A3M row without adding an aligned column, so
+    # rows of different raw length can still be one alignment.
+    aligned = MSA(
+        [
+            FastaEntry("query", "ACD-E"),
+            FastaEntry("insertion", "AqCD-E"),
+            FastaEntry("dot insertion", "A.CD-E"),
+        ]
+    )
+    assert aligned.depth == 3
+
+    # A row with a different number of match columns is still misaligned,
+    # however its raw length compares.
+    with pytest.raises(ValueError, match=r"row 0 has 5 columns, row 1 has 4"):
+        MSA([FastaEntry("query", "ACD-E"), FastaEntry("short", "AqCD-")])
+    with pytest.raises(ValueError, match="MSA sequences must be non-empty"):
+        MSA([FastaEntry("only insertions", "acd")])
+
+
 def test_protein_chain_rejects_misaligned_atom37_tables() -> None:
     with pytest.raises(ValueError, match=r"shape \(length, 37, 3\)"):
         ProteinChain.from_atom37(

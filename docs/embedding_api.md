@@ -391,7 +391,10 @@ Persisted results include:
 - model ID, immutable revision, checkpoint hash, and package versions;
 - Torch and Transformers versions, backend/device policy, checkpoint identity,
   and adapter identity;
-- tensor dtype and resolved attention backend;
+- tensor dtype and resolved attention backend. A model loaded with
+  `attn_implementation="auto"` settles that request before the run is
+  fingerprinted, so the record names the implementation that executed and
+  never `auto`;
 - selected layer or projection;
 - tokenizer and biological-residue policy;
 - pooling names and output slices;

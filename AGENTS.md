@@ -81,7 +81,10 @@ modules. Do not hand-edit generated model cards or
 - Structure families retain native chain, residue, atom, ligand, nucleic-acid,
   and MSA semantics where applicable.
 - A requested attention backend either executes the named implementation or
-  raises. Never add a silent fallback.
+  raises. Never add a silent fallback. The opt-in `attn_implementation="auto"`
+  request follows the family's `attention_auto_order`, ends in a named
+  implementation, and records why each skipped candidate was unusable. An order
+  that prefers FlashAttention must cite measured evidence.
 - Folding progress is disabled by default (`verbose=False`). Progress display must
   preserve outputs and random-number state; confidence-disabled ESMFold2
   exports must retain unknown confidence values.

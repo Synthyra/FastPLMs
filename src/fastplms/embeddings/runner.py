@@ -290,6 +290,19 @@ def _model_device(model: Any) -> torch.device:
         return torch.device("cpu")
 
 
+def _residue_embeddings(X: Tensor, M: Tensor) -> list[Tensor]:
+    """Copy every sample's biological residues to the host in one transfer.
+
+    Boolean indexing packs the selected rows in batch order, so splitting the
+    packed rows by residue count gives the values that indexing each sample
+    would. Each returned tensor owns its storage, as a per-sample copy does.
+    """
+    # X: (b, l, d); M: (b, l)
+    residue_counts = M.sum(dim=1).tolist()  # b counts r_i
+    packed = X[M].detach().cpu()  # (sum of r_i, d)
+    return [sample.clone() for sample in torch.split(packed, residue_counts)]  # each: (r_i, d)
+
+
 def _attention_backend(model: Any) -> str | None:
     config = getattr(model, "config", None)
     for name in ("_attn_implementation", "attn_implementation", "attn_backend"):
@@ -1163,6 +1176,12 @@ def embed_dataset(
                 allowed_unsupported_pooling
             )
 
+    # A pending automatic attention request settles here, inside the caller's
+    # autocast context, so the fingerprint records the backend that executes.
+    attention_resolution = getattr(model, "attention_resolution", None)
+    if attention_resolution is not None and attention_resolution.deferred:
+        model.resolve_attn_implementation()
+
     tokenizer_metadata = _tokenizer_metadata(model, tokenizer)
     (
         input_fingerprint,
@@ -1424,10 +1443,7 @@ def embed_dataset(
                             for X_i, M_i in zip(X, M, strict=True)
                         ]
                     else:
-                        values = [
-                            X_i[M_i].detach().cpu()  # (r_i, d)
-                            for X_i, M_i in zip(X, M, strict=True)
-                        ]
+                        values = _residue_embeddings(X, M)  # each: (r_i, d)
                 else:
                     if pooler is None:
                         raise RuntimeError(

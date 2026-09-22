@@ -239,15 +239,18 @@ class MSA(SequentialDataclass):
             raise ValueError("MSA requires at least one aligned sequence.")
         if any(not isinstance(entry, FastaEntry) for entry in self.entries):
             raise TypeError("Every MSA entry must be a FastaEntry.")
-        expected_length = len(self.entries[0].sequence)
+        # Rows align on match columns. A raw A3M row also carries lowercase and
+        # "." insertions, which the pinned Biohub MSA accepts and paired-MSA
+        # construction decodes into deletion counts, so they are not columns.
+        expected_length = len(remove_insertions_from_sequence(self.entries[0].sequence))
         if expected_length == 0:
             raise ValueError("MSA sequences must be non-empty.")
         for row, entry in enumerate(self.entries[1:], start=1):
-            if len(entry.sequence) != expected_length:
+            row_length = len(remove_insertions_from_sequence(entry.sequence))
+            if row_length != expected_length:
                 raise ValueError(
                     "MSA row length mismatch: "
-                    f"row 0 has {expected_length} columns, row {row} has "
-                    f"{len(entry.sequence)}."
+                    f"row 0 has {expected_length} columns, row {row} has {row_length}."
                 )
         deletions = self.deletions
         if deletions is not None and not isinstance(deletions, np.ndarray):

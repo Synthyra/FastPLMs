@@ -43,9 +43,11 @@ try:
         AttentionBackend,
         BlockMask,
         FastPLMsAttentionMixin,
+        FlashPaddingLayout,
         _get_flex_attention_fn,
         flex_attention,
         get_attention_mask,
+        get_flash_padding_layout,
         kernels_flash_attention_func,
         resolve_attention_backend,
         resolve_attention_backend_for_call,
@@ -59,9 +61,11 @@ except ModuleNotFoundError as error:
         "EmbeddingMixin",
         "FastPLMsAttentionMixin",
         "FastPLMTestTimeTrainingMixin",
+        "FlashPaddingLayout",
         "_get_flex_attention_fn",
         "flex_attention",
         "get_attention_mask",
+        "get_flash_padding_layout",
         "kernels_flash_attention_func",
         "resolve_attention_backend",
         "resolve_attention_backend_for_call",
@@ -163,6 +167,7 @@ class DPLMPreTrainedModel(FastPLMsAttentionMixin, EsmPreTrainedModel):
         "flex_attention",
         "flash_attention_3",
     )
+    _fastplms_attention_auto_order = ("sdpa",)
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
@@ -255,6 +260,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         output_attentions: bool | None = False,
         output_s_max: bool | None = False,
         past_key_values: tuple[tuple[torch.FloatTensor]] | None = None,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         # hidden_states: (b, l_q, d); encoder_hidden_states: (b, l_kv, d) or None
         if past_key_values is not None:
@@ -345,6 +351,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
                 flex_block_mask=flex_block_mask,
                 output_attentions=output_attentions,
                 output_s_max=output_s_max,
+                flash_padding_layout=flash_padding_layout,
             )
 
         if head_mask is not None and torch.is_tensor(head_mask):
@@ -367,6 +374,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if output_attentions:
             return self._manual_attn(
@@ -390,7 +398,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
             return attn_output, None, s_max
         if self.attn_backend.is_flash:
             attn_output, attn_weights = self._kernels_flash_attn(
-                query_heads, key_heads, value_heads, attention_mask_2d
+                query_heads, key_heads, value_heads, attention_mask_2d, flash_padding_layout
             )
         elif self.attn_backend == AttentionBackend.FLEX:
             attn_output, attn_weights = self._flex_attn(
@@ -462,6 +470,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
         attention_mask_2d: torch.Tensor | None = None,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, None]:
         query_tokens = query_heads.transpose(1, 2).contiguous()  # (b, l_q, h, d_h)
         key_tokens = key_heads.transpose(1, 2).contiguous()  # (b, l_kv, h, d_h)
@@ -476,6 +485,7 @@ class ModifiedEsmSelfAttention(EsmSelfAttention):
             causal=False,
             softmax_scale=1.0,
             implementation=self.attn_backend.value,
+            padding_layout=flash_padding_layout,
         )
         return rearrange(attn_output, "b s h d -> b s (h d)"), None  # (b, l_q, d), None
 
@@ -548,6 +558,7 @@ class ModifiedEsmAttention(EsmAttention):
         past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         hidden_states_ln = self.LayerNorm(hidden_states)  # (b, l, d)
         attn_output, attn_weights, s_max = self.self(  # (b, l, d), optional weights, heads
@@ -561,6 +572,7 @@ class ModifiedEsmAttention(EsmAttention):
             past_key_value=past_key_value,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            flash_padding_layout=flash_padding_layout,
         )
         attention_output = self.output(attn_output, hidden_states)  # (b, l, d)
         return attention_output, attn_weights, s_max
@@ -587,6 +599,7 @@ class ModifiedEsmLayer(EsmLayer):
         past_key_value: tuple[tuple[torch.FloatTensor]] | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         attention_output, attn_weights, s_max = self.attention(  # (b, l, d), weights, heads
             hidden_states,
@@ -597,6 +610,7 @@ class ModifiedEsmLayer(EsmLayer):
             output_attentions=output_attentions,
             output_s_max=output_s_max,
             past_key_value=past_key_value[:2] if past_key_value is not None else None,
+            flash_padding_layout=flash_padding_layout,
         )
 
         if self.is_decoder and encoder_hidden_states is not None:
@@ -675,6 +689,7 @@ class ModifiedEsmEncoder(EsmEncoder):
             dtype=hidden_states.dtype,
             mask_semantics="padding",
         )
+        flash_padding_layout = get_flash_padding_layout(effective_backend, attention_mask_2d)
 
         for i, layer_module in enumerate(self.layer):
             if output_hidden_states:
@@ -696,6 +711,7 @@ class ModifiedEsmEncoder(EsmEncoder):
                     past_key_value,
                     output_attentions,
                     output_s_max,
+                    flash_padding_layout,
                 )
             else:
                 hidden_states, attn_weights, s_max = layer_module(
@@ -709,6 +725,7 @@ class ModifiedEsmEncoder(EsmEncoder):
                     past_key_value=past_key_value,
                     output_attentions=output_attentions,
                     output_s_max=output_s_max,
+                    flash_padding_layout=flash_padding_layout,
                 )
 
             if all_self_attentions is not None:

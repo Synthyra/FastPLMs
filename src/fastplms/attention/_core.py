@@ -11,6 +11,7 @@ import warnings
 import torch
 from collections import OrderedDict
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
 from types import MappingProxyType
@@ -440,12 +441,53 @@ index_first_axis = IndexFirstAxis.apply
 index_put_first_axis = IndexPutFirstAxis.apply
 
 
+def _select_first_axis(states: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
+    """Copy the rows at ``indices``, through the autograd wrapper only when it is needed.
+
+    Without a gradient to route, the wrapper and its reshapes are host overhead
+    that every layer pays, and plain indexing copies the same values.
+    """
+    # states: (n, ...); indices: (m,)
+    if states.requires_grad:
+        selected: torch.Tensor = index_first_axis(states, indices)  # (m, ...)
+        return selected
+    return states[indices]  # (m, ...)
+
+
 def pad_input(
     hidden_states: torch.Tensor, indices: torch.Tensor, batch: int, seqlen: int
 ) -> torch.Tensor:
     # hidden_states: (t, ...); indices: (t,)
-    output = index_put_first_axis(hidden_states, indices, batch * seqlen)  # (b * l, ...)
-    return rearrange(output, "(b s) ... -> b s ...", b=batch)  # (b, l, ...)
+    if hidden_states.requires_grad:
+        output = index_put_first_axis(hidden_states, indices, batch * seqlen)  # (b * l, ...)
+        return rearrange(output, "(b s) ... -> b s ...", b=batch)  # (b, l, ...)
+    output = hidden_states.new_zeros(batch * seqlen, *hidden_states.shape[1:])  # (b * l, ...)
+    output[indices] = hidden_states
+    return output.view(batch, seqlen, *hidden_states.shape[1:])  # (b, l, ...)
+
+
+@dataclass(frozen=True)
+class FlashPaddingLayout:
+    """Varlen metadata shared by every layer of one padded self-attention forward.
+
+    The token indices and the longest row each cost a host synchronization to
+    derive. An encoder builds this record once per forward so its layers do not
+    repeat that work. It is valid only for the mask it was built from.
+    """
+
+    attention_mask_2d: torch.Tensor  # (b, l), bool; True marks a real token
+    indices: torch.Tensor  # (t,), positions of the t real tokens in the flat (b * l) axis
+    cu_seqlens: torch.Tensor  # (b + 1,), int32 cumulative row lengths
+    max_seqlen: int  # longest row
+
+
+def _flash_padding_layout(attention_mask_2d: torch.Tensor) -> FlashPaddingLayout:
+    # attention_mask_2d: (b, l), bool
+    seqlens = attention_mask_2d.sum(dim=1).int()  # (b,)
+    cu_seqlens = F.pad(seqlens.cumsum(0, dtype=torch.int32), (1, 0))  # (b + 1,)
+    max_seqlen = int(seqlens.max().item())
+    indices = attention_mask_2d.flatten().nonzero(as_tuple=False).flatten()  # (t,)
+    return FlashPaddingLayout(attention_mask_2d, indices, cu_seqlens, max_seqlen)
 
 
 def _unpad_input(
@@ -453,6 +495,7 @@ def _unpad_input(
     key_layer: torch.Tensor,
     value_layer: torch.Tensor,
     attention_mask_2d: torch.Tensor,
+    padding_layout: FlashPaddingLayout | None = None,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -463,17 +506,18 @@ def _unpad_input(
 ]:
     # query_layer, key_layer, value_layer: (b, l, h, d); attention_mask_2d: (b, l)
     batch_size, seq_len, num_heads, head_dim = query_layer.shape
-    seqlens = attention_mask_2d.sum(dim=1).int()  # (b,)
-    cu_seqlens = F.pad(seqlens.cumsum(0, dtype=torch.int32), (1, 0))  # (b + 1,)
-    max_seqlen = int(seqlens.max().item())
-    indices = attention_mask_2d.flatten().nonzero(as_tuple=False).flatten()  # (t,)
-    query_layer = index_first_axis(  # (t, h, d)
+    if padding_layout is None:
+        padding_layout = _flash_padding_layout(attention_mask_2d)
+    indices = padding_layout.indices  # (t,)
+    cu_seqlens = padding_layout.cu_seqlens  # (b + 1,)
+    max_seqlen = padding_layout.max_seqlen
+    query_layer = _select_first_axis(  # (t, h, d)
         query_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices
     )
-    key_layer = index_first_axis(  # (t, h, d)
+    key_layer = _select_first_axis(  # (t, h, d)
         key_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices
     )
-    value_layer = index_first_axis(  # (t, h, d)
+    value_layer = _select_first_axis(  # (t, h, d)
         value_layer.reshape(batch_size * seq_len, num_heads, head_dim), indices
     )
     return (
@@ -513,6 +557,25 @@ def _validate_flash_padding_mask(
     return attention_mask_2d.to(dtype=torch.bool)  # (b, l)
 
 
+def _validate_flash_padding_layout(
+    padding_layout: FlashPaddingLayout,
+    attention_mask_2d: torch.Tensor | None,
+) -> None:
+    """Reject a layout that cannot belong to this call without reading tensor values."""
+
+    # attention_mask_2d: (b, l) or None
+    if attention_mask_2d is None:
+        raise ValueError("A FlashAttention padding layout requires the mask it was built from.")
+    layout_mask = padding_layout.attention_mask_2d  # (b, l)
+    if layout_mask.shape != attention_mask_2d.shape:
+        raise ValueError(
+            "FlashAttention padding layout was built for mask shape "
+            f"{tuple(layout_mask.shape)}, but this call uses {tuple(attention_mask_2d.shape)}."
+        )
+    if layout_mask.device != attention_mask_2d.device:
+        raise ValueError("FlashAttention padding layout and padding mask must share a device.")
+
+
 def kernels_flash_attention_func(
     query_states: torch.Tensor,
     key_states: torch.Tensor,
@@ -521,6 +584,7 @@ def kernels_flash_attention_func(
     causal: bool = False,
     softmax_scale: float | None = None,
     implementation: str = "flash_attention_3",
+    padding_layout: FlashPaddingLayout | None = None,
 ) -> torch.Tensor:
     """Public flash-attention entry point with optional padding handling.
 
@@ -533,6 +597,10 @@ def kernels_flash_attention_func(
     before calling this function (ESM2, DPLM, DPLM2, E1, and ESMFold do), pass
     `softmax_scale=1.0`. Otherwise the flash kernel applies its default scale
     again, yielding an effective `1/head_dim` scale that drifts across layers.
+
+    `padding_layout` is the record `get_flash_padding_layout` built from
+    `attention_mask_2d`. Pass both so that a multi-layer encoder derives the
+    varlen metadata once per forward. The output is identical without it.
     """
     # query_states, key_states, value_states: (b, l, h, d)
     # attention_mask_2d: (b, l) or None
@@ -559,6 +627,8 @@ def kernels_flash_attention_func(
             value_states,
             attention_mask_2d,
         )
+    if padding_layout is not None:
+        _validate_flash_padding_layout(padding_layout, attention_mask_2d)
     _ensure_flash_kernels_loaded(implementation)
     if attention_mask_2d is not None:
         batch_size, q_len = query_states.shape[:2]
@@ -574,6 +644,7 @@ def kernels_flash_attention_func(
             key_states,
             value_states,
             attention_mask_2d,
+            padding_layout,
         )
         attn_output_unpad = _kernels_flash_varlen_forward(  # (t, h, d)
             query_states=query_states,
@@ -587,8 +658,8 @@ def kernels_flash_attention_func(
             softmax_scale=softmax_scale,
             implementation=implementation,
         )
-        output = pad_input(attn_output_unpad, indices_q, batch_size, q_len)  # (b, l, h, d)
-        return output.masked_fill(~attention_mask_2d[:, :, None, None], 0)  # (b, l, h, d)
+        # pad_input scatters the real tokens into zeros, so padded positions are already zero.
+        return pad_input(attn_output_unpad, indices_q, batch_size, q_len)  # (b, l, h, d)
     else:
         return _kernels_flash_forward(  # (b, l, h, d)
             query_states=query_states,
@@ -801,6 +872,21 @@ def get_attention_mask(
     # their outputs stay finite instead of softmaxing over all -inf scores.
     attention_mask_4d = attention_mask_2d[:, None, None, :]  # (b, 1, 1, l)
     return attention_mask_2d, attention_mask_4d, None  # (b, l), (b, 1, 1, l), None
+
+
+def get_flash_padding_layout(
+    effective_backend: AttentionBackend,
+    attention_mask_2d: torch.Tensor | None,
+) -> FlashPaddingLayout | None:
+    """Build the FlashAttention varlen metadata once for all encoder layers.
+
+    `attention_mask_2d` is the bool mask that `get_attention_mask` returned.
+    Returns None when the call does not run a padded FlashAttention kernel.
+    """
+    # attention_mask_2d: (b, l) or None
+    if attention_mask_2d is None or not resolve_attention_backend(effective_backend).is_flash:
+        return None
+    return _flash_padding_layout(attention_mask_2d)
 
 
 def bool_to_additive_mask(

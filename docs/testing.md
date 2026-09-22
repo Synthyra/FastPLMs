@@ -257,6 +257,74 @@ sudo docker compose -f docker/compose.yaml run --rm structure \
   -m "not gpu and not slow and not structure and not artifact" -v
 ```
 
+## Cloud evidence workers
+
+`tools/gpu_evidence` runs candidate-only checks and measurements on bounded
+Modal workers when the Docker workstation is not available. It needs no live
+reference container, so it complements the compliance suite and does not
+replace it.
+
+```bash
+python -m tools.gpu_evidence.launch unit
+python -m tools.gpu_evidence.launch cpu-contract
+python -m tools.gpu_evidence.launch backend-bench --gpu H100
+```
+
+A worker receives a stage name and an optional pytest `-k` selection, never a
+command. `tools/gpu_evidence/stages.py` holds the fixed stage table:
+
+| Stage | Worker | Runs |
+| --- | --- | --- |
+| `cpu-contract` | CPU | The required offline CPU gate |
+| `typing` | CPU | mypy errors that the working tree adds to its Git baseline |
+| `unit` | GPU | `tests/unit` without the confidence-pilot tests |
+| `parity-local` | GPU | The local ESMFold2 source-parity tests of the release suite |
+| `probe` | GPU | Resolution and loading of the manifest-locked FlashAttention kernels |
+| `lever-bench`, `flash-lever-bench`, `runner-lever-bench` | GPU | Latency of the working tree against its Git baseline |
+| `backend-bench` | GPU | Latency of every advertised attention backend on padded and full batches |
+| `packed-probe` | GPU | Design probe on a generic encoder: padded SDPA against packed-token execution through PyTorch variable-length attention and compiled FlexAttention |
+| `fold-bench`, `fold-bench-smoke`, `fold-bench-long` | GPU | ESMFold2 folding time, phase times, and peak memory by protein length: the official implementation, the Git baseline tree, and the working tree. The long stage adds 2,048 residues with one instrumented fold per series |
+| `fold-peak-memory` | GPU | The model source lines whose tensors are alive when a fold reaches its peak allocated memory, from an allocator trace |
+
+Each launch uploads an allowlisted copy of the working tree, which excludes
+credential-shaped paths, and exports `src/` and `kernels.lock` at `HEAD` as the
+baseline. It reserves the worst-case cost of the stage in
+`artifacts/gpu_evidence/budget.json` before dispatch and refuses a stage that
+would exceed `--max-dollars`, which defaults to 25. Receipts, JUnit reports, and
+worker output land in the ignored `artifacts/gpu_evidence/<run>/` directory.
+Run one launch at a time, because the ledger has a single writer.
+
+The bench stages compare alternating worker processes in one container on one
+GPU, with randomly initialized models at published dimensions. Their numbers
+are descriptive evidence for keeping a change or ordering backends. They are not
+release benchmark claims. `python -m tools.gpu_evidence.record_backend_evidence
+<run> ...` copies passed `backend-bench` results into
+`docs/evidence/attention/backend_latency.json`, the file that a
+FlashAttention-first `attention_auto_order` must cite.
+
+The fold stages use a second image that adds the pinned official ESMFold2 stack
+in its own interpreter, mirroring the `reference` stage of
+`docker/esmfold2-validation.Dockerfile`. Every series runs in its own process on
+one worker, so ratios between series are within-run. The official series loads
+the ESMC backbone at the manifest-pinned revision and refuses any weight the
+checkpoint does not supply: the official loader fetches the repository head,
+whose tensor names no longer match the pinned source, and Transformers would
+only warn while initializing those weights at random. Run `fold-bench-smoke` on
+an inexpensive GPU first; it exercises both environments and leaves the weights
+in the cache volume. `python -m tools.gpu_evidence.fold_report record <run> [<long run> ...]`
+copies a full sweep, extended by any long runs, into
+`docs/evidence/esmfold2/folding_cost.json`, and
+`python -m tools.gpu_evidence.fold_report plot` redraws
+`docs/assets/esmfold2_folding_cost.png` and rewrites its caption beside it from
+that file alone. The figure carries only axes and a legend; every condition is in
+the caption. Plotting needs
+`requirements/features/reporting.in`.
+
+The CPU gate's per-test time budget and memory gate are calibrated on the
+validation workstation. A sandboxed cloud worker can exceed them while every
+assertion holds, so a receipt lists budget overruns apart from assertion
+failures. Only the workstation result decides that gate.
+
 ## Manifest-generated cases
 
 `tests/conftest.py` loads `src/fastplms/models.toml`. Each checkpoint contributes

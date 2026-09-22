@@ -74,18 +74,18 @@ selectable. Strict-parity exceptions are documented in the checkpoint cards.
 
 ## Family execution
 
-| Family | Attention | Precision | BF16 execution | Extra | Reference |
-| --- | --- | --- | --- | --- | --- |
-| `esm2` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default` | `fp32_parameters_autocast` | `core` | `reference-esm2` |
-| `esm_plusplus` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `default`, `fp8` (experimental) | `static_parameters` | `core` | `reference-biohub-esm` |
-| `esm3` | `eager`, `sdpa`, `flex_attention` | `default` | `fp32_parameters_autocast` | `core` | `reference-biohub-esm` |
-| `e1` | `sdpa`, `flex_attention` | `default` | `static_parameters` | `core` | `reference-e1` |
-| `dplm` | `eager`, `sdpa`, `flex_attention`, `flash_attention_3` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` |
-| `dplm2` | `sdpa` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` |
-| `ankh` | `eager`, `sdpa` | `default` | `static_parameters` | `core` | `reference-ankh` |
-| `boltz2` | `eager` | `default` | `fp32_parameters_autocast` | `structure` | `reference-boltz2` |
-| `esmfold` | `eager`, `sdpa`, `flex_attention` | `default` | `fp32_parameters_autocast` | `structure` | `reference-esmfold` |
-| `esmfold2` | `eager`, `sdpa`, `flex_attention` | `auto`, `fp32`, `bf16`, `fp8` (experimental) | `fp32_parameters_autocast` | `structure` | `reference-esmfold2` |
+| Family | Attention | Auto order | Precision | BF16 execution | Extra | Reference |
+| --- | --- | --- | --- | --- | --- | --- |
+| `esm2` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `sdpa` | `default` | `fp32_parameters_autocast` | `core` | `reference-esm2` |
+| `esm_plusplus` | `eager`, `sdpa`, `flex_attention`, `flash_attention_2`, `flash_attention_3` | `sdpa` | `default`, `fp8` (experimental) | `static_parameters` | `core` | `reference-biohub-esm` |
+| `esm3` | `eager`, `sdpa`, `flex_attention` | `sdpa` | `default` | `fp32_parameters_autocast` | `core` | `reference-biohub-esm` |
+| `e1` | `sdpa`, `flex_attention` | `sdpa` | `default` | `static_parameters` | `core` | `reference-e1` |
+| `dplm` | `eager`, `sdpa`, `flex_attention`, `flash_attention_3` | `sdpa` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` |
+| `dplm2` | `sdpa` | `sdpa` | `default` | `fp32_parameters_autocast` | `core` | `reference-dplm` |
+| `ankh` | `eager`, `sdpa` | `sdpa`, `eager` | `default` | `static_parameters` | `core` | `reference-ankh` |
+| `boltz2` | `eager` | none | `default` | `fp32_parameters_autocast` | `structure` | `reference-boltz2` |
+| `esmfold` | `eager`, `sdpa`, `flex_attention` | `sdpa` | `default` | `fp32_parameters_autocast` | `structure` | `reference-esmfold` |
+| `esmfold2` | `eager`, `sdpa`, `flex_attention` | `sdpa` | `auto`, `fp32`, `bf16`, `fp8` (experimental) | `fp32_parameters_autocast` | `structure` | `reference-esmfold2` |
 
 ## Family release contracts
 

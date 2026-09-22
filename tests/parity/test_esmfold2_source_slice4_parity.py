@@ -304,11 +304,13 @@ def _protein_fixture() -> local_protein_complex.ProteinComplex:
     # mask: (n_positions, 37)
     mask = np.zeros((n_positions, 37), dtype=bool)
     atom_names = ("N", "CA", "C", "O", "CB", "SG")
+    # The pinned blob format stores floats as FP16, so exact round-trip
+    # assertions need coordinates and confidences that FP16 represents exactly.
     for sequence_index in (0, 1, 3, 4):
         for atom_offset, atom_name in enumerate(atom_names):
             atom_index = local_residues.atom_order[atom_name]
             positions[sequence_index, atom_index] = np.asarray(
-                [sequence_index, atom_offset, sequence_index + atom_offset / 10],
+                [sequence_index, atom_offset, sequence_index + atom_offset / 8],
                 dtype=np.float32,
             )
             mask[sequence_index, atom_index] = True
@@ -322,7 +324,7 @@ def _protein_fixture() -> local_protein_complex.ProteinComplex:
         insertion_code=np.asarray([""] * n_positions, dtype=object),
         atom37_positions=positions,
         atom37_mask=mask,
-        confidence=np.asarray([0.8, 0.7, 0.0, 0.9, 0.6], dtype=np.float32),
+        confidence=np.asarray([0.75, 0.625, 0.0, 0.875, 0.5], dtype=np.float32),
         metadata=local_protein_complex.ProteinComplexMetadata(
             entity_lookup={0: 0, 1: 1},
             chain_lookup={0: "A", 1: "ligand_1"},

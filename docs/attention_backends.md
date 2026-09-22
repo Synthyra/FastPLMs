@@ -48,8 +48,9 @@ can use a manifest-built artifact under `dist/hub/<model>` for local,
 offline validation before publishing an update.
 
 If the caller does not choose a backend, FastPLMs leaves the value unspecified.
-Transformers normally selects SDPA. FastPLMs does not implement an `auto`
-backend. An unavailable requested implementation raises. For
+Transformers normally selects SDPA. An unavailable named implementation raises.
+`attn_implementation="auto"` is a separate opt-in request, described under
+[Automatic selection](#automatic-selection). For
 `output_attentions=True`, FastPLMs uses eager attention for that call and emits
 a warning. This does not change the configured backend.
 
@@ -86,6 +87,85 @@ that resolves to a backend outside the family's manifest row still raises, and
 imperative selection through `set_attn_implementation()` or the legacy
 `attn_backend` setter accepts canonical names only.
 
+## Automatic selection
+
+`attn_implementation="auto"` asks FastPLMs to choose an implementation for the
+machine. It is opt-in. An unspecified backend still means the Transformers
+default, and a named backend still executes or raises.
+
+```python
+import torch
+from transformers import AutoModel
+
+model = AutoModel.from_pretrained(
+    model_id,
+    trust_remote_code=True,
+    attn_implementation="auto",
+).cuda()
+with torch.autocast("cuda", dtype=torch.bfloat16):
+    output = model(**batch)
+print(model.attention_resolution)
+```
+
+Each family declares a preference order as `attention_auto_order` in
+`models.toml`, and the [generated support matrix](generated/support.md) lists
+it. FastPLMs configures the first implementation in that order that can
+execute:
+
+- `eager` and `sdpa` always can. `flex_attention` can when the PyTorch build
+  provides it.
+- A FlashAttention entry must pass these gates in order: a CUDA device, BF16
+  attention inputs from BF16 weights or CUDA BF16 autocast, a compute
+  capability of at least the kernel's `min_cuda_capability`, an installed
+  `kernels` package, and a successful load of the manifest-locked kernel. Only
+  the last gate can download, and it honors the Hugging Face offline variables.
+
+An order that prefers FlashAttention must cite its measurement as
+`attention_auto_evidence`, a file under `docs/evidence/`.
+
+The device and the autocast dtype are unknown when a model is built. A model
+whose order contains FlashAttention therefore runs the first
+device-independent entry of its order until the first forward. That forward
+settles the request inside the caller's autocast context.
+`model.resolve_attn_implementation(device=..., dtype=...)` settles it earlier,
+which is the right call before `torch.compile`. `embed_dataset` settles a
+pending request before it fingerprints the run, so a fingerprint always records
+the implementation that executed.
+
+`model.attention_resolution` reports the request, the selected implementation,
+the device and dtype that were judged, and the reason each skipped candidate
+was unusable. The configuration holds the selected name and never the word
+`auto`. `save_pretrained` writes the backend that the checkpoint stored, not the
+choice made for one machine. `set_attn_implementation("auto")` starts a new
+request, and a named call replaces one.
+
+The outcome depends on the GPU, the dtype, and the installed packages. When
+numbers must be reproducible across machines, request the recorded
+implementation by name. Boltz2 rejects the request. The ANKH
+sequence-to-sequence model has only eager attention and selects it.
+
+### Measured basis for the current orders
+
+Every family currently orders `sdpa` first. On 2026-09-21 the `backend-bench`
+stage of `tools/gpu_evidence` timed each advertised backend of ESM2, ESM++, and
+DPLM with PyTorch 2.13.0+cu130 and Transformers 5.13.0. The models were randomly
+initialized at ESM2-150M, ESMC-300M, and DPLM-150M dimensions, with FP32
+parameters under CUDA BF16 autocast in inference mode. One batch held 8 rows of
+512 positions, either right-padded to 2336 residues or full.
+
+| GPU | FlashAttention speed relative to SDPA, padded batch | Full batch |
+| --- | --- | --- |
+| L4 | 1.04x to 1.15x | 0.99x to 1.06x |
+| H100 | 0.68x to 0.80x | 0.72x to 0.83x |
+
+On the H100 these forwards are bound by host overhead, and the FlashAttention
+path does more work per layer on the host. A FlashAttention-first order would
+therefore slow that machine down, so no family has one.
+`docs/evidence/attention/backend_latency.json` holds the numbers. They describe
+an uncommitted working tree on cloud workers and are not a release benchmark.
+They do not cover longer sequences or larger checkpoints, where a named
+FlashAttention request can still be the faster choice.
+
 ## Choosing a backend
 
 | Need | Start with | Why |
@@ -95,6 +175,7 @@ imperative selection through `set_attn_implementation()` or the legacy
 | Variable-length batches with compiled masks | `flex_attention` | Its `BlockMask` can avoid padded attention work |
 | Precompiled BF16 CUDA kernel on a declared family | `flash_attention_2` or `flash_attention_3` | The immutable binary and compatible runtime are validated before import |
 | Reproducible benchmark comparison | Set the exact backend explicitly | Leaving it unspecified delegates selection to Transformers and Torch |
+| The family's measured preference for this machine | `auto` | It selects the first usable entry of `attention_auto_order` and records why |
 
 Start from the family row in the
 [generated support matrix](generated/support.md). Do not request a backend
@@ -280,6 +361,10 @@ backend dispatch. FlashAttention calls with a packed 2D padding mask always use 
 including causal self-attention. The causal flag is passed to the varlen kernel,
 and padded query rows are restored as exact zeros after repadding. Masked calls
 reject shapes or devices that do not match Q, K, and V before loading a kernel.
+ESM2, ESM++, and DPLM derive the varlen token indices and cumulative lengths
+once per forward with `get_flash_padding_layout` and share that record across
+layers. A direct `kernels_flash_attention_func` call without the record derives
+the same metadata itself and returns identical values.
 
 E1's block-causal pattern is a distinct semantic key. It is never represented
 as ordinary padding attention. Mixed-length and skewed-padding parity cases
@@ -298,7 +383,8 @@ compile Flex or modify Dynamo or Inductor settings.
 A FastPLMs model revision fixes its own forward pass. Selecting an optimized
 implementation is always an explicit request, never a consequence of what
 happens to be installed, so adding or removing an optional package cannot move
-published numbers.
+published numbers. The opt-in `auto` request is the one exception. It depends on
+the machine by design, and it records the implementation that it selected.
 
 This differs from several official sources. Profluent's E1 resolves
 `kernels-community/triton-layer-norm` at import and uses a fused Triton RMSNorm

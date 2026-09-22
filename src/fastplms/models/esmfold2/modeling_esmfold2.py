@@ -65,6 +65,7 @@ from .modeling_esmfold2_common import (
     OuterProductMean,
     ResIdxAsymIdSymIdEntityIdEncoding,
     RowAttentionPooling,
+    SWA3DRoPEAttention,
     SwiGLUMLP,
     TriangleMultiplicativeUpdate,
     _categorical_mean,
@@ -74,6 +75,7 @@ from .modeling_esmfold2_common import (
     gather_token_to_atom,
     maybe_apply_msa_column_masking,
     maybe_subsample_msa,
+    validate_atom_attention,
     validate_kernel_backend,
     validate_msa_conditioning_inputs,
     validate_prepared_auxiliary_inputs,
@@ -1217,6 +1219,22 @@ class ESMFold2Model(
         self.confidence_head.set_kernel_backend(backend)
         self.structure_head.set_kernel_backend(backend)
         self._kernel_backend = backend
+
+    def set_atom_attention(self, mode: str) -> None:
+        """Select how atoms attend to each other in the atom encoders and decoder.
+
+        Args:
+            mode: ``"dense"`` (default) lets every atom attend to every atom slot,
+                as the official model does without flash-attn. ``"windowed"``
+                restricts each atom to 64 real neighbors on each side through
+                PyTorch's variable-length FlashAttention, as the official model
+                does with flash-attn. It needs CUDA, costs linear rather than
+                quadratic memory in the atom count, and changes numerical output.
+        """
+        validate_atom_attention(mode)
+        for module in self.modules():
+            if isinstance(module, SWA3DRoPEAttention):
+                module.set_atom_attention(mode)
 
     def apply_torch_compile(self, mode: str = "fixed_seqlen", dynamic: bool | None = None) -> None:
         """Compile l^2-heavy blocks.

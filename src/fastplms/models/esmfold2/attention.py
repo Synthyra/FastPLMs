@@ -20,6 +20,7 @@ class ESMFold2AttentionMixin(FastPLMsAttentionMixin):
         "sdpa",
         "flex_attention",
     )
+    _fastplms_attention_auto_order = ("sdpa",)
 
     def __init__(self, config, *args, **kwargs) -> None:
         super().__init__(config, *args, **kwargs)

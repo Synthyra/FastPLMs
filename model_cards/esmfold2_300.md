@@ -198,6 +198,39 @@ inputs remain supported without MSA conditioning.
 The confidence head is disabled: pLDDT, pTM, iPTM, and PAE are unavailable.
 The 300 and 600 suffixes describe backbone scale, not total model parameters.
 
+## Folding speed settings
+
+Two runtime settings trade memory or exactness for speed on long proteins. They
+need no extra package and no compilation, and neither is stored in the
+configuration.
+
+```python
+model.set_chunk_size(None)            # unchunked pair updates
+model.set_atom_attention("windowed")  # the official flash-attn atom window, through PyTorch
+```
+
+`set_chunk_size(None)` removes the row chunking of the pair-update blocks, which
+costs most of a long fold's time on a data-center GPU and saves little peak
+memory; pass a chunk such as 512 when the unchunked fold does not fit.
+`set_atom_attention("windowed")` restricts each atom to 64 real neighbors on
+each side, as the official model does when flash-attn is installed. It needs
+CUDA and changes numerical output, within sampling spread on the measured
+panel. The
+[ESMFold2 guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/esmfold2.md#measured-folding-cost)
+records the conditions, the dense-versus-windowed comparison, and the figure.
+
+| Residues | FastPLMs defaults (s) | Optimized (s) |
+| ---: | ---: | ---: |
+| 256 | 1.1 | 1.0 |
+| 1,024 | 35 | 10 |
+| 2,048 | not measured | 40 |
+
+Measured on one NVIDIA H100 80GB HBM3 with PyTorch 2.13.0+cu130: one
+fixed pseudo-random protein per length, 3 trunk loops,
+50 requested sampling steps under the official noise cap,
+1 diffusion sample, BF16 autocast over FP32 folding
+parameters, median of end-to-end folds. "Defaults" changes no setting.
+
 ## Learned representation and ESMC precision
 
 The learned projection maps `H: (b, l, 31, 960) -> Z: (b, l, 256)`.

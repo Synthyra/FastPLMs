@@ -1,10 +1,17 @@
 """Shared attention backends, masks, and optional optimized kernels."""
 
+from ._auto import (
+    AUTO_ATTENTION,
+    AttentionCandidate,
+    AttentionExecutionContext,
+    AttentionResolution,
+)
 from ._core import (
     LEGACY_CHECKPOINT_ATTENTION_BACKENDS,
     VALID_ATTENTION_BACKENDS,
     AttentionBackend,
     BlockMask,
+    FlashPaddingLayout,
     _ensure_flash_kernels_loaded,
     _get_flex_attention_fn,
     _get_flex_block_mask,
@@ -18,6 +25,7 @@ from ._core import (
     flex_attention,
     get_attention_mask,
     get_attn_implementation,
+    get_flash_padding_layout,
     index_first_axis,
     index_put_first_axis,
     kernels_flash_attention_func,
@@ -36,13 +44,18 @@ from .interfaces import (
 
 
 __all__ = [
+    "AUTO_ATTENTION",
     "FASTPLMS_ATTENTION_FUNCTIONS",
     "FASTPLMS_ATTENTION_MASKS",
     "LEGACY_CHECKPOINT_ATTENTION_BACKENDS",
     "VALID_ATTENTION_BACKENDS",
     "AttentionBackend",
+    "AttentionCandidate",
+    "AttentionExecutionContext",
+    "AttentionResolution",
     "BlockMask",
     "FastPLMsAttentionMixin",
+    "FlashPaddingLayout",
     "_ensure_flash_kernels_loaded",
     "_get_flex_attention_fn",
     "_get_flex_block_mask",
@@ -56,6 +69,7 @@ __all__ = [
     "flex_attention",
     "get_attention_mask",
     "get_attn_implementation",
+    "get_flash_padding_layout",
     "index_first_axis",
     "index_put_first_axis",
     "kernels_flash_attention_func",

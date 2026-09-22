@@ -12,7 +12,7 @@ from __future__ import annotations
 import importlib
 from functools import partial
 from importlib.util import find_spec
-from typing import ClassVar, cast
+from typing import Any, ClassVar, cast
 
 import torch
 import torch.nn as nn
@@ -39,6 +39,13 @@ except (AttributeError, ImportError):
     _cue_tri_mul = None  # type: ignore[assignment]
     CUE_AVAILABLE = False
 
+# PyTorch ships this variable-length FlashAttention entry point, so windowed
+# atom attention needs no extra package and no compilation.
+try:
+    from torch.nn.attention.varlen import varlen_attn as _varlen_attn
+except ImportError:
+    _varlen_attn = None  # type: ignore[assignment]
+
 # Biohub ships optional source-built Triton helpers. FastPLMs does not bundle or
 # compile them; these placeholders retain checkpoint-compatible control flow
 # while the portable PyTorch path remains flat and self-contained.
@@ -51,6 +58,9 @@ TRITON_KERNELS_AVAILABLE = False
 BACKEND_FUSED = "fused"
 BACKEND_CUEQ = "cuequivariance"
 _VALID_BACKENDS = (None, BACKEND_FUSED, BACKEND_CUEQ)
+ATOM_ATTENTION_DENSE = "dense"
+ATOM_ATTENTION_WINDOWED = "windowed"
+_VALID_ATOM_ATTENTION = (ATOM_ATTENTION_DENSE, ATOM_ATTENTION_WINDOWED)
 MSA_CONDITIONING_INPUT_NAMES = (
     "msa",
     "msa_attention_mask",
@@ -83,6 +93,18 @@ def validate_kernel_backend(backend: str | None) -> None:
             "backend='cuequivariance' requires cuequivariance_torch and the CUDA 13 "
             "cuequivariance_ops_torch runtime. Install FastPLMs with the "
             "'structure,cueq' extras on a supported Linux CUDA 13 host."
+        )
+
+
+def validate_atom_attention(mode: str) -> None:
+    """Fail before mutating modules when a named atom attention mode cannot execute."""
+
+    if mode not in _VALID_ATOM_ATTENTION:
+        raise ValueError(f"atom attention must be one of {_VALID_ATOM_ATTENTION}, got {mode!r}")
+    if mode == ATOM_ATTENTION_WINDOWED and _varlen_attn is None:
+        raise RuntimeError(
+            "atom attention 'windowed' requires torch.nn.attention.varlen, which this "
+            "PyTorch build does not provide."
         )
 
 
@@ -827,18 +849,29 @@ class TriangleMultiplicativeBlock(nn.Module):
     def _triangular_contract_chunked(
         self, left_stream: Tensor, right_stream: Tensor, chunk_size: int
     ) -> Tensor:
-        """Compute the triangular einsum in chunks along the output i-dimension."""
-        length = left_stream.shape[1] if self.flow == "outgoing" else left_stream.shape[2]
+        """Compute the triangular einsum in chunks along the output i-dimension.
+
+        ``torch.einsum`` lowers each chunk to one batched matrix product over
+        ``(b, d)``, and to do so it copies the whole right stream into that
+        layout once per chunk. That copy is made once here. Each chunk then runs
+        the same product on the same values, so the result is bitwise identical
+        to a per-chunk einsum. ``forward`` has already cast the streams to the
+        autocast dtype, which the product would otherwise do once per chunk.
+        """
+        if self.flow == "outgoing":
+            left_rows = left_stream.permute(0, 3, 1, 2)  # (b, i, k, d) -> (b, d, i, k)
+            right_columns = right_stream.permute(0, 3, 2, 1)  # (b, j, k, d) -> (b, d, k, j)
+        else:
+            left_rows = left_stream.permute(0, 3, 2, 1)  # (b, k, i, d) -> (b, d, i, k)
+            right_columns = right_stream.permute(0, 3, 1, 2)  # (b, k, j, d) -> (b, d, k, j)
+        batch_size, channels, length, inner = left_rows.shape
+        right_columns = right_columns.reshape(batch_size * channels, inner, -1)  # (b * d, k, j)
         chunks = []
         for start in range(0, length, chunk_size):
-            end = min(start + chunk_size, length)
-            if self.flow == "outgoing":
-                chunk = torch.einsum(self._einsum_equation, left_stream[:, start:end], right_stream)
-            else:
-                chunk = torch.einsum(
-                    self._einsum_equation, left_stream[:, :, start:end], right_stream
-                )
-            chunks.append(chunk)
+            rows = left_rows[:, :, start : start + chunk_size]  # (b, d, i_c, k)
+            product = torch.bmm(rows.reshape(batch_size * channels, -1, inner), right_columns)
+            product = product.view(batch_size, channels, rows.shape[2], -1)  # (b, d, i_c, j)
+            chunks.append(product.permute(0, 2, 3, 1))  # (b, i_c, j, d)
         return torch.cat(chunks, dim=1)
 
     def forward(self, pair_grid: Tensor, visibility: Tensor | None = None) -> Tensor:
@@ -862,20 +895,34 @@ class TriangleMultiplicativeBlock(nn.Module):
                 eps=_EPS,
             )
 
+        # Every tensor below is as large as the pair representation or larger, and this
+        # block sets the peak memory of a fold. Each name is dropped once it is dead, so
+        # the allocator can reuse its buffer. No value changes.
         normalized_grid = self.norm_start(pair_grid)
-        bundled = self.proj_bundle(normalized_grid)
+        bundled = self.proj_bundle(normalized_grid)  # (b, l, l, 4 * d)
         signal, gate_logits = bundled.split(2 * self.latent_channels, dim=-1)
-        routed = signal * torch.sigmoid(gate_logits)
+        routed = signal * torch.sigmoid(gate_logits)  # (b, l, l, 2 * d)
+        # The two views would keep the whole projection alive.
+        del bundled, signal, gate_logits
         routed = routed * visibility.unsqueeze(-1)
 
-        left_stream, right_stream = routed.float().chunk(2, dim=-1)
+        left_stream, right_stream = routed.float().chunk(2, dim=-1)  # each (b, l, l, d)
+        if torch.is_autocast_enabled(left_stream.device.type):
+            # The contraction is an autocast operation. Casting its inputs here, as it
+            # would, lets the full-precision product go before the contraction runs.
+            autocast_dtype = torch.get_autocast_dtype(left_stream.device.type)
+            left_stream = left_stream.to(autocast_dtype)
+            right_stream = right_stream.to(autocast_dtype)
+        del routed
         if self._chunk_size is not None:
             contracted = self._triangular_contract_chunked(
                 left_stream, right_stream, self._chunk_size
             )
         else:
             contracted = self._triangular_contract(left_stream, right_stream)
+        del left_stream, right_stream
         mixed = self.proj_emit(self.norm_mix(contracted))
+        del contracted
         output_gate = torch.sigmoid(self.proj_gate(normalized_grid))
         return mixed * output_gate
 
@@ -1315,7 +1362,11 @@ class SwiGLU(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         x12 = self.w12(x)
         x1, x2 = x12.split(self.hidden_features, dim=-1)
-        hidden = F.silu(x1) * x2
+        hidden = F.silu(x1)
+        # Without autograd the product can reuse the activation's buffer. On a pair tensor
+        # that buffer is twice the pair representation. The values are the same either way.
+        hidden = hidden * x2 if torch.is_grad_enabled() else hidden.mul_(x2)
+        del x12, x1, x2
         return self.w3(hidden)
 
 
@@ -1447,10 +1498,57 @@ class SWA3DRoPEAttention(nn.Module):
         self.head_dim = d_model // n_heads
         self.scale = self.head_dim**-0.5
         self.half_window = half_window
+        self._atom_attention = ATOM_ATTENTION_DENSE
 
         self.Wqkv = nn.Linear(d_model, 3 * d_model, bias=False)
         self.out_proj = nn.Linear(d_model, d_model, bias=False)
         self.gate_proj = nn.Linear(d_model, d_model, bias=False)
+
+    def set_atom_attention(self, mode: str) -> None:
+        validate_atom_attention(mode)
+        self._atom_attention = mode
+
+    def _windowed_attention(
+        self, q: Tensor, k: Tensor, v: Tensor, attention_params: tuple[Any, ...]
+    ) -> Tensor:
+        """Attend to at most ``half_window`` real atoms on each side.
+
+        This is the attention the official model runs when flash-attn is
+        installed. Window offsets count unpadded atoms within one sample, so a
+        padded slot is never a key, and its output is zero.
+        """
+        # q, k, v: (b, n_atoms, h, d_h)
+        if not q.is_cuda:
+            raise RuntimeError("atom attention 'windowed' requires CUDA tensors.")
+        batch_size, n_atoms = q.shape[:2]
+        # indices: (t,) flat positions of real atoms; cu_seqlens: (b + 1,) int32 row offsets.
+        indices, cu_seqlens, max_seqlen = attention_params[2:5]
+        flat_shape = (batch_size * n_atoms, self.n_heads, self.head_dim)
+        q, k, v = q.reshape(flat_shape), k.reshape(flat_shape), v.reshape(flat_shape)
+        has_padding = indices.shape[0] != batch_size * n_atoms
+        if has_padding:
+            q, k, v = q[indices], k[indices], v[indices]  # each (t, h, d_h)
+        # Without an auxiliary request the call returns the attended values alone.
+        attended = cast(
+            Tensor,
+            _varlen_attn(
+                q,
+                k,
+                v,
+                cu_seqlens,
+                cu_seqlens,
+                max_seqlen,
+                max_seqlen,
+                scale=self.scale,
+                window_size=(self.half_window, self.half_window),
+            ),
+        )  # (t, h, d_h)
+        if has_padding:
+            out = attended.new_zeros(flat_shape)  # (b * n_atoms, h, d_h)
+            out[indices] = attended
+        else:
+            out = attended
+        return out.view(batch_size, n_atoms, self.n_heads, self.head_dim)
 
     def forward(self, x: Tensor, attention_params: tuple) -> Tensor:
         batch_size, n_atoms = x.shape[:2]
@@ -1472,12 +1570,15 @@ class SWA3DRoPEAttention(nn.Module):
         # ESMFold2 does not advertise FlashAttention. Keep this atom path on
         # PyTorch. Models that advertise FlashAttention dispatch through the
         # precompiled Hugging Face kernels interface in fastplms.attention.
-        q_t = q.transpose(1, 2)
-        k_t = k.transpose(1, 2)
-        v_t = v.transpose(1, 2)
-        attn = torch.matmul(q_t, k_t.transpose(-2, -1)) * self.scale
-        attn = F.softmax(attn, dim=-1)
-        out = torch.matmul(attn, v_t).transpose(1, 2)
+        if self._atom_attention == ATOM_ATTENTION_WINDOWED:
+            out = self._windowed_attention(q, k, v, attention_params)
+        else:
+            q_t = q.transpose(1, 2)
+            k_t = k.transpose(1, 2)
+            v_t = v.transpose(1, 2)
+            attn = torch.matmul(q_t, k_t.transpose(-2, -1)) * self.scale
+            attn = F.softmax(attn, dim=-1)
+            out = torch.matmul(attn, v_t).transpose(1, 2)
 
         out = out.to(input_dtype).reshape(  # type: ignore[union-attr]
             batch_size, n_atoms, -1
@@ -1934,7 +2035,14 @@ class AttentionPairBias(nn.Module):
         beta: Tensor | float = 0.0,
         attention_mask: Tensor | None = None,
         num_diffusion_samples: int = 1,
+        step_cache: dict[str, Tensor] | None = None,
     ) -> Tensor:
+        """Attend over tokens with a per-head bias projected from the pair tensor.
+
+        ``step_cache`` belongs to this block for one ``sample`` call. The sampler
+        conditions every denoising step on the same ``z``, so the PyTorch path
+        projects the bias on the first step and reuses that tensor afterwards.
+        """
         bsz, n_queries, d_model = a.shape
 
         x = self.adaln(a, s) if s is not None else self.pre_norm(a)
@@ -1946,9 +2054,20 @@ class AttentionPairBias(nn.Module):
         k = k.view(bsz, n_keys, self.num_heads, self.head_dim)
         v = v.view(bsz, n_keys, self.num_heads, self.head_dim)
 
-        # Expand z for num_diffusion_samples
-        if z.dim() == 4 and z.shape[0] != bsz and num_diffusion_samples > 1:
-            z = z.repeat_interleave(num_diffusion_samples, dim=0)
+        use_fused_kernel = self._can_use_fused_pair_bias(z, n_queries, beta)
+        use_cueq_kernel = not use_fused_kernel and self._can_use_cueq_pair_bias(z, n_queries, beta)
+        cached_pair_bias = None
+        if step_cache is not None and not use_fused_kernel and not use_cueq_kernel:
+            cached_pair_bias = step_cache.get("pair_bias")
+
+        # Expand z for num_diffusion_samples, unless its projection is already cached.
+        if (
+            cached_pair_bias is None
+            and z.dim() == 4
+            and z.shape[0] != bsz
+            and num_diffusion_samples > 1
+        ):
+            z = z.repeat_interleave(num_diffusion_samples, dim=0)  # (b * samples, n, n, d_pair)
         if (
             attention_mask is not None
             and attention_mask.shape[0] != bsz
@@ -1956,7 +2075,7 @@ class AttentionPairBias(nn.Module):
         ):
             attention_mask = attention_mask.repeat_interleave(num_diffusion_samples, dim=0)
 
-        if self._can_use_fused_pair_bias(z, n_queries, beta):
+        if use_fused_kernel:
             kernel_mask = (
                 attention_mask
                 if attention_mask is not None
@@ -1990,7 +2109,7 @@ class AttentionPairBias(nn.Module):
                 out = torch.sigmoid(self.out_gate(s)) * out
             return out
 
-        if self._can_use_cueq_pair_bias(z, n_queries, beta):
+        if use_cueq_kernel:
             kernel_mask = (
                 attention_mask
                 if attention_mask is not None
@@ -2018,7 +2137,14 @@ class AttentionPairBias(nn.Module):
 
             logits = torch.einsum("... i h d, ... j h d -> ... i j h", q, k) * self.scale
 
-            pair_bias = self.pair_bias_proj(self.pair_norm(z)) if z.dim() == 4 else z.unsqueeze(-1)
+            if cached_pair_bias is not None:
+                pair_bias = cached_pair_bias  # (b * samples, n, n, h)
+            elif z.dim() == 4:
+                pair_bias = self.pair_bias_proj(self.pair_norm(z))  # (b * samples, n, n, h)
+                if step_cache is not None:
+                    step_cache["pair_bias"] = pair_bias
+            else:
+                pair_bias = z.unsqueeze(-1)  # (b * samples, n, n, 1), a precomputed bias
             logits = logits + pair_bias.to(dtype=logits.dtype)
 
             if attention_mask is not None:
@@ -2136,10 +2262,22 @@ class DiffusionTransformer(nn.Module):
         attention_mask: Tensor | None = None,
         num_diffusion_samples: int = 1,
         return_intermediates: bool = False,
+        inference_cache: dict[str, Any] | None = None,
     ) -> tuple[Tensor, list[Tensor]]:
+        """Run the token blocks.
+
+        ``inference_cache`` must span only calls that share ``z``, as one
+        ``sample`` call does; each block then keeps its pair bias across steps.
+        """
         intermediates: list[Tensor] = []
+        block_caches: dict[int, dict[str, Tensor]] | None = None
+        if inference_cache is not None:
+            block_caches = inference_cache.setdefault("token_pair_bias", {})
         x = a
-        for attn, transition in zip(self.attn_blocks, self.transition_blocks, strict=True):
+        for block_index, (attn, transition) in enumerate(
+            zip(self.attn_blocks, self.transition_blocks, strict=True)
+        ):
+            step_cache = None if block_caches is None else block_caches.setdefault(block_index, {})
             x = x + attn(
                 x,
                 s,
@@ -2147,6 +2285,7 @@ class DiffusionTransformer(nn.Module):
                 beta,
                 attention_mask=attention_mask,
                 num_diffusion_samples=num_diffusion_samples,
+                step_cache=step_cache,
             )
             x = x + transition(x, s)
             if return_intermediates:
@@ -2409,6 +2548,7 @@ class DiffusionModule(nn.Module):
             beta=0.0,
             attention_mask=token_attention_mask,
             num_diffusion_samples=num_diffusion_samples,
+            inference_cache=inference_cache,
         )
 
         # Step 6: token norm
