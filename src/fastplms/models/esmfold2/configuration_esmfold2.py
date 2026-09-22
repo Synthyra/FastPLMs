@@ -16,7 +16,10 @@
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import asdict, dataclass, field
+from pathlib import PurePosixPath
 from typing import Any, TypeVar, cast
 from transformers.configuration_utils import PretrainedConfig
 
@@ -25,6 +28,35 @@ from fastplms.attention import canonical_checkpoint_attention_backend
 
 _ESMC_ATTENTION_IMPLEMENTATIONS = frozenset({"eager", "flex_attention", "sdpa"})
 _ESMC_PRECISIONS = frozenset({"auto", "bf16", "fp32", "fp8"})
+
+
+def validate_confidence_head_source(value: Any) -> dict[str, str] | None:
+    """Validate an explicit, independently versioned confidence-head binding."""
+
+    if value is None:
+        return None
+    fields = {
+        "repo_id", "repo_type", "latest_path", "revision", "model_id", "base_weight_sha256"
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError(f"confidence_head_source requires exactly {sorted(fields)}.")
+    if any(not isinstance(item, str) or not item for item in value.values()):
+        raise ValueError("confidence_head_source values must be nonempty strings.")
+    if value["repo_type"] != "dataset":
+        raise ValueError("External confidence heads must come from a dataset repository.")
+    if value["model_id"] not in {"esmfold2_300", "esmfold2_600"}:
+        raise ValueError("External confidence heads support esmfold2_300 and esmfold2_600.")
+    path = PurePosixPath(value["latest_path"])
+    if (
+        path.is_absolute()
+        or ".." in path.parts
+        or "\\" in value["latest_path"]
+        or path.suffix != ".json"
+    ):
+        raise ValueError("confidence_head_source.latest_path must be a relative JSON path.")
+    if re.fullmatch(r"[0-9a-f]{64}", value["base_weight_sha256"]) is None:
+        raise ValueError("confidence_head_source.base_weight_sha256 must be a SHA256 digest.")
+    return dict(value)
 
 
 def _esmc_backbone_checkpoint_ids() -> tuple[str, str]:
@@ -284,6 +316,25 @@ class ESMFold2Config(PretrainedConfig):
 
         for name, config_type in _NESTED_CONFIGS:
             setattr(self, name, _nested_config(kwargs.get(name), config_type))
+        self.confidence_head_source = validate_confidence_head_source(
+            kwargs.get("confidence_head_source")
+        )
+        self.confidence_head_resolved = kwargs.get("confidence_head_resolved")
+        if self.confidence_head_source is not None:
+            if self.type != "experimental" or self.confidence_head.enabled:
+                raise ValueError(
+                    "External confidence heads require a disabled experimental base head."
+                )
+            if self.confidence_head_resolved is not None:
+                raise ValueError("A confidence head cannot be both external and embedded.")
+        if self.confidence_head_resolved is not None:
+            if (
+                not isinstance(self.confidence_head_resolved, dict)
+                or not self.confidence_head.enabled
+            ):
+                raise ValueError(
+                    "Resolved confidence-head provenance requires an enabled embedded head."
+                )
         if not isinstance(self.msa_encoder.enabled, bool):
             raise TypeError("msa_encoder.enabled must be a boolean.")
         declared_msa_conditioning = kwargs.get("msa_conditioning")
@@ -332,4 +383,5 @@ __all__ = [
     "ParcaeConfig",
     "normalize_esmc_attention_implementation",
     "normalize_esmc_id",
+    "validate_confidence_head_source",
 ]

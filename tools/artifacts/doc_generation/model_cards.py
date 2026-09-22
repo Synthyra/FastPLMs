@@ -16,6 +16,7 @@ from tools.artifacts.doc_generation.card_metadata import (
 from tools.artifacts.doc_generation.confidence_rendering import (
     _confidence_adaptation_section,
     _confidence_research_section,
+    _live_confidence_section,
 )
 from tools.artifacts.doc_generation.esmc_evidence import (
     EsmcReportSet,
@@ -135,7 +136,7 @@ def render_model_card(
     model_overview = _model_overview(spec)
     esmfold2_quick_start = _esmfold2_quick_start(spec)
     confidence_adaptation = _confidence_adaptation_section(spec, evidence_root)
-    confidence_research = _confidence_research_section(spec, evidence_root)
+    confidence_research = _live_confidence_section(spec) + _confidence_research_section(spec, evidence_root)
     attention_usage = _attention_usage(spec)
     sequence_forward = _sequence_forward_usage(spec)
     embedding_usage = _embedding_usage(spec)

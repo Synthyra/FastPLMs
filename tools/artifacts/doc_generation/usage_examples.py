@@ -389,8 +389,9 @@ def _esmfold2_quick_start(spec: ModelSpec) -> str:
         "PAE, pTM, and iPTM fields. Confidence calculation is optional."
         if spec.confidence_adaptation is not None
         else (
-            "The confidence fields are unavailable because this experimental variant "
-            "has a disabled confidence head."
+            "The pinned base has no confidence head. A Hub config with a published v2 "
+            "head source loads the latest head and enables confidence by default; "
+            "its evaluation status remains pending during training."
             if is_small_variant
             else "This variant has an enabled confidence head and returns confidence fields."
         )
@@ -884,7 +885,7 @@ folding requests raise.
             "The Synthyra-adapted native confidence head returns pLDDT, PAE, pTM, and "
             "iPTM. Confidence calculation is optional."
             if spec.confidence_adaptation is not None
-            else "The confidence head is disabled: pLDDT, pTM, iPTM, and PAE are unavailable."
+            else "The pinned base has no confidence head. The Hub config can bind the latest published v2 head, which enables pLDDT, pTM, iPTM and PAE by default."
         )
         backbone_layers, backbone_width = (31, 960) if spec.id == "esmfold2_300" else (37, 1152)
         return f"""## Protein folding

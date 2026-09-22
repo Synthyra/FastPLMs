@@ -486,6 +486,59 @@ receipts are saved locally under `artifacts/confidence-v2/<campaign>/` and on
 the Modal volume. No credentials are included in source uploads or public
 artifacts.
 
+### Ongoing Hugging Face checkpoints
+
+The companion publisher checks the persistent training volume every two minutes
+and mirrors each new saved EMA head. Training saves at initialization, every
+30 minutes, after validation and at completion; update zero is retained in W&B
+but is not advertised as a trained head on Hugging Face. Full resumable
+checkpoints remain in W&B. Each head-only safetensors file and its provenance
+have an immutable, content-addressed path in `Synthyra/FastPLMs-artifacts` under
+`confidence/v2/<campaign>/<model>/<wandb-run>/updates/`. A per-model `latest.json`
+advances in the same parent-protected commit as the corresponding head files.
+An interrupted upload cannot advance the pointer to an absent head.
+
+Once the first positive-update head is public, the companion updates only the
+model repository's `config.json` to declare `confidence_head_source`. It first
+checks the published base weight hash and availability of the new loading code.
+The base weights remain unchanged. Subsequent loads of `Synthyra/ESMFold2-300`
+and `Synthyra/ESMFold2-600` resolve the current head and enable confidence by
+default. Publication reports retain the dataset revision, model-config revision,
+training step and head hash. These heads carry `evaluation_status="pending"`;
+publication does not assert the final acceptance criteria have passed.
+
+The loader resolves `latest.json` and its head at one immutable dataset revision,
+checks hash, size, finite tensors and strict native state, and records that
+identity in `model.config.confidence_head_resolved`. Existing model objects keep
+their loaded weights. `save_pretrained` embeds the exact head and removes the
+rolling source, allowing the saved model to reload without an update download.
+Pass `load_confidence_head=False` to omit an external head; this does not remove
+an embedded head. For a reproducible external load, set
+`config.confidence_head_source["revision"]` to a recorded dataset commit before
+passing that config to `from_pretrained`. Offline loading requires the pointer
+and head to be cached. External heads support a single resident model device;
+split-device and disk-offloaded loading raise before downloading the head.
+
+The CPU companion runs independently of the two GPU trainers and retains its
+status at `status/live-publication.json` on the campaign volume. Three consecutive
+publication failures stop it visibly; W&B checkpoint persistence remains part of
+the training loop. Its wall-time limit is 23.5 hours. With the replacement
+training call IDs already recorded, verify and dispatch it with:
+
+```bash
+PYTHONPATH=src:. python -m tools.confidence.launch_v2 publish-live --campaign <campaign>
+```
+
+Publish the checked loading source with the established files-only workflow
+before dispatch. `--verify-only` runs its focused CPU checks without starting a
+publisher. Keep its dispatch receipt to avoid duplicate companion workers.
+The deployed companion is
+[Modal app ap-q5y9ATYHMaTpJVS1nsVU7F](https://modal.com/apps/synthyra/main/ap-q5y9ATYHMaTpJVS1nsVU7F).
+Its 106 focused CPU checks passed, including checkpoint integrity, publication
+ordering, saved-model reload and independent handling of failed training calls.
+Deployment receipts and results are pinned at
+[HF revision e96c4ba](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/e96c4baac3af558be1b17d5426b62b19d3333c7a/confidence-v2/v2-reproduction-20260922).
+
 ### GPU cost comparison and training migration
 
 On September 22, 2026, seven GPU types ran the same 16-target training panel

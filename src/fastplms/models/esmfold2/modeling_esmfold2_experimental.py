@@ -22,6 +22,7 @@ from transformers.modeling_utils import PreTrainedModel
 
 from .attention import ESMFold2AttentionMixin
 from .configuration_esmfold2 import ESMFold2Config
+from .confidence_checkpoint import install_confidence_checkpoint
 from .embedding import ESMFold2EmbeddingMixin
 from .modeling_esmfold2 import (
     ESMCPrecision,
@@ -606,6 +607,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         pretrained_model_name_or_path,
         *model_args,
         load_esmc: bool = True,
+        load_confidence_head: bool = True,
         **kwargs,
     ):
         if "config" not in kwargs:
@@ -620,6 +622,8 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
             model, loading_info = loaded
         else:
             model = loaded
+        if load_confidence_head and model.config.confidence_head_source is not None:
+            install_confidence_checkpoint(model, download_options=kwargs)
         if load_esmc:
             model.load_esmc(
                 model.config.esmc_id,

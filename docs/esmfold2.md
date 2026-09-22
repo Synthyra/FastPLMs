@@ -23,8 +23,13 @@ without MSA conditioning for single-sequence inference
 
 The base300M and base600M checkpoints are experimental architecture variants.
 Their pinned configs declare 24 folding blocks, no MSA conditioning, and
-`confidence_head.enabled=false`. They therefore do not produce pLDDT, pTM,
-iPTM, or PAE outputs. The 300M single-protein comparison passed, as reported
+`confidence_head.enabled=false`. Those pinned base revisions do not produce
+pLDDT, pTM, iPTM or PAE outputs. The Hub main config can independently bind a
+published v2 confidence head through `confidence_head_source`; loading that
+config attaches the latest head and enables confidence by default. The
+[ongoing head publication](confidence_training.md#ongoing-hugging-face-checkpoints)
+records its training update and immutable identity. Heads published during
+training have pending evaluation. The 300M single-protein comparison passed, as reported
 in [ESMFold2-300 validation](validation/esmfold2_small.md). This is not the
 full structure benchmark, which remains pending. The mirrors are published at
 revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
@@ -42,8 +47,9 @@ calculation when enabled, and decoding. Progress display does not change the
 sampling settings or random-number sequence.
 
 For a two-protein example that saves `complex.cif`, start with a model card's
-Quick start. The 300M and 600M results keep confidence values unavailable;
-their CIF files use `?` for unknown confidence-derived B factors.
+Quick start. A 300M or 600M base loaded without an external confidence head
+keeps confidence values unavailable and uses `?` for unknown confidence-derived
+B factors. A successfully loaded v2 head supplies confidence fields.
 
 ## Dependencies and platform requirements
 
@@ -280,8 +286,8 @@ feature tensors include `ref_pos`, but this is component reference geometry
 created during featurization, not the target coordinates. Atomic coordinates
 and confidence fields are model outputs.
 The base300M and base600M experimental Fast variants have
-`confidence_head.enabled=false` in their pinned configs. Folding with either
-variant returns structure outputs without pLDDT, pTM, iPTM, or PAE fields, so
+`confidence_head.enabled=false` in their pinned base configs. Loading either
+base without an external head returns no pLDDT, pTM, iPTM or PAE fields, so
 the confidence-printing examples above apply only to variants with an enabled
 confidence head.
 The offline [`structure_preparation.py`](../examples/structure_preparation.py)

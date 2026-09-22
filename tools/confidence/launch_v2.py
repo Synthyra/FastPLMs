@@ -30,6 +30,10 @@ def main() -> None:
         from .modal_resume import main as dispatch
 
         del sys.argv[1]
+    elif len(sys.argv) > 1 and sys.argv[1] == "publish-live":
+        from .modal_live import main as dispatch
+
+        del sys.argv[1]
     else:
         from .modal_v2 import main as dispatch
 

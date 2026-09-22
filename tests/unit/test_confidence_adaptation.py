@@ -111,7 +111,9 @@ def test_unadapted_cards_withhold_metrics_pending_recomputation(model_id: str) -
     root = Path(__file__).resolve().parents[2]
     card = render_model_card(get_model_registry()[model_id], evidence_root=root)
     assert "## Separately trained confidence head" in card
-    assert "This checkpoint ships with its confidence head disabled" in card
+    assert "The pinned base checkpoint has its confidence head disabled" in card
+    assert "Current v2 confidence head" in card
+    assert "pending evaluation" in card
     assert "require recomputation" in " ".join(card.split())
     assert "780 update rows" in card
     assert "zero skipped training targets" in card

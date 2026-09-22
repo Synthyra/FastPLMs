@@ -23,6 +23,33 @@ def _withheld_metrics_notice(evidence: ConfidenceEvidence) -> str:
     )
 
 
+def _live_confidence_section(spec: ModelSpec) -> str:
+    if spec.id not in {"esmfold2_300", "esmfold2_600"} or spec.confidence_adaptation is not None:
+        return ""
+    return f"""## Current v2 confidence head
+
+The v2 reproduction publishes current EMA heads during training to the public
+[artifact dataset](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/main/confidence/v2/v2-reproduction-20260922/{spec.id}).
+After the first trained checkpoint is uploaded, the Hub config binds this model
+to its latest published head. `AutoModel.from_pretrained` then loads that head
+and enables pLDDT, PAE, pTM and iPTM by default. These training checkpoints have
+pending evaluation; the historical results below do not validate them.
+
+Each load resolves an immutable dataset revision and verifies the head's hash
+and native state. `model.config.confidence_head_resolved` records the revision,
+training update and head identity. An already loaded model keeps its head;
+reload to obtain a newer publication. `save_pretrained` embeds the exact loaded
+head, so the saved model reloads without fetching a newer one.
+
+Pass `load_confidence_head=False` to load the unchanged base without its external
+head. This option does not remove a head already embedded in a saved model.
+External loading supports one resident model device and cached offline loads;
+split-device and disk-offloaded loading are unsupported. See the
+[confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md#ongoing-hugging-face-checkpoints).
+
+"""
+
+
 def _confidence_adaptation_section(spec: ModelSpec, root: Path | None) -> str:
     """Render identity and measured evidence for a separately trained head."""
 
@@ -186,16 +213,16 @@ def _confidence_research_section(spec: ModelSpec, root: Path | None) -> str:
         ):
             return f"""## Separately trained confidence head
 
-This checkpoint ships with its confidence head disabled. Separately trained
-confidence weights remain unpublished and are not part of this artifact.
+The pinned base checkpoint has its confidence head disabled. The historical
+GH200 confidence weights were not recovered and remain unpublished.
 
 {_withheld_metrics_notice(report)}
 
 """
         return f"""## Separately trained confidence head
 
-This checkpoint ships with its confidence head disabled. Separately trained
-confidence weights remain unpublished and are not part of this artifact.
+The pinned base checkpoint has its confidence head disabled. The historical
+GH200 confidence weights were not recovered and remain unpublished.
 
 The archived correlations, bootstrap intervals, and acceptance gates require
 recomputation after correcting tied ranks in Spearman correlation. Raw test
@@ -242,7 +269,7 @@ preserves the historical results and their review status.
         )
     introduction = _fill_paragraphs(
         (
-            "This checkpoint ships with its confidence head disabled. The results below come "
+            "The pinned base checkpoint has its confidence head disabled. The historical results below come "
             "from a "
             "confidence head trained separately for this backbone. Those weights are not published "
             "and are not part of this artifact.",

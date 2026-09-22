@@ -51,8 +51,9 @@ with torch.inference_mode():
 Path("complex.cif").write_text(model.result_to_cif(result), encoding="utf-8")
 ```
 
-Set `verbose=False` to silence the folding progress display. The confidence fields are unavailable because this experimental variant has a
-disabled confidence head.
+Set `verbose=False` to silence the folding progress display. The pinned base has no confidence head. A Hub config with a published v2 head
+source loads the latest head and enables confidence by default; its evaluation
+status remains pending during training.
 
 ## Model overview
 
@@ -200,7 +201,7 @@ This checkpoint was trained without MSA conditioning. It rejects
 `ProteinInput.msa` and MSA-derived features. Typed multichain and multimolecule
 inputs remain supported without MSA conditioning.
 
-The confidence head is disabled: pLDDT, pTM, iPTM, and PAE are unavailable.
+The pinned base has no confidence head. The Hub config can bind the latest published v2 head, which enables pLDDT, pTM, iPTM and PAE by default.
 The 300 and 600 suffixes describe backbone scale, not total model parameters.
 
 ## Folding speed settings
@@ -242,10 +243,31 @@ The learned projection maps `H: (b, l, 37, 1152) -> Z: (b, l, 256)`.
 `embed_dataset` returns one `(l, 256)` residue representation per sequence.
 The experimental architecture does not expose folding TTT.
 
+## Current v2 confidence head
+
+The v2 reproduction publishes current EMA heads during training to the public
+[artifact dataset](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/main/confidence/v2/v2-reproduction-20260922/esmfold2_600).
+After the first trained checkpoint is uploaded, the Hub config binds this model
+to its latest published head. `AutoModel.from_pretrained` then loads that head
+and enables pLDDT, PAE, pTM and iPTM by default. These training checkpoints have
+pending evaluation; the historical results below do not validate them.
+
+Each load resolves an immutable dataset revision and verifies the head's hash
+and native state. `model.config.confidence_head_resolved` records the revision,
+training update and head identity. An already loaded model keeps its head;
+reload to obtain a newer publication. `save_pretrained` embeds the exact loaded
+head, so the saved model reloads without fetching a newer one.
+
+Pass `load_confidence_head=False` to load the unchanged base without its external
+head. This option does not remove a head already embedded in a saved model.
+External loading supports one resident model device and cached offline loads;
+split-device and disk-offloaded loading are unsupported. See the
+[confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md#ongoing-hugging-face-checkpoints).
+
 ## Separately trained confidence head
 
-This checkpoint ships with its confidence head disabled. Separately trained
-confidence weights remain unpublished and are not part of this artifact.
+The pinned base checkpoint has its confidence head disabled. The historical
+GH200 confidence weights were not recovered and remain unpublished.
 
 The archived correlations, bootstrap intervals, and acceptance gates require
 recomputation after correcting tied ranks in Spearman correlation. Raw test

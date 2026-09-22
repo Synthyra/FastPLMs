@@ -62,7 +62,7 @@ AutoClasses, attention backends, precision paths, and release tiers.
 | DPLM2 | Amino-acid and structure co-generation | Amino-acid and structure token tracks | Separate structure and amino-acid boundary tokens |
 | ANKH | T5 protein encoding and sequence-to-sequence modeling | Amino-acid sequences tokenized for encoder or seq2seq use | The 1.0 artifact contract is one full official-compatible encoder-decoder checkpoint with encoder-default embeddings |
 | ESMFold | Sequence-to-structure inference | Raw amino-acid sequences | Meta ESMFold contract with FastPLMs ESM2 backbone |
-| ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Full variants have 48 folding blocks and optional MSA conditioning; Fast variants have 24 blocks and no MSA conditioning; experimental base300M/base600M variants disable confidence outputs |
+| ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Full variants have 48 folding blocks and optional MSA conditioning; Fast variants have 24 blocks and no MSA conditioning; small experimental variants support separately published v2 confidence heads |
 | Boltz2 | Structure prediction | Raw amino-acid sequences or prepared model features | Provisional end-to-end numerical-equivalence status |
 
 The model manifest controls support, not this summary. A backend or AutoClass
@@ -507,11 +507,12 @@ FastPLMs also exposes the experimental `Synthyra/ESMFold2-300` and
 no MSA conditioning, and disabled confidence heads. The 300M backbone is
 `960 x 30`; its single-protein comparison passed, as documented in
 [ESMFold2-300 validation](docs/validation/esmfold2_small.md). That case is not
-the full structure benchmark, which remains pending. The published mirrors are pinned
+the full structure benchmark, which remains pending. The base snapshots are pinned
 to revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
 `71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M backbone is
-`1152 x 36` and has no inference validation result. These variants do not
-produce pLDDT, pTM, iPTM, or PAE fields.
+`1152 x 36` and has no inference validation result. Those base snapshots do not
+produce pLDDT, pTM, iPTM or PAE fields; the current Hub configs can load a
+separately published v2 head as described below.
 
 Folding progress is disabled by default (`verbose=False`). Set `verbose=True` on
 ESMFold `infer`, ESMFold2 `fold` or `infer_protein`, or Boltz2
@@ -591,10 +592,15 @@ multimolecule, modification, and bond paths and the pocket and distogram
 rejection contracts. Its ESMFold2 MSA path needs a full checkpoint, not a Fast
 checkpoint.
 
-The experimental `Synthyra/ESMFold2-300` and `Synthyra/ESMFold2-600` variants
-disable their confidence heads. Their folding results therefore do not contain
-pLDDT, pTM, iPTM, or PAE fields. The confidence fields shown in the examples
-above apply to variants with an enabled confidence head. Separate research
+The pinned experimental `Synthyra/ESMFold2-300` and `Synthyra/ESMFold2-600` base
+weights exclude confidence heads. Their Hub main configs can bind the latest
+published v2 EMA head, enabling pLDDT, pTM, iPTM and PAE by default after the
+first trained checkpoint is public. These ongoing training heads have pending
+evaluation. Each load records the exact dataset revision and head hash in
+`model.config.confidence_head_resolved`; `save_pretrained` embeds that exact
+head for reproducible reloads. Pass `load_confidence_head=False` to omit an
+external head. See [ongoing HF publication](docs/confidence_training.md#ongoing-hugging-face-checkpoints).
+Separate research
 confidence heads were trained in a Modal pilot and a GH200 v2 campaign; neither
 has produced a release-qualified confidence checkpoint. The pilot reports remain
 valid within their documented scope. The historical v2 correlations, bootstrap
