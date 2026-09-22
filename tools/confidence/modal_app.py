@@ -44,6 +44,7 @@ image = (
         "numpy==1.26.4",
         "scipy==1.16.3",
         "gemmi==0.7.3",
+        "pyarrow==21.0.0",
     )
     .env(
         {

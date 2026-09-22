@@ -583,20 +583,15 @@ checkpoint.
 The experimental `Synthyra/ESMFold2-300` and `Synthyra/ESMFold2-600` variants
 disable their confidence heads. Their folding results therefore do not contain
 pLDDT, pTM, iPTM, or PAE fields. The confidence fields shown in the examples
-above apply to variants with an enabled confidence head. The separate Modal
-confidence-head pilot is documented in
-[Confidence-head training](docs/confidence_training.md). The revised workflow
-passed 119 focused tests and both real-model smoke checks on Modal. It has not
-produced a release-qualified confidence checkpoint.
-The approved run uses two bounded H100 workers in parallel for about ten hours
-each. The supplied `rcsb_multimer` copy has downloaded and extracted in Modal.
-Split construction passed. Both campaigns were restarted after fixing a device
-mismatch in cache generation. Cache progress now reports to W&B before the
-separate overfit and training runs. Both completed caching, passed the overfit
-checks, and reported main-training optimizer updates to W&B. The 300M run
-stopped early under its validation rule and passed held-out quality checks;
-600M also stopped early and passed held-out quality checks. Artifact release checks and
-publication remain pending. Two-sample ranking remains a documented limitation.
+above apply to variants with an enabled confidence head. Separate research
+confidence heads were trained in a Modal pilot and a GH200 v2 campaign; neither
+has produced a release-qualified confidence checkpoint. The pilot reports remain
+valid within their documented scope. The historical v2 correlations, bootstrap
+intervals, and acceptance gates require recomputation after correcting tied
+ranks. Raw predictions were not recovered from the closed GH200 hosts or W&B,
+so those results remain uncorrected and the test set remains spent. See
+[Confidence-head training](docs/confidence_training.md) for the protocols,
+training records, limitations, and saved-record recomputation command.
 
 The learned sequence representation combines the ordered hidden-state stack of
 each declared ESMFold2 backbone with the folding checkpoint projection. The
@@ -835,6 +830,13 @@ and notices are centralized under [`LICENSES/`](LICENSES/); checkpoint-specific
 terms remain distinct from the FastPLMs Apache-2.0 code license.
 
 ## Validation and reproducibility
+
+Measured JSON reports and golden safetensors live in the public
+[Synthyra/FastPLMs-artifacts dataset](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts).
+`evidence.toml` pins their revision, hashes, and local paths. Restore them with
+`python -m tools.artifacts.evidence_store fetch` before documentation, release,
+or parity checks. See [artifact storage](docs/artifacts.md#pinned-evidence-storage)
+and the [bounded CPU verification workflow](docs/testing.md#run-tiers).
 
 All release validation is containerized. The portable runner accepts the host
 and identity at invocation time:

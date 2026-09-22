@@ -35,20 +35,14 @@ unused code path when the manifest or current tests say otherwise.
   oracles. Runtime code must not import from this directory.
 - `tests/` contains unit, integration, parity, structure, and release checks.
 - `tools/` contains artifact, conversion, remote, and maintenance workflows.
-- `tools/confidence/` contains the resumable Modal confidence-head pilot. Keep
+- `tools/confidence/` contains the Modal pilot and GH200 v2 confidence workflows. Keep
   its tests and compute remote; do not run intensive confidence work locally.
-  The approved run uses two bounded H100 workers in parallel for about ten
-  hours each. Cost and duration are tracked, with at most two GPU workers.
-  The supplied `rcsb_multimer` copy has downloaded and extracted successfully.
-  Split construction passed. Both campaigns were restarted after fixing a
-  device mismatch in cache generation, which now reports progress to W&B.
-  Both completed caching and passed the overfit checks; main-training optimizer
-  updates are verified in W&B. The 300M training stage stopped early under its
-  validation rule and passed held-out quality checks. The 600M training stage
-  also stopped early and passed its final evaluation. Artifact release
-  checks and publication remain pending. Avoid duplicate evaluation calls.
-  Quality checks still govern publication. See docs/confidence_training.md for
-  current run links. Preserve active runs' recorded training-code hashes.
+  Both pilot training stages completed through validation-based early stopping
+  and passed their held-out quality gates; publication remains pending.
+  GPU work requires an explicit budget and environment. Avoid duplicate
+  evaluation calls. See docs/confidence_training.md for run links and commands.
+  Preserve active runs' recorded training-code hashes. Use the bounded
+  `tools.verification.cpu` workflow for focused remote CPU checks.
   The v2 campaign (`ssh.py`, `host.py`, `online_*.py`, `rollouts.py`,
   `target_*.py`, `test_evaluation.py`) trains on a GH200 workstation from
   AtlasFold-Data with online rollouts. Its GPU-hour ledger allows 2 hours of
@@ -56,7 +50,8 @@ unused code path when the manifest or current tests say otherwise.
   Both v2 heads finished training, the test evaluation and the production
   reference ran once. Corrected correlations, bootstrap intervals, and
   acceptance gates are pending recomputation after the tied-rank fix.
-  Historical results remain in `docs/evidence/confidence/esmfold2_{300,600}-v2.json`
+  Historical reports are restored from the pinned public artifact dataset to
+  `docs/evidence/confidence/esmfold2_{300,600}-v2.json`
   with `metrics_review.status = "requires_recomputation"`; do not present them
   as corrected results. Raw predictions were not recovered from the closed
   GH200 workstation or W&B. Each run's 780 W&B update rows report zero skipped
@@ -65,6 +60,9 @@ unused code path when the manifest or current tests say otherwise.
   evaluation on it is no longer held out. Keep the pilot heads and reports
   unchanged as baselines, and do not publish v2 weights without separate
   approval.
+  New evaluations use immutable group directories with exact checkpoint
+  snapshots and raw prediction records. Verify and export their public evidence
+  before closing a compute host. Keep v2 analysis independent of model loading.
 - `examples/` contains runnable research and training examples. Keep examples
   directly in this directory rather than creating a tutorial subtree.
 - `model_cards/` contains generated checkpoint cards.
@@ -157,6 +155,7 @@ markers before running expensive suites.
 Regenerate and check documentation:
 
 ```bash
+python -m tools.artifacts.evidence_store fetch
 PYTHONPATH=src python -m tools.artifacts.generate_docs
 PYTHONPATH=src python -m tools.artifacts.generate_docs --check
 python -m pytest tests/release/test_documentation.py \

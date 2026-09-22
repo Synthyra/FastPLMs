@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tools.confidence.config import GPU_DOLLARS_PER_SECOND, resource_rate
+from tools.execution.pricing import GPU_DOLLARS_PER_SECOND, resource_rate
 
 
 APP_NAME = "fastplms-gpu-evidence"

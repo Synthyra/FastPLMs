@@ -74,12 +74,27 @@ _ARTIFACT_REQUIREMENT_INPUTS = (
 )
 _RELEASE_TOOL_SCOPE_PATHS = (
     *_ARTIFACT_REQUIREMENT_INPUTS,
+    "evidence.toml",
     "src/fastplms/__init__.py",
     "src/fastplms/models.toml",
     "src/fastplms/registry.py",
     "tools/artifacts/__init__.py",
     "tools/artifacts/build.py",
     "tools/artifacts/build_all.py",
+    "tools/artifacts/doc_generation/__init__.py",
+    "tools/artifacts/doc_generation/capabilities.py",
+    "tools/artifacts/doc_generation/card_metadata.py",
+    "tools/artifacts/doc_generation/confidence_evidence.py",
+    "tools/artifacts/doc_generation/confidence_rendering.py",
+    "tools/artifacts/doc_generation/esmc_evidence.py",
+    "tools/artifacts/doc_generation/esmc_rendering.py",
+    "tools/artifacts/doc_generation/evidence_links.py",
+    "tools/artifacts/doc_generation/folding_rendering.py",
+    "tools/artifacts/doc_generation/model_cards.py",
+    "tools/artifacts/doc_generation/outputs.py",
+    "tools/artifacts/doc_generation/support.py",
+    "tools/artifacts/doc_generation/usage_examples.py",
+    "tools/artifacts/evidence_store.py",
     "tools/artifacts/generate_docs.py",
     "tools/artifacts/license_metadata.py",
     "tools/artifacts/offline_probe.py",
@@ -95,6 +110,7 @@ _RELEASE_TOOL_SCOPE_PATHS = (
 )
 _RELEASE_TOOL_SCOPE_ROOTS = (
     *_ARTIFACT_REQUIREMENT_INPUTS,
+    "evidence.toml",
     "src/fastplms/__init__.py",
     "src/fastplms/models.toml",
     "src/fastplms/registry.py",
@@ -1964,7 +1980,9 @@ def _validate_bootstrap(path: Path, spec: ModelSpec, runtime_hash: str) -> None:
 def render_model_card(spec: ModelSpec) -> str:
     """Render the canonical generated card used by documentation and artifacts."""
 
-    from tools.artifacts.generate_docs import render_model_card as render_canonical_card
+    from tools.artifacts.doc_generation.model_cards import (
+        render_model_card as render_canonical_card,
+    )
 
     return render_canonical_card(spec, allow_generic_family=True)
 

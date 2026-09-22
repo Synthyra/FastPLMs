@@ -25,8 +25,8 @@ import numpy as np
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 
-from .online_training import spearman
-from .test_evaluation import BOOTSTRAP_SAMPLES, LONG_STRATUM, _metrics
+from .v2_analysis import BOOTSTRAP_SAMPLES, LONG_STRATUM, sample_metrics, spearman
+from .v2_records import EvaluationRecord
 
 
 HIGHER_IS_BETTER = {
@@ -58,7 +58,7 @@ SPEARMAN_TOLERANCE = 0.03
 CALIBRATION_TOLERANCE = 0.01
 ACCURACY_TOLERANCE = 0.03
 
-Record = Mapping[str, object]
+Record = EvaluationRecord
 
 
 def _by_target(records: Sequence[Record]) -> dict[str, list[Record]]:
@@ -77,11 +77,14 @@ def _interval(values: Sequence[float]) -> list[float]:
 
 
 def paired_estimates(
-    model_records: Sequence[Record], heads: Sequence[str], reference_records: Sequence[Record], seed: int = 0
+    model_records: Sequence[Record],
+    heads: Sequence[str],
+    reference_records: Sequence[Record],
+    seed: int = 0,
 ) -> dict[str, dict[str, object]]:
-    """Point estimates and paired intervals for every head, production, and each head minus the pilot.
+    """Point estimates and paired intervals for heads, production, and head-minus-pilot differences.
 
-    `model_records` carry predictions of all `heads` on shared samples; `reference_records` carry the
+    `model_records` carry all `heads` on shared samples; `reference_records` carry the
     production predictions under the head name `production`.
     """
     model_targets, reference_targets = _by_target(model_records), _by_target(reference_records)
@@ -93,10 +96,18 @@ def paired_estimates(
 
     def metrics_for(draw: Sequence[str]) -> dict[str, dict[str, float]]:
         # Each drawn copy gets its own id, so a target drawn twice stays two groups.
-        model_draw = [{**record, "target_id": f"{target}#{copy}"} for copy, target in enumerate(draw) for record in model_targets[target]]
-        reference_draw = [{**record, "target_id": f"{target}#{copy}"} for copy, target in enumerate(draw) for record in reference_targets[target]]
-        values = {head: _metrics(model_draw, head) for head in heads}
-        values["production"] = _metrics(reference_draw, "production")
+        model_draw = [
+            {**record, "target_id": f"{target}#{copy}"}
+            for copy, target in enumerate(draw)
+            for record in model_targets[target]
+        ]
+        reference_draw = [
+            {**record, "target_id": f"{target}#{copy}"}
+            for copy, target in enumerate(draw)
+            for record in reference_targets[target]
+        ]
+        values = {head: sample_metrics(model_draw, head) for head in heads}
+        values["production"] = sample_metrics(reference_draw, "production")
         return values
 
     point = metrics_for(target_ids)
@@ -109,9 +120,13 @@ def paired_estimates(
             for name in REPORTED_METRICS:
                 draws[source][name].append(metrics[name])
                 if source != "pilot" and "pilot" in values:
-                    draws[f"{source}-minus-pilot"][name].append(metrics[name] - values["pilot"][name])
+                    draws[f"{source}-minus-pilot"][name].append(
+                        metrics[name] - values["pilot"][name]
+                    )
                 if source != "production":
-                    draws[f"{source}-minus-production"][name].append(metrics[name] - values["production"][name])
+                    draws[f"{source}-minus-production"][name].append(
+                        metrics[name] - values["production"][name]
+                    )
     estimates: dict[str, dict[str, object]] = {}
     for source, metrics in draws.items():
         if "-minus-" in source:
@@ -122,18 +137,23 @@ def paired_estimates(
                 "random_selection_regret": point[source]["random_selection_regret"],
                 "targets": point[source]["targets"],
             }
-        estimates[source] = {"estimate": estimate, "interval_95": {name: _interval(values) for name, values in metrics.items()}}
+        estimates[source] = {
+            "estimate": estimate,
+            "interval_95": {name: _interval(values) for name, values in metrics.items()},
+        }
     estimates["shared_targets"] = {"compared": len(target_ids), "not_in_both_evaluations": unshared}
     return estimates
 
 
 def significantly_worse(difference_interval: Sequence[float], higher_is_better: bool) -> bool:
-    """True when the whole paired interval of `candidate - baseline` lies on the worse side of zero."""
+    """True when the entire candidate-minus-baseline interval lies on the worse side of zero."""
     low, high = difference_interval
     return high < 0 if higher_is_better else low > 0
 
 
-def acceptance_gates(estimates: Mapping[str, Mapping[str, object]], head: str = "v2") -> dict[str, object]:
+def acceptance_gates(
+    estimates: Mapping[str, Mapping[str, object]], head: str = "v2"
+) -> dict[str, object]:
     """Evaluate the three pre-registered gates for `head` from `paired_estimates` output."""
     candidate = estimates[head]["estimate"]  # type: ignore[index]
     candidate_interval = estimates[head]["interval_95"]  # type: ignore[index]
@@ -141,41 +161,75 @@ def acceptance_gates(estimates: Mapping[str, Mapping[str, object]], head: str = 
     versus_pilot = estimates[f"{head}-minus-pilot"]["interval_95"]  # type: ignore[index]
     production = estimates["production"]["estimate"]  # type: ignore[index]
 
-    regressions = [name for name, higher in HIGHER_IS_BETTER.items() if significantly_worse(versus_pilot[name], higher)]
+    regressions = [
+        name
+        for name, higher in HIGHER_IS_BETTER.items()
+        if significantly_worse(versus_pilot[name], higher)
+    ]
     beats_pilot = {
-        "plddt_lddt_spearman_not_lower": candidate["plddt_lddt_spearman"] >= pilot["plddt_lddt_spearman"],
-        "calibration_error_not_higher": candidate["calibration_error_10bin"] <= pilot["calibration_error_10bin"],
+        "plddt_lddt_spearman_not_lower": candidate["plddt_lddt_spearman"]
+        >= pilot["plddt_lddt_spearman"],
+        "calibration_error_not_higher": candidate["calibration_error_10bin"]
+        <= pilot["calibration_error_10bin"],
         "significant_regressions": regressions,
     }
     selection = {
-        **{f"{name}_lower_bound_above_half": bool(candidate_interval[name][0] > 0.5) for name in ACCURACY_METRICS},
+        **{
+            f"{name}_lower_bound_above_half": bool(candidate_interval[name][0] > 0.5)
+            for name in ACCURACY_METRICS
+        },
         "top1_regret_below_random": candidate["top1_regret"] < candidate["random_selection_regret"],
     }
     parity = {
-        **{f"{name}_within_{SPEARMAN_TOLERANCE}": candidate[name] >= production[name] - SPEARMAN_TOLERANCE for name in SPEARMAN_METRICS},
-        f"calibration_error_within_{CALIBRATION_TOLERANCE}": candidate["calibration_error_10bin"] <= production["calibration_error_10bin"] + CALIBRATION_TOLERANCE,
-        **{f"{name}_within_{ACCURACY_TOLERANCE}": candidate[name] >= production[name] - ACCURACY_TOLERANCE for name in ACCURACY_METRICS},
+        **{
+            f"{name}_within_{SPEARMAN_TOLERANCE}": candidate[name]
+            >= production[name] - SPEARMAN_TOLERANCE
+            for name in SPEARMAN_METRICS
+        },
+        f"calibration_error_within_{CALIBRATION_TOLERANCE}": candidate["calibration_error_10bin"]
+        <= production["calibration_error_10bin"] + CALIBRATION_TOLERANCE,
+        **{
+            f"{name}_within_{ACCURACY_TOLERANCE}": candidate[name]
+            >= production[name] - ACCURACY_TOLERANCE
+            for name in ACCURACY_METRICS
+        },
     }
     gates = {
-        "beats_pilot": bool(beats_pilot["plddt_lddt_spearman_not_lower"] and beats_pilot["calibration_error_not_higher"] and not regressions),
+        "beats_pilot": bool(
+            beats_pilot["plddt_lddt_spearman_not_lower"]
+            and beats_pilot["calibration_error_not_higher"]
+            and not regressions
+        ),
         "sample_selection": all(bool(value) for value in selection.values()),
         "production_parity": all(bool(value) for value in parity.values()),
     }
-    return {"head": head, "passed": all(gates.values()), "gates": gates, "beats_pilot": beats_pilot, "sample_selection": selection, "production_parity": parity}
+    return {
+        "head": head,
+        "passed": all(gates.values()),
+        "gates": gates,
+        "beats_pilot": beats_pilot,
+        "sample_selection": selection,
+        "production_parity": parity,
+    }
 
 
 def _target_scores(records: Sequence[Record], head: str) -> dict[str, dict[str, float]]:
     """Each standard target's confidence scores, averaged over that head's samples of the target."""
     return {
         target: {
-            **{name: float(np.mean([float(record["predictions"][head][name]) for record in group])) for name in AGREEMENT_SCORES},  # type: ignore[index]
+            **{
+                name: float(np.mean([float(record["predictions"][head][name]) for record in group]))
+                for name in AGREEMENT_SCORES
+            },  # type: ignore[index]
             "num_chains": float(group[0]["num_chains"]),  # type: ignore[arg-type]
         }
         for target, group in _by_target(records).items()
     }
 
 
-def production_agreement(model_records: Sequence[Record], heads: Sequence[str], reference_records: Sequence[Record]) -> dict[str, dict[str, float]]:
+def production_agreement(
+    model_records: Sequence[Record], heads: Sequence[str], reference_records: Sequence[Record]
+) -> dict[str, dict[str, float]]:
     """How closely each head's confidence tracks production `esmfold2` on the same targets.
 
     Each model folds its own diffusion samples, so a head and production never score one structure.
@@ -190,10 +244,22 @@ def production_agreement(model_records: Sequence[Record], heads: Sequence[str], 
         shared = sorted(set(candidate) & set(reference))
         values: dict[str, float] = {}
         for name in AGREEMENT_SCORES:
-            compared = [target for target in shared if name != "iptm" or candidate[target]["num_chains"] > 1]
+            compared = [
+                target for target in shared if name != "iptm" or candidate[target]["num_chains"] > 1
+            ]
             head_scores = [candidate[target][name] for target in compared]
             production_scores = [reference[target][name] for target in compared]
             values[f"{name}_spearman"] = spearman(head_scores, production_scores)
-            values[f"{name}_mean_difference"] = float(np.mean(np.subtract(head_scores, production_scores))) if compared else float("nan")
-        agreement[head] = {**values, "targets": float(len(shared)), "multi_chain_targets": float(sum(candidate[target]["num_chains"] > 1 for target in shared))}
+            values[f"{name}_mean_difference"] = (
+                float(np.mean(np.subtract(head_scores, production_scores)))
+                if compared
+                else float("nan")
+            )
+        agreement[head] = {
+            **values,
+            "targets": float(len(shared)),
+            "multi_chain_targets": float(
+                sum(candidate[target]["num_chains"] > 1 for target in shared)
+            ),
+        }
     return agreement

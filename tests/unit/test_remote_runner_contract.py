@@ -51,7 +51,7 @@ def test_uploaded_source_archive_digest_is_verified_against_local_bytes() -> Non
 
 
 def test_remote_archive_inventory_is_tracked_only() -> None:
-    source = (Path(__file__).resolve().parents[2] / "tools" / "remote" / "run.py").read_text(
+    source = (Path(__file__).resolve().parents[2] / "tools" / "remote" / "source.py").read_text(
         encoding="utf-8"
     )
     git_files = source.split("def _git_files", maxsplit=1)[1].split(

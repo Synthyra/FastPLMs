@@ -153,7 +153,7 @@ def test_source_archive_rejects_missing_or_changed_evidence(tmp_path: Path, miss
     else:
         evidence.write_bytes(b"modified")
 
-    with pytest.raises(RuntimeError, match="hydrated|identity mismatch"):
+    with pytest.raises(RuntimeError, match=r"hydrated|identity mismatch"):
         create_source_archive(repository, tmp_path / "source.tar.gz")
 
 
@@ -437,4 +437,16 @@ def test_source_archive_rejects_a_tracked_sensitive_path(tmp_path: Path) -> None
     _git(repository, "commit", "-m", "Track a forbidden credential-shaped file")
 
     with pytest.raises(RuntimeError, match="tracks forbidden source path"):
+        create_source_archive(repository, tmp_path / "source.tar.gz")
+
+
+def test_source_archive_rejects_tracked_symlinks_before_archiving(tmp_path: Path) -> None:
+    repository, _ = _create_repository(tmp_path)
+    outside = tmp_path / "outside.py"
+    outside.write_text("external source\n", encoding="utf-8")
+    (repository / "alias.py").symlink_to(outside)
+    _git(repository, "add", "alias.py")
+    _git(repository, "commit", "-m", "Track external link")
+
+    with pytest.raises(RuntimeError, match="symlink"):
         create_source_archive(repository, tmp_path / "source.tar.gz")

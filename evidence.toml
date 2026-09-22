@@ -1,7 +1,7 @@
 # Public evidence payloads; runtime configuration and test inputs remain in Git.
 schema_version = 1
 repository = "Synthyra/FastPLMs-artifacts"
-revision = "pending"
+revision = "07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3"
 
 [[files]]
 path = "docs/evidence/attention/backend_latency.json"

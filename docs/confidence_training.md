@@ -1,4 +1,4 @@
-# ESMFold2 confidence-head pilot
+# ESMFold2 confidence-head research
 
 Status: both training stages completed through validation-based early stopping.
 Both heads passed their held-out quality gates.
@@ -11,11 +11,11 @@ artifacts passed isolated inference checks. Each upload inventory contains 75
 files, including the checkpoint weights. Publication and published reload remain
 pending. Reports are `artifacts/confidence/release-300.json` and
 `artifacts/confidence/release-600.json`. The monitoring heartbeat is paused
-because its two calls completed. Checked-in evaluation records are
-[300M](evidence/confidence/esmfold2_300.json) and
-[600M](evidence/confidence/esmfold2_600.json); artifact checks are
-[300M](evidence/confidence/esmfold2_300-package.json) and
-[600M](evidence/confidence/esmfold2_600-package.json).
+because its two calls completed. Archived pilot evaluation records are
+[300M](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/evidence/confidence/esmfold2_300.json) and
+[600M](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/evidence/confidence/esmfold2_600.json); artifact checks are
+[300M](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/evidence/confidence/esmfold2_300-package.json) and
+[600M](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/evidence/confidence/esmfold2_600-package.json).
 
 The approved run permits one H100 worker per model for about ten hours in
 parallel. Duration is bounded, cost is recorded, and no more than two GPU
@@ -217,8 +217,8 @@ exact equality of seeded coordinates and intermediate representations with
 confidence on and off, finite gradients for 88 head parameter tensors,
 unchanged head and positional-encoder parameter values, and no gradients in
 the frozen encoders. Folding caches were generated for both targets.
-No optimizer update occurred. Full training, multi-sample release checks,
-held-out quality evaluation, and publication remain pending.
+No optimizer update occurred during these smoke checks. Training and held-out
+quality evaluation completed later, as recorded above; publication remains pending.
 
 The historical smoke checks found and fixed a dropped sample axis in cache
 writing. Enabling deterministic Torch algorithms resolved the failed
@@ -654,9 +654,9 @@ are published.
 
 Per-head numbers, paired intervals, per-stratum results including the 64 long
 targets, split identity, and training configuration are recorded in
-[docs/evidence/confidence/esmfold2_300-v2.json](evidence/confidence/esmfold2_300-v2.json)
+[docs/evidence/confidence/esmfold2_300-v2.json](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/evidence/confidence/esmfold2_300-v2.json)
 and
-[docs/evidence/confidence/esmfold2_600-v2.json](evidence/confidence/esmfold2_600-v2.json).
+[docs/evidence/confidence/esmfold2_600-v2.json](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/evidence/confidence/esmfold2_600-v2.json).
 
 ### Kernels
 
@@ -730,3 +730,60 @@ The workstation stages are `pilot-artifacts`, `pool`, `splits`, `smoke`,
 `train`, `evaluate`, `reference`, and `download-reference`. `evaluate` and
 `reference` accept `--split validation --limit <n>` for a dry run that never
 folds or scores a test target.
+
+The SSH `wait` command returns the recorded job exit status after printing its
+log tail, so a failed remote stage also fails the controlling shell command.
+Job names use letters, digits, underscores, and hyphens, beginning with a letter
+or digit.
+
+### Preserve evaluation records
+
+Use one evaluation ID to group the two model evaluations and the production
+reference. A missing ID generates a new one. Each model destination is reserved
+before model loading, and existing destinations are refused:
+
+```bash
+python -m tools.confidence.host evaluate --model esmfold2_300 --run v2 --evaluation-id review-rerun
+python -m tools.confidence.host evaluate --model esmfold2_600 --run v2 --evaluation-id review-rerun
+python -m tools.confidence.host reference --evaluation-id review-rerun
+```
+
+These commands allocate GPU work and score the already spent test split. They
+are documented for an explicitly authorized rerun, not as a prerequisite for
+CPU metric correction. Outputs live under
+`~/data/confidence-v2/evaluation/review-rerun/<model>/`. They retain raw sample
+predictions, skipped targets, split inputs, source and environment identity,
+and the hashes of the exact head checkpoint snapshots loaded for evaluation.
+Completion and failure records distinguish a finished evaluation from a partial
+run. Checkpoint snapshots stay local unless separately approved for publication.
+
+Verify and export an evaluation for durable storage:
+
+```bash
+python -m tools.confidence.experiment_artifacts verify --evaluation-dir <evaluation/model>
+python -m tools.confidence.experiment_artifacts export --evaluation-dir <evaluation/model> --output-dir <new-public-directory>
+```
+
+The export checks the recorded hashes and copies the JSON records and
+identities into a new directory. It excludes checkpoint weights and makes no
+network calls. Review the bundle, publish it to the public artifact dataset,
+and pin its revision and file identities before closing the compute host.
+
+### Recompute metrics from saved predictions
+
+The v2 calculation module uses NumPy and SciPy without importing training,
+folding, Torch, or the target-pool loader. Given saved records for
+`esmfold2_300`, `esmfold2_600`, and `esmfold2`, recompute summaries, paired
+bootstrap intervals, acceptance gates, and production agreement on a CPU:
+
+```bash
+python -m tools.confidence.recompute --evaluation-dir <evaluation-group> --output-dir <new-correction-directory> --evidence-dir docs/evidence/confidence
+```
+
+`--evidence-dir` is optional. When supplied, corrected evidence copies go under
+the new output directory; original evidence is preserved. The command records
+input and calculation-source hashes, versions, bootstrap seed, and cohort
+counts. It does not refold structures or change weights. The test set remains
+spent, and validation correlations used during checkpoint selection still need
+their own saved-cache rescore. Historical v2 raw predictions remain unavailable,
+so this command cannot currently correct those published historical numbers.

@@ -15,7 +15,14 @@ from typing import Any
 
 MODEL_IDS = ("esmfold2_300", "esmfold2_600")
 HEADS = ("v2", "pilot", "donor")
-SOURCE_FILES = ("recompute.py", "test_evaluation.py", "acceptance.py", "online_training.py")
+SOURCE_FILES = (
+    "recompute.py",
+    "acceptance.py",
+    "v2_analysis.py",
+    "v2_records.py",
+    "experiment_artifacts.py",
+)
+EVALUATION_MARKERS = ("request.json", "completion.json", "failure.json")
 
 
 def _read_hashed(path: Path) -> tuple[Any, str]:
@@ -106,11 +113,44 @@ def recompute(
     records: dict[str, Any] = {}
     inputs: dict[str, str] = {}
     evidence_sources: dict[str, dict[str, Any]] = {}
-    for model_id in (*MODEL_IDS, "esmfold2"):
-        path = evaluation_dir / model_id / "records.json"
+    directories = {model_id: evaluation_dir / model_id for model_id in (*MODEL_IDS, "esmfold2")}
+    completions: dict[str, dict[str, Any]] = {}
+    lineage: dict[str, object] = {
+        "status": "legacy_records_without_manifests",
+        "manifests_verified": False,
+        "shared_target_identity": "unverified",
+    }
+    if any(
+        (directory / marker).exists()
+        for directory in directories.values()
+        for marker in EVALUATION_MARKERS
+    ):
+        from .experiment_artifacts import verify_evaluation_group
+
+        completions = verify_evaluation_group(directories, split="test")
+        for model_id, directory in directories.items():
+            path = directory / "completion.json"
+            saved, inputs[str(path.resolve())] = _read_hashed(path)
+            if saved != completions[model_id]:
+                raise ValueError(f"Evaluation completion changed during verification: {path}")
+        lineage = {
+            "status": "verified_manifest_group",
+            "manifests_verified": True,
+            "shared_target_identity": "verified",
+            "evaluation_id": completions["esmfold2"]["evaluation_id"],
+            "checkpoint_weights_required": False,
+        }
+    for model_id, directory in directories.items():
+        path = directory / "records.json"
         records[model_id], inputs[str(path.resolve())] = _read_hashed(path)
         if not isinstance(records[model_id], list) or not records[model_id]:
             raise ValueError(f"Expected nonempty saved records: {path}")
+        if (
+            completions
+            and inputs[str(path.resolve())]
+            != completions[model_id]["public_files"]["records.json"]["sha256"]
+        ):
+            raise ValueError(f"Evaluation records changed during verification: {path}")
     if evidence_dir is not None:
         for model_id in MODEL_IDS:
             path = evidence_dir / f"{model_id}-v2.json"
@@ -118,9 +158,9 @@ def recompute(
             if evidence_sources[model_id].get("model_id") != model_id:
                 raise ValueError(f"Evidence model identity differs: {path}")
 
-    # --help needs only the standard library; calculation needs the confidence environment.
+    # --help needs only the standard library; saved-record calculations need NumPy and SciPy.
     from .acceptance import acceptance_gates, paired_estimates, production_agreement
-    from .test_evaluation import BOOTSTRAP_SAMPLES, summarize
+    from .v2_analysis import BOOTSTRAP_SAMPLES, summarize
 
     provenance = {
         "status": "complete",
@@ -130,6 +170,7 @@ def recompute(
         "refolding": False,
         "correction": "Spearman uses average ranks for ties and rejects undefined correlations.",
         "input_sha256": inputs,
+        "evaluation_lineage": lineage,
         "source_sha256": {
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
             for name in SOURCE_FILES

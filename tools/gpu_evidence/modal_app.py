@@ -32,17 +32,19 @@ from .config import (
     TRANSFORMERS_VERSION,
 )
 from .source import (
-    BASELINE_DIRECTORY,
     BASELINE_WORKSPACE,
-    ROOT,
     SOURCE_DIRECTORIES,
     SOURCE_FILES,
     WORKSPACE,
     excluded_from_upload,
+    upload_source_root,
+    baseline_source_root,
 )
 from .stages import STAGES, stage_arguments
 
 
+SOURCE_ROOT = upload_source_root()
+BASELINE_ROOT = baseline_source_root()
 CACHE_ROOT = "/vol"
 # Set on the stage subprocess, not in the image. Modal refuses to mount a volume
 # on a non-empty path, and an image-level cache variable under the mount point
@@ -110,15 +112,15 @@ def _with_reference_environment(image: modal.Image) -> modal.Image:
     requirements = f"{_REFERENCE_SOURCES}/requirements"
     return (
         image.apt_install("build-essential")
-        .add_local_dir(str(ROOT / "requirements"), requirements, copy=True)
+        .add_local_dir(str(SOURCE_ROOT / "requirements"), requirements, copy=True)
         .add_local_dir(
-            str(ROOT / "vendor/upstream/biohub-transformers"),
+            str(SOURCE_ROOT / "vendor/upstream/biohub-transformers"),
             f"{_REFERENCE_SOURCES}/transformers",
             copy=True,
             ignore=_FORK_PATHS_NOT_INSTALLED,
         )
         .add_local_dir(
-            str(ROOT / "vendor/upstream/biohub-esm"),
+            str(SOURCE_ROOT / "vendor/upstream/biohub-esm"),
             f"{_REFERENCE_SOURCES}/esm",
             copy=True,
             ignore=_FORK_PATHS_NOT_INSTALLED,
@@ -142,12 +144,12 @@ def _image(
         modal.Image.debian_slim(python_version=PYTHON_VERSION)
         .apt_install("git", "libgomp1")
         .uv_pip_install(f"torch=={TORCH_VERSION}", index_url=torch_index)
-        .pip_install_from_requirements(str(ROOT / "requirements/core.in"))
+        .pip_install_from_requirements(str(SOURCE_ROOT / "requirements/core.in"))
     )
     # Profiles use relative ``-r`` includes, so install each feature file directly.
     for feature_file in feature_files:
         image = image.pip_install_from_requirements(
-            str(ROOT / "requirements/features" / feature_file)
+            str(SOURCE_ROOT / "requirements/features" / feature_file)
         )
     image = image.uv_pip_install(f"transformers=={TRANSFORMERS_VERSION}")
     # Build steps must precede the working-tree mounts below.
@@ -165,14 +167,14 @@ def _image(
     ).workdir(WORKSPACE)
     for directory in SOURCE_DIRECTORIES:
         image = image.add_local_dir(
-            str(ROOT / directory), f"{WORKSPACE}/{directory}", ignore=excluded_from_upload
+            str(SOURCE_ROOT / directory), f"{WORKSPACE}/{directory}", ignore=excluded_from_upload
         )
     for file_name in SOURCE_FILES:
-        image = image.add_local_file(str(ROOT / file_name), f"{WORKSPACE}/{file_name}")
+        image = image.add_local_file(str(SOURCE_ROOT / file_name), f"{WORKSPACE}/{file_name}")
     # The launcher exports this before import; inside a worker the local path is absent.
-    if BASELINE_DIRECTORY.is_dir():
+    if BASELINE_ROOT.is_dir():
         image = image.add_local_dir(
-            str(BASELINE_DIRECTORY), BASELINE_WORKSPACE, ignore=excluded_from_upload
+            str(BASELINE_ROOT), BASELINE_WORKSPACE, ignore=excluded_from_upload
         )
     return image
 

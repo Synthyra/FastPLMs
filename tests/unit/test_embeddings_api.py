@@ -455,19 +455,88 @@ def test_caller_owned_model_state_fingerprint_overrides_state_hash() -> None:
 
 
 def test_runtime_versions_are_part_of_resume_identity(monkeypatch) -> None:
-    import fastplms.embeddings.runner as runner
+    import fastplms.embeddings.identity as identity
 
     model = SyntheticEmbeddingModel()
     first = embed_dataset(model, ["ACD"])
-    versions = runner._software_versions()
+    versions = identity._software_versions()
     monkeypatch.setattr(
-        runner,
+        identity,
         "_software_versions",
         lambda: {**versions, "torch": "different-runtime"},
     )
     changed = embed_dataset(model, ["ACD"])
 
     assert changed.metadata["run_fingerprint"] != first.metadata["run_fingerprint"]
+    assert changed.metadata["software"]["torch"] == "different-runtime"
+    assert changed.metadata["execution"]["software"] == changed.metadata["software"]
+
+
+@pytest.mark.parametrize(
+    ("disk_backed", "expected_run_fingerprint"),
+    (
+        (False, "20791d64142f90a9076d072e4a28ab948b939c5d0d03a589fff837b3477acd52"),
+        (True, "1b8a59b611cf8d0189a9ceb555627df8b5c8cd54c42f77eda26d631d741808d1"),
+    ),
+)
+def test_schema_three_fingerprint_matches_existing_embedding_runs(
+    monkeypatch,
+    disk_backed: bool,
+    expected_run_fingerprint: str,
+) -> None:
+    from fastplms.embeddings import identity
+    from fastplms.embeddings.inputs import _InputSpool, _normalize_inputs
+
+    # Captured from the original schema-3 runner before the module extraction.
+    versions = {
+        "fastplms": "test",
+        "python": "3.test",
+        "safetensors": "test",
+        "torch": "test",
+        "torch_cuda": None,
+        "transformers": "test",
+    }
+    monkeypatch.setattr(identity, "_software_versions", lambda: versions)
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            _attn_implementation="eager",
+            _name_or_path="test/model",
+            _commit_hash="fixed-checkpoint",
+        ),
+        parameters=lambda: iter(()),
+    )
+    records = _normalize_inputs(
+        [EmbeddingInput("duplicate", "ACD"), EmbeddingInput("duplicate", "W")],
+        disk_backed=disk_backed,
+    )
+    try:
+        observed = identity._run_fingerprint(
+            model,
+            records,
+            pooling=("mean", "max"),
+            full_embeddings=False,
+            max_length=8,
+            truncate=True,
+            dtype=None,
+            model_kwargs={"hidden_state_index": 2},
+            tokenizer_metadata={"mode": "native-sequence"},
+            model_state_fingerprint="fixed-state",
+            persist_output=True,
+            embedding_context={"hidden_state_source": "encoder"},
+            batch_size=2,
+            batch_window_size=4,
+            max_tokens_per_batch=16,
+        )
+    finally:
+        if isinstance(records, _InputSpool):
+            records.close()
+
+    assert observed == (
+        "659d9deeef1b010c975475655006e0e9919115b49522f2878a588cc2218c3e05",
+        expected_run_fingerprint,
+        "fixed-state",
+        "caller",
+    )
 
 
 def test_tokenizer_content_changes_run_fingerprint() -> None:

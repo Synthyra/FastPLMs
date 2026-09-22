@@ -22,16 +22,8 @@ tied to that environment.
 
 ## Fetch pinned evidence
 
-While the root `evidence.toml` has revision `pending`, publication has not
-completed and every listed payload remains tracked in Git. Before documentation
-generation, release checks, or parity suites, verify those originals offline:
-
-```bash
-python -m tools.artifacts.evidence_store verify
-```
-
-After publication and immutable revision pinning, fetch and verify the evidence
-bundle:
+Before documentation generation, release checks, or parity suites, fetch and
+verify the public evidence bundle pinned by `evidence.toml`:
 
 ```bash
 python -m tools.artifacts.evidence_store fetch
@@ -57,6 +49,23 @@ See [artifact storage](artifacts.md#pinned-evidence-storage) for the storage and
 update contract.
 
 ## Run tiers
+
+For focused confidence, embedding, execution, artifact, and documentation
+checks, use the bounded Modal CPU workflow from a hydrated checkout:
+
+```bash
+python -m tools.verification.cpu
+```
+
+It freezes the allowlisted source bytes, records their hashes, and runs one
+worker with four CPUs, 16 GiB of memory, and a 20-minute limit. The worker has
+no GPU or credentials and runs offline. Unit/integration, release, and CPU
+contract checks run in separate pytest processes so their fixtures do not
+interfere. Reports under `artifacts/verification/<run>/` contain installed
+versions, commands, exit codes, logs, JUnit, and the source inventory. Use
+`--output-root <new-directory>` to choose the destination. This command runs
+selected contracts; it does not establish live GPU or structure equivalence.
+
 
 | Tier | Purpose |
 | --- | --- |
@@ -119,7 +128,7 @@ Transformers to the release versions in
 to the CPU index. CUDA-only cuEquivariance and FP8 dependencies belong in
 separate environments.
 
-The gate statically covers all 29 checkpoints and runs each advertised
+The gate statically covers every checkpoint in `src/fastplms/models.toml` and runs each advertised
 AutoClass once per family. It covers forward/loss/backward, resize, tuple and
 dictionary output, and save/reload. It also covers ANKH stack selection and
 state views; backend masks, fallback warnings, fake Flash dispatch, E1 cache,
@@ -538,8 +547,7 @@ generation command, input fingerprint, tensor names and shapes, dtypes, and
 output hashes. Goldens are read-only fixtures. They accelerate `check`, but they
 never replace live `compliance`.
 
-Golden payloads remain tracked while dataset publication is pending. After
-publication they can be restored from the pinned evidence dataset outside Git.
+Golden payloads live in the pinned public evidence dataset outside Git.
 Verify them with the commands above before running a golden comparison.
 
 The manifest declares a required golden only through an `official_golden`

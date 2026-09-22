@@ -7,23 +7,16 @@ a Hub repository, uploads, deletes, commits, pushes, or opens a pull request.
 
 ## Pinned evidence storage
 
-The root `evidence.toml` inventories generated evidence for storage in a Hugging
-Face dataset at an immutable revision. It pins each file's identity and
-restoration path. While its revision is `pending`, publication has not completed
-and all listed payloads remain tracked in Git. Run only the offline check in
-that state:
-
-```bash
-python -m tools.artifacts.evidence_store verify
-```
-
-After publication and revision pinning, JSON reports under `docs/evidence/` and
-`docs/validation/`, plus JSON and safetensors reference outputs under
-`tests/goldens/`, can become ignored local files.
+The root `evidence.toml` pins the public
+[Synthyra/FastPLMs-artifacts dataset](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts)
+at an immutable revision, with each file's SHA-256, size, and restoration path.
+JSON reports under `docs/evidence/` and `docs/validation/`, plus JSON and
+safetensors reference outputs under `tests/goldens/`, live in that dataset
+and are ignored local files after restoration.
 Runtime configuration, test inputs, and small synthetic fixtures remain tracked
 in Git.
 
-Once a dataset revision is published, fetch the declared bundle before
+Fetch the declared bundle before
 documentation generation, release checks, or parity suites:
 
 ```bash
@@ -267,7 +260,7 @@ structure benchmark, which remains pending. The published mirrors are pinned to
 revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
 `71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). Inference validation is
 unavailable for 600M. The reloaded 300M artifact also passed the same isolated
-comparison; see [artifact reload evidence](validation/esmfold2_300_artifact_reload.json).
+comparison; see [artifact reload evidence](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_300_artifact_reload.json).
 
 ## Generated cards and support data
 

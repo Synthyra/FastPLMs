@@ -7,6 +7,7 @@ import copy
 
 import pytest
 
+from pathlib import Path
 from types import ModuleType
 
 from tools.confidence.recompute import MODEL_IDS, SOURCE_FILES, corrected_evidence, recompute
@@ -109,7 +110,7 @@ def test_recompute_hashes_inputs_and_writes_only_new_outputs(monkeypatch, tmp_pa
         originals[path] = path.read_bytes()
 
     # Stub only the expensive metric execution; exercise real file IO and evidence conversion.
-    evaluation_module = ModuleType("tools.confidence.test_evaluation")
+    evaluation_module = ModuleType("tools.confidence.v2_analysis")
     evaluation_module.BOOTSTRAP_SAMPLES = 1000
     evaluation_module.summarize = lambda records, heads: _summary(heads)
     acceptance_module = ModuleType("tools.confidence.acceptance")
@@ -124,6 +125,11 @@ def test_recompute_hashes_inputs_and_writes_only_new_outputs(monkeypatch, tmp_pa
     assert provenance["test_set_status"] == "spent"
     assert provenance["new_heldout_evaluation"] is False
     assert provenance["refolding"] is False
+    assert provenance["evaluation_lineage"] == {
+        "status": "legacy_records_without_manifests",
+        "manifests_verified": False,
+        "shared_target_identity": "unverified",
+    }
     assert set(provenance["source_sha256"]) == set(SOURCE_FILES)
     for path, content in originals.items():
         assert path.read_bytes() == content
@@ -146,10 +152,10 @@ def test_recompute_requires_all_saved_records_before_creating_output(tmp_path):
 
 
 def test_recompute_real_metrics_uses_paired_cohort_and_intervals(monkeypatch, tmp_path):
-    from tools.confidence import acceptance, test_evaluation
+    from tools.confidence import acceptance, v2_analysis
 
     monkeypatch.setattr(acceptance, "BOOTSTRAP_SAMPLES", 8)
-    monkeypatch.setattr(test_evaluation, "BOOTSTRAP_SAMPLES", 8)
+    monkeypatch.setattr(v2_analysis, "BOOTSTRAP_SAMPLES", 8)
     records = []
     for target in range(5):
         for sample in range(3):
@@ -226,3 +232,131 @@ def test_recompute_real_metrics_uses_paired_cohort_and_intervals(monkeypatch, tm
             assert corrected["interval_95"][metric] == pytest.approx(interval, nan_ok=True)
         assert "long" in corrected["by_stratum"]
     assert evidence["metrics_review"]["status"] == "corrected_test_metrics"
+
+
+def _manifest_group(
+    root: Path,
+    *,
+    changed_model: str | None = None,
+    change: str | None = None,
+) -> Path:
+    from tools.confidence.experiment_artifacts import EvaluationArtifacts, write_new_json
+
+    from .test_confidence_v2_analysis import _records
+
+    root.mkdir()
+    checkpoint = root / "selected.safetensors"
+    checkpoint.write_bytes(b"immutable test checkpoint")
+    split_report = root / "split-report.json"
+    split_report.write_text('{"status": "verified"}', encoding="utf-8")
+    for model_id in (*MODEL_IDS, "esmfold2"):
+        records = _records()
+        targets = {}
+        for record in records:
+            sequences = ["AC"] if record["num_chains"] == 1 else ["AC", "DE"]
+            record["num_tokens"] = 2 * record["num_chains"]
+            target_id = record["target_id"]
+            record["target_positions"] = {
+                "sha256": hashlib.sha256(target_id.encode()).hexdigest(),
+                "shape": [record["num_tokens"], 14, 3],
+                "dtype": "float32",
+            }
+            if model_id == changed_model and target_id == "m1":
+                if change == "sequence":
+                    sequences = ["AG"]
+                if change == "coordinates":
+                    record["target_positions"]["sha256"] = "f" * 64
+            targets[target_id] = {
+                "target_id": target_id,
+                "sequences": sequences,
+                "num_chains": record["num_chains"],
+                "num_tokens": record["num_tokens"],
+                "stratum": record["stratum"],
+            }
+            if model_id == "esmfold2":
+                record["predictions"] = {"production": record["predictions"]["v2"]}
+        run = EvaluationArtifacts.create(
+            root / model_id,
+            evaluation_id="different"
+            if model_id == changed_model and change == "group"
+            else "group",
+            model_id="wrong_model" if model_id == changed_model and change == "model" else model_id,
+            split="validation" if model_id == changed_model and change == "split" else "test",
+            targets=list(targets.values()),
+            head_files=(
+                {"v2": checkpoint, "pilot": checkpoint, "donor": None}
+                if model_id in MODEL_IDS
+                else {}
+            ),
+            metadata={"inference": {"samples": 3, "seed_offset": 1000}},
+            input_files={"split-report.json": split_report},
+        )
+        write_new_json(run.directory / "records.json", records)
+        write_new_json(run.directory / "skipped.json", [])
+        write_new_json(run.directory / "summary.json", _summary(records[0]["predictions"]))
+        run.complete()
+    return root
+
+
+def test_recompute_verifies_public_export_lineage_without_checkpoint_weights(monkeypatch, tmp_path):
+    from tools.confidence import acceptance, v2_analysis
+    from tools.confidence.experiment_artifacts import export_evaluation
+
+    monkeypatch.setattr(acceptance, "BOOTSTRAP_SAMPLES", 5)
+    monkeypatch.setattr(v2_analysis, "BOOTSTRAP_SAMPLES", 5)
+    original = _manifest_group(tmp_path / "original")
+    exported = tmp_path / "exported"
+    for model_id in (*MODEL_IDS, "esmfold2"):
+        export_evaluation(original / model_id, exported / model_id)
+    assert not list(exported.rglob("*.safetensors"))
+    provenance = recompute(exported, tmp_path / "corrected")
+    assert provenance["evaluation_lineage"] == {
+        "status": "verified_manifest_group",
+        "manifests_verified": True,
+        "shared_target_identity": "verified",
+        "evaluation_id": "group",
+        "checkpoint_weights_required": False,
+    }
+    for model_id in (*MODEL_IDS, "esmfold2"):
+        path = exported / model_id / "completion.json"
+        assert (
+            provenance["input_sha256"][str(path.resolve())]
+            == hashlib.sha256(path.read_bytes()).hexdigest()
+        )
+
+
+@pytest.mark.parametrize("change", ["model", "group", "split", "sequence", "coordinates"])
+def test_recompute_rejects_incoherent_manifest_groups_before_writing(tmp_path, change):
+    evaluation = _manifest_group(
+        tmp_path / "evaluation", changed_model="esmfold2_600", change=change
+    )
+    with pytest.raises(ValueError):
+        recompute(evaluation, tmp_path / "corrected")
+    assert not (tmp_path / "corrected").exists()
+
+
+@pytest.mark.parametrize("marker", ["request.json", "completion.json", "failure.json"])
+def test_any_manifest_marker_prevents_fallback_to_legacy_records(tmp_path, marker):
+    evaluation = tmp_path / "evaluation"
+    for model_id in (*MODEL_IDS, "esmfold2"):
+        directory = evaluation / model_id
+        directory.mkdir(parents=True)
+        (directory / "records.json").write_text(
+            json.dumps([{"target_id": "saved-record", "stratum": "monomer_short"}]),
+            encoding="utf-8",
+        )
+    (evaluation / "esmfold2_300" / marker).write_text("{}", encoding="utf-8")
+    with pytest.raises((ValueError, FileNotFoundError)):
+        recompute(evaluation, tmp_path / "corrected")
+    assert not (tmp_path / "corrected").exists()
+
+
+def test_recompute_rejects_modified_records_in_an_otherwise_complete_group(tmp_path):
+    evaluation = _manifest_group(tmp_path / "evaluation")
+    path = evaluation / "esmfold2_600" / "records.json"
+    records = json.loads(path.read_text())
+    records[0]["true_lddt"] = 0.99
+    path.write_text(json.dumps(records), encoding="utf-8")
+    with pytest.raises(ValueError, match="integrity"):
+        recompute(evaluation, tmp_path / "corrected")
+    assert not (tmp_path / "corrected").exists()

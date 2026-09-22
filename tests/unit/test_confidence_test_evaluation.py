@@ -6,11 +6,12 @@ import torch
 
 from types import SimpleNamespace
 
-from tools.confidence.test_evaluation import _metrics, _summaries, bootstrap_records, summarize
+from tools.confidence.test_evaluation import _summaries
+from tools.confidence.v2_analysis import bootstrap_records, sample_metrics as _metrics, summarize
 
 
 def _calibration_fields(predicted: float, true: float, atoms: int = 2) -> dict[str, object]:
-    """Summary sums of `atoms` resolved residues, one atom each, sharing one predicted and one true value."""
+    """Sums for resolved residues, one atom each, sharing predicted and true values."""
     counts, predicted_sums, true_sums = [0] * 10, [0.0] * 10, [0.0] * 10
     index = min(int(predicted * 10), 9)
     counts[index], predicted_sums[index], true_sums[index] = atoms, predicted * atoms, true * atoms
@@ -29,7 +30,7 @@ def _calibration_fields(predicted: float, true: float, atoms: int = 2) -> dict[s
 
 
 def _records(head_order: str) -> list[dict[str, object]]:
-    """Two monomers and one dimer with three samples each; the head ranks samples as `head_order` says."""
+    """Two monomers and one dimer, each with three samples ranked by `head_order`."""
     records = []
     for target, chains in (("m1", 1), ("m2", 1), ("d1", 2)):
         for sample, quality in enumerate((0.5, 0.7, 0.9)):
@@ -84,13 +85,27 @@ def test_sample_sums_reproduce_atom_level_calibration_and_error():
         true_coords=torch.zeros(1, atoms, 3),
     )
     summary = _summaries(plddt_logits, pae_logits, rollout, 0)
-    record = {"target_id": "t", "stratum": "monomer_short", "num_chains": 1, "sample": 0, "true_lddt": 0.5, "tm_score": 0.5, "dockq": None}
+    record = {
+        "target_id": "t",
+        "stratum": "monomer_short",
+        "num_chains": 1,
+        "sample": 0,
+        "true_lddt": 0.5,
+        "tm_score": 0.5,
+        "dockq": None,
+    }
     metrics = _metrics([{**record, "predictions": {"head": summary}}], "head")
 
-    predicted = (plddt_logits.softmax(-1) * ((torch.arange(50) + 0.5) / 50)).sum(-1)[0][labeled].numpy()  # (n,)
+    predicted = (
+        (plddt_logits.softmax(-1) * ((torch.arange(50) + 0.5) / 50)).sum(-1)[0][labeled].numpy()
+    )  # (n,)
     true = plddt_score[labeled].numpy()  # (n,)
     bins = np.clip((predicted * 10).astype(int), 0, 9)
-    expected = sum((bins == b).mean() * abs(predicted[bins == b].mean() - true[bins == b].mean()) for b in range(10) if (bins == b).any())
+    expected = sum(
+        (bins == b).mean() * abs(predicted[bins == b].mean() - true[bins == b].mean())
+        for b in range(10)
+        if (bins == b).any()
+    )
     assert metrics["calibration_error_10bin"] == pytest.approx(expected, abs=1e-5)
     assert metrics["atom_plddt_mae"] == pytest.approx(np.abs(predicted - true).mean(), abs=1e-5)
 
@@ -123,7 +138,15 @@ def test_disorder_metrics_separate_unresolved_from_resolved_residues():
         true_coords=true_coords,
     )
     summary = _summaries(plddt_logits, torch.zeros(1, tokens, tokens, 64), rollout, 0)
-    record = {"target_id": "t", "stratum": "monomer_short", "num_chains": 1, "sample": 0, "true_lddt": 0.9, "tm_score": 0.9, "dockq": None}
+    record = {
+        "target_id": "t",
+        "stratum": "monomer_short",
+        "num_chains": 1,
+        "sample": 0,
+        "true_lddt": 0.9,
+        "tm_score": 0.9,
+        "dockq": None,
+    }
     metrics = _metrics([{**record, "predictions": {"head": summary}}], "head")
     assert metrics["disorder_auroc"] == 1.0
     assert metrics["unresolved_residue_mean_plddt"] == pytest.approx(0.31, abs=1e-3)

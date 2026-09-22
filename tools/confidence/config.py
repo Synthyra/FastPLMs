@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
+from tools.execution.pricing import (
+    CPU_DOLLARS_PER_CORE_SECOND as CPU_DOLLARS_PER_CORE_SECOND,
+    GPU_DOLLARS_PER_SECOND as GPU_DOLLARS_PER_SECOND,
+    MEMORY_DOLLARS_PER_GIB_SECOND as MEMORY_DOLLARS_PER_GIB_SECOND,
+    resource_rate as resource_rate,
+)
+
 
 MODEL_IDS = ("esmfold2_300", "esmfold2_600")
 DONOR_REPO = "biohub/ESMFold2-Experimental-Fast-Cutoff2025"
@@ -14,9 +21,6 @@ DONOR_TENSOR_BYTES = 31_071_252
 VOLUME_NAME = "fastplms-confidence-pilot"
 WANDB_PROJECT = "fastplms-confidence"
 STAGES = ("prepare", "cache", "train", "evaluate", "campaign", "package", "release")
-GPU_DOLLARS_PER_SECOND = {"L4": 0.000222, "L40S": 0.000542, "H100": 0.001097}
-CPU_DOLLARS_PER_CORE_SECOND = 0.0000131
-MEMORY_DOLLARS_PER_GIB_SECOND = 0.00000222
 MAX_PARALLEL_WORKERS = 2
 TRAIN_TIMEOUT_SECONDS = 36_600
 TRAINING_MAXIMUM_SECONDS = 36_000
@@ -44,9 +48,3 @@ class TrainingConfig:
 
     def to_dict(self) -> dict[str, int | float]:
         return asdict(self)
-
-
-def resource_rate(gpu: str | None, cpu: float = 4.0, memory_gib: float = 32.0) -> float:
-    """Conservative per-second rate using requested resource allocations."""
-    gpu_rate = GPU_DOLLARS_PER_SECOND[gpu] if gpu else 0.0
-    return gpu_rate + cpu * CPU_DOLLARS_PER_CORE_SECOND + memory_gib * MEMORY_DOLLARS_PER_GIB_SECOND

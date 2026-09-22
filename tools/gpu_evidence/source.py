@@ -8,11 +8,17 @@ second barrier for credential-shaped names nested inside an uploaded directory.
 from __future__ import annotations
 
 import io
-import shutil
+import os
 import subprocess
 import tarfile
 
 from pathlib import Path
+
+from tools.execution.source import (
+    SourceSnapshot,
+    excluded_from_upload as excluded_from_upload,
+    stage_source_snapshot,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -55,47 +61,81 @@ SOURCE_FILES = (
     "THIRD_PARTY_NOTICES.md",
 )
 
-_CREDENTIAL_NAMES = frozenset(
-    {".netrc", ".npmrc", ".pypirc", ".git-credentials", ".envrc", "credentials"}
+REFERENCE_SOURCE_DIRECTORIES = (
+    "vendor/upstream/biohub-transformers",
+    "vendor/upstream/biohub-esm",
 )
-_CREDENTIAL_SUFFIXES = frozenset({".pem", ".key", ".p12", ".pfx"})
-_BUILD_DIRECTORIES = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
+REFERENCE_EXCLUDED_DIRECTORIES = frozenset({
+    ".git", ".github", "tests", "docs", "examples", "benchmark", "benchmark_v2",
+    "notebooks", "templates", "i18n", "docker", "scripts", "cookbook", "_assets",
+})
 
 
-def excluded_from_upload(path: Path) -> bool:
-    """Return whether a path must stay on the workstation."""
-    if _BUILD_DIRECTORIES.intersection(path.parts) or path.suffix == ".pyc":
-        return True
-    name = path.name.lower()
-    if name in _CREDENTIAL_NAMES or path.suffix.lower() in _CREDENTIAL_SUFFIXES:
-        return True
-    # ``.env``, ``.env.local``, ``prod.env``, and ``.secrets.env`` style files.
-    return name == ".env" or name.startswith(".env.") or name.endswith(".env")
+def stage_upload_source(destination: Path) -> SourceSnapshot:
+    """Freeze candidate source and the isolated official reference build inputs."""
+    def exclude(path: Path) -> bool:
+        for root_name in REFERENCE_SOURCE_DIRECTORIES:
+            root = Path(root_name)
+            if path.is_relative_to(root):
+                relative = path.relative_to(root)
+                if relative.parts and relative.parts[0] in REFERENCE_EXCLUDED_DIRECTORIES:
+                    return True
+        return excluded_from_upload(path)
+
+    return stage_source_snapshot(
+        ROOT, destination,
+        directories=(*SOURCE_DIRECTORIES, *REFERENCE_SOURCE_DIRECTORIES),
+        files=SOURCE_FILES,
+        exclude=exclude,
+    )
 
 
-def export_baseline_source(revision: str = "HEAD") -> str:
+def upload_source_root() -> Path:
+    """Use the launcher's frozen snapshot when building local Modal images."""
+    return Path(os.environ.get("FASTPLMS_EVIDENCE_SOURCE_ROOT", str(ROOT)))
+
+
+def baseline_source_root() -> Path:
+    return Path(os.environ.get("FASTPLMS_EVIDENCE_BASELINE_ROOT", str(BASELINE_DIRECTORY)))
+
+
+def export_baseline_source(revision: str = "HEAD", *, destination: Path | None = None) -> str:
     """Materialize the runtime source at a Git revision and return the resolved commit.
 
     ``kernels.lock`` travels with ``src/`` because the FlashAttention loader reads it
     from the root of the tree it was imported from.
     """
+    destination = destination or BASELINE_DIRECTORY
     resolved = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{revision}^{{commit}}"],
+        [
+            "git", "-c", f"safe.directory={ROOT.as_posix()}",
+            "rev-parse", "--verify", f"{revision}^{{commit}}",
+        ],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=True,
     ).stdout.strip()
     archive = subprocess.run(
-        ["git", "archive", "--format=tar", resolved, "src", "kernels.lock"],
+        [
+            "git", "-c", f"safe.directory={ROOT.as_posix()}",
+            "archive", "--format=tar", resolved, "src", "kernels.lock",
+        ],
         cwd=ROOT,
         capture_output=True,
         check=True,
     ).stdout
-    if BASELINE_DIRECTORY.exists():
-        shutil.rmtree(BASELINE_DIRECTORY)
-    BASELINE_DIRECTORY.mkdir(parents=True)
+    destination = destination.resolve()
+    if not destination.is_relative_to((ROOT / "artifacts").resolve()):
+        raise ValueError("Baseline source destination must stay inside workspace artifacts")
+    if destination.exists():
+        raise FileExistsError(f"Baseline source already exists: {destination}")
+    destination.mkdir(parents=True)
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
-        tar.extractall(BASELINE_DIRECTORY, filter="data")
-    (BASELINE_DIRECTORY / "REVISION").write_text(f"{resolved}\n", encoding="utf-8")
+        for member in tar.getmembers():
+            path = Path(member.name)
+            if excluded_from_upload(path) or member.issym() or member.islnk():
+                raise RuntimeError(f"Baseline archive contains a forbidden path: {member.name}")
+        tar.extractall(destination, filter="data")
+    (destination / "REVISION").write_text(f"{resolved}\n", encoding="utf-8")
     return resolved

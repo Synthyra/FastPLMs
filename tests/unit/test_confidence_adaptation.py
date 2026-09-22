@@ -12,7 +12,7 @@ from fastplms.registry import (
     RegistryError,
     _parse_confidence_adaptation,
 )
-from tools.artifacts.generate_docs import render_model_card
+from tools.artifacts.doc_generation.model_cards import render_model_card
 
 
 def _record() -> dict[str, str]:

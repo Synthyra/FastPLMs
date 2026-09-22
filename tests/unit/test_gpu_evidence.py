@@ -8,13 +8,14 @@ import pytest
 from pathlib import Path
 
 from fastplms.registry import get_model_registry
-from tools.confidence.budget import BudgetExceeded, BudgetLedger
+from tools.execution.budget import BudgetExceeded, BudgetLedger
 from tools.gpu_evidence import config, lever_bench
 from tools.gpu_evidence.launch import (
     failing_tests_by_cause,
     junit_counts,
     reservation_dollars,
     reserve_within_cap,
+    settle_worker_receipt,
 )
 from tools.gpu_evidence.record_backend_evidence import backend_evidence
 from tools.gpu_evidence.source import (
@@ -194,6 +195,29 @@ def test_cap_refuses_a_stage_before_anything_is_reserved(tmp_path: Path) -> None
     # An observed receipt replaces the worst case and frees the remainder.
     ledger.complete(reservation, worst_case / 10)
     reserve_within_cap(ledger, spec, "L4", max_dollars=worst_case * 1.5)
+
+
+@pytest.mark.parametrize("cap", [float("nan"), float("inf"), -float("inf"), 0.0, -1.0])
+def test_invalid_cap_cannot_create_a_reservation(tmp_path: Path, cap: float) -> None:
+    ledger = BudgetLedger(tmp_path / "budget.json")
+    with pytest.raises(ValueError, match="positive and finite"):
+        reserve_within_cap(ledger, STAGES["probe"], "L4", cap)
+    assert ledger.entries == []
+    assert not ledger.path.exists()
+
+
+def test_dispatch_failure_keeps_unknown_spend_reserved(tmp_path: Path) -> None:
+    ledger = BudgetLedger(tmp_path / "budget.json")
+    reservation = ledger.reserve("probe", "worker", 5.0)
+    settle_worker_receipt(
+        ledger, reservation, wall_seconds=10.0, worker_seconds=None, gpu="L4",
+    )
+    assert BudgetLedger(ledger.path).committed() == 5.0
+    observed = settle_worker_receipt(
+        ledger, reservation, wall_seconds=10.0, worker_seconds=20.0, gpu="L4",
+    )
+    assert observed == pytest.approx(20.0 * config.worker_rate("L4"))
+    assert BudgetLedger(ledger.path).committed() == observed
 
 
 def test_junit_counts_total_every_suite() -> None:

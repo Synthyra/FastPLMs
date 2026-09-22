@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import os
 import subprocess
 import time
 import uuid
@@ -12,7 +14,7 @@ import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any
 
-from tools.confidence.budget import BudgetExceeded, BudgetLedger
+from tools.execution.budget import BudgetExceeded, BudgetLedger
 
 from .config import (
     DEFAULT_GPU,
@@ -22,7 +24,7 @@ from .config import (
     STARTUP_TIMEOUT_SECONDS,
     worker_rate,
 )
-from .source import ROOT, export_baseline_source
+from .source import ROOT, export_baseline_source, stage_upload_source
 from .stages import STAGES, StageSpec, stage_arguments
 
 
@@ -56,6 +58,8 @@ def reserve_within_cap(
     max_dollars: float,
 ) -> str:
     """Reserve a stage's worst-case cost, refusing before dispatch if it breaks the cap."""
+    if not math.isfinite(max_dollars) or max_dollars <= 0:
+        raise ValueError("max_dollars must be positive and finite")
     dollars = reservation_dollars(spec, gpu)
     committed = ledger.committed()
     if committed + dollars > max_dollars:
@@ -70,6 +74,21 @@ def reserve_within_cap(
         timeout_seconds=spec.timeout_seconds,
         gpu=gpu,
     )
+
+
+def settle_worker_receipt(
+    ledger: BudgetLedger,
+    reservation: str,
+    *,
+    wall_seconds: float,
+    worker_seconds: float | None,
+    gpu: str | None,
+) -> float:
+    """Settle a known result; retain the reservation when remote completion is unknown."""
+    observed_dollars = max(wall_seconds, worker_seconds or 0.0) * worker_rate(gpu)
+    if worker_seconds is not None:
+        ledger.complete(reservation, observed_dollars)
+    return observed_dollars
 
 
 def junit_counts(junit_xml: str | None) -> dict[str, int] | None:
@@ -106,10 +125,12 @@ def failing_tests_by_cause(junit_xml: str | None) -> dict[str, list[str]]:
 def _git_state() -> dict[str, object]:
     """Identify the uploaded source; a dirty tree makes the run descriptive only."""
     revision = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
+        ["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "HEAD"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
     ).stdout.strip()
     changed = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True, check=True
+        ["git", "-c", f"safe.directory={ROOT.as_posix()}", "status", "--porcelain"],
+        cwd=ROOT, capture_output=True, text=True, check=True,
     ).stdout.splitlines()
     return {"revision": revision, "dirty": bool(changed), "changed_paths": len(changed)}
 
@@ -126,21 +147,31 @@ def main() -> None:
     # Reject a malformed selection before any money is reserved.
     stage_arguments(spec, args.select, "junit.xml")
 
-    ledger = BudgetLedger(ARTIFACT_ROOT / "budget.json")
-    try:
-        reservation = reserve_within_cap(ledger, spec, gpu, args.max_dollars)
-    except BudgetExceeded as error:
-        raise SystemExit(str(error)) from error
-
+    if not math.isfinite(args.max_dollars) or args.max_dollars <= 0:
+        raise SystemExit("max_dollars must be positive and finite")
     run_directory = (
         ARTIFACT_ROOT / f"{time.strftime('%Y%m%dT%H%M%S')}-{spec.name}-{uuid.uuid4().hex[:8]}"
     )
+    snapshot = stage_upload_source(run_directory / "source")
+    baseline_directory = run_directory / "baseline"
+    baseline_revision = export_baseline_source(destination=baseline_directory)
+    os.environ["FASTPLMS_EVIDENCE_SOURCE_ROOT"] = str(snapshot.root)
+    os.environ["FASTPLMS_EVIDENCE_BASELINE_ROOT"] = str(baseline_directory)
+    source_state = _git_state()
+    source_state["snapshot"] = snapshot.to_dict()
+
+    ledger = BudgetLedger(ARTIFACT_ROOT / "budget.json")
+    try:
+        reservation = reserve_within_cap(ledger, spec, gpu, args.max_dollars)
+    except (BudgetExceeded, ValueError) as error:
+        raise SystemExit(str(error)) from error
+
     receipt: dict[str, Any] = {
         "stage": spec.name,
         "selection": args.select,
         "gpu": gpu,
-        "source": _git_state(),
-        "baseline_revision": export_baseline_source(),
+        "source": source_state,
+        "baseline_revision": baseline_revision,
         "reserved_dollars": reservation_dollars(spec, gpu),
         "status": "dispatching",
     }
@@ -167,14 +198,17 @@ def main() -> None:
     finally:
         # Charge the longer of the two clocks; wall time also covers startup.
         wall_seconds = time.monotonic() - started
-        worker_seconds = float(result["elapsed_seconds"]) if result else 0.0
-        observed_dollars = max(wall_seconds, worker_seconds) * worker_rate(gpu)
-        ledger.complete(reservation, observed_dollars)
+        worker_seconds = float(result["elapsed_seconds"]) if result else None
+        observed_dollars = settle_worker_receipt(
+            ledger, reservation,
+            wall_seconds=wall_seconds, worker_seconds=worker_seconds, gpu=gpu,
+        )
         receipt.update(
             wall_seconds=wall_seconds,
             observed_dollars=observed_dollars,
             committed_dollars=ledger.committed(),
             status="failed" if result is None else result["status"],
+            budget_settlement="awaiting_worker_receipt" if result is None else "completed",
         )
         _write_json(run_directory / "receipt.json", receipt)
 
