@@ -731,6 +731,47 @@ def test_esm3_saved_model_loads_without_installed_fastplms(tmp_path: Path) -> No
             output = model(**batch)
         assert output.logits is not None
         assert output.logits.shape[:2] == batch["input_ids"].shape
+
+        # The saved runtime must include the complete shared embedding pipeline.
+        model.train()
+        rng_state = torch.random.get_rng_state()  # CPU generator byte state
+        inputs = [("duplicate", "MKTAYIAKQ"), ("duplicate", "GGG")]
+        embedding_path = model_root / "embeddings.sqlite"
+        embeddings = model.embed_dataset(
+            iter(inputs),
+            full_embeddings=True,
+            batch_size=1,
+            batch_window_size=2,
+            output=embedding_path,
+            format="sqlite",
+        )  # record tensors: (residues_i, hidden_size)
+        assert model.training
+        assert torch.equal(torch.random.get_rng_state(), rng_state)
+        assert [record.id for record in embeddings] == ["duplicate", "duplicate"]
+        assert [record.load_tensor().shape for record in embeddings] == [
+            (9, model.config.hidden_size), (3, model.config.hidden_size),
+        ]
+        torch.testing.assert_close(
+            embeddings[0].load_tensor(),  # (9, hidden_size)
+            output.last_hidden_state[0, 1:-1],  # (9, hidden_size), without BOS/EOS
+            rtol=0.0,
+            atol=0.0,
+        )
+        resumed = model.embed_dataset(
+            iter(inputs),
+            full_embeddings=True,
+            batch_size=1,
+            batch_window_size=2,
+            output=embedding_path,
+            format="sqlite",
+        )
+        assert resumed.metadata == embeddings.metadata
+        assert model.training
+        assert torch.equal(torch.random.get_rng_state(), rng_state)
+        for expected, observed in zip(embeddings, resumed, strict=True):
+            torch.testing.assert_close(
+                observed.load_tensor(), expected.load_tensor(), rtol=0.0, atol=0.0,
+            )
         """
     )
     environment = os.environ.copy()

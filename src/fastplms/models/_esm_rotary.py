@@ -56,13 +56,30 @@ class RotaryEmbedding(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # tensor: (..., l, d)
         seq_len = tensor.shape[seq_dimension]
-        cache_stale = (
-            self._cos_cached is None
-            or self._sin_cached is None
-            or self._seq_len_cached != seq_len
-            or self._cos_cached.device != tensor.device
+        # Row t depends only on t and ``inv_freq``, so the first l rows of a
+        # longer table equal a table built at length l. A shorter request can
+        # therefore reuse the cache, provided ``inv_freq`` still has the dtype
+        # the cache was built from. A length change used to rebuild from the
+        # current ``inv_freq``; the dtype test preserves that after ``.to(dtype)``.
+        # Autograd must save these factors, so inference-created tables cannot
+        # be reused in a gradient-enabled forward, even when the module is in eval mode.
+        cached_prefix_is_valid = (
+            self._cos_cached is not None
+            and self._sin_cached is not None
+            and self._seq_len_cached is not None
+            and self._cos_cached.device == tensor.device
+            and not (
+                torch.is_grad_enabled()
+                and (self._cos_cached.is_inference() or self._sin_cached.is_inference())
+            )
+            and (
+                seq_len == self._seq_len_cached
+                or (
+                    seq_len < self._seq_len_cached and self._cos_cached.dtype == self.inv_freq.dtype
+                )
+            )
         )
-        if cache_stale:
+        if not cached_prefix_is_valid:
             self._seq_len_cached = seq_len
             positions = torch.arange(seq_len, device=tensor.device).type_as(  # (l,)
                 self.inv_freq
@@ -74,7 +91,8 @@ class RotaryEmbedding(nn.Module):
 
         assert self._cos_cached is not None
         assert self._sin_cached is not None
-        return self._cos_cached, self._sin_cached  # (1, 1, l, d), (1, 1, l, d)
+        # Callers still receive exactly l rows: (1, 1, l, d), (1, 1, l, d)
+        return self._cos_cached[:, :, :seq_len, :], self._sin_cached[:, :, :seq_len, :]
 
     def forward(
         self,

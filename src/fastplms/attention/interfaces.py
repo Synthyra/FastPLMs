@@ -8,6 +8,15 @@ from functools import partial
 from typing import Any
 from transformers import AttentionInterface, AttentionMaskInterface
 
+from ._auto import (
+    AUTO_ATTENTION,
+    AttentionResolution,
+    attention_execution_context,
+    deferred_resolution,
+    needs_execution_context,
+    provisional_implementation,
+    resolve_auto_attention,
+)
 from ._core import (
     AttentionBackend,
     canonical_checkpoint_attention_backend,
@@ -95,6 +104,13 @@ class FastPLMsAttentionMixin:
         "sdpa",
         "flex_attention",
     )
+    # Preference order for ``attn_implementation="auto"``, mirrored from the
+    # family's ``attention_auto_order`` in models.toml. Empty rejects the request.
+    _fastplms_attention_auto_order: tuple[str, ...] = ()
+    # Supplied by the Transformers ``PreTrainedModel`` that follows this mixin in every
+    # MRO. Each family's configuration class adds the ``attn_backend`` field this mixin
+    # reads, and they share no base that declares it, so the boundary is dynamic.
+    config: Any
 
     def _validate_attention_name(self, implementation: str) -> None:
         if implementation not in self._fastplms_attention_implementations:
@@ -147,11 +163,18 @@ class FastPLMsAttentionMixin:
     def __init__(self, config, *args: Any, **kwargs: Any) -> None:
         sentinel = object()
         internal = getattr(config, "_attn_implementation_internal", sentinel)
-        stored = (
-            getattr(config, "_attn_implementation", None) if internal is sentinel else internal
-        )
+        stored = getattr(config, "_attn_implementation", None) if internal is sentinel else internal
         legacy = getattr(config, "attn_backend", None)
         requested = stored if stored is not None else legacy
+        auto_requested = requested == AUTO_ATTENTION
+        serialized_backend: str | None = None
+        if auto_requested:
+            # The configuration never holds ``auto``. Family layers are built on the
+            # provisional implementation, and a saved copy keeps the backend that a
+            # named load of the same checkpoint would have stored.
+            requested = provisional_implementation(self._require_attention_auto_order())
+            serialized_backend = legacy if legacy not in (None, AUTO_ATTENTION) else requested
+            stored = None
         if requested is not None:
             if not isinstance(requested, str):
                 raise TypeError(
@@ -180,6 +203,93 @@ class FastPLMsAttentionMixin:
         resolved = get_attn_implementation(config)
         self._validate_attention_name(resolved)
         set_config_attn_implementation(config, resolved)
+        if auto_requested:
+            self.__dict__["_fastplms_serialized_attn_backend"] = serialized_backend
+            self._begin_auto_attention()
+
+    def _require_attention_auto_order(self) -> tuple[str, ...]:
+        order = self._fastplms_attention_auto_order
+        if not order:
+            raise ValueError(
+                f"{type(self).__name__} does not support attn_implementation='auto'; "
+                f"request one of {self._fastplms_attention_implementations}."
+            )
+        return order
+
+    @property
+    def attention_resolution(self) -> AttentionResolution | None:
+        """The record of an ``auto`` request, or None when a backend was named."""
+        return self.__dict__.get("_fastplms_attention_resolution")
+
+    def _begin_auto_attention(self) -> None:
+        """Resolve now when no candidate needs a device, else at the first forward."""
+        order = self._require_attention_auto_order()
+        self._cancel_pending_auto_attention()
+        if not needs_execution_context(order):
+            resolution = resolve_auto_attention(order, None)
+            self._apply_attn_implementation(resolution.resolved)
+            self.__dict__["_fastplms_attention_resolution"] = resolution
+            return
+        resolution = deferred_resolution(order)
+        self._apply_attn_implementation(resolution.resolved)
+        self.__dict__["_fastplms_attention_resolution"] = resolution
+        # The first forward runs inside the caller's autocast context, which is
+        # what decides FlashAttention eligibility for FP32 parameters.
+        self.__dict__["_fastplms_auto_attention_hook"] = (
+            self._as_module().register_forward_pre_hook(_resolve_auto_attention_before_forward)
+        )
+
+    def _as_module(self) -> torch.nn.Module:
+        if not isinstance(self, torch.nn.Module):
+            raise TypeError(
+                f"{type(self).__name__} must be a torch.nn.Module to defer attention selection."
+            )
+        return self
+
+    def _cancel_pending_auto_attention(self) -> None:
+        hook = self.__dict__.pop("_fastplms_auto_attention_hook", None)
+        if hook is not None:
+            hook.remove()
+
+    def resolve_attn_implementation(
+        self,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> AttentionResolution:
+        """Settle a pending ``auto`` request for the device and dtype of the next forward.
+
+        The first forward does this by itself. Call it earlier, for example before
+        ``torch.compile`` or before fingerprinting an embedding run, and pass
+        ``dtype`` when the forward will run under an autocast context that is not
+        active yet. A settled request returns its record unchanged.
+        """
+        resolution = self.attention_resolution
+        if resolution is None:
+            raise RuntimeError(
+                f"{type(self).__name__} was not configured with attn_implementation='auto'."
+            )
+        if not resolution.deferred:
+            return resolution
+        self._cancel_pending_auto_attention()
+        resolution = resolve_auto_attention(
+            self._require_attention_auto_order(),
+            attention_execution_context(self._as_module(), device=device, dtype=dtype),
+        )
+        self._apply_attn_implementation(resolution.resolved)
+        self.__dict__["_fastplms_attention_resolution"] = resolution
+        return resolution
+
+    def save_pretrained(self, *args: Any, **kwargs: Any) -> Any:
+        """Save without the machine-specific outcome of an ``auto`` request."""
+        # ``save_pretrained`` comes from the ``PreTrainedModel`` later in the MRO.
+        if self.attention_resolution is None:
+            return super().save_pretrained(*args, **kwargs)  # type: ignore[misc]
+        selected_backend = self.config.attn_backend
+        self.config.attn_backend = self.__dict__["_fastplms_serialized_attn_backend"]
+        try:
+            return super().save_pretrained(*args, **kwargs)  # type: ignore[misc]
+        finally:
+            self.config.attn_backend = selected_backend
 
     def set_attn_implementation(
         self,
@@ -194,6 +304,23 @@ class FastPLMsAttentionMixin:
                 raise ValueError(
                     "FastPLMs models have one attention backbone; pass a string or {'': name}."
                 )
+        if attn_implementation == AUTO_ATTENTION:
+            if allow_all_kernels:
+                raise ValueError("FastPLMs does not load external attention kernels.")
+            self.__dict__.setdefault(
+                "_fastplms_serialized_attn_backend", getattr(self.config, "attn_backend", None)
+            )
+            self._begin_auto_attention()
+            return
+        # A named request replaces any earlier automatic selection.
+        self._cancel_pending_auto_attention()
+        self.__dict__.pop("_fastplms_attention_resolution", None)
+        self.__dict__.pop("_fastplms_serialized_attn_backend", None)
+        self._apply_attn_implementation(attn_implementation, allow_all_kernels)
+
+    def _apply_attn_implementation(
+        self, attn_implementation: str, allow_all_kernels: bool = False
+    ) -> None:
         resolved_name = self._check_and_adjust_attn_implementation(
             attn_implementation,
             is_init_check=False,
@@ -211,6 +338,17 @@ class FastPLMsAttentionMixin:
                 module.__dict__[attribute] = (
                     resolved if isinstance(current, AttentionBackend) else resolved_name
                 )
+
+
+# Selection reads the manifest, can load a kernel, and rewrites layer attributes.
+# It runs eagerly so that a compiled model never traces it.
+@torch.compiler.disable  # type: ignore[untyped-decorator]
+def _resolve_auto_attention_before_forward(
+    module: torch.nn.Module, _arguments: tuple[Any, ...]
+) -> None:
+    if not isinstance(module, FastPLMsAttentionMixin):
+        raise TypeError("The automatic attention hook belongs on a FastPLMs model.")
+    module.resolve_attn_implementation()
 
 
 def validate_transformers_attention_interfaces() -> None:

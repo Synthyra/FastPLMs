@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
+
+from pathlib import Path
 
 from fastplms.registry import CheckpointSource, FileDigest, get_model_registry
 from tools.artifacts.build import ArtifactError, hash_file, verify_checkpoint
@@ -40,19 +39,12 @@ def test_materialized_config_preserves_biological_fields_and_normalizes_backbone
 ) -> None:
     registry = get_model_registry()
     spec = registry[model_id]
-    snapshot_name = "fold300" if model_id == "esmfold2_300" else "fold600"
-    source = json.loads(
-        (
-            Path(__file__).parents[2]
-            / "artifacts"
-            / "esmfold2-small"
-            / snapshot_name
-            / "config.json"
-        ).read_text(
-            encoding="utf-8"
-        )
-    )
-    source["sentinel_biological_field"] = {"preserve": True}
+    assert spec.backbone is not None
+    source = {
+        "esmc_id": spec.backbone.repo_id,
+        "msa_encoder": {"enabled": False},
+        "sentinel_biological_field": {"preserve": True},
+    }
 
     materialized = _materialize_config(source, spec, "b" * 64)
 

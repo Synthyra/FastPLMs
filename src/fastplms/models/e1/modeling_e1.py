@@ -10,7 +10,7 @@ from collections import defaultdict
 from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, ClassVar, TypedDict
+from typing import Any, ClassVar, TypedDict, cast
 from tqdm.auto import tqdm
 from transformers import PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
@@ -143,13 +143,27 @@ def _validate_cached_global_query_start(first_sequence_id: torch.Tensor) -> None
         raise ValueError("E1 cached queries must start with a non-padding sequence token.")
 
 
+@dataclass(frozen=True)
+class RotaryLengths:
+    """Rotary table rows one forward needs: the highest position of each kind, plus one.
+
+    Input validation reads both maxima from the device once. Passing them to the
+    attention layers spares each layer its own host synchronization. Traced code
+    only carries this record: a compiled graph that read the integers would be
+    specialized on them and recompiled whenever the positions changed.
+    """
+
+    within_seq: int
+    global_positions: int
+
+
 @torch.compiler.disable
 def _validate_biological_indices(
     within_positions: torch.Tensor,
     global_positions: torch.Tensor,
     sequence_numbers: torch.Tensor,
     config: E1Config,
-) -> None:
+) -> RotaryLengths:
     """Validate E1's sequence and position conventions outside compiled graphs."""
 
     lowest_position, highest_position = torch.aminmax(within_positions)
@@ -181,6 +195,7 @@ def _validate_biological_indices(
             f"[-1, {config.max_num_sequences}); got max "
             f"{maximum_sequence} and min {minimum_sequence}"
         )
+    return RotaryLengths(maximum_position + 1, maximum_global + 1)
 
 
 _TOKENIZER_LOAD_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -373,9 +388,15 @@ class RotaryPositionalEmbedding(nn.Module):
         position_ids: torch.Tensor,
         seq_len: int | None,
         device: torch.device,
+        rotary_lengths: RotaryLengths | None = None,
+        within_seq_layer: bool = True,
     ) -> None:
         """Resize the data-dependent rotary cache outside compiled graphs."""
 
+        if seq_len is None and rotary_lengths is not None:
+            seq_len = (
+                rotary_lengths.within_seq if within_seq_layer else rotary_lengths.global_positions
+            )
         required_length = int(position_ids.max().item()) + 1 if seq_len is None else seq_len
         if required_length > self.max_seq_len_cached:
             self._set_sin_cos_cache(seq_len=required_length, device=device)
@@ -386,10 +407,12 @@ class RotaryPositionalEmbedding(nn.Module):
         k: torch.Tensor,
         position_ids: torch.LongTensor,
         seq_len: int | None = None,
+        rotary_lengths: RotaryLengths | None = None,
+        within_seq_layer: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # q, k: (b, l, h, d)
         device, dtype = q.device, q.dtype
-        self._ensure_sin_cos_cache(position_ids, seq_len, device)
+        self._ensure_sin_cos_cache(position_ids, seq_len, device, rotary_lengths, within_seq_layer)
 
         # Selecting by position inserts a head axis for broadcasting.
         idxs = position_ids.to(device)
@@ -463,6 +486,7 @@ class Attention(nn.Module):
         position_ids: torch.LongTensor,
         past_key_value: DynamicCache | None = None,
         use_cache: bool = False,
+        rotary_lengths: RotaryLengths | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # hidden_states: (b, l, d); position_ids: (b, l)
         bsz, q_len, _ = hidden_states.size()
@@ -485,7 +509,13 @@ class Attention(nn.Module):
             key_states = key_states.clamp(-self.clip_qkv, self.clip_qkv)
             val_states = val_states.clamp(-self.clip_qkv, self.clip_qkv)
 
-        query_states, key_states = self.rotary_emb(query_states, key_states, position_ids)
+        query_states, key_states = self.rotary_emb(
+            query_states,
+            key_states,
+            position_ids,
+            rotary_lengths=rotary_lengths,
+            within_seq_layer=self.layer_type == AttentionLayerType.WITHIN_SEQ,
+        )
 
         if use_cache and past_key_value is not None:
             key_states, val_states = past_key_value.update(key_states, val_states, self.layer_idx)
@@ -519,6 +549,7 @@ class Attention(nn.Module):
         output_s_max: bool = False,
         use_cache: bool = False,
         effective_backend: AttentionBackend | None = None,
+        rotary_lengths: RotaryLengths | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
         # hidden_states: (b, l, d); position and sequence IDs: (b, l)
         is_cache_prefilled = (
@@ -534,6 +565,7 @@ class Attention(nn.Module):
             else global_position_ids,
             past_key_value=past_key_value,
             use_cache=use_cache,
+            rotary_lengths=rotary_lengths,
         )
 
         attn_output, attn_weights, s_max = self._attn(
@@ -1025,6 +1057,7 @@ class NormAttentionNorm(nn.Module):
         output_s_max: bool = False,
         use_cache: bool = False,
         effective_backend: AttentionBackend | None = None,
+        rotary_lengths: RotaryLengths | None = None,
     ) -> tuple[
         torch.Tensor,
         torch.Tensor,
@@ -1045,6 +1078,7 @@ class NormAttentionNorm(nn.Module):
             output_s_max=output_s_max,
             use_cache=use_cache,
             effective_backend=effective_backend,
+            rotary_lengths=rotary_lengths,
         )
         hidden_states = residual + hidden_states
 
@@ -1073,6 +1107,7 @@ class DecoderLayer(nn.Module):
         output_s_max: bool = False,
         use_cache: bool = False,
         effective_backend: AttentionBackend | None = None,
+        rotary_lengths: RotaryLengths | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, DynamicCache | None, list[torch.Tensor] | None]:
         hidden_states, residual, self_attn_weights, present_key_value, s_max = self.norm_attn_norm(
             hidden_states=hidden_states,
@@ -1085,6 +1120,7 @@ class DecoderLayer(nn.Module):
             output_s_max=output_s_max,
             use_cache=use_cache,
             effective_backend=effective_backend,
+            rotary_lengths=rotary_lengths,
         )
 
         # Fully Connected
@@ -1107,6 +1143,7 @@ class E1PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
     _supports_flash_attn_2 = False
     _supports_flash_attn_3 = False
     _fastplms_attention_implementations = ("sdpa", "flex_attention")
+    _fastplms_attention_auto_order = ("sdpa",)
     _is_internal_encoder = False
 
     def __init__(self, config: E1Config, *args: Any, **kwargs: Any) -> None:
@@ -1317,7 +1354,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         within_seq_position_ids: torch.LongTensor | None,
         global_position_ids: torch.LongTensor | None,
         sequence_ids: torch.LongTensor | None,
-    ) -> tuple[torch.Tensor, torch.LongTensor, torch.LongTensor, torch.LongTensor]:
+    ) -> tuple[torch.Tensor, torch.LongTensor, torch.LongTensor, torch.LongTensor, RotaryLengths]:
         if (input_ids is None) == (inputs_embeds is None):
             message = (
                 "Must specify either input_ids or inputs_embeds"
@@ -1368,10 +1405,11 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                 raise ValueError(
                     f"{name} must have shape {expected_shape}; got {tuple(value.shape)}."
                 )
-        within_positions = within_seq_position_ids.long()
-        global_positions = global_position_ids.long()
-        sequence_numbers = sequence_ids.long()
-        _validate_biological_indices(
+        # ``Tensor.long`` is typed as a plain Tensor; these are int64 by construction.
+        within_positions = cast(torch.LongTensor, within_seq_position_ids.long())
+        global_positions = cast(torch.LongTensor, global_position_ids.long())
+        sequence_numbers = cast(torch.LongTensor, sequence_ids.long())
+        rotary_lengths: RotaryLengths = _validate_biological_indices(
             within_positions,
             global_positions,
             sequence_numbers,
@@ -1392,6 +1430,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             within_positions,
             global_positions,
             sequence_numbers,
+            rotary_lengths,
         )
 
     def _resolve_forward_cache(
@@ -1452,6 +1491,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
         output_hidden_states: bool,
         output_s_max: bool,
         effective_backend: AttentionBackend,
+        rotary_lengths: RotaryLengths,
     ) -> E1ModelOutputWithPast:
         hidden_history: list[torch.Tensor] | None = [] if output_hidden_states else None
         attention_history: list[torch.Tensor] | None = [] if output_attentions else None
@@ -1474,6 +1514,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                     output_s_max,
                     use_cache,
                     effective_backend,
+                    rotary_lengths,
                 )
             else:
                 layer_output = layer(
@@ -1487,6 +1528,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
                     output_s_max=output_s_max,
                     use_cache=use_cache,
                     effective_backend=effective_backend,
+                    rotary_lengths=rotary_lengths,
                 )
             hidden_states, attention, layer_cache, s_max = layer_output
             if use_cache:
@@ -1544,7 +1586,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        hidden_states, within_positions, global_positions, sequence_numbers = (
+        hidden_states, within_positions, global_positions, sequence_numbers, rotary_lengths = (
             self._prepare_hidden_states(
                 input_ids,
                 inputs_embeds,
@@ -1575,6 +1617,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
             output_hidden_states,
             output_s_max,
             effective_backend,
+            rotary_lengths,
         )
         if not return_dict:
             return result.to_tuple()

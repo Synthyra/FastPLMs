@@ -73,10 +73,15 @@ _SAVED_RUNTIME_SCHEMA_VERSION = 1
 _SAVED_RUNTIME_FILES = (
     "__init__.py",
     "attention/__init__.py",
+    "attention/_auto.py",
     "attention/_core.py",
     "attention/_kernel_lock.py",
     "attention/interfaces.py",
     "embeddings/__init__.py",
+    "embeddings/batches.py",
+    "embeddings/identity.py",
+    "embeddings/inputs.py",
+    "embeddings/output.py",
     "embeddings/pooling.py",
     "embeddings/runner.py",
     "embeddings/storage.py",
@@ -2206,6 +2211,7 @@ class FastESM3PreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
     _supports_flash_attn_2 = False
     _supports_flash_attn_3 = False
     _fastplms_attention_implementations = _SUPPORTED_ATTENTION_BACKENDS
+    _fastplms_attention_auto_order = ("sdpa",)
 
     @property
     def tokenizer(self) -> EsmSequenceTokenizer:

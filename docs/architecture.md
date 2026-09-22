@@ -90,6 +90,12 @@ persistence, and resume. Model-specific adapters only prepare the representation
 and residue mask. E1 keeps its tokenizer-free raw-sequence adapter. ESMFold2
 produces its learned width-256 representation through a dedicated mixin.
 
+Within that package, `inputs.py` normalizes and spools inputs, `identity.py`
+defines run fingerprints, `batches.py` executes bounded windows, and `output.py`
+coordinates resume validation and transactional persistence. `runner.py` keeps
+the public interface and orders these phases. Storage schemas and fingerprints
+remain compatible across the module split.
+
 ESMFold2 structure variants retain the semantics declared by their pinned
 configs. The experimental Fast base300M and base600M variants use 24 folding
 blocks, no MSA conditioning, and backbone dimensions `960 x 30` and `1152 x
@@ -143,6 +149,30 @@ GPU access, `ipc: host`, caches, source mounts, and output mounts.
 `tools/remote/run.py` creates an isolated source archive, sends it to a host
 specified at invocation time, runs Docker there, and returns JUnit, JSON, and
 benchmark outputs. Hostnames, identities, and secrets are never tracked.
+
+`tools/execution/` owns resource pricing, budget reservations, and frozen source
+inventories shared by experiment launchers. `tools/remote/` separates suite
+contracts, source archives, and reports from SSH/Docker orchestration. Modal
+launchers upload an allowlisted snapshot and record hashes of those exact bytes,
+including uncommitted edits. Pinned official references remain isolated.
+
+## Research evidence and documentation
+
+`tools/confidence/v2_analysis.py` calculates the v2 sample metrics and target
+bootstrap intervals from typed records without training or folding dependencies.
+The pilot retains its separate protocol in `metrics.py`. Acceptance rules consume
+the v2 calculations; orchestration does not define scientific statistics.
+
+`tools/confidence/experiment_artifacts.py` reserves evaluation destinations and
+records requests, exact checkpoint identities, raw predictions, and completion
+hashes. Public exports exclude private checkpoint snapshots. `evidence.toml`
+pins the public dataset payloads used by offline validation and documentation.
+
+`tools/artifacts/doc_generation/` separates evidence loading and validation,
+capability derivation, family renderers, card composition, and synchronization.
+Renderers honor pending or invalidated metric status. The stable entry point is
+`python -m tools.artifacts.generate_docs`; generated cards and support data are
+never edited by hand.
 
 ## Design rule
 

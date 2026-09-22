@@ -51,6 +51,7 @@ from .modeling_esmfold2_common import (
     PairUpdateBlock,
     ResIdxAsymIdSymIdEntityIdEncoding,
     RowAttentionPooling,
+    SWA3DRoPEAttention,
     SwiGLUMLP,
     TriangleMultiplicativeUpdate,
     _categorical_mean,
@@ -59,6 +60,7 @@ from .modeling_esmfold2_common import (
     compute_lm_hidden_states,
     gather_rep_atom_coords,
     gather_token_to_atom,
+    validate_atom_attention,
     validate_kernel_backend,
     validate_msa_conditioning_inputs,
     validate_prepared_auxiliary_inputs,
@@ -511,6 +513,22 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         self.structure_head.set_kernel_backend(backend)
         self._kernel_backend = backend
 
+    def set_atom_attention(self, mode: str) -> None:
+        """Select how atoms attend to each other in the atom encoders and decoder.
+
+        Args:
+            mode: ``"dense"`` (default) lets every atom attend to every atom slot,
+                as the official model does without flash-attn. ``"windowed"``
+                restricts each atom to 64 real neighbors on each side through
+                PyTorch's variable-length FlashAttention, as the official model
+                does with flash-attn. It needs CUDA, costs linear rather than
+                quadratic memory in the atom count, and changes numerical output.
+        """
+        validate_atom_attention(mode)
+        for module in self.modules():
+            if isinstance(module, SWA3DRoPEAttention):
+                module.set_atom_attention(mode)
+
     def set_chunk_size(self, chunk_size: int | None) -> None:
         self.folding_trunk.set_chunk_size(chunk_size)
         if self.confidence_head is not None:
@@ -606,7 +624,6 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
     def apply_torch_compile(self, mode: str = "fixed_seqlen", dynamic: bool | None = None) -> None:
         if dynamic is None:
             dynamic = mode == "dynamic_seqlen"
-        compile_kwargs: dict[str, bool] = {"dynamic": dynamic}
         compile_targets = (
             PairUpdateBlock,
             DiffusionTransformer,
@@ -616,7 +633,9 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
 
         def _maybe_compile(module: nn.Module) -> None:
             if isinstance(module, compile_targets):
-                module.forward = torch.compile(module.forward, **compile_kwargs)
+                module.forward = torch.compile(  # type: ignore[assignment]
+                    module.forward, dynamic=dynamic
+                )
 
         self.apply(_maybe_compile)
 

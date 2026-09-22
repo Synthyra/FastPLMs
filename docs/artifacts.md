@@ -5,6 +5,37 @@ artifacts under `dist/hub/<model>/`. It operates only on an already downloaded,
 manifest-pinned checkpoint snapshot. It never authenticates, downloads, creates
 a Hub repository, uploads, deletes, commits, pushes, or opens a pull request.
 
+## Pinned evidence storage
+
+The root `evidence.toml` pins the public
+[Synthyra/FastPLMs-artifacts dataset](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts)
+at an immutable revision, with each file's SHA-256, size, and restoration path.
+JSON reports under `docs/evidence/` and `docs/validation/`, plus JSON and
+safetensors reference outputs under `tests/goldens/`, live in that dataset
+and are ignored local files after restoration.
+Runtime configuration, test inputs, and small synthetic fixtures remain tracked
+in Git.
+
+Fetch the declared bundle before
+documentation generation, release checks, or parity suites:
+
+```bash
+python -m tools.artifacts.evidence_store fetch
+python -m tools.artifacts.evidence_store verify
+```
+
+Fetching is an explicit network operation. Verification is offline and checks
+the restored files against the manifest. Tests and model runtime code never
+fetch evidence automatically. Prepare the bundle before running an offline
+validation environment; the standalone `cpu_contract` tier needs no bundle.
+
+To update evidence, generate and review the new outputs, publish them to the
+dataset, and update `evidence.toml` with the resulting immutable revision and
+file identities. A changed golden also requires matching `official_golden`
+hashes in `src/fastplms/models.toml`. Retain the outputs' recorded source,
+checkpoint, environment, and measurement boundaries; moving storage does not
+establish a new numerical result.
+
 ## Dependencies
 
 Artifact tooling uses Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
@@ -229,7 +260,7 @@ structure benchmark, which remains pending. The published mirrors are pinned to
 revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
 `71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). Inference validation is
 unavailable for 600M. The reloaded 300M artifact also passed the same isolated
-comparison; see [artifact reload evidence](validation/esmfold2_300_artifact_reload.json).
+comparison; see [artifact reload evidence](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_300_artifact_reload.json).
 
 ## Generated cards and support data
 

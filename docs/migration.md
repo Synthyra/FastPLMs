@@ -62,8 +62,11 @@ model.set_attn_implementation("sdpa")
 
 The 1.0 names are `eager`, `sdpa`, `flex_attention`,
 `flash_attention_2`, and `flash_attention_3`, restricted by the manifest.
-There is no `auto` backend, source compilation, or fallback for an unavailable
-kernel.
+There is no source compilation and no fallback for an unavailable named kernel.
+The 0.x `auto` value, which depended silently on installed packages, is replaced
+by the opt-in `attn_implementation="auto"` request. It follows a measured
+per-family order and records what it selected, as described in the
+[attention backend guide](attention_backends.md#automatic-selection).
 
 `output_attentions=True` is a documented exception. If an optimized backend
 cannot return the full matrix, FastPLMs emits one warning with the configured

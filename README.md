@@ -529,6 +529,22 @@ pdb_text = folder.result_to_pdb(result)
 print(result.ptm, result.plddt.mean().item())
 ```
 
+Two opt-in runtime settings trade a little memory or exactness for speed on long
+proteins, with no extra package and no compilation:
+
+```python
+folder.set_chunk_size(None)            # unchunked pair updates
+folder.set_atom_attention("windowed")  # the official flash-attn atom window, through PyTorch
+```
+
+In one measured run on an H100, a 1,024-residue fold took 23 s with both settings
+against 87 s for the official implementation, at 0.97 times its peak memory, and
+a 64-residue fold took 0.80 s against 0.98 s. At 2,048 residues the official
+implementation ran out of the GPU's 80 GB, while FastPLMs folded in 596 s with its
+bitwise-exact defaults and 139 s with windowed atoms and 512-row chunks. The
+conditions, the dense-versus-windowed comparison, and the figure are in
+[ESMFold2](docs/esmfold2.md#measured-folding-cost).
+
 Build complexes with input types from the loaded artifact:
 
 ```python
@@ -567,7 +583,15 @@ checkpoint.
 The experimental `Synthyra/ESMFold2-300` and `Synthyra/ESMFold2-600` variants
 disable their confidence heads. Their folding results therefore do not contain
 pLDDT, pTM, iPTM, or PAE fields. The confidence fields shown in the examples
-above apply to variants with an enabled confidence head.
+above apply to variants with an enabled confidence head. Separate research
+confidence heads were trained in a Modal pilot and a GH200 v2 campaign; neither
+has produced a release-qualified confidence checkpoint. The pilot reports remain
+valid within their documented scope. The historical v2 correlations, bootstrap
+intervals, and acceptance gates require recomputation after correcting tied
+ranks. Raw predictions were not recovered from the closed GH200 hosts or W&B,
+so those results remain uncorrected and the test set remains spent. See
+[Confidence-head training](docs/confidence_training.md) for the protocols,
+training records, limitations, and saved-record recomputation command.
 
 The learned sequence representation combines the ordered hidden-state stack of
 each declared ESMFold2 backbone with the folding checkpoint projection. The
@@ -723,7 +747,11 @@ model.set_attn_implementation("sdpa")
 | `flash_attention_2` | A supported ESM2 or ESM++ BF16 CUDA path needs a precompiled kernel | BF16-only and family-limited |
 | `flash_attention_3` | A supported ESM2, ESM++, or DPLM BF16 CUDA path needs a precompiled kernel | BF16-only and family-limited |
 
-FastPLMs does not implement an `auto` backend. An unavailable request raises.
+An unavailable named request raises. `attn_implementation="auto"` is an opt-in
+request: FastPLMs selects the first implementation in the family's measured
+preference order that the machine can execute, and `model.attention_resolution`
+records the choice and the reasons. See
+[automatic selection](docs/attention_backends.md#automatic-selection).
 When an optimized implementation cannot return attention matrices,
 `output_attentions=True` emits one warning naming the configured backend,
 effective eager backend, and reason, then runs a correctly masked eager call.
@@ -803,6 +831,13 @@ terms remain distinct from the FastPLMs Apache-2.0 code license.
 
 ## Validation and reproducibility
 
+Measured JSON reports and golden safetensors live in the public
+[Synthyra/FastPLMs-artifacts dataset](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts).
+`evidence.toml` pins their revision, hashes, and local paths. Restore them with
+`python -m tools.artifacts.evidence_store fetch` before documentation, release,
+or parity checks. See [artifact storage](docs/artifacts.md#pinned-evidence-storage)
+and the [bounded CPU verification workflow](docs/testing.md#run-tiers).
+
 All release validation is containerized. The portable runner accepts the host
 and identity at invocation time:
 
@@ -881,6 +916,7 @@ weights.
 - [Embedding API](docs/embedding_api.md)
 - [Attention backends](docs/attention_backends.md)
 - [ESMFold2](docs/esmfold2.md)
+- [Confidence-head training](docs/confidence_training.md)
 - [Test-time training](docs/ttt.md)
 - [Binder design](docs/binder_design.md)
 - [Fine-tuning](docs/finetuning.md)

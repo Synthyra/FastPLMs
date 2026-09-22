@@ -35,6 +35,34 @@ unused code path when the manifest or current tests say otherwise.
   oracles. Runtime code must not import from this directory.
 - `tests/` contains unit, integration, parity, structure, and release checks.
 - `tools/` contains artifact, conversion, remote, and maintenance workflows.
+- `tools/confidence/` contains the Modal pilot and GH200 v2 confidence workflows. Keep
+  its tests and compute remote; do not run intensive confidence work locally.
+  Both pilot training stages completed through validation-based early stopping
+  and passed their held-out quality gates; publication remains pending.
+  GPU work requires an explicit budget and environment. Avoid duplicate
+  evaluation calls. See docs/confidence_training.md for run links and commands.
+  Preserve active runs' recorded training-code hashes. Use the bounded
+  `tools.verification.cpu` workflow for focused remote CPU checks.
+  The v2 campaign (`ssh.py`, `host.py`, `online_*.py`, `rollouts.py`,
+  `target_*.py`, `test_evaluation.py`) trains on a GH200 workstation from
+  AtlasFold-Data with online rollouts. Its GPU-hour ledger allows 2 hours of
+  smoke checks, 24 hours per model, and 5 hours for the production reference.
+  Both v2 heads finished training, the test evaluation and the production
+  reference ran once. Corrected correlations, bootstrap intervals, and
+  acceptance gates are pending recomputation after the tied-rank fix.
+  Historical reports are restored from the pinned public artifact dataset to
+  `docs/evidence/confidence/esmfold2_{300,600}-v2.json`
+  with `metrics_review.status = "requires_recomputation"`; do not present them
+  as corrected results. Raw predictions were not recovered from the closed
+  GH200 workstation or W&B. Each run's 780 W&B update rows report zero skipped
+  targets, so the skipped-target gradient bug did not affect these runs.
+  The test split is now spent, so a further
+  evaluation on it is no longer held out. Keep the pilot heads and reports
+  unchanged as baselines, and do not publish v2 weights without separate
+  approval.
+  New evaluations use immutable group directories with exact checkpoint
+  snapshots and raw prediction records. Verify and export their public evidence
+  before closing a compute host. Keep v2 analysis independent of model loading.
 - `examples/` contains runnable research and training examples. Keep examples
   directly in this directory rather than creating a tutorial subtree.
 - `model_cards/` contains generated checkpoint cards.
@@ -54,7 +82,10 @@ modules. Do not hand-edit generated model cards or
 - Structure families retain native chain, residue, atom, ligand, nucleic-acid,
   and MSA semantics where applicable.
 - A requested attention backend either executes the named implementation or
-  raises. Never add a silent fallback.
+  raises. Never add a silent fallback. The opt-in `attn_implementation="auto"`
+  request follows the family's `attention_auto_order`, ends in a named
+  implementation, and records why each skipped candidate was unusable. An order
+  that prefers FlashAttention must cite measured evidence.
 - Folding progress is disabled by default (`verbose=False`). Progress display must
   preserve outputs and random-number state; confidence-disabled ESMFold2
   exports must retain unknown confidence values.
@@ -95,6 +126,11 @@ python -m tools.remote \
   --suite compliance
 ```
 
+Run confidence-pilot tests and compute through Modal with the launcher described
+in [confidence-head training](docs/confidence_training.md). Do not inspect or
+print `.secrets.env`; the launcher loads it through the trusted environment
+loader and requires W&B initialization for every training run.
+
 Build the candidate and one isolated reference image:
 
 ```bash
@@ -119,6 +155,7 @@ markers before running expensive suites.
 Regenerate and check documentation:
 
 ```bash
+python -m tools.artifacts.evidence_store fetch
 PYTHONPATH=src python -m tools.artifacts.generate_docs
 PYTHONPATH=src python -m tools.artifacts.generate_docs --check
 python -m pytest tests/release/test_documentation.py \

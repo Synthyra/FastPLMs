@@ -279,6 +279,7 @@ class DPLM2PreTrainedModel(FastPLMsAttentionMixin, EsmPreTrainedModel):
     _supports_flash_attn_2 = False
     _supports_flash_attn_3 = False
     _fastplms_attention_implementations = ("sdpa",)
+    _fastplms_attention_auto_order = ("sdpa",)
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
@@ -403,12 +404,12 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
     def _update_cos_sin_tables(
         self,
         x: torch.Tensor,
-        type_ids: torch.Tensor | None,
+        packed_layout: bool,
         seq_dimension: int = 2,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # x: (b, h, l, d)
         seq_len = x.shape[seq_dimension]
-        if self._has_multimodal_tokens(type_ids):
+        if packed_layout:
             seq_len = seq_len // 2
 
         cache_is_stale = (
@@ -439,13 +440,16 @@ class ModifiedRotaryEmbedding(RotaryEmbedding):
         type_ids: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # q, k: (b, h, l, d)
+        # Detecting the layout synchronizes with the host, so decide once per
+        # call and share the answer with the table builder.
+        packed_layout = self._has_multimodal_tokens(type_ids)
         self._cos_cached, self._sin_cached = self._update_cos_sin_tables(
             k,
-            type_ids=type_ids,
+            packed_layout=packed_layout,
             seq_dimension=-2,
         )
 
-        if self._has_multimodal_tokens(type_ids):
+        if packed_layout:
             q_1, q_2 = q.chunk(2, dim=-2)  # each (b, h, l / 2, d)
             k_1, k_2 = k.chunk(2, dim=-2)  # each (b, h, l / 2, d)
             q_1 = apply_rotary_pos_emb(q_1, self._cos_cached, self._sin_cached)

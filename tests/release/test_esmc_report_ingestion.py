@@ -15,7 +15,8 @@ from pathlib import Path
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
 from tests.unit.test_biohub_reference_lock import _reference_environment_payload
 from tools.artifacts import generate_docs
-from tools.artifacts.generate_docs import (
+from tools.artifacts.doc_generation import esmc_evidence
+from tools.artifacts.doc_generation.esmc_evidence import (
     ESMC_BACKENDS,
     ESMC_MODEL_IDS,
     ESMC_PANEL_KINDS,
@@ -23,9 +24,9 @@ from tools.artifacts.generate_docs import (
     EsmcReportSet,
     EsmcRuntimeIdentity,
     load_esmc_report_set,
-    render_capability_evidence,
-    render_model_card,
 )
+from tools.artifacts.doc_generation.model_cards import render_model_card
+from tools.artifacts.doc_generation.support import render_capability_evidence
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -160,7 +161,7 @@ def _report(
     panel: Mapping[str, object],
 ) -> dict[str, object]:
     panel_kind = str(panel["kind"])
-    is_unavailable = backend in generate_docs.ESMC_UNAVAILABLE_BACKENDS
+    is_unavailable = backend in esmc_evidence.ESMC_UNAVAILABLE_BACKENDS
     model_offset = ESMC_MODEL_IDS.index(spec.id) * 0.001
     backend_offset = ESMC_BACKENDS.index(backend) * 0.0001
     panel_offset = ESMC_PANEL_KINDS.index(panel_kind) * 0.00001
@@ -209,7 +210,7 @@ def _report(
         },
         "record_status": "unavailable" if is_unavailable else "measured",
         "unavailability": (
-            generate_docs._esmc_unavailability_identity(backend, LOCKED_REFERENCE_ENVIRONMENT)
+            esmc_evidence._esmc_unavailability_identity(backend, LOCKED_REFERENCE_ENVIRONMENT)
             if is_unavailable
             else None
         ),
@@ -230,7 +231,7 @@ def _report(
             else {"mode": release_modes[backend], "status": "passed"}
         ),
     }
-    payload["report_sha256"] = generate_docs._esmc_report_sha256(payload)
+    payload["report_sha256"] = esmc_evidence._esmc_report_sha256(payload)
     return payload
 
 
@@ -238,7 +239,7 @@ def _report(
 def complete_report_root(tmp_path: Path) -> Path:
     report_root = tmp_path / "reports"
     report_root.mkdir()
-    panels = generate_docs._expected_esmc_panels(ROOT)
+    panels = esmc_evidence._expected_esmc_panels(ROOT)
     for model_id in ESMC_MODEL_IDS:
         spec = REGISTRY[model_id]
         for backend in ESMC_BACKENDS:
@@ -261,7 +262,7 @@ def _rewrite_report(
     payload = json.loads(path.read_text(encoding="utf-8"))
     mutate(payload)
     if rehash:
-        payload["report_sha256"] = generate_docs._esmc_report_sha256(payload)
+        payload["report_sha256"] = esmc_evidence._esmc_report_sha256(payload)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -310,14 +311,14 @@ def test_generator_dynamic_environment_schema_is_hardware_neutral(
         }
     }
 
-    validated_candidate = generate_docs._validate_esmc_candidate_environment(candidate)
-    validated_reference = generate_docs._validate_esmc_reference_environment(dynamic_reference)
-    generate_docs._validate_esmc_environment_binding(
+    validated_candidate = esmc_evidence._validate_esmc_candidate_environment(candidate)
+    validated_reference = esmc_evidence._validate_esmc_reference_environment(dynamic_reference)
+    esmc_evidence._validate_esmc_environment_binding(
         validated_candidate,
         validated_reference,
         locked_reference,
     )
-    unavailable = generate_docs._esmc_unavailability_identity("flash_attention_2", locked_reference)
+    unavailable = esmc_evidence._esmc_unavailability_identity("flash_attention_2", locked_reference)
     assert unavailable["platform"] == f"linux/{architecture}"
     assert unavailable["accelerator"] == f"{gpu_name}/SM90"
 
@@ -402,7 +403,9 @@ def test_esmc_schema_validation_remains_fail_closed_under_python_optimized_mode(
     script = f"""
 from pathlib import Path
 from fastplms.registry import get_model_registry
-from tools.artifacts.generate_docs import EsmcReportError, EsmcRuntimeIdentity, load_esmc_report_set
+from tools.artifacts.doc_generation.esmc_evidence import (
+    EsmcReportError, EsmcRuntimeIdentity, load_esmc_report_set,
+)
 
 try:
     load_esmc_report_set(
@@ -488,7 +491,7 @@ else:
                 "gpu"
             ].__setitem__("name", "forged accelerator"),
             True,
-            "locked reference environment is invalid",
+            "candidate environment differs from the locked reference runtime",
         ),
         (
             lambda report: report["panel_logits_metrics"].__setitem__("mean_jsd", 0.06),
@@ -602,8 +605,12 @@ def test_cli_explicit_report_root_renders_only_after_complete_validation(
         ROOT / "docker" / "biohub-reference-lock.Dockerfile",
         source_root / "docker" / "biohub-reference-lock.Dockerfile",
     )
+    confidence_root = source_root / "docs" / "evidence" / "confidence"
+    confidence_root.mkdir(parents=True)
+    for name in ("esmfold2_300-v2.json", "esmfold2_600-v2.json"):
+        shutil.copyfile(ROOT / "docs" / "evidence" / "confidence" / name, confidence_root / name)
     monkeypatch.setattr(
-        generate_docs,
+        esmc_evidence,
         "_esmc_runtime_identity_from_source",
         lambda source, registry: RUNTIME_IDENTITY,
     )
@@ -632,7 +639,7 @@ def test_cli_release_evidence_options_fail_closed_on_missing_set(
 ) -> None:
     missing = tmp_path / "missing"
     monkeypatch.setattr(
-        generate_docs,
+        esmc_evidence,
         "_esmc_runtime_identity_from_source",
         lambda source, registry: RUNTIME_IDENTITY,
     )

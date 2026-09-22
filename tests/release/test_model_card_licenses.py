@@ -7,10 +7,10 @@ import pytest
 
 from fastplms.registry import HUB_LICENSE_IDENTIFIERS, ModelSpec, load_model_registry
 from tools.artifacts.build import render_model_card as render_artifact_model_card
-from tools.artifacts.generate_docs import (
+from tools.artifacts.doc_generation.model_cards import (
     render_model_card as render_documentation_model_card,
 )
-from tools.artifacts.generate_docs import (
+from tools.artifacts.doc_generation.support import (
     render_support,
 )
 from tools.artifacts.license_metadata import parse_hub_license_metadata
@@ -42,9 +42,10 @@ EMBEDDING_FAMILIES = {
 
 def _is_experimental_esmfold2(spec: ModelSpec) -> bool:
     """Identify ESMFold2 experimental implementations from their AutoClass map."""
-    return spec.family.id == "esmfold2" and "modeling_esmfold2_experimental" in spec.auto_map[
-        "AutoModel"
-    ]
+    return (
+        spec.family.id == "esmfold2"
+        and "modeling_esmfold2_experimental" in spec.auto_map["AutoModel"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -169,7 +170,7 @@ def test_every_manifest_model_card_has_task_oriented_guidance() -> None:
             assert "create a new, untrained `classifier`" in card
             assert "AutoModelForSequenceClassification.from_pretrained" in card
             assert "AutoModelForTokenClassification.from_pretrained" in card
-            assert "token_labels = torch.full_like(batch[\"input_ids\"], -100)" in card
+            assert 'token_labels = torch.full_like(batch["input_ids"], -100)' in card
             assert 'modules_to_save=["classifier"]' in card
         else:
             assert "## Downstream prediction" not in card

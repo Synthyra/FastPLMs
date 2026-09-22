@@ -89,7 +89,10 @@ def _initialize_release_tool_repository(root: Path) -> None:
 @pytest.mark.parametrize(
     "relative_name",
     (
+        "evidence.toml",
         "tools/artifacts/build.py",
+        "tools/artifacts/doc_generation/confidence_evidence.py",
+        "tools/artifacts/doc_generation/esmc_evidence.py",
         "tools/artifacts/publish.py",
         "tools/artifacts/offline_probe.py",
         "tools/conversion/state_transforms.py",
@@ -1394,7 +1397,6 @@ def test_preloaded_non_artifact_fastplms_runtime_is_rejected(tmp_path: Path) -> 
     checkpoint = tmp_path / "checkpoint"
     checkpoint.mkdir()
     registry, spec = _synthetic_registry(source_root, checkpoint)
-    source_package = source_root / "src" / "fastplms"
     artifact = build_artifact(
         spec,
         registry,

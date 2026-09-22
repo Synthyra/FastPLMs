@@ -732,6 +732,7 @@ class AnkhPreTrainedModel(
     _supports_flash_attn_3 = False
     _supports_flex_attn = False
     _fastplms_attention_implementations = ("eager", "sdpa")
+    _fastplms_attention_auto_order = ("sdpa", "eager")
     embedding_unsupported_pooling = ("cls",)
 
     def __init__(self, config: FastAnkhConfig, *args, **kwargs) -> None:
@@ -1176,7 +1177,8 @@ class FastAnkhForConditionalGeneration(
 
     def __init__(self, config: FastAnkhConfig, **kwargs) -> None:
         requested_backend = getattr(config, "_attn_implementation", None) or config.attn_backend
-        if requested_backend not in (None, "eager"):
+        # Eager attention is the only implementation, so an automatic request selects it.
+        if requested_backend not in (None, "eager", "auto"):
             raise ValueError(
                 "ANKH sequence-to-sequence checkpoints support only eager attention; "
                 f"received {requested_backend!r}. Use FastAnkhModel for optimized "

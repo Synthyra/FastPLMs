@@ -418,7 +418,10 @@ The ESMFold2 folding checkpoint remains FP32. Folding computation uses CUDA
 BF16 autocast. Requested ESMC precision controls the ESMC backbone separately.
 Therefore, selecting BF16 or FP8 ESMC does not change folding-parameter storage.
 The base300M and base600M configs disable the confidence head. Their folding
-outputs therefore do not contain pLDDT, pTM, iPTM, or PAE fields. The 300M
+outputs therefore do not contain pLDDT, pTM, iPTM, or PAE fields. Confidence
+heads for both backbones were trained and evaluated separately and are not
+published; [Confidence-head training](confidence_training.md) records the
+recipe, the test results, and the correlations with production `esmfold2`. The 300M
 variant has a passed single-protein comparison, documented in
 [ESMFold2-300 validation](validation/esmfold2_small.md). This is not the full
 structure benchmark, which remains pending. The mirrors are published at revisions

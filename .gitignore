@@ -27,7 +27,11 @@ results/
 *.pth
 *.pt
 *.safetensors
-!tests/goldens/**/*.safetensors
+
+# Hydrated evidence and reference outputs, pinned by evidence.toml
+/docs/evidence/**/*.json
+/docs/validation/**/*.json
+/tests/goldens/**/*.json
 
 # Local credentials and workstation state
 .env

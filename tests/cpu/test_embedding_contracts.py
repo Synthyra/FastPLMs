@@ -73,6 +73,9 @@ test_model_state_fingerprint_rehashes_data_and_storage_alias_mutations = (
 test_runtime_versions_are_part_of_resume_identity = (
     contracts.test_runtime_versions_are_part_of_resume_identity
 )
+test_schema_three_fingerprint_matches_existing_embedding_runs = (
+    contracts.test_schema_three_fingerprint_matches_existing_embedding_runs
+)
 test_tokenizer_content_changes_run_fingerprint = (
     contracts.test_tokenizer_content_changes_run_fingerprint
 )

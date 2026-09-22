@@ -35,10 +35,12 @@ try:
         AttentionBackend,
         BlockMask,
         FastPLMsAttentionMixin,
+        FlashPaddingLayout,
         _get_flex_attention_fn,
         _get_flex_block_mask,
         flex_attention,
         get_attention_mask,
+        get_flash_padding_layout,
         kernels_flash_attention_func,
         resolve_attention_backend,
         resolve_attention_backend_for_call,
@@ -52,11 +54,13 @@ except ModuleNotFoundError as error:
         "EmbeddingMixin",
         "FastPLMsAttentionMixin",
         "FastPLMTestTimeTrainingMixin",
+        "FlashPaddingLayout",
         "Pooler",
         "_get_flex_attention_fn",
         "_get_flex_block_mask",
         "flex_attention",
         "get_attention_mask",
+        "get_flash_padding_layout",
         "kernels_flash_attention_func",
         "resolve_attention_backend",
         "resolve_attention_backend_for_call",
@@ -296,13 +300,27 @@ def apply_rotary_emb_torch(
         raise AssertionError("rotary width exceeds the attention head dimension")
 
     token_count = x.shape[1]
-    cos_full = torch.cat((cos[:token_count], cos[:token_count]), dim=-1).unsqueeze(1)
-    sin_full = torch.cat((sin[:token_count], sin[:token_count]), dim=-1).unsqueeze(1)
-    x_rotary = x[..., :rotary_width]
-    y_rotary = x_rotary * cos_full + rotate_half(x_rotary, interleaved) * sin_full
+    cos_full = torch.cat((cos[:token_count], cos[:token_count]), dim=-1)  # (l, d_r)
+    sin_full = torch.cat((sin[:token_count], sin[:token_count]), dim=-1)  # (l, d_r)
+    return _rotate_with_full_tables(x, cos_full, sin_full, interleaved)
+
+
+def _rotate_with_full_tables(
+    x: torch.Tensor,
+    cos_full: torch.Tensor,
+    sin_full: torch.Tensor,
+    interleaved: bool,
+) -> torch.Tensor:
+    # x: (b, l, h, d); cos_full, sin_full: (l, d_r) with rotary width d_r <= d
+    rotary_width = cos_full.shape[-1]
+    x_rotary = x[..., :rotary_width]  # (b, l, h, d_r)
+    y_rotary = (  # (b, l, h, d_r)
+        x_rotary * cos_full.unsqueeze(1)
+        + rotate_half(x_rotary, interleaved) * sin_full.unsqueeze(1)
+    )
     if rotary_width == x.shape[-1]:
         return y_rotary
-    return torch.cat((y_rotary, x[..., rotary_width:]), dim=-1)
+    return torch.cat((y_rotary, x[..., rotary_width:]), dim=-1)  # (b, l, h, d)
 
 
 class RotaryEmbedding(torch.nn.Module):
@@ -344,6 +362,10 @@ class RotaryEmbedding(torch.nn.Module):
         self._sin_cached: torch.Tensor | None = None
         self._cos_k_cached: torch.Tensor | None = None
         self._sin_k_cached: torch.Tensor | None = None
+        # Both halves of a head rotate by the same angles. Q and K of every layer
+        # read these full-width tables instead of concatenating the halves again.
+        self._cos_full_cached: torch.Tensor | None = None
+        self._sin_full_cached: torch.Tensor | None = None
 
     def reset_parameters(self, device: torch.device | str | None = None) -> None:
         """Rebuild the non-persistent frequency buffers on ``device``."""
@@ -426,6 +448,8 @@ class RotaryEmbedding(torch.nn.Module):
         if self.scale is None:
             self._cos_cached = cos_angles.to(dtype)
             self._sin_cached = sin_angles.to(dtype)
+            self._cos_full_cached = torch.cat((self._cos_cached, self._cos_cached), dim=-1)
+            self._sin_full_cached = torch.cat((self._sin_cached, self._sin_cached), dim=-1)
             return
 
         centered_positions = (
@@ -459,11 +483,17 @@ class RotaryEmbedding(torch.nn.Module):
         if self.scale is not None:
             raise AssertionError("Scaled rotary embeddings are unsupported for ESMC.")
 
-        cos_angles = self._cos_cached
-        sin_angles = self._sin_cached
+        if self._cos_full_cached is None or self._sin_full_cached is None:
+            raise RuntimeError("Rotary cache initialization did not produce full-width tables.")
+        if 2 * self._cos_cached.shape[-1] > q.shape[-1]:
+            raise AssertionError("rotary width exceeds the attention head dimension")
+
+        token_count = q.shape[1]
+        cos_full = self._cos_full_cached[:token_count]  # (l, d_r)
+        sin_full = self._sin_full_cached[:token_count]  # (l, d_r)
         return (
-            apply_rotary_emb_torch(q, cos_angles, sin_angles, self.interleaved, True),
-            apply_rotary_emb_torch(k, cos_angles, sin_angles, self.interleaved, True),
+            _rotate_with_full_tables(q, cos_full, sin_full, self.interleaved),
+            _rotate_with_full_tables(k, cos_full, sin_full, self.interleaved),
         )
 
 
@@ -540,6 +570,7 @@ class MultiHeadAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         # x: (b, l, d)
         qkv = self.layernorm_qkv(x)  # (b, l, 3 * d)
@@ -562,6 +593,7 @@ class MultiHeadAttention(nn.Module):
             flex_block_mask=flex_block_mask,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            flash_padding_layout=flash_padding_layout,
         )
 
         output = self.out_proj(attn_output)
@@ -577,6 +609,7 @@ class MultiHeadAttention(nn.Module):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         if output_attentions:
             return self._manual_attn(
@@ -590,7 +623,7 @@ class MultiHeadAttention(nn.Module):
             return attn_output, None, s_max
         if self.attn_backend.is_flash:
             attn_output, attn_weights = self._kernels_flash_attn(
-                query_heads, key_heads, value_heads, attention_mask_2d
+                query_heads, key_heads, value_heads, attention_mask_2d, flash_padding_layout
             )
         elif self.attn_backend == AttentionBackend.FLEX:
             attn_output, attn_weights = self._flex_attn(
@@ -647,6 +680,7 @@ class MultiHeadAttention(nn.Module):
         key_heads: torch.Tensor,
         value_heads: torch.Tensor,
         attention_mask_2d: torch.Tensor | None = None,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, None]:
         query_tokens = query_heads.transpose(1, 2).contiguous()
         key_tokens = key_heads.transpose(1, 2).contiguous()
@@ -658,6 +692,7 @@ class MultiHeadAttention(nn.Module):
             attention_mask_2d=attention_mask_2d,
             causal=False,
             implementation=self.attn_backend.value,
+            padding_layout=flash_padding_layout,
         )
         return rearrange(attn_output, "b s h d -> b s (h d)"), None
 
@@ -747,6 +782,7 @@ class UnifiedTransformerBlock(nn.Module):
         flex_block_mask: BlockMask | None = None,
         output_attentions: bool = False,
         output_s_max: bool = False,
+        flash_padding_layout: FlashPaddingLayout | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[torch.Tensor] | None]:
         attn_output, attn_weights, s_max = self.attn(
             x,
@@ -755,6 +791,7 @@ class UnifiedTransformerBlock(nn.Module):
             flex_block_mask=flex_block_mask,
             output_attentions=output_attentions,
             output_s_max=output_s_max,
+            flash_padding_layout=flash_padding_layout,
         )
         x = x + self.dropout(attn_output) / self.scaling_factor
         x = x + self.dropout(self.ffn(x)) / self.scaling_factor
@@ -857,16 +894,20 @@ class TransformerStack(nn.Module):
         # Match the pinned Biohub Transformers contract: a supplied sequence_id
         # is authoritative and must encode padding as -1.  attention_mask is
         # ignored in that mode rather than intersected with the chain mask.
-        attention_mask_2d, attention_mask_4d, flex_block_mask = (
-            self._prepare_attention_masks(
-                attention_mask=attention_mask,
-                sequence_id=sequence_id,
-                batch_size=x.shape[0],
-                seq_len=x.shape[1],
-                device=x.device,
-                dtype=x.dtype,
-                output_attentions=bool(output_attentions),
-            )
+        attention_mask_2d, attention_mask_4d, flex_block_mask = self._prepare_attention_masks(
+            attention_mask=attention_mask,
+            sequence_id=sequence_id,
+            batch_size=x.shape[0],
+            seq_len=x.shape[1],
+            device=x.device,
+            dtype=x.dtype,
+            output_attentions=bool(output_attentions),
+        )
+        # A call that returns attention weights runs eager attention and needs no layout.
+        flash_padding_layout = (
+            None
+            if output_attentions
+            else get_flash_padding_layout(self.attention_backend, attention_mask_2d)
         )
 
         for layer_index, block in enumerate(self.blocks):
@@ -890,6 +931,7 @@ class TransformerStack(nn.Module):
                     flex_block_mask=flex_block_mask,
                     output_attentions=output_attentions,
                     output_s_max=output_s_max,
+                    flash_padding_layout=flash_padding_layout,
                 )
             else:
                 x, attn_weights, s_max = block(
@@ -899,6 +941,7 @@ class TransformerStack(nn.Module):
                     flex_block_mask=flex_block_mask,
                     output_attentions=output_attentions,
                     output_s_max=output_s_max,
+                    flash_padding_layout=flash_padding_layout,
                 )
 
             if attentions is not None:
@@ -1048,6 +1091,7 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
         "flash_attention_2",
         "flash_attention_3",
     )
+    _fastplms_attention_auto_order = ("sdpa",)
 
     def __init__(self, config: ESMplusplusConfig, *args: object, **kwargs: object) -> None:
         super().__init__(config, *args, **kwargs)

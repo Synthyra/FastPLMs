@@ -676,6 +676,7 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
     _supports_flash_attn_2 = False
     _supports_flash_attn_3 = False
     _fastplms_attention_implementations = ("eager", "sdpa", "flex_attention")
+    _fastplms_attention_auto_order = ("sdpa",)
 
     def __init__(self, config: FastEsmFoldConfig) -> None:
         super().__init__(config)

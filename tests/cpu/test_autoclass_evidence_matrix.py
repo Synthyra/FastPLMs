@@ -149,12 +149,12 @@ AUTOCLASS_EVIDENCE: dict[tuple[str, str], AutoClassEvidence] = {
     ),
     ("esm3", "AutoModelForSequenceClassification"): _task_head(
         "fastplms.models.esm3.modeling_esm3.FastESM3ForSequenceClassification",
-        "tests/unit/test_esm3_classification.py::"
+        "tests/cpu/test_classification_contracts.py::"
         "test_esm3_classifiers_support_tuple_and_dictionary_outputs",
     ),
     ("esm3", "AutoModelForTokenClassification"): _task_head(
         "fastplms.models.esm3.modeling_esm3.FastESM3ForTokenClassification",
-        "tests/unit/test_esm3_classification.py::"
+        "tests/cpu/test_classification_contracts.py::"
         "test_esm3_classifiers_support_tuple_and_dictionary_outputs",
     ),
     ("e1", "AutoConfig"): _config("fastplms.models.e1.modeling_e1.E1Config"),
@@ -313,11 +313,11 @@ AUTOCLASS_EVIDENCE: dict[tuple[str, str], AutoClassEvidence] = {
     ("esmfold", "AutoModelForSequenceClassification"): _task_head(
         "fastplms.models.esmfold.modeling_fast_esmfold."
         "FastEsmForSequenceClassification",
-        "tests/unit/test_esmfold_classification.py::test_classifier_train_scope_is_exact",
+        "tests/cpu/test_classification_contracts.py::test_classifier_train_scope_is_exact",
     ),
     ("esmfold", "AutoModelForTokenClassification"): _task_head(
         "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForTokenClassification",
-        "tests/unit/test_esmfold_classification.py::test_classifier_train_scope_is_exact",
+        "tests/cpu/test_classification_contracts.py::test_classifier_train_scope_is_exact",
     ),
     ("esmfold2", "AutoConfig"): _config(
         "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config"
@@ -341,13 +341,13 @@ AUTOCLASS_EVIDENCE: dict[tuple[str, str], AutoClassEvidence] = {
     ("esmfold2", "AutoModelForSequenceClassification"): _task_head(
         "fastplms.models.esmfold2.modeling_esmfold2_classification."
         "ESMFold2ForSequenceClassification",
-        "tests/unit/test_esmfold2_classification.py::"
+        "tests/cpu/test_classification_contracts.py::"
         "test_esmfold2_classifier_wrappers_bypass_structure_trunk",
     ),
     ("esmfold2", "AutoModelForTokenClassification"): _task_head(
         "fastplms.models.esmfold2.modeling_esmfold2_classification."
         "ESMFold2ForTokenClassification",
-        "tests/unit/test_esmfold2_classification.py::"
+        "tests/cpu/test_classification_contracts.py::"
         "test_esmfold2_classifier_wrappers_bypass_structure_trunk",
     ),
 }

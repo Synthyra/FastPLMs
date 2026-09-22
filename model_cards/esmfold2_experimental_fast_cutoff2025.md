@@ -206,6 +206,28 @@ not target coordinates.
 Predicted coordinates and confidence scores are outputs and do not establish
 biochemical activity.
 
+## Folding speed settings
+
+Two runtime settings trade memory or exactness for speed on long proteins. They
+need no extra package and no compilation, and neither is stored in the
+configuration.
+
+```python
+model.set_chunk_size(None)            # unchunked pair updates
+model.set_atom_attention("windowed")  # the official flash-attn atom window, through PyTorch
+```
+
+`set_chunk_size(None)` removes the row chunking of the pair-update blocks, which
+costs most of a long fold's time on a data-center GPU and saves little peak
+memory; pass a chunk such as 512 when the unchunked fold does not fit.
+`set_atom_attention("windowed")` restricts each atom to 64 real neighbors on
+each side, as the official model does when flash-attn is installed. It needs
+CUDA and changes numerical output, within sampling spread on the measured
+panel. The
+[ESMFold2 guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/esmfold2.md#measured-folding-cost)
+records the conditions, the dense-versus-windowed comparison, and the figure.
+
+
 ## Learned representation and ESMC precision
 
 ESMFold2 applies its learned state mixture and projection as

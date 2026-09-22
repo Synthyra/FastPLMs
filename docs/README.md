@@ -17,12 +17,17 @@ evidence, and contributor workflows for FastPLMs 1.0. The model manifest at
 | Run parity, structure, or release tests | [Testing](testing.md) |
 | Measure throughput or memory | [Benchmarking](benchmarking.md) |
 | Review ESMFold2-300 validation evidence | [ESMFold2-300 validation](validation/esmfold2_small.md) |
+| Fold long proteins faster with ESMFold2, with measured cost | [ESMFold2](esmfold2.md#measured-folding-cost) |
+| Train or review ESMFold2 confidence heads | [Confidence-head training](confidence_training.md) |
 
 ## Model and research workflows
 
 - [ESMFold2](esmfold2.md): folding, learned representations, the distinct full
   and Fast MSA contracts, experimental base300M/base600M architecture variants,
   BF16, and ESMC-6B-only experimental FP8.
+- [Confidence-head training](confidence_training.md): Modal pilot settings, the
+  GH200 v2 campaign, W&B records, pilot results, and historical v2 metrics that
+  require recomputation. Includes commands for preserving and rescoring evaluations.
 - [Test-time training](ttt.md): opt-in low-rank adaptation and its evidence
   boundary.
 - [Binder design](binder_design.md): differentiable ESMFold2 and ESM++ research

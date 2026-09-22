@@ -104,7 +104,7 @@ Automatic loading and inference from the published 300M repository also
 passed. The run used checkpoint revision
 `a38a62ae930d157484b331c2bf4241684573adba` and runtime revision
 `c5ab9623368b223111791a6c7017e6dfdc95da46`. The raw result is recorded in
-[published loading evidence](esmfold2_300_published_loading.json).
+[published loading evidence](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_300_published_loading.json).
 
 ## Evidence files
 
@@ -112,14 +112,14 @@ The 300M model-card quick start also completed with two protein chains and
 `verbose=True`. Its CIF contains chains A and B, 250 atoms with finite
 coordinates, and `?` for unknown confidence values. This checks the example
 and export path, without claiming complex-prediction accuracy. See the
-[quick-start result](esmfold2_300_quickstart.json).
+[quick-start result](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_300_quickstart.json).
 
 The raw comparison and metadata are tracked beside this report:
 
-- [comparison JSON](esmfold2_small_300_comparison.json)
-- [reference metadata](esmfold2_small_300_reference_metadata.json)
-- [candidate metadata](esmfold2_small_300_candidate_metadata.json)
-- [artifact reload comparison](esmfold2_300_artifact_reload.json)
-- [published artifact evidence](esmfold2_small_publication.json)
-- [published loading evidence](esmfold2_300_published_loading.json)
-- [verified files-only updates](fastplms_files_only_publication.json)
+- [comparison JSON](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_small_300_comparison.json)
+- [reference metadata](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_small_300_reference_metadata.json)
+- [candidate metadata](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_small_300_candidate_metadata.json)
+- [artifact reload comparison](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_300_artifact_reload.json)
+- [published artifact evidence](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_small_publication.json)
+- [published loading evidence](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_300_published_loading.json)
+- [verified files-only updates](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/fastplms_files_only_publication.json)

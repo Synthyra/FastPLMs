@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Self
 from urllib.parse import unquote, urlsplit
 
-from tools.artifacts.generate_docs import (
+from tools.artifacts.doc_generation.capabilities import (
     CAPABILITY_EVIDENCE_SELECTORS,
     EMBEDDING_CAPABILITY_ROWS,
     GENERATION_CAPABILITY_ROWS,
@@ -20,8 +20,8 @@ from tools.artifacts.generate_docs import (
     autoclass_evidence_keys,
     benchmark_autoclass_evidence_pairs,
     benchmark_backend_evidence,
-    synchronize,
 )
+from tools.artifacts.doc_generation.outputs import synchronize
 from tools.debug.check_notation import (
     iter_repository_files,
     scan_repository,
@@ -394,10 +394,7 @@ def test_generated_cards_keep_integrity_digests_in_machine_records() -> None:
         assert re.search(r"\b[0-9a-f]{64}\b", card, flags=re.IGNORECASE) is None
         if spec.canonical_state_sha256 is not None:
             assert spec.canonical_state_sha256 not in card
-            assert (
-                "Canonical transformed state identity: recorded in `source-record.json`"
-                in card
-            )
+            assert "Canonical transformed state identity: recorded in `source-record.json`" in card
 
 
 def test_curated_offline_examples_expose_executable_help() -> None:
@@ -418,7 +415,7 @@ def test_curated_offline_examples_expose_executable_help() -> None:
             env=environment,
             capture_output=True,
             text=True,
-                timeout=20,
+            timeout=20,
             check=False,
         )
 
@@ -595,7 +592,7 @@ def test_generated_cards_put_installation_before_hub_quick_start() -> None:
         if path.stem.startswith("esmfold2"):
             assert text.index("## Quick start") < text.index("## Install and platform requirements")
             assert text.index("## Quick start") < text.index("## Model overview")
-            assert 'dtype=torch.float32' in text
+            assert "dtype=torch.float32" in text
             assert 'device_map="cuda"' in text
             assert 'esmc_precision="bf16"' in text
             assert "model.set_chunk_size(32)" in text
@@ -689,9 +686,7 @@ def test_esmc_release_operations_live_in_docs_not_model_cards() -> None:
         assert "/docs/attention_backends.md" in text
         assert "/docs/generated/capability_evidence.md" in text
 
-    evidence = (ROOT / "docs/generated/capability_evidence.md").read_text(
-        encoding="utf-8"
-    )
+    evidence = (ROOT / "docs/generated/capability_evidence.md").read_text(encoding="utf-8")
     assert "Locked oracle package compatibility exception" in evidence
     assert "nvidia-cusparselt-cu13==0.8.1" in evidence
 

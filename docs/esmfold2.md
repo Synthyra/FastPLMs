@@ -143,6 +143,76 @@ be used to reconstruct the transient FP8 inference path without changing the
 folding checkpoint's FP32 storage. Only the ESMC-6B variants can reconstruct
 the transient FP8 path; base300M and base600M remain BF16-only for ESMC.
 
+## Atom attention and sampling caches
+
+The atom encoders and the atom decoder attend over atoms in one of two modes:
+
+| Mode | Behavior | Requirements |
+| --- | --- | --- |
+| `"dense"` (default) | Every atom attends to every atom slot. The official implementation executes this when `flash-attn` is not installed, and every parity and compliance result in this document was measured in it. | None |
+| `"windowed"` | Each atom attends to at most 64 real atoms on each side. Padded atom slots are never keys, and their output is zero. The official implementation executes this, with `window_size=(64, 64)`, when `flash-attn` is installed. | CUDA and `torch.nn.attention.varlen` |
+
+```python
+model.set_atom_attention("windowed")
+```
+
+The windowed mode calls PyTorch's built-in variable-length FlashAttention, so it
+needs no extra package and no compilation. It raises for CPU tensors and for a
+PyTorch build without that entry point, and it never falls back to dense
+attention. Atom attention time and memory then grow linearly with the atom count
+instead of quadratically. The two modes differ numerically, so do not mix them
+within one comparison. The mode is a runtime setting: it is not stored in the
+configuration, and `save_pretrained` does not record it.
+
+Every denoising step conditions on the same pair representation. With the
+sampler's `use_inference_cache=True` default, each token-transformer block
+projects its pair bias on the first step and reuses that tensor afterwards. The
+result is bitwise identical to projecting at every step. The cache holds one
+`(batch * samples, tokens, tokens, heads)` tensor per block for one `sample` call.
+
+### Measured folding cost
+
+![ESMFold2 folding throughput and memory by protein length](assets/esmfold2_folding_cost.png)
+
+**ESMFold2 single-chain folding cost by protein length on one NVIDIA H100 80GB HBM3.** Left: throughput in residues per second. Middle: peak allocated GPU memory. Right: working memory per residue, which is peak allocated memory above the loaded weights divided by the protein length. Every fold uses 3 trunk loops, 50 requested sampling steps under the official noise cap of 256 (which runs 35 of them), and 1 diffusion sample, on one fixed pseudo-random protein per length, with PyTorch 2.13.0+cu130, BF16 autocast over FP32 folding parameters, and a BF16 ESMC backbone. Times are medians of two or more end-to-end `infer_protein` calls after a shortened warm-up fold at the same length; at 2,048 residues each series timed one fold without a warm-up. Official is the pinned Biohub implementation on its PyTorch path, which is what it executes without flash-attn or its source-built Triton kernels. FastPLMs defaults changes no setting, and its output is bitwise identical to the previous FastPLMs revision; it adds the sampling pair-bias cache, a single layout of the right stream per chunked triangle update, and the early release of dead pair-sized tensors. FastPLMs optimized adds `set_atom_attention("windowed")` and `set_chunk_size(None)`. Optimized ESMFold2 reaches 1.23x the official throughput at 64 residues and 3.76x at 1,024, for 0.97x the official peak memory there; the bitwise-exact defaults reach 1.07x to 1.13x. ESMFold2-600 and ESMFold2-300 share one 24-block trunk, so their curves nearly coincide. At 2,048 residues unchunked pair updates exhaust this GPU, so the optimized ESMFold2 point there uses 512-row chunks and is drawn hollow: 139 s at a 65 GiB peak, against 596 s for the bitwise-exact defaults, while the official implementation runs out of memory. These folds exhausted GPU memory, so their curves end earlier: ESMFold2, FastPLMs optimized at 2,048 residues; ESMFold2, official at 2,048 residues. All series of a run ran in separate processes on one worker. The longest length comes from a second run, whose repeated measurements of shorter folds agree with the first run within 0.7%.
+
+| Residues | Official (s) | FastPLMs defaults (s) | FastPLMs optimized (s) | Official peak (GiB) | Defaults peak (GiB) | Optimized peak (GiB) | ESMFold2-300 optimized (s) | ESMFold2-300 peak (GiB) |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 | 0.98 | 0.88 | 0.80 | 13.0 | 13.1 | 13.1 | 0.63 | 1.4 |
+| 256 | 1.93 | 1.78 | 1.58 | 13.8 | 13.8 | 14.0 | 0.96 | 2.1 |
+| 512 | 7.84 | 7.13 | 4.47 | 16.8 | 16.3 | 16.8 | 2.21 | 4.2 |
+| 768 | 37.10 | 34.49 | 12.32 | 21.9 | 20.4 | 21.5 | 5.71 | 7.8 |
+| 1,024 | 87.16 | 81.34 | 23.21 | 28.9 | 26.1 | 28.1 | 10.43 | 12.7 |
+| 2,048 | out of memory | 595.92 | 138.97 (512-row chunks) | out of memory | 65.1 | 65.1 | 40.29 | 46.6 |
+
+The pair-update blocks dominate long folds: at 1,024 residues the trunk is 82 s
+of the official 87 s. Both implementations chunk those blocks at 64 rows by
+default, which on this GPU costs most of that time and saves almost no peak
+memory, so `set_chunk_size(None)` is the setting to try first when memory
+allows, and a larger chunk such as 512 rows when it does not. The official model
+exposes the same setting. Windowed atom attention and the pair-bias cache
+together cut the diffusion phase from 2.44 s to 1.15 s at 1,024 residues.
+FastPLMs also releases pair-sized intermediate tensors as soon as they are dead,
+which changes no value and is why it folds 2,048 residues on this 80 GB GPU
+where the official implementation runs out of memory. The measurements,
+including per-phase times and every series, are in
+`docs/evidence/esmfold2/folding_cost.json`; `docs/testing.md` describes how to
+reproduce them. These are single-worker descriptive measurements, not release
+benchmark claims.
+
+The same run folded three real proteins in both atom attention modes with two
+seeds each and compared representative-atom coordinates after rigid
+superposition. With one seed, windowed and dense ESMFold2 folds differ by 0.32
+angstrom RMSD for ubiquitin and 0.61 for T4 lysozyme, against 1.22 and 0.60
+between two dense seeds, and mean pLDDT stays within ubiquitin 0.80 to 0.81; T4
+lysozyme 0.93 to 0.94. For ESMFold2-300 the differences are 0.32, 0.22, and 0.75
+angstrom for ubiquitin, T4 lysozyme, and GFP, against 0.54, 0.21, and 1.49
+between dense seeds. ESMFold2 folds GFP with low confidence in either mode
+without an MSA (mean pLDDT 0.36 to 0.48), and its samples differ from one
+another by 4.7 to 7.9 angstrom, so that case does not separate the modes. On
+this small panel the windowed mode sits inside sampling spread. It is not the
+structure benchmark, which remains pending.
+
 ## Hash-pinned CCD asset
 
 Structure preparation requires `ccd.pkl` from the immutable snapshot

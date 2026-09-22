@@ -20,13 +20,58 @@ then rejects drift between preflight and the loaded images. Existing historical
 release measurements identify an NVIDIA GH200/aarch64 environment and remain
 tied to that environment.
 
+## Fetch pinned evidence
+
+Before documentation generation, release checks, or parity suites, fetch and
+verify the public evidence bundle pinned by `evidence.toml`:
+
+```bash
+python -m tools.artifacts.evidence_store fetch
+python -m tools.artifacts.evidence_store verify
+```
+
+The manifest pins a Hugging Face dataset revision and each file's hash. The
+fetch command restores ignored JSON reports under `docs/evidence/` and
+`docs/validation/`, and JSON/safetensors reference outputs under `tests/goldens/`,
+to the paths used by existing validators. Runtime configuration, test inputs,
+and small synthetic fixtures stay in Git. Tests and model runtime code never
+download this bundle automatically. Run the explicit fetch step before entering
+an offline validation environment; `verify` checks the local files offline.
+The remote runner includes these local files in its source archive only after
+checking every identity against the tracked manifest. Hydrate the checkout
+before invoking `tools.remote`; missing or changed evidence fails before upload.
+With a `pending` revision, archives require every listed payload to remain
+tracked and verify the same file identities; untracked evidence is rejected.
+
+The `cpu_contract` tier does not require the evidence bundle. It checks that
+checkpoint reads are forbidden even when the requested file does not exist.
+See [artifact storage](artifacts.md#pinned-evidence-storage) for the storage and
+update contract.
+
 ## Run tiers
+
+For focused confidence, embedding, execution, artifact, and documentation
+checks, use the bounded Modal CPU workflow from a hydrated checkout:
+
+```bash
+python -m tools.verification.cpu
+```
+
+It freezes the allowlisted source bytes, records their hashes, and runs one
+worker with four CPUs, 16 GiB of memory, and a 20-minute limit. The worker has
+no GPU or credentials and runs offline. Unit/integration, release, and CPU
+contract checks run in separate pytest processes so their fixtures do not
+interfere. Reports under `artifacts/verification/<run>/` contain installed
+versions, commands, exit codes, logs, JUnit, and the source inventory. Use
+`--output-root <new-directory>` to choose the destination. This command runs
+selected contracts; it does not establish live GPU or structure equivalence.
+
 
 | Tier | Purpose |
 | --- | --- |
 | `cpu_contract` | Required offline CPU confidence gate with tiny models, no checkpoints, network, Docker, skips, or xfails |
 | `check` | Candidate-only units, imports, local integration, release checks, and immutable checkpoint goldens; no artifacts, live references, or kernel downloads |
-| `gpu-golden-smoke` | Conditional exact-device comparison with checked-in sequence and structure goldens; no live reference build |
+| `gpu-golden-smoke` | Conditional exact-device comparison with fetched, hash-pinned sequence and structure goldens; no live reference build |
 | `compliance` | Every checkpoint whose manifest declares the release compliance tier against its live pinned official implementation |
 | `structure` | ESMFold, six ESMFold2 variants, provisional Boltz2 diagnostics, feature preparation, export, and seeded stochastic output |
 | `feature` | DPLM generation, DPLM2 generation, ESM3 multimodal generation, TTT, E1 sequence and RAG adapters, binder flow, pooling, and conversion |
@@ -83,7 +128,7 @@ Transformers to the release versions in
 to the CPU index. CUDA-only cuEquivariance and FP8 dependencies belong in
 separate environments.
 
-The gate statically covers all 29 checkpoints and runs each advertised
+The gate statically covers every checkpoint in `src/fastplms/models.toml` and runs each advertised
 AutoClass once per family. It covers forward/loss/backward, resize, tuple and
 dictionary output, and save/reload. It also covers ANKH stack selection and
 state views; backend masks, fallback warnings, fake Flash dispatch, E1 cache,
@@ -129,7 +174,7 @@ explicit `python-matrix`, `check`, `compliance`, and release suites.
 - Before merge: offline CPU contracts and static/source checks.
 - Conditional accelerator smoke: when a relevant sequence or structure path
   changes, run `gpu-golden-smoke` against the exact candidate head. Candidate
-  output is compared with checked-in goldens; no reference image is built.
+  output is compared with fetched, hash-pinned goldens; no reference image is built.
 - Extended accelerator tier: sharded real-checkpoint goldens,
   eager/SDPA/Flex execution, generation, PEFT, structure, artifacts, FP8, and
   throughput by family. The historical GH200 job does not download, build, or execute
@@ -256,6 +301,74 @@ sudo docker compose -f docker/compose.yaml run --rm structure \
   python -m pytest tests/unit tests/integration tests/release \
   -m "not gpu and not slow and not structure and not artifact" -v
 ```
+
+## Cloud evidence workers
+
+`tools/gpu_evidence` runs candidate-only checks and measurements on bounded
+Modal workers when the Docker workstation is not available. It needs no live
+reference container, so it complements the compliance suite and does not
+replace it.
+
+```bash
+python -m tools.gpu_evidence.launch unit
+python -m tools.gpu_evidence.launch cpu-contract
+python -m tools.gpu_evidence.launch backend-bench --gpu H100
+```
+
+A worker receives a stage name and an optional pytest `-k` selection, never a
+command. `tools/gpu_evidence/stages.py` holds the fixed stage table:
+
+| Stage | Worker | Runs |
+| --- | --- | --- |
+| `cpu-contract` | CPU | The required offline CPU gate |
+| `typing` | CPU | mypy errors that the working tree adds to its Git baseline |
+| `unit` | GPU | `tests/unit` without the confidence-pilot tests |
+| `parity-local` | GPU | The local ESMFold2 source-parity tests of the release suite |
+| `probe` | GPU | Resolution and loading of the manifest-locked FlashAttention kernels |
+| `lever-bench`, `flash-lever-bench`, `runner-lever-bench` | GPU | Latency of the working tree against its Git baseline |
+| `backend-bench` | GPU | Latency of every advertised attention backend on padded and full batches |
+| `packed-probe` | GPU | Design probe on a generic encoder: padded SDPA against packed-token execution through PyTorch variable-length attention and compiled FlexAttention |
+| `fold-bench`, `fold-bench-smoke`, `fold-bench-long` | GPU | ESMFold2 folding time, phase times, and peak memory by protein length: the official implementation, the Git baseline tree, and the working tree. The long stage adds 2,048 residues with one instrumented fold per series |
+| `fold-peak-memory` | GPU | The model source lines whose tensors are alive when a fold reaches its peak allocated memory, from an allocator trace |
+
+Each launch uploads an allowlisted copy of the working tree, which excludes
+credential-shaped paths, and exports `src/` and `kernels.lock` at `HEAD` as the
+baseline. It reserves the worst-case cost of the stage in
+`artifacts/gpu_evidence/budget.json` before dispatch and refuses a stage that
+would exceed `--max-dollars`, which defaults to 25. Receipts, JUnit reports, and
+worker output land in the ignored `artifacts/gpu_evidence/<run>/` directory.
+Run one launch at a time, because the ledger has a single writer.
+
+The bench stages compare alternating worker processes in one container on one
+GPU, with randomly initialized models at published dimensions. Their numbers
+are descriptive evidence for keeping a change or ordering backends. They are not
+release benchmark claims. `python -m tools.gpu_evidence.record_backend_evidence
+<run> ...` copies passed `backend-bench` results into
+`docs/evidence/attention/backend_latency.json`, the file that a
+FlashAttention-first `attention_auto_order` must cite.
+
+The fold stages use a second image that adds the pinned official ESMFold2 stack
+in its own interpreter, mirroring the `reference` stage of
+`docker/esmfold2-validation.Dockerfile`. Every series runs in its own process on
+one worker, so ratios between series are within-run. The official series loads
+the ESMC backbone at the manifest-pinned revision and refuses any weight the
+checkpoint does not supply: the official loader fetches the repository head,
+whose tensor names no longer match the pinned source, and Transformers would
+only warn while initializing those weights at random. Run `fold-bench-smoke` on
+an inexpensive GPU first; it exercises both environments and leaves the weights
+in the cache volume. `python -m tools.gpu_evidence.fold_report record <run> [<long run> ...]`
+copies a full sweep, extended by any long runs, into
+`docs/evidence/esmfold2/folding_cost.json`, and
+`python -m tools.gpu_evidence.fold_report plot` redraws
+`docs/assets/esmfold2_folding_cost.png` and rewrites its caption beside it from
+that file alone. The figure carries only axes and a legend; every condition is in
+the caption. Plotting needs
+`requirements/features/reporting.in`.
+
+The CPU gate's per-test time budget and memory gate are calibrated on the
+validation workstation. A sandboxed cloud worker can exceed them while every
+assertion holds, so a receipt lists budget overruns apart from assertion
+failures. Only the workstation result decides that gate.
 
 ## Manifest-generated cases
 
@@ -434,6 +547,9 @@ generation command, input fingerprint, tensor names and shapes, dtypes, and
 output hashes. Goldens are read-only fixtures. They accelerate `check`, but they
 never replace live `compliance`.
 
+Golden payloads live in the pinned public evidence dataset outside Git.
+Verify them with the commands above before running a golden comparison.
+
 The manifest declares a required golden only through an `official_golden`
 record on a model entry. Both files are SHA-256 pinned and use fixed paths:
 
@@ -501,6 +617,10 @@ converter prints a TOML declaration only when output is written to the canonical
 `tests/goldens` directory. It never edits `models.toml`; a reviewer adds the
 printed declaration only after validating both generated files. The read-only
 validator then verifies every recorded identity, shape, dtype, and hash.
+
+When replacing a golden, publish the reviewed payload to the evidence dataset
+and update `evidence.toml` to its immutable revision and file identities. Keep
+the `official_golden` identities in `models.toml` consistent with that payload.
 
 The sequence regression resolves the current repository-source class from the manifest
 `auto_map` and loads only the pinned checkpoint weights. Generated remote-code

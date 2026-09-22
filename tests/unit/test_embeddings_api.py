@@ -29,6 +29,7 @@ from fastplms.embeddings import (
     save_safetensors_result,
     save_sqlite_result,
 )
+from fastplms.embeddings import runner as embedding_runner
 from fastplms.embeddings.storage import SafetensorsStreamWriter
 
 
@@ -454,19 +455,88 @@ def test_caller_owned_model_state_fingerprint_overrides_state_hash() -> None:
 
 
 def test_runtime_versions_are_part_of_resume_identity(monkeypatch) -> None:
-    import fastplms.embeddings.runner as runner
+    import fastplms.embeddings.identity as identity
 
     model = SyntheticEmbeddingModel()
     first = embed_dataset(model, ["ACD"])
-    versions = runner._software_versions()
+    versions = identity._software_versions()
     monkeypatch.setattr(
-        runner,
+        identity,
         "_software_versions",
         lambda: {**versions, "torch": "different-runtime"},
     )
     changed = embed_dataset(model, ["ACD"])
 
     assert changed.metadata["run_fingerprint"] != first.metadata["run_fingerprint"]
+    assert changed.metadata["software"]["torch"] == "different-runtime"
+    assert changed.metadata["execution"]["software"] == changed.metadata["software"]
+
+
+@pytest.mark.parametrize(
+    ("disk_backed", "expected_run_fingerprint"),
+    (
+        (False, "20791d64142f90a9076d072e4a28ab948b939c5d0d03a589fff837b3477acd52"),
+        (True, "1b8a59b611cf8d0189a9ceb555627df8b5c8cd54c42f77eda26d631d741808d1"),
+    ),
+)
+def test_schema_three_fingerprint_matches_existing_embedding_runs(
+    monkeypatch,
+    disk_backed: bool,
+    expected_run_fingerprint: str,
+) -> None:
+    from fastplms.embeddings import identity
+    from fastplms.embeddings.inputs import _InputSpool, _normalize_inputs
+
+    # Captured from the original schema-3 runner before the module extraction.
+    versions = {
+        "fastplms": "test",
+        "python": "3.test",
+        "safetensors": "test",
+        "torch": "test",
+        "torch_cuda": None,
+        "transformers": "test",
+    }
+    monkeypatch.setattr(identity, "_software_versions", lambda: versions)
+    model = SimpleNamespace(
+        config=SimpleNamespace(
+            _attn_implementation="eager",
+            _name_or_path="test/model",
+            _commit_hash="fixed-checkpoint",
+        ),
+        parameters=lambda: iter(()),
+    )
+    records = _normalize_inputs(
+        [EmbeddingInput("duplicate", "ACD"), EmbeddingInput("duplicate", "W")],
+        disk_backed=disk_backed,
+    )
+    try:
+        observed = identity._run_fingerprint(
+            model,
+            records,
+            pooling=("mean", "max"),
+            full_embeddings=False,
+            max_length=8,
+            truncate=True,
+            dtype=None,
+            model_kwargs={"hidden_state_index": 2},
+            tokenizer_metadata={"mode": "native-sequence"},
+            model_state_fingerprint="fixed-state",
+            persist_output=True,
+            embedding_context={"hidden_state_source": "encoder"},
+            batch_size=2,
+            batch_window_size=4,
+            max_tokens_per_batch=16,
+        )
+    finally:
+        if isinstance(records, _InputSpool):
+            records.close()
+
+    assert observed == (
+        "659d9deeef1b010c975475655006e0e9919115b49522f2878a588cc2218c3e05",
+        expected_run_fingerprint,
+        "fixed-state",
+        "caller",
+    )
 
 
 def test_tokenizer_content_changes_run_fingerprint() -> None:
@@ -1955,3 +2025,125 @@ def test_sqlite_lazy_references_are_absolute_after_cwd_change(tmp_path: Path, mo
     monkeypatch.chdir(tmp_path.parent)
     assert Path(saved[0].tensor.source).is_absolute()
     assert torch.equal(saved[0].load_tensor(), torch.arange(4, dtype=torch.float32))
+
+
+class CraftedBatchModel(SyntheticEmbeddingModel):
+    """Return one caller-supplied batch so each runner guard can be exercised alone."""
+
+    def __init__(self, X: torch.Tensor, residue_mask: torch.Tensor) -> None:
+        super().__init__()
+        self.crafted = EmbeddingBatch(X=X, residue_mask=residue_mask)
+
+    def _embedding_batch(self, sequences: list[str]) -> EmbeddingBatch:
+        del sequences
+        return self.crafted
+
+
+def _two_residue_batch() -> tuple[torch.Tensor, torch.Tensor]:
+    # X: (b=2, l=3, d=2); M: (b=2, l=3) with one excluded position per sample.
+    X = torch.arange(12, dtype=torch.float32).reshape(2, 3, 2)
+    M = torch.tensor([[True, True, False], [True, True, False]])
+    return X, M
+
+
+def _with_non_finite_residue(X: torch.Tensor, value: float) -> torch.Tensor:
+    corrupted = X.clone()
+    corrupted[0, 0, 0] = value  # a position that M selects
+    return corrupted
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        (
+            lambda X, M: (X, M.float().masked_fill(~M, torch.nan)),
+            "residue_mask must contain finite binary values",
+        ),
+        (
+            lambda X, M: (X, M.float() * 2),
+            "residue_mask must contain finite binary values",
+        ),
+        (
+            lambda X, M: (X[:, :2], M),
+            r"must provide X with shape \(b, l, d\)",
+        ),
+        (
+            lambda X, M: (X, M & torch.tensor([[True], [False]])),
+            "Every embedding sample must contain a biological residue",
+        ),
+        (
+            lambda X, M: (_with_non_finite_residue(X, torch.inf), M),
+            "Biological residue embeddings produced non-finite output",
+        ),
+    ),
+    ids=("nan-mask", "non-binary-mask", "shape", "empty-sample", "non-finite-residue"),
+)
+def test_embedding_batch_guards_fail_closed_with_stable_messages(mutate, message: str) -> None:
+    X, M = mutate(*_two_residue_batch())
+    with pytest.raises(ValueError, match=message):
+        embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)
+
+
+def test_embedding_batch_guards_report_the_earliest_violation() -> None:
+    X, M = _two_residue_batch()
+    non_finite_X = _with_non_finite_residue(X, torch.nan)
+
+    # A corrupt mask is reported before the embeddings it would have selected.
+    with pytest.raises(ValueError, match="finite binary values"):
+        embed_dataset(
+            CraftedBatchModel(non_finite_X, M.float() * 2), ["AC", "GG"], full_embeddings=True
+        )
+    # An empty sample is reported before non-finite embeddings.
+    empty_sample = M & torch.tensor([[True], [False]])
+    with pytest.raises(ValueError, match="must contain a biological residue"):
+        embed_dataset(
+            CraftedBatchModel(non_finite_X, empty_sample), ["AC", "GG"], full_embeddings=True
+        )
+
+
+def test_embedding_batch_guard_ignores_non_finite_excluded_positions() -> None:
+    X, M = _two_residue_batch()
+    # Position 2 is excluded by M in both samples, so padding garbage is legal.
+    X[:, 2] = torch.tensor([torch.nan, torch.inf])
+
+    result = embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)
+
+    assert torch.equal(result[0].load_tensor(), X[0, :2])
+    assert torch.equal(result[1].load_tensor(), X[1, :2])
+
+
+def test_embedding_batch_guard_accepts_finite_values_whose_sum_overflows() -> None:
+    # Every element is finite, but an FP32 reduction over them is not. A guard
+    # that tests a sum instead of the elements would reject this valid batch.
+    X = torch.full((2, 3, 2), torch.finfo(torch.float32).max)
+    M = torch.tensor([[True, True, False], [True, True, False]])
+    assert not torch.isfinite(X.sum())
+
+    result = embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)
+
+    assert torch.equal(result[0].load_tensor(), X[0, :2])
+
+
+@pytest.mark.parametrize("dtype", (torch.float32, torch.bfloat16))
+def test_packed_residue_transfer_matches_per_sample_indexing(dtype: torch.dtype) -> None:
+    generator = torch.Generator().manual_seed(3)
+    X = torch.randn(4, 7, 5, generator=generator).to(dtype)  # (b=4, l=7, d=5)
+    M = torch.tensor(  # (b, l); rows 1 and 3 have interior gaps
+        [
+            [True, True, True, True, True, True, True],
+            [False, True, False, True, True, False, False],
+            [False, True, False, False, False, False, False],
+            [True, False, False, False, False, False, True],
+        ]
+    )
+
+    values = embedding_runner._residue_embeddings(X, M)
+
+    assert len(values) == 4
+    for value, X_i, M_i in zip(values, X, M, strict=True):
+        expected = X_i[M_i].detach().cpu()  # (r_i, d)
+        assert torch.equal(value, expected)
+        assert value.dtype == dtype
+        assert value.is_contiguous()
+        # A record must not keep the whole batch alive through a shared storage.
+        assert value.untyped_storage().nbytes() == value.numel() * value.element_size()

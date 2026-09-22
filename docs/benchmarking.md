@@ -256,3 +256,21 @@ Each dense, throughput, and mixed-padding case is evaluated independently. A
 backend can improve padded batches and regress dense batches. A throughput
 improvement does not relax parity. Each advertised backend must pass its
 correctness contract before its performance result can support a claim.
+
+## Descriptive evidence from cloud workers
+
+The release matrix above measures published Hub artifacts on the validation
+workstation. Two other measurements exist and are descriptive only:
+
+- `docs/evidence/attention/backend_latency.json` records the latency of every
+  advertised attention backend against SDPA on padded and full batches, from the
+  `backend-bench` stage of `tools/gpu_evidence` on Modal L4 and H100 workers. A
+  family whose `attention_auto_order` prefers FlashAttention must cite it.
+- `docs/evidence/esmfold2/folding_cost.json` records ESMFold2 folding time,
+  per-phase time, and peak memory by protein length for the official
+  implementation and the FastPLMs working tree, from the `fold-bench` stages on
+  one H100. `docs/esmfold2.md` shows the figure and its caption.
+
+Both compare processes on one worker in one run, so their ratios hold within a
+run and are not transferable to the workstation's baseline. [Testing](testing.md)
+describes the workers.

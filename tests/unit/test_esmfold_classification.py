@@ -82,13 +82,14 @@ def test_prepare_classifier_inputs_is_residue_only_and_rejects_complexes() -> No
             FastEsmForSequenceClassification.prepare_classifier_inputs(invalid)
 
 
+# The CPU AutoClass evidence matrix identifies each head by this parameter name.
 @pytest.mark.parametrize(
-    "wrapper",
+    "model_class",
     [FastEsmForSequenceClassification, FastEsmForTokenClassification],
 )
 @pytest.mark.parametrize("scope", ["probe", "projection"])
-def test_classifier_train_scope_is_exact(wrapper: type, scope: str) -> None:
-    model = wrapper(_tiny_config(num_labels=2, classifier_train_scope=scope))
+def test_classifier_train_scope_is_exact(model_class: type, scope: str) -> None:
+    model = model_class(_tiny_config(num_labels=2, classifier_train_scope=scope))
     trainable = {
         name for name, parameter in model.named_parameters() if parameter.requires_grad
     }

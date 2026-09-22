@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
+_WANDB_RUN_URL_RE = re.compile(r"^https://wandb\.ai/[^/?#]+/[^/?#]+/runs/[^/?#]+$")
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _HUB_LICENSE_NAME_RE = re.compile(r"[^a-z0-9.]+")
 _WINDOWS_INVALID_PATH_CHARACTERS = frozenset('<>:"|?*')
@@ -105,6 +106,8 @@ _FAMILY_FIELDS = frozenset(
         "reference_container",
         "reference_adapter",
         "attention",
+        "attention_auto_order",
+        "attention_auto_evidence",
         "dtypes",
         "bf16_execution",
         "precisions",
@@ -152,6 +155,7 @@ _MODEL_FIELDS = frozenset(
         "backbone",
         "backbone_model",
         "publication_status",
+        "confidence_adaptation",
     }
 )
 _RUNTIME_ASSET_FIELDS = frozenset(
@@ -312,6 +316,8 @@ class AttentionKernelSpec:
     version: int
     expected_variant: str
     dtypes: tuple[DtypeName, ...]
+    # (major, minor) of the oldest CUDA architecture that automatic selection offers this kernel.
+    min_cuda_capability: tuple[int, int] = (8, 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -347,6 +353,10 @@ class ModelFamily:
     hub_license_link: str | None = None
     conversion_provenance: str = ""
     backbone_model: str | None = None
+    # Preference order for ``attn_implementation="auto"``. Empty means the family rejects it.
+    attention_auto_order: tuple[str, ...] = ()
+    # Repository path of the measurement that justifies a FlashAttention-first order.
+    attention_auto_evidence: str | None = None
 
     @property
     def auto_map(self) -> Mapping[str, str]:
@@ -378,6 +388,20 @@ class ModelFamily:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfidenceAdaptation:
+    """Identity and evidence record for a separately trained confidence head."""
+
+    head_sha256: str
+    base_weight_sha256: str
+    donor_repo: str
+    donor_revision: str
+    donor_weight_sha256: str
+    training_url: str
+    evaluation_url: str
+    evidence_path: str
+
+
+@dataclass(frozen=True, slots=True)
 class ModelSpec:
     """Complete immutable source and runtime contract for one checkpoint."""
 
@@ -398,6 +422,7 @@ class ModelSpec:
     backbone: CheckpointSource | None = None
     backbone_model: str | None = None
     publication_status: str = "published"
+    confidence_adaptation: ConfidenceAdaptation | None = None
 
     @property
     def is_deep_reference(self) -> bool:
@@ -800,6 +825,51 @@ def _parse_official_golden(
     return OfficialGolden(metadata=parsed["metadata"], tensors=parsed["tensors"])
 
 
+def _parse_min_cuda_capability(table: Mapping[str, Any], context: str) -> tuple[int, int]:
+    value = table.get("min_cuda_capability", [8, 0])
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or any(isinstance(part, bool) or not isinstance(part, int) or part < 0 for part in value)
+    ):
+        raise RegistryError(
+            f"{context}.min_cuda_capability must be [major, minor] with non-negative integers."
+        )
+    return (value[0], value[1])
+
+
+def _parse_attention_auto_order(
+    table: Mapping[str, Any],
+    attention: tuple[str, ...],
+    context: str,
+) -> tuple[tuple[str, ...], str | None]:
+    """Validate the opt-in automatic preference order and the evidence it cites."""
+    order = _optional_str_list(table, "attention_auto_order", context)
+    evidence = _optional_str(table, "attention_auto_evidence", context)
+    if not order:
+        if evidence is not None:
+            raise RegistryError(f"{context}.attention_auto_evidence requires attention_auto_order.")
+        return (), None
+    if not set(order).issubset(attention):
+        raise RegistryError(f"{context}.attention_auto_order must be a subset of attention.")
+    # The last choice must run on every device and dtype so that a request always resolves.
+    if order[-1] not in {"eager", "sdpa"}:
+        raise RegistryError(f"{context}.attention_auto_order must end in 'eager' or 'sdpa'.")
+    prefers_flash = order[0].startswith("flash_attention")
+    if prefers_flash and evidence is None:
+        raise RegistryError(
+            f"{context}.attention_auto_order prefers {order[0]!r}, so it must cite "
+            "attention_auto_evidence."
+        )
+    if evidence is not None and (
+        not evidence.startswith("docs/evidence/") or ".." in evidence.split("/")
+    ):
+        raise RegistryError(
+            f"{context}.attention_auto_evidence must be a path under docs/evidence/."
+        )
+    return order, evidence
+
+
 def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
     if not isinstance(raw, list) or not raw:
         raise RegistryError("The manifest must contain [[attention_kernels]] entries.")
@@ -820,6 +890,7 @@ def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
                 "version",
                 "expected_variant",
                 "dtypes",
+                "min_cuda_capability",
             }
         )
         _reject_unknown_fields(value, expected_fields, context)
@@ -855,6 +926,7 @@ def _parse_attention_kernels(raw: object) -> dict[str, AttentionKernelSpec]:
             version=kernel_version,
             expected_variant=expected_variant,
             dtypes=cast(tuple[DtypeName, ...], dtypes),
+            min_cuda_capability=_parse_min_cuda_capability(value, context),
         )
     if set(kernels) != set(expected_variants):
         raise RegistryError("The manifest must pin both FlashAttention kernel versions.")
@@ -969,6 +1041,9 @@ def _parse_families(
         attention = _require_str_list(value, "attention", context)
         if not set(attention).issubset(_ALLOWED_ATTENTION):
             raise RegistryError(f"Unsupported attention implementation in {context}.")
+        attention_auto_order, attention_auto_evidence = _parse_attention_auto_order(
+            value, attention, context
+        )
         dtypes = _require_str_list(value, "dtypes", context)
         if not set(dtypes).issubset(_ALLOWED_DTYPES):
             raise RegistryError(f"Unsupported dtype in {context}.")
@@ -1112,6 +1187,8 @@ def _parse_families(
             hub_license_link=hub_license_link,
             conversion_provenance=conversion_provenance,
             backbone_model=backbone_model,
+            attention_auto_order=attention_auto_order,
+            attention_auto_evidence=attention_auto_evidence,
         )
     return families
 
@@ -1193,6 +1270,69 @@ def _parse_runtime_assets(
     return runtime_assets
 
 
+def _parse_confidence_adaptation(
+    table: Mapping[str, Any], context: str, model_id: str | None = None
+) -> ConfidenceAdaptation | None:
+    raw = table.get("confidence_adaptation")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RegistryError(f"{context}.confidence_adaptation must be a table.")
+    if model_id is not None and model_id not in {"esmfold2_300", "esmfold2_600"}:
+        raise RegistryError(
+            f"{context}.confidence_adaptation is only supported for ESMFold2 300M and 600M."
+        )
+    fields = frozenset(
+        {
+            "head_sha256",
+            "base_weight_sha256",
+            "donor_repo",
+            "donor_revision",
+            "donor_weight_sha256",
+            "training_url",
+            "evaluation_url",
+            "evidence_path",
+        }
+    )
+    _reject_unknown_fields(raw, fields, f"{context}.confidence_adaptation")
+    adaptation_context = f"{context}.confidence_adaptation"
+    digests: dict[str, str] = {}
+    for key in ("head_sha256", "base_weight_sha256", "donor_weight_sha256"):
+        digest = _require_str(raw, key, adaptation_context)
+        if len(digest) != 64 or _HEX_RE.fullmatch(digest) is None:
+            raise RegistryError(f"{adaptation_context}.{key} must be a SHA-256 digest.")
+        digests[key] = digest
+    donor_repo = _require_str(raw, "donor_repo", adaptation_context)
+    if _REPOSITORY_ID_RE.fullmatch(donor_repo) is None:
+        raise RegistryError(f"{adaptation_context}.donor_repo must be a repository ID.")
+    donor_revision = _require_str(raw, "donor_revision", adaptation_context)
+    _validate_revision(donor_revision, f"{adaptation_context}.donor_revision")
+    urls: dict[str, str] = {}
+    for key in ("training_url", "evaluation_url"):
+        url = _require_str(raw, key, adaptation_context)
+        if _WANDB_RUN_URL_RE.fullmatch(url) is None:
+            raise RegistryError(
+                f"{adaptation_context}.{key} must be a W&B run URL without query or fragment."
+            )
+        urls[key] = url
+    evidence_path = _portable_relative_path(
+        _require_str(raw, "evidence_path", adaptation_context),
+        f"{adaptation_context}.evidence_path",
+    )
+    if evidence_path.suffix != ".json":
+        raise RegistryError(f"{adaptation_context}.evidence_path must be a JSON path.")
+    return ConfidenceAdaptation(
+        head_sha256=digests["head_sha256"],
+        base_weight_sha256=digests["base_weight_sha256"],
+        donor_repo=donor_repo,
+        donor_revision=donor_revision,
+        donor_weight_sha256=digests["donor_weight_sha256"],
+        training_url=urls["training_url"],
+        evaluation_url=urls["evaluation_url"],
+        evidence_path=evidence_path.as_posix(),
+    )
+
+
 def _parse_models(
     raw: object,
     families: Mapping[str, ModelFamily],
@@ -1214,6 +1354,7 @@ def _parse_models(
         family_id = _require_str(value, "family", context)
         if family_id not in families:
             raise RegistryError(f"{context} references unknown family {family_id!r}.")
+        confidence_adaptation = _parse_confidence_adaptation(value, context, model_id)
         fast = _parse_checkpoint(value, "fast", context)
         official = _parse_checkpoint(value, "official", context)
         if fast.repo_id in fast_repositories:
@@ -1326,6 +1467,7 @@ def _parse_models(
             backbone_model=value.get("backbone_model"),
             publication_status=publication_status,
             msa_conditioning=msa_conditioning,
+            confidence_adaptation=confidence_adaptation,
         )
     return models
 
