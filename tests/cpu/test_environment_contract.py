@@ -138,9 +138,8 @@ def test_container_process_spawns_are_blocked_at_python_startup() -> None:
 
 def test_repository_checkpoint_reads_are_structurally_blocked() -> None:
     workspace = Path(__file__).resolve().parents[2]
-    checkpoints = sorted((workspace / "tests/goldens").glob("*.safetensors"))
-    assert checkpoints, "The release tree must contain pinned golden tensors"
-    checkpoint = checkpoints[0]
+    # Reject the path before opening it, even when no goldens have been fetched.
+    checkpoint = workspace / "tests/goldens/cpu_guard_synthetic.safetensors"
 
     for operation in (
         lambda: checkpoint.open("rb"),

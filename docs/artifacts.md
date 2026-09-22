@@ -5,6 +5,44 @@ artifacts under `dist/hub/<model>/`. It operates only on an already downloaded,
 manifest-pinned checkpoint snapshot. It never authenticates, downloads, creates
 a Hub repository, uploads, deletes, commits, pushes, or opens a pull request.
 
+## Pinned evidence storage
+
+The root `evidence.toml` inventories generated evidence for storage in a Hugging
+Face dataset at an immutable revision. It pins each file's identity and
+restoration path. While its revision is `pending`, publication has not completed
+and all listed payloads remain tracked in Git. Run only the offline check in
+that state:
+
+```bash
+python -m tools.artifacts.evidence_store verify
+```
+
+After publication and revision pinning, JSON reports under `docs/evidence/` and
+`docs/validation/`, plus JSON and safetensors reference outputs under
+`tests/goldens/`, can become ignored local files.
+Runtime configuration, test inputs, and small synthetic fixtures remain tracked
+in Git.
+
+Once a dataset revision is published, fetch the declared bundle before
+documentation generation, release checks, or parity suites:
+
+```bash
+python -m tools.artifacts.evidence_store fetch
+python -m tools.artifacts.evidence_store verify
+```
+
+Fetching is an explicit network operation. Verification is offline and checks
+the restored files against the manifest. Tests and model runtime code never
+fetch evidence automatically. Prepare the bundle before running an offline
+validation environment; the standalone `cpu_contract` tier needs no bundle.
+
+To update evidence, generate and review the new outputs, publish them to the
+dataset, and update `evidence.toml` with the resulting immutable revision and
+file identities. A changed golden also requires matching `official_golden`
+hashes in `src/fastplms/models.toml`. Retain the outputs' recorded source,
+checkpoint, environment, and measurement boundaries; moving storage does not
+establish a new numerical result.
+
 ## Dependencies
 
 Artifact tooling uses Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.

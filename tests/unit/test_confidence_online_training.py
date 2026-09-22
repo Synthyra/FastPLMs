@@ -1,8 +1,12 @@
-"""Online confidence training: schedule, EMA, checkpoint selection, ranking gradients, and sampling."""
+"""Online confidence training schedules, EMA, selection, ranking gradients, and sampling."""
 
+import math
 import pytest
 import torch
 
+from types import SimpleNamespace
+
+from tools.confidence import online_training
 from tools.confidence.online_training import (
     ExponentialMovingAverage,
     OnlineTrainingConfig,
@@ -65,7 +69,10 @@ def test_per_sample_ranking_terms_sum_to_the_joint_pairwise_gradient():
 
     scores = (weights * features).sum(-1)  # (samples,)
     joint = torch.stack(
-        [torch.nn.functional.softplus(-(scores[better] - scores[worse]) / temperature) for better, worse in pairs]
+        [
+            torch.nn.functional.softplus(-(scores[better] - scores[worse]) / temperature)
+            for better, worse in pairs
+        ]
     ).mean()
     (joint_gradient,) = torch.autograd.grad(joint, weights)
 
@@ -99,6 +106,85 @@ def test_spearman_uses_ranks_and_needs_three_values():
     assert spearman([1, 2, 3, 4], [10, 20, 30, 400]) == pytest.approx(1.0)
     assert spearman([1, 2, 3, 4], [4, 3, 2, 1]) == pytest.approx(-1.0)
     assert spearman([1, 2], [1, 2]) != spearman([1, 2], [1, 2])  # NaN
+
+
+def test_spearman_averages_ties_and_is_invariant_to_observation_order():
+    assert spearman([1, 1, 2], [1, 2, 3]) == pytest.approx(math.sqrt(3) / 2)
+    assert spearman([1, 1, 2], [2, 1, 3]) == pytest.approx(math.sqrt(3) / 2)
+
+
+@pytest.mark.parametrize("values", [[1, 1, 1], [1, float("nan"), 3], [1, float("inf"), 3]])
+def test_spearman_rejects_undefined_observations(values):
+    assert math.isnan(spearman(values, [1, 2, 3]))
+    assert math.isnan(spearman([1, 2, 3], values))
+
+
+def test_spearman_rejects_different_lengths():
+    with pytest.raises(ValueError, match="equal lengths"):
+        spearman([1, 2, 3], [1, 2])
+
+
+@pytest.mark.parametrize("failure", [ValueError, torch.OutOfMemoryError])
+def test_failed_target_restarts_accumulation_without_partial_gradients(
+    monkeypatch, tmp_path, failure
+):
+    head = torch.nn.Linear(1, 1, bias=False)
+    context = SimpleNamespace(head=head)
+    draws = iter(
+        {"target_id": str(value), "num_tokens": 1, "value": value} for value in (100, 200, 3, 5)
+    )
+    sampler = SimpleNamespace(draw=lambda: next(draws))
+    logs = []
+    run = SimpleNamespace(
+        settings=SimpleNamespace(mode="online"),
+        log=lambda values, **kwargs: logs.append(values),
+        summary={},
+        url="test-run",
+        finish=lambda: None,
+    )
+    observed_gradients = []
+
+    class RecordingOptimizer(torch.optim.SGD):
+        def step(self, closure=None):
+            observed_gradients.append(float(head.weight.grad))
+            return super().step(closure)
+
+    def target_step(context, target, config):
+        (context.head.weight.sum() * target["value"] / config.targets_per_update).backward()
+        if target["value"] == 200:
+            raise failure("failure after a sample backward")
+        return {
+            "plddt_ce": float(target["value"]),
+            "pae_ce": 0.0,
+            "ranking": 0.0,
+            "ranking_pairs": 0.0,
+        }
+
+    monkeypatch.setattr(online_training, "HeadContext", lambda _: context)
+    monkeypatch.setattr(online_training, "TargetSampler", lambda *args: sampler)
+    monkeypatch.setattr(online_training, "structure", lambda pool, target: target)
+    monkeypatch.setattr(online_training, "fold", lambda model, target, *args: target)
+    monkeypatch.setattr(online_training, "target_step", target_step)
+    monkeypatch.setattr(online_training, "build_validation_cache", lambda *args: None)
+    monkeypatch.setattr(online_training, "validate", lambda *args: {"total_ce": 1.0})
+    monkeypatch.setattr(online_training, "_rng_state", lambda *args: {})
+    monkeypatch.setattr(online_training.wandb, "init", lambda **kwargs: run)
+    monkeypatch.setattr(online_training.torch.optim, "AdamW", RecordingOptimizer)
+    monkeypatch.setattr(online_training.torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(online_training.torch.cuda, "max_memory_allocated", lambda: 0)
+    config = OnlineTrainingConfig(
+        model_id="esmfold2_300", planned_updates=1, targets_per_update=2, gradient_clip=1000.0
+    )
+
+    report = online_training.train_online(
+        None, tmp_path, [], [], tmp_path / "run", config, lambda message: None, 60
+    )
+
+    assert report["updates"] == 1
+    assert observed_gradients == pytest.approx([4.0])
+    train_log = next(values for values in logs if "train/plddt_ce" in values)
+    assert train_log["train/plddt_ce"] == pytest.approx(4.0)
+    assert train_log["train/skipped_targets"] == 1
 
 
 def test_sampler_balances_chain_counts_then_follows_weights():

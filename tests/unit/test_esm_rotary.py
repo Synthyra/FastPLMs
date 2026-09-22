@@ -95,3 +95,28 @@ def test_dtype_conversion_invalidates_a_longer_cached_table() -> None:
     assert cos.dtype == torch.bfloat16
     assert torch.equal(cos, expected_cos)
     assert torch.equal(sin, expected_sin)
+
+
+@pytest.mark.parametrize("seq_len", (9, 40), ids=("shorter", "same"))
+@pytest.mark.parametrize("training", (True, False), ids=("train", "eval"))
+def test_gradient_forward_rebuilds_inference_tables(seq_len: int, training: bool) -> None:
+    head_dim = 16
+    warm = RotaryEmbedding(head_dim).train(training)
+    with torch.inference_mode():
+        probe = torch.randn(1, 2, 40, head_dim)  # (b=1, h=2, l=40, d=16)
+        warm(probe, probe)
+
+    query = torch.randn(1, 2, seq_len, head_dim, requires_grad=True)  # (b=1, h=2, l, d=16)
+    key = torch.randn_like(query, requires_grad=True)
+    cold_query = query.detach().clone().requires_grad_()
+    cold_key = key.detach().clone().requires_grad_()
+    expected = RotaryEmbedding(head_dim)(cold_query, cold_key)
+    actual = warm(query, key)
+
+    sum(output.square().sum() for output in expected).backward()
+    sum(output.square().sum() for output in actual).backward()
+
+    for actual_output, expected_output in zip(actual, expected, strict=True):
+        assert torch.equal(actual_output, expected_output)
+    assert torch.equal(query.grad, cold_query.grad)
+    assert torch.equal(key.grad, cold_key.grad)

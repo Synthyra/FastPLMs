@@ -54,11 +54,14 @@ unused code path when the manifest or current tests say otherwise.
   AtlasFold-Data with online rollouts. Its GPU-hour ledger allows 2 hours of
   smoke checks, 24 hours per model, and 5 hours for the production reference.
   Both v2 heads finished training, the test evaluation and the production
-  reference ran once, and the acceptance gates were applied: the 300M head
-  passes the pilot and sample-selection gates, the 600M head passes neither,
-  and both miss production parity on within-target selection accuracy. Results
-  are recorded in `docs/evidence/confidence/esmfold2_{300,600}-v2.json` and
-  summarized in the model cards. The test split is now spent, so a further
+  reference ran once. Corrected correlations, bootstrap intervals, and
+  acceptance gates are pending recomputation after the tied-rank fix.
+  Historical results remain in `docs/evidence/confidence/esmfold2_{300,600}-v2.json`
+  with `metrics_review.status = "requires_recomputation"`; do not present them
+  as corrected results. Raw predictions were not recovered from the closed
+  GH200 workstation or W&B. Each run's 780 W&B update rows report zero skipped
+  targets, so the skipped-target gradient bug did not affect these runs.
+  The test split is now spent, so a further
   evaluation on it is no longer held out. Keep the pilot heads and reports
   unchanged as baselines, and do not publish v2 weights without separate
   approval.

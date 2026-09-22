@@ -420,7 +420,23 @@ existing model cards and generated support reports accurately describe the
 
 ## Confidence heads v2 on a GH200 workstation
 
-Status: complete. Both heads trained for all 780 planned updates, so both
+**Metrics review: recomputation required.** The validation, test, agreement,
+and gate results below are historical, uncorrected records. The original
+Spearman implementation assigned distinct ranks to tied values, including
+ties introduced by bootstrap resampling. Corrected correlations, intervals,
+and acceptance gates cannot be recovered from aggregates. The GH200
+workstation is closed, and neither W&B run contains logged artifacts or raw
+per-target predictions. Retain these tables as historical records only; do not cite
+them as corrected quality or acceptance results. Model cards withhold the
+numerical tables pending raw prediction recovery.
+
+An exhaustive audit of each linked W&B run's 780 update rows found
+`train/skipped_targets = 0` throughout. The skipped-target gradient bug
+therefore did not affect these recorded training weights. That finding does
+not validate the archived correlation estimates.
+
+Training status: complete; metrics and acceptance: pending recomputation.
+Both heads trained for all 780 planned updates, so both
 schedules finished and both learning rates decayed to the floor. Each head was
 evaluated once on the untouched test split, and production `esmfold2` scored
 the same targets. No v2 weights are published, and the pilot heads and reports
@@ -563,7 +579,7 @@ so the metrics are a directional check rather than a disorder benchmark.
 These metrics were added after the smoke checks and before any test
 evaluation ran.
 
-### Results
+### Historical results requiring recomputation
 
 Every head scored the same folded samples of the 512 standard test targets,
 five samples per target, at three recycling loops and 50 diffusion steps.
@@ -592,7 +608,7 @@ at least 0.01 lDDT or 0.05 DockQ. The 300M samples give 409 lDDT pairs and 474
 ipTM pairs, the 600M samples 279 and 405, and the production samples 510 and
 758. Each model scores its own samples, so the pair counts differ.
 
-Paired 95% intervals for the v2 heads, from one bootstrap of 1,000 target
+Historical, uncorrected paired 95% intervals for the v2 heads, from one bootstrap of 1,000 target
 resamples shared by every head:
 
 | Metric | 300M v2 | 600M v2 |
@@ -623,7 +639,7 @@ Against production over the same targets, the 300M v2 head reports -0.081 mean
 pLDDT, -0.039 pTM, and +0.006 ipTM on average, and the 600M v2 head reports
 -0.055, -0.020, and +0.018.
 
-Gate outcomes:
+Historical gate outcomes, pending recomputation:
 
 | Gate | 300M | 600M |
 | --- | --- | --- |
@@ -631,12 +647,10 @@ Gate outcomes:
 | 2. Sample selection | pass | fail |
 | 3. Production parity | fail | fail |
 
-The 600M head fails gate 1 on calibration error, 0.0050 against the pilot's
-0.0046; its paired intervals record no metric significantly worse than the
-pilot. It fails gate 2 because neither within-target accuracy has a lower
-bound above 0.5. Both heads fail gate 3 only on the two within-target accuracy
-tolerances and clear the Spearman and calibration tolerances. Neither head is
-accepted, and no v2 weights are published.
+These are the original gate decisions, not corrected acceptance results.
+The full gate analysis remains pending raw prediction recovery and
+recomputation. Neither head is approved for publication, and no v2 weights
+are published.
 
 Per-head numbers, paired intervals, per-stratum results including the 64 long
 targets, split identity, and training configuration are recorded in

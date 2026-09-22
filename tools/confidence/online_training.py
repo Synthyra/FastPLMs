@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from safetensors.torch import load_file, save_file
+from scipy.stats import rankdata
 from torch import Tensor, nn
 
 from .labels import _masked_cross_entropy
@@ -205,10 +206,14 @@ def selected_checkpoint(final: Mapping[str, float], best: Mapping[str, float]) -
 
 
 def spearman(left: Sequence[float], right: Sequence[float]) -> float:
-    if len(left) < 3:
+    if len(left) != len(right):
+        raise ValueError("Spearman inputs must have equal lengths")
+    if len(left) < 3 or not np.isfinite(left).all() or not np.isfinite(right).all():
         return float("nan")
-    left_rank = np.argsort(np.argsort(left, kind="stable"), kind="stable").astype(float)
-    right_rank = np.argsort(np.argsort(right, kind="stable"), kind="stable").astype(float)
+    left_rank = rankdata(left, method="average")  # (observations,)
+    right_rank = rankdata(right, method="average")  # (observations,)
+    if np.ptp(left_rank) == 0 or np.ptp(right_rank) == 0:
+        return float("nan")
     return float(np.corrcoef(left_rank, right_rank)[0, 1])
 
 
@@ -437,16 +442,26 @@ def train_online(
             target = sampler.draw()
             drawn += 1
             fold_started = time.monotonic()
+            stage = "fold"
             try:
                 rollout = fold(model, structure(pool_dir, target), config.samples_per_target, int(rollout_rng.integers(2**31)), config.num_loops, config.num_sampling_steps)
                 fold_seconds += time.monotonic() - fold_started
+                stage = "head"
                 losses = target_step(context, rollout, config)
             except (torch.OutOfMemoryError, ValueError) as error:
-                # One target that cannot be folded or labeled is replaced by the next draw, so a
-                # rare failure does not end a day-long run; frequent failures still stop it. A
-                # failure inside the head step keeps the samples' gradients accumulated before it.
+                # A head failure can leave partial sample gradients. Restart the whole update so
+                # its gradient and logged losses include only complete targets with equal weight.
+                optimizer.zero_grad(set_to_none=True)
+                discarded_targets = completed
+                completed = 0
+                tokens = 0.0
+                totals = {name: 0.0 for name in totals}
                 skipped += 1
-                log(f"skipped {target['target_id']} ({target['num_tokens']} tokens): {type(error).__name__}: {error}")
+                log(
+                    f"skipped {target['target_id']} ({target['num_tokens']} tokens) during {stage}; "
+                    f"restarted accumulation after discarding {discarded_targets} complete targets: "
+                    f"{type(error).__name__}: {error}"
+                )
                 rollout = None
                 torch.cuda.empty_cache()
                 if skipped > max(MAX_SKIPPED_TARGETS, MAX_SKIPPED_FRACTION * drawn):

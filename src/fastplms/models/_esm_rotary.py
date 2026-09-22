@@ -61,11 +61,17 @@ class RotaryEmbedding(nn.Module):
         # therefore reuse the cache, provided ``inv_freq`` still has the dtype
         # the cache was built from. A length change used to rebuild from the
         # current ``inv_freq``; the dtype test preserves that after ``.to(dtype)``.
+        # Autograd must save these factors, so inference-created tables cannot
+        # be reused in a gradient-enabled forward, even when the module is in eval mode.
         cached_prefix_is_valid = (
             self._cos_cached is not None
             and self._sin_cached is not None
             and self._seq_len_cached is not None
             and self._cos_cached.device == tensor.device
+            and not (
+                torch.is_grad_enabled()
+                and (self._cos_cached.is_inference() or self._sin_cached.is_inference())
+            )
             and (
                 seq_len == self._seq_len_cached
                 or (

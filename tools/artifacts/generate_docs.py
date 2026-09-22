@@ -4255,9 +4255,32 @@ def _confidence_research_section(spec: ModelSpec, root: Path | None) -> str:
     """Render measured results for a confidence head trained separately and not published."""
 
     evidence_path = CONFIDENCE_RESEARCH_EVIDENCE.get(spec.id)
-    if evidence_path is None or root is None:
+    if spec.confidence_adaptation is not None or evidence_path is None or root is None:
         return ""
     evidence = json.loads((root / evidence_path).read_text(encoding="utf-8"))
+    review = evidence.get("metrics_review", {})
+    if review.get("status") == "requires_recomputation":
+        audit = review["training_history_audit"]
+        return f"""## Separately trained confidence head
+
+This checkpoint ships with its confidence head disabled. Separately trained
+confidence weights remain unpublished and are not part of this artifact.
+
+The archived correlations, bootstrap intervals, and acceptance gates require
+recomputation after correcting tied ranks in Spearman correlation. Raw test
+predictions were not recovered from the closed GH200 workstation or W&B, so
+the historical numbers are withheld here pending raw prediction recovery.
+They do not establish corrected quality or acceptance results.
+
+The [W&B training history audit]({audit['wandb_url']}) inspected all
+{audit['history_rows']} update rows and found zero skipped training targets.
+The skipped-target gradient bug therefore did not affect this recorded run's
+training weights. This audit does not validate the archived correlations.
+
+The [confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md)
+preserves the historical results and their review status.
+
+"""
     data, training, test = evidence["data"], evidence["training"], evidence["test"]
     config = training["config"]
     head, production = test["heads"]["v2"], test["heads"]["production"]

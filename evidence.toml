@@ -1,0 +1,379 @@
+# Public evidence payloads; runtime configuration and test inputs remain in Git.
+schema_version = 1
+repository = "Synthyra/FastPLMs-artifacts"
+revision = "pending"
+
+[[files]]
+path = "docs/evidence/attention/backend_latency.json"
+size = 6281
+sha256 = "985c20bb5c5f668b4242ed8f4ec2c23a05cab8daad306616cc3231e4ca34af51"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_300-package.json"
+size = 7217
+sha256 = "ca574d9857a8608340d275d314d77b5d03419ae0289e1743701ca1b2df47b1d8"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_300-v2.json"
+size = 49459
+sha256 = "2744b32e95c3ad34570a0451a674cf6fc17b1d994761fc5259a957d25e18666c"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_300.json"
+size = 10496
+sha256 = "18bf3221f67956e4ca56cbf1690811d913f74abdc34a0ca87cf340ae5b87238e"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_600-package.json"
+size = 7217
+sha256 = "c9479d5a173962e9056e10ee3e91105071fe54bd76846a488987d9324824021e"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_600-v2.json"
+size = 49512
+sha256 = "8a4271ad7c3b3cae598c6f407e47eab0a4ed1490ce48345b68b3eaf5b621d8a4"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_600.json"
+size = 10491
+sha256 = "da2eae83e0edcb94e189b5c5130bdac1f21c341e75644c759a0912ac66396a3d"
+
+[[files]]
+path = "docs/evidence/esmfold2/folding_cost.json"
+size = 44936
+sha256 = "7e162ad7b6309e3d08d92f311477f2ebf6e810511676256983b9d1e35b8217d1"
+
+[[files]]
+path = "docs/validation/esmfold2_300_artifact_reload.json"
+size = 2274
+sha256 = "f2f8d428b4f06adadf3df06be648623a55b49b6a16cbfa7a9e1268176abbe11b"
+
+[[files]]
+path = "docs/validation/esmfold2_300_backbone.json"
+size = 1020
+sha256 = "174dde30bddbafcb992a3cc629691f2e089ba11244b40e4460d1eb7f57be11e9"
+
+[[files]]
+path = "docs/validation/esmfold2_300_published_loading.json"
+size = 1773
+sha256 = "3dcdbe5dc8c8d047190e4ff9efbfebdf181c90f36c902fa29606185a4a248678"
+
+[[files]]
+path = "docs/validation/esmfold2_300_quickstart.json"
+size = 969
+sha256 = "bebf80932a0e64989285baac18f0a4e3a7c56f2d096e4cda5f84310b1206198b"
+
+[[files]]
+path = "docs/validation/esmfold2_600_backbone.json"
+size = 1020
+sha256 = "097a837c3df98f49b6ff86870cbe866308acc691d4e9b4820e3a2b590561e490"
+
+[[files]]
+path = "docs/validation/esmfold2_small_300_candidate_metadata.json"
+size = 10492
+sha256 = "91ff2a366a3728d74bb384b21a5ddcce64d9b5646b054c04579cbbf37177c0e6"
+
+[[files]]
+path = "docs/validation/esmfold2_small_300_comparison.json"
+size = 2268
+sha256 = "6fe6e9bf62b39cfc515db9da159ce8c992b3862cc9332e697c49e68fbb624525"
+
+[[files]]
+path = "docs/validation/esmfold2_small_300_reference_metadata.json"
+size = 10488
+sha256 = "d521fec2d451a4ecad8a0da627d08b2a2cea4818e73a9e87a31c37eae402afc8"
+
+[[files]]
+path = "docs/validation/esmfold2_small_dependencies.json"
+size = 14162
+sha256 = "9c1a5f51b21b860bea02121d5a34f66f54ae81881697755fda8df8cffaaa8255"
+
+[[files]]
+path = "docs/validation/esmfold2_small_publication.json"
+size = 40943
+sha256 = "c3e6092c17a9e211e5b9572bb0d59bae89efcbc39c3a1d12b1dc1e020fda2652"
+
+[[files]]
+path = "docs/validation/fastplms_files_only_publication.json"
+size = 12762
+sha256 = "ba9c674335b42e5ff7346e800049cc176ce186440d466235a12050d906891938"
+
+[[files]]
+path = "tests/goldens/ankh2_large.json"
+size = 4537
+sha256 = "e8df38994ca1a1e0c598ace34a0b257b264937e4fdbb01bc41544985116b02a4"
+
+[[files]]
+path = "tests/goldens/ankh2_large.safetensors"
+size = 574922
+sha256 = "25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d"
+
+[[files]]
+path = "tests/goldens/ankh3_large.json"
+size = 4635
+sha256 = "2e5bb05b3baa5baa78f61fef7d2a2c669b0da5dbfaf6b50b12abd3e17253a961"
+
+[[files]]
+path = "tests/goldens/ankh3_large.safetensors"
+size = 574922
+sha256 = "e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513"
+
+[[files]]
+path = "tests/goldens/ankh3_xl.json"
+size = 4872
+sha256 = "66bb12e033e4163be225d636108a479393228a4f5061015c8af114e766c3c486"
+
+[[files]]
+path = "tests/goldens/ankh3_xl.safetensors"
+size = 955850
+sha256 = "72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae"
+
+[[files]]
+path = "tests/goldens/ankh_base.json"
+size = 4444
+sha256 = "ebce8d7de821827ee995789c9b38d79252d3b2f76888130b0a8a7eedafaefe2b"
+
+[[files]]
+path = "tests/goldens/ankh_base.safetensors"
+size = 289226
+sha256 = "f0e78aa15d11749e0c64ff57f9e88c51cec6538a0adf8951f839df70cc708b65"
+
+[[files]]
+path = "tests/goldens/ankh_large.json"
+size = 4449
+sha256 = "59492518b021de5cfaea87d672c9448c8558e99a3443ba2cc7ab544963196ecb"
+
+[[files]]
+path = "tests/goldens/ankh_large.safetensors"
+size = 574922
+sha256 = "3fb8d3ac27716d15a9ea92aeef6acf2b977bcc887d9b535000539e523673459b"
+
+[[files]]
+path = "tests/goldens/dplm2_150m.json"
+size = 7501
+sha256 = "d269de779ea1503de72c77e7b2e6224afc9797bd945b40c571ff6faec782e4aa"
+
+[[files]]
+path = "tests/goldens/dplm2_150m.safetensors"
+size = 13416818
+sha256 = "17fc26600938ba5364b8ecb96750786d33e9f92bcd4ea4df3e12a389340748eb"
+
+[[files]]
+path = "tests/goldens/dplm2_3b.json"
+size = 8209
+sha256 = "d6e0e02af53b13cb129192f06e264758aa21c9ebf4ee82411cf67037082d2329"
+
+[[files]]
+path = "tests/goldens/dplm2_3b.safetensors"
+size = 16319858
+sha256 = "838b11824d08f83bcb0c0b3268e579f3a87dbfb965370cfe5c3f8793b96b1964"
+
+[[files]]
+path = "tests/goldens/dplm2_650m.json"
+size = 7502
+sha256 = "d9a7548f9af657a72d441ca70f27379863724fcce8ddd3da4f672104b7bfb772"
+
+[[files]]
+path = "tests/goldens/dplm2_650m.safetensors"
+size = 14384498
+sha256 = "c4e0e467c252c3ac813363d2d4b17a5e3bd99e75fad315e76d97689b4655ddac"
+
+[[files]]
+path = "tests/goldens/dplm_150m.json"
+size = 7490
+sha256 = "3228551fe3bed951db9ec97347143ec4462ce7c221ac240b7ce7730948c1dc1f"
+
+[[files]]
+path = "tests/goldens/dplm_150m.safetensors"
+size = 512449
+sha256 = "392992235195beed97ab8359b90a2e11e52f4326606f99a471447bed81d146bd"
+
+[[files]]
+path = "tests/goldens/dplm_3b.json"
+size = 7849
+sha256 = "a5b6df8b9c7b371976892ec1d6c45581a32ad3a6325c6c0a0b3267012848c8ed"
+
+[[files]]
+path = "tests/goldens/dplm_3b.safetensors"
+size = 1963977
+sha256 = "75b0a0854fc391133920b0feaaeb8f69ab7568a88b3759627aca1556c4338c1e"
+
+[[files]]
+path = "tests/goldens/dplm_650m.json"
+size = 7491
+sha256 = "bf58d0ce73aaac7e6fb1923ef3d9adad67122df2a3dd414c3229488ef9587a6d"
+
+[[files]]
+path = "tests/goldens/dplm_650m.safetensors"
+size = 996297
+sha256 = "073f0a6abea7e48f28c2d921ff8329a28e22627f01979277cb324908a01b3378"
+
+[[files]]
+path = "tests/goldens/e1_150m.json"
+size = 5051
+sha256 = "701a64a6ab1a2fec5a427555b6af96232526c15cb3d5b4dc7fb253ac8f20b922"
+
+[[files]]
+path = "tests/goldens/e1_150m.safetensors"
+size = 333099
+sha256 = "6558bc8f1a7b20629eaaaa6f72601d0c2cdb859a5dc13595549b1773b6e2de41"
+
+[[files]]
+path = "tests/goldens/e1_300m.json"
+size = 5052
+sha256 = "d3478f3f5957a0e0377864074dde0107de890019f96cb63548ee17ffb8f3ec3a"
+
+[[files]]
+path = "tests/goldens/e1_300m.safetensors"
+size = 432939
+sha256 = "92778b9ef95a803ddc84b3e3ca764c59e045872a94bcff0eb0cd47647732c188"
+
+[[files]]
+path = "tests/goldens/e1_600m.json"
+size = 5052
+sha256 = "914be191c28141c1f84535cdb69ead0588a2057bb19d46c5bc7f3891a3d6739e"
+
+[[files]]
+path = "tests/goldens/e1_600m.safetensors"
+size = 532779
+sha256 = "22ed8417a4651ded255099f6d15c63c2c40552e700d2b0470d1adfde3a39c513"
+
+[[files]]
+path = "tests/goldens/esm2_150m.json"
+size = 4014
+sha256 = "c04c93486024ba0fa1c81fbfbe92ee79d1d4c7f1cfcc2c9886728522f752feab"
+
+[[files]]
+path = "tests/goldens/esm2_150m.safetensors"
+size = 512449
+sha256 = "c03fe9916dba137b452a6bbe944c7dc414db4019a6f0921e87b92d4bb6a8a42f"
+
+[[files]]
+path = "tests/goldens/esm2_35m.json"
+size = 4010
+sha256 = "e919d3ce6d20b6a942d27d92323814ae7594a0129dc9c4de27c5053e96675bcd"
+
+[[files]]
+path = "tests/goldens/esm2_35m.safetensors"
+size = 391489
+sha256 = "c9b8bb616cf884fb7744521a2fcc6eed23586342d11241e6c9ef16454ec31e17"
+
+[[files]]
+path = "tests/goldens/esm2_3b.json"
+size = 4139
+sha256 = "5043b2333c57a34d54fac53916722d1acb4b6fd50395b9abafa805435b184a48"
+
+[[files]]
+path = "tests/goldens/esm2_3b.safetensors"
+size = 1963977
+sha256 = "dfd5a8cb05d3e814a080185c4808c8e7ec2277f070f395562fcfbe4376789e4e"
+
+[[files]]
+path = "tests/goldens/esm2_650m.json"
+size = 4015
+sha256 = "f18332172fcb3abf5dd2485fd55f5b0d193ad3b93a44cc744e0d02817c927477"
+
+[[files]]
+path = "tests/goldens/esm2_650m.safetensors"
+size = 996297
+sha256 = "c3a66b75add03628e62e238cb63da6a9e4d321f8160e84bdf2a131c096977f86"
+
+[[files]]
+path = "tests/goldens/esm2_8m.json"
+size = 4005
+sha256 = "6975e86d1d8f27488bf2a676551feaa48cc19254c9d24b6acb09198122745609"
+
+[[files]]
+path = "tests/goldens/esm2_8m.safetensors"
+size = 270529
+sha256 = "b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c"
+
+[[files]]
+path = "tests/goldens/esm3_small.json"
+size = 5855
+sha256 = "5470e8596cbba0e2882647eccbc53c36d8b48b0f3947d1fe0bcea68da1078c32"
+
+[[files]]
+path = "tests/goldens/esm3_small.safetensors"
+size = 1189077
+sha256 = "d957922f810c9ab4c557d80d5aaaf6a3aab79a5a45e4638012a634a4134803b1"
+
+[[files]]
+path = "tests/goldens/esmc_6b.json"
+size = 6480
+sha256 = "e229d938719782f280fab22dfc4c43e86109fdb0cc523631168c5a491afaace3"
+
+[[files]]
+path = "tests/goldens/esmc_6b.safetensors"
+size = 995810
+sha256 = "a948945e985c7deaca7be8b7eed09c0a9521a2af3f2b10fc2ec7a7d2a0f99ada"
+
+[[files]]
+path = "tests/goldens/esmc_large.json"
+size = 5891
+sha256 = "7a4d614f67b6fde417f3fd89f61e7ec442ae284769734b2b73e14945a816a8fd"
+
+[[files]]
+path = "tests/goldens/esmc_large.safetensors"
+size = 463586
+sha256 = "e13302df4cf7e8381552f1043a8fd0f31f3e0d50b2ab6009fb86b7940ae8ff79"
+
+[[files]]
+path = "tests/goldens/esmc_small.json"
+size = 5890
+sha256 = "bb02652cf3cc484756b98ffa4ba55ed4c55870d2cea3342adb1d920ba9dfe10a"
+
+[[files]]
+path = "tests/goldens/esmc_small.safetensors"
+size = 391010
+sha256 = "03378d0f0fdd8161178ebb2c1f0da1b9776a726c8e8d3a10c009808a24de5654"
+
+[[files]]
+path = "tests/goldens/esmfold.json"
+size = 4824
+sha256 = "380b9a96168410717d1f698feaabb826b1606444cbdeec86c2ea06d9ffe8f186"
+
+[[files]]
+path = "tests/goldens/esmfold.safetensors"
+size = 179144
+sha256 = "873b1b325a43d8e0f35f355c8914a2a9fe611cc48763875e9e6a22e09ec9ebcb"
+
+[[files]]
+path = "tests/goldens/esmfold2.json"
+size = 8612
+sha256 = "f6e0ed1ec400b9a0fcc817db51774be968dc454b7a32645a07c479e42423ab20"
+
+[[files]]
+path = "tests/goldens/esmfold2.safetensors"
+size = 2573976
+sha256 = "e4d6be4344c528e26b13f79a9303549e3de7e582da195c0078db3ce957fad420"
+
+[[files]]
+path = "tests/goldens/esmfold2_experimental_cutoff2025.json"
+size = 8494
+sha256 = "cfd0e35b2bc468a0dc4f614d3acfa2fce004f96e9ae2433256ed095b829d55cc"
+
+[[files]]
+path = "tests/goldens/esmfold2_experimental_cutoff2025.safetensors"
+size = 1771064
+sha256 = "9347466bbe803b6f5dc82e3356ca6cbbf2c2edd8765f9fd273385bda255019f6"
+
+[[files]]
+path = "tests/goldens/esmfold2_experimental_fast_cutoff2025.json"
+size = 8514
+sha256 = "1d0b2da4f1579243f37ae04bd4b834b747005cd8e8e7665e00d088123c43afd9"
+
+[[files]]
+path = "tests/goldens/esmfold2_experimental_fast_cutoff2025.safetensors"
+size = 1771064
+sha256 = "516e216d05d7e6bee59e77126d3e595e2bb7821929433f00c259c5d5241964bb"
+
+[[files]]
+path = "tests/goldens/esmfold2_fast.json"
+size = 8632
+sha256 = "091b004c0b330217b59c12acd6da3d6edaf91e48d95f6d5f40fc20399cef9478"
+
+[[files]]
+path = "tests/goldens/esmfold2_fast.safetensors"
+size = 2573976
+sha256 = "6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990"

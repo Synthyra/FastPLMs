@@ -239,73 +239,22 @@ The experimental architecture does not expose folding TTT.
 
 ## Separately trained confidence head
 
-This checkpoint ships with its confidence head disabled. The results below come
-from a confidence head trained separately for this backbone. Those weights are
-not published and are not part of this artifact.
+This checkpoint ships with its confidence head disabled. Separately trained
+confidence weights remain unpublished and are not part of this artifact.
 
-The head was initialized from `biohub/ESMFold2-Experimental-Fast-Cutoff2025` at
-revision `74b88548bf19688b8727432db0d698cb2e1d8783`, and the backbone, folding
-trunk, and diffusion module stayed frozen. Training targets come from the
-`rcsb` and `rcsb_multimer` configurations of
-[Synthyra/AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data),
-limited to structures resolved to 4.0 Å or better. Chains were clustered at 40%
-sequence identity, and test targets share no cluster with a training target.
+The archived correlations, bootstrap intervals, and acceptance gates require
+recomputation after correcting tied ranks in Spearman correlation. Raw test
+predictions were not recovered from the closed GH200 workstation or W&B, so
+the historical numbers are withheld here pending raw prediction recovery.
+They do not establish corrected quality or acceptance results.
 
-Each update folded 16 new targets with 4 diffusion samples each, at 3 recycling
-loops and 50 diffusion steps, then minimized pLDDT cross-entropy plus PAE
-cross-entropy plus 0.5 times a pairwise loss that ranks the samples of one
-target. Optimization used AdamW at `1e-4` with cosine decay to `1e-5` and an
-exponential moving average of the weights. The run completed 780 updates in
-19.0 hours on one GH200 and kept its final moving-average weights.
+The [W&B training history audit](https://wandb.ai/lhallee/fastplms-confidence/runs/01c7e12b6d03) inspected all
+780 update rows and found zero skipped training targets.
+The skipped-target gradient bug therefore did not affect this recorded run's
+training weights. This audit does not validate the archived correlations.
 
-Evaluation folded 512 held-out targets with 5 samples each at the same settings
-and scored every sample with the trained head. Production `esmfold2`, which
-uses the 6B ESMC backbone and its own released confidence head, folded and
-scored its own 5 samples of the same targets. Intervals are 95% intervals from
-one bootstrap over test targets.
-
-| Measurement | This head | 95% interval | Production `esmfold2` |
-| --- | ---: | ---: | ---: |
-| pLDDT against all-atom lDDT, Spearman | 0.854 | 0.821 to 0.882 | 0.687 |
-| pTM against TM-score, Spearman | 0.863 | 0.835 to 0.886 | 0.751 |
-| ipTM against DockQ, Spearman | 0.853 | 0.818 to 0.880 | 0.759 |
-| Atom pLDDT mean absolute error | 0.0808 | 0.0773 to 0.0846 | 0.0809 |
-| Calibration error, 10 bins | 0.0050 | 0.0030 to 0.0102 | 0.0477 |
-| pLDDT cross-entropy | 2.689 | 2.632 to 2.744 | 3.262 |
-| PAE cross-entropy | 2.748 | 2.691 to 2.800 | 3.131 |
-| Within-target lDDT selection accuracy | 0.480 | 0.392 to 0.567 | 0.767 |
-| Within-target ipTM against DockQ selection accuracy | 0.501 | 0.422 to 0.586 | 0.759 |
-| Top-1 selection regret | 0.0175 | 0.0144 to 0.0208 | 0.0177 |
-| Random-choice regret | 0.0186 |  | 0.0321 |
-| Unresolved against resolved residue AUROC | 0.874 | 0.854 to 0.894 | 0.888 |
-| Resolved residue mean pLDDT | 0.790 | 0.777 to 0.803 | 0.864 |
-| Unresolved residue mean pLDDT | 0.505 | 0.487 to 0.524 | 0.565 |
-| Resolved residues below pLDDT 50 | 0.094 | 0.073 to 0.114 | 0.048 |
-| Unresolved residues below pLDDT 50 | 0.560 | 0.514 to 0.604 | 0.440 |
-
-| Agreement with production `esmfold2` | Spearman | Mean difference |
-| --- | ---: | ---: |
-| Mean pLDDT | 0.713 | -0.055 |
-| pTM | 0.790 | -0.020 |
-| ipTM | 0.696 | +0.018 |
-
-Selection accuracy counts sample pairs whose measured quality differs by at
-least 0.01 lDDT or 0.05 DockQ: 279 lDDT pairs and 405 ipTM pairs for this head,
-510 and 758 for production. Regret is the measured quality lost by taking the
-top-ranked sample instead of the best one, next to the loss from an average
-sample.
-
-Residues whose C-alpha atom is missing from the experimental structure stand in
-for disordered regions, and no head receives pLDDT labels on those atoms. The
-AUROC is the probability that an unresolved residue receives a lower pLDDT than
-a resolved one.
-
-Agreement with production uses the per-target mean of each model's samples,
-with ipTM over the 320 multi-chain targets. Each model folds its own samples,
-so these compare per-target scores rather than two scores of one structure.
-
-The recipe, the split rules, the per-stratum results, and the acceptance gates are in the
-[confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md).
+The [confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md)
+preserves the historical results and their review status.
 
 ## Notes and limitations
 

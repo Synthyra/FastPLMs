@@ -1,6 +1,27 @@
 {
   "status": "complete",
   "campaign": "confidence-v2",
+  "metrics_review": {
+    "status": "requires_recomputation",
+    "reason": "The original Spearman implementation assigned distinct ranks to tied values. Correlations, bootstrap intervals, and acceptance gates must be recomputed with average tied ranks.",
+    "historical_values_preserved": true,
+    "raw_prediction_recovery": {
+      "status": "unavailable",
+      "details": "The GH200 workstation is closed. W&B contains no logged artifacts or raw per-target prediction records for either v2 run; aggregate history cannot reconstruct corrected metrics.",
+      "required_files": [
+        "~/data/confidence-v2/evaluation/esmfold2_300/records.json",
+        "~/data/confidence-v2/evaluation/esmfold2/records.json"
+      ]
+    },
+    "training_history_audit": {
+      "wandb_url": "https://wandb.ai/lhallee/fastplms-confidence/runs/d5587e06871a",
+      "history_rows": 780,
+      "metric": "train/skipped_targets",
+      "maximum": 0,
+      "scope": "All 780 update rows were inspected.",
+      "conclusion": "The skipped-target gradient bug did not affect this recorded training run because no training target was skipped."
+    }
+  },
   "model_id": "esmfold2_300",
   "data": {
     "dataset": "Synthyra/AtlasFold-Data",

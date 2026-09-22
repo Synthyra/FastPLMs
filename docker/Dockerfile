@@ -94,7 +94,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM candidate-dependencies AS candidate
 
-COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md evidence.toml ./
 COPY LICENSES ./LICENSES
 COPY src ./src
 COPY tests /opt/fastplms/tests
@@ -113,7 +113,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM candidate-structure-dependencies AS candidate-structure
 
-COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md evidence.toml ./
 COPY LICENSES ./LICENSES
 COPY src ./src
 COPY tests /opt/fastplms/tests
@@ -133,7 +133,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 FROM candidate-fp8-dependencies AS candidate-fp8
 
-COPY README.md LICENSE THIRD_PARTY_NOTICES.md ./
+COPY README.md LICENSE THIRD_PARTY_NOTICES.md evidence.toml ./
 COPY LICENSES ./LICENSES
 COPY src ./src
 COPY tests /opt/fastplms/tests

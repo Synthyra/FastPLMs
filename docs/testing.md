@@ -20,13 +20,49 @@ then rejects drift between preflight and the loaded images. Existing historical
 release measurements identify an NVIDIA GH200/aarch64 environment and remain
 tied to that environment.
 
+## Fetch pinned evidence
+
+While the root `evidence.toml` has revision `pending`, publication has not
+completed and every listed payload remains tracked in Git. Before documentation
+generation, release checks, or parity suites, verify those originals offline:
+
+```bash
+python -m tools.artifacts.evidence_store verify
+```
+
+After publication and immutable revision pinning, fetch and verify the evidence
+bundle:
+
+```bash
+python -m tools.artifacts.evidence_store fetch
+python -m tools.artifacts.evidence_store verify
+```
+
+The manifest pins a Hugging Face dataset revision and each file's hash. The
+fetch command restores ignored JSON reports under `docs/evidence/` and
+`docs/validation/`, and JSON/safetensors reference outputs under `tests/goldens/`,
+to the paths used by existing validators. Runtime configuration, test inputs,
+and small synthetic fixtures stay in Git. Tests and model runtime code never
+download this bundle automatically. Run the explicit fetch step before entering
+an offline validation environment; `verify` checks the local files offline.
+The remote runner includes these local files in its source archive only after
+checking every identity against the tracked manifest. Hydrate the checkout
+before invoking `tools.remote`; missing or changed evidence fails before upload.
+With a `pending` revision, archives require every listed payload to remain
+tracked and verify the same file identities; untracked evidence is rejected.
+
+The `cpu_contract` tier does not require the evidence bundle. It checks that
+checkpoint reads are forbidden even when the requested file does not exist.
+See [artifact storage](artifacts.md#pinned-evidence-storage) for the storage and
+update contract.
+
 ## Run tiers
 
 | Tier | Purpose |
 | --- | --- |
 | `cpu_contract` | Required offline CPU confidence gate with tiny models, no checkpoints, network, Docker, skips, or xfails |
 | `check` | Candidate-only units, imports, local integration, release checks, and immutable checkpoint goldens; no artifacts, live references, or kernel downloads |
-| `gpu-golden-smoke` | Conditional exact-device comparison with checked-in sequence and structure goldens; no live reference build |
+| `gpu-golden-smoke` | Conditional exact-device comparison with fetched, hash-pinned sequence and structure goldens; no live reference build |
 | `compliance` | Every checkpoint whose manifest declares the release compliance tier against its live pinned official implementation |
 | `structure` | ESMFold, six ESMFold2 variants, provisional Boltz2 diagnostics, feature preparation, export, and seeded stochastic output |
 | `feature` | DPLM generation, DPLM2 generation, ESM3 multimodal generation, TTT, E1 sequence and RAG adapters, binder flow, pooling, and conversion |
@@ -129,7 +165,7 @@ explicit `python-matrix`, `check`, `compliance`, and release suites.
 - Before merge: offline CPU contracts and static/source checks.
 - Conditional accelerator smoke: when a relevant sequence or structure path
   changes, run `gpu-golden-smoke` against the exact candidate head. Candidate
-  output is compared with checked-in goldens; no reference image is built.
+  output is compared with fetched, hash-pinned goldens; no reference image is built.
 - Extended accelerator tier: sharded real-checkpoint goldens,
   eager/SDPA/Flex execution, generation, PEFT, structure, artifacts, FP8, and
   throughput by family. The historical GH200 job does not download, build, or execute
@@ -502,6 +538,10 @@ generation command, input fingerprint, tensor names and shapes, dtypes, and
 output hashes. Goldens are read-only fixtures. They accelerate `check`, but they
 never replace live `compliance`.
 
+Golden payloads remain tracked while dataset publication is pending. After
+publication they can be restored from the pinned evidence dataset outside Git.
+Verify them with the commands above before running a golden comparison.
+
 The manifest declares a required golden only through an `official_golden`
 record on a model entry. Both files are SHA-256 pinned and use fixed paths:
 
@@ -569,6 +609,10 @@ converter prints a TOML declaration only when output is written to the canonical
 `tests/goldens` directory. It never edits `models.toml`; a reviewer adds the
 printed declaration only after validating both generated files. The read-only
 validator then verifies every recorded identity, shape, dtype, and hash.
+
+When replacing a golden, publish the reviewed payload to the evidence dataset
+and update `evidence.toml` to its immutable revision and file identities. Keep
+the `official_golden` identities in `models.toml` consistent with that payload.
 
 The sequence regression resolves the current repository-source class from the manifest
 `auto_map` and loads only the pinned checkpoint weights. Generated remote-code

@@ -47,6 +47,11 @@ def test_every_uploaded_path_exists_and_none_is_the_repository_root() -> None:
         assert (ROOT / file_name).is_file(), file_name
 
 
+def test_source_upload_does_not_require_local_artifacts() -> None:
+    for relative_path in (*SOURCE_DIRECTORIES, *SOURCE_FILES):
+        assert Path(relative_path).parts[0] != "artifacts", relative_path
+
+
 @pytest.mark.parametrize(
     "path",
     (

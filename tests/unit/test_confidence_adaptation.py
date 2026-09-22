@@ -59,7 +59,8 @@ def test_confidence_adaptation_rejects_non_esmfold2_model() -> None:
         _parse_confidence_adaptation({"confidence_adaptation": _record()}, "models[0]", "esm2_8m")
 
 
-def test_adapted_model_card_reads_checked_in_evidence(tmp_path: Path) -> None:
+@pytest.mark.parametrize("model_id", ("esmfold2_300", "esmfold2_600"))
+def test_adapted_model_card_reads_checked_in_evidence(tmp_path: Path, model_id: str) -> None:
     from fastplms.registry import get_model_registry
 
     adaptation = ConfidenceAdaptation(**_record())
@@ -80,7 +81,7 @@ def test_adapted_model_card_reads_checked_in_evidence(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    spec = replace(get_model_registry()["esmfold2_300"], confidence_adaptation=adaptation)
+    spec = replace(get_model_registry()[model_id], confidence_adaptation=adaptation)
     card = render_model_card(spec, evidence_root=tmp_path)
     assert "Synthyra-adapted native confidence head" in card
     assert "held-out evaluation used 128 targets" in card
@@ -89,6 +90,9 @@ def test_adapted_model_card_reads_checked_in_evidence(tmp_path: Path) -> None:
     assert "atom MAE 0.068" in card
     assert "Two-seed pLDDT sample selection: recorded" in card
     assert "two seeds only" in card
+    assert "## Separately trained confidence head" not in card
+    assert "confidence head disabled" not in card
+    assert "The confidence head is disabled" not in card
 
 
 def test_unadapted_cards_keep_existing_family_paths() -> None:
@@ -97,3 +101,18 @@ def test_unadapted_cards_keep_existing_family_paths() -> None:
     registry = get_model_registry()
     assert "The confidence fields are unavailable" not in render_model_card(registry["esm2_8m"])
     assert "The confidence head is disabled" not in render_model_card(registry["esmfold2"])
+
+
+@pytest.mark.parametrize("model_id", ("esmfold2_300", "esmfold2_600"))
+def test_unadapted_cards_withhold_metrics_pending_recomputation(model_id: str) -> None:
+    from fastplms.registry import get_model_registry
+
+    root = Path(__file__).resolve().parents[2]
+    card = render_model_card(get_model_registry()[model_id], evidence_root=root)
+    assert "## Separately trained confidence head" in card
+    assert "This checkpoint ships with its confidence head disabled" in card
+    assert "require recomputation" in " ".join(card.split())
+    assert "780 update rows" in card
+    assert "zero skipped training targets" in card
+    assert "| Measurement | This head |" not in card
+    assert "| Agreement with production" not in card

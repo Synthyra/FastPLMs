@@ -43,12 +43,11 @@ SOURCE_FILES = (
     "ruff.toml",
     "mypy.ini",
     "kernels.lock",
+    "evidence.toml",
+    "vendor/README.md",
     # The source-inventory parity test checks the pinned submodule list.
     ".gitmodules",
     ".dockerignore",
-    # Materialized small-ESMFold2 configurations (no weights) read by unit tests.
-    "artifacts/esmfold2-small/fold300/config.json",
-    "artifacts/esmfold2-small/fold600/config.json",
     "README.md",
     "AGENTS.md",
     "CLAUDE.md",

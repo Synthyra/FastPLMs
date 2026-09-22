@@ -1,8 +1,8 @@
 """Synchronize a clean workspace and run FastPLMs containers over SSH.
 
 The runner accepts the SSH host and identity only at invocation time. It does
-not read credential files, copy ignored files, or persist workstation details
-in the repository.
+not read credential files or persist workstation details in the repository.
+Ignored evidence is copied only when its bytes match the tracked evidence manifest.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from tools.artifacts.evidence_store import load_manifest
 from tools.source_record import (
     ARCHIVE_PROVENANCE_NAME,
     archive_root_record,
@@ -1363,11 +1364,40 @@ def _submodule_files(
     return output, record
 
 
+def _archive_evidence(repository: Path) -> list[tuple[str, bytes]]:
+    """Read only manifest-pinned evidence, keeping verified bytes for archiving."""
+    store = load_manifest(repository / "evidence.toml")
+    if store.revision == "pending":
+        tracked = {path.as_posix() for path in _git_files(repository)}
+        untracked = [entry.path for entry in store.files if entry.path not in tracked]
+        if untracked:
+            raise RuntimeError(
+                "Pending evidence must remain tracked until its dataset revision is published: "
+                + ", ".join(untracked)
+            )
+    payloads = []
+    for entry in store.files:
+        source = (repository / entry.path).resolve()
+        if not source.is_relative_to(repository) or _is_sensitive(PurePosixPath(entry.path)):
+            raise RuntimeError(f"Forbidden evidence path: {entry.path}")
+        try:
+            payload = source.read_bytes()
+        except OSError as error:
+            raise RuntimeError(
+                "Evidence must be hydrated before creating a source archive; run "
+                "python -m tools.artifacts.evidence_store fetch"
+            ) from error
+        if len(payload) != entry.size or hashlib.sha256(payload).hexdigest() != entry.sha256:
+            raise RuntimeError(f"Evidence identity mismatch: {entry.path}")
+        payloads.append((entry.path, payload))
+    return payloads
+
+
 def create_source_archive(
     repository: Path,
     destination: Path,
 ) -> dict[str, dict[str, object]]:
-    """Archive tracked source plus initialized, pinned submodule tracked files."""
+    """Archive tracked source, pinned submodules, and verified local evidence."""
 
     repository = repository.resolve()
     _require_clean_tracked_repository(repository)
@@ -1404,6 +1434,8 @@ def create_source_archive(
         root_tracked_files,
         head_revision=head_revision,
     )
+    evidence = _archive_evidence(repository) if "evidence.toml" in root_tracked_files else []
+    evidence_paths = {name for name, _ in evidence}
 
     seen: set[str] = set()
     with tarfile.open(
@@ -1414,10 +1446,19 @@ def create_source_archive(
     ) as archive:
         for source, relative in sorted(files, key=lambda item: item[1].as_posix()):
             archive_name = relative.as_posix()
-            if archive_name in seen or _is_sensitive(PurePosixPath(archive_name)):
+            if (
+                archive_name in seen
+                or archive_name in evidence_paths
+                or _is_sensitive(PurePosixPath(archive_name))
+            ):
                 continue
             seen.add(archive_name)
             archive.add(source, arcname=archive_name, recursive=False)
+        for name, payload in evidence:
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            info.mode = 0o644
+            archive.addfile(info, io.BytesIO(payload))
         provenance_bytes = render_archive_provenance(provenance, root=root_record)
         provenance_info = tarfile.TarInfo(ARCHIVE_PROVENANCE_NAME)
         provenance_info.size = len(provenance_bytes)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import tarfile
@@ -79,6 +80,81 @@ def _create_repository(tmp_path: Path) -> tuple[Path, str]:
     )
     _git(repository, "commit", "-m", "Pin synthetic upstream")
     return repository, revision
+
+
+def _add_evidence_manifest(
+    repository: Path, payload: bytes, revision: str = "a" * 40
+) -> Path:
+    relative = "tests/goldens/synthetic.json"
+    (repository / "evidence.toml").write_text(
+        'schema_version = 1\nrepository = "Synthyra/FastPLMs-artifacts"\n'
+        f'revision = "{revision}"\n\n[[files]]\npath = "{relative}"\n'
+        f'size = {len(payload)}\nsha256 = "{hashlib.sha256(payload).hexdigest()}"\n',
+        encoding="utf-8",
+    )
+    _git(repository, "add", "evidence.toml")
+    _git(repository, "commit", "-m", "Pin synthetic evidence")
+    target = repository / relative
+    target.parent.mkdir(parents=True)
+    target.write_bytes(payload)
+    return target
+
+
+def test_source_archive_accepts_pending_evidence_only_while_tracked(tmp_path: Path) -> None:
+    repository, _ = _create_repository(tmp_path)
+    evidence = _add_evidence_manifest(repository, b"original", revision="pending")
+    archive_path = tmp_path / "source.tar.gz"
+    with pytest.raises(RuntimeError, match="Pending evidence must remain tracked"):
+        create_source_archive(repository, archive_path)
+
+    _git(repository, "add", "tests/goldens/synthetic.json")
+    _git(repository, "commit", "-m", "Retain evidence pending publication")
+    create_source_archive(repository, archive_path)
+    extracted = tmp_path / "extracted"
+    with tarfile.open(archive_path, "r:gz") as archive:
+        assert archive.getnames().count("tests/goldens/synthetic.json") == 1
+        archive.extractall(extracted, filter="data")
+    assert (extracted / "tests/goldens/synthetic.json").read_bytes() == evidence.read_bytes()
+    validate_archived_root(extracted)
+
+    evidence.write_bytes(b"modified")
+    _git(repository, "add", "tests/goldens/synthetic.json")
+    _git(repository, "commit", "-m", "Change evidence without updating its identity")
+    with pytest.raises(RuntimeError, match="Evidence identity mismatch"):
+        create_source_archive(repository, archive_path)
+
+
+def test_source_archive_includes_only_manifest_verified_evidence(tmp_path: Path) -> None:
+    repository, _ = _create_repository(tmp_path)
+    evidence = _add_evidence_manifest(repository, b'{"verified":true}')
+    (evidence.parent / "unlisted.json").write_text("{}", encoding="utf-8")
+    archive_path = tmp_path / "source.tar.gz"
+
+    create_source_archive(repository, archive_path)
+
+    extracted = tmp_path / "extracted"
+    with tarfile.open(archive_path, "r:gz") as archive:
+        assert "tests/goldens/synthetic.json" in archive.getnames()
+        assert "tests/goldens/unlisted.json" not in archive.getnames()
+        archive.extractall(extracted, filter="data")
+    assert (extracted / "tests/goldens/synthetic.json").read_bytes() == evidence.read_bytes()
+    root = json.loads((extracted / ARCHIVE_PROVENANCE_NAME).read_text())["root"]
+    assert "evidence.toml" in root["files"]
+    assert "tests/goldens/synthetic.json" not in root["files"]
+    validate_archived_root(extracted)
+
+
+@pytest.mark.parametrize("missing", (False, True))
+def test_source_archive_rejects_missing_or_changed_evidence(tmp_path: Path, missing: bool) -> None:
+    repository, _ = _create_repository(tmp_path)
+    evidence = _add_evidence_manifest(repository, b"original")
+    if missing:
+        evidence.unlink()
+    else:
+        evidence.write_bytes(b"modified")
+
+    with pytest.raises(RuntimeError, match="hydrated|identity mismatch"):
+        create_source_archive(repository, tmp_path / "source.tar.gz")
 
 
 def test_source_archive_preserves_revision_proof_without_git_metadata(
