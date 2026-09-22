@@ -567,7 +567,20 @@ checkpoint.
 The experimental `Synthyra/ESMFold2-300` and `Synthyra/ESMFold2-600` variants
 disable their confidence heads. Their folding results therefore do not contain
 pLDDT, pTM, iPTM, or PAE fields. The confidence fields shown in the examples
-above apply to variants with an enabled confidence head.
+above apply to variants with an enabled confidence head. The separate Modal
+confidence-head pilot is documented in
+[Confidence-head training](docs/confidence_training.md). The revised workflow
+passed 119 focused tests and both real-model smoke checks on Modal. It has not
+produced a release-qualified confidence checkpoint.
+The approved run uses two bounded H100 workers in parallel for about ten hours
+each. The supplied `rcsb_multimer` copy has downloaded and extracted in Modal.
+Split construction passed. Both campaigns were restarted after fixing a device
+mismatch in cache generation. Cache progress now reports to W&B before the
+separate overfit and training runs. Both completed caching, passed the overfit
+checks, and reported main-training optimizer updates to W&B. The 300M run
+stopped early under its validation rule and passed held-out quality checks;
+600M also stopped early and passed held-out quality checks. Artifact release checks and
+publication remain pending. Two-sample ranking remains a documented limitation.
 
 The learned sequence representation combines the ordered hidden-state stack of
 each declared ESMFold2 backbone with the folding checkpoint projection. The
@@ -881,6 +894,7 @@ weights.
 - [Embedding API](docs/embedding_api.md)
 - [Attention backends](docs/attention_backends.md)
 - [ESMFold2](docs/esmfold2.md)
+- [Confidence-head training](docs/confidence_training.md)
 - [Test-time training](docs/ttt.md)
 - [Binder design](docs/binder_design.md)
 - [Fine-tuning](docs/finetuning.md)

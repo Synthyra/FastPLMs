@@ -11,7 +11,7 @@ import random
 import statistics
 import tempfile
 import textwrap
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -207,6 +207,12 @@ ESMC_TOP_LEVEL_FIELDS = {
     "catastrophic_gate",
     "release_gate",
     "report_sha256",
+}
+# Separately trained confidence heads that are evaluated but not published. The card reports their
+# measured results; the published checkpoint itself still ships a disabled head.
+CONFIDENCE_RESEARCH_EVIDENCE = {
+    "esmfold2_300": "docs/evidence/confidence/esmfold2_300-v2.json",
+    "esmfold2_600": "docs/evidence/confidence/esmfold2_600-v2.json",
 }
 
 
@@ -2934,11 +2940,16 @@ def _model_overview(spec: ModelSpec) -> str:
     """Introduce the checkpoint in task-oriented prose."""
 
     public_input = spec.family.public_input[0].lower() + spec.family.public_input[1:]
-    overview = (
-        f"`{spec.fast.repo_id}` packages the `{spec.official.repo_id}` checkpoint with "
-        "the FastPLMs runtime for Hugging Face Transformers. "
-        f"It accepts {public_input}."
-    )
+    if spec.confidence_adaptation is None:
+        package_description = (
+            f"packages the `{spec.official.repo_id}` checkpoint with the FastPLMs runtime"
+        )
+    else:
+        package_description = (
+            f"packages the `{spec.official.repo_id}` checkpoint with the FastPLMs runtime "
+            "and a Synthyra-adapted native confidence head"
+        )
+    overview = f"`{spec.fast.repo_id}` {package_description} for Hugging Face Transformers. It accepts {public_input}."
     entry_points = (
         "The repository uses the standard Transformers loading interface with "
         "`trust_remote_code=True`. See Technical details for each registered class and "
@@ -3313,10 +3324,15 @@ def _esmfold2_quick_start(spec: ModelSpec) -> str:
         else "The example omits `num_sampling_steps` and uses the model default."
     )
     confidence_note = (
-        "The confidence fields are unavailable because this experimental variant "
-        "has a disabled confidence head."
-        if is_small_variant
-        else "This variant has an enabled confidence head and returns confidence fields."
+        "This variant has a Synthyra-adapted native confidence head and returns pLDDT, "
+        "PAE, pTM, and iPTM fields. Confidence calculation is optional."
+        if spec.confidence_adaptation is not None
+        else (
+            "The confidence fields are unavailable because this experimental variant "
+            "has a disabled confidence head."
+            if is_small_variant
+            else "This variant has an enabled confidence head and returns confidence fields."
+        )
     )
     confidence_note = textwrap.fill(
         confidence_note,
@@ -3781,6 +3797,12 @@ folding requests raise.
 """
     if spec.id in {"esmfold2_300", "esmfold2_600"}:
         backbone = "Synthyra/ESMplusplus_small" if spec.id == "esmfold2_300" else "Synthyra/ESMplusplus_large"
+        confidence_note = (
+            "The Synthyra-adapted native confidence head returns pLDDT, PAE, pTM, and "
+            "iPTM. Confidence calculation is optional."
+            if spec.confidence_adaptation is not None
+            else "The confidence head is disabled: pLDDT, pTM, iPTM, and PAE are unavailable."
+        )
         return f"""## Protein folding
 
 This experimental Fast checkpoint has 24 folding blocks and uses the frozen
@@ -3807,7 +3829,7 @@ This checkpoint was trained without MSA conditioning. It rejects
 `ProteinInput.msa` and MSA-derived features. Typed multichain and multimolecule
 inputs remain supported without MSA conditioning.
 
-The confidence head is disabled: pLDDT, pTM, iPTM, and PAE are unavailable.
+{confidence_note}
 The 300 and 600 suffixes describe backbone scale, not total model parameters.
 
 ## Learned representation and ESMC precision
@@ -3815,7 +3837,6 @@ The 300 and 600 suffixes describe backbone scale, not total model parameters.
 The learned projection maps `H: (b, l, {31 if spec.id == "esmfold2_300" else 37}, {960 if spec.id == "esmfold2_300" else 1152}) -> Z: (b, l, 256)`.
 `embed_dataset` returns one `(l, 256)` residue representation per sequence.
 The experimental architecture does not expose folding TTT.
-
 
 """
     if family_id == "esmfold2":
@@ -4002,11 +4023,220 @@ exact cached object and never downloads a replacement.
     raise ValueError(f"Unsupported model-card family: {family_id!r}")
 
 
+def _confidence_adaptation_section(spec: ModelSpec, root: Path | None) -> str:
+    """Render identity and measured evidence for a separately trained head."""
+
+    adaptation = spec.confidence_adaptation
+    if adaptation is None:
+        return ""
+    evidence: Mapping[str, object] = {}
+    if root is not None:
+        evidence_file = root / adaptation.evidence_path
+        with evidence_file.open(encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        if not isinstance(loaded, dict):
+            raise ValueError(f"Confidence evidence must be a JSON object: {evidence_file}")
+        evidence = loaded
+    candidate = evidence.get("candidate")
+    if not isinstance(candidate, dict):
+        candidate = {}
+
+    def metric(name: str) -> str:
+        value = candidate.get(name)
+        return f"{value:.3f}" if isinstance(value, (int, float)) else "recorded"
+
+    def ranking(value: object) -> str:
+        if not isinstance(value, dict):
+            return "recorded"
+        selection = value.get("selection_accuracy")
+        count = value.get("comparable_count")
+        if isinstance(selection, (int, float)) and isinstance(count, int):
+            return f"{selection:.1%} ({count} comparable targets)"
+        return "recorded"
+
+    candidate_ranking = evidence.get("candidate_sample_ranking")
+    if not isinstance(candidate_ranking, dict):
+        candidate_ranking = {}
+    metrics = (
+        f"atom MAE {metric('atom_mae')}; Cα MAE {metric('ca_mae')}; "
+        f"calibration error {metric('calibration_error_10bin')}; "
+        f"pLDDT Spearman {metric('target_plddt_spearman')}; "
+        f"iPTM/DockQ Spearman {metric('iptm_dockq_spearman')}; "
+        f"pLDDT CE {metric('plddt_ce')}; PAE CE {metric('pae_ce')}; "
+        f"PAE overflow {metric('pae_overflow_fraction')}"
+    )
+    return f"""## Adapted confidence head
+
+This artifact keeps the frozen official base checkpoint and adds a separately
+trained Synthyra native confidence head. Only the confidence head was trained;
+the backbone and folding parameters remain frozen. The head supplies pLDDT and
+PAE, with pTM and iPTM derived by the existing runtime. Call
+`model.infer_protein(..., calculate_confidence=False)` to skip confidence while
+retaining structure inference.
+
+The held-out evaluation used 128 targets: 64 monomers and 64 dimers, with
+64-384 total residues per target.
+
+The head was initialized from the pinned experimental Fast donor and trained
+on 1,024 experimental AtlasFold targets: 512 monomers and 512 dimers. The
+training recipe used atom-specific heavy-atom lDDT targets and native-order PAE
+targets, with pLDDT cross-entropy plus `0.1 * PAE cross-entropy`. The full
+recipe and split rules are documented in the
+[confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md).
+
+- Donor: `{adaptation.donor_repo}@{adaptation.donor_revision}`
+- Donor weight SHA-256: `{adaptation.donor_weight_sha256}`
+- Base weight SHA-256: `{adaptation.base_weight_sha256}`
+- Adapted head SHA-256: `{adaptation.head_sha256}`
+- Training record: {adaptation.training_url}
+- Evaluation record: {adaptation.evaluation_url}
+- Evidence: `{adaptation.evidence_path}`
+- Held-out evidence: {metrics}
+- Two-seed pLDDT sample selection: {ranking(candidate_ranking.get('plddt_selection'))}
+- Two-seed interface sample selection: {ranking(candidate_ranking.get('interface_selection'))}
+
+Both models show near-chance within-target sample selection with two seeds only.
+These are weak diagnostics and do not support a general sample-ranking claim.
+
+"""
+
+
+CONFIDENCE_RESEARCH_ROWS = (
+    ("pLDDT against all-atom lDDT, Spearman", "plddt_lddt_spearman", 3),
+    ("pTM against TM-score, Spearman", "ptm_tm_spearman", 3),
+    ("ipTM against DockQ, Spearman", "iptm_dockq_spearman", 3),
+    ("Atom pLDDT mean absolute error", "atom_plddt_mae", 4),
+    ("Calibration error, 10 bins", "calibration_error_10bin", 4),
+    ("pLDDT cross-entropy", "plddt_ce", 3),
+    ("PAE cross-entropy", "pae_ce", 3),
+    ("Within-target lDDT selection accuracy", "within_target_plddt_accuracy", 3),
+    ("Within-target ipTM against DockQ selection accuracy", "within_target_iptm_dockq_accuracy", 3),
+    ("Top-1 selection regret", "top1_regret", 4),
+    ("Random-choice regret", "random_selection_regret", 4),
+    ("Unresolved against resolved residue AUROC", "disorder_auroc", 3),
+    ("Resolved residue mean pLDDT", "resolved_residue_mean_plddt", 3),
+    ("Unresolved residue mean pLDDT", "unresolved_residue_mean_plddt", 3),
+    ("Resolved residues below pLDDT 50", "resolved_fraction_below_50", 3),
+    ("Unresolved residues below pLDDT 50", "unresolved_fraction_below_50", 3),
+)
+CONFIDENCE_AGREEMENT_ROWS = (("Mean pLDDT", "mean_plddt"), ("pTM", "ptm"), ("ipTM", "iptm"))
+
+
+def _learning_rate(value: float) -> str:
+    """Format a learning rate as `1e-4` rather than `0.0001`."""
+    return f"{value:.0e}".replace("e-0", "e-")
+
+
+def _interval_cell(interval: Sequence[float] | None, digits: int) -> str:
+    """Format one bootstrap interval, or an empty cell for a measurement without one."""
+    if interval is None:
+        return ""
+    low, high = interval
+    return f"{low:.{digits}f} to {high:.{digits}f}"
+
+
+def _fill_paragraphs(paragraphs: Iterable[str]) -> str:
+    """Wrap interpolated card prose to the card width."""
+    return "\n\n".join(
+        textwrap.fill(paragraph, width=79, break_long_words=False, break_on_hyphens=False)
+        for paragraph in paragraphs
+    )
+
+
+def _confidence_research_section(spec: ModelSpec, root: Path | None) -> str:
+    """Render measured results for a confidence head trained separately and not published."""
+
+    evidence_path = CONFIDENCE_RESEARCH_EVIDENCE.get(spec.id)
+    if evidence_path is None or root is None:
+        return ""
+    evidence = json.loads((root / evidence_path).read_text(encoding="utf-8"))
+    data, training, test = evidence["data"], evidence["training"], evidence["test"]
+    config = training["config"]
+    head, production = test["heads"]["v2"], test["heads"]["production"]
+    agreement = evidence["production_agreement"]["v2"]
+    configurations = " and ".join(f"`{name}`" for name in data["configurations"])
+    comparison = "\n".join(
+        f"| {label} | {head[key]:.{digits}f} | {_interval_cell(head['interval_95'].get(key), digits)} "
+        f"| {production[key]:.{digits}f} |"
+        for label, key, digits in CONFIDENCE_RESEARCH_ROWS
+    )
+    correlations = "\n".join(
+        f"| {label} | {agreement[f'{key}_spearman']:.3f} | {agreement[f'{key}_mean_difference']:+.3f} |"
+        for label, key in CONFIDENCE_AGREEMENT_ROWS
+    )
+    introduction = _fill_paragraphs(
+        (
+            "This checkpoint ships with its confidence head disabled. The results below come from a "
+            "confidence head trained separately for this backbone. Those weights are not published "
+            "and are not part of this artifact.",
+            f"The head was initialized from `{training['donor_repo']}` at revision "
+            f"`{training['donor_revision']}`, and the backbone, folding trunk, and diffusion module "
+            f"stayed frozen. Training targets come from the {configurations} configurations of "
+            f"[{data['dataset']}](https://huggingface.co/datasets/{data['dataset']}), limited to "
+            f"structures resolved to {data['maximum_resolution_angstrom']} Å or better. Chains were "
+            "clustered at 40% sequence identity, and test targets share no cluster with a training "
+            "target.",
+            f"Each update folded {config['targets_per_update']} new targets with "
+            f"{config['samples_per_target']} diffusion samples each, at {config['num_loops']} "
+            f"recycling loops and {config['num_sampling_steps']} diffusion steps, then minimized "
+            f"pLDDT cross-entropy plus PAE cross-entropy plus {config['ranking_weight']} times a "
+            "pairwise loss that ranks the samples of one target. Optimization used AdamW at "
+            f"`{_learning_rate(config['learning_rate'])}` with cosine decay to "
+            f"`{_learning_rate(config['minimum_learning_rate'])}` and an exponential moving average "
+            f"of the weights. The run completed {training['updates']} updates in "
+            f"{training['elapsed_hours']:.1f} hours on one GH200 and kept its final moving-average "
+            "weights.",
+            f"Evaluation folded {test['targets']} held-out targets with {test['samples_per_target']} "
+            "samples each at the same settings and scored every sample with the trained head. "
+            "Production `esmfold2`, which uses the 6B ESMC backbone and its own released confidence "
+            f"head, folded and scored its own {test['samples_per_target']} samples of the same "
+            "targets. Intervals are 95% intervals from one bootstrap over test targets.",
+        )
+    )
+    definitions = _fill_paragraphs(
+        (
+            "Selection accuracy counts sample pairs whose measured quality differs by at least 0.01 "
+            f"lDDT or 0.05 DockQ: {head['within_target_plddt_pairs']:.0f} lDDT pairs and "
+            f"{head['within_target_iptm_dockq_pairs']:.0f} ipTM pairs for this head, "
+            f"{production['within_target_plddt_pairs']:.0f} and "
+            f"{production['within_target_iptm_dockq_pairs']:.0f} for production. Regret is the "
+            "measured quality lost by taking the top-ranked sample instead of the best one, next to "
+            "the loss from an average sample.",
+            "Residues whose C-alpha atom is missing from the experimental structure stand in for "
+            "disordered regions, and no head receives pLDDT labels on those atoms. The AUROC is the "
+            "probability that an unresolved residue receives a lower pLDDT than a resolved one.",
+            "Agreement with production uses the per-target mean of each model's samples, with ipTM "
+            f"over the {agreement['multi_chain_targets']:.0f} multi-chain targets. Each model folds "
+            "its own samples, so these compare per-target scores rather than two scores of one "
+            "structure.",
+        )
+    )
+    return f"""## Separately trained confidence head
+
+{introduction}
+
+| Measurement | This head | 95% interval | Production `esmfold2` |
+| --- | ---: | ---: | ---: |
+{comparison}
+
+| Agreement with production `esmfold2` | Spearman | Mean difference |
+| --- | ---: | ---: |
+{correlations}
+
+{definitions}
+
+The recipe, the split rules, the per-stratum results, and the acceptance gates are in the
+[confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md).
+
+"""
+
+
 def render_model_card(
     spec: ModelSpec,
     *,
     allow_generic_family: bool = False,
     esmc_evidence: EsmcReportSet | None = None,
+    evidence_root: Path | None = None,
 ) -> str:
     """Render one checkpoint card whose claims are limited to manifest evidence."""
 
@@ -4019,6 +4249,8 @@ def render_model_card(
     notes = ""
     model_overview = _model_overview(spec)
     esmfold2_quick_start = _esmfold2_quick_start(spec)
+    confidence_adaptation = _confidence_adaptation_section(spec, evidence_root)
+    confidence_research = _confidence_research_section(spec, evidence_root)
     attention_usage = _attention_usage(spec)
     sequence_forward = _sequence_forward_usage(spec)
     embedding_usage = _embedding_usage(spec)
@@ -4077,7 +4309,14 @@ For offline validation, replace `model_id` with the manifest-built
     weights_allowed = str(spec.family.weights_publication_allowed).lower()
     weights_license_status = "resolved" if spec.family.weights_publication_allowed else "unresolved"
     complete_weights = str(spec.family.requires_complete_weight_publication).lower()
-    if spec.backbone_model is not None:
+    if spec.confidence_adaptation is not None:
+        validation_scope = (
+            "The adapted confidence head passed held-out quality checks on short "
+            "monomers and dimers. Focused Transformers reload, confidence ranges, "
+            "seeded coordinate equality, and two-chain CIF checks also passed. "
+            "These results are not a full structure benchmark."
+        )
+    elif spec.backbone_model is not None:
         validation_scope = (
             "ESMFold2-300 passed a Docker BF16 reference comparison on one compact "
             "Protein G sequence. ESMFold2-600 is not inference-validated. Both have "
@@ -4106,9 +4345,9 @@ tags:
 
 # {_model_title(spec)}
 
-{esmfold2_quick_start}{model_overview}{_installation_section(spec)}{generic_quick_start}\
+{esmfold2_quick_start}{confidence_adaptation}{model_overview}{_installation_section(spec)}{generic_quick_start}\
 {attention_usage}{sequence_forward}{embedding_usage}{task_head_usage}{peft_usage}\
-{sequence_ttt_usage}{family_usage}{notes}## Technical details
+{sequence_ttt_usage}{family_usage}{confidence_research}{notes}## Technical details
 
 - Inputs: {spec.family.public_input}
 - Transformers classes: {_code(sorted(spec.auto_map))}
@@ -4174,6 +4413,7 @@ def expected_outputs(
         output[root / "model_cards" / f"{spec.id}.md"] = render_model_card(
             spec,
             esmc_evidence=esmc_evidence,
+            evidence_root=root,
         )
     return output
 

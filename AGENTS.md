@@ -35,6 +35,33 @@ unused code path when the manifest or current tests say otherwise.
   oracles. Runtime code must not import from this directory.
 - `tests/` contains unit, integration, parity, structure, and release checks.
 - `tools/` contains artifact, conversion, remote, and maintenance workflows.
+- `tools/confidence/` contains the resumable Modal confidence-head pilot. Keep
+  its tests and compute remote; do not run intensive confidence work locally.
+  The approved run uses two bounded H100 workers in parallel for about ten
+  hours each. Cost and duration are tracked, with at most two GPU workers.
+  The supplied `rcsb_multimer` copy has downloaded and extracted successfully.
+  Split construction passed. Both campaigns were restarted after fixing a
+  device mismatch in cache generation, which now reports progress to W&B.
+  Both completed caching and passed the overfit checks; main-training optimizer
+  updates are verified in W&B. The 300M training stage stopped early under its
+  validation rule and passed held-out quality checks. The 600M training stage
+  also stopped early and passed its final evaluation. Artifact release
+  checks and publication remain pending. Avoid duplicate evaluation calls.
+  Quality checks still govern publication. See docs/confidence_training.md for
+  current run links. Preserve active runs' recorded training-code hashes.
+  The v2 campaign (`ssh.py`, `host.py`, `online_*.py`, `rollouts.py`,
+  `target_*.py`, `test_evaluation.py`) trains on a GH200 workstation from
+  AtlasFold-Data with online rollouts. Its GPU-hour ledger allows 2 hours of
+  smoke checks, 24 hours per model, and 5 hours for the production reference.
+  Both v2 heads finished training, the test evaluation and the production
+  reference ran once, and the acceptance gates were applied: the 300M head
+  passes the pilot and sample-selection gates, the 600M head passes neither,
+  and both miss production parity on within-target selection accuracy. Results
+  are recorded in `docs/evidence/confidence/esmfold2_{300,600}-v2.json` and
+  summarized in the model cards. The test split is now spent, so a further
+  evaluation on it is no longer held out. Keep the pilot heads and reports
+  unchanged as baselines, and do not publish v2 weights without separate
+  approval.
 - `examples/` contains runnable research and training examples. Keep examples
   directly in this directory rather than creating a tutorial subtree.
 - `model_cards/` contains generated checkpoint cards.
@@ -94,6 +121,11 @@ python -m tools.remote \
   --identity /path/to/key \
   --suite compliance
 ```
+
+Run confidence-pilot tests and compute through Modal with the launcher described
+in [confidence-head training](docs/confidence_training.md). Do not inspect or
+print `.secrets.env`; the launcher loads it through the trusted environment
+loader and requires W&B initialization for every training run.
 
 Build the candidate and one isolated reference image:
 

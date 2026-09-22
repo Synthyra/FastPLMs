@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
+_WANDB_RUN_URL_RE = re.compile(r"^https://wandb\.ai/[^/?#]+/[^/?#]+/runs/[^/?#]+$")
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _HUB_LICENSE_NAME_RE = re.compile(r"[^a-z0-9.]+")
 _WINDOWS_INVALID_PATH_CHARACTERS = frozenset('<>:"|?*')
@@ -152,6 +153,7 @@ _MODEL_FIELDS = frozenset(
         "backbone",
         "backbone_model",
         "publication_status",
+        "confidence_adaptation",
     }
 )
 _RUNTIME_ASSET_FIELDS = frozenset(
@@ -378,6 +380,20 @@ class ModelFamily:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfidenceAdaptation:
+    """Identity and evidence record for a separately trained confidence head."""
+
+    head_sha256: str
+    base_weight_sha256: str
+    donor_repo: str
+    donor_revision: str
+    donor_weight_sha256: str
+    training_url: str
+    evaluation_url: str
+    evidence_path: str
+
+
+@dataclass(frozen=True, slots=True)
 class ModelSpec:
     """Complete immutable source and runtime contract for one checkpoint."""
 
@@ -398,6 +414,7 @@ class ModelSpec:
     backbone: CheckpointSource | None = None
     backbone_model: str | None = None
     publication_status: str = "published"
+    confidence_adaptation: ConfidenceAdaptation | None = None
 
     @property
     def is_deep_reference(self) -> bool:
@@ -1193,6 +1210,69 @@ def _parse_runtime_assets(
     return runtime_assets
 
 
+def _parse_confidence_adaptation(
+    table: Mapping[str, Any], context: str, model_id: str | None = None
+) -> ConfidenceAdaptation | None:
+    raw = table.get("confidence_adaptation")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise RegistryError(f"{context}.confidence_adaptation must be a table.")
+    if model_id is not None and model_id not in {"esmfold2_300", "esmfold2_600"}:
+        raise RegistryError(
+            f"{context}.confidence_adaptation is only supported for ESMFold2 300M and 600M."
+        )
+    fields = frozenset(
+        {
+            "head_sha256",
+            "base_weight_sha256",
+            "donor_repo",
+            "donor_revision",
+            "donor_weight_sha256",
+            "training_url",
+            "evaluation_url",
+            "evidence_path",
+        }
+    )
+    _reject_unknown_fields(raw, fields, f"{context}.confidence_adaptation")
+    adaptation_context = f"{context}.confidence_adaptation"
+    digests: dict[str, str] = {}
+    for key in ("head_sha256", "base_weight_sha256", "donor_weight_sha256"):
+        digest = _require_str(raw, key, adaptation_context)
+        if len(digest) != 64 or _HEX_RE.fullmatch(digest) is None:
+            raise RegistryError(f"{adaptation_context}.{key} must be a SHA-256 digest.")
+        digests[key] = digest
+    donor_repo = _require_str(raw, "donor_repo", adaptation_context)
+    if _REPOSITORY_ID_RE.fullmatch(donor_repo) is None:
+        raise RegistryError(f"{adaptation_context}.donor_repo must be a repository ID.")
+    donor_revision = _require_str(raw, "donor_revision", adaptation_context)
+    _validate_revision(donor_revision, f"{adaptation_context}.donor_revision")
+    urls: dict[str, str] = {}
+    for key in ("training_url", "evaluation_url"):
+        url = _require_str(raw, key, adaptation_context)
+        if _WANDB_RUN_URL_RE.fullmatch(url) is None:
+            raise RegistryError(
+                f"{adaptation_context}.{key} must be a W&B run URL without query or fragment."
+            )
+        urls[key] = url
+    evidence_path = _portable_relative_path(
+        _require_str(raw, "evidence_path", adaptation_context),
+        f"{adaptation_context}.evidence_path",
+    )
+    if evidence_path.suffix != ".json":
+        raise RegistryError(f"{adaptation_context}.evidence_path must be a JSON path.")
+    return ConfidenceAdaptation(
+        head_sha256=digests["head_sha256"],
+        base_weight_sha256=digests["base_weight_sha256"],
+        donor_repo=donor_repo,
+        donor_revision=donor_revision,
+        donor_weight_sha256=digests["donor_weight_sha256"],
+        training_url=urls["training_url"],
+        evaluation_url=urls["evaluation_url"],
+        evidence_path=evidence_path.as_posix(),
+    )
+
+
 def _parse_models(
     raw: object,
     families: Mapping[str, ModelFamily],
@@ -1214,6 +1294,7 @@ def _parse_models(
         family_id = _require_str(value, "family", context)
         if family_id not in families:
             raise RegistryError(f"{context} references unknown family {family_id!r}.")
+        confidence_adaptation = _parse_confidence_adaptation(value, context, model_id)
         fast = _parse_checkpoint(value, "fast", context)
         official = _parse_checkpoint(value, "official", context)
         if fast.repo_id in fast_repositories:
@@ -1326,6 +1407,7 @@ def _parse_models(
             backbone_model=value.get("backbone_model"),
             publication_status=publication_status,
             msa_conditioning=msa_conditioning,
+            confidence_adaptation=confidence_adaptation,
         )
     return models
 
