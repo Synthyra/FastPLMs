@@ -226,3 +226,108 @@ def test_partial_target_is_atomically_published_only_after_complete_write(monkey
     evaluation._write_partial_target(tmp_path, 0, "first", [{"sample": 0}])
     assert destination.is_file()
     assert not (tmp_path / ".000000.json.tmp").exists()
+
+
+def test_resume_reuses_complete_targets_and_original_indices(monkeypatch, tmp_path):
+    def interrupted(model, target, *args, **kwargs):
+        if target.target_id == "second":
+            raise RuntimeError("preempted")
+        return _Rollout(target.target_id)
+
+    _stub_evaluation(monkeypatch, interrupted)
+    output = tmp_path / "records.json"
+    with pytest.raises(RuntimeError, match="preempted"):
+        evaluation.fold_and_score(
+            object(), tmp_path, _targets(), {"head": object()}, output, print
+        )
+    retained = (tmp_path / "partial-records/000000.json").read_bytes()
+    calls = []
+
+    def continued(model, target, samples, seed, *args, **kwargs):
+        calls.append((target.target_id, seed))
+        return _Rollout(target.target_id)
+
+    monkeypatch.setattr(evaluation, "fold", continued)
+    records = evaluation.fold_and_score(
+        object(), tmp_path, _targets(), {"head": object()}, output, print, resume=True
+    )
+    assert calls == [("second", 1001), ("third", 1002)]
+    assert (tmp_path / "partial-records/000000.json").read_bytes() == retained
+    assert [(record["target_id"], record["sample"]) for record in records] == [
+        (target["target_id"], sample) for target in _targets() for sample in range(5)
+    ]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("sample", 4),
+        ("target_id", "wrong"),
+        ("predictions", {"wrong": {}}),
+        ("tm_score", float("nan")),
+    ],
+)
+def test_resume_rejects_invalid_partial_records_before_folding(
+    monkeypatch, tmp_path, field, value
+):
+    _stub_evaluation(
+        monkeypatch, lambda model, target, *args, **kwargs: _Rollout(target.target_id)
+    )
+    output = tmp_path / "records.json"
+    evaluation.fold_and_score(
+        object(), tmp_path, _targets(), {"head": object()}, output, print
+    )
+    output.unlink()
+    (tmp_path / "skipped.json").unlink()
+    partial = tmp_path / "partial-records/000000.json"
+    saved = json.loads(partial.read_text())
+    saved["records"][0][field] = value
+    partial.write_text(json.dumps(saved))
+    monkeypatch.setattr(
+        evaluation,
+        "fold",
+        lambda *args, **kwargs: pytest.fail("invalid reuse must fail before folding"),
+    )
+    with pytest.raises(ValueError):
+        evaluation.fold_and_score(
+            object(),
+            tmp_path,
+            _targets(),
+            {"head": object()},
+            output,
+            print,
+            resume=True,
+        )
+
+
+def test_resume_preserves_out_of_memory_targets(monkeypatch, tmp_path):
+    def first_attempt(model, target, *args, **kwargs):
+        if target.target_id == "first":
+            raise torch.OutOfMemoryError("retained skip")
+        raise RuntimeError("preempted")
+
+    _stub_evaluation(monkeypatch, first_attempt)
+    output = tmp_path / "records.json"
+    with pytest.raises(RuntimeError):
+        evaluation.fold_and_score(
+            object(), tmp_path, _targets(), {"head": object()}, output, print
+        )
+    _stub_evaluation(
+        monkeypatch, lambda model, target, *args, **kwargs: _Rollout(target.target_id)
+    )
+    records = evaluation.fold_and_score(
+        object(), tmp_path, _targets(), {"head": object()}, output, print, resume=True
+    )
+    assert len(records) == 10
+    assert json.loads((tmp_path / "skipped.json").read_text()) == ["first"]
+
+
+def test_resume_preserves_undefined_native_interface_quality(monkeypatch, tmp_path):
+    _stub_evaluation(monkeypatch, lambda model, target, *args, **kwargs: _Rollout(target.target_id))
+    evaluation.fold_and_score(object(), tmp_path, _targets(), {"head": object()}, tmp_path / "records.json", print)
+    partial = tmp_path / "partial-records/000000.json"
+    saved = json.loads(partial.read_text())
+    saved["records"][0]["true_true_iptm"] = float("nan")
+    partial.write_text(json.dumps(saved))
+    retained = evaluation.validated_partial_targets(tmp_path / "partial-records", _targets(), {"head"})
+    assert retained[0][0]["true_true_iptm"] != retained[0][0]["true_true_iptm"]

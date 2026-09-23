@@ -14,7 +14,9 @@ from pathlib import Path
 DATASET_REPO = "Synthyra/AtlasFold-Data"
 DATASET_REVISION = "98b5212fd04cc34e3cdcb43c9bc6a66639ef4041"
 ARTIFACT_REPO = "Synthyra/FastPLMs-artifacts"
-HISTORICAL_SPLIT_SHA256 = "da801db539deabdc36d6060e5ef8570ca6cff15374a04dca5280bdcc31166bdd"
+HISTORICAL_SPLIT_SHA256 = (
+    "da801db539deabdc36d6060e5ef8570ca6cff15374a04dca5280bdcc31166bdd"
+)
 MODEL_IDS = ("esmfold2_300", "esmfold2_600")
 PLANNED_UPDATES = 780
 TRAINING_SECONDS = 73_800
@@ -195,14 +197,14 @@ def validate_evaluation_recovery(root: Path, model_id: str) -> None:
     verify_evaluation(root / "public/evaluation/esmfold2", require_checkpoints=False)
 
 
-def evaluate_model(root: Path, model_id: str) -> None:
+def evaluate_model(root: Path, model_id: str, *, resume: bool = False) -> None:
     from . import host
 
     configure_host(root, model_id)
     if model_id == "esmfold2":
         host.stage_reference("test", None, root.name)
     else:
-        host.stage_evaluate(model_id, "v2", "test", None, root.name)
+        host.stage_evaluate(model_id, "v2", "test", None, root.name, resume=resume)
 
 
 def export_evaluation(root: Path, model_id: str) -> list[str]:

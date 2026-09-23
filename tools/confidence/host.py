@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import time
+import uuid
 import warnings
 
 from collections.abc import Callable, Iterator
@@ -22,6 +23,7 @@ from pathlib import Path
 
 from .experiment_artifacts import (
     EvaluationArtifacts,
+    environment_identity,
     file_identity,
     new_evaluation_id,
     source_identity,
@@ -44,7 +46,9 @@ MMSEQS = str(Path.home() / "bin" / "mmseqs")
 SMOKE_BUDGET_HOURS = 2.0
 MODEL_BUDGET_HOURS = 24.0
 REFERENCE_BUDGET_HOURS = 5.0
-EVALUATION_RESERVE_HOURS = 2.0  # kept free of training so a model's test evaluation fits its budget
+EVALUATION_RESERVE_HOURS = (
+    2.0  # kept free of training so a model's test evaluation fits its budget
+)
 RATE_TARGETS = 64  # training draws timed to set planned updates
 RATE_SAMPLER_SEED = 101
 PILOT_FILES = {
@@ -369,20 +373,73 @@ def prepare_evaluation(
     )
 
 
+def validate_resume_protocol(request: dict[str, object]) -> None:
+    from .config import DONOR_REPO, DONOR_REVISION, DONOR_WEIGHT_SHA256
+    from .experiment_artifacts import verify_resume_runtime
+    from .rollouts import INFERENCE_LOOPS, INFERENCE_SAMPLING_STEPS
+    from .test_evaluation import EVALUATION_SAMPLES, EVALUATION_SEED_OFFSET
+
+    expected_inference = {
+        "samples": EVALUATION_SAMPLES,
+        "seed_offset": EVALUATION_SEED_OFFSET,
+        "seed_rule": "seed_offset + index_in_targets_json",
+        "recycling_loops": INFERENCE_LOOPS,
+        "diffusion_steps": INFERENCE_SAMPLING_STEPS,
+        "attention_backend": "sdpa",
+        "fast_folding_kernels": True,
+        "parameter_dtype": "float32",
+        "fold_autocast_dtype": "bfloat16",
+        "head_autocast_dtype": "bfloat16",
+        "esmc_precision": "bf16",
+    }
+    expected_donor = {
+        "repo_id": DONOR_REPO,
+        "revision": DONOR_REVISION,
+        "weight_sha256": DONOR_WEIGHT_SHA256,
+    }
+    if (
+        request["metadata"]["inference"] != expected_inference
+        or request["metadata"]["donor"] != expected_donor
+    ):
+        raise ValueError("Inference policy or donor checkpoint changed before recovery")
+    verify_resume_runtime(request)
+
+
 def stage_evaluate(
-    model_id: str, run: str, split: str, limit: int | None, evaluation_id: str | None = None
+    model_id: str,
+    run: str,
+    split: str,
+    limit: int | None,
+    evaluation_id: str | None = None,
+    *,
+    resume: bool = False,
 ) -> None:
-    identifier, output_dir = evaluation_output(split, model_id, evaluation_id)
+    if resume:
+        identifier = validate_evaluation_id(evaluation_id or "")
+        output_dir = (
+            DATA_ROOT / "evaluation" / identifier / validate_evaluation_id(model_id)
+        )
+        if split != "test" or limit is not None:
+            raise ValueError("Recovery requires the complete original test inventory")
+    else:
+        identifier, output_dir = evaluation_output(split, model_id, evaluation_id)
     validate_evaluation_id(run)
 
     from .cache import load_folding_model
     from .rollouts import use_fast_folding_kernels
-    from .test_evaluation import fold_and_score, load_heads, summarize
+    from .test_evaluation import (
+        fold_and_score,
+        load_heads,
+        summarize,
+        validated_partial_targets,
+    )
 
     run_dir = RUNS_DIR / model_id / run
     report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
     if report.get("status") != "complete" or report.get("model_id") != model_id:
-        raise ValueError("Evaluation requires a completed training report for the requested model")
+        raise ValueError(
+            "Evaluation requires a completed training report for the requested model"
+        )
     selected = Path(report["selected_checkpoint"])
     if selected.name != str(selected) or selected.suffix != ".safetensors":
         raise ValueError(
@@ -396,21 +453,105 @@ def stage_evaluate(
     targets, category, budget, _ = evaluation_scope(
         split, limit, f"model-{model_id}", MODEL_BUDGET_HOURS
     )
-    artifacts = prepare_evaluation(
-        output_dir, identifier, model_id, split, targets, head_files, run_dir / "report.json"
-    )
+    deadline = None
+    all_targets_saved = False
+    if resume:
+        from fastplms.registry import get_model_spec
+
+        from .experiment_artifacts import verify_evaluation
+
+        artifacts = EvaluationArtifacts(output_dir)
+        if (output_dir / "completion.json").exists():
+            verify_evaluation(output_dir)
+            return
+        recovery = json.loads((output_dir / "resume.json").read_text(encoding="utf-8"))
+        if (
+            asdict(file_identity(output_dir / "request.json"))
+            != recovery["original_request"]
+        ):
+            raise ValueError("Original evaluation request changed before recovery")
+        request = json.loads((output_dir / "request.json").read_text(encoding="utf-8"))
+        validate_resume_protocol(request)
+        if (
+            request["model_id"] != model_id
+            or request["evaluation_id"] != identifier
+            or request["split"] != split
+        ):
+            raise ValueError("Recovery request belongs to a different evaluation")
+        if (
+            json.loads((output_dir / "targets.json").read_text(encoding="utf-8"))
+            != targets
+        ):
+            raise ValueError("Evaluation targets changed before recovery")
+        spec = get_model_spec(model_id)
+        expected_model = {
+            "repo_id": spec.fast.repo_id,
+            "revision": spec.fast.revision,
+            "files": [asdict(item) for item in spec.fast.files],
+        }
+        if request["metadata"]["model"] != expected_model:
+            raise ValueError("Pinned folding model changed before recovery")
+        for name, path in {
+            "split-report.json": SPLITS_DIR / "split-report.json",
+            "training-report.json": run_dir / "report.json",
+        }.items():
+            if (
+                asdict(file_identity(path))
+                != request["public_inputs"][f"inputs/{name}"]
+            ):
+                raise ValueError(f"Evaluation input changed before recovery: {name}")
+        remaining = recovery["metadata"]["deadline_unix"] - time.time()
+        if remaining <= 0:
+            raise TimeoutError("The recovery GPU budget has expired")
+        deadline = time.monotonic() + remaining
+        retained = validated_partial_targets(
+            output_dir / "partial-records", targets, set(head_files)
+        )
+        all_targets_saved = len(retained) == len(targets)
+        history = output_dir / "resume-history"
+        history.mkdir(exist_ok=True)
+        attempt = uuid.uuid4().hex
+        write_new_json(
+            history / f"attempt-{attempt}.json",
+            {
+                "started_unix": time.time(),
+                "remaining_seconds": remaining,
+                "retained_targets": len(retained),
+                "source_files": source_identity(Path(__file__).resolve().parents[2]),
+                "environment": environment_identity(),
+                "gpu": recovery["metadata"]["gpu"],
+            },
+        )
+        for name in ("records.json", "skipped.json", "summary.json"):
+            path = output_dir / name
+            if path.exists():
+                path.rename(history / f"interrupted-{attempt}-{name}")
+    else:
+        artifacts = prepare_evaluation(
+            output_dir,
+            identifier,
+            model_id,
+            split,
+            targets,
+            head_files,
+            run_dir / "report.json",
+        )
     log(f"evaluation {identifier}: {output_dir}")
     try:
         with gpu_budget(category, f"evaluate-{run}-{split}", budget):
-            model = load_folding_model(model_id)
-            use_fast_folding_kernels(model)
+            model = None if all_targets_saved else load_folding_model(model_id)
+            if model is not None:
+                use_fast_folding_kernels(model)
             records = fold_and_score(
                 model,
                 POOL_DIR,
                 targets,
-                load_heads(model_id, artifacts.head_files()),
+                {name: None for name in artifacts.head_files()}
+                if all_targets_saved
+                else load_heads(model_id, artifacts.head_files()),
                 output_dir / "records.json",
                 log,
+                **({"resume": True, "deadline": deadline} if resume else {}),
             )
         summary = summarize(records, list(head_files))
         write_new_json(

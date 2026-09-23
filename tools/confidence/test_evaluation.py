@@ -10,8 +10,12 @@ targets. Production `esmfold2` is evaluated separately on its own samples with i
 from __future__ import annotations
 
 import hashlib
+import json
+import math
 import multiprocessing
 import tempfile
+import time
+import uuid
 import warnings
 import numpy as np
 import torch
@@ -213,6 +217,8 @@ def _write_partial_target(
     if path.exists():
         raise FileExistsError(f"Partial target already exists: {path}")
     temporary = path.with_name(f".{path.name}.tmp")
+    if temporary.exists():
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     write_new_json(
         temporary,
         {
@@ -248,6 +254,66 @@ def _save_finished_targets(pending: dict[int, _PendingTarget], directory: Path) 
             del pending[index]
 
 
+def validated_partial_targets(
+    directory: Path, targets: Sequence[Mapping[str, object]], heads: set[str]
+) -> dict[int, list[dict[str, object]]]:
+    """Read only complete targets with the original target, sample, and head identities."""
+    completed = {}
+    for path in sorted(directory.glob("*.json")):
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        index = saved.get("target_index")
+        if (
+            type(index) is not int
+            or not 0 <= index < len(targets)
+            or path.name != f"{index:06d}.json"
+        ):
+            raise ValueError(f"Invalid partial target index: {path}")
+        target = targets[index]
+        records = saved.get("records")
+        if (
+            saved.get("status") != "partial_evaluation"
+            or saved.get("target_id") != target["target_id"]
+            or not isinstance(records, list)
+        ):
+            raise ValueError(f"Partial target identity differs: {path}")
+        if saved.get("skipped_out_of_memory") is True and not records:
+            completed[index] = []
+            continue
+        if (
+            saved.get("skipped_out_of_memory") is not False
+            or len(records) != EVALUATION_SAMPLES
+        ):
+            raise ValueError(f"Incomplete partial target: {path}")
+        for sample, record in enumerate(records):
+            if (
+                record.get("target_id") != target["target_id"]
+                or type(record.get("sample")) is not int
+                or record["sample"] != sample
+                or record.get("stratum") != target["stratum"]
+                or record.get("num_tokens") != target["num_tokens"]
+                or record.get("num_chains") != len(target["sequences"])
+                or set(record.get("predictions", {})) != heads
+                or "tm_score" not in record
+                or "dockq" not in record
+            ):
+                raise ValueError(f"Partial sample identity or scores differ: {path}")
+            # Native interface quality is undefined when no inter-chain pairs are resolved.
+            values = [
+                value for name, value in record.items()
+                if not (name == "true_true_iptm" and isinstance(value, float) and math.isnan(value))
+            ]
+            while values:
+                value = values.pop()
+                if isinstance(value, dict):
+                    values.extend(value.values())
+                elif isinstance(value, list):
+                    values.extend(value)
+                elif isinstance(value, float) and not math.isfinite(value):
+                    raise ValueError(f"Nonfinite partial sample: {path}")
+        completed[index] = records
+    return completed
+
+
 def fold_and_score(
     model: torch.nn.Module,
     pool_dir: Path,
@@ -256,6 +322,9 @@ def fold_and_score(
     output_path: Path,
     log: Log,
     workers: int = 32,
+    *,
+    resume: bool = False,
+    deadline: float | None = None,
 ) -> list[dict[str, object]]:
     """Fold targets, score samples with candidate or native heads, and add structure quality."""
     skipped_path = output_path.with_name("skipped.json")
@@ -264,7 +333,14 @@ def fold_and_score(
             raise FileExistsError(f"Evaluation output already exists: {path}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     partial_dir = output_path.parent / "partial-records"
-    partial_dir.mkdir(exist_ok=False)
+    partial_dir.mkdir(exist_ok=resume)
+    completed = (
+        validated_partial_targets(
+            partial_dir, targets, set(heads or {"production": None})
+        )
+        if resume
+        else {}
+    )
     records: list[dict[str, object]] = []
     pending: dict[int, _PendingTarget] = {}
     skipped: list[str] = []
@@ -275,12 +351,40 @@ def fold_and_score(
         ) as executor:
             for index, target in enumerate(targets):
                 _save_finished_targets(pending, partial_dir)
+                if index in completed:
+                    retained = completed[index]
+                    if retained:
+                        positions = structure(pool_dir, target).positions
+                        identity = {
+                            "sha256": hashlib.sha256(
+                                memoryview(positions).cast("B")
+                            ).hexdigest(),
+                            "shape": list(positions.shape),
+                            "dtype": str(positions.dtype),
+                        }
+                        if any(
+                            record.get("target_positions") != identity
+                            for record in retained
+                        ):
+                            raise ValueError(
+                                f"Native coordinates changed for {target['target_id']}"
+                            )
+                        records.extend(retained)
+                    else:
+                        skipped.append(str(target["target_id"]))
+                    continue
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "Evaluation GPU budget exhausted; completed targets retained"
+                    )
                 sequences = list(target["sequences"])  # type: ignore[arg-type]
                 try:
                     native_structure = structure(pool_dir, target)
                     positions = native_structure.positions  # (residues, 14, 3)
                     positions_identity = {
-                        "sha256": hashlib.sha256(memoryview(positions).cast("B")).hexdigest(),
+                        "sha256": hashlib.sha256(
+                            memoryview(positions).cast("B")
+                        ).hexdigest(),
                         "shape": list(positions.shape),
                         "dtype": str(positions.dtype),
                     }
@@ -300,7 +404,9 @@ def fold_and_score(
                         f"skipped {target['target_id']} ({target['num_tokens']} tokens): out of memory"
                     )
                     torch.cuda.empty_cache()
-                    _write_partial_target(partial_dir, index, str(target["target_id"]), [])
+                    _write_partial_target(
+                        partial_dir, index, str(target["target_id"]), []
+                    )
                     continue
                 target_records: list[dict[str, object]] = []
                 futures: list[Future[dict[str, float | None]]] = []
@@ -347,7 +453,9 @@ def fold_and_score(
                     # A previous target must not occupy GPU memory while the next fold runs.
                     rollout = None
                     native = None
-                pending[index] = _PendingTarget(str(target["target_id"]), target_records, futures)
+                pending[index] = _PendingTarget(
+                    str(target["target_id"]), target_records, futures
+                )
                 _save_finished_targets(pending, partial_dir)
                 if (index + 1) % 25 == 0:
                     log(f"folded {index + 1}/{len(targets)} test targets")
@@ -361,7 +469,9 @@ def fold_and_score(
     write_new_json(output_path, records)
     write_new_json(skipped_path, skipped)
     if skipped:
-        log(f"skipped {len(skipped)} of {len(targets)} targets that did not fit in memory")
+        log(
+            f"skipped {len(skipped)} of {len(targets)} targets that did not fit in memory"
+        )
     return records
 
 

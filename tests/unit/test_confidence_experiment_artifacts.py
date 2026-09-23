@@ -102,6 +102,51 @@ def test_partial_and_failed_runs_never_export_as_complete(tmp_path):
     assert not (run.directory / "completion.json").exists()
 
 
+def test_explicit_resume_preserves_request_and_failure_in_public_evidence(tmp_path):
+    run = create_evaluation(tmp_path)
+    original_request = (run.directory / "request.json").read_bytes()
+    run.fail(RuntimeError("preemption retry refused existing output"))
+    original_failure = (run.directory / "failure.json").read_bytes()
+    run.resume({"previous_call_id": "fc-terminal", "prior_elapsed_seconds": 3600})
+    run.fail(RuntimeError("another interruption"))
+    write_results(run)
+    run.complete()
+    destination = tmp_path / "export"
+    export_evaluation(run.directory, destination)
+    assert (destination / "request.json").read_bytes() == original_request
+    assert (destination / "failure.json").read_bytes() == original_failure
+    assert (destination / "resume.json").is_file()
+    assert len(list((destination / "resume-history").glob("failure-*.json"))) == 1
+    verify_evaluation(destination, require_checkpoints=False)
+
+
+def test_resume_rejects_changed_checkpoint_before_reservation(tmp_path):
+    run = create_evaluation(tmp_path)
+    (run.directory / "checkpoints/v2.safetensors").write_bytes(b"changed")
+    with pytest.raises(ValueError, match="integrity"):
+        run.resume({"previous_call_id": "fc-terminal"})
+    assert not (run.directory / "resume.json").exists()
+
+
+@pytest.mark.parametrize("changed", ["recovery", "scientific_source", "packages"])
+def test_resume_requires_fixed_scientific_runtime(monkeypatch, changed):
+    from tools.confidence import experiment_artifacts
+
+    recorded = {"tools/confidence/host.py": {"sha256": "old"}, "tools/confidence/rollouts.py": {"sha256": "fixed"}}
+    current = {**recorded, "tools/confidence/host.py": {"sha256": "recovery"}}
+    packages = {"torch": "2.13.0+cu132"}
+    if changed == "scientific_source":
+        current["tools/confidence/rollouts.py"] = {"sha256": "changed"}
+    monkeypatch.setattr(experiment_artifacts, "source_identity", lambda _: current)
+    monkeypatch.setattr(experiment_artifacts, "environment_identity", lambda: {"packages": {"torch": "different"} if changed == "packages" else packages})
+    request = {"metadata": {"source_files": recorded}, "environment": {"packages": packages}}
+    if changed == "recovery":
+        experiment_artifacts.verify_resume_runtime(request)
+    else:
+        with pytest.raises(ValueError, match="Scientific"):
+            experiment_artifacts.verify_resume_runtime(request)
+
+
 def test_completion_rejects_missing_or_duplicate_diffusion_samples(tmp_path):
     run = create_evaluation(tmp_path)
     write_results(run)

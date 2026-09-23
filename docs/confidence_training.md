@@ -512,6 +512,27 @@ The 300M recovery was dispatched on September 23 in
 after 53 focused CPU checks passed. Its completed training archive is pinned at
 [HF revision 6eb69e3](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/6eb69e3e5e14a9a1266324b15fe085f163b4af95/confidence-v2/v2-reproduction-20260922/runs/esmfold2_300/v2).
 
+Modal subsequently preempted that 300M evaluation after 158 target records
+had been saved. To resume an interrupted evaluation, first confirm that its
+previous call is terminal and bound its elapsed GPU time conservatively:
+
+```bash
+PYTHONPATH=src:. python -m tools.confidence.launch_v2 evaluate --campaign v2-reproduction-20260922 --model-id esmfold2_300 --resume-evaluation --previous-call-id fc-01M377QTNZRFQ4C4NCK6F0CB70 --prior-elapsed-seconds 3600
+```
+
+Recovery verifies the original inputs, checkpoint snapshots, and completed
+target records. It retains their original indices and sample seeds, appends
+recovery records, and folds only missing targets. The remaining allocation
+excludes the supplied prior elapsed time and uses a persisted deadline so a
+further preemption cannot reset the budget. Existing completed evaluations need
+only verification and an archive retry. Keep the original records and failure
+history; never delete an evaluation directory to make a retry start.
+The continuation runs in
+[Modal app ap-5e967MxtYnJXpjYZkJMdlz](https://modal.com/apps/synthyra/main/ap-5e967MxtYnJXpjYZkJMdlz).
+Its final preflight passed 74 focused CPU checks. Recovery retains undefined
+native interface-quality values where no resolved inter-chain pairs exist;
+nonfinite predicted confidence and other invalid saved metrics are rejected.
+
 The completed production reference is preserved at
 [HF revision 156619f](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/156619fb1b15a58e1f112bcd5ef0aeeac18d4bf2/confidence-v2/v2-reproduction-20260922/public/evaluation/esmfold2).
 Its 2,790 records cover five samples for each of 558 targets: all 512 standard

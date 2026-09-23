@@ -24,7 +24,9 @@ from tools.execution.source import excluded_from_upload, require_regular_source
 
 
 SCHEMA_VERSION = 1
-RESULT_FILES = frozenset({"request.json", "records.json", "skipped.json", "summary.json"})
+RESULT_FILES = frozenset(
+    {"request.json", "records.json", "skipped.json", "summary.json"}
+)
 ENVIRONMENT_PACKAGES = (
     "torch",
     "transformers",
@@ -109,11 +111,62 @@ def environment_identity() -> dict[str, object]:
     }
 
 
+def verify_resume_runtime(request: Mapping[str, object]) -> None:
+    """Keep numerical source and dependencies fixed across a reviewed recovery."""
+    # These modules contain the reviewed recovery changes, recorded in resume history.
+    recovery_paths = {
+        f"tools/confidence/{name}.py"
+        for name in ("experiment_artifacts", "host", "modal_v2", "test_evaluation", "v2_campaign")
+    }
+    previous = request["metadata"]["source_files"]
+    current = source_identity(Path(__file__).resolve().parents[2])
+    changed = {
+        path for path in previous.keys() | current.keys()
+        if previous.get(path) != current.get(path)
+    }
+    if changed - recovery_paths:
+        raise ValueError(f"Scientific source changed before recovery: {sorted(changed - recovery_paths)}")
+    if request["environment"]["packages"] != environment_identity()["packages"]:
+        raise ValueError("Scientific package versions changed before recovery")
+
+
 @dataclass(frozen=True)
 class EvaluationArtifacts:
     """One reserved evaluation directory whose original inputs are never replaced."""
 
     directory: Path
+
+    def resume(self, metadata: Mapping[str, object]) -> None:
+        """Append an explicit recovery attempt; preserve the original request and failure."""
+        if (self.directory / "completion.json").exists():
+            raise ValueError("Completed evaluations need only an archive retry")
+        request = json.loads(
+            (self.directory / "request.json").read_text(encoding="utf-8")
+        )
+        _verify_files(self.directory, request["public_inputs"])
+        _verify_files(self.directory, request["private_inputs"])
+        retained = {
+            path.relative_to(self.directory).as_posix(): asdict(file_identity(path))
+            for path in sorted((self.directory / "partial-records").glob("*.json"))
+        }
+        failure = self.directory / "failure.json"
+        write_new_json(
+            self.directory / "resume.json",
+            {
+                "status": "resumed_after_terminal_call",
+                "created_at": datetime.now(UTC).isoformat(),
+                "original_request": asdict(
+                    file_identity(self.directory / "request.json")
+                ),
+                "prior_failure": asdict(file_identity(failure))
+                if failure.exists()
+                else None,
+                "retained_partial_files": retained,
+                "metadata": dict(metadata),
+                "source_files": source_identity(Path(__file__).resolve().parents[2]),
+                "environment": environment_identity(),
+            },
+        )
 
     @classmethod
     def create(
@@ -134,7 +187,9 @@ class EvaluationArtifacts:
             raise ValueError("Evaluations require the test or validation split")
         samples = metadata.get("inference", {}).get("samples")
         if type(samples) is not int or samples <= 0:
-            raise ValueError("Evaluation metadata requires a positive integer sample count")
+            raise ValueError(
+                "Evaluation metadata requires a positive integer sample count"
+            )
         if not targets:
             raise ValueError("An evaluation requires at least one target")
         if len({str(target["target_id"]) for target in targets}) != len(targets):
@@ -175,7 +230,9 @@ class EvaluationArtifacts:
                     file_identity(destination)
                 )
             write_new_json(directory / "targets.json", list(targets))
-            public_files["targets.json"] = asdict(file_identity(directory / "targets.json"))
+            public_files["targets.json"] = asdict(
+                file_identity(directory / "targets.json")
+            )
             write_new_json(
                 directory / "request.json",
                 {
@@ -184,7 +241,9 @@ class EvaluationArtifacts:
                     "model_id": model_id,
                     "created_at": datetime.now(UTC).isoformat(),
                     "split": split,
-                    "test_set_status": "spent" if split == "test" else "validation_dry_run",
+                    "test_set_status": "spent"
+                    if split == "test"
+                    else "validation_dry_run",
                     "new_heldout_evaluation": False,
                     "requested_targets": len(targets),
                     "checkpoint_inputs": checkpoint_inputs,
@@ -200,21 +259,45 @@ class EvaluationArtifacts:
         return run
 
     def head_files(self) -> dict[str, Path | None]:
-        request = json.loads((self.directory / "request.json").read_text(encoding="utf-8"))
+        request = json.loads(
+            (self.directory / "request.json").read_text(encoding="utf-8")
+        )
         _verify_files(self.directory, request["private_inputs"])
         return {
-            name: _artifact_path(self.directory, value["snapshot"]) if "snapshot" in value else None
+            name: _artifact_path(self.directory, value["snapshot"])
+            if "snapshot" in value
+            else None
             for name, value in request["checkpoint_inputs"].items()
         }
 
     def complete(self) -> dict[str, object]:
-        if (self.directory / "failure.json").exists():
+        if (self.directory / "failure.json").exists() and not (
+            self.directory / "resume.json"
+        ).exists():
             raise ValueError("A failed evaluation cannot be marked complete")
-        request = json.loads((self.directory / "request.json").read_text(encoding="utf-8"))
+        request = json.loads(
+            (self.directory / "request.json").read_text(encoding="utf-8")
+        )
         _verify_files(self.directory, request["public_inputs"])
         _verify_files(self.directory, request["private_inputs"])
         _verify_record_coverage(self.directory, request)
         public_files = dict(request["public_inputs"])
+        resume_path = self.directory / "resume.json"
+        if resume_path.exists():
+            resume = json.loads(resume_path.read_text(encoding="utf-8"))
+            if resume["original_request"] != asdict(
+                file_identity(self.directory / "request.json")
+            ):
+                raise ValueError("Original evaluation request changed during recovery")
+            _verify_files(self.directory, resume["retained_partial_files"])
+            public_files["resume.json"] = asdict(file_identity(resume_path))
+            if resume["prior_failure"] is not None:
+                _verify_files(self.directory, {"failure.json": resume["prior_failure"]})
+                public_files["failure.json"] = resume["prior_failure"]
+            for path in sorted((self.directory / "resume-history").glob("*.json")):
+                public_files[path.relative_to(self.directory).as_posix()] = asdict(
+                    file_identity(path)
+                )
         for name in sorted(RESULT_FILES):
             public_files[name] = asdict(file_identity(self.directory / name))
         completion = {
@@ -233,8 +316,15 @@ class EvaluationArtifacts:
     def fail(self, error: BaseException) -> None:
         """Append a failure marker without altering inputs or any completed result."""
         path = self.directory / "failure.json"
+        if (self.directory / "resume.json").exists():
+            path = (
+                self.directory / "resume-history" / f"failure-{uuid.uuid4().hex}.json"
+            )
+            path.parent.mkdir(exist_ok=True)
         if not (self.directory / "completion.json").exists() and not path.exists():
-            write_new_json(path, {"status": "failed", "error_type": type(error).__name__})
+            write_new_json(
+                path, {"status": "failed", "error_type": type(error).__name__}
+            )
 
 
 def _verify_files(root: Path, files: Mapping[str, object]) -> None:
@@ -268,11 +358,18 @@ def _verify_record_coverage(root: Path, request: Mapping[str, object]) -> None:
         raise ValueError("Evaluation prediction heads differ from the checkpoint inputs")
 
 
-def verify_evaluation(directory: Path, *, require_checkpoints: bool = True) -> dict[str, object]:
-    if (directory / "failure.json").exists():
+def verify_evaluation(
+    directory: Path, *, require_checkpoints: bool = True
+) -> dict[str, object]:
+    if (directory / "failure.json").exists() and not (
+        directory / "resume.json"
+    ).exists():
         raise ValueError("Failed evaluations cannot be exported as complete evidence")
     completion = json.loads((directory / "completion.json").read_text(encoding="utf-8"))
-    if completion.get("schema_version") != SCHEMA_VERSION or completion.get("status") != "complete":
+    if (
+        completion.get("schema_version") != SCHEMA_VERSION
+        or completion.get("status") != "complete"
+    ):
         raise ValueError("Unsupported or incomplete evaluation manifest")
     public_files = completion.get("public_files")
     if (
@@ -302,13 +399,37 @@ def verify_evaluation(directory: Path, *, require_checkpoints: bool = True) -> d
     inputs = request.get("public_inputs")
     if not isinstance(inputs, dict) or "targets.json" not in inputs:
         raise ValueError("Evaluation request omits its target inventory")
-    if set(public_files) != set(inputs) | RESULT_FILES:
-        raise ValueError("Completion public inventory differs from the evaluation request")
+    recovery_files = set()
+    if "resume.json" in public_files:
+        resume = json.loads((directory / "resume.json").read_text(encoding="utf-8"))
+        if (
+            resume.get("status") != "resumed_after_terminal_call"
+            or resume.get("original_request") != public_files["request.json"]
+        ):
+            raise ValueError("Resume evidence does not preserve the original request")
+        recovery_files.add("resume.json")
+        recovery_files.update(
+            name
+            for name in public_files
+            if name.startswith("resume-history/")
+            and PurePosixPath(name).suffix == ".json"
+        )
+        if resume.get("prior_failure") is not None:
+            if public_files.get("failure.json") != resume["prior_failure"]:
+                raise ValueError("Resume evidence omits the original failure")
+            recovery_files.add("failure.json")
+    if set(public_files) != set(inputs) | RESULT_FILES | recovery_files:
+        raise ValueError(
+            "Completion public inventory differs from the evaluation request"
+        )
     for name, identity in inputs.items():
         if public_files[name] != identity:
             raise ValueError(f"Request and completion input identity differ: {name}")
     private_inputs = request.get("private_inputs")
-    if not isinstance(private_inputs, dict) or completion.get("private_files") != private_inputs:
+    if (
+        not isinstance(private_inputs, dict)
+        or completion.get("private_files") != private_inputs
+    ):
         raise ValueError("Request and completion checkpoint inventory differ")
     checkpoint_inputs = request.get("checkpoint_inputs")
     if not isinstance(checkpoint_inputs, dict):
@@ -319,7 +440,9 @@ def verify_evaluation(directory: Path, *, require_checkpoints: bool = True) -> d
         if "snapshot" in value
     }
     if private_inputs != snapshots:
-        raise ValueError("Checkpoint input identities differ from the private inventory")
+        raise ValueError(
+            "Checkpoint input identities differ from the private inventory"
+        )
     _verify_record_coverage(directory, request)
     if require_checkpoints:
         _verify_files(directory, private_inputs)
