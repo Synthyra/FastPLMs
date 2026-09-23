@@ -76,7 +76,6 @@ def with_source_files(environment: modal.Image) -> modal.Image:
         .add_local_file(str(ROOT / "LICENSE"), "/workspace/LICENSE")
         .add_local_file(str(ROOT / "README.md"), "/workspace/README.md")
         .add_local_file(str(ROOT / "AGENTS.md"), "/workspace/AGENTS.md")
-        .add_local_file(str(ROOT / "CLAUDE.md"), "/workspace/CLAUDE.md")
         .add_local_file(str(ROOT / "THIRD_PARTY_NOTICES.md"), "/workspace/THIRD_PARTY_NOTICES.md")
         .add_local_dir(str(ROOT / "tests/unit"), "/workspace/tests/unit")
         .add_local_dir(

@@ -486,13 +486,50 @@ receipts are saved locally under `artifacts/confidence-v2/<campaign>/` and on
 the Modal volume. No credentials are included in source uploads or public
 artifacts.
 
+### Recovering evaluation after an archive failure
+
+Both September 22 reproduction runs completed all 780 updates. The 300M
+training workflow then encountered an HTTP 412 during its final archive because
+another publisher advanced the dataset branch. Its final head was already
+published by the live companion; the failure did not require retraining.
+Campaign archives now retry this conflict up to three attempts, refreshing the
+parent revision while retaining the parent-commit guard.
+
+For a completed training run whose evaluation has never started:
+
+```bash
+PYTHONPATH=src:. python -m tools.confidence.launch_v2 evaluate --campaign v2-reproduction-20260922 --model-id esmfold2_300
+```
+
+The controller verifies the completed production evidence, retries the training
+archive, and reserves a dispatch receipt before starting evaluation. Existing
+evaluation directories or dispatch receipts prevent a duplicate launch. New
+small-model evaluations use RTX PRO 6000 Blackwell with 96 GB GPU memory,
+four CPUs, 64 GiB host RAM, CUDA 13.2, and a four-hour worker limit. The already
+running 600M evaluation retains its original H200/CUDA 13.0 environment.
+The 300M recovery was dispatched on September 23 in
+[Modal app ap-ZToRE2X4aJYGUMY1JlzPp9](https://modal.com/apps/synthyra/main/ap-ZToRE2X4aJYGUMY1JlzPp9)
+after 53 focused CPU checks passed. Its completed training archive is pinned at
+[HF revision 6eb69e3](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/6eb69e3e5e14a9a1266324b15fe085f163b4af95/confidence-v2/v2-reproduction-20260922/runs/esmfold2_300/v2).
+
+The completed production reference is preserved at
+[HF revision 156619f](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/156619fb1b15a58e1f112bcd5ef0aeeac18d4bf2/confidence-v2/v2-reproduction-20260922/public/evaluation/esmfold2).
+Its 2,790 records cover five samples for each of 558 targets: all 512 standard
+targets and 46 of 64 long targets. The remaining 18 long targets exceeded GPU
+memory. The records retain confidence summaries, calibration aggregates, measured
+structure quality, and native-coordinate identities, sufficient for the current
+correlations and acceptance analysis. Full confidence arrays, logits, and predicted
+coordinates were not retained. Comparisons use jointly successful targets and
+must disclose these omissions. Agreement with production compares confidence
+on independently generated structures, rather than rescoring identical structures.
+
 ### Ongoing Hugging Face checkpoints
 
 The companion publisher checks the persistent training volume every two minutes
 and mirrors each new saved EMA head. Training saves at initialization, every
 30 minutes, after validation and at completion; update zero is retained in W&B
 but is not advertised as a trained head on Hugging Face. Full resumable
-checkpoints remain in W&B. Each head-only safetensors file and its provenance
+checkpoints remain in W&B. Each head-only safetensors file and its metadata
 have an immutable, content-addressed path in `Synthyra/FastPLMs-artifacts` under
 `confidence/v2/<campaign>/<model>/<wandb-run>/updates/`. A per-model `latest.json`
 advances in the same parent-protected commit as the corresponding head files.
@@ -575,8 +612,9 @@ app logged a GPU hardware fault; its stalled H200 call was cancelled and the
 replacement H200 result is used above.
 
 RTX PRO 6000 has the lowest measured cost per update for both models and is now
-the training default. B200 is about 40% faster on this panel for about 12% more
-per update. All GPUs passed a 1,024-token complex training guard. The five-sample
+the training default. B200 took about 52 seconds per update versus 86 seconds
+on RTX PRO 6000, at about 12% higher cost per update. All GPUs passed a
+1,024-token complex training guard. The five-sample
 2,048-token evaluation probe passed on every GPU except L40S, which ran out of
 memory. RTX PRO 6000 peaked at 40.2 GiB for the training guard and 69.3 GiB for
 the evaluation probe. These checks do not establish full evaluation parity.
@@ -586,7 +624,7 @@ updates. Resumption verifies their terminal status, checkpoint identity when
 present, and the target identities and tensor shapes in partial validation
 caches. Cache payload hashes are not verified. The same campaign, W&B IDs,
 target assignments and budget ledgers are retained. Training now uses CUDA
-13.2; cached initial H200 rollouts and downstream H200 evaluations use CUDA
+13.2; cached initial H200 rollouts and the original H200 evaluations use CUDA
 13.0. This migration does not promise bitwise reproduction across GPUs.
 The replacement calls were dispatched in
 [Modal app ap-3VzXRZhoijTCcSzUdcISJZ](https://modal.com/apps/synthyra/main/ap-3VzXRZhoijTCcSzUdcISJZ),

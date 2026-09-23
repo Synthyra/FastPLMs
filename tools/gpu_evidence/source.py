@@ -55,7 +55,6 @@ SOURCE_FILES = (
     ".dockerignore",
     "README.md",
     "AGENTS.md",
-    "CLAUDE.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
 )

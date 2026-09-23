@@ -112,6 +112,7 @@ def prepare_data(root: Path, pilot_root: Path, workers: int = 8) -> dict[str, ob
 def publish_files(root: Path, names: list[str], group: str) -> str:
     """Archive only explicitly selected campaign files in the public dataset."""
     from huggingface_hub import CommitOperationAdd, HfApi
+    from huggingface_hub.errors import HfHubHTTPError
 
     api = HfApi()
     operations = []
@@ -120,14 +121,22 @@ def publish_files(root: Path, names: list[str], group: str) -> str:
         if not path.is_relative_to(root.resolve()) or not path.is_file():
             raise ValueError(f"Invalid campaign artifact path: {name}")
         operations.append(CommitOperationAdd(path_in_repo=f"confidence-v2/{root.name}/{name}", path_or_fileobj=path))
-    parent = api.dataset_info(ARTIFACT_REPO).sha
-    commit = api.create_commit(
-        repo_id=ARTIFACT_REPO,
-        repo_type="dataset",
-        operations=operations,
-        parent_commit=parent,
-        commit_message=f"Archive {root.name} {group}",
-    )
+    for attempt in range(3):
+        parent = api.dataset_info(ARTIFACT_REPO).sha
+        try:
+            commit = api.create_commit(
+                repo_id=ARTIFACT_REPO,
+                repo_type="dataset",
+                operations=operations,
+                parent_commit=parent,
+                commit_message=f"Archive {root.name} {group}",
+            )
+            break
+        except HfHubHTTPError as error:
+            if error.response is None or error.response.status_code != 412 or attempt == 2:
+                raise
+            # Other campaign workers publish disjoint files to the same dataset branch.
+            time.sleep(attempt + 1)
     revision = str(commit.oid)
     write_json(root / "uploads" / f"{group}.json", {"repo_id": ARTIFACT_REPO, "revision": revision, "files": names})
     return revision
@@ -160,6 +169,30 @@ def train_model(root: Path, model_id: str) -> dict[str, object]:
             host.RUNS_DIR / model_id / "v2", config, host.log,
             min(TRAINING_SECONDS + 1800, remaining - 4 * 3600) - (time.monotonic() - started),
         )
+
+
+def validate_evaluation_recovery(root: Path, model_id: str) -> None:
+    """Permit recovery only when completed training has no dispatched evaluation."""
+    from .experiment_artifacts import verify_evaluation
+
+    if model_id not in MODEL_IDS:
+        raise ValueError("Select a trained 300M or 600M head")
+    report = json.loads((root / "runs" / model_id / "v2/report.json").read_text(encoding="utf-8"))
+    if report.get("status") != "complete" or report.get("model_id") != model_id or report.get("updates") != PLANNED_UPDATES:
+        raise ValueError("Evaluation requires the completed training run")
+    status_root = root / "status"
+    if any(path.exists() for path in (
+        root / "evaluation" / root.name / model_id,
+        status_root / f"dispatch-evaluate-{model_id}.json",
+        status_root / f"evaluate-{model_id}.json",
+    )):
+        raise FileExistsError("Evaluation already reserved; inspect its existing worker and records")
+    training_status = status_root / f"train-{model_id}.json"
+    if training_status.exists():
+        status = json.loads(training_status.read_text(encoding="utf-8"))
+        if status.get("evaluation_call_id") or status.get("status") == "running":
+            raise FileExistsError("Training may have an active evaluation dispatch; inspect its call ID")
+    verify_evaluation(root / "public/evaluation/esmfold2", require_checkpoints=False)
 
 
 def evaluate_model(root: Path, model_id: str) -> None:

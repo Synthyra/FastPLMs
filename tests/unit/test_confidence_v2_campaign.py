@@ -85,6 +85,34 @@ def test_completion_requires_every_evaluation_upload(tmp_path: Path) -> None:
     assert v2_campaign.evaluations_archived(root)
 
 
+@pytest.mark.parametrize(("status_code", "failures", "succeeds", "attempts"), [(412, 1, True, 2), (412, 3, False, 3), (500, 1, False, 1)])
+def test_archive_retry_preserves_parent_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status_code: int, failures: int, succeeds: bool, attempts: int) -> None:
+    import httpx
+    import huggingface_hub
+
+    from huggingface_hub.errors import HfHubHTTPError
+
+    (tmp_path / "report.json").write_text("{}")
+    parents = []
+
+    def commit(**kwargs: object) -> SimpleNamespace:
+        parents.append(kwargs["parent_commit"])
+        if len(parents) <= failures:
+            raise HfHubHTTPError("Concurrent writer", response=httpx.Response(status_code, request=httpx.Request("POST", "https://huggingface.co")))
+        return SimpleNamespace(oid="archived")
+
+    api = SimpleNamespace(dataset_info=lambda _: SimpleNamespace(sha=f"parent-{len(parents)}"), create_commit=commit)
+    monkeypatch.setattr(huggingface_hub, "HfApi", lambda: api)
+    monkeypatch.setattr(v2_campaign.time, "sleep", lambda _: None)
+    if succeeds:
+        assert v2_campaign.publish_files(tmp_path, ["report.json"], "report") == "archived"
+    else:
+        with pytest.raises(HfHubHTTPError):
+            v2_campaign.publish_files(tmp_path, ["report.json"], "report")
+        assert not (tmp_path / "uploads/report.json").exists()
+    assert parents == [f"parent-{index}" for index in range(attempts)]
+
+
 def test_export_retry_verifies_existing_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from tools.confidence import experiment_artifacts
 
@@ -95,3 +123,30 @@ def test_export_retry_verifies_existing_bundle(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr(experiment_artifacts, "verify_evaluation", lambda path, **kwargs: calls.append((path, kwargs)) or {"model_id": "esmfold2_300", "evaluation_id": tmp_path.name})
     assert v2_campaign.export_evaluation(tmp_path, "esmfold2_300") == ["public/evaluation/esmfold2_300/completion.json"]
     assert calls == [(destination, {"require_checkpoints": False})]
+
+
+@pytest.mark.parametrize("existing", [None, "queued", "training", "directory", "receipt", "status", "incomplete"])
+def test_evaluation_recovery_requires_undispatched_completed_training(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: str | None) -> None:
+    from tools.confidence import experiment_artifacts
+
+    model_id = "esmfold2_300"
+    v2_campaign.write_json(tmp_path / "runs" / model_id / "v2/report.json", {
+        "status": "complete", "model_id": model_id, "updates": 779 if existing == "incomplete" else 780,
+    })
+    if existing in {"queued", "training"}:
+        status = {"evaluation_call_id": "fc-queued"} if existing == "queued" else {"status": "running"}
+        v2_campaign.write_json(tmp_path / "status" / f"train-{model_id}.json", status)
+    elif existing == "directory":
+        (tmp_path / "evaluation" / tmp_path.name / model_id).mkdir(parents=True)
+    elif existing in {"receipt", "status"}:
+        name = f"dispatch-evaluate-{model_id}.json" if existing == "receipt" else f"evaluate-{model_id}.json"
+        v2_campaign.write_json(tmp_path / "status" / name, {"status": "running"})
+    verified = []
+    monkeypatch.setattr(experiment_artifacts, "verify_evaluation", lambda *args, **kwargs: verified.append((args, kwargs)))
+    if existing is None:
+        v2_campaign.validate_evaluation_recovery(tmp_path, model_id)
+        assert verified == [((tmp_path / "public/evaluation/esmfold2",), {"require_checkpoints": False})]
+    else:
+        with pytest.raises(ValueError if existing == "incomplete" else FileExistsError):
+            v2_campaign.validate_evaluation_recovery(tmp_path, model_id)
+        assert not verified

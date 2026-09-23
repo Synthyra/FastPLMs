@@ -121,7 +121,7 @@ def run_evaluation(campaign: str, model_id: str) -> dict[str, object]:
         pilot_volume.commit()
 
 
-@app.function(image=image, cpu=4, memory=65536, gpu="H200", timeout=14400, startup_timeout=900, volumes=MOUNTS, secrets=[credentials], max_containers=2)
+@app.function(image=training_image, cpu=4, memory=65536, gpu=TRAINING_GPU, timeout=14400, startup_timeout=900, volumes=MOUNTS, secrets=[credentials], max_containers=2)
 def evaluate(campaign: str, model_id: str) -> dict[str, object]:
     return run_evaluation(campaign, model_id)
 
@@ -169,6 +169,36 @@ def archive(campaign: str, group: str) -> dict[str, object]:
         volume.commit()
 
 
+@app.function(image=image, cpu=2, memory=8192, timeout=4200, volumes=MOUNTS, secrets=[credentials], max_containers=1)
+def start_evaluation(campaign: str, model_id: str) -> dict[str, object]:
+    """Recover a completed training run whose evaluation was never dispatched."""
+    from .v2_campaign import validate_evaluation_recovery
+
+    volume.reload()
+    root = campaign_root(campaign)
+    validate_evaluation_recovery(root, model_id)
+    checked = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "tests/unit/test_confidence_v2_campaign.py", "tests/unit/test_confidence_experiment_artifacts.py"],
+        capture_output=True, text=True, timeout=120,
+    )
+    write_json(root / "status" / f"recovery-checks-{model_id}.json", {"returncode": checked.returncode, "output": checked.stdout + checked.stderr})
+    volume.commit()
+    if checked.returncode:
+        raise RuntimeError(checked.stdout + checked.stderr)
+    archive.remote(campaign, f"train-{model_id}")
+    volume.reload()
+    validate_evaluation_recovery(root, model_id)
+    receipt_path = root / "status" / f"dispatch-evaluate-{model_id}.json"
+    with receipt_path.open("x", encoding="utf-8") as stream:
+        json.dump({"status": "dispatching", "model_id": model_id}, stream)
+    volume.commit()
+    call = evaluate.spawn(campaign, model_id)
+    receipt = {"status": "dispatched", "model_id": model_id, "call_id": call.object_id, "gpu": TRAINING_GPU, "timeout_seconds": 14400}
+    write_json(receipt_path, receipt)
+    volume.commit()
+    return receipt
+
+
 @app.function(image=image, cpu=2, memory=8192, timeout=21600, volumes=MOUNTS, secrets=[credentials], max_containers=1)
 def start(campaign: str) -> dict[str, object]:
     from .v2_campaign import validate_prepared
@@ -201,17 +231,22 @@ def start(campaign: str) -> dict[str, object]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("stage", choices=("prepare", "verify", "start"))
+    parser.add_argument("stage", choices=("prepare", "verify", "start", "evaluate"))
     parser.add_argument("--campaign", required=True)
+    parser.add_argument("--model-id", choices=MODEL_IDS)
     args = parser.parse_args()
     from .experiment_artifacts import validate_evaluation_id
 
     validate_evaluation_id(args.campaign)
-    worker = {"prepare": prepare, "verify": verify, "start": start}[args.stage]
+    if (args.stage == "evaluate") != (args.model_id is not None):
+        parser.error("--model-id is required only for the evaluate stage")
+    worker = {"prepare": prepare, "verify": verify, "start": start, "evaluate": start_evaluation}[args.stage]
     with modal.enable_output(), app.run(detach=True):
-        call = worker.spawn(args.campaign)
+        arguments = (args.campaign, args.model_id) if args.stage == "evaluate" else (args.campaign,)
+        call = worker.spawn(*arguments)
         receipt = {"app_id": app.app_id, "call_id": call.object_id, "stage": args.stage, "campaign": args.campaign, "volume": VOLUME_NAME}
-        write_json(ROOT / "artifacts/confidence-v2" / args.campaign / f"{args.stage}-dispatch.json", receipt)
+        stage = f"evaluate-{args.model_id}" if args.stage == "evaluate" else args.stage
+        write_json(ROOT / "artifacts/confidence-v2" / args.campaign / f"{stage}-dispatch.json", receipt)
         print(json.dumps(receipt, indent=2))
 
 
