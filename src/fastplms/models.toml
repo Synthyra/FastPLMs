@@ -1254,36 +1254,38 @@ auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFo
 
 [[models]]
 id = "esmfold2_300"
+confidence_adaptation = { release = "v1", head_sha256 = "40fd7f3d82fcefe8ad20ab2b32a37a68a84b54a527a4bce6eb9437bad2b77e31", base_weight_sha256 = "44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd", donor_repo = "biohub/ESMFold2-Experimental-Fast-Cutoff2025", donor_revision = "74b88548bf19688b8727432db0d698cb2e1d8783", donor_weight_sha256 = "4e903b740ad6ad704ec60881bfd593e0d6c874a630ffa0f0838276e0b665088f", training_url = "https://wandb.ai/lhallee/fastplms-confidence/runs/9558b6d23daf", evaluation_url = "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/309f353b07e0e46de4d77a5266d4eddd695538e3/confidence-v2/v2-reproduction-20260922/public/evaluation/esmfold2_300", evidence_path = "docs/evidence/confidence/esmfold2_300-v1.json", frozen_base = { repo = "Synthyra/ESMFold2-300", revision = "a38a62ae930d157484b331c2bf4241684573adba", files = ["config.json=git-sha1:47ec20cf8b234c3b41d6f3ae1bdfe95d4eb4849e", "model.safetensors=sha256:44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd"] } }
 family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
 msa_conditioning = false
 publication_status = "published"
 fast_repo = "Synthyra/ESMFold2-300"
-fast_revision = "a38a62ae930d157484b331c2bf4241684573adba"
-fast_files = ["config.json=git-sha1:47ec20cf8b234c3b41d6f3ae1bdfe95d4eb4849e", "model.safetensors=sha256:44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd"]
+fast_revision = "960fd2538ef8a5690473cc6ee44bbd74cce78d91"
+fast_files = ["config.json=git-sha1:e1e346a9dd66e9658e4f13cb815777d13eb944cc", "model.safetensors=sha256:bb2eaf6389e1d58f5117ca3173a5ee73d73548cda5c89f95f85c4a2280ad0e7e"]
 official_repo = "biohub/ESMFold2-Experimental-Fast-base300M-step1500k"
 official_revision = "21531e59002c9205284715e28ee802dafb430637"
 official_files = ["config.json=git-sha1:8c9a04fe22b0e5fca77bc4e2861a12c9494ef4d4", "model.safetensors=sha256:44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd"]
-notes = "Experimental Fast checkpoint with a frozen 300M ESM++ backbone, tensor-exact in BF16 with the pinned step-1500000 source, 24 folding blocks, no MSA conditioning, and no confidence head. BF16 execution uses FP32 folding parameters with CUDA autocast. FP8 is unsupported. Docker BF16 inference validation passed on the compact Protein G case."
+notes = "Experimental Fast model with a frozen 300M ESM++ backbone, 24 folding blocks, no MSA conditioning, and a Synthyra-trained confidence head enabled by default. BF16 execution uses FP32 folding parameters with CUDA autocast; FP8 is unsupported. Confidence evaluation does not establish full structure-model equivalence to production ESMFold2."
 auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel", AutoModelForSequenceClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForTokenClassification" }
 backbone_model = "esmc_small"
 backbone = { repo = "biohub/ESMC-300M-1500000", revision = "56803b6378b82e16c3b24aac49d1fce4445540b7", files = ["config.json=git-sha1:7fe728a0eb3fb81b24491d6cc1de816bf7797c27", "model.safetensors=sha256:8bd6cacf9b5a92d51954b64b20407f1f9f564a7e4849b8663470784d2a8b7ed2", "tokenizer.json=git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c", "tokenizer_config.json=git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89", "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b"] }
 
 [[models]]
 id = "esmfold2_600"
+confidence_adaptation = { release = "v1", head_sha256 = "e84726a050722e1b722712c87d17a5388bd3699e2520e4a59abb1d828dfb8de7", base_weight_sha256 = "11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602", donor_repo = "biohub/ESMFold2-Experimental-Fast-Cutoff2025", donor_revision = "74b88548bf19688b8727432db0d698cb2e1d8783", donor_weight_sha256 = "4e903b740ad6ad704ec60881bfd593e0d6c874a630ffa0f0838276e0b665088f", training_url = "https://wandb.ai/lhallee/fastplms-confidence/runs/820d2cfa56c0", evaluation_url = "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/6e62186cd36b9047cc4691980076be9f76482192/confidence-v2/v2-reproduction-20260922/public/evaluation/esmfold2_600", evidence_path = "docs/evidence/confidence/esmfold2_600-v1.json", frozen_base = { repo = "Synthyra/ESMFold2-600", revision = "71c67d0b2b73dc245ea7c3cc0d0476439a882d08", files = ["config.json=git-sha1:8e271837cbdada96c4974c8e543f84065e0f06f1", "model.safetensors=sha256:11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602"] } }
 family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
 msa_conditioning = false
 publication_status = "published"
 fast_repo = "Synthyra/ESMFold2-600"
-fast_revision = "71c67d0b2b73dc245ea7c3cc0d0476439a882d08"
-fast_files = ["config.json=git-sha1:8e271837cbdada96c4974c8e543f84065e0f06f1", "model.safetensors=sha256:11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602"]
+fast_revision = "639d1ed9673a7a139a58c2813a22fc2ff8b61a9b"
+fast_files = ["config.json=git-sha1:8f2dbe39b6aeddb39dc17e78cc6ee6588960757a", "model.safetensors=sha256:4e3baff4574120dfa58a25f34c910a05943e343ce63ad268775d2ce33b3b8c64"]
 official_repo = "biohub/ESMFold2-Experimental-Fast-base600M-step1500k"
 official_revision = "15cf2d6648692f6c17cee1297d8a285476fffa9b"
 official_files = ["config.json=git-sha1:95517e555f17a1eca4b68866c89033a1f6916a5d", "model.safetensors=sha256:11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602"]
-notes = "Experimental Fast checkpoint with a frozen 600M ESM++ backbone, tensor-exact in BF16 with the pinned step-1500000 source, 24 folding blocks, no MSA conditioning, and no confidence head. BF16 execution uses FP32 folding parameters with CUDA autocast. FP8 is unsupported. Configuration, weight identities, and artifact reload are verified; this model is not inference-validated."
+notes = "Experimental Fast model with a frozen 600M ESM++ backbone, 24 folding blocks, no MSA conditioning, and a Synthyra-trained confidence head enabled by default. BF16 execution uses FP32 folding parameters with CUDA autocast; FP8 is unsupported. Confidence evaluation does not establish full structure-model equivalence to production ESMFold2."
 auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel", AutoModelForSequenceClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForTokenClassification" }
 backbone_model = "esmc_large"
 backbone = { repo = "biohub/ESMC-600M-1500000", revision = "21af9cc429af76ebda6c48074fb624db4735aaaf", files = ["config.json=git-sha1:ec29f6009b21d710f64bf1c058f3a9710833d692", "model.safetensors=sha256:d6869f5ae0f11e5dc829b195e062e87cfcc2f851a08a5edbaf5d1083ae7f76cc", "tokenizer.json=git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c", "tokenizer_config.json=git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89", "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b"] }

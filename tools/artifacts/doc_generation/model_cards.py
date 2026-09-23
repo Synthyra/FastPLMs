@@ -200,10 +200,8 @@ For offline validation, replace `model_id` with the manifest-built
     complete_weights = str(spec.family.requires_complete_weight_publication).lower()
     if spec.confidence_adaptation is not None and spec.confidence_adaptation.release == "v1":
         validation_scope = (
-            "The confidence-head section reports the current checkpoint's verified metrics, "
-            "individual quality-gate outcomes, and artifact checks. The test split was already "
-            "used; these measurements do not constitute a new held-out benchmark or a full "
-            "structure-model equivalence result."
+            "The confidence evaluation above uses the existing test split. "
+            "It does not establish full structure-model equivalence."
         )
     elif spec.confidence_adaptation is not None:
         validation_scope = (

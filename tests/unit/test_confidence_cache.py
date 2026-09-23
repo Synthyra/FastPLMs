@@ -342,7 +342,7 @@ def test_coordinate_cache_rejects_multiple_samples():
 
 
 def test_folding_loader_preserves_frozen_base_after_release(monkeypatch):
-    original = get_model_spec("esmfold2_300").fast
+    original = get_model_spec("esmfold2_300").confidence_training_base
     published = SimpleNamespace(repo_id=original.repo_id, revision="f" * 40)
     monkeypatch.setattr(cache, "get_model_spec", lambda model_id: SimpleNamespace(
         fast=published, confidence_training_base=original,

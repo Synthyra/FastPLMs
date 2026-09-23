@@ -149,7 +149,11 @@ def test_every_manifest_model_card_has_task_oriented_guidance() -> None:
         for backend in spec.family.attention:
             assert f"`{backend}`" in card
         assert "Requesting an unavailable backend raises" in normalized
-        if spec.backbone_model is not None:
+        if spec.confidence_adaptation is not None and spec.confidence_adaptation.release == "v1":
+            assert "The confidence evaluation above uses the existing test split." in normalized
+            assert "It does not establish full structure-model equivalence." in normalized
+            assert "ESMFold2-600 is not inference-validated" not in card
+        elif spec.backbone_model is not None:
             assert "ESMFold2-600 is not inference-validated" in card
             assert "not a full structure benchmark result" in card
         elif "compliance" in spec.family.test_tiers:

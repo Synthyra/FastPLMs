@@ -1,17 +1,23 @@
-# ESMFold2-300 single-protein validation
+# Historical ESMFold2-300 single-protein validation
 
 ## Scope and status
 
-This report records one isolated reference-versus-candidate comparison for the
-experimental `ESMFold2-300` mirror. The case uses one 56-residue protein, seed
+This historical report records one isolated reference-versus-candidate
+comparison for the original confidence-disabled `ESMFold2-300` mirror. The case uses one 56-residue protein, seed
 17, one diffusion sample, three recycling loops, and 15 diffusion sampling
 steps. The comparison passed its declared checks. It is a single-protein case,
 not the full structure benchmark. The mirrors were published at revisions
 `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
-`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). No inference result is
-available for `ESMFold2-600`.
+`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). This study did not
+evaluate `ESMFold2-600`.
 
-The experimental config disables the confidence head and MSA features. The
+Current releases include trained confidence heads. Both models have since
+completed confidence evaluation and offline artifact checks; see the
+[current confidence guide](../confidence_training.md). The original settings
+and measurements below remain unchanged for reproducibility.
+
+The config used in this historical comparison disables the confidence head
+and MSA features. The
 comparison therefore checks structure and representation outputs without
 pLDDT, pTM, iPTM, or PAE fields.
 
@@ -108,13 +114,13 @@ passed. The run used checkpoint revision
 
 ## Evidence files
 
-The 300M model-card quick start also completed with two protein chains and
-`verbose=True`. Its CIF contains chains A and B, 250 atoms with finite
+The historical 300M model-card quick start also completed with two protein chains and
+`verbose=True`. Its saved CIF contains chains A and B, 250 atoms with finite
 coordinates, and `?` for unknown confidence values. This checks the example
 and export path, without claiming complex-prediction accuracy. See the
 [quick-start result](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_300_quickstart.json).
 
-The raw comparison and metadata are tracked beside this report:
+The raw comparison and metadata are archived in the public artifact dataset:
 
 - [comparison JSON](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_small_300_comparison.json)
 - [reference metadata](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/resolve/07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3/docs/validation/esmfold2_small_300_reference_metadata.json)

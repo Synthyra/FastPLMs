@@ -608,7 +608,7 @@ def test_cli_explicit_report_root_renders_only_after_complete_validation(
     )
     confidence_root = source_root / "docs" / "evidence" / "confidence"
     confidence_root.mkdir(parents=True)
-    for name in ("esmfold2_300-v2.json", "esmfold2_600-v2.json"):
+    for name in ("esmfold2_300-v1.json", "esmfold2_600-v1.json"):
         shutil.copyfile(ROOT / "docs" / "evidence" / "confidence" / name, confidence_root / name)
     monkeypatch.setattr(
         esmc_evidence,

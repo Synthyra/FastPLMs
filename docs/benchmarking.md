@@ -134,13 +134,13 @@ None of these modes runs the folding trunk or diffusion sampler. Full ESMFold2
 folding remains in the structure suite, where geometry and confidence metrics
 are meaningful.
 
-The experimental ESMFold2-300 and ESMFold2-600 configs disable the confidence
-head. Folding benchmarks for those variants therefore do not report pLDDT, pTM,
-iPTM, or PAE. The 300M single-protein comparison passed, but the full
-structure benchmark remains pending. The mirrors are published at revisions
-`a38a62ae930d157484b331c2bf4241684573adba` (300M) and
-`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
-inference validation result.
+Current ESMFold2-300 and ESMFold2-600 releases include trained confidence heads
+and report pLDDT, pTM, iPTM, and PAE by default. Historical timings from the
+original confidence-disabled base checkpoints retain that condition; do not
+attribute their folding cost to the current default without measuring it.
+Record checkpoint identity and `calculate_confidence` with folding benchmarks.
+The [confidence evaluation](confidence_training.md) covers both models but does
+not establish full structure-benchmark parity with production ESMFold2.
 
 Run a single ESMC-plus-projection case with:
 

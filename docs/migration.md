@@ -276,16 +276,16 @@ have 24 folding blocks and were trained without MSA conditioning, so they
 reject MSA-derived inputs rather than silently ignoring them. This includes
 `ProteinInput.msa` and low-level MSA-derived features. Fast still supports the
 declared multichain and multimolecule inputs when every protein chain uses
-`msa=None`. The base300M and base600M configs also disable the confidence head
-and use backbone dimensions `960 x 30` and `1152 x 36`, respectively. They do
-not produce pLDDT, pTM, iPTM, or PAE fields. The 300M single-protein
-comparison passed, but the full structure benchmark remains pending. The
-published mirrors are pinned to revisions
-`a38a62ae930d157484b331c2bf4241684573adba` (300M) and
-`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
-inference validation result. This
-distinction follows the official model description in
+`msa=None`. This MSA distinction follows the official model description in
 [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf).
+
+The base300M and base600M variants retain backbone dimensions `960 x 30` and
+`1152 x 36`, respectively. Their upstream base checkpoints disable confidence;
+current FastPLMs releases include trained confidence heads directly in the
+weights and enable pLDDT, pTM, iPTM, and PAE by default. An external head pointer
+is no longer required. Original pinned base revisions keep their historical
+behavior. See [confidence training](confidence_training.md) for both models'
+evaluation results and limits; these do not establish full structure parity.
 
 `esmc_precision="auto"` resolves to BF16. FP8 is an explicit, experimental,
 inference-only request and raises when the validated Transformer Engine path is

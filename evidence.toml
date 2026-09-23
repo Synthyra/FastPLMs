@@ -1,7 +1,7 @@
 # Public evidence payloads; runtime configuration and test inputs remain in Git.
 schema_version = 1
 repository = "Synthyra/FastPLMs-artifacts"
-revision = "07cd9e4fee7aeb18ff9d2ce2078f9092fa8ed3f3"
+revision = "d7039a56e732e2de7685abefdbea57dfc6a9da13"
 
 [[files]]
 path = "docs/evidence/attention/backend_latency.json"
@@ -377,3 +377,23 @@ sha256 = "091b004c0b330217b59c12acd6da3d6edaf91e48d95f6d5f40fc20399cef9478"
 path = "tests/goldens/esmfold2_fast.safetensors"
 size = 2573976
 sha256 = "6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_300-v1.json"
+size = 85043
+sha256 = "a270ce440871f044da85b66da0c02ce10a247cdf566f7f7632e40b3d80d8b053"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_300-v1-package.json"
+size = 3131
+sha256 = "573cb4064f62a4db148aea9d9971b3521232d7cd3d433e1b5b851f9e11685ec3"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_600-v1.json"
+size = 84665
+sha256 = "cf420cd7b7e8479b9c87c41983f16ab52a42e667808ff2ac6365b3df32fda72c"
+
+[[files]]
+path = "docs/evidence/confidence/esmfold2_600-v1-package.json"
+size = 3131
+sha256 = "fb0efaee28a8882fc3adb64f2a0d0e559e0a96e3a2f15c06780b539458d5a174"

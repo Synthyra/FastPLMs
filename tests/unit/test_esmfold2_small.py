@@ -115,7 +115,7 @@ def _fixture_config_path(directory_name: str) -> Path:
     SMALL_MODELS,
     ids=("esmfold2_300", "esmfold2_600"),
 )
-def test_small_artifact_config_matches_manifest_contract(
+def test_small_training_base_config_matches_manifest_contract(
     model_id: str,
     directory_name: str,
     lm_d_model: int,
@@ -153,7 +153,7 @@ def test_small_artifact_config_matches_manifest_contract(
     SMALL_ARTIFACTS,
     ids=("esmfold2_300", "esmfold2_600"),
 )
-def test_small_artifact_config_roundtrips(
+def test_small_training_base_config_roundtrips(
     tmp_path: Path,
     model_id: str,
     directory_name: str,

@@ -384,14 +384,17 @@ single-label classification, and multi-label classification.
 
 Supported variants are restricted to:
 
-| Official checkpoint | Folding blocks | MSA conditioning | Confidence head | Intended path |
+| Official checkpoint | Folding blocks | MSA conditioning | Confidence head in FastPLMs | Intended path |
 | --- | ---: | --- | --- | --- |
 | `biohub/ESMFold2` | 48 | Optional | Enabled | Full sequence or complex inference, including MSA-conditioned requests |
 | `biohub/ESMFold2-Fast` | 24 | None; MSA-derived inputs are rejected | Enabled | Inference-optimized single-sequence use |
 | `biohub/ESMFold2-Experimental-Cutoff2025` | 48 | Optional | Enabled | Experimental-cutoff full inference, including MSA-conditioned requests |
 | `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; MSA-derived inputs are rejected | Enabled | Experimental-cutoff, inference-optimized single-sequence use |
-| `biohub/ESMFold2-Experimental-Fast-base300M-step1500k` | 24 | None; MSA-derived inputs are rejected | Disabled; backbone `960 x 30` | Experimental single-sequence architecture; published; single-protein comparison passed; full benchmark pending |
-| `biohub/ESMFold2-Experimental-Fast-base600M-step1500k` | 24 | None; MSA-derived inputs are rejected | Disabled; backbone `1152 x 36` | Experimental single-sequence architecture; published; not inference validated |
+| `biohub/ESMFold2-Experimental-Fast-base300M-step1500k` | 24 | None; MSA-derived inputs are rejected | Adapted and enabled; backbone `960 x 30` | Experimental single-sequence architecture; confidence evaluation complete; offline reload passed; full structure parity not established |
+| `biohub/ESMFold2-Experimental-Fast-base600M-step1500k` | 24 | None; MSA-derived inputs are rejected | Adapted and enabled; backbone `1152 x 36` | Experimental single-sequence architecture; confidence evaluation complete; offline reload passed; full structure parity not established |
+
+The upstream base300M/base600M checkpoints disable confidence. Their FastPLMs
+releases add the trained heads listed above.
 
 Fast is an architectural distinction, not only a speed label. Biohub
 [Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf) describes Fast as a
@@ -417,17 +420,18 @@ also trains `base_z_combine` and `base_z_linear`; it does not fine-tune ESMC.
 The ESMFold2 folding checkpoint remains FP32. Folding computation uses CUDA
 BF16 autocast. Requested ESMC precision controls the ESMC backbone separately.
 Therefore, selecting BF16 or FP8 ESMC does not change folding-parameter storage.
-The base300M and base600M configs disable the confidence head. Their folding
-outputs therefore do not contain pLDDT, pTM, iPTM, or PAE fields. Confidence
-heads for both backbones were trained and evaluated separately and are not
-published; [Confidence-head training](confidence_training.md) records the
-recipe, the test results, and the correlations with production `esmfold2`. The 300M
-variant has a passed single-protein comparison, documented in
-[ESMFold2-300 validation](validation/esmfold2_small.md). This is not the full
-structure benchmark, which remains pending. The mirrors are published at revisions
-`a38a62ae930d157484b331c2bf4241684573adba` (300M) and
-`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
-inference validation result.
+ESMFold2-300 and ESMFold2-600 include trained native confidence heads directly
+in their checkpoint weights and enable them by default. Folding returns pLDDT,
+pTM, iPTM, and PAE. Only the confidence heads were adapted; the backbone and
+folding model remain unchanged. The manifest records the frozen training base
+separately from each published checkpoint revision.
+
+Both heads completed 780 updates on AtlasFold-Data and evaluation on 512
+standard targets plus 64 long targets. [Confidence-head training](confidence_training.md)
+records the recipe, metrics, and production-confidence agreement. The existing
+[300M single-protein comparison](validation/esmfold2_small.md) is separate from
+this confidence evaluation. Neither study establishes full structure-benchmark
+parity with production ESMFold2.
 
 ### Boltz2
 

@@ -55,7 +55,7 @@ def test_pilot_adaptation_keeps_legacy_defaults() -> None:
     assert adaptation is not None
     assert adaptation.release == "pilot"
     assert adaptation.frozen_base is None
-    spec = get_model_registry()["esmfold2_300"]
+    spec = replace(get_model_registry()["esmfold2_300"], confidence_adaptation=None)
     assert spec.confidence_training_base == spec.fast
     assert replace(spec, confidence_adaptation=adaptation).confidence_training_base == spec.fast
 
@@ -254,7 +254,8 @@ def test_unadapted_cards_withhold_metrics_pending_recomputation(model_id: str) -
     from fastplms.registry import get_model_registry
 
     root = Path(__file__).resolve().parents[2]
-    card = render_model_card(get_model_registry()[model_id], evidence_root=root)
+    spec = replace(get_model_registry()[model_id], confidence_adaptation=None)
+    card = render_model_card(spec, evidence_root=root)
     assert "## Separately trained confidence head" in card
     assert "The pinned base checkpoint has its confidence head disabled" in card
     assert "Current v2 confidence head" in card

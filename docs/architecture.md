@@ -99,13 +99,13 @@ remain compatible across the module split.
 ESMFold2 structure variants retain the semantics declared by their pinned
 configs. The experimental Fast base300M and base600M variants use 24 folding
 blocks, no MSA conditioning, and backbone dimensions `960 x 30` and `1152 x
-36`, respectively. Their disabled confidence heads mean that pLDDT, pTM, iPTM,
-and PAE are not produced. Configuration facts do not imply inference
-validation; the 300M single-protein comparison passed, but the full benchmark
-remains pending. The published mirrors are pinned to revisions
-`a38a62ae930d157484b331c2bf4241684573adba` (300M) and
-`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
-inference result.
+36`, respectively. Their published checkpoints include adapted native confidence
+heads, enabled by default, for pLDDT, pTM, iPTM, and PAE. Training changes only
+the confidence subtree; the manifest retains the original frozen base identity
+separately from the published checkpoint. Both variants completed confidence
+evaluation on 512 standard and 64 long targets. This evidence measures confidence
+quality and does not establish full equivalence with production ESMFold2. See
+[confidence training](confidence_training.md) for the protocol and limitations.
 
 `fastplms.models` contains model-family implementations. Parameter names remain
 compatible with existing checkpoints where possible. If a schema must change,
@@ -158,10 +158,12 @@ including uncommitted edits. Pinned official references remain isolated.
 
 ## Research evidence and documentation
 
-`tools/confidence/v2_analysis.py` calculates the v2 sample metrics and target
+`tools/confidence/v2_analysis.py` calculates sample metrics and target
 bootstrap intervals from typed records without training or folding dependencies.
 The pilot retains its separate protocol in `metrics.py`. Acceptance rules consume
-the v2 calculations; orchestration does not define scientific statistics.
+these calculations; orchestration does not define scientific statistics. The
+filename and archived raw keys retain their historical names; public confidence
+releases are pilot and v1.
 
 `tools/confidence/experiment_artifacts.py` reserves evaluation destinations and
 records requests, exact checkpoint identities, raw predictions, and completion

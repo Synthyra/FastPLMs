@@ -34,7 +34,7 @@ def test_all_confidence_sections_withhold_unreviewed_metrics(tmp_path: Path, sta
         tmp_path,
         {"metrics_review": {"status": status}, "candidate": {"atom_mae": 0.987654}},
     )
-    spec = get_model_registry()["esmfold2_300"]
+    spec = replace(get_model_registry()["esmfold2_300"], confidence_adaptation=None)
     adaptation = ConfidenceAdaptation(
         head_sha256="a" * 64,
         base_weight_sha256="b" * 64,
@@ -83,7 +83,7 @@ def test_card_rejects_tampered_declared_confidence_review(tmp_path: Path) -> Non
         f'sha256 = "{"a" * 64}"\n',
         encoding="utf-8",
     )
-    spec = get_model_registry()["esmfold2_300"]
+    spec = replace(get_model_registry()["esmfold2_300"], confidence_adaptation=None)
     # A single card needs its own declared payload, not every file in the evidence store.
     assert "`pending`" in _confidence_research_section(spec, tmp_path)
     changed = encoded.replace(b"pending", b"validated").rstrip().ljust(len(encoded), b" ")
@@ -118,7 +118,8 @@ def test_corrected_card_reports_undefined_metrics_and_spent_test_scope(tmp_path:
     payload["test"]["heads"]["v2"]["interval_95"]["plddt_lddt_spearman"] = None
     payload["production_agreement"]["v2"]["mean_plddt_spearman"] = None
     _evidence(tmp_path, payload)
-    section = _confidence_research_section(get_model_registry()["esmfold2_300"], tmp_path)
+    spec = replace(get_model_registry()["esmfold2_300"], confidence_adaptation=None)
+    section = _confidence_research_section(spec, tmp_path)
     assert "| pLDDT against all-atom lDDT, Spearman | undefined |" in section
     assert "| Mean pLDDT | undefined |" in section
     assert "The test split is spent" in section

@@ -35,34 +35,34 @@ unused code path when the manifest or current tests say otherwise.
   oracles. Runtime code must not import from this directory.
 - `tests/` contains unit, integration, parity, structure, and release checks.
 - `tools/` contains artifact, conversion, remote, and maintenance workflows.
-- `tools/confidence/` contains the Modal pilot and GH200 v2 confidence workflows. Keep
-  its tests and compute remote; do not run intensive confidence work locally.
-  Both pilot training stages completed through validation-based early stopping
-  and passed their held-out quality gates; publication remains pending.
-  GPU work requires an explicit budget and environment. Avoid duplicate
-  evaluation calls. See docs/confidence_training.md for run links and commands.
-  Preserve active runs' recorded training-code hashes. Use the bounded
-  `tools.verification.cpu` workflow for focused remote CPU checks.
-  The v2 campaign (`ssh.py`, `host.py`, `online_*.py`, `rollouts.py`,
-  `target_*.py`, `test_evaluation.py`) trains on a GH200 workstation from
-  AtlasFold-Data with online rollouts. Its GPU-hour ledger allows 2 hours of
-  smoke checks, 24 hours per model, and 5 hours for the production reference.
-  Both v2 heads finished training, the test evaluation and the production
-  reference ran once. Corrected correlations, bootstrap intervals, and
-  acceptance gates are pending recomputation after the tied-rank fix.
-  Historical reports are restored from the pinned public artifact dataset to
-  `docs/evidence/confidence/esmfold2_{300,600}-v2.json`
-  with `metrics_review.status = "requires_recomputation"`; do not present them
-  as corrected results. Raw predictions were not recovered from the closed
-  GH200 workstation or W&B. Each run's 780 W&B update rows report zero skipped
-  targets, so the skipped-target gradient bug did not affect these runs.
-  The test split is now spent, so a further
-  evaluation on it is no longer held out. Keep the pilot heads and reports
-  unchanged as baselines, and do not publish v2 weights without separate
-  approval.
-  New evaluations use immutable group directories with exact checkpoint
-  snapshots and raw prediction records. Verify and export their public evidence
-  before closing a compute host. Keep v2 analysis independent of model loading.
+- `tools/confidence/` contains the pilot, historical GH200 campaign, and current
+  Modal confidence workflows. Keep tests and compute remote. GPU work requires
+  an explicit budget and environment; avoid duplicate evaluations. Preserve
+  active runs' recorded source hashes. Use `tools.verification.cpu` for bounded
+  remote CPU checks and docs/confidence_training.md for run links and commands.
+  The published releases are pilot and v1. Both current heads completed 780
+  updates on AtlasFold-Data; final EMA heads are embedded directly in ESMFold2-300
+  and ESMFold2-600 and enabled by default. Both completed 512 standard and 64
+  long evaluation targets. Production completed 512 standard and 46 long targets.
+  The test split is spent. The corrected current metrics, raw predictions, and
+  six-check GPU package validation are public in Synthyra/FastPLMs-artifacts;
+  `evidence.toml` pins the verified `esmfold2_{300,600}-v1.json` projections.
+  These evaluations do not establish full structure equivalence to production.
+  The original pilot stages stopped through validation-based early stopping and
+  passed their protocol's held-out criteria; keep their heads/reports unchanged.
+  Historical GH200 workflows (`ssh.py`, `host.py`, `online_*.py`, `rollouts.py`,
+  `target_*.py`, `test_evaluation.py`) used a ledger of 2 smoke GPU-hours,
+  24 hours per model, and 5 production-reference hours. Those heads and raw
+  predictions were not recovered from the closed host or W&B. Historical
+  `esmfold2_{300,600}-v2.json` reports remain `requires_recomputation` after the
+  tied-rank fix; do not present them as corrected current results. Their 780
+  W&B update rows per model report zero skipped targets, so the skipped-target
+  gradient bug did not affect those runs. Archival names containing `v2` remain
+  unchanged to preserve source hashes and identifiers; they are not new releases.
+  New evaluations use immutable directories with exact checkpoint snapshots
+  and raw records. Verify/export evidence before closing a host. Keep metric
+  analysis independent of model loading. Future training and publication require
+  authorization; the current embedded-weight release was approved by the user.
 - `examples/` contains runnable research and training examples. Keep examples
   directly in this directory rather than creating a tutorial subtree.
 - `model_cards/` contains generated checkpoint cards.
@@ -94,13 +94,17 @@ modules. Do not hand-edit generated model cards or
   a kernel, initialize a model, or mutate global Torch state.
 - State transformations are named, deterministic, and covered by exact tests.
 - ESMFold2 experimental Fast base300M and base600M variants retain their pinned
-  24-block, no-MSA contracts and use backbone dimensions `960 x 30` and
-  `1152 x 36`; their disabled confidence heads do not produce pLDDT, pTM, iPTM,
-  or PAE. The 300M single-protein comparison passed, but this is not the full
-  structure benchmark, which remains pending. The published mirrors are pinned to
-  revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
-  `71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
-  inference validation result.
+  24-block, no-MSA contracts and backbone dimensions `960 x 30` and `1152 x 36`.
+  Current Synthyra checkpoints embed trained confidence heads and return pLDDT,
+  pTM, iPTM, and PAE by default. Both passed strict offline GPU reload, exact
+  embedded-head identity, output range, seeded coordinate equality, and CIF
+  confidence checks. Disabled confidence still produces unknown confidence.
+  The original headless bases remain pinned as `confidence_training_base` at
+  `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
+  `71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The historical 300M
+  single-protein comparison passed; neither that case nor current confidence
+  evaluation establishes full structure-benchmark parity. Current published
+  checkpoint revisions and exact identities are declared in `models.toml`.
 - Boltz2 remains provisional until its declared native end-to-end equivalence
   limits pass. Do not broaden its claims from partial contracts.
 

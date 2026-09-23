@@ -51,17 +51,79 @@ with torch.inference_mode():
 Path("complex.cif").write_text(model.result_to_cif(result), encoding="utf-8")
 ```
 
-Set `verbose=False` to silence the folding progress display. The pinned base has no confidence head. A Hub config with a published v2 head
-source loads the latest head and enables confidence by default; its evaluation
-status remains pending during training.
+Set `verbose=False` to silence the folding progress display. This variant has a Synthyra-adapted native confidence head and returns pLDDT,
+PAE, pTM, and iPTM fields. Confidence calculation is optional.
+
+## Confidence training and evaluation
+
+The packaged model includes the trained confidence head and enables it by default.
+
+The confidence head completed 780 training updates in
+18.1 hours on
+[AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data). The backbone and folding
+model stayed frozen, and evaluation used the final exponential moving-average
+checkpoint. Training sampled from 475,969 eligible
+structures, including monomers, dimers, and larger complexes.
+
+The results below use 512 targets from the existing,
+already-used test split, with 5 predictions per target,
+3 recycling loops, and 50 diffusion steps.
+Intervals are 95% bootstrap intervals over targets. Longer sequences were evaluated
+separately and are not included in these tables.
+
+| Model | Standard targets evaluated | Long targets evaluated |
+| --- | ---: | ---: |
+| ESMFold2-600 | 512 | 64 |
+| Production ESMFold2 | 512 | 46 |
+
+| Measurement | ESMFold2-600 | 95% interval |
+| --- | ---: | ---: |
+| pLDDT against all-atom lDDT, Spearman | 0.85185 | 0.81670 to 0.87953 |
+| pTM against TM-score, Spearman | 0.86219 | 0.83103 to 0.88565 |
+| ipTM against DockQ, Spearman | 0.84507 | 0.81196 to 0.87120 |
+| Atom pLDDT mean absolute error | 0.07950 | 0.07625 to 0.08277 |
+| Calibration error, 10 bins | 0.00567 | 0.00293 to 0.01027 |
+| pLDDT cross-entropy | 2.68398 | 2.62732 to 2.73986 |
+| PAE cross-entropy | 2.75040 | 2.69624 to 2.79981 |
+| Within-target lDDT selection accuracy | 0.50962 | 0.41981 to 0.59490 |
+| Within-target ipTM against DockQ selection accuracy | 0.50993 | 0.43450 to 0.58957 |
+| Top-1 selection regret | 0.01946 | 0.01503 to 0.02496 |
+| Random-choice regret | 0.02029 |  |
+| Unresolved against resolved residue AUROC | 0.87270 | 0.85106 to 0.89298 |
+| Resolved residue mean pLDDT | 0.79139 | 0.77773 to 0.80532 |
+| Unresolved residue mean pLDDT | 0.50637 | 0.48717 to 0.52610 |
+| Resolved residues below pLDDT 0.5 | 0.09616 | 0.07473 to 0.11890 |
+| Unresolved residues below pLDDT 0.5 | 0.55747 | 0.50788 to 0.60834 |
+
+Confidence scores, errors, accuracies, and fractions use a 0–1 scale.
+Lower error, cross-entropy, and regret are better; higher correlation, ranking
+accuracy, and AUROC are better. Ranking accuracy compares predictions of the
+same target, with 0.5 representing chance. Regret is the quality lost by selecting
+a prediction instead of the best available one. Unresolved residues are a proxy
+for disorder, not definitive disorder labels.
+
+| Agreement with production ESMFold2 | Spearman correlation | Mean difference |
+| --- | ---: | ---: |
+| Mean pLDDT | 0.71212 | -0.05294 |
+| pTM | 0.78433 | -0.01344 |
+| ipTM | 0.68299 | +0.02579 |
+
+Production agreement compares each model's average confidence per target:
+512 targets for pLDDT and pTM, and
+320 multichain targets for ipTM. Differences are
+ESMFold2-600 minus production. Each model predicts its own structures, so these
+correlations do not measure folding accuracy or scores of identical structures.
+
+See the [FastPLMs confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md)
+for the training recipe, evaluation methods, and detailed records.
 
 ## Model overview
 
 `Synthyra/ESMFold2-600` packages the
 `biohub/ESMFold2-Experimental-Fast-base600M-step1500k` checkpoint with the
-FastPLMs runtime for Hugging Face Transformers. It accepts raw amino-acid
-sequences or typed molecular-complex specifications; low-level forward accepts
-prepared feature tensors.
+FastPLMs runtime and a Synthyra-adapted native confidence head for Hugging Face
+Transformers. It accepts raw amino-acid sequences or typed molecular-complex
+specifications; low-level forward accepts prepared feature tensors.
 
 The repository uses the standard Transformers loading interface with
 `trust_remote_code=True`. See Technical details for each registered class and
@@ -201,7 +263,7 @@ This checkpoint was trained without MSA conditioning. It rejects
 `ProteinInput.msa` and MSA-derived features. Typed multichain and multimolecule
 inputs remain supported without MSA conditioning.
 
-The pinned base has no confidence head. The Hub config can bind the latest published v2 head, which enables pLDDT, pTM, iPTM and PAE by default.
+The Synthyra-adapted native confidence head returns pLDDT, PAE, pTM, and iPTM. Confidence calculation is optional.
 The 300 and 600 suffixes describe backbone scale, not total model parameters.
 
 ## Folding speed settings
@@ -243,54 +305,13 @@ The learned projection maps `H: (b, l, 37, 1152) -> Z: (b, l, 256)`.
 `embed_dataset` returns one `(l, 256)` residue representation per sequence.
 The experimental architecture does not expose folding TTT.
 
-## Current v2 confidence head
-
-The v2 reproduction publishes current EMA heads during training to the public
-[artifact dataset](https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/main/confidence/v2/v2-reproduction-20260922/esmfold2_600).
-After the first trained checkpoint is uploaded, the Hub config binds this model
-to its latest published head. `AutoModel.from_pretrained` then loads that head
-and enables pLDDT, PAE, pTM and iPTM by default. These training checkpoints have
-pending evaluation; the historical results below do not validate them.
-
-Each load resolves an immutable dataset revision and verifies the head's hash
-and native state. `model.config.confidence_head_resolved` records the revision,
-training update and head identity. An already loaded model keeps its head;
-reload to obtain a newer publication. `save_pretrained` embeds the exact loaded
-head, so the saved model reloads without fetching a newer one.
-
-Pass `load_confidence_head=False` to load the unchanged base without its external
-head. This option does not remove a head already embedded in a saved model.
-External loading supports one resident model device and cached offline loads;
-split-device and disk-offloaded loading are unsupported. See the
-[confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md#ongoing-hugging-face-checkpoints).
-
-## Separately trained confidence head
-
-The pinned base checkpoint has its confidence head disabled. The historical
-GH200 confidence weights were not recovered and remain unpublished.
-
-The archived correlations, bootstrap intervals, and acceptance gates require
-recomputation after correcting tied ranks in Spearman correlation. Raw test
-predictions were not recovered from the closed GH200 workstation or W&B, so
-the historical numbers are withheld here pending raw prediction recovery.
-They do not establish corrected quality or acceptance results.
-
-The [W&B training history audit](https://wandb.ai/lhallee/fastplms-confidence/runs/01c7e12b6d03) inspected all
-780 update rows and found zero skipped training targets.
-The skipped-target gradient bug therefore did not affect this recorded run's
-training weights. This audit does not validate the archived correlations.
-
-The [confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/docs/confidence_training.md)
-preserves the historical results and their review status.
-
 ## Notes and limitations
 
-Experimental Fast checkpoint with a frozen 600M ESM++ backbone, tensor-exact in
-BF16 with the pinned step-1500000 source, 24 folding blocks, no MSA
-conditioning, and no confidence head. BF16 execution uses FP32 folding
-parameters with CUDA autocast. FP8 is unsupported. Configuration, weight
-identities, and artifact reload are verified; this model is not
-inference-validated.
+Experimental Fast model with a frozen 600M ESM++ backbone, 24 folding blocks,
+no MSA conditioning, and a Synthyra-trained confidence head enabled by default.
+BF16 execution uses FP32 folding parameters with CUDA autocast; FP8 is
+unsupported. Confidence evaluation does not establish full structure-model
+equivalence to production ESMFold2.
 
 ## Technical details
 
@@ -323,10 +344,8 @@ identities and conversion details in `source-record.json`.
 - Release tiers: `check`, `compliance`, `structure`, `feature`, `artifact`, `benchmark`
 - Unresolved required file identities: `0`
 
-ESMFold2-300 passed a Docker BF16 reference comparison on one compact Protein G
-sequence. ESMFold2-600 is not inference-validated. Both have configuration,
-weight identity, and artifact loading checks. This is bounded checkpoint
-evidence, not a full structure benchmark result.
+The confidence evaluation above uses the existing test split. It does not
+establish full structure-model equivalence.
 
 Declared tiers compare configuration, tokenizer behavior, state, and
 representative inference with the pinned reference. A nonzero unresolved count

@@ -1,6 +1,6 @@
 # FastPLMs
 
-<img width="2816" height="1536" alt="FastPLMs Hero Image" src="https://github.com/user-attachments/assets/ffaf84b6-9970-40fd-aa31-1b314d6ca146" />
+![FastPLMs: a protein structure unfolding into amino-acid sequence. Developed by Synthyra and the University of Delaware; hosted by Hugging Face.](docs/assets/fastplms-banner-attribution.png)
 
 FastPLMs maintains runtime code for Hugging Face protein language and structure
 models. This repository is their source, test, and dependency workspace. It is
@@ -62,7 +62,7 @@ AutoClasses, attention backends, precision paths, and release tiers.
 | DPLM2 | Amino-acid and structure co-generation | Amino-acid and structure token tracks | Separate structure and amino-acid boundary tokens |
 | ANKH | T5 protein encoding and sequence-to-sequence modeling | Amino-acid sequences tokenized for encoder or seq2seq use | The 1.0 artifact contract is one full official-compatible encoder-decoder checkpoint with encoder-default embeddings |
 | ESMFold | Sequence-to-structure inference | Raw amino-acid sequences | Meta ESMFold contract with FastPLMs ESM2 backbone |
-| ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Full variants have 48 folding blocks and optional MSA conditioning; Fast variants have 24 blocks and no MSA conditioning; small experimental variants support separately published v2 confidence heads |
+| ESMFold2 | Sequence and complex structure prediction | Raw amino-acid sequences or complex specifications | Full variants have 48 folding blocks and optional MSA conditioning; Fast variants have 24 blocks and no MSA conditioning; 300M and 600M variants include trained confidence heads |
 | Boltz2 | Structure prediction | Raw amino-acid sequences or prepared model features | Provisional end-to-end numerical-equivalence status |
 
 The model manifest controls support, not this summary. A backend or AutoClass
@@ -503,16 +503,12 @@ single-sequence mode. See the official description in
 below uses Fast and no MSA.
 
 FastPLMs also exposes the experimental `Synthyra/ESMFold2-300` and
-`Synthyra/ESMFold2-600` mirrors. Their pinned configs use 24 folding blocks,
-no MSA conditioning, and disabled confidence heads. The 300M backbone is
-`960 x 30`; its single-protein comparison passed, as documented in
-[ESMFold2-300 validation](docs/validation/esmfold2_small.md). That case is not
-the full structure benchmark, which remains pending. The base snapshots are pinned
-to revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
-`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M backbone is
-`1152 x 36` and has no inference validation result. Those base snapshots do not
-produce pLDDT, pTM, iPTM or PAE fields; the current Hub configs can load a
-separately published v2 head as described below.
+`Synthyra/ESMFold2-600` models. They use 24 folding blocks, no MSA conditioning,
+and trained confidence heads enabled by default. Their ESM++ backbones are
+`960 x 30` and `1152 x 36`, respectively. Both heads were evaluated on 512
+standard targets and 64 longer targets. Confidence evaluation and the earlier
+[ESMFold2-300 single-protein comparison](docs/validation/esmfold2_small.md)
+do not establish full structure-model equivalence to production ESMFold2.
 
 Folding progress is disabled by default (`verbose=False`). Set `verbose=True` on
 ESMFold `infer`, ESMFold2 `fold` or `infer_protein`, or Boltz2
@@ -592,23 +588,17 @@ multimolecule, modification, and bond paths and the pocket and distogram
 rejection contracts. Its ESMFold2 MSA path needs a full checkpoint, not a Fast
 checkpoint.
 
-The pinned experimental `Synthyra/ESMFold2-300` and `Synthyra/ESMFold2-600` base
-weights exclude confidence heads. Their Hub main configs can bind the latest
-published v2 EMA head, enabling pLDDT, pTM, iPTM and PAE by default after the
-first trained checkpoint is public. These ongoing training heads have pending
-evaluation. Each load records the exact dataset revision and head hash in
-`model.config.confidence_head_resolved`; `save_pretrained` embeds that exact
-head for reproducible reloads. Pass `load_confidence_head=False` to omit an
-external head. See [ongoing HF publication](docs/confidence_training.md#ongoing-hugging-face-checkpoints).
-Separate research
-confidence heads were trained in a Modal pilot and a GH200 v2 campaign; neither
-has produced a release-qualified confidence checkpoint. The pilot reports remain
-valid within their documented scope. The historical v2 correlations, bootstrap
-intervals, and acceptance gates require recomputation after correcting tied
-ranks. Raw predictions were not recovered from the closed GH200 hosts or W&B,
-so those results remain uncorrected and the test set remains spent. See
-[Confidence-head training](docs/confidence_training.md) for the protocols,
-training records, limitations, and saved-record recomputation command.
+`Synthyra/ESMFold2-300` and `Synthyra/ESMFold2-600` include their trained
+confidence heads directly in the model weights. They return pLDDT, pTM, iPTM,
+and PAE by default without downloading a separate head. Pass
+`calculate_confidence=False` during folding to omit confidence computation.
+Both heads completed 780 updates, about 18 hours per model, on
+[AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data) while
+the backbone and folding parameters stayed frozen. Their model cards report
+the current evaluation results and correlations with production ESMFold2.
+These results use an already-used test split. See
+[Confidence-head training](docs/confidence_training.md) for the recipe,
+metrics, limitations, and preserved prediction records.
 
 The learned sequence representation combines the ordered hidden-state stack of
 each declared ESMFold2 backbone with the folding checkpoint projection. The
@@ -967,5 +957,21 @@ the specific checkpoint family:
   url = {https://github.com/Synthyra/FastPLMs},
   doi = {10.57967/hf/3726},
   publisher = {Hugging Face}
+}
+```
+
+The ESMFold2-300 and ESMFold2-600 confidence heads were trained using
+[AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data).
+Please also cite the [AtlasFold paper](https://doi.org/10.64898/2026.09.04.749352)
+when using these trained heads:
+
+```bibtex
+@article{seo2026atlasfold,
+  author = {Seo, Seonghwan and Kim, Hyeongwoo and Moon, Seokhyun and Kim, Woo Youn and {Team KAIST}},
+  title = {AtlasFold: Protein structure prediction with metagenomic-scale language models},
+  year = {2026},
+  journal = {bioRxiv},
+  doi = {10.64898/2026.09.04.749352},
+  url = {https://www.biorxiv.org/content/10.64898/2026.09.04.749352v2}
 }
 ```

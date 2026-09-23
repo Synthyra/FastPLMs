@@ -43,12 +43,12 @@ For ESMFold2, select an artifact by its conditioning contract. The full
 `ESMFold2` and `ESMFold2-Experimental-Cutoff2025` checkpoints have 48 folding
 blocks and support optional MSA conditioning. Fast and experimental Fast
 checkpoints have 24 folding blocks. They are optimized for single-sequence
-inference and reject MSA-derived inputs. The experimental `ESMFold2-300` and
-`ESMFold2-600` configs also disable the confidence head, so they do not produce
-pLDDT, pTM, iPTM, or PAE fields. See Biohub
-[Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf). Fast supports
-supported multichain and multimolecule requests, but each protein chain uses
-single-sequence mode.
+inference and reject MSA-derived inputs. See Biohub
+[Appendix A.2.1](https://biohub.ai/papers/esm_protein.pdf). Fast supports the
+declared multichain and multimolecule requests, but each protein chain uses
+single-sequence mode. Current `ESMFold2-300` and `ESMFold2-600` releases include
+trained confidence heads in their weights and return pLDDT, pTM, iPTM, and PAE
+by default. Original upstream base revisions remain confidence-disabled.
 
 ## Prepare an offline artifact
 
@@ -107,7 +107,7 @@ FlashAttention 3 is supported but may be unavailable on the locked target.
 | Diffusion and multimodal generation | [`generation.py`](generation.py) | Seeded DPLM, DPLM2, and conditioned ESM3 generation | One representative deterministic strategy per family |
 | E1 RAG | [`e1_rag.py`](e1_rag.py) | Local A3M retrieval, ordered duplicate records, shared persistence | No remote MSA search or network fallback |
 | Test-time training | [`ttt.py`](ttt.py) | Seeded update, atomic save, reset, local reload | Output must be absent and outside the source artifact |
-| Structure preparation | [`structure_preparation.py`](structure_preparation.py) | Typed ESMFold2 multimolecule/MSA/modification/bond input, explicit pocket/distogram rejection, seeded ESMFold/Boltz helpers | The MSA branch requires a full 48-block ESMFold2 variant; Fast variants reject MSA-derived inputs; base300M/base600M confidence fields are unavailable; tiny preparation and helper contracts are not full folding parity |
+| Structure preparation | [`structure_preparation.py`](structure_preparation.py) | Typed ESMFold2 multimolecule/MSA/modification/bond input, explicit pocket/distogram rejection, seeded ESMFold/Boltz helpers | The MSA branch requires a full 48-block ESMFold2 variant; Fast variants reject MSA-derived inputs; current 300M/600M releases include trained confidence heads; tiny preparation and helper contracts are not full folding parity |
 | Fine-tuning | [`fine_tuning.py`](fine_tuning.py) | ESM2 classification/regression, LoRA or full tuning, eager/SDPA/Flex selection, immutable inputs, atomic verified final artifact | LoRA is the demonstrated PEFT method; Flash training requires a separate explicit BF16 CUDA policy; other PEFT methods are not claimed by this example |
 | Binder design | [`binder_design_fastplms.py`](binder_design_fastplms.py) | Differentiable ESMFold2/ESM++ optimization and critic consensus | Research prioritization only; no experimental binding claim |
 

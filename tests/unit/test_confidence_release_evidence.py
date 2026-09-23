@@ -10,6 +10,7 @@ from pathlib import Path
 from fastplms.registry import ConfidenceAdaptation, get_model_spec
 from tools.artifacts.doc_generation.confidence_evidence import load_confidence_evidence
 from tools.artifacts.doc_generation.model_cards import render_model_card
+from tools.artifacts.preview_confidence_cards import preview_card
 from tools.confidence import acceptance, release_evidence
 from tools.confidence.experiment_artifacts import file_identity
 from .test_confidence_acceptance import _records
@@ -156,7 +157,7 @@ def test_release_refuses_unmatched_evidence(release_inputs, problem):
         )
 
 
-def test_v1_card_reports_failed_quality_and_pending_artifact_checks(
+def test_confidence_card_keeps_metrics_and_links_detailed_records(
     release_inputs, tmp_path
 ):
     model_id, _, _ = release_inputs
@@ -170,7 +171,7 @@ def test_v1_card_reports_failed_quality_and_pending_artifact_checks(
     spec = get_model_spec(model_id)
     adaptation = ConfidenceAdaptation(
         head_sha256="a" * 64,
-        base_weight_sha256=spec.fast.file_map["model.safetensors"].digest,
+        base_weight_sha256=spec.confidence_training_base.file_map["model.safetensors"].digest,
         donor_repo="Synthyra/donor",
         donor_revision="c" * 40,
         donor_weight_sha256="d" * 64,
@@ -179,18 +180,72 @@ def test_v1_card_reports_failed_quality_and_pending_artifact_checks(
         + "e" * 40,
         evidence_path=relative,
         release="v1",
-        frozen_base=spec.fast,
+        frozen_base=spec.confidence_training_base,
     )
     card = render_model_card(
         replace(spec, confidence_adaptation=adaptation), evidence_root=tmp_path
     )
-    assert "## Confidence head v1" in card
-    assert "| Within-target sample selection | Failed |" in card
-    assert "| Strict Transformers reload | Pending |" in card
+    assert "## Confidence training and evaluation" in card
     assert "already-used test split" in card
+    assert "confidence head completed 780 training updates" in card
+    assert "| Measurement | ESMFold2-600 | 95% interval |" in card
+    assert "| Agreement with production ESMFold2 |" in card
+    assert "embedded-weight release is being prepared" in card
+    assert "confidence_training.md" in card
+    for omitted in ("Quality gate", "predeclared", "Artifact check", "Skipped", "SHA-256", "| Pilot |", "Confidence head v1"):
+        assert omitted not in card
+    assert adaptation.head_sha256 not in card
+    assert "requires no separate confidence-head download" not in card
     assert "passed held-out quality checks" not in card
+    assert evidence["gates"]["passed"] is False
+
+    evidence["artifact_validation"]["status"] = "failed"
+    path.write_text(json.dumps(evidence, allow_nan=False))
+    card = render_model_card(
+        replace(spec, confidence_adaptation=adaptation), evidence_root=tmp_path
+    )
+    assert "packaged model still needs validation fixes" in card
+    assert "release is being prepared" not in card
+
+
+def test_confidence_preview_preserves_manifest_and_binds_local_evidence(
+    release_inputs, tmp_path
+):
+    model_id, _, _ = release_inputs
+    evidence = release_evidence.build_release_evidence(
+        *release_inputs, expected_head_sha256="a" * 64
+    )
+    spec = get_model_spec(model_id)
+    base = spec.confidence_training_base
+    evidence["frozen_base"] = {
+        "repo_id": base.repo_id,
+        "revision": base.revision,
+        "files": [asdict(item) for item in base.files],
+    }
+    evidence["donor"] = {
+        "repo_id": "Synthyra/donor",
+        "revision": "c" * 40,
+        "weight_sha256": "d" * 64,
+    }
+    path = tmp_path / "evaluated.json"
+    path.write_text(json.dumps(evidence, allow_nan=False))
+    output = tmp_path / "review"
+    card_path = preview_card(model_id, path, output)
+    card = card_path.read_text()
+    assert "**Local review draft.**" in card
+    assert "## Confidence training and evaluation" in card
+    assert "confidence_training.md" in card
+    assert "Local evaluation evidence" not in card
+    assert "| Pilot |" not in card
     assert "Current v2 confidence head" not in card
-    assert "1,024 experimental AtlasFold targets" not in card
+    assert "this model is not inference-validated" not in card
+    assert get_model_spec(model_id) == spec
+    assert (output / "evidence" / f"{model_id}-v1.json").read_bytes() == path.read_bytes()
+
+    evidence["frozen_base"]["revision"] = "f" * 40
+    path.write_text(json.dumps(evidence, allow_nan=False))
+    with pytest.raises(ValueError, match="frozen training base"):
+        preview_card(model_id, path, output)
 
 
 def test_v1_evidence_without_review_is_withheld(tmp_path):

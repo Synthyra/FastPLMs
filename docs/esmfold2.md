@@ -2,14 +2,14 @@
 
 FastPLMs supports six Biohub ESMFold2 variants:
 
-| Official checkpoint | FastPLMs mirror | Folding blocks | MSA conditioning | Confidence head | Inference evidence |
+| Official checkpoint | FastPLMs mirror | Folding blocks | MSA conditioning | Confidence head in FastPLMs | Inference evidence |
 | --- | --- | ---: | --- | --- | --- |
 | `biohub/ESMFold2` | `Synthyra/ESMFold2` | 48 | Optional; single-sequence and MSA-conditioned inference are supported | Enabled | Established family contract |
 | `biohub/ESMFold2-Fast` | `Synthyra/ESMFold2-Fast` | 24 | None; inference-optimized single-sequence conditioning | Enabled | Established family contract |
 | `biohub/ESMFold2-Experimental-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Cutoff2025` | 48 | Optional; experimental full-checkpoint contract | Enabled | Experimental family contract |
 | `biohub/ESMFold2-Experimental-Fast-Cutoff2025` | `Synthyra/ESMFold2-Experimental-Fast-Cutoff2025` | 24 | None; experimental Fast single-sequence-conditioning contract | Enabled | Experimental family contract |
-| `biohub/ESMFold2-Experimental-Fast-base300M-step1500k` | `Synthyra/ESMFold2-300` | 24 | None; single-sequence conditioning | Disabled; backbone `960 x 30` | Published; single-protein comparison passed; full benchmark pending |
-| `biohub/ESMFold2-Experimental-Fast-base600M-step1500k` | `Synthyra/ESMFold2-600` | 24 | None; single-sequence conditioning | Disabled; backbone `1152 x 36` | Published; not inference validated |
+| `biohub/ESMFold2-Experimental-Fast-base300M-step1500k` | `Synthyra/ESMFold2-300` | 24 | None; single-sequence conditioning | Adapted and enabled; backbone `960 x 30` | Confidence evaluation complete; offline reload passed; full structure parity not established |
+| `biohub/ESMFold2-Experimental-Fast-base600M-step1500k` | `Synthyra/ESMFold2-600` | 24 | None; single-sequence conditioning | Adapted and enabled; backbone `1152 x 36` | Confidence evaluation complete; offline reload passed; full structure parity not established |
 
 The Fast variants are optimized for single-sequence conditioning and are not
 MSA-conditioned. They accept the checkpoint typed multichain and multimolecule
@@ -21,22 +21,20 @@ blocks for Fast versus 48 for full ESMFold2 and describes Fast as operating
 without MSA conditioning for single-sequence inference
 ([Biohub preprint](https://biohub.ai/papers/esm_protein.pdf)).
 
-The base300M and base600M checkpoints are experimental architecture variants.
-Their pinned configs declare 24 folding blocks, no MSA conditioning, and
-`confidence_head.enabled=false`. Those pinned base revisions do not produce
-pLDDT, pTM, iPTM or PAE outputs. The Hub main config can independently bind a
-published v2 confidence head through `confidence_head_source`; loading that
-config attaches the latest head and enables confidence by default. The
-[ongoing head publication](confidence_training.md#ongoing-hugging-face-checkpoints)
-records its training update and immutable identity. Heads published during
-training have pending evaluation. The 300M single-protein comparison passed, as reported
-in [ESMFold2-300 validation](validation/esmfold2_small.md). This is not the
-full structure benchmark, which remains pending. The mirrors are published at
-revisions `a38a62ae930d157484b331c2bf4241684573adba` (300M) and
-`71c67d0b2b73dc245ea7c3cc0d0476439a882d08` (600M). The 600M variant has no
-inference validation result. Local artifact building does not modify the
-Hub. Files-only publication is a separate, add-only workflow described in
-[Hub artifacts](artifacts.md).
+The base300M and base600M checkpoints are experimental architecture variants
+with 24 folding blocks and no MSA conditioning. The upstream base checkpoints
+disable confidence. FastPLMs ESMFold2-300 and ESMFold2-600 include Synthyra's
+trained native confidence heads directly in their weights, enabled by default,
+and return pLDDT, pTM, iPTM, and PAE without an external head download.
+
+Both heads completed training and evaluation on 512 standard and 64 long
+targets. The [confidence training guide](confidence_training.md) describes the
+recipe, metrics, production agreement, and limitations. The earlier
+[300M single-protein comparison](validation/esmfold2_small.md) concerns the
+original confidence-disabled checkpoint. Neither that comparison nor the
+current confidence evaluation establishes full structure-benchmark parity.
+Local artifact building does not modify the Hub. Publication is a separate,
+add-only workflow described in [Hub artifacts](artifacts.md).
 
 ## Progress display and confidence-free export
 
@@ -47,9 +45,10 @@ calculation when enabled, and decoding. Progress display does not change the
 sampling settings or random-number sequence.
 
 For a two-protein example that saves `complex.cif`, start with a model card's
-Quick start. A 300M or 600M base loaded without an external confidence head
-keeps confidence values unavailable and uses `?` for unknown confidence-derived
-B factors. A successfully loaded v2 head supplies confidence fields.
+Quick start. Current 300M and 600M releases supply confidence fields by default.
+Explicitly disabling confidence, or loading an original confidence-disabled
+base revision, leaves those values unavailable; CIF export uses `?` for unknown
+confidence-derived B factors.
 
 ## Dependencies and platform requirements
 
@@ -285,11 +284,9 @@ mode is supported in 1.0. No known target structure is required. Prepared
 feature tensors include `ref_pos`, but this is component reference geometry
 created during featurization, not the target coordinates. Atomic coordinates
 and confidence fields are model outputs.
-The base300M and base600M experimental Fast variants have
-`confidence_head.enabled=false` in their pinned base configs. Loading either
-base without an external head returns no pLDDT, pTM, iPTM or PAE fields, so
-the confidence-printing examples above apply only to variants with an enabled
-confidence head.
+The current ESMFold2-300 and ESMFold2-600 releases include enabled confidence
+heads, so the confidence-printing examples apply to them. Original upstream
+base revisions remain confidence-disabled.
 The offline [`structure_preparation.py`](../examples/structure_preparation.py)
 example constructs the supported MSA, protein-complex, RNA, DNA, ligand,
 modification, and covalent-bond inputs and executes the pocket and distogram
