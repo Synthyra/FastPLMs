@@ -329,9 +329,9 @@ def prepare_evaluation(
         input_files["training-report.json"] = training_report
     metadata = {
         "model": {
-            "repo_id": spec.fast.repo_id,
-            "revision": spec.fast.revision,
-            "files": [asdict(item) for item in spec.fast.files],
+            "repo_id": spec.confidence_training_base.repo_id,
+            "revision": spec.confidence_training_base.revision,
+            "files": [asdict(item) for item in spec.confidence_training_base.files],
         },
         "donor": (
             {
@@ -485,9 +485,9 @@ def stage_evaluate(
             raise ValueError("Evaluation targets changed before recovery")
         spec = get_model_spec(model_id)
         expected_model = {
-            "repo_id": spec.fast.repo_id,
-            "revision": spec.fast.revision,
-            "files": [asdict(item) for item in spec.fast.files],
+            "repo_id": spec.confidence_training_base.repo_id,
+            "revision": spec.confidence_training_base.revision,
+            "files": [asdict(item) for item in spec.confidence_training_base.files],
         }
         if request["metadata"]["model"] != expected_model:
             raise ValueError("Pinned folding model changed before recovery")

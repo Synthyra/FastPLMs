@@ -434,9 +434,9 @@ def _training_provenance(
         targets[split] = {"count": len(records), "sha256": hashlib.sha256(payload).hexdigest()}
     return {
         "model_id": config.model_id,
-        "base_repo": spec.fast.repo_id,
-        "base_revision": spec.fast.revision,
-        "base_weight_sha256": spec.fast.file_map["model.safetensors"].digest,
+        "base_repo": spec.confidence_training_base.repo_id,
+        "base_revision": spec.confidence_training_base.revision,
+        "base_weight_sha256": spec.confidence_training_base.file_map["model.safetensors"].digest,
         "donor_repo": DONOR_REPO,
         "donor_revision": DONOR_REVISION,
         "donor_weight_sha256": DONOR_WEIGHT_SHA256,

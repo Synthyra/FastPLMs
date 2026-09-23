@@ -47,7 +47,7 @@ def bind_live_head(checkpoint: LiveCheckpoint, api: HfApi) -> str:
     if checkpoint.latest_path != expected_latest:
         raise ValueError("Live pointer does not belong to the campaign model")
     spec = get_model_spec(model_id)
-    base_hash = spec.fast.file_map["model.safetensors"].digest
+    base_hash = spec.confidence_training_base.file_map["model.safetensors"].digest
     if latest.get("base_weight_sha256") != base_hash:
         raise ValueError("Live head base weights differ from the manifest")
 

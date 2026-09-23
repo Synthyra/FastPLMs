@@ -56,6 +56,8 @@ def _confidence_adaptation_section(spec: ModelSpec, root: Path | None) -> str:
     adaptation = spec.confidence_adaptation
     if adaptation is None:
         return ""
+    if adaptation.release == "v1":
+        return _confidence_release_section(spec, root)
     evidence: Mapping[str, object] = {}
     if root is not None:
         report = load_confidence_evidence(
@@ -162,6 +164,131 @@ CONFIDENCE_RESEARCH_ROWS = (
 CONFIDENCE_AGREEMENT_ROWS = (("Mean pLDDT", "mean_plddt"), ("pTM", "ptm"), ("ipTM", "iptm"))
 
 
+def _confidence_release_section(spec: ModelSpec, root: Path | None) -> str:
+    adaptation = spec.confidence_adaptation
+    if adaptation is None or root is None:
+        return ""
+    report = load_confidence_evidence(root / adaptation.evidence_path, protocol="v1", evidence_root=root)
+    if not report.can_report_metrics:
+        return f"## Confidence head v1\n\n{_withheld_metrics_notice(report)}\n\n"
+    evidence = report.payload
+    if evidence.get("model_id") != spec.id or evidence.get("head_sha256") != adaptation.head_sha256:
+        raise ValueError("Confidence release evidence does not identify the published head")
+    training, test = evidence["training"], evidence["test"]
+    if test["set_status"] != "spent" or test["new_heldout_evaluation"] is not False:
+        raise ValueError("Current confidence release must preserve the spent-test evidence boundary")
+    head, pilot, production = (test["heads"][name] for name in ("v1", "pilot", "production"))
+    comparison = "\n".join(
+        f"| {label} | {_metric_cell(head[name], digits)} | {_interval_cell(head['interval_95'].get(name), digits)} | {_metric_cell(pilot[name], digits)} | {_metric_cell(production[name], digits)} |"
+        for label, name, digits in CONFIDENCE_RESEARCH_ROWS
+    )
+    agreement = evidence["production_agreement"]["v1"]
+    correlations = "\n".join(
+        f"| {label} | {_metric_cell(agreement[name + '_spearman'], 3)} | {_metric_cell(agreement[name + '_mean_difference'], 3, signed=True)} |"
+        for label, name in CONFIDENCE_AGREEMENT_ROWS
+    )
+    coverage = test["coverage"]
+    coverage_rows = "\n".join(
+        f"| {source} | {scope} | {values['requested']} | {values['retained']} | {values['skipped']} |"
+        for source, strata in coverage.items() for scope, values in strata.items()
+    )
+    gates = evidence["gates"]
+    gate_rows = "\n".join(
+        f"| {label} | {'Passed' if gates[name] else 'Failed'} |"
+        for name, label in (("beats_pilot", "Improvement over pilot"), ("sample_selection", "Within-target sample selection"), ("production_parity", "Production parity"))
+    )
+    validation = evidence["artifact_validation"]
+    check_labels = {
+        "strict_reload": "Strict Transformers reload",
+        "embedded_head_identity": "Exact evaluated head embedded in weights",
+        "confidence_default_enabled": "Confidence enabled by default",
+        "confidence_ranges": "Confidence output shapes and ranges",
+        "seeded_coordinate_equality": "Identical seeded coordinates with confidence enabled or disabled",
+        "cif_confidence": "Two-chain CIF confidence fields",
+    }
+    validation_rows = "\n".join(
+        f"| {label} | { {True: 'Passed', False: 'Failed', None: 'Pending'}[validation.get('checks', {}).get(name)]} |"
+        for name, label in check_labels.items()
+    )
+    config = training["config"]
+    inference = test["inference"]
+    margins = test["pair_margins"]
+    limits = (
+        "All predeclared quality gates passed."
+        if gates["passed"] else
+        "The predeclared quality gates did not all pass. These results do not establish production equivalence or reliable within-target sample ranking."
+    )
+    return f"""## Confidence head v1
+
+This checkpoint contains Synthyra's trained native confidence head directly in
+`model.safetensors`. pLDDT, PAE, pTM, and iPTM are enabled by default; loading this
+release requires no separate confidence-head download. Only the confidence head
+was trained. The backbone and folding tensors remain unchanged. Pass
+`calculate_confidence=False` during inference to skip confidence calculation.
+
+Training completed {training['updates']} updates in {training['elapsed_hours']:.1f} hours.
+Each update was configured for {config['targets_per_update']} sampled targets and {config['samples_per_target']}
+diffusion samples per target, with {config['num_loops']} recycling loops and
+{config['num_sampling_steps']} diffusion steps. The loss was pLDDT cross-entropy plus
+{config['pae_weight']} times PAE cross-entropy plus {config['ranking_weight']} times
+the within-target ranking loss. The released weights are the final EMA checkpoint.
+The clustered training split contains {evidence['data']['train_targets']:,} eligible
+targets; this is the sampling pool size, not the number of distinct targets seen.
+
+Evaluation generated {inference['samples']} samples per target with {inference['recycling_loops']}
+recycling loops and {inference['diffusion_steps']} diffusion steps, using
+{inference['parameter_dtype']} parameters, {inference['fold_autocast_dtype']} folding autocast,
+and {inference['attention_backend']} attention. This is an evaluation of the current
+checkpoints on the existing, already-used test split, not a new held-out benchmark.
+The main comparison uses {test['shared_standard_targets']} shared standard targets;
+long targets are reported separately in the evidence record. Intervals are target-level
+95% bootstrap intervals from {test['bootstrap_samples']} resamples; each draw retains
+all diffusion samples of each selected target. Correlations use individual samples.
+
+| Model | Target group | Requested | Evaluated | Skipped |
+| --- | --- | ---: | ---: | ---: |
+{coverage_rows}
+
+| Measurement | v1 | 95% interval | Pilot | Production ESMFold2 |
+| --- | ---: | ---: | ---: | ---: |
+{comparison}
+
+The pilot head rescored the same structures as v1. Production ESMFold2 generated
+its own structures. Higher confidence correlation does not by itself imply better
+predicted structures. pLDDT errors, calibration errors, and mean pLDDT values in
+this table use a 0 to 1 scale; exported CIF pLDDT values use 0 to 100.
+
+Within-target selection uses pairs separated by at least {margins['lddt']} lDDT or
+{margins['dockq']} DockQ: {head['within_target_plddt_pairs']:.0f} lDDT pairs and
+{head['within_target_iptm_dockq_pairs']:.0f} DockQ pairs for v1. A value of 0.5 is
+chance ordering. Regret measures quality lost relative to the best generated sample.
+
+| Quality gate | Result |
+| --- | --- |
+{gate_rows}
+
+{limits}
+
+| Agreement with production ESMFold2 | Spearman | Mean difference |
+| --- | ---: | ---: |
+{correlations}
+
+Agreement compares per-target mean confidence on each model's independently
+generated structures. It is not a comparison of heads rescoring identical structures.
+
+| Artifact check | Result |
+| --- | --- |
+{validation_rows}
+
+- Head SHA-256: `{adaptation.head_sha256}`
+- Frozen base SHA-256: `{adaptation.base_weight_sha256}`
+- Training: {adaptation.training_url}
+- Evaluation: {adaptation.evaluation_url}
+- Metrics, recipe, per-stratum results, and gate details: {evidence_reference(adaptation.evidence_path, root)}
+
+"""
+
+
 def _learning_rate(value: float) -> str:
     """Format a learning rate as `1e-4` rather than `0.0001`."""
     return f"{value:.0e}".replace("e-0", "e-")
@@ -172,6 +299,8 @@ def _interval_cell(interval: Sequence[float] | None, digits: int) -> str:
     if interval is None:
         return ""
     low, high = interval
+    if low is None or high is None:
+        return "undefined"
     return f"{low:.{digits}f} to {high:.{digits}f}"
 
 

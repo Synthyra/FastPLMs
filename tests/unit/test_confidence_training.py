@@ -31,7 +31,10 @@ def test_save_checkpoint_round_trips_training_state(monkeypatch, tmp_path) -> No
     monkeypatch.setattr(
         training,
         "get_model_spec",
-        lambda model_id: types.SimpleNamespace(fast=types.SimpleNamespace(revision="revision")),
+        lambda model_id: types.SimpleNamespace(
+            fast=types.SimpleNamespace(revision="published-revision"),
+            confidence_training_base=types.SimpleNamespace(revision="revision"),
+        ),
     )
     monkeypatch.setattr(training.torch.cuda, "get_rng_state_all", lambda: [])
 

@@ -32,6 +32,7 @@ def hub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[LiveCheckpoint
         repo_id="Synthyra/ESMFold2-300",
         file_map={"model.safetensors": SimpleNamespace(digest="b" * 64)},
     ))
+    spec.confidence_training_base = spec.fast
     monkeypatch.setattr(binding, "get_model_spec", lambda model_id: spec)
     api = Mock()
     api.dataset_info.return_value = SimpleNamespace(sha="d" * 40)

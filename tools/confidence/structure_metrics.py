@@ -292,7 +292,7 @@ def audit_smoke_structures(root: Path) -> dict[str, Any]:
                 cache, _ = load_cache(
                     cache_path,
                     model_id=model_id,
-                    model_revision=get_model_spec(model_id).fast.revision,
+                    model_revision=get_model_spec(model_id).confidence_training_base.revision,
                 )
                 metrics = compute_structure_metrics(
                     cache, record, root / "smoke" / model_id / "structure-audit" / kind

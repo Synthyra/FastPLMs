@@ -36,7 +36,7 @@ class ConfidenceEvidence:
 def load_confidence_evidence(
     path: Path,
     *,
-    protocol: Literal["pilot", "v2"],
+    protocol: Literal["pilot", "v1", "v2"],
     evidence_root: Path | None = None,
 ) -> ConfidenceEvidence:
     """Keep legacy pilot evidence usable while requiring review of v2 metrics."""
@@ -64,6 +64,8 @@ def load_confidence_evidence(
     status = review.get("status")
     if not isinstance(status, str) or status not in REPORTABLE_STATUSES | WITHHELD_STATUSES:
         raise ValueError(f"Unknown confidence metrics review status {status!r}: {path}")
-    if protocol == "v2" and status == "legacy_pilot":
-        raise ValueError(f"V2 confidence evidence cannot use legacy pilot review status: {path}")
+    if protocol != "pilot" and status == "legacy_pilot":
+        raise ValueError(f"{protocol} confidence evidence cannot use legacy pilot review status: {path}")
+    if protocol == "v1" and payload.get("release") != "v1":
+        raise ValueError(f"V1 confidence evidence must identify its release: {path}")
     return ConfidenceEvidence(payload, review, status)

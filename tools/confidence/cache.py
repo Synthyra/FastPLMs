@@ -307,14 +307,14 @@ def load_folding_model(
     from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 
     config = ESMFold2Config.from_pretrained(
-        spec.fast.repo_id,
-        revision=spec.fast.revision,
+        spec.confidence_training_base.repo_id,
+        revision=spec.confidence_training_base.revision,
         attn_implementation="sdpa",
         esmc_precision="bf16",
     )
     model = ESMFold2ExperimentalModel.from_pretrained(
-        spec.fast.repo_id,
-        revision=spec.fast.revision,
+        spec.confidence_training_base.repo_id,
+        revision=spec.confidence_training_base.revision,
         config=config,
         torch_dtype=torch.float32,
         attn_implementation="sdpa",
@@ -322,9 +322,9 @@ def load_folding_model(
         load_esmc=True,
     )
     model._fastplms_model_id = model_id
-    model._fastplms_revision = spec.fast.revision
-    model._fastplms_repo = spec.fast.repo_id
-    model._fastplms_pins = ";".join(item.encoded for item in spec.fast.files)
+    model._fastplms_revision = spec.confidence_training_base.revision
+    model._fastplms_repo = spec.confidence_training_base.repo_id
+    model._fastplms_pins = ";".join(item.encoded for item in spec.confidence_training_base.files)
     model.set_chunk_size(32)
     return model.to(device).eval().requires_grad_(False)
 

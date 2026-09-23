@@ -79,11 +79,11 @@ def prepare_release(root: Path, model_id: str) -> dict[str, Any]:
         raise ValueError("release directory already exists; inspect it before replacing")
     release_artifact = release_root / "package" / "artifact"
     spec = get_model_spec(model_id)
-    if package_report.get("base_weight_sha256") != spec.fast.file_map["model.safetensors"].digest:
+    if package_report.get("base_weight_sha256") != spec.confidence_training_base.file_map["model.safetensors"].digest:
         raise ValueError("package base weight does not match the manifest-pinned source")
     if (
-        package_report.get("base_repo") != spec.fast.repo_id
-        or package_report.get("base_revision") != spec.fast.revision
+        package_report.get("base_repo") != spec.confidence_training_base.repo_id
+        or package_report.get("base_revision") != spec.confidence_training_base.revision
     ):
         raise ValueError("package source identity does not match the manifest")
     if _sha256(artifact / "model.safetensors") != package_report.get("weight_sha256") or _sha256(

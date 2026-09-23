@@ -7,8 +7,13 @@ import pytest
 import torch
 
 from types import SimpleNamespace
+from unittest.mock import Mock
+
 from torch import nn
 
+from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
+from fastplms.registry import get_model_spec
+from tools.confidence import cache
 from tools.confidence.cache import (
     _kabsch_aligned,
     _chain_assignment,
@@ -334,3 +339,25 @@ def test_native_coordinate_layout_keeps_the_sample_axis(shape):
 def test_coordinate_cache_rejects_multiple_samples():
     with pytest.raises(ValueError, match="exactly one"):
         _single_sample_coordinates(torch.zeros(1, 2, 4, 3))
+
+
+def test_folding_loader_preserves_frozen_base_after_release(monkeypatch):
+    original = get_model_spec("esmfold2_300").fast
+    published = SimpleNamespace(repo_id=original.repo_id, revision="f" * 40)
+    monkeypatch.setattr(cache, "get_model_spec", lambda model_id: SimpleNamespace(
+        fast=published, confidence_training_base=original,
+    ))
+    config_loader = Mock(return_value=SimpleNamespace())
+    monkeypatch.setattr(ESMFold2Config, "from_pretrained", config_loader)
+    model = Mock()
+    model.to.return_value = model
+    model.eval.return_value = model
+    model.requires_grad_.return_value = model
+    model_loader = Mock(return_value=model)
+    monkeypatch.setattr(cache.ESMFold2ExperimentalModel, "from_pretrained", model_loader)
+    loaded = cache.load_folding_model("esmfold2_300", device="cpu")
+    assert loaded is model
+    assert config_loader.call_args.kwargs["revision"] == original.revision
+    assert model_loader.call_args.kwargs["revision"] == original.revision
+    assert loaded._fastplms_revision == original.revision
+    assert loaded._fastplms_pins == ";".join(item.encoded for item in original.files)

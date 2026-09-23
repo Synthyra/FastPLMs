@@ -298,7 +298,7 @@ def evaluate_final(root: Path, model_id: str) -> dict[str, Any]:
                     cache, _ = load_cache(
                         _cache_path(root, model_id, selected_record, seed),
                         model_id=model_id,
-                        model_revision=get_model_spec(model_id).fast.revision,
+                        model_revision=get_model_spec(model_id).confidence_training_base.revision,
                         seed=seed,
                     )
                     yield _targets(cache)

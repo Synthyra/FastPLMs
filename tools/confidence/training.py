@@ -64,7 +64,7 @@ class HeadContext(nn.Module):
     def __init__(self, model_id: str, device: str = "cuda") -> None:
         super().__init__()
         spec = get_model_spec(model_id)
-        config = ESMFold2Config.from_pretrained(spec.fast.repo_id, revision=spec.fast.revision)
+        config = ESMFold2Config.from_pretrained(spec.confidence_training_base.repo_id, revision=spec.confidence_training_base.revision)
         self.rel_pos = ResIdxAsymIdSymIdEntityIdEncoding(
             n_relative_residx_bins=config.n_relative_residx_bins,
             n_relative_chain_bins=config.n_relative_chain_bins,
@@ -74,9 +74,9 @@ class HeadContext(nn.Module):
         self.head = ConfidenceHead(config)
         self.head.set_chunk_size(32)
         base = Path(
-            hf_hub_download(spec.fast.repo_id, "model.safetensors", revision=spec.fast.revision)
+            hf_hub_download(spec.confidence_training_base.repo_id, "model.safetensors", revision=spec.confidence_training_base.revision)
         )
-        expected = spec.fast.file_map["model.safetensors"].digest
+        expected = spec.confidence_training_base.file_map["model.safetensors"].digest
         if _file_hash(base) != expected:
             raise ValueError("Frozen checkpoint hash differs from the registry")
         donor = Path(hf_hub_download(DONOR_REPO, "model.safetensors", revision=DONOR_REVISION))
@@ -150,7 +150,7 @@ def _cache_one(model, record: dict, root: Path, model_id: str, seed: int) -> dic
             load_cache(
                 path,
                 model_id=model_id,
-                model_revision=get_model_spec(model_id).fast.revision,
+                model_revision=get_model_spec(model_id).confidence_training_base.revision,
                 seed=seed,
             )
         except (OSError, ValueError):
@@ -158,7 +158,7 @@ def _cache_one(model, record: dict, root: Path, model_id: str, seed: int) -> dic
     if not path.exists():
         cache_target(model, record, root / "data", path, seed)
     cache, metadata = load_cache(
-        path, model_id=model_id, model_revision=get_model_spec(model_id).fast.revision, seed=seed
+        path, model_id=model_id, model_revision=get_model_spec(model_id).confidence_training_base.revision, seed=seed
     )
     record_hash = hashlib.sha256(
         json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
@@ -210,7 +210,7 @@ def _generate_caches(
     ]
     pending = []
     invalid = []
-    revision = get_model_spec(model_id).fast.revision
+    revision = get_model_spec(model_id).confidence_training_base.revision
     for record, seed in tasks:
         path = _cache_path(root, model_id, record, seed)
         if not path.exists():
@@ -261,7 +261,7 @@ def _load_example(root: Path, model_id: str, record: dict, seed: int = 17) -> tu
     cache, metadata = load_cache(
         _cache_path(root, model_id, record, seed),
         model_id=model_id,
-        model_revision=get_model_spec(model_id).fast.revision,
+        model_revision=get_model_spec(model_id).confidence_training_base.revision,
         seed=seed,
     )
     expected_record = hashlib.sha256(
@@ -368,9 +368,9 @@ def _training_settings(root: Path, model_id: str) -> dict:
     spec = get_model_spec(model_id)
     config.update(
         model_id=model_id,
-        model_repo=spec.fast.repo_id,
-        model_revision=spec.fast.revision,
-        model_weight_sha256=spec.fast.file_map["model.safetensors"].digest,
+        model_repo=spec.confidence_training_base.repo_id,
+        model_revision=spec.confidence_training_base.revision,
+        model_weight_sha256=spec.confidence_training_base.file_map["model.safetensors"].digest,
         donor_repo=DONOR_REPO,
         donor_revision=DONOR_REVISION,
         donor_weight_sha256=DONOR_WEIGHT_SHA256,
@@ -441,7 +441,7 @@ def _benchmark(root: Path, model_id: str, maximum_seconds: int) -> dict:
     cache, _ = load_cache(
         benchmark_root / "cache" / "0.safetensors",
         model_id=model_id,
-        model_revision=get_model_spec(model_id).fast.revision,
+        model_revision=get_model_spec(model_id).confidence_training_base.revision,
         seed=17,
     )
     with torch.no_grad():
@@ -573,7 +573,7 @@ def train_head(
                 cache, _ = load_cache(
                     _cache_path(root, model_id, record, 17),
                     model_id=model_id,
-                    model_revision=get_model_spec(model_id).fast.revision,
+                    model_revision=get_model_spec(model_id).confidence_training_base.revision,
                     seed=17,
                 )
                 yield {name: value.cpu() for name, value in _targets(cache).items()}
@@ -599,7 +599,7 @@ def train_head(
             state = torch.load(checkpoint, map_location="cuda", weights_only=True)
             expected_checkpoint = {
                 "model_id": model_id,
-                "model_revision": get_model_spec(model_id).fast.revision,
+                "model_revision": get_model_spec(model_id).confidence_training_base.revision,
                 "model_pins": context.base_weight_sha256,
                 "base_weight_sha256": context.base_weight_sha256,
                 "frozen_hashes": frozen_hashes,
@@ -828,7 +828,7 @@ def _save_checkpoint(
             "best_sha256": _file_hash(best_path) if best_path.exists() else None,
             "donor_validation_sha256": _file_hash(donor_path) if donor_path.exists() else None,
             "model_id": model_id,
-            "model_revision": get_model_spec(model_id).fast.revision,
+            "model_revision": get_model_spec(model_id).confidence_training_base.revision,
             "model_pins": context.base_weight_sha256,
             "base_weight_sha256": context.base_weight_sha256,
             "frozen_hashes": frozen_hashes,

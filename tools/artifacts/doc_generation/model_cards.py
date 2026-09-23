@@ -198,7 +198,14 @@ For offline validation, replace `model_id` with the manifest-built
     weights_allowed = str(spec.family.weights_publication_allowed).lower()
     weights_license_status = "resolved" if spec.family.weights_publication_allowed else "unresolved"
     complete_weights = str(spec.family.requires_complete_weight_publication).lower()
-    if spec.confidence_adaptation is not None:
+    if spec.confidence_adaptation is not None and spec.confidence_adaptation.release == "v1":
+        validation_scope = (
+            "The confidence-head section reports the current checkpoint's verified metrics, "
+            "individual quality-gate outcomes, and artifact checks. The test split was already "
+            "used; these measurements do not constitute a new held-out benchmark or a full "
+            "structure-model equivalence result."
+        )
+    elif spec.confidence_adaptation is not None:
         validation_scope = (
             "The adapted confidence head passed held-out quality checks on short "
             "monomers and dimers. Focused Transformers reload, confidence ranges, "

@@ -119,7 +119,7 @@ def package_head(root: Path, model_id: str, validate_only: bool = False) -> dict
     if checkpoint["best_sha256"] != head_hash or checkpoint["model_id"] != model_id:
         raise ValueError("Selected confidence head differs from the training checkpoint")
     spec = get_model_spec(model_id)
-    config = {"model_id": model_id, "head_sha256": head_hash, "base_revision": spec.fast.revision}
+    config = {"model_id": model_id, "head_sha256": head_hash, "base_revision": spec.confidence_training_base.revision}
     run = _wandb_run(root, model_id, "package", config)
     failed = False
     try:
@@ -133,8 +133,8 @@ def package_head(root: Path, model_id: str, validate_only: bool = False) -> dict
             ] != _hash(artifact / "config.json"):
                 raise ValueError("Prepared artifact changed before validation")
             return _validate_and_record(directory, report, run)
-        snapshot = Path(snapshot_download(spec.fast.repo_id, revision=spec.fast.revision))
-        expected_base = spec.fast.file_map["model.safetensors"].digest
+        snapshot = Path(snapshot_download(spec.confidence_training_base.repo_id, revision=spec.confidence_training_base.revision))
+        expected_base = spec.confidence_training_base.file_map["model.safetensors"].digest
         if (
             _hash(snapshot / "model.safetensors") != expected_base
             or training["base_weight_sha256"] != expected_base
@@ -170,8 +170,8 @@ def package_head(root: Path, model_id: str, validate_only: bool = False) -> dict
             "status": "prepared",
             "model_id": model_id,
             "artifact": str(artifact),
-            "base_repo": spec.fast.repo_id,
-            "base_revision": spec.fast.revision,
+            "base_repo": spec.confidence_training_base.repo_id,
+            "base_revision": spec.confidence_training_base.revision,
             "base_weight_sha256": expected_base,
             "head_sha256": head_hash,
             "weight_sha256": _hash(artifact / "model.safetensors"),

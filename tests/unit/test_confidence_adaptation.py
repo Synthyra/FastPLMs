@@ -12,6 +12,7 @@ from fastplms.registry import (
     ConfidenceAdaptation,
     RegistryError,
     _parse_confidence_adaptation,
+    get_model_registry,
 )
 from tools.artifacts.doc_generation.model_cards import render_model_card
 
@@ -32,6 +33,150 @@ def _record() -> dict[str, str]:
 
 def test_confidence_adaptation_is_optional() -> None:
     assert _parse_confidence_adaptation({}, "models[0]") is None
+
+
+def _v1_record() -> dict[str, object]:
+    return {
+        **_record(),
+        "release": "v1",
+        "frozen_base": {
+            "repo": "Synthyra/ESMFold2-300",
+            "revision": "e" * 40,
+            "files": [
+                "config.json=git-sha1:" + "f" * 40,
+                "model.safetensors=sha256:" + "b" * 64,
+            ],
+        },
+    }
+
+
+def test_pilot_adaptation_keeps_legacy_defaults() -> None:
+    adaptation = _parse_confidence_adaptation({"confidence_adaptation": _record()}, "models[0]")
+    assert adaptation is not None
+    assert adaptation.release == "pilot"
+    assert adaptation.frozen_base is None
+    spec = get_model_registry()["esmfold2_300"]
+    assert spec.confidence_training_base == spec.fast
+    assert replace(spec, confidence_adaptation=adaptation).confidence_training_base == spec.fast
+
+
+def test_v1_preserves_training_base_after_published_revision_changes() -> None:
+    adaptation = _parse_confidence_adaptation({"confidence_adaptation": _v1_record()}, "models[0]")
+    assert adaptation is not None
+    assert adaptation.release == "v1"
+    assert adaptation.frozen_base is not None
+    assert adaptation.frozen_base.repo_id == "Synthyra/ESMFold2-300"
+    assert adaptation.frozen_base.revision == "e" * 40
+    assert adaptation.frozen_base.file_map["config.json"].digest == "f" * 40
+    assert (
+        adaptation.frozen_base.file_map["model.safetensors"].digest == adaptation.base_weight_sha256
+    )
+    spec = get_model_registry()["esmfold2_300"]
+    published = replace(spec.fast, revision="1" * 40)
+    released = replace(spec, fast=published, confidence_adaptation=adaptation)
+    assert released.artifact_checkpoint == published
+    assert released.confidence_training_base == adaptation.frozen_base
+    assert released.confidence_training_base != released.fast
+
+
+@pytest.mark.parametrize("release", ("v2", "", None, [], 1))
+def test_confidence_adaptation_rejects_unknown_release(release: object) -> None:
+    record = {**_record(), "release": release}
+    with pytest.raises(RegistryError, match="release"):
+        _parse_confidence_adaptation({"confidence_adaptation": record}, "models[0]")
+
+
+def test_v1_requires_a_frozen_base() -> None:
+    record = {**_record(), "release": "v1"}
+    with pytest.raises(RegistryError, match="frozen_base is required"):
+        _parse_confidence_adaptation({"confidence_adaptation": record}, "models[0]")
+
+
+def test_v1_requires_the_exact_training_config() -> None:
+    record = _v1_record()
+    record["frozen_base"]["files"] = ["model.safetensors=sha256:" + "b" * 64]
+    with pytest.raises(RegistryError, match="config.json"):
+        _parse_confidence_adaptation({"confidence_adaptation": record}, "models[0]")
+
+
+@pytest.mark.parametrize(
+    "base",
+    (
+        None,
+        {
+            "repo": "Synthyra/ESMFold2-300",
+            "revision": "main",
+            "files": ["model.safetensors=sha256:" + "b" * 64],
+        },
+        {
+            "repo": "Synthyra/ESMFold2-300",
+            "revision": "e" * 40,
+            "files": ["model.safetensors=sha256:" + "c" * 64],
+        },
+        {
+            "repo": "Synthyra/ESMFold2-300",
+            "revision": "e" * 40,
+            "files": ["model.safetensors=git-sha1:" + "b" * 40],
+        },
+        {
+            "repo": "Synthyra/ESMFold2-300",
+            "revision": "e" * 40,
+            "files": ["pytorch_model.bin=sha256:" + "b" * 64],
+        },
+    ),
+)
+def test_v1_rejects_invalid_frozen_base(base: object) -> None:
+    record = {**_v1_record(), "frozen_base": base}
+    with pytest.raises(RegistryError, match="frozen_base"):
+        _parse_confidence_adaptation({"confidence_adaptation": record}, "models[0]")
+
+
+@pytest.mark.parametrize(
+    "view_path",
+    (
+        "tree/{revision}",
+        "tree/{revision}/confidence/v1",
+        "blob/{revision}/confidence/v1/report.json",
+    ),
+)
+def test_evaluation_accepts_pinned_synthyra_dataset_url(view_path: str) -> None:
+    url = "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/" + view_path.format(
+        revision="a" * 40
+    )
+    record = {**_v1_record(), "evaluation_url": url}
+    adaptation = _parse_confidence_adaptation({"confidence_adaptation": record}, "models[0]")
+    assert adaptation is not None
+    assert adaptation.evaluation_url == url
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/main/confidence",
+        "https://huggingface.co/datasets/other/artifacts/tree/" + "a" * 40,
+        "https://huggingface.co/Synthyra/ESMFold2-300/tree/" + "a" * 40,
+        "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/blob/" + "a" * 40,
+        "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/"
+        + "a" * 40
+        + "?download=true",
+        "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/" + "a" * 40 + "#metrics",
+        "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/" + "a" * 40 + "/../main",
+    ),
+)
+def test_evaluation_rejects_unpinned_or_unscoped_dataset_url(url: str) -> None:
+    record = {**_v1_record(), "evaluation_url": url}
+    with pytest.raises(RegistryError, match="evaluation_url"):
+        _parse_confidence_adaptation({"confidence_adaptation": record}, "models[0]")
+
+
+def test_training_url_still_requires_wandb() -> None:
+    record = {
+        **_v1_record(),
+        "training_url": "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/"
+        + "a" * 40,
+    }
+    with pytest.raises(RegistryError, match="training_url.*W&B"):
+        _parse_confidence_adaptation({"confidence_adaptation": record}, "models[0]")
 
 
 def test_confidence_adaptation_rejects_nonportable_evidence_path() -> None:

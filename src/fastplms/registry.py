@@ -22,6 +22,10 @@ from urllib.parse import urlparse
 
 _HEX_RE = re.compile(r"^[0-9a-f]+$")
 _WANDB_RUN_URL_RE = re.compile(r"^https://wandb\.ai/[^/?#]+/[^/?#]+/runs/[^/?#]+$")
+_CONFIDENCE_DATASET_URL_RE = re.compile(
+    r"https://huggingface\.co/datasets/Synthyra/[A-Za-z0-9][A-Za-z0-9_.-]*/"
+    r"(?P<view>tree|blob)/[0-9a-f]{40}(?:/(?P<path>[A-Za-z0-9_./-]+))?"
+)
 _IDENTIFIER_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _HUB_LICENSE_NAME_RE = re.compile(r"[^a-z0-9.]+")
 _WINDOWS_INVALID_PATH_CHARACTERS = frozenset('<>:"|?*')
@@ -400,6 +404,8 @@ class ConfidenceAdaptation:
     training_url: str
     evaluation_url: str
     evidence_path: str
+    release: Literal["pilot", "v1"] = "pilot"
+    frozen_base: CheckpointSource | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +446,17 @@ class ModelSpec:
         """Return the checkpoint selected for local artifact construction."""
 
         return self.fast if self.artifact_source == "fast" else self.official
+
+    @property
+    def confidence_training_base(self) -> CheckpointSource:
+        """Keep confidence training tied to its original base after release repinning."""
+
+        if (
+            self.confidence_adaptation is not None
+            and self.confidence_adaptation.frozen_base is not None
+        ):
+            return self.confidence_adaptation.frozen_base
+        return self.fast
 
     @property
     def oracle_asset_map(self) -> Mapping[str, OracleAsset]:
@@ -1293,16 +1310,45 @@ def _parse_confidence_adaptation(
             "training_url",
             "evaluation_url",
             "evidence_path",
+            "release",
+            "frozen_base",
         }
     )
     _reject_unknown_fields(raw, fields, f"{context}.confidence_adaptation")
     adaptation_context = f"{context}.confidence_adaptation"
+    release = raw.get("release", "pilot")
+    if release not in ("pilot", "v1"):
+        raise RegistryError(f"{adaptation_context}.release must be pilot or v1.")
     digests: dict[str, str] = {}
     for key in ("head_sha256", "base_weight_sha256", "donor_weight_sha256"):
         digest = _require_str(raw, key, adaptation_context)
         if len(digest) != 64 or _HEX_RE.fullmatch(digest) is None:
             raise RegistryError(f"{adaptation_context}.{key} must be a SHA-256 digest.")
         digests[key] = digest
+    frozen_base = None
+    if "frozen_base" in raw:
+        base_context = f"{adaptation_context}.frozen_base"
+        raw_base = raw["frozen_base"]
+        if not isinstance(raw_base, dict):
+            raise RegistryError(f"{base_context} must be a table.")
+        _reject_unknown_fields(raw_base, {"repo", "revision", "files"}, base_context)
+        frozen_base = _parse_checkpoint(
+            {f"base_{key}": value for key, value in raw_base.items()},
+            "base",
+            base_context,
+        )
+        weight = frozen_base.file_map.get("model.safetensors")
+        if (
+            weight is None
+            or weight.algorithm != "sha256"
+            or weight.digest != digests["base_weight_sha256"]
+        ):
+            raise RegistryError(f"{base_context} model.safetensors must match base_weight_sha256.")
+        config = frozen_base.file_map.get("config.json")
+        if config is None or config.algorithm != "git-sha1":
+            raise RegistryError(f"{base_context} must pin config.json with git-sha1.")
+    if release == "v1" and frozen_base is None:
+        raise RegistryError(f"{adaptation_context}.frozen_base is required for v1.")
     donor_repo = _require_str(raw, "donor_repo", adaptation_context)
     if _REPOSITORY_ID_RE.fullmatch(donor_repo) is None:
         raise RegistryError(f"{adaptation_context}.donor_repo must be a repository ID.")
@@ -1311,9 +1357,21 @@ def _parse_confidence_adaptation(
     urls: dict[str, str] = {}
     for key in ("training_url", "evaluation_url"):
         url = _require_str(raw, key, adaptation_context)
-        if _WANDB_RUN_URL_RE.fullmatch(url) is None:
+        dataset_match = (
+            _CONFIDENCE_DATASET_URL_RE.fullmatch(url) if key == "evaluation_url" else None
+        )
+        if dataset_match is not None:
+            dataset_path = dataset_match["path"]
+            if dataset_match["view"] == "blob" and dataset_path is None:
+                raise RegistryError(f"{adaptation_context}.{key} blob URL requires a file path.")
+            if dataset_path is not None:
+                _portable_relative_path(dataset_path, f"{adaptation_context}.{key}")
+        elif _WANDB_RUN_URL_RE.fullmatch(url) is None:
+            accepted_urls = "a W&B run URL"
+            if key == "evaluation_url":
+                accepted_urls += " or an immutable Synthyra Hugging Face dataset URL"
             raise RegistryError(
-                f"{adaptation_context}.{key} must be a W&B run URL without query or fragment."
+                f"{adaptation_context}.{key} must be {accepted_urls} without query or fragment."
             )
         urls[key] = url
     evidence_path = _portable_relative_path(
@@ -1331,6 +1389,8 @@ def _parse_confidence_adaptation(
         training_url=urls["training_url"],
         evaluation_url=urls["evaluation_url"],
         evidence_path=evidence_path.as_posix(),
+        release=cast(Literal["pilot", "v1"], release),
+        frozen_base=frozen_base,
     )
 
 
