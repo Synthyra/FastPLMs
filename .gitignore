@@ -55,3 +55,4 @@ marketing/
 /output
 *.log
 .secrets.env
+*.cif
