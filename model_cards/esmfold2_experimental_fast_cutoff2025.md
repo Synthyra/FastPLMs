@@ -286,7 +286,8 @@ and
 Structure preparation requires `ccd.pkl` from
 `biohub/ESMFold2`. The manifest pins its repository, revision, size, content
 identity, and MIT terms. This is a trusted-deserialization boundary. FastPLMs
-accepts only the pinned snapshot link inside the repository blob directory.
+accepts only the pinned snapshot link inside the repository blob directory, or
+in the Hub's shared Xet blob store through the repository's pinned blob link.
 User-supplied asset and `cache_dir` symlinks are rejected. The loader verifies a
 private temporary snapshot before deserialization, protecting against
 path-replacement and in-place source-write races. Offline execution requires the
