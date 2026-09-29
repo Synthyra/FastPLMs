@@ -10,6 +10,7 @@ import pytest
 import torch
 import zstandard
 
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, BinaryIO
@@ -133,25 +134,127 @@ def test_ccd_in_place_mutation_after_hashing_cannot_change_loaded_bytes(
     assert pickle.loads(asset.read_bytes()) == {"ALA": "replacement"}
 
 
+_XET_HASH = "49e6d925d799aeed5457c617c9d52257c0d283500d5ec4ff0a9db52cf2385e8e"
+
+
+def _relative_symlink(link: Path, target: Path) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(os.path.relpath(target, link.parent))
+
+
+def _populate_hub_cache(
+    hub_root: Path,
+    contract: SimpleNamespace,
+    payload: bytes,
+    *,
+    layout: str,
+) -> Path:
+    """Write the Hub cache layout that huggingface_hub produces and return the snapshot link.
+
+    ``repository``: ``snapshots/<rev>/ccd.pkl -> blobs/<sha256>``, a regular file.
+    ``shared``: the same links, with ``blobs/<sha256>`` itself a relative link to the
+    cache-wide Xet store entry ``<hub>/blobs/<xet[:2]>/<xet>`` (huggingface_hub 1.32+).
+    """
+
+    repository_cache = hub_root / "models--biohub--ESMFold2"
+    repository_blob = repository_cache / "blobs" / contract.sha256
+    if layout == "repository":
+        repository_blob.parent.mkdir(parents=True)
+        repository_blob.write_bytes(payload)
+    else:
+        store_entry = hub_root / "blobs" / _XET_HASH[:2] / _XET_HASH
+        store_entry.parent.mkdir(parents=True)
+        store_entry.write_bytes(payload)
+        _relative_symlink(repository_blob, store_entry)
+    snapshot = repository_cache / "snapshots" / contract.revision / contract.path
+    _relative_symlink(snapshot, repository_blob)
+    return snapshot
+
+
+def _use_hub_cache(monkeypatch: pytest.MonkeyPatch, hub_root: Path, snapshot: Path) -> None:
+    monkeypatch.delenv("ESMCFOLD_CCD_PATH", raising=False)
+    monkeypatch.setattr(conformers, "HF_HUB_CACHE", str(hub_root))
+    monkeypatch.setattr(conformers, "hf_hub_download", lambda **_kwargs: str(snapshot))
+
+
+@pytest.mark.parametrize("layout", ["repository", "shared"])
 def test_ccd_loader_allows_manifest_owned_hub_snapshot_symlink(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    layout: str,
+) -> None:
+    payload = pickle.dumps({"ALA": "trusted"})
+    contract = _install_contract(monkeypatch, payload)
+    hub_root = tmp_path / "hub"
+    snapshot = _populate_hub_cache(hub_root, contract, payload, layout=layout)
+    _use_hub_cache(monkeypatch, hub_root, snapshot)
+
+    assert conformers._ChemicalComponentStore().load() == {"ALA": "trusted"}
+
+
+def test_ccd_loader_verifies_shared_store_bytes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     payload = pickle.dumps({"ALA": "trusted"})
     contract = _install_contract(monkeypatch, payload)
     hub_root = tmp_path / "hub"
-    repository_cache = hub_root / "models--biohub--ESMFold2"
-    blob = repository_cache / "blobs" / contract.sha256
-    blob.parent.mkdir(parents=True)
-    blob.write_bytes(payload)
-    snapshot = repository_cache / "snapshots" / contract.revision / contract.path
-    snapshot.parent.mkdir(parents=True)
-    snapshot.symlink_to(blob)
-    monkeypatch.delenv("ESMCFOLD_CCD_PATH", raising=False)
-    monkeypatch.setattr(conformers, "HF_HUB_CACHE", str(hub_root))
-    monkeypatch.setattr(conformers, "hf_hub_download", lambda **_kwargs: str(snapshot))
+    snapshot = _populate_hub_cache(hub_root, contract, payload, layout="shared")
+    store_entry = hub_root / "blobs" / _XET_HASH[:2] / _XET_HASH
+    store_entry.write_bytes(pickle.dumps({"ALA": "forged"}).ljust(len(payload), b"\0"))
+    _use_hub_cache(monkeypatch, hub_root, snapshot)
 
-    assert conformers._ChemicalComponentStore().load() == {"ALA": "trusted"}
+    with pytest.raises(ValueError, match="SHA256 mismatch"):
+        conformers._ChemicalComponentStore().load()
+
+
+def _link_snapshot_past_repository_blob(hub_root: Path, snapshot: Path) -> None:
+    """Point the snapshot straight at the store entry and unbind the pinned repository blob."""
+
+    repository_blobs = snapshot.parent.parent.parent / "blobs"
+    for link in repository_blobs.iterdir():
+        link.unlink()
+    snapshot.unlink()
+    _relative_symlink(snapshot, hub_root / "blobs" / _XET_HASH[:2] / _XET_HASH)
+
+
+def _misfile_store_entry(hub_root: Path, snapshot: Path) -> None:
+    """Move the store entry under a prefix directory that does not match its hash."""
+
+    misfiled = hub_root / "blobs" / "00" / _XET_HASH
+    misfiled.parent.mkdir()
+    os.replace(hub_root / "blobs" / _XET_HASH[:2] / _XET_HASH, misfiled)
+    repository_blob = snapshot.parent.parent.parent / "blobs" / snapshot.readlink().name
+    repository_blob.unlink()
+    _relative_symlink(repository_blob, misfiled)
+
+
+def _move_store_outside_cache(hub_root: Path, snapshot: Path) -> None:
+    """Replace the store directory with a link to an identical store outside the cache root."""
+
+    outside = hub_root.parent / "outside_store"
+    os.replace(hub_root / "blobs", outside)
+    (hub_root / "blobs").symlink_to(outside, target_is_directory=True)
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [_link_snapshot_past_repository_blob, _misfile_store_entry, _move_store_outside_cache],
+)
+def test_ccd_loader_rejects_unbound_shared_store_targets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tamper: Callable[[Path, Path], None],
+) -> None:
+    payload = pickle.dumps({"ALA": "trusted"})
+    contract = _install_contract(monkeypatch, payload)
+    hub_root = tmp_path / "hub"
+    snapshot = _populate_hub_cache(hub_root, contract, payload, layout="shared")
+    tamper(hub_root, snapshot)
+    _use_hub_cache(monkeypatch, hub_root, snapshot)
+
+    with pytest.raises(ValueError, match="escapes its repository blob cache"):
+        conformers._ChemicalComponentStore().load()
 
 
 def test_ccd_loader_rejects_hub_snapshot_link_outside_repo_blob_cache(

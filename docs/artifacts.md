@@ -241,7 +241,9 @@ MIT license, and trust kind `hash_pinned_pickle`. Deserialization occurs only
 from a private loader-owned temporary snapshot after verifying that snapshot's
 size and SHA-256. User-supplied asset and `cache_dir` symlinks are rejected. The
 exact manifest repository/revision Hugging Face snapshot link is the sole
-exception and must resolve within that repository's contained blob directory.
+exception. It must resolve within that repository's contained blob directory or,
+through the repository blob link named by the pinned SHA-256, to an entry of the
+Hub cache's shared Xet blob store (`blobs/<xet hash[:2]>/<xet hash>`).
 This prevents path replacement and in-place source mutation across the trust
 boundary. Offline execution requires the exact verified cache object and does
 not fetch a substitute.

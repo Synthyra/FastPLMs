@@ -59,9 +59,11 @@ terms. The manifest pins repository, immutable revision, path, size, and
 SHA-256. Because it is pickle, validated deserialization is an explicit trust
 boundary. The loader rejects user and `cache_dir` symlinks, except for the exact
 manifest snapshot link resolving into its repository's contained blob
-directory. It copies into a private loader-owned temporary snapshot, verifies
-that snapshot's size and hash, and unpickles only those verified bytes. Offline
-runs require the exact cache object and never fetch a substitute.
+directory, or through that repository's pinned blob link into the Hub cache's
+shared Xet blob store. It copies into a private loader-owned temporary
+snapshot, verifies that snapshot's size and hash, and unpickles only those
+verified bytes. Offline runs require the exact cache object and never fetch a
+substitute.
 
 ## Artifact and container rules
 

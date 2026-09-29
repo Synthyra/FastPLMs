@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import re
 import stat
 import tempfile
 import numpy as np
@@ -28,6 +29,7 @@ from .esmfold2_constants import RES_TYPE_TO_CCD
 
 _CCD_ENVIRONMENT_VARIABLE = "ESMCFOLD_CCD_PATH"
 _CCD_ASSET_ID = "esmfold2_ccd"
+_HEX_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
 @dataclass(frozen=True)
@@ -174,17 +176,55 @@ def _resolve_trusted_hub_snapshot_link(
         ) from error
 
     resolved = asset_path.resolve(strict=True)
-    blob_root = (repository_cache / "blobs").resolve(strict=True)
-    try:
-        blob_root.relative_to(root)
-        resolved.relative_to(blob_root)
-    except ValueError as error:
+    if not (
+        _is_repository_blob(resolved, repository_cache, root)
+        or _is_shared_store_blob(resolved, repository_cache, root, contract.sha256)
+    ):
         raise ValueError(
-            f"CCD Hub snapshot link escapes its repository blob cache: {asset_path}"
-        ) from error
+            "CCD Hub snapshot link escapes its repository blob cache and the shared "
+            f"Hub blob store: {asset_path}"
+        )
     if not resolved.is_file() or resolved.is_symlink():
         raise ValueError(f"CCD Hub snapshot target must be a regular file: {resolved}")
     return resolved
+
+
+def _is_repository_blob(target: Path, repository_cache: Path, root: Path) -> bool:
+    """Return whether ``target`` lies in the repository's own blob directory."""
+
+    blob_root = (repository_cache / "blobs").resolve(strict=True)
+    return blob_root.is_relative_to(root) and target.is_relative_to(blob_root)
+
+
+def _is_shared_store_blob(
+    target: Path,
+    repository_cache: Path,
+    root: Path,
+    sha256: str,
+) -> bool:
+    """Return whether ``target`` is the shared Xet store entry of the pinned repository blob.
+
+    Since huggingface_hub 1.32, Xet downloads live once per cache at
+    ``<root>/blobs/<xet hash[:2]>/<xet hash>``, and ``models--<repo>/blobs/<sha256>``
+    becomes a relative symlink to that entry. The store name is a Xet hash, not the
+    SHA-256, so the repository blob named by the pinned digest binds the entry to
+    this asset. ``_open_verified_asset`` still hashes the bytes themselves.
+    """
+
+    if _HEX_DIGEST.fullmatch(sha256) is None:
+        return False
+    store_root = (root / "blobs").resolve()
+    if not store_root.is_relative_to(root) or not target.is_relative_to(store_root):
+        return False
+    store_parts = target.relative_to(store_root).parts
+    if (
+        len(store_parts) != 2
+        or _HEX_DIGEST.fullmatch(store_parts[1]) is None
+        or store_parts[0] != store_parts[1][:2]
+    ):
+        return False
+    repository_blob = repository_cache / "blobs" / sha256
+    return repository_blob.is_symlink() and repository_blob.resolve() == target
 
 
 class _ChemicalComponentStore:

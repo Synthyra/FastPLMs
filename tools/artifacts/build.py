@@ -1750,6 +1750,34 @@ def _validate_runtime_bundle(
         raise ArtifactError("Runtime bundle archive is invalid.") from error
 
 
+# Embedded in every generated bridge. Artifacts share one runtime package per process,
+# and Transformers keys its auto-model registry on the config class, so re-exporting
+# the shared classes let the first artifact's model class answer for a later artifact
+# with the same config class (ESMFold2 production after experimental, for example).
+ARTIFACT_CLASS_SOURCE = '''\
+def _artifact_class(base, config_class=None):
+    """Subclass a shared runtime class so this artifact registers its own classes.
+
+    The base constructor is kept explicitly because Transformers turns every config
+    subclass into a dataclass, which would otherwise generate a new constructor.
+    """
+    namespace = {
+        "__module__": __name__,
+        "__qualname__": base.__name__,
+        "__doc__": base.__doc__,
+        "__init__": base.__init__,
+    }
+    base_config_class = getattr(base, "config_class", None)
+    if (
+        config_class is not None
+        and isinstance(base_config_class, type)
+        and issubclass(config_class, base_config_class)
+    ):
+        namespace["config_class"] = config_class
+    return type(base.__name__, (base,), namespace)
+'''
+
+
 def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
     """Render the flat Transformers bridge to the bundled unchanged sources."""
 
@@ -1943,16 +1971,27 @@ def _render_bootstrap(spec: ModelSpec, runtime_hash: str) -> str:
         "    return package",
         "",
         "_install_runtime()",
+        "",
+        *ARTIFACT_CLASS_SOURCE.splitlines(),
+        "",
     ]
+    config_path = spec.auto_map.get("AutoConfig")
+    module_variables: dict[str, str] = {}
     for module_name in sorted(grouped):
         variable = f"_module_{len(lines)}"
+        module_variables[module_name] = variable
         lines.append(f'{variable} = _import_without_bytecode("{module_name}")')
+    config_name = None
+    if config_path is not None:
+        config_module, config_name = config_path.rsplit(".", maxsplit=1)
+        lines.append(f"{config_name} = _artifact_class({module_variables[config_module]}.{config_name})")
+    for module_name in sorted(grouped):
         for class_name in sorted(set(grouped[module_name])):
-            lines.extend(
-                (
-                    f"{class_name} = {variable}.{class_name}",
-                    f"{class_name}.__module__ = __name__",
-                )
+            if class_name == config_name and f"{module_name}.{class_name}" == config_path:
+                continue
+            config_argument = f", config_class={config_name}" if config_name is not None else ""
+            lines.append(
+                f"{class_name} = _artifact_class({module_variables[module_name]}.{class_name}{config_argument})"
             )
     lines.append("")
     return "\n".join(lines)

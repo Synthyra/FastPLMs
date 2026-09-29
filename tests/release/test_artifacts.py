@@ -37,6 +37,7 @@ from tools.artifacts import (
     verify_checkpoint,
 )
 from tools.artifacts.build import (
+    ARTIFACT_CLASS_SOURCE,
     _RELEASE_TOOL_SCOPE_PATHS,
     _canonical_state_sha256,
     _checkpoint_identity_hash,
@@ -1606,6 +1607,68 @@ def test_artifact_copies_official_tokenizer_bytes_exactly(tmp_path: Path) -> Non
         "tokenizer.json": official.files[-2].encoded,
         "tokenizer_config.json": official.files[-1].encoded,
     }
+
+
+def test_bridge_classes_resolve_per_artifact_when_config_class_is_shared() -> None:
+    """Two artifacts whose model classes share one runtime config class stay distinct.
+
+    ESMFold2 production and experimental models share ESMFold2Config. Before bridges
+    subclassed the runtime classes, loading one in a process made Transformers build
+    that model class for the other, leaving its confidence head randomly initialized.
+    """
+    from dataclasses import asdict, dataclass
+
+    from transformers import AutoModel, PreTrainedConfig, PreTrainedModel
+    from transformers.models.auto.auto_factory import _get_model_class
+
+    @dataclass
+    class NestedConfig:
+        width: int = 2
+
+    class SharedConfig(PreTrainedConfig):
+        model_type = "fastplms_bridge_probe"
+
+        def __init__(self, nested: dict | None = None, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            self.nested = NestedConfig(**(nested or {}))
+
+        def to_dict(self) -> dict:
+            output = super().to_dict()
+            output["nested"] = asdict(self.nested)
+            return output
+
+    class ProductionModel(PreTrainedModel):
+        config_class = SharedConfig
+
+    class ExperimentalModel(PreTrainedModel):
+        config_class = SharedConfig
+
+    def bridge_classes(bridge_name: str, model_class: type) -> tuple[type, type]:
+        namespace: dict[str, object] = {"__name__": f"transformers_modules.{bridge_name}.modeling_fastplms"}
+        exec(ARTIFACT_CLASS_SOURCE, namespace)
+        artifact_class = namespace["_artifact_class"]
+        config_class = artifact_class(SharedConfig)
+        return config_class, artifact_class(model_class, config_class=config_class)
+
+    production_config, production_model = bridge_classes("production", ProductionModel)
+    experimental_config, experimental_model = bridge_classes("experimental", ExperimentalModel)
+    mapping = AutoModel._model_mapping
+    try:
+        # What Transformers does for each trust_remote_code load, in load order.
+        AutoModel.register(production_config, production_model, exist_ok=True)
+        AutoModel.register(experimental_config, experimental_model, exist_ok=True)
+        assert _get_model_class(production_config(), mapping) is production_model
+        assert _get_model_class(experimental_config(), mapping) is experimental_model
+    finally:
+        mapping._extra_content.pop(production_config, None)
+        mapping._extra_content.pop(experimental_config, None)
+
+    assert experimental_model.__module__ == "transformers_modules.experimental.modeling_fastplms"
+    assert issubclass(experimental_model, ExperimentalModel)
+    assert experimental_model.config_class is experimental_config
+    config = experimental_config(nested={"width": 3})
+    assert config.nested == NestedConfig(width=3)
+    assert config.to_dict()["nested"] == {"width": 3}
 
 
 def test_artifact_rewrites_custom_tokenizer_auto_map_to_local_bridge(tmp_path: Path) -> None:
