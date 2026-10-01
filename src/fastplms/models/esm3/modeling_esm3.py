@@ -1103,7 +1103,7 @@ class RotaryEmbedding(nn.Module):
             or self._cos_cached is None
             or self._cos_cached.device != device
             or self._cos_cached.dtype != dtype
-            or (self.training and self._cos_cached.is_inference())
+            or (torch.is_grad_enabled() and self._cos_cached.is_inference())  # autograd cannot save inference-created tables, in eval mode too
         ):
             self._seq_len_cached = seqlen
             # ``inv_freq`` is non-persistent and may have been materialized
