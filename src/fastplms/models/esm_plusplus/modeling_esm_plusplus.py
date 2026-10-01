@@ -416,7 +416,7 @@ class RotaryEmbedding(torch.nn.Module):
             and self._seq_len_cached >= token_count
             and cached.device == device
             and cached.dtype == dtype
-            and not (self.training and cached.is_inference())
+            and not (torch.is_grad_enabled() and cached.is_inference())  # autograd cannot save inference-created tables, in eval mode too
         )
 
     def _rotary_angles(
