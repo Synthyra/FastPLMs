@@ -11,7 +11,6 @@ import torch
 import torch.nn.functional as functional
 
 from collections.abc import Sequence
-
 from torch import Tensor
 
 from .labels import PAE_MAX_ANGSTROM, PLDDT_BINS
@@ -22,7 +21,7 @@ EPSILON = 1e-8
 
 def expected_mean_plddt(plddt_logits: Tensor, atom_mask: Tensor) -> Tensor:
     """Mean expected pLDDT in [0, 1]; logits (b, a, 50) and mask (b, a) give (b,)."""
-    # b: batch items; a: atoms.
+    # plddt_logits: (b, a, 50); atom_mask: (b, a); b: batch items; a: atoms.
     centers = (torch.arange(PLDDT_BINS, device=plddt_logits.device) + 0.5) / PLDDT_BINS  # (50,)
     per_atom = (plddt_logits.float().softmax(-1) * centers).sum(-1)  # (b, a)
     mask = atom_mask.float()  # (b, a)
@@ -31,7 +30,7 @@ def expected_mean_plddt(plddt_logits: Tensor, atom_mask: Tensor) -> Tensor:
 
 def expected_tm_scores(pae_logits: Tensor, asym_id: Tensor, token_mask: Tensor) -> tuple[Tensor, Tensor]:
     """pTM and ipTM from PAE logits (b, t, t, bins), as the head computes them; returns (b,), (b,)."""
-    # b: batch items; t: tokens; asym_id/token_mask: (b, t).
+    # pae_logits: (b, t, t, bins); asym_id, token_mask: (b, t); b: batch items; t: tokens.
     bins = pae_logits.shape[-1]
     width = PAE_MAX_ANGSTROM / bins
     centers = torch.arange(0.5 * width, PAE_MAX_ANGSTROM, width, device=pae_logits.device)  # (bins,)

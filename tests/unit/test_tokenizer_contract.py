@@ -13,6 +13,7 @@ from threading import Barrier
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
+from tests.conftest import CANONICAL_AAS, FULL_MODEL_REGISTRY, mark_by_size
 from transformers import AutoModelForMaskedLM, AutoTokenizer, EsmTokenizer, PretrainedConfig
 
 from fastplms.models.ankh.modeling_ankh import (
@@ -45,7 +46,6 @@ from fastplms.models.esm3.modeling_esm3 import (
     EsmSequenceTokenizer as ESM3SequenceTokenizer,
 )
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import EsmSequenceTokenizer
-from tests.conftest import CANONICAL_AAS, FULL_MODEL_REGISTRY, mark_by_size
 
 
 TOKENIZER_REFERENCE_KEYS = [
@@ -274,8 +274,8 @@ def test_tokenizer_context_survives_loading_info_and_concurrent_lazy_loads(
         loaded_models.append(loaded)
         loading_infos.append(loading_info)
 
-    assert all(not info["missing_keys"] for info in loading_infos)
-    assert all(not info["unexpected_keys"] for info in loading_infos)
+    assert all(not loading_report["missing_keys"] for loading_report in loading_infos)
+    assert all(not loading_report["unexpected_keys"] for loading_report in loading_infos)
     assert all(
         "secret-" not in json.dumps(model.config.to_dict(), default=str)
         for model in loaded_models

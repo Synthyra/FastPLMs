@@ -10,14 +10,17 @@ import torch
 
 from collections.abc import Mapping
 from pathlib import Path
-
-from fastplms.registry import get_model_registry
+from tests.conftest import validation_pins
 from tests.structure.support import esmfold_bundle
+from tests.structure.support.compliance_metrics import aligned_ca_rmsd, bundle_output, lddt_ca
 from tests.structure.support.esmfold_bundle import load_bundle, load_request
 from tests.structure.support.hardware import (
     assert_same_device,
     device_fingerprint,
 )
+from tests.structure.support.state_contract import checkpoint_metadata, upstream_metadata
+
+from fastplms.registry import get_model_registry
 
 
 relative_l2_targets = {"fp32": 2e-6, "bf16": 1e-2}
@@ -57,106 +60,47 @@ def _paths(precision: str) -> tuple[Path, Path, Path]:
     return request, reference, candidate
 
 
-def _checkpoint_contract(checkpoint: object) -> dict[str, object]:
-    return {
-        "repo_id": checkpoint.repo_id,
-        "revision": checkpoint.revision,
-        "files": [
-            {
-                "path": item.path,
-                "algorithm": item.algorithm,
-                "digest": item.digest,
-            }
-            for item in checkpoint.files
-        ],
-    }
-
-
-def _upstream_contract(upstream: object) -> dict[str, object]:
-    return {
-        "id": upstream.id,
-        "path": upstream.path,
-        "url": upstream.url,
-        "revision": upstream.revision,
-        "license_expression": upstream.license_expression,
-    }
-
-
-def _output(tensors: Mapping[str, torch.Tensor], name: str) -> torch.Tensor:
-    key = f"output__{name}"
-    if key not in tensors:
-        raise KeyError(f"ESMFold bundle omits required output {name!r}.")
-    return tensors[key]
-
-
 def _residue_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    # tensors: (...) one tensor per bundle name; output__atom37_atom_exists (b, l, 37), output__positions (n_blocks, b, l, 14, 3), output__plddt (b, l, 37), output__predicted_aligned_error (b, l, l)
     # atom37_mask: (b, l, 37); b is batch size and l is residue length.
-    atom37_mask = _output(tensors, "atom37_atom_exists").bool()
+    atom37_mask = bundle_output(tensors, "atom37_atom_exists").bool()
     assert atom37_mask.ndim == 3 and atom37_mask.shape[-1] == 37
-    return atom37_mask[0, :, 1]
+    return atom37_mask[0, :, 1]  # (l,) boolean, true at each resolved residue
 
 
 def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    # tensors: (...) one tensor per bundle name; output__atom37_atom_exists (b, l, 37), output__positions (n_blocks, b, l, 14, 3), output__plddt (b, l, 37), output__predicted_aligned_error (b, l, l)
     # P is the atom14 position tensor with shape (n_blocks, b, l, 14, 3).
-    P = _output(tensors, "positions").float()
+    P = bundle_output(tensors, "positions").float()
     assert P.ndim == 5 and P.shape[-2:] == (14, 3)
     # coordinates: (..., 3)
     coordinates = P[-1, 0, :, 1]
-    return coordinates[_residue_mask(tensors)]
-
-
-def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
-    actual_centered = actual.float() - actual.float().mean(dim=0, keepdim=True)  # (n, 3)
-    expected_centered = expected.float() - expected.float().mean(dim=0, keepdim=True)  # (n, 3)
-    covariance = actual_centered.T @ expected_centered  # (3, 3)
-    left, _, right = torch.linalg.svd(covariance)
-    # correction: (3, 3)
-    correction = torch.eye(3, dtype=torch.float32)
-    correction[-1, -1] = torch.sign(torch.det(left @ right))
-    rotation = left @ correction @ right  # (3, 3)
-    aligned = actual_centered @ rotation  # (n, 3)
-    return torch.sqrt(torch.mean(torch.sum((aligned - expected_centered) ** 2, dim=-1))).item()
-
-
-def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
-    actual_distances = torch.cdist(actual.float(), actual.float())  # (n, n)
-    expected_distances = torch.cdist(expected.float(), expected.float())  # (n, n)
-    # pair_mask: (n, n)
-    pair_mask = expected_distances.lt(15.0)
-    pair_mask.fill_diagonal_(False)
-    assert pair_mask.any(), "No valid C-alpha pairs for ESMFold lDDT."
-    errors = (actual_distances - expected_distances).abs()  # (n, n)
-    # scores: (n, n)
-    scores = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
-        dim=0
-    )
-    return scores[pair_mask].mean().item()
+    return coordinates[_residue_mask(tensors)]  # (l, 3) one C-alpha coordinate per residue
 
 
 def _structure_metrics(
     actual: Mapping[str, torch.Tensor],
     expected: Mapping[str, torch.Tensor],
 ) -> dict[str, float]:
+    # actual, expected: (...) one tensor per bundle name; output__atom37_atom_exists (b, l, 37), output__positions (n_blocks, b, l, 14, 3), output__plddt (b, l, 37), output__predicted_aligned_error (b, l, l)
     residue_mask = _residue_mask(actual)
     # pair_mask: (l, l), covering valid residue pairs.
     pair_mask = residue_mask[:, None] & residue_mask[None, :]
     # Meta ESMFold reports pLDDT on (0, 100); compliance uses (0, 1).
     # actual_plddt: (l,), using the C-alpha slot.
-    actual_plddt = _output(actual, "plddt").float()[0, :, 1] / 100.0
+    actual_plddt = bundle_output(actual, "plddt").float()[0, :, 1] / 100.0
     # expected_plddt: (l,), using the C-alpha slot.
-    expected_plddt = _output(expected, "plddt").float()[0, :, 1] / 100.0
+    expected_plddt = bundle_output(expected, "plddt").float()[0, :, 1] / 100.0
     # actual_pae: (l, l)
-    actual_pae = _output(actual, "predicted_aligned_error").float()[0]
+    actual_pae = bundle_output(actual, "predicted_aligned_error").float()[0]
     # expected_pae: (l, l)
-    expected_pae = _output(expected, "predicted_aligned_error").float()[0]
+    expected_pae = bundle_output(expected, "predicted_aligned_error").float()[0]
     return {
-        "ca_rmsd": _aligned_ca_rmsd(
+        "ca_rmsd": aligned_ca_rmsd(
             _ca_coordinates(actual),
             _ca_coordinates(expected),
         ),
-        "lddt_ca": _lddt_ca(
+        "lddt_ca": lddt_ca(
             _ca_coordinates(actual),
             _ca_coordinates(expected),
         ),
@@ -166,8 +110,8 @@ def _structure_metrics(
         .item(),
         "pae_mae": (actual_pae[pair_mask] - expected_pae[pair_mask]).abs().mean().item(),
         "ptm_error": (
-            _output(actual, "ptm").float().reshape(-1)[0]
-            - _output(expected, "ptm").float().reshape(-1)[0]
+            bundle_output(actual, "ptm").float().reshape(-1)[0]
+            - bundle_output(expected, "ptm").float().reshape(-1)[0]
         )
         .abs()
         .item(),
@@ -179,7 +123,7 @@ def _relative_l2(
     expected: torch.Tensor,
     mask: torch.Tensor,
 ) -> float:
-    # actual and expected share shape s; mask covers the leading axes of s.
+    # actual, expected: (...) shared shape s; mask: (...) covers the leading axes of s.
     while mask.ndim < actual.ndim:
         # Append a singleton feature axis until mask can broadcast to shape s.
         mask = mask.unsqueeze(-1)
@@ -196,23 +140,24 @@ def _logit_metrics(
     actual: Mapping[str, torch.Tensor],
     expected: Mapping[str, torch.Tensor],
 ) -> dict[str, float]:
+    # actual, expected: (...) one tensor per bundle name; output__atom37_atom_exists (b, l, 37), output__positions (n_blocks, b, l, 14, 3), output__plddt (b, l, 37), output__predicted_aligned_error (b, l, l); the logits outputs end in their own class axis
     residue_mask = _residue_mask(actual)
     # pair_mask: (l, l), covering valid residue pairs.
     pair_mask = residue_mask[:, None] & residue_mask[None, :]
     return {
         "distogram_logits": _relative_l2(
-            _output(actual, "distogram_logits"),
-            _output(expected, "distogram_logits"),
+            bundle_output(actual, "distogram_logits"),
+            bundle_output(expected, "distogram_logits"),
             pair_mask.unsqueeze(0),
         ),
         "ptm_logits": _relative_l2(
-            _output(actual, "ptm_logits"),
-            _output(expected, "ptm_logits"),
+            bundle_output(actual, "ptm_logits"),
+            bundle_output(expected, "ptm_logits"),
             pair_mask.unsqueeze(0),
         ),
         "lm_logits": _relative_l2(
-            _output(actual, "lm_logits"),
-            _output(expected, "lm_logits"),
+            bundle_output(actual, "lm_logits"),
+            bundle_output(expected, "lm_logits"),
             residue_mask.unsqueeze(0),
         ),
     }
@@ -223,6 +168,7 @@ def _assert_valid_bundle(
     *,
     context: str,
 ) -> None:
+    # tensors: (...) one tensor per bundle name; output__atom37_atom_exists (b, l, 37), output__positions (n_blocks, b, l, 14, 3), output__plddt (b, l, 37), output__predicted_aligned_error (b, l, l)
     residue_mask = _residue_mask(tensors)
     assert residue_mask.sum().item() == len(esmfold_bundle.fold_sequence)
     for name, tensor in tensors.items():
@@ -247,10 +193,10 @@ def _assert_bundle_identity(
     assert metadata["producer"] == producer
     assert metadata["model_id"] == spec.id
     assert metadata["request_sha256"] == request["request_sha256"]
-    assert metadata["official"] == _checkpoint_contract(spec.official)
-    assert metadata["candidate"] == _checkpoint_contract(spec.fast)
+    assert metadata["official"] == checkpoint_metadata(spec.official)
+    assert metadata["candidate"] == checkpoint_metadata(spec.fast)
     assert metadata["upstreams"] == [
-        _upstream_contract(registry.upstreams[name]) for name in ("fair-esm", "openfold")
+        upstream_metadata(registry.upstreams[name]) for name in ("fair-esm", "openfold")
     ]
     assert metadata["sequence"] == esmfold_bundle.fold_sequence
     assert metadata["seed"] == esmfold_bundle.fold_seed
@@ -268,11 +214,12 @@ def _assert_bundle_identity(
     assert isinstance(environment, Mapping)
     device_fingerprint(environment)
     if producer == "candidate":
-        assert str(environment["torch"]).split("+", maxsplit=1)[0] == "2.13.0"
+        pins = validation_pins()
+        assert str(environment["torch"]).split("+", maxsplit=1)[0] == pins["torch"]
         assert str(environment["cuda_runtime"]).startswith("13.0")
         packages = environment["packages"]
         assert isinstance(packages, Mapping)
-        assert packages["transformers"] == "5.13.0"
+        assert packages["transformers"] == pins["transformers"]
 
 
 def test_esmfold_reference_path_has_no_fastplms_dependency() -> None:
@@ -297,8 +244,8 @@ def test_prepare_esmfold_request_is_manifest_exact(tmp_path: Path) -> None:
     request = load_request(path)
     registry = get_model_registry()
     spec = registry[esmfold_bundle.model_id]
-    assert request["official"] == _checkpoint_contract(spec.official)
-    assert request["candidate"] == _checkpoint_contract(spec.fast)
+    assert request["official"] == checkpoint_metadata(spec.official)
+    assert request["candidate"] == checkpoint_metadata(spec.fast)
     assert request["candidate_auto_model"] == spec.auto_map["AutoModel"]
     assert request["adapter"] == spec.family.reference_adapter
     assert request["deterministic_algorithms"] is True
@@ -310,8 +257,8 @@ def test_esmfold_metric_helpers_are_exact_for_rigid_identity() -> None:
     # rotation: (3, 3)
     rotation = torch.tensor([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
     actual = expected @ rotation + torch.tensor([4.0, -2.0, 7.0])
-    assert _aligned_ca_rmsd(actual, expected) == pytest.approx(0.0, abs=1e-5)
-    assert _lddt_ca(actual, expected) == pytest.approx(1.0)
+    assert aligned_ca_rmsd(actual, expected) == pytest.approx(0.0, abs=1e-5)
+    assert lddt_ca(actual, expected) == pytest.approx(1.0)
 
 
 def test_esmfold_tensor_hash_accepts_scalar_outputs() -> None:
@@ -353,8 +300,8 @@ def test_esmfold_live_official_structure_parity(precision: str) -> None:
     assert candidate_metadata["state"] == reference_metadata["state"]
     assert reference_tensors.keys() == candidate_tensors.keys()
     for name in esmfold_bundle._exact_outputs:
-        actual = _output(candidate_tensors, name)
-        expected = _output(reference_tensors, name)
+        actual = bundle_output(candidate_tensors, name)
+        expected = bundle_output(reference_tensors, name)
         assert actual.dtype == expected.dtype, name
         assert actual.shape == expected.shape, name
         assert torch.equal(actual, expected), name

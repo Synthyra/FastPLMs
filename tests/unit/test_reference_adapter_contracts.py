@@ -7,7 +7,6 @@ import torch
 import torch.nn as nn
 
 from types import SimpleNamespace
-
 from tests.parity.support.native_reference import (
     _adapter_reference_sources,
     _generation_contract,
@@ -21,6 +20,7 @@ from tests.parity.support.reference_adapters.dplm2 import (
     _call_checkpoint_forward,
     _call_checkpoint_generate,
 )
+
 from tools.remote.reference_source_attestation import ReferenceSourceAttestationError
 
 
@@ -44,6 +44,7 @@ class _AcceptsKeywordArguments(nn.Module):
 
 class _RejectsTypeIds(nn.Module):
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        # input_ids: (b, l)
         return input_ids  # (b, l)
 
 
@@ -53,6 +54,7 @@ class _OfficialWrapper(nn.Module):
         self.generation_calls: list[dict[str, object]] = []
 
     def forward(self, input_ids: torch.Tensor) -> torch.Tensor:
+        # input_ids: (b, l)
         return input_ids + 1  # (b, l)
 
     def generate(self, input_tokens: torch.Tensor, **kwargs: object) -> torch.Tensor:
@@ -72,7 +74,7 @@ class _CheckpointNetwork(_RejectsTypeIds):
         max_iter: int,
         sampling_strategy: str,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # batch["input_ids"]: (b, l)
+        # batch: (...) one tensor per name; input_ids (b, l)
         self.generation_calls.append(
             {
                 "batch": batch,
@@ -97,6 +99,7 @@ class EsmForDPLM(_RejectsTypeIds):
         max_iter: int,
         sampling_strategy: str,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        # batch: (...) one tensor per name; input_ids (b, l)
         del max_iter, sampling_strategy
         tokens = batch["input_ids"]  # (b, l)
         tokens.ne(self.bos_id)

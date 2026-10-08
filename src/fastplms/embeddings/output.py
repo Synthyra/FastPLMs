@@ -125,11 +125,12 @@ class EmbeddingOutput:
             }
             self.sqlite_run_id = run_fingerprint
             if not resume and output_already_exists:
+                prior_run_readable = True
                 try:
                     load_sqlite_result(output, run_id=run_fingerprint)
                 except KeyError:
-                    pass
-                else:
+                    prior_run_readable = False
+                if prior_run_readable:
                     # Keep an exact prior run readable until replacement inference
                     # has produced the first complete commit window.
                     self.sqlite_replace_on_first_commit = True
@@ -209,7 +210,9 @@ class EmbeddingOutput:
             return load_sqlite_result(self.output, run_id=self.sqlite_run_id)
         if self.safetensors_writer is not None:
             return self.safetensors_writer.publish(complete=True, metadata=metadata)
-        result = EmbeddingResult(self.output_records, metadata)
+        embedding_result = EmbeddingResult(self.output_records, metadata)
         if self.output is not None:
-            return save_result(result, self.output, format=self.format, shard_size=self.shard_size)
-        return result
+            return save_result(
+                embedding_result, self.output, format=self.format, shard_size=self.shard_size
+            )
+        return embedding_result

@@ -11,10 +11,14 @@ import platform
 import re
 import subprocess
 import sys
+
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from fastplms.digests import json_sha256
+from tools.stored_files import write_stored_bytes, write_stored_json
 
 
 SCHEMA_VERSION = 1
@@ -388,30 +392,7 @@ def _counter_records(counter: Counter[Fingerprint]) -> list[dict[str, object]]:
 
 
 def _fingerprint_sha256(counter: Counter[Fingerprint]) -> str:
-    payload = json.dumps(
-        _counter_records(counter),
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _write_json(path: Path, value: Mapping[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(value, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    temporary.replace(path)
-
-
-def _write_bytes(path: Path, payload: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_bytes(payload)
-    temporary.replace(path)
+    return json_sha256(_counter_records(counter))
 
 
 def _run_mypy(repo_root: Path) -> tuple[int, bytes]:
@@ -478,7 +459,7 @@ def _records_counter(
 ) -> Counter[Fingerprint]:
     if not isinstance(value, list):
         raise TypingGateError("Typing baseline fingerprints must be an array.")
-    result: Counter[Fingerprint] = Counter()
+    counts: Counter[Fingerprint] = Counter()
     for record in value:
         if not isinstance(record, dict) or set(record) != {"path", "code", "message", "count"}:
             raise TypingGateError("Typing baseline contains a malformed fingerprint.")
@@ -494,10 +475,10 @@ def _records_counter(
             message=_require_string(record["message"], "fingerprint message"),
         )
         count = _require_nonnegative_int(record["count"], "fingerprint count")
-        if count == 0 or fingerprint in result:
+        if count == 0 or fingerprint in counts:
             raise TypingGateError("Typing baseline fingerprints must be positive and unique.")
-        result[fingerprint] = count
-    return result
+        counts[fingerprint] = count
+    return counts
 
 
 def _validate_pinned_baseline_identity(value: Mapping[str, object]) -> None:
@@ -807,7 +788,7 @@ def _baseline_command(arguments: argparse.Namespace) -> int:
         source_files,
     )
     mypy_exit_code, raw_report = _run_mypy(arguments.repo_root)
-    _write_bytes(arguments.raw_output, raw_report)
+    write_stored_bytes(arguments.raw_output, raw_report)
     _print_report_tail(raw_report)
     if verified_git_head(arguments.repo_root, scope) != revision:
         raise TypingGateError("Baseline Git HEAD changed while evidence was generated.")
@@ -835,7 +816,7 @@ def _baseline_command(arguments: argparse.Namespace) -> int:
         mypy_exit_code=mypy_exit_code,
     )
     _validate_pinned_baseline_identity(payload)
-    _write_json(arguments.output, payload)
+    write_stored_json(arguments.output, payload, newline="\n")
     return 0
 
 
@@ -854,7 +835,7 @@ def _compare_command(arguments: argparse.Namespace) -> int:
         source_files,
     )
     mypy_exit_code, raw_report = _run_mypy(arguments.repo_root)
-    _write_bytes(arguments.raw_output, raw_report)
+    write_stored_bytes(arguments.raw_output, raw_report)
     _print_report_tail(raw_report)
     final_source_files = discover_source_files(arguments.repo_root, scope)
     final_inventory_sha256, final_tree_sha256 = source_digests(
@@ -875,7 +856,7 @@ def _compare_command(arguments: argparse.Namespace) -> int:
             raw_report=raw_report,
             reasons=["candidate source tree changed during mypy execution"],
         )
-        _write_json(arguments.output, payload)
+        write_stored_json(arguments.output, payload, newline="\n")
         return 1
     try:
         text = raw_report.decode("utf-8")
@@ -903,7 +884,7 @@ def _compare_command(arguments: argparse.Namespace) -> int:
             raw_report=raw_report,
             reasons=reasons,
         )
-        _write_json(arguments.output, payload)
+        write_stored_json(arguments.output, payload, newline="\n")
         return 1
     payload = compare_payload(
         baseline=baseline,
@@ -917,7 +898,7 @@ def _compare_command(arguments: argparse.Namespace) -> int:
     )
     payload["raw_report_sha256"] = hashlib.sha256(raw_report).hexdigest()
     payload["candidate_output_parsed"] = True
-    _write_json(arguments.output, payload)
+    write_stored_json(arguments.output, payload, newline="\n")
     return 0 if payload["status"] == "passed" else 1
 
 

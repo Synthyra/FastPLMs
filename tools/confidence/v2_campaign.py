@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import subprocess
@@ -10,8 +9,12 @@ import time
 
 from pathlib import Path
 
+from fastplms.digests import file_sha256
+from tools.stored_files import write_stored_json
 
-DATASET_REPO = "Synthyra/AtlasFold-Data"
+
+# Moved from Synthyra/AtlasFold-Data on 2026-10-08 with its history, so the revision is the same commit.
+DATASET_REPO = "lhallee/AtlasFold-Data"
 DATASET_REVISION = "98b5212fd04cc34e3cdcb43c9bc6a66639ef4041"
 ARTIFACT_REPO = "Synthyra/FastPLMs-artifacts"
 HISTORICAL_SPLIT_SHA256 = (
@@ -20,18 +23,6 @@ HISTORICAL_SPLIT_SHA256 = (
 MODEL_IDS = ("esmfold2_300", "esmfold2_600")
 PLANNED_UPDATES = 780
 TRAINING_SECONDS = 73_800
-
-
-def write_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
-def file_hash(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def configure_host(root: Path, worker: str) -> None:
@@ -56,7 +47,7 @@ def validate_prepared(root: Path) -> dict[str, object]:
     if receipt["dataset_revision"] != DATASET_REVISION or receipt["status"] != "prepared":
         raise ValueError("Prepared data does not match the campaign dataset pin")
     for name, digest in receipt["pilot_files"].items():
-        if file_hash(root / "pilot" / name) != digest:
+        if file_sha256(root / "pilot" / name) != digest:
             raise ValueError(f"Pilot input changed: {name}")
     targets = load_split(root / "splits")
     for name in {str(target["positions_file"]) for target in targets}:
@@ -91,12 +82,12 @@ def prepare_data(root: Path, pilot_root: Path, workers: int = 8) -> dict[str, ob
     source_files = sorted(dataset_root.glob("data/*/*.parquet"))
     if len(source_files) != 80:
         raise ValueError(f"Expected 80 pinned AtlasFold Parquets, found {len(source_files)}")
-    inventory = {path.relative_to(dataset_root).as_posix(): {"sha256": file_hash(path), "size": path.stat().st_size} for path in source_files}
-    write_json(root / "dataset.json", {"repo_id": DATASET_REPO, "revision": DATASET_REVISION, "files": inventory})
+    inventory = {path.relative_to(dataset_root).as_posix(): {"sha256": file_sha256(path), "size": path.stat().st_size} for path in source_files}
+    write_stored_json(root / "dataset.json", {"repo_id": DATASET_REPO, "revision": DATASET_REVISION, "files": inventory}, sort_keys=False)
     pool = build_pool(dataset_root, root / "pool", workers)
     splits = build_splits(root / "pool", pilot / "records.json", root / "splits", "mmseqs", workers)
     load_split(root / "splits")
-    result = {
+    preparation_record = {
         "status": "prepared",
         "dataset_revision": DATASET_REVISION,
         "pool": pool,
@@ -105,10 +96,10 @@ def prepare_data(root: Path, pilot_root: Path, workers: int = 8) -> dict[str, ob
         "matches_historical_split_bytes": splits["targets_sha256"] == HISTORICAL_SPLIT_SHA256,
         "test_set_status": "spent",
         "mmseqs_version": subprocess.check_output(["mmseqs", "version"], text=True).strip(),
-        "pilot_files": {path.name: file_hash(path) for path in sorted(pilot.iterdir())},
+        "pilot_files": {path.name: file_sha256(path) for path in sorted(pilot.iterdir())},
     }
-    write_json(receipt, result)
-    return result
+    write_stored_json(receipt, preparation_record, sort_keys=False)
+    return preparation_record
 
 
 def publish_files(root: Path, names: list[str], group: str) -> str:
@@ -140,7 +131,7 @@ def publish_files(root: Path, names: list[str], group: str) -> str:
             # Other campaign workers publish disjoint files to the same dataset branch.
             time.sleep(attempt + 1)
     revision = str(commit.oid)
-    write_json(root / "uploads" / f"{group}.json", {"repo_id": ARTIFACT_REPO, "revision": revision, "files": names})
+    write_stored_json(root / "uploads" / f"{group}.json", {"repo_id": ARTIFACT_REPO, "revision": revision, "files": names}, sort_keys=False)
     return revision
 
 

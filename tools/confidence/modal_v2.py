@@ -7,29 +7,33 @@ import json
 import subprocess
 import sys
 import time
-
 import modal
 
 from pathlib import Path
 
+from fastplms.digests import file_sha256
+from tools.stored_files import write_stored_json
 from .modal_app import (
     base_image,
     credentials,
     volume as pilot_volume,
+    hf_volume,
+    MOUNTS,
     with_source_files,
 )
-from .v2_campaign import MODEL_IDS, PLANNED_UPDATES, prepare_data, write_json
+from .v2_campaign import MODEL_IDS, PLANNED_UPDATES, prepare_data
+from .volume_artifacts import ARTIFACT_VOLUME, PILOT_ROOT, V2_ROOT, restore_v2
 
 
 ROOT = Path(__file__).resolve().parents[2]
-VOLUME_NAME = "fastplms-confidence-v2"
+VOLUME_NAME = ARTIFACT_VOLUME
 TRAINING_GPU = "RTX-PRO-6000"
-REMOTE_ROOT = Path("/experiment")
+REMOTE_ROOT = V2_ROOT
 app = modal.App("fastplms-confidence-v2")
-volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+volume = pilot_volume
 image = with_source_files(
     base_image.uv_pip_install(
-        "datasets>=4,<5",
+        "datasets>=5.0",
         "cuequivariance==0.10.0",
         "cuequivariance-torch==0.10.0",
         "cuequivariance-ops-torch-cu13==0.10.0",
@@ -40,14 +44,13 @@ training_image = with_source_files(
         "torch==2.13.0+cu132", index_url="https://download.pytorch.org/whl/cu132"
     )
     .uv_pip_install(
-        "datasets>=4,<5",
+        "datasets>=5.0",
         "cuequivariance==0.10.0",
         "cuequivariance-torch==0.10.0",
         "cuequivariance-ops-torch-cu13==0.10.0",
     )
     .env({"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
 )
-MOUNTS = {"/vol": pilot_volume, str(REMOTE_ROOT): volume}
 
 
 def campaign_root(campaign: str) -> Path:
@@ -60,10 +63,10 @@ def campaign_root(campaign: str) -> Path:
 def prepare(campaign: str) -> dict[str, object]:
     root = campaign_root(campaign)
     try:
-        return prepare_data(root, Path("/vol/confidence"))
+        return prepare_data(root, PILOT_ROOT)
     finally:
         volume.commit()
-        pilot_volume.commit()
+        hf_volume.commit()
 
 
 @app.function(image=image, cpu=4, memory=32768, timeout=1800, volumes=MOUNTS, max_containers=1)
@@ -83,12 +86,12 @@ def verify(campaign: str) -> dict[str, object]:
     completed = subprocess.run([sys.executable, "-m", "pytest", "-q", "-m", "not gpu", *paths], capture_output=True, text=True)
     from .experiment_artifacts import source_identity
 
-    result = {"status": "passed" if completed.returncode == 0 else "failed", "returncode": completed.returncode, "output": completed.stdout + completed.stderr, "source_files": source_identity(ROOT)}
-    write_json(campaign_root(campaign) / "verification.json", result)
+    verification = {"status": "passed" if completed.returncode == 0 else "failed", "returncode": completed.returncode, "output": completed.stdout + completed.stderr, "source_files": source_identity(ROOT)}
+    write_stored_json(campaign_root(campaign) / "verification.json", verification, sort_keys=False)
     volume.commit()
     if completed.returncode:
-        raise RuntimeError(result["output"])
-    return result
+        raise RuntimeError(verification["output"])
+    return verification
 
 
 @app.function(image=training_image, cpu=4, memory=65536, gpu=TRAINING_GPU, timeout=79200, startup_timeout=900, volumes=MOUNTS, secrets=[credentials], max_containers=2)
@@ -97,22 +100,22 @@ def train(campaign: str, model_id: str) -> dict[str, object]:
 
     root = campaign_root(campaign)
     status_path = root / "status" / f"train-{model_id}.json"
-    write_json(status_path, {"status": "running", "model_id": model_id})
+    write_stored_json(status_path, {"status": "running", "model_id": model_id}, sort_keys=False)
     try:
-        result = train_model(root, model_id)
+        training_report = train_model(root, model_id)
         volume.commit()
         archive.remote(campaign, f"train-{model_id}")
-        if result["updates"] != PLANNED_UPDATES:
-            raise RuntimeError(f"Training stopped after {result['updates']}/{PLANNED_UPDATES} updates; checkpoint saved, reproduction incomplete")
+        if training_report["updates"] != PLANNED_UPDATES:
+            raise RuntimeError(f"Training stopped after {training_report['updates']}/{PLANNED_UPDATES} updates; checkpoint saved, reproduction incomplete")
         evaluation = evaluate.spawn(campaign, model_id)
-        write_json(status_path, {"status": "complete", "report": result, "evaluation_call_id": evaluation.object_id})
-        return result
+        write_stored_json(status_path, {"status": "complete", "report": training_report, "evaluation_call_id": evaluation.object_id}, sort_keys=False)
+        return training_report
     except BaseException as error:
-        write_json(status_path, {"status": "failed", "error": str(error), "model_id": model_id})
+        write_stored_json(status_path, {"status": "failed", "error": str(error), "model_id": model_id}, sort_keys=False)
         raise
     finally:
         volume.commit()
-        pilot_volume.commit()
+        hf_volume.commit()
 
 
 def run_evaluation(
@@ -132,7 +135,7 @@ def run_evaluation(
         if remaining <= 0:
             raise TimeoutError("Recovery deadline expired; refusing more GPU work")
 
-    write_json(status_path, {"status": "running", "model_id": model_id})
+    write_stored_json(status_path, {"status": "running", "model_id": model_id}, sort_keys=False)
     try:
         if resume:
             subprocess.run(
@@ -150,17 +153,17 @@ def run_evaluation(
             evaluate_model(root, model_id)
         volume.commit()
         archive.remote(campaign, f"evaluate-{model_id}")
-        result = {"status": "complete", "model_id": model_id}
-        write_json(status_path, result)
-        return result
+        status_record = {"status": "complete", "model_id": model_id}
+        write_stored_json(status_path, status_record, sort_keys=False)
+        return status_record
     except BaseException as error:
-        write_json(
-            status_path, {"status": "failed", "error": str(error), "model_id": model_id}
+        write_stored_json(
+            status_path, {"status": "failed", "error": str(error), "model_id": model_id}, sort_keys=False
         )
         raise
     finally:
         volume.commit()
-        pilot_volume.commit()
+        hf_volume.commit()
 
 
 @app.function(
@@ -192,18 +195,18 @@ def reference(campaign: str) -> dict[str, object]:
 def archive(campaign: str, group: str) -> dict[str, object]:
     from . import host
     from .experiment_artifacts import source_identity
-    from .v2_campaign import configure_host, evaluations_archived, export_evaluation, file_hash, publish_files
+    from .v2_campaign import configure_host, evaluations_archived, export_evaluation, publish_files
 
     volume.reload()
     root = campaign_root(campaign)
     if group == "inputs":
-        write_json(root / "source-files.json", source_identity(ROOT))
+        write_stored_json(root / "source-files.json", source_identity(ROOT), sort_keys=False)
         names = ["prepared.json", "dataset.json", "source-files.json", "verification.json", "splits/targets.parquet", "splits/split-report.json", "pilot/records.json"]
     elif group.startswith("train-") and group[6:] in MODEL_IDS:
         model_id = group[6:]
         relative = f"runs/{model_id}/v2"
         names = [f"{relative}/{name}" for name in ("final-ema.safetensors", "best-ema.safetensors", "report.json", "wandb-id.txt")]
-        write_json(root / relative / "file-identities.json", {name: file_hash(root / name) for name in names})
+        write_stored_json(root / relative / "file-identities.json", {name: file_sha256(root / name) for name in names}, sort_keys=False)
         names.append(f"{relative}/file-identities.json")
     elif group.startswith("evaluate-") and group[9:] in (*MODEL_IDS, "esmfold2"):
         names = export_evaluation(root, group[9:])
@@ -220,7 +223,7 @@ def archive(campaign: str, group: str) -> dict[str, object]:
                     host.stage_acceptance(model_id, campaign)
                 acceptance_names.append(name)
             acceptance_revision = publish_files(root, acceptance_names, "acceptance")
-            write_json(root / "complete.json", {"status": "complete", "acceptance_revision": acceptance_revision, "model_publication": "pending_review", "test_set_status": "spent"})
+            write_stored_json(root / "complete.json", {"status": "complete", "acceptance_revision": acceptance_revision, "model_publication": "pending_review", "test_set_status": "spent"}, sort_keys=False)
         return {"status": "archived", "group": group, "revision": revision}
     finally:
         volume.commit()
@@ -238,7 +241,7 @@ def start_evaluation(campaign: str, model_id: str) -> dict[str, object]:
         [sys.executable, "-m", "pytest", "-q", "tests/unit/test_confidence_v2_campaign.py", "tests/unit/test_confidence_experiment_artifacts.py"],
         capture_output=True, text=True, timeout=120,
     )
-    write_json(root / "status" / f"recovery-checks-{model_id}.json", {"returncode": checked.returncode, "output": checked.stdout + checked.stderr})
+    write_stored_json(root / "status" / f"recovery-checks-{model_id}.json", {"returncode": checked.returncode, "output": checked.stdout + checked.stderr}, sort_keys=False)
     volume.commit()
     if checked.returncode:
         raise RuntimeError(checked.stdout + checked.stderr)
@@ -251,7 +254,7 @@ def start_evaluation(campaign: str, model_id: str) -> dict[str, object]:
     volume.commit()
     call = evaluate.spawn(campaign, model_id)
     receipt = {"status": "dispatched", "model_id": model_id, "call_id": call.object_id, "gpu": TRAINING_GPU, "timeout_seconds": 14400}
-    write_json(receipt_path, receipt)
+    write_stored_json(receipt_path, receipt, sort_keys=False)
     volume.commit()
     return receipt
 
@@ -303,7 +306,7 @@ def resume_evaluation(
          "tests/unit/test_confidence_v2_campaign.py"],
         capture_output=True, text=True, timeout=180,
     )
-    write_json(root / "status" / f"resume-checks-{model_id}.json", {"returncode": checked.returncode, "output": checked.stdout + checked.stderr})
+    write_stored_json(root / "status" / f"resume-checks-{model_id}.json", {"returncode": checked.returncode, "output": checked.stdout + checked.stderr}, sort_keys=False)
     volume.commit()
     if checked.returncode:
         raise RuntimeError(checked.stdout + checked.stderr)
@@ -356,11 +359,11 @@ def resume_evaluation(
                 "started": time.time() - prior_elapsed_seconds,
             }
         )
-        write_json(ledger_path, entries)
+        write_stored_json(ledger_path, entries, sort_keys=False)
     volume.commit()
     call = continue_evaluation.spawn(campaign, model_id)
     receipt = {"status": "dispatched", "call_id": call.object_id, **metadata}
-    write_json(receipt_path, receipt)
+    write_stored_json(receipt_path, receipt, sort_keys=False)
     volume.commit()
     return receipt
 
@@ -386,13 +389,13 @@ def start(campaign: str) -> dict[str, object]:
     calls = {}
     for model_id in MODEL_IDS:
         calls[model_id] = train.spawn(campaign, model_id).object_id
-        write_json(root / "dispatch.json", {"status": "dispatching", "calls": calls})
+        write_stored_json(root / "dispatch.json", {"status": "dispatching", "calls": calls}, sort_keys=False)
         volume.commit()
     calls["esmfold2"] = reference.spawn(campaign).object_id
-    result = {"status": "dispatched", "calls": calls, "campaign": campaign}
-    write_json(root / "dispatch.json", result)
+    dispatch_record = {"status": "dispatched", "calls": calls, "campaign": campaign}
+    write_stored_json(root / "dispatch.json", dispatch_record, sort_keys=False)
     volume.commit()
-    return result
+    return dispatch_record
 
 
 def main() -> None:
@@ -430,6 +433,7 @@ def main() -> None:
     if args.resume_evaluation:
         worker = resume_evaluation
     with modal.enable_output(), app.run(detach=True):
+        prepare_retained_inputs.remote(args.campaign, "resume" if args.resume_evaluation else args.stage, args.model_id)
         arguments = (
             (args.campaign, args.model_id)
             if args.stage == "evaluate"
@@ -448,11 +452,18 @@ def main() -> None:
         stage = f"evaluate-{args.model_id}" if args.stage == "evaluate" else args.stage
         if args.resume_evaluation:
             stage = f"resume-{stage}"
-        write_json(
+        write_stored_json(
             ROOT / "artifacts/confidence-v2" / args.campaign / f"{stage}-dispatch.json",
-            receipt,
+            receipt, sort_keys=False,
         )
         print(json.dumps(receipt, indent=2))
+
+
+@app.function(image=image, cpu=(2, 2), memory=(8192, 8192), timeout=7200, volumes=MOUNTS,
+              secrets=[credentials], max_containers=1)
+def prepare_retained_inputs(campaign: str, stage: str, model_id: str | None = None) -> None:
+    restore_v2(campaign, stage, model_id)
+    volume.commit()
 
 
 if __name__ == "__main__":

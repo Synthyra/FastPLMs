@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from collections.abc import Callable
 
 from .config import TRAINING_MAXIMUM_SECONDS
 from .training import _records, generate_caches, train_head
@@ -49,7 +49,7 @@ def _run_stage(
     print(f"[campaign] starting {name}", flush=True)
     try:
         report = function(*args, **kwargs)
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  a stage failure of any kind is recorded and the campaign reports it
         return None, {
             "status": "failed",
             "error_type": type(error).__name__,
@@ -178,7 +178,7 @@ def run_campaign(
             status=training_report["status"],
             volume_commit=volume_commit,
         )
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  a campaign failure of any kind is written to the progress record
         return _finish(
             path=progress_path,
             progress=progress,

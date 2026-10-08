@@ -464,12 +464,12 @@ def test_manifest_checkpoint_flash_mixed_padding_parity(
 ) -> None:
     assert torch.cuda.is_available(), "Checkpoint FlashAttention parity requires CUDA."
     spec = get_model_registry()[model_id]
-    result = _run_checkpoint(model_id, model_class)
-    assert result["checkpoint"] == spec.fast.repo_id
-    assert result["revision"] == spec.fast.revision
-    assert set(result["backends"]) == set(backends)
+    checkpoint_report = _run_checkpoint(model_id, model_class)
+    assert checkpoint_report["checkpoint"] == spec.fast.repo_id
+    assert checkpoint_report["revision"] == spec.fast.revision
+    assert set(checkpoint_report["backends"]) == set(backends)
     for backend in backends:
-        metrics = result["backends"][backend]
+        metrics = checkpoint_report["backends"][backend]
         record_property(f"{backend}_relative_l2", metrics["relative_l2"])
         record_property(f"{backend}_minimum_cosine", metrics["minimum_cosine"])
         assert metrics["finite"] is True

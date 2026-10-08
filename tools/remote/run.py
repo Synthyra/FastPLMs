@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
@@ -25,7 +26,6 @@ from tools.execution.source import (
     SENSITIVE_SUFFIXES as SENSITIVE_SUFFIXES,
     excluded_from_upload as _is_sensitive,  # noqa: F401  Historical import surface.
 )
-
 from .contracts import (
     _CONTROL_TIMEOUT_SECONDS,
     _TRANSFER_TIMEOUT_SECONDS,
@@ -56,7 +56,7 @@ test "$workspace" != "$base"
 rm -rf -- "$workspace"
 """
 _MACHINE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_FLASH_ATTENTION_2_REVISION = "db6b51744f0cd7061386442c09df890fc6d9f47e"
+_FLASH_ATTENTION_2_REVISION = "81fb77c12b2ad5d69380669b46739d5868614502"
 _FLASH_ATTENTION_3_REVISION = "43f0bd269777115d94ff826e0d113ce9c1c9087b"
 _REFERENCE_IMAGE_IDENTITY_PATH = (
     "artifacts/reference/environment/container-images.json"
@@ -197,8 +197,8 @@ def _kernel_capability_preflight(
             "provider": "kernels-community/flash-attn2",
             "revision": _FLASH_ATTENTION_2_REVISION,
             "reason": (
-                "The release matrix reuses prior revision-pinned focused FA2 "
-                "evidence; it does not download, build, or execute FA2 in this run."
+                "The release matrix does not download, build, or execute FA2 in this "
+                "run. Prior focused FA2 evidence is historical and predates this revision."
             ),
         },
         "flash_attention_3": {
@@ -821,7 +821,7 @@ class RemoteRunner:
                     start_phase("artifact-inventory")
                     try:
                         artifact_inventory = _artifact_tree_summary(output)
-                    except BaseException as error:
+                    except BaseException as error:  # noqa: broad-except  kept in inventory_failure and raised after the remote cleanup
                         inventory_failure = error
                         artifact_inventory = {
                             "status": "failed",

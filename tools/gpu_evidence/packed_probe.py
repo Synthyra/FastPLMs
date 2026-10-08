@@ -51,7 +51,7 @@ def natural_lengths(generator: random.Random) -> list[int]:
 
 
 def rotate(states: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    # states: (..., tokens, h, d_h); cos/sin: (..., tokens, 1, d_h).
+    # states: (..., tokens, h, d_h); cos, sin: (..., tokens, 1, d_h).
     first, second = states.chunk(2, dim=-1)  # each (..., tokens, h, d_h / 2)
     return states * cos + torch.cat((-second, first), dim=-1) * sin  # (..., tokens, h, d_h)
 
@@ -70,7 +70,7 @@ class Layer(nn.Module):
     def forward(
         self, hidden: torch.Tensor, attend: Attend, cos: torch.Tensor, sin: torch.Tensor
     ) -> torch.Tensor:
-        # hidden: (..., tokens, width); cos, sin broadcast over heads: (..., tokens, 1, d_h)
+        # hidden: (..., tokens, width); cos, sin: (..., tokens, 1, d_h), broadcast over heads
         qkv = self.qkv(self.attention_norm(hidden))  # (..., tokens, 3 * width)
         Q, K, V = qkv.view(*hidden.shape[:-1], 3, self.heads, -1).unbind(-3)  # each (..., tokens, h, d_h)
         attended = attend(rotate(Q, cos, sin), rotate(K, cos, sin), V)  # (..., tokens, h, d_h)
@@ -157,8 +157,8 @@ def varlen_per_layer(encoder: Encoder, batch: Batch) -> torch.Tensor:
 
 def varlen_packed(encoder: Encoder, batch: Batch) -> torch.Tensor:
     def attend(Q: torch.Tensor, K: torch.Tensor, V: torch.Tensor) -> torch.Tensor:
-        # Q, K, V and return: (t, h, d_h).
-        return cast(
+        # Q, K, V: (t, h, d_h); the return is (t, h, d_h).
+        return cast(  # (t, h, d_h)
             torch.Tensor,
             varlen_attn(Q, K, V, batch.cu_seqlens, batch.cu_seqlens, batch.longest, batch.longest),
         )

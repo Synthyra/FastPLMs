@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-
 import torch
 
 from pathlib import Path
 from typing import Any
-
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file, save_file
 
+from fastplms.digests import file_sha256
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.modeling_esmfold2_experimental import ConfidenceHead
 from fastplms.registry import get_model_spec
@@ -25,11 +24,6 @@ from .packaging import merge_head, verify_folding_state
 
 def _read(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _sha256(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def evaluated_head_identity(directory: Path) -> dict[str, Any]:
@@ -80,7 +74,7 @@ def evaluated_head_identity(directory: Path) -> dict[str, Any]:
         "frozen_base": model,
         "base_weight_sha256": base_hash,
         "evaluation_id": completion["evaluation_id"],
-        "evaluation_request_sha256": _sha256(directory / "request.json"),
+        "evaluation_request_sha256": file_sha256(directory / "request.json"),
         "training_url": training["wandb_url"],
         "updates": training["updates"],
     }
@@ -136,7 +130,7 @@ def prepare_evaluated_package(
     config_path = Path(
         hf_hub_download(source["repo_id"], "config.json", revision=source["revision"])
     )
-    if _sha256(weights_path) != identity["base_weight_sha256"]:
+    if file_sha256(weights_path) != identity["base_weight_sha256"]:
         raise ValueError("Downloaded base weights differ from the evaluated checkpoint")
     encoded = config_path.read_bytes()
     config_hash = hashlib.sha1(f"blob {len(encoded)}\0".encode() + encoded).hexdigest()
@@ -187,7 +181,7 @@ def prepare_evaluated_package(
         destination = output / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(payload)
-    weight_hash = _sha256(output / "model.safetensors")
+    weight_hash = file_sha256(output / "model.safetensors")
     config = embedded_config(json.loads(encoded), identity, weight_hash)
     config["auto_map"] = _artifact_auto_map(spec)
     config["fastplms_runtime_bundle_sha256"], _ = _decode_runtime_bundle(
@@ -201,7 +195,7 @@ def prepare_evaluated_package(
         "status": "prepared",
         "artifact": str(output),
         "weight_sha256": weight_hash,
-        "config_sha256": _sha256(output / "config.json"),
+        "config_sha256": file_sha256(output / "config.json"),
         "preserved_folding_tensors": preserved,
         "embedded_head_identity": True,
         "complete_artifact_compliance": False,

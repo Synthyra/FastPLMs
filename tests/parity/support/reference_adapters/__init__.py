@@ -22,6 +22,7 @@ from typing import Any
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 _ESM_SUBMODULE = _REPOSITORY_ROOT / "vendor" / "upstream" / "biohub-esm"
+_DPLM_SOURCE = _REPOSITORY_ROOT / "vendor" / "upstream" / "dplm" / "src"
 
 
 class OfficialGenerationUnavailable(RuntimeError):
@@ -48,6 +49,19 @@ class OfficialGenerationUnavailable(RuntimeError):
             "exception_type": self.exception_type,
             "reason": self.reason,
         }
+
+
+def install_dplm_source_path() -> None:
+    """Put the pinned DPLM source tree on ``sys.path`` and load the ByProt sequence namespace from it."""
+
+    if not _DPLM_SOURCE.is_dir():
+        raise FileNotFoundError(
+            "DPLM submodule is missing; run git submodule update --init --recursive"
+        )
+    source = str(_DPLM_SOURCE)
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    install_byprot_sequence_namespace(_DPLM_SOURCE)
 
 
 def install_byprot_sequence_namespace(source_root: Path) -> None:

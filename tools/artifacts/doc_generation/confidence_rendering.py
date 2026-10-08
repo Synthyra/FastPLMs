@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import textwrap
+
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
@@ -206,7 +207,7 @@ def _confidence_release_section(spec: ModelSpec, root: Path | None) -> str:
 
 The confidence head completed {training['updates']} training updates in
 {training['elapsed_hours']:.1f} hours on
-[AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data). The backbone and folding
+[AtlasFold-Data](https://huggingface.co/datasets/lhallee/AtlasFold-Data). The backbone and folding
 model stayed frozen, and evaluation used the final exponential moving-average
 checkpoint. Training sampled from {evidence['data']['train_targets']:,} eligible
 structures, including monomers, dimers, and larger complexes.
@@ -327,11 +328,11 @@ The [confidence training guide](https://github.com/Synthyra/FastPLMs/blob/main/d
 preserves the historical results and their review status.
 
 """
-    data, training, test = evidence["data"], evidence["training"], evidence["test"]
+    dataset_evidence, training, test = evidence["data"], evidence["training"], evidence["test"]
     config = training["config"]
     head, production = test["heads"]["v2"], test["heads"]["production"]
     agreement = evidence["production_agreement"]["v2"]
-    configurations = " and ".join(f"`{name}`" for name in data["configurations"])
+    configurations = " and ".join(f"`{name}`" for name in dataset_evidence["configurations"])
     comparison = "\n".join(
         f"| {label} | {_metric_cell(head[key], digits)} | "
         f"{_interval_cell(head['interval_95'].get(key), digits)} | "
@@ -365,8 +366,8 @@ preserves the historical results and their review status.
             f"`{training['donor_revision']}`, and the backbone, folding trunk, and diffusion "
             "module "
             f"stayed frozen. Training targets come from the {configurations} configurations of "
-            f"[{data['dataset']}](https://huggingface.co/datasets/{data['dataset']}), limited to "
-            f"structures resolved to {data['maximum_resolution_angstrom']} Å or better. "
+            f"[{dataset_evidence['dataset']}](https://huggingface.co/datasets/{dataset_evidence['dataset']}), limited to "
+            f"structures resolved to {dataset_evidence['maximum_resolution_angstrom']} Å or better. "
             "Chains were "
             "clustered at 40% sequence identity, and test targets share no cluster with a training "
             "target.",

@@ -10,14 +10,14 @@ import torch
 
 from pathlib import Path
 from safetensors.torch import load_file
-
-from fastplms.registry import ModelSpec, get_model_registry
 from tests.parity.test_model_parity import (
     _assert_logits_contract,
     _assert_tensor_contract,
     _last_hidden,
     _numeric_contract,
 )
+
+from fastplms.registry import ModelSpec, get_model_registry
 from tools.goldens import validate_golden_bundle
 
 
@@ -52,6 +52,7 @@ def _model_class(spec: ModelSpec) -> type[torch.nn.Module]:
 
 
 @pytest.mark.gpu
+@pytest.mark.checkpoint
 @pytest.mark.parametrize("spec", [_parameter(spec) for spec in SEQUENCE_GOLDENS])
 def test_declared_sequence_golden_matches_candidate(spec: ModelSpec) -> None:
     """Run one compact BF16 regression without importing an official package."""

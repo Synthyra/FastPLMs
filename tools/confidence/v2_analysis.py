@@ -11,7 +11,6 @@ import numpy as np
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-
 from scipy.stats import rankdata
 
 from .v2_records import EvaluationRecord, HeadSummary

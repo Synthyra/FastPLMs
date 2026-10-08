@@ -5,11 +5,10 @@ from __future__ import annotations
 import ast
 import builtins
 import os
-import subprocess
-import sys
 import pytest
 
 from pathlib import Path
+from tests.conftest import run_optimized_script
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -148,15 +147,7 @@ must_raise(
     environment["PYTHONPATH"] = os.pathsep.join(
         value for value in (source_root, environment.get("PYTHONPATH", "")) if value
     )
-    completed = subprocess.run(
-        [sys.executable, "-O", "-c", script],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    completed = run_optimized_script(script, environment=environment, timeout=30)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -469,15 +460,7 @@ must_raise(
     environment["PYTHONPATH"] = os.pathsep.join(
         value for value in (source_root, environment.get("PYTHONPATH", "")) if value
     )
-    completed = subprocess.run(
-        [sys.executable, "-O", "-c", script],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    completed = run_optimized_script(script, environment=environment, timeout=30)
     assert completed.returncode == 0, completed.stderr
 
 
@@ -520,13 +503,5 @@ must_raise(
     environment["PYTHONPATH"] = os.pathsep.join(
         value for value in (str(ROOT), source_root, environment.get("PYTHONPATH", "")) if value
     )
-    completed = subprocess.run(
-        [sys.executable, "-O", "-c", script],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    completed = run_optimized_script(script, environment=environment, timeout=30)
     assert completed.returncode == 0, completed.stderr

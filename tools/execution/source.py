@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import stat
 
@@ -23,26 +24,45 @@ SENSITIVE_NAMES = frozenset(
         ".pypirc",
         ".git-credentials",
         ".envrc",
+        ".secrets",
+        ".ssh",
+        ".aws",
+        ".gnupg",
+        "gcloud",
         "credentials",
         "credentials.json",
         "id_rsa",
         "id_ed25519",
     }
 )
-SENSITIVE_SUFFIXES = frozenset({".pem", ".key", ".p12", ".pfx"})
+SENSITIVE_SUFFIXES = frozenset({".pem", ".key", ".p12", ".pfx", ".keystore", ".jks"})
+# SSH private keys and cloud or Firebase service keys, whatever else their names carry:
+# id_ecdsa_work, gcloud-credentials.json, service-account-prod.json, firebase-adminsdk-a1b2c.json.
+SENSITIVE_NAME_PATTERN = re.compile(
+    r"^id_(?:rsa|ed25519|ecdsa|dsa)|credentials\.json$"
+    r"|service[-_]?account.*\.json$|firebase[-_]adminsdk"
+)
+_PLACEHOLDER_SUFFIXES = (".example", ".sample", ".template", ".dist")
 _BUILD_DIRECTORIES = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"})
 _SNAPSHOT_DOMAIN = b"fastplms-source-snapshot-v1\0"
 
 
 def excluded_from_upload(path: Path | PurePosixPath) -> bool:
-    """Exclude credentials and generated caches at every directory depth."""
+    """Exclude credentials and generated caches at every directory depth.
+
+    The credential names cover every file the research workspace's credential rule names,
+    which a test there checks, since FastPLMs vendors none of the workspace's code.
+    """
     for part in path.parts:
         name = part.lower()
         if name in SENSITIVE_NAMES or name in _BUILD_DIRECTORIES:
             return True
         if name == ".env" or name.startswith(".env.") or name.endswith(".env"):
             return True
-        if PurePosixPath(name).suffix in SENSITIVE_SUFFIXES:
+        # `.secrets.json` holds values, and `.secrets.env.template` only names them.
+        if name.startswith(".secrets.") and not name.endswith(_PLACEHOLDER_SUFFIXES):
+            return True
+        if PurePosixPath(name).suffix in SENSITIVE_SUFFIXES or SENSITIVE_NAME_PATTERN.search(name):
             return True
     return path.suffix.lower() == ".pyc"
 

@@ -10,6 +10,7 @@ import torch
 
 from pathlib import Path
 from types import SimpleNamespace
+from tests.conftest import requires_checkout_input
 
 from fastplms.attention import AttentionResolution, _auto, interfaces
 from fastplms.attention._auto import (
@@ -32,6 +33,7 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import PreTrainedESMplus
 from fastplms.models.esmfold.modeling_fast_esmfold import FastEsmForProteinFolding
 from fastplms.models.esmfold2.attention import ESMFold2AttentionMixin
 from fastplms.registry import RegistryError, get_model_registry, load_model_registry
+from tools.artifacts import evidence_store
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -99,13 +101,27 @@ def test_manifest_orders_match_the_family_classes() -> None:
         assert set(family.attention_auto_order) <= set(family.attention)
         if family.attention_auto_order[0].startswith("flash_attention"):
             assert family.attention_auto_evidence is not None
-        if family.attention_auto_evidence is not None:
-            assert (ROOT / family.attention_auto_evidence).is_file()
         # A family that advertises FlashAttention cites the measurement behind its order.
         if any(name.startswith("flash_attention") for name in family.attention):
             assert family.attention_auto_evidence is not None
     # Boltz2 keeps its single eager implementation and rejects the request.
     assert families["boltz2"].attention_auto_order == ()
+
+
+def _cited_attention_evidence() -> set[str]:
+    families = get_model_registry().families.values()
+    return {family.attention_auto_evidence for family in families if family.attention_auto_evidence}
+
+
+def test_cited_attention_evidence_is_pinned_by_the_evidence_store() -> None:
+    pinned = {entry.path for entry in evidence_store.load_manifest(ROOT / "evidence.toml").files}
+    assert _cited_attention_evidence() <= pinned
+
+
+@requires_checkout_input("docs/evidence", "`python -m tools.artifacts.evidence_store fetch`")
+def test_cited_attention_evidence_is_hydrated() -> None:
+    for relative_path in _cited_attention_evidence():
+        assert (ROOT / relative_path).is_file(), relative_path
 
 
 @pytest.mark.parametrize(

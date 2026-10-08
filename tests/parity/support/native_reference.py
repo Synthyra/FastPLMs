@@ -26,7 +26,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from safetensors.torch import save_file
-
 from tests.parity.support.reference_adapters import (
     OfficialGenerationUnavailable,
     snapshot_path,
@@ -37,6 +36,7 @@ from tests.parity.support.state_transforms import (
     transform_preserves_aliases,
     transform_state,
 )
+
 from tools.remote.biohub_reference_environment import (
     validate_biohub_reference_environment_evidence,
 )
@@ -65,7 +65,7 @@ _TOKENIZER_SETTINGS = (
 
 
 def _tensor_digest(tensor: torch.Tensor) -> dict[str, Any]:
-    # tensor and value share the caller's arbitrary tensor shape through the CPU copy.
+    # tensor: (...) any shape; value shares it through the CPU copy.
     value = tensor.detach().cpu().contiguous()
     raw = value.view(torch.uint8).numpy().tobytes()
     return {
@@ -196,7 +196,7 @@ def _tokenizer_asset_contract(request: Mapping[str, Any]) -> dict[str, Any]:
         # case; checkpoint-backed tokenizers still hash every declared file.
         return {}
     snapshot = snapshot_path(request["reference_repo_id"], request["reference_revision"])
-    result: dict[str, Any] = {}
+    contract: dict[str, Any] = {}
     for relative_name in files:
         relative = Path(relative_name)
         if relative.is_absolute() or ".." in relative.parts:
@@ -205,11 +205,11 @@ def _tokenizer_asset_contract(request: Mapping[str, Any]) -> dict[str, Any]:
         if not path.is_file():
             raise FileNotFoundError(f"Official tokenizer asset is missing: {path}")
         content = path.read_bytes()
-        result[relative.as_posix()] = {
+        contract[relative.as_posix()] = {
             "size": len(content),
             "sha256": hashlib.sha256(content).hexdigest(),
         }
-    return result
+    return contract
 
 
 def _state_contract(model: nn.Module, transform_name: str) -> dict[str, Any]:
@@ -232,7 +232,7 @@ def _state_contract(model: nn.Module, transform_name: str) -> dict[str, Any]:
     return {"tensors": tensors, "aliases": aliases}
 
 
-def _normalize_tokenizer_error(message: str) -> str:
+def normalize_tokenizer_error(message: str) -> str:
     """Remove a dependency-list difference between Transformers v4 and v5."""
 
     return message.replace(
@@ -244,12 +244,12 @@ def _normalize_tokenizer_error(message: str) -> str:
 def _token_result(tokenizer: object, sequences: Sequence[str], options: Mapping[str, Any]) -> Any:
     try:
         encoded = tokenizer(sequences, return_tensors="pt", **options)
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  the exact error is part of the token contract
         return [
             "error",
             type(error).__module__,
             type(error).__qualname__,
-            _normalize_tokenizer_error(str(error)),
+            normalize_tokenizer_error(str(error)),
         ]
     normalized = {
         key: value.tolist() if torch.is_tensor(value) else value for key, value in encoded.items()
@@ -275,7 +275,7 @@ def _tokenizer_contract(
 
 
 def _to_device(values: Mapping[str, Any], device: torch.device) -> dict[str, torch.Tensor]:
-    return {name: value.to(device) for name, value in values.items() if torch.is_tensor(value)}
+    return {name: value.to(device) for name, value in values.items() if torch.is_tensor(value)}  # (...) the tensor entries of values, one per name, shapes unchanged
 
 
 def _prepare_dplm2_inputs(
@@ -335,7 +335,7 @@ def _prepare_dplm2_inputs(
             row_index,
             aa_start + 1 : aa_start + 1 + residue_count,
         ] = True
-    return {
+    return {  # (...) input_ids, attention_mask: (n, 2 * track_length) for n sequences; residue_mask (n, 2 * track_length)
         "input_ids": input_ids,
         "attention_mask": input_ids.ne(pad_id).long(),
     }, residue_mask
@@ -364,9 +364,9 @@ def _prepare_inputs(
         inputs = {name: prepared[name] for name in required}
         # residue_mask: (b, l)
         residue_mask = inputs["sequence_ids"].ge(0)
-        return inputs, residue_mask
+        return inputs, residue_mask  # (...) the four id tensors (b, l); residue_mask (b, l)
     if request["family"] == "dplm2":
-        return _prepare_dplm2_inputs(sequences, tokenizer, device)
+        return _prepare_dplm2_inputs(sequences, tokenizer, device)  # (...) input_ids, attention_mask: (n, 2 * track_length); residue_mask (n, 2 * track_length)
 
     encoded = _to_device(
         tokenizer(sequences, return_tensors="pt", padding=True),
@@ -384,7 +384,7 @@ def _prepare_inputs(
     if request["architecture"] == "ESMC":
         # inputs['sequence_id']: (b, l)
         inputs["sequence_id"] = encoded["attention_mask"].bool()
-    return inputs, residue_mask
+    return inputs, residue_mask  # (...) input_ids, attention_mask, sometimes sequence_id: each (b, l); residue_mask (b, l)
 
 
 def _output_tensors(output: object) -> dict[str, torch.Tensor]:
@@ -409,7 +409,7 @@ def _output_tensors(output: object) -> dict[str, torch.Tensor]:
     if logits is not None:
         # tensors['output__logits']: (..., c)
         tensors["output__logits"] = logits.detach().cpu().contiguous().clone()
-    return tensors
+    return tensors  # (...) output__hidden_NNNN and output__last_hidden_state (..., d), optionally output__logits (..., c)
 
 
 @contextlib.contextmanager
@@ -477,7 +477,7 @@ def _inference_tensors(
     tensors["residue_mask"] = residue_mask.detach().cpu().contiguous().clone()
     tensors.update(_output_tensors(output))
     del output
-    return tensors
+    return tensors  # (...) input__<name> tensors and residue_mask (b, l), plus the tensors of _output_tensors
 
 
 def _ankh_generation_contract(

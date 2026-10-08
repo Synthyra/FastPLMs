@@ -34,11 +34,13 @@ class _OfficialESMFold2Wrapper(nn.Module):
     ) -> torch.Tensor:
         """Return Biohub's learned sequence summary before pair expansion."""
 
+        # residue_mask: (b, l), or None
         # hidden_states: (..., d)
         shim = self.model.language_model
         captured: list[torch.Tensor] = []
 
         def capture_pair_input(_module: nn.Module, args: tuple[torch.Tensor, ...]) -> None:
+            # args: (b, l, d_z) the sequence summary, as a one-tuple
             if len(args) != 1:
                 raise RuntimeError("Biohub base_z_mlp received an unexpected input signature.")
             captured.append(args[0])
@@ -58,7 +60,7 @@ class _OfficialESMFold2Wrapper(nn.Module):
                 device=projected.device,
                 dtype=projected.dtype,
             ).unsqueeze(-1)
-        return projected
+        return projected  # (b, l, d_z)
 
 
 def load_official_model(

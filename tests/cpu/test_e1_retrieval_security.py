@@ -271,8 +271,8 @@ def test_mmseqs2_result_provenance_controls_cache_reuse(
         return _completed(command)
 
     monkeypatch.setattr(searcher, "_run_docker_command", fake_run)
-    result = searcher.search("ACDEFG", "results", seq_id="query")
-    provenance_path = Path(result).with_name(searcher._PROVENANCE_FILENAME)
+    result_path = searcher.search("ACDEFG", "results", seq_id="query")
+    provenance_path = Path(result_path).with_name(searcher._PROVENANCE_FILENAME)
     provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
 
     assert provenance["runtime"]["image_id"] == identity.image_id
@@ -287,10 +287,10 @@ def test_mmseqs2_result_provenance_controls_cache_reuse(
         "_ensure_docker_image",
         lambda: (_ for _ in ()).throw(AssertionError("valid cache must not inspect Docker")),
     )
-    assert searcher.search("ACDEFG", "results", seq_id="query") == result
+    assert searcher.search("ACDEFG", "results", seq_id="query") == result_path
     assert calls == []
 
-    Path(result).write_text(">query\nTAMPERED\n", encoding="utf-8")
+    Path(result_path).write_text(">query\nTAMPERED\n", encoding="utf-8")
     with pytest.raises(AssertionError, match="valid cache must not inspect Docker"):
         searcher.search("ACDEFG", "results", seq_id="query")
 

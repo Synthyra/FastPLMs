@@ -7,15 +7,15 @@ offline CPU documentation job when this contract changes.
 
 ## Dependencies and source layout
 
-FastPLMs 1.0 requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
+FastPLMs 1.0 requires Python 3.12-3.14, PyTorch 2.14, and Transformers 5.17.
 The project is not installed as a Python distribution. Published models carry
 their runtime source in the Hugging Face repository and load it with
 `trust_remote_code=True`. Install dependencies directly:
 
 ```bash
 python -m pip install \
-  "torch>=2.13,<2.14" \
-  "transformers>=5.13,<5.14"
+  "torch>=2.14" \
+  "transformers>=5.17"
 ```
 
 Repository tools and source-level APIs run with `PYTHONPATH=src`. Their

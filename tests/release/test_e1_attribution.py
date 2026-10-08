@@ -30,14 +30,14 @@ def _run_isolated(code: str) -> subprocess.CompletedProcess[str]:
 
 
 def test_importing_e1_does_not_display_runtime_attribution() -> None:
-    result = _run_isolated("import fastplms.models.e1.modeling_e1")
-    assert result.returncode == 0, result.stderr
-    assert "Profluent-E1" not in result.stdout
-    assert "Profluent-E1" not in result.stderr
+    completed = _run_isolated("import fastplms.models.e1.modeling_e1")
+    assert completed.returncode == 0, completed.stderr
+    assert "Profluent-E1" not in completed.stdout
+    assert "Profluent-E1" not in completed.stderr
 
 
 def test_constructing_public_e1_model_displays_attribution_once() -> None:
-    result = _run_isolated(
+    completed = _run_isolated(
         """
 from fastplms.models.e1.modeling_e1 import E1Config, E1Model
 
@@ -55,6 +55,6 @@ config = E1Config(
 E1Model(config)
 """
     )
-    assert result.returncode == 0, result.stderr
-    output = result.stdout + result.stderr
+    assert completed.returncode == 0, completed.stderr
+    output = completed.stdout + completed.stderr
     assert output.count("Profluent-E1") == 1, output

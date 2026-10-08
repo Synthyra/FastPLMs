@@ -7,13 +7,6 @@ import torch
 
 from pathlib import Path
 from types import SimpleNamespace
-
-from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
-from fastplms.models.esmfold2.modeling_esmfold2 import ESMFold2Model
-from fastplms.models.esmfold2.modeling_esmfold2_common import NUM_RES_TYPES
-from fastplms.models.esmfold2.modeling_esmfold2_experimental import (
-    ESMFold2ExperimentalModel,
-)
 from tests.integration import test_binder_design as binder_contracts
 from tests.structure import test_esmfold2_complex_identity as complex_identity
 from tests.structure import test_structure_public_helpers as structure_contracts
@@ -29,6 +22,12 @@ from tests.unit import test_esmfold_api as esmfold_contracts
 from tests.unit import test_structure_output_contracts as output_contracts
 from tests.unit.test_esmfold2_reimplemented_leaves import (
     test_experimental_top_level_kernel_backend_validates_before_zero_layer_dispatch as _kernel,
+)
+from tests.unit.tiny_families import tiny_esmfold2_config
+
+from fastplms.models.esmfold2.modeling_esmfold2 import ESMFold2Model
+from fastplms.models.esmfold2.modeling_esmfold2_experimental import (
+    ESMFold2ExperimentalModel,
 )
 
 
@@ -167,16 +166,16 @@ def test_public_binder_workflow_pads_heterogeneous_prepared_atoms_without_trunca
                 token_count,
                 128,
             )
-            return {"distogram_logits": logits}
+            return {"distogram_logits": logits}  # (...) distogram_logits (b, l, l, 128)
 
         def __call__(self, **inputs: object) -> dict[str, torch.Tensor]:
-            return self.forward(**inputs)
+            return self.forward(**inputs)  # (...) distogram_logits (b, l, l, 128)
 
     model = FakeFoldModel()
     design = torch.zeros((2, 2, binder.AA_DIMS), dtype=torch.float32)  # (b=2, l=2, aa)
     design[0, :, 0] = 1
     design[1, :, 1] = 1
-    result = binder.fold_and_get_distogram(
+    fold_outputs = binder.fold_and_get_distogram(
         model,
         "ACD",
         binder.sequence_to_one_hot("ACD", device="cpu"),
@@ -197,9 +196,9 @@ def test_public_binder_workflow_pads_heterogeneous_prepared_atoms_without_trunca
     assert batch["atom_attention_mask"][1, :65].all()
     assert not batch["atom_attention_mask"][0, 32:].any()
     assert not batch["atom_attention_mask"][1, 65:].any()
-    assert result["inputs"]["ref_pos"].shape == (2, 96, 3)
-    assert result["chain_info_list"] == [["chain-1"], ["chain-2"]]
-    assert result["distogram_logits"][:, 0, 0, 0].tolist() == [1.0, 2.0]
+    assert fold_outputs["inputs"]["ref_pos"].shape == (2, 96, 3)
+    assert fold_outputs["chain_info_list"] == [["chain-1"], ["chain-2"]]
+    assert fold_outputs["distogram_logits"][:, 0, 0, 0].tolist() == [1.0, 2.0]
 
 
 def test_binder_example_rejects_prepared_feature_schema_drift() -> None:
@@ -207,7 +206,8 @@ def test_binder_example_rejects_prepared_feature_schema_drift() -> None:
 
     class StrictModel:
         def forward(self, token_index: torch.Tensor) -> torch.Tensor:
-            return token_index
+            # token_index: (1,) = (n,) in this test
+            return token_index  # (1,) = (n,)
 
     with pytest.raises(TypeError, match="unexpected_feature"):
         binder._prepare_model_forward_kwargs(
@@ -234,7 +234,7 @@ def test_binder_example_main_wires_explicit_offline_cli_arguments(
     )
     output = tmp_path / "binder-output"
 
-    result = binder.main(
+    exit_code = binder.main(
         [
             "--target-sequence",
             "ACD",
@@ -268,7 +268,7 @@ def test_binder_example_main_wires_explicit_offline_cli_arguments(
         ]
     )
 
-    assert result == 0
+    assert exit_code == 0
     assert observed == {
         "target_name": None,
         "target_sequence": "ACD",
@@ -366,61 +366,6 @@ def test_esmfold2_public_esmc_loaders_propagate_instance_offline_context(
     ]
 
 
-def _tiny_esmfold2_config(model_type: str) -> ESMFold2Config:
-    atom_token_width = 8
-    input_feature_width = atom_token_width // 2 + 2 * NUM_RES_TYPES + 1
-    return ESMFold2Config(
-        type=model_type,
-        d_single=8,
-        d_pair=8,
-        num_loops=0,
-        num_diffusion_samples=1,
-        lm_d_model=8,
-        lm_num_layers=1,
-        inputs={
-            "d_inputs": input_feature_width,
-            "atom_encoder": {
-                "d_atom": 8,
-                "d_token": atom_token_width,
-                "n_blocks": 0,
-                "n_heads": 2,
-                "swa_window_size": 32,
-                "expansion_ratio": 2,
-                "n_spatial_rope_pairs_per_axis": 1,
-                "n_uid_rope_pairs": 1,
-            },
-        },
-        folding_trunk={"n_layers": 0, "n_heads": 2, "dropout": 0.0},
-        structure_head={
-            "diffusion_module": {
-                "c_atom": 8,
-                "c_token": 8,
-                "c_z": 8,
-                "c_s_inputs": input_feature_width,
-                "fourier_dim": 8,
-                "atom_num_blocks": 0,
-                "atom_num_heads": 2,
-                "token_num_blocks": 0,
-                "token_num_heads": 2,
-                "transition_multiplier": 2,
-            },
-            "distogram_bins": 8,
-            "inference_num_steps": 1,
-        },
-        confidence_head={
-            "enabled": False,
-            "folding_trunk": {"n_layers": 0, "n_heads": 2, "dropout": 0.0},
-            "num_plddt_bins": 4,
-            "num_pde_bins": 4,
-            "num_pae_bins": 4,
-            "distogram_bins": 8,
-        },
-        msa_encoder={"enabled": False},
-        lm_encoder={"enabled": False, "n_layers": 0},
-        parcae={"enabled": True, "min_steps": 1, "max_steps": 1, "coda_n_layers": 0},
-    )
-
-
 @pytest.mark.parametrize(
     ("model_class", "model_type"),
     (
@@ -433,7 +378,7 @@ def test_esmfold2_advertised_models_tiny_init_backward_and_save_reload(
     model_type: str,
     tmp_path: Path,
 ) -> None:
-    model = model_class(_tiny_esmfold2_config(model_type))
+    model = model_class(tiny_esmfold2_config(model_type))
     pair_state = torch.randn(1, 2, 2, 8, requires_grad=True)  # (b=1, l=2, l, d_pair=8)
     logits = model.distogram_head(  # (b, l, l, distogram_bins=8)
         pair_state + pair_state.transpose(1, 2)

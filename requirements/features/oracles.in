@@ -1,0 +1,14 @@
+# The pinned Biohub esm oracle imports these when the ESM3 and ESMC official-equivalence tests
+# load it from vendor/upstream/biohub-esm; floors are the versions those tests passed on.
+# Only the candidate test profiles take them: they add about 2.5 s to a cold transformers
+# import, which the CPU contract gate's 10 s per-test budget cannot absorb.
+boto3>=1.43.109
+cloudpathlib>=0.26.0
+dna-features-viewer>=3.1.5
+ipython>=9.17.1
+ipywidgets>=8.1.9
+py3dmol>=2.5.5
+pydssp>=0.9.1
+pygtrie>=2.6.2
+tenacity>=9.2.1
+zstd>=1.5.7.2

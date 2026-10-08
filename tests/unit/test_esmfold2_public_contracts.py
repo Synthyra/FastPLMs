@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import inspect
 import os
-import subprocess
-import sys
 import pytest
 import torch
 
 from pathlib import Path
 from types import MethodType, SimpleNamespace
+from tests.conftest import run_optimized_script
 
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.esmfold2_msa import MSA
@@ -228,6 +227,7 @@ def test_active_prepared_auxiliary_conditioning_is_rejected(
     provided_name: str,
     values: dict[str, torch.Tensor | None],
 ) -> None:
+    # values: (...) one entry per name or None; pocket_feature (1,), disto_cond (1, 1), disto_cond_mask (1, 1)
     with pytest.raises(NotImplementedError, match=provided_name):
         validate_prepared_auxiliary_inputs(**values)
 
@@ -269,6 +269,7 @@ def test_fast_model_forward_rejects_every_msa_input_before_computation(
 
 
 def _builder_with_features(features: dict[str, torch.Tensor]) -> ESMFold2InputBuilder:
+    # features: (...) one tensor per prepared feature name, shapes as the caller supplies
     builder = object.__new__(ESMFold2InputBuilder)
 
     def prepare_input(
@@ -278,7 +279,7 @@ def _builder_with_features(features: dict[str, torch.Tensor]) -> ESMFold2InputBu
         device: torch.device | str | None = None,
     ) -> tuple[dict[str, torch.Tensor], list[object]]:
         del self, input, seed, device
-        return dict(features), []
+        return dict(features), []  # (...) the supplied features, then an empty chain-info list
 
     builder.prepare_input = MethodType(prepare_input, builder)
     return builder
@@ -363,12 +364,5 @@ expect(
 '''
     env = dict(os.environ)
     env["PYTHONPATH"] = str(ROOT / "src")
-    completed = subprocess.run(
-        [sys.executable, "-O", "-c", script],
-        cwd=ROOT,
-        env=env,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    completed = run_optimized_script(script, environment=env, timeout=None)
     assert completed.returncode == 0, completed.stdout + completed.stderr

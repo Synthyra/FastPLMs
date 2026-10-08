@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
+from tools.stored_files import write_stored_json
 from .regression import GateResult, compare_reports
 from .run import (
     _load_model,
@@ -495,10 +496,10 @@ def benchmark_artifact_model_ids() -> tuple[str, ...]:
 
 
 def _axis(values: Iterable[int], name: str) -> tuple[int, ...]:
-    result = tuple(values)
-    if not result or any(value <= 0 for value in result):
+    axis_values = tuple(values)
+    if not axis_values or any(value <= 0 for value in axis_values):
         raise ValueError(f"{name} must contain positive integers")
-    return result
+    return axis_values
 
 
 def benchmark_cases(
@@ -750,13 +751,6 @@ def exhaustive_benchmark_cases(
                     )
 
 
-def _write_report(path: Path, report: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
 def _load_report(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -961,13 +955,13 @@ def main(argv: Iterable[str] | None = None) -> int:
                 torch.cuda.empty_cache()
             cached_model, load_ms = _load_model(case, torch)
             cached_key = key
-        result = run_case(
+        case_record = run_case(
             case,
             model=cached_model,
             load_ms=load_ms,
             model_reused=reused,
         )
-        result.update(
+        case_record.update(
             {
                 "suite_profile": case.suite_profile,
                 "dedicated_mode": case.dedicated_mode,
@@ -979,21 +973,21 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "artifact_dependencies": getattr(case, "artifact_dependencies", {}),
             }
         )
-        report["results"].append(result)
+        report["results"].append(case_record)
         report["completed_case_count"] = len(report["results"])
-        _write_report(arguments.output, report)
+        write_stored_json(arguments.output, report)
         gc.collect()
         torch.cuda.empty_cache()
 
     report["status"] = "complete"
-    _write_report(arguments.output, report)
+    write_stored_json(arguments.output, report)
     if arguments.baseline is None:
         if arguments.junit_output is not None:
             _write_junit(arguments.junit_output, suite_name="benchmark-capture")
         return 0
     gate = compare_reports(report, _load_report(arguments.baseline))
     gate_output = arguments.gate_output or arguments.output.with_suffix(".gate.json")
-    _write_report(gate_output, gate.to_dict())
+    write_stored_json(gate_output, gate.to_dict())
     if arguments.junit_output is not None:
         _write_junit(
             arguments.junit_output,

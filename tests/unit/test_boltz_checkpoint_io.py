@@ -7,10 +7,13 @@ import torch
 
 from pathlib import Path
 from typing import Any
+from safetensors.torch import save_file
+from tests.unit.checkpoint_cache import assert_checkpoint_loads_exactly, find_verified_snapshot
 from torch import nn
 
 from fastplms.models.boltz import modeling_boltz2
 from fastplms.models.boltz.modeling_boltz2 import Boltz2Config, Boltz2Model
+from fastplms.registry import get_model_registry
 
 
 class _TinyCore(nn.Module):
@@ -172,3 +175,42 @@ def test_floating_features_default_to_fp32_parameter_storage(
     assert moved["indices"].dtype == torch.int64
     assert moved["mask"].dtype == torch.bool
     assert {tensor.device for tensor in moved.values()} == {model.device}
+
+
+def test_exact_load_check_accepts_a_round_trip_and_names_each_way_a_checkpoint_can_differ(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _install_tiny_core(monkeypatch)
+    source = Boltz2Model(Boltz2Config(core_kwargs={"width": 3}))
+    source.core.weight.data.copy_(torch.tensor([0.25, -1.5, 3.0]))  # (d=3,)
+    source.save_pretrained(tmp_path / "exact")
+
+    loaded = assert_checkpoint_loads_exactly(Boltz2Model, tmp_path / "exact")
+
+    assert torch.equal(loaded.core.weight, source.core.weight)
+
+    for name, tensors, message in (
+        ("extra", {"core.weight": torch.ones(3), "core.extra": torch.ones(2)}, "unexpected_keys"),
+        ("short", {}, "missing_keys"),
+        ("nan", {"core.weight": torch.tensor([1.0, float("nan"), 2.0])}, "non-finite"),
+    ):
+        directory = tmp_path / name
+        source.save_pretrained(directory)
+        save_file(tensors, directory / "model.safetensors", metadata={"format": "pt"})
+        with pytest.raises(AssertionError, match=message):
+            assert_checkpoint_loads_exactly(Boltz2Model, directory)
+
+
+@pytest.mark.checkpoint
+def test_pinned_checkpoint_loads_every_saved_tensor_and_nothing_else() -> None:
+    """The pinned Synthyra Boltz2 weights reach the model unchanged, with no tensor missing, extra, or left at its initial value."""
+
+    spec = get_model_registry()["boltz2"]
+    snapshot = find_verified_snapshot(spec)
+    assert snapshot is not None, (
+        f"No cached snapshot of {spec.fast.repo_id} matches the files pinned at {spec.fast.revision}; "
+        "fetch it into the Hugging Face cache first."
+    )
+
+    assert_checkpoint_loads_exactly(Boltz2Model, snapshot)

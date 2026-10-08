@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextlib
 import importlib
 import inspect
-import random
 import pytest
 import torch
 import torch.nn.functional as F
@@ -15,9 +14,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
+from tests.conftest import seeded_sequences
 
 from fastplms.registry import ModelSpec, get_model_registry
-from tests.conftest import CANONICAL_AAS, SEED
 
 
 REGISTRY = get_model_registry()
@@ -110,14 +109,6 @@ def _model_class(spec: ModelSpec) -> type[torch.nn.Module]:
     return model_class
 
 
-def _sequences() -> list[str]:
-    generator = random.Random(SEED)
-    return [
-        "M" + "".join(generator.choices(CANONICAL_AAS, k=SEQUENCE_LENGTH - 1))
-        for _ in range(NUM_SEQUENCES)
-    ]
-
-
 def _prepare_inputs(
     spec: ModelSpec,
     model: torch.nn.Module,
@@ -135,7 +126,7 @@ def _prepare_inputs(
             "global_position_ids": batch["global_position_ids"],
             "sequence_ids": batch["sequence_ids"],
         }
-        return inputs, batch["sequence_ids"].ge(0)
+        return inputs, batch["sequence_ids"].ge(0)  # (...) the four id tensors (b, l), residue_mask (b, l)
 
     tokenizer = getattr(model, "tokenizer", None)
     if tokenizer is None:
@@ -172,7 +163,7 @@ def _prepare_inputs(
         inputs["decoder_input_ids"] = input_ids
         # inputs['decoder_attention_mask']: (b, l)
         inputs["decoder_attention_mask"] = inputs["attention_mask"]
-    return inputs, residue_mask
+    return inputs, residue_mask  # (...) one input tensor per name, each (b, l), residue_mask (b, l)
 
 
 def _consumes_decoder_inputs(model: torch.nn.Module) -> bool:
@@ -195,10 +186,10 @@ def _sequence_output(output: object) -> tuple[torch.Tensor, bool]:
     for name in ("logits", "sequence_logits"):
         value = getattr(output, name, None)
         if torch.is_tensor(value):
-            return value, True
+            return value, True  # (b, l, v) logits, True
     value = getattr(output, "last_hidden_state", None)
     if torch.is_tensor(value):
-        return value, False
+        return value, False  # (b, l, d) hidden state, False
     raise AssertionError("Advertised sequence model output omitted a residue tensor")
 
 
@@ -292,7 +283,7 @@ def _measure_backends(
         device_map=device,
     )
     model.eval()
-    inputs, residue_mask = _prepare_inputs(spec, model, _sequences(), device)
+    inputs, residue_mask = _prepare_inputs(spec, model, seeded_sequences(NUM_SEQUENCES, SEQUENCE_LENGTH), device)
     # A prepared argument the forward does not declare raises a bare TypeError
     # that reads like any other failure, which is how the E1 and ANKH rows of
     # this gate went unexecuted. Name the offending key instead.
@@ -326,7 +317,7 @@ def _measure_backends(
 
     del model
     torch.cuda.empty_cache()
-    return outputs, residue_mask
+    return outputs, residue_mask  # (...) per backend (b, l, v) logits or (b, l, d) hidden states, residue_mask (b, l)
 
 
 @pytest.mark.parametrize("spec", [_parameter(spec) for spec in SEQUENCE_SPECS])

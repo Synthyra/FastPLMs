@@ -285,6 +285,7 @@ def _manual_encoder_forward(
     model: FAST_E1_ENCODER,
     batch: dict[str, torch.Tensor],
 ) -> tuple[torch.Tensor, tuple[torch.Tensor, ...]]:
+    # batch: (b, l) one tensor per name
     sequence_ids = batch["sequence_ids"]
     hidden_states = model.embed_tokens(batch["input_ids"])
     # hidden_states: (..., d)
@@ -314,7 +315,7 @@ def _manual_encoder_forward(
         )
     hidden_states = model.norm(hidden_states)
     hidden_history.append(hidden_states)
-    return hidden_states, tuple(hidden_history)
+    return hidden_states, tuple(hidden_history)  # (b, l, d) final state, (b, l, d) per layer in a tuple
 
 
 @pytest.mark.gpu

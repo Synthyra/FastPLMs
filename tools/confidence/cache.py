@@ -7,20 +7,17 @@ recomputed from the frozen model when a cache is consumed.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-
 import numpy as np
 import torch
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
-
 from safetensors.torch import load_file, save_file
 from torch import Tensor
 
+from fastplms.digests import file_sha256, json_sha256
 from fastplms.models.esmfold2.esmfold2_input_builder import ProteinInput, StructurePredictionInput
 from fastplms.models.esmfold2.modeling_esmfold2_experimental import ESMFold2ExperimentalModel
 from fastplms.registry import get_model_spec
@@ -55,12 +52,8 @@ _AMBIGUOUS_ATOM_PAIRS = {
 }
 
 
-def _record_hash(record: Mapping[str, object]) -> str:
-    encoded = json.dumps(dict(record), sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _backbone_indices(features: Mapping[str, Tensor]) -> Tensor:
+    # features: (...) one tensor per feature name; the atom features hold (atoms,) values, ref_atom_name_chars (atoms, 4), token_attention_mask (tokens,)
     # Native feature axes: atoms, tokens, and four encoded atom-name characters.
     atom_to_token = features["atom_to_token"].reshape(-1).long()  # (atoms,)
     atom_mask = features["atom_attention_mask"].reshape(-1).bool()  # (atoms,)
@@ -84,8 +77,9 @@ def _decode_atom_name(chars: Tensor) -> str:
 
 def _kabsch_aligned(predicted: Tensor, target: Tensor) -> Tensor:
     """Return target coordinates aligned onto predicted; both inputs are (points, 3)."""
+    # predicted, target: (points, 3)
     if predicted.shape != target.shape or predicted.shape[0] < 3:
-        return target  # unchanged input shape on unsupported alignment inputs
+        return target  # (points, 3), unchanged on unsupported alignment inputs
     predicted_centered = predicted - predicted.mean(0, keepdim=True)  # (points, 3)
     target_centered = target - target.mean(0, keepdim=True)  # (points, 3)
     covariance = target_centered.transpose(0, 1) @ predicted_centered  # (3, 3)
@@ -108,8 +102,8 @@ def _chain_assignment(
     atom_to_token: Tensor,
 ) -> list[int]:
     """Match equivalent two-chain records to native chain order by CA RMSD."""
-    # predicted/true: (atoms, 3); atom_mask/atom_to_token: (atoms,).
-    # chain_atoms contains one (chain atoms,) index vector per chain.
+    # predicted, true: (atoms, 3); atom_mask, atom_to_token: (atoms,)
+    # chain_atoms: (atoms in chain,) one atom index vector per chain, held in a list
     if len(chain_atoms) != 2 or chain_sequences[0] != chain_sequences[1]:
         return [0, 1] if len(chain_atoms) == 2 else list(range(len(chain_atoms)))
     candidates: list[float] = []
@@ -148,7 +142,7 @@ def _resolve_ambiguous_atoms(
     token_residue_names: Mapping[int, str],
 ) -> Tensor:
     """Choose crystallographic equivalent-atom labels by predicted distance."""
-    # predicted/true: (atoms, 3); resolved/atom_to_token: (atoms,).
+    # predicted, true: (atoms, 3); resolved, atom_to_token: (atoms,)
     valid = resolved & torch.isfinite(predicted).all(-1) & torch.isfinite(true).all(-1)  # (atoms,)
     if int(valid.sum()) < 3:
         return true  # (atoms, 3)
@@ -211,6 +205,7 @@ def _aligned_true_coordinates(
     predicted_coords: Tensor,
 ) -> tuple[Tensor, Tensor]:
     """Map atom14 coordinates onto the native padded atom order."""
+    # features: (...) one tensor per feature name; the atom features hold (atoms,) values, ref_atom_name_chars (atoms, 4)
     # predicted_coords: (atoms, 3); structure arrays use residue and atom14 axes.
     with np.load(structure_path, allow_pickle=False) as arrays:
         coordinates = np.asarray(arrays["coordinates"], dtype=np.float32)  # (residues, 14, 3)
@@ -333,10 +328,11 @@ def _output_tensor(output: Any, name: str) -> Tensor:
     value = output[name] if isinstance(output, Mapping) else getattr(output, name)  # field-specific shape
     if value is None:
         raise RuntimeError(f"model output omitted {name}")
-    return value  # shape unchanged; the caller selects and validates the field
+    return value  # (...) field-specific shape, unchanged; the caller selects and validates the field
 
 
 def _single_sample_coordinates(prediction: Tensor) -> Tensor:
+    # prediction: (b * s, atoms, 3) or (b, s, atoms, 3), for b targets and s diffusion samples
     # Native outputs use (batch * sample, atom, xyz) or (batch, sample, atom, xyz).
     if prediction.ndim not in (3, 4) or prediction.shape[-1] != 3:
         raise ValueError("Unexpected native coordinate shape")
@@ -361,8 +357,7 @@ def cache_target(
     structure_path = (data_root / structure_value).resolve()
     if data_root.resolve() not in structure_path.parents:
         raise ValueError("structure_path escapes data_root")
-    with structure_path.open("rb") as handle:
-        structure_digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    structure_digest = file_sha256(structure_path)
     if structure_digest != record.get("structure_sha256"):
         raise ValueError("Normalized structure differs from the selected dataset hash")
     validate_structure_npz(structure_path)
@@ -370,7 +365,7 @@ def cache_target(
     device = next(model.parameters()).device
     prepared = {name: value.to(device) for name, value in prepared.items()}
     with torch.autocast(device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"):
-        result = model(
+        model_output = model(
             **prepared,
             num_loops=3,
             num_sampling_steps=15,
@@ -380,11 +375,11 @@ def cache_target(
             output_hidden_states=True,
             return_dict=True,
         )
-    hidden_states = getattr(result, "hidden_states", None)
+    hidden_states = getattr(model_output, "hidden_states", None)
     if hidden_states is None or len(hidden_states) < 2:
         raise RuntimeError("model output did not include token and pair hidden states")
     prediction = _single_sample_coordinates(
-        _output_tensor(result, "sample_atom_coords").detach().float().cpu()
+        _output_tensor(model_output, "sample_atom_coords").detach().float().cpu()
     )  # [1, atom, xyz]
     # Alignment and atom-name bookkeeping are CPU-only. Keep them on the same
     # device even when the frozen fold ran on CUDA.
@@ -413,7 +408,7 @@ def cache_target(
         "model_pins": str(getattr(model, "_fastplms_pins", "")),
         "record_id": str(record.get("id", "")),
         "split": str(record.get("split", "")),
-        "record_sha256": _record_hash(record),
+        "record_sha256": json_sha256(dict(record)),
         "seed": str(seed),
         "num_loops": "3",
         "num_sampling_steps": "15",
@@ -499,11 +494,12 @@ def load_cache(
         atom_to_token.min() < 0 or atom_to_token.max() >= token_mask.numel()
     ):
         raise ValueError("confidence cache atom_to_token contains an invalid token index")
-    return tensors, metadata
+    return tensors, metadata  # (...) one tensor per cache name, then string metadata
 
 
 def confidence_inputs(model: Any, cache: Mapping[str, Tensor]) -> dict[str, Tensor | int]:
     """Reconstruct native confidence-head inputs from a frozen model cache."""
+    # cache: (...) one tensor per cache name; s_inputs (1, tokens, channels), z (1, tokens, tokens, pair channels), x_pred (1, atoms, 3)
     try:
         device = next(model.parameters()).device
     except (AttributeError, StopIteration):
@@ -521,7 +517,7 @@ def confidence_inputs(model: Any, cache: Mapping[str, Tensor]) -> dict[str, Tens
         bonds = model.token_bonds(tensors["token_bonds"].float())  # (1, tokens, tokens, pair channels)
     relative = relative.float()  # (1, tokens, tokens, pair channels)
     bonds = bonds.float()  # (1, tokens, tokens, pair channels)
-    return {
+    return {  # (...) one tensor per head input; s_inputs (1, tokens, channels), z (1, tokens, tokens, pair channels), x_pred (1, atoms, 3), encodings (1, tokens, tokens, pair channels)
         "s_inputs": tensors["s_inputs"],
         "z": tensors["z"],
         "x_pred": tensors["x_pred"],

@@ -4,6 +4,7 @@ import importlib.util
 import random
 import sys
 
+from collections.abc import Mapping
 from pathlib import Path
 
 
@@ -41,7 +42,11 @@ _bootstrap_cpu_contract()
 
 # The hermetic CPU bootstrap must run before these import-time initializers.
 import pytest  # noqa: E402
+import subprocess  # noqa: E402
 import torch  # noqa: E402
+
+from packaging.requirements import Requirement  # noqa: E402
+from packaging.utils import canonicalize_name  # noqa: E402
 
 from fastplms.registry import ModelSpec, get_model_registry  # noqa: E402
 
@@ -59,6 +64,46 @@ CANONICAL_AAS = "ACDEFGHIKLMNPQRSTVWY"
 SEED = 42
 DEFAULT_BATCH_SIZE = 4
 MAX_EMBED_LEN = 128
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+# A development checkout initializes the pinned official sources under vendor/upstream and
+# hydrates docs/evidence from the pinned Hub dataset. The research workspace that develops
+# FastPLMs does neither: it keeps no Git submodules, records each upstream pin in models.toml,
+# and runs its suites offline. Its projections are therefore the trees without .gitmodules.
+DEVELOPMENT_CHECKOUT = (REPOSITORY_ROOT / ".gitmodules").is_file()
+
+
+def requires_checkout_input(relative_path: str, provided_by: str) -> pytest.MarkDecorator:
+    """Skip a test whose input only a development checkout provides, where this tree lacks it.
+
+    In a development checkout a missing input still fails, as a missing dependency does.
+    """
+    absent = not (REPOSITORY_ROOT / relative_path).exists()
+    return pytest.mark.skipif(
+        absent and not DEVELOPMENT_CHECKOUT,
+        reason=f"needs {relative_path}, which {provided_by} provides in a development checkout",
+    )
+
+
+VALIDATION_CONSTRAINTS = REPOSITORY_ROOT / "requirements" / "constraints" / "validation.txt"
+
+
+def validation_pins() -> dict[str, str]:
+    """The exact release versions `requirements/constraints/validation.txt` pins, by distribution.
+
+    Version checks read the validated stack here instead of restating it, so raising that stack
+    is one edit to the constraints file.
+    """
+    pins: dict[str, str] = {}
+    for line in VALIDATION_CONSTRAINTS.read_text(encoding="utf-8").splitlines():
+        declaration = line.partition("#")[0].strip()
+        if not declaration:
+            continue
+        requirement = Requirement(declaration)
+        clauses = list(requirement.specifier)
+        if len(clauses) != 1 or clauses[0].operator != "==":
+            raise ValueError(f"validation.txt must pin one exact version: {declaration!r}")
+        pins[canonicalize_name(requirement.name)] = clauses[0].version
+    return pins
 
 
 @contextlib.contextmanager
@@ -188,7 +233,7 @@ def tokenize_batch(
 
     if config["model_type"] == "E1":
         batch = model.model.prep_tokens.get_batch_kwargs(sequences, device=device)
-        return {
+        return {  # (...) input_ids, within_seq_position_ids, global_position_ids, sequence_ids, attention_mask: each (b, l)
             "input_ids": batch["input_ids"],
             "within_seq_position_ids": batch["within_seq_position_ids"],
             "global_position_ids": batch["global_position_ids"],
@@ -197,7 +242,7 @@ def tokenize_batch(
         }
     tokenizer = model.tokenizer
     tokenized = tokenizer(sequences, return_tensors="pt", padding=True)
-    return {k: v.to(device) for k, v in tokenized.items()}
+    return {k: v.to(device) for k, v in tokenized.items()}  # (...) one tokenizer output per name, each (b, l)
 
 
 def add_model_specific_inputs(
@@ -206,9 +251,9 @@ def add_model_specific_inputs(
 ) -> dict[str, torch.Tensor]:
     """Add model-specific extra inputs (e.g. sequence_id for ESMC)."""
     if model_type == "ESMC":
-        # model_inputs["sequence_id"]: (b, l)
+        # model_inputs: (...) one tensor per name, attention_mask (b, l); sequence_id (b, l) is added for ESMC
         model_inputs["sequence_id"] = model_inputs["attention_mask"].to(dtype=torch.bool)
-    return model_inputs
+    return model_inputs  # (...) the same tensors, each (b, l)
 
 
 def random_sequences(n: int, min_len: int = 8, max_len: int = 64) -> list[str]:
@@ -220,6 +265,48 @@ def random_sequences(n: int, min_len: int = 8, max_len: int = 64) -> list[str]:
 
 def random_sequences_fixed_len(n: int, length: int = 64) -> list[str]:
     return ["M" + "".join(random.choices(CANONICAL_AAS, k=length - 1)) for _ in range(n)]
+
+
+def run_optimized_script(
+    script: str,
+    *,
+    environment: Mapping[str, str],
+    timeout: float | None,
+) -> subprocess.CompletedProcess[str]:
+    """Run ``script`` under ``python -O`` from the repository root, so that its ``assert`` statements are removed."""
+
+    return subprocess.run(
+        [sys.executable, "-O", "-c", script],
+        cwd=REPOSITORY_ROOT,
+        env=dict(environment),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def seeded_sequences(n: int, length: int) -> list[str]:
+    """Return ``n`` sequences of ``length`` residues that start with M, drawn from a generator seeded with ``SEED``."""
+
+    generator = random.Random(SEED)
+    return ["M" + "".join(generator.choices(CANONICAL_AAS, k=length - 1)) for _ in range(n)]
+
+
+def assert_nested_close(actual: object, expected: object) -> None:
+    """Require two nested tuples or lists of tensors and plain values to match, tensors within the default tolerance."""
+
+    if torch.is_tensor(expected):
+        assert torch.is_tensor(actual)
+        torch.testing.assert_close(actual, expected)
+        return
+    if isinstance(expected, (tuple, list)):
+        assert isinstance(actual, type(expected))
+        assert len(actual) == len(expected)
+        for actual_value, expected_value in zip(actual, expected, strict=True):
+            assert_nested_close(actual_value, expected_value)
+        return
+    assert actual == expected
 
 
 def get_device() -> torch.device:

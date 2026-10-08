@@ -3,46 +3,104 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import sqlite3
 import tempfile
+import weakref
 
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import overload
+from typing import NamedTuple, overload
 
 from .types import EmbeddingInput
+
+
+class FastaRecord(NamedTuple):
+    """One FASTA record: its header text and its sequence lines joined."""
+
+    header: str
+    sequence: str
+
+
+@dataclass(frozen=True)
+class FastaDialect:
+    """How one caller reads FASTA lines. FastPLMs has three readers, and each keeps its rules here.
+
+    ``strip_lines``: strip each line before use; otherwise lines are used as given, so a space-only line
+        is sequence data.
+    ``comment_prefix``: lines that start with it are skipped, or ``None`` for no comments.
+    ``first_word_header``: the header is its first whitespace-delimited word, not the whole header text.
+    ``squeeze_sequence_whitespace``: remove all whitespace inside a sequence line.
+    ``orphan_message``: raised as ``ValueError`` for sequence data before the first header, formatted
+        with ``line_number`` and ``source``; ``None`` skips such lines.
+    ``empty_message``: raised as ``ValueError`` when the input holds no record, formatted with
+        ``source``; ``None`` allows empty input.
+    """
+
+    strip_lines: bool
+    comment_prefix: str | None
+    first_word_header: bool
+    squeeze_sequence_whitespace: bool
+    orphan_message: str | None
+    empty_message: str | None
+
+
+EMBEDDING_FASTA = FastaDialect(
+    strip_lines=True,
+    comment_prefix=None,
+    first_word_header=True,
+    squeeze_sequence_whitespace=True,
+    orphan_message="Sequence data precedes the first FASTA header on line {line_number}.",
+    empty_message="No FASTA records found in {source}.",
+)
+
+
+def scan_fasta_lines(
+    lines: Iterable[str], dialect: FastaDialect, *, source: str
+) -> Iterator[FastaRecord]:
+    """Yield the records of FASTA ``lines`` in order, one record at a time.
+
+    ``source`` names the input in the dialect's messages. A record is yielded when the next header or
+    the end of input shows it is complete, so an error raised later in the input surfaces after the
+    records before it.
+    """
+
+    header: str | None = None
+    sequence_parts: list[str] = []
+    found_record = False
+    for line_number, raw_line in enumerate(lines, start=1):
+        line = raw_line.strip() if dialect.strip_lines else raw_line
+        if not line or (dialect.comment_prefix is not None and line.startswith(dialect.comment_prefix)):
+            continue
+
+        if line.startswith(">"):
+            if header is not None:
+                found_record = True
+                yield FastaRecord(header, "".join(sequence_parts))
+            header = line[1:].strip()
+            if dialect.first_word_header:
+                # An empty header has no first word and raises IndexError here.
+                header = header.split(maxsplit=1)[0]
+            sequence_parts = []
+        elif header is not None:
+            sequence_parts.append("".join(line.split()) if dialect.squeeze_sequence_whitespace else line)
+        elif dialect.orphan_message is not None:
+            raise ValueError(dialect.orphan_message.format(line_number=line_number, source=source))
+
+    if header is not None:
+        found_record = True
+        yield FastaRecord(header, "".join(sequence_parts))
+    if not found_record and dialect.empty_message is not None:
+        raise ValueError(dialect.empty_message.format(source=source))
 
 
 def iter_fasta(path: str | Path) -> Iterator[EmbeddingInput]:
     """Yield FASTA records in source order without reading the file into memory."""
 
-    identifier: str | None = None
-    sequence_parts: list[str] = []
-    found_record = False
     with Path(path).open("r", encoding="utf-8") as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith(">"):
-                if identifier is not None:
-                    found_record = True
-                    yield EmbeddingInput(identifier, "".join(sequence_parts))
-                identifier = line[1:].strip().split(maxsplit=1)[0]
-                if not identifier:
-                    raise ValueError(f"Missing FASTA identifier on line {line_number}.")
-                sequence_parts = []
-            else:
-                if identifier is None:
-                    raise ValueError(
-                        f"Sequence data precedes the first FASTA header on line {line_number}."
-                    )
-                sequence_parts.append("".join(line.split()))
-    if identifier is not None:
-        found_record = True
-        yield EmbeddingInput(identifier, "".join(sequence_parts))
-    if not found_record:
-        raise ValueError(f"No FASTA records found in {path}.")
+        for record in scan_fasta_lines(handle, EMBEDDING_FASTA, source=str(path)):
+            yield EmbeddingInput(record.header, record.sequence)
 
 
 def parse_fasta(path: str | Path) -> list[EmbeddingInput]:
@@ -66,6 +124,27 @@ def _normalize_input_item(
     )
 
 
+class _SpoolFiles:
+    """A spool's directory and SQLite connection, released together: the connection first.
+
+    Windows cannot delete a file that an open connection holds. The cycle collector runs weakref
+    finalizers before any ``__del__``, so a spool freed as cyclic garbage, as one referenced from
+    a raised exception's traceback is, would have ``tempfile.TemporaryDirectory``'s own finalizer
+    remove the directory while the connection was still open. One finalizer owns both instead.
+    """
+
+    def __init__(self) -> None:
+        self.directory = Path(tempfile.mkdtemp(prefix="fastplms-inputs-"))
+        self.connection: sqlite3.Connection | None = None
+
+    def release(self) -> None:
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+        if self.directory.exists():
+            shutil.rmtree(self.directory)
+
+
 class _InputSpool(Sequence[EmbeddingInput]):
     """Immutable disk-backed normalized inputs with an incremental digest."""
 
@@ -73,19 +152,19 @@ class _InputSpool(Sequence[EmbeddingInput]):
         self,
         values: Iterable[str | EmbeddingInput | tuple[str, str]],
     ) -> None:
-        self._temporary: tempfile.TemporaryDirectory[str] | None = tempfile.TemporaryDirectory(
-            prefix="fastplms-inputs-"
-        )
-        self.path = Path(self._temporary.name) / "inputs.sqlite"
-        self._connection: sqlite3.Connection | None = sqlite3.connect(self.path)
-        self._connection.execute(
-            "CREATE TABLE inputs ("
-            "position INTEGER PRIMARY KEY, input_id TEXT NOT NULL, sequence TEXT NOT NULL)"
-        )
+        self._files = _SpoolFiles()
+        # Called by close(), or by garbage collection however the spool is freed; at most once.
+        self._release = weakref.finalize(self, self._files.release)
+        self.path = self._files.directory / "inputs.sqlite"
         digest = hashlib.sha256()
         count = 0
         pending: list[tuple[int, str, str]] = []
         try:
+            connection = self._files.connection = sqlite3.connect(self.path)
+            connection.execute(
+                "CREATE TABLE inputs ("
+                "position INTEGER PRIMARY KEY, input_id TEXT NOT NULL, sequence TEXT NOT NULL)"
+            )
             for position, item in enumerate(values):
                 record = _normalize_input_item(position, item)
                 for value in (record.id, record.sequence):
@@ -95,15 +174,15 @@ class _InputSpool(Sequence[EmbeddingInput]):
                 pending.append((position, record.id, record.sequence))
                 count += 1
                 if len(pending) == 1_024:
-                    self._connection.executemany("INSERT INTO inputs VALUES (?, ?, ?)", pending)
+                    connection.executemany("INSERT INTO inputs VALUES (?, ?, ?)", pending)
                     pending.clear()
             if pending:
-                self._connection.executemany("INSERT INTO inputs VALUES (?, ?, ?)", pending)
+                connection.executemany("INSERT INTO inputs VALUES (?, ?, ?)", pending)
             if count == 0:
                 raise ValueError("inputs must contain at least one sequence.")
-            self._connection.commit()
-            self._connection.close()
-            self._connection = sqlite3.connect(
+            connection.commit()
+            connection.close()
+            self._files.connection = sqlite3.connect(
                 f"{self.path.resolve().as_uri()}?mode=ro",
                 uri=True,
             )
@@ -115,9 +194,10 @@ class _InputSpool(Sequence[EmbeddingInput]):
         self._count = count
 
     def _require_connection(self) -> sqlite3.Connection:
-        if self._connection is None:
+        connection = self._files.connection
+        if connection is None:
             raise RuntimeError("Input spool is closed.")
-        return self._connection
+        return connection
 
     def __len__(self) -> int:
         return self._count
@@ -160,17 +240,7 @@ class _InputSpool(Sequence[EmbeddingInput]):
         return EmbeddingInput(row[0], row[1])
 
     def close(self) -> None:
-        connection = getattr(self, "_connection", None)
-        if connection is not None:
-            connection.close()
-            self._connection = None
-        temporary = getattr(self, "_temporary", None)
-        if temporary is not None:
-            temporary.cleanup()
-            self._temporary = None
-
-    def __del__(self) -> None:
-        self.close()
+        self._release()
 
 
 def _normalize_inputs(

@@ -252,9 +252,11 @@ def test_small_esmplusplus_fp8_rejection_precedes_runtime_access(
 
 
 def test_fp8_context_requires_inference_mode() -> None:
-    with pytest.raises(RuntimeError, match="inference-only"):
-        with _esmplusplus_fp8_context(True, torch.device("cpu")):
-            pass
+    with (
+        pytest.raises(RuntimeError, match="inference-only"),
+        _esmplusplus_fp8_context(True, torch.device("cpu")),
+    ):
+        pass
 
 
 def test_fp8_context_nests_bf16_and_transformer_engine_autocast(
@@ -288,9 +290,8 @@ def test_fp8_context_nests_bf16_and_transformer_engine_autocast(
         lambda: (SimpleNamespace(autocast=fake_te_autocast), fake_recipe),
     )
 
-    with torch.inference_mode():
-        with _esmplusplus_fp8_context(True, torch.device("cuda")):
-            events.append("body")
+    with torch.inference_mode(), _esmplusplus_fp8_context(True, torch.device("cuda")):
+        events.append("body")
 
     assert events == [
         ("recipe", {"use_power_2_scales": False, "fp8_format": "hybrid"}),
@@ -360,6 +361,7 @@ class _SyntheticSAE(nn.Module):
         hidden_states: torch.Tensor,
         token_mask: torch.Tensor,
     ) -> SimpleNamespace:
+        # hidden_states: (b, l, d); token_mask: (b, l)
         self.seen_hidden_shape = tuple(hidden_states.shape)
         self.seen_mask = token_mask.detach().clone()
         return SimpleNamespace(feature_magnitudes=hidden_states[token_mask, :4])

@@ -10,6 +10,11 @@ import torch
 from dataclasses import replace
 from pathlib import Path
 from safetensors.torch import load_file, save_file
+from tests.parity.support.native_reference import _select_requests
+from tests.parity.support.reference_adapters.dplm2 import (
+    DPLM2_3B_GENERATION_LIMITATION,
+)
+from tests.release.test_artifacts import _synthetic_registry
 
 from fastplms.registry import (
     FileDigest,
@@ -18,11 +23,6 @@ from fastplms.registry import (
     OfficialGolden,
     get_model_registry,
 )
-from tests.parity.support.native_reference import _select_requests
-from tests.parity.support.reference_adapters.dplm2 import (
-    DPLM2_3B_GENERATION_LIMITATION,
-)
-from tests.release.test_artifacts import _synthetic_registry
 from tools.goldens import (
     GoldenBundleRecord,
     GoldenError,
@@ -37,6 +37,7 @@ from tools.goldens import (
 )
 from tools.goldens.from_native import main as golden_main
 from tools.remote.prepare_references import MIXED_LENGTHS, prepare_reference_requests
+from tools.tensor_digests import raw_tensor_sha256
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -443,11 +444,6 @@ def test_native_structure_converter_requires_reference_hash_contract(
     }
     save_file(tensors, native / "bundle.safetensors")
 
-    def raw_hash(T: torch.Tensor) -> str:
-        # T may have any serialized tensor shape; hashing preserves its byte order.
-        value = T.contiguous().view(torch.uint8).numpy().tobytes()
-        return hashlib.sha256(value).hexdigest()
-
     metadata = {
         "schema_version": 1,
         "producer": "reference",
@@ -464,7 +460,7 @@ def test_native_structure_converter_requires_reference_hash_contract(
             "packages": {"transformers": "5.13.0"},
         },
         "tensor_keys": sorted(tensors),
-        "tensor_hashes": {name: raw_hash(T) for name, T in tensors.items()},
+        "tensor_hashes": {name: raw_tensor_sha256(T) for name, T in tensors.items()},
     }
     metadata_path = native / "metadata.json"
     metadata_path.write_text(

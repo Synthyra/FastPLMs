@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import random
 import subprocess
 
 from pathlib import Path
+from typing import Any
+
+from fastplms.digests import file_sha256
 
 
-COUNTS = {"train": {1: 512, 2: 512}, "validation": {1: 64, 2: 64}, "final_test": {1: 64, 2: 64}}
+COUNTS: dict[str, dict[int, int]] = {"train": {1: 512, 2: 512}, "validation": {1: 64, 2: 64}, "final_test": {1: 64, 2: 64}}
 
 
 def select_disjoint(
-    records: list[dict], clusters: dict[tuple[str, int], str], counts: dict = COUNTS
-) -> list[dict]:
+    records: list[dict[str, Any]], clusters: dict[tuple[str, int], str], counts: dict[str, dict[int, int]] = COUNTS
+) -> list[dict[str, Any]]:
     """Select complete targets, reserving every component chain's cluster."""
     used_clusters, used_pdbs = set(), set()
     selected = []
@@ -55,7 +57,7 @@ def select_disjoint(
     return selected
 
 
-def chain_clusters(records: list[dict], directory: Path) -> dict[tuple[str, int], str]:
+def chain_clusters(records: list[dict[str, Any]], directory: Path) -> dict[tuple[str, int], str]:
     directory.mkdir(parents=True, exist_ok=True)
     sequences = {}
     identifiers = {}
@@ -89,9 +91,9 @@ def chain_clusters(records: list[dict], directory: Path) -> dict[tuple[str, int]
         "--max-seqs",
         str(len(sequences)),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=900)
-    (directory / "mmseqs.log").write_text(result.stdout + result.stderr)
-    if result.returncode:
+    completed = subprocess.run(command, capture_output=True, text=True, timeout=900)
+    (directory / "mmseqs.log").write_text(completed.stdout + completed.stderr)
+    if completed.returncode:
         raise RuntimeError("MMseqs2 sequence exclusion failed; see the remote mmseqs.log")
     parents = {name: name for name in sequences}
 
@@ -122,7 +124,7 @@ def chain_clusters(records: list[dict], directory: Path) -> dict[tuple[str, int]
     return {identifiers[name]: find(name) for name in sequences}
 
 
-def finalize_splits(data_root: Path) -> dict:
+def finalize_splits(data_root: Path) -> dict[str, Any]:
     records = json.loads((data_root / "candidates.json").read_text())
     clusters = chain_clusters(records, data_root / "sequence_exclusion")
     selected = select_disjoint(records, clusters)
@@ -130,7 +132,7 @@ def finalize_splits(data_root: Path) -> dict:
     destination.write_text(json.dumps(selected, indent=2, sort_keys=True) + "\n")
     report = {
         "status": "verified",
-        "records_sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+        "records_sha256": file_sha256(destination),
         "counts": {
             split: {
                 str(n): sum(r["split"] == split and len(r["chains"]) == n for r in selected)

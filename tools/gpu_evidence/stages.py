@@ -14,7 +14,6 @@ from typing import Literal
 
 # Shared with the Docker-host release suite so the two cannot drift apart.
 from tools.remote.run import _RELEASE_LOCAL_PARITY_TESTS
-
 from .config import (
     CPU_WORKER_TIMEOUT_SECONDS,
     FOLD_WORKER_TIMEOUT_SECONDS,
@@ -32,13 +31,18 @@ _SELECTION_PATTERN = re.compile(r"[A-Za-z0-9_ ()\[\]\-.]+")
 
 @dataclass(frozen=True, slots=True)
 class StageSpec:
-    """One runnable stage: interpreter arguments, where it runs, and its bound."""
+    """One runnable stage: interpreter arguments, where it runs, and its bound.
+
+    ``compares_baseline`` marks a stage that reads the Git baseline tree at ``/baseline``,
+    so a launch from a tree without Git metadata refuses it before dispatch.
+    """
 
     name: str
     device: Device
     arguments: tuple[str, ...]
     timeout_seconds: int
     image: WorkerImage = "candidate"
+    compares_baseline: bool = False
 
     @property
     def is_pytest(self) -> bool:
@@ -92,7 +96,11 @@ STAGES: dict[str, StageSpec] = {
         StageSpec("probe", "gpu", ("tools/debug/probe_flash_kernels.py",), 600),
         # mypy errors the working tree adds relative to its Git baseline.
         StageSpec(
-            "typing", "cpu", ("-m", "tools.gpu_evidence.typing_check"), CPU_WORKER_TIMEOUT_SECONDS
+            "typing",
+            "cpu",
+            ("-m", "tools.gpu_evidence.typing_check"),
+            CPU_WORKER_TIMEOUT_SECONDS,
+            compares_baseline=True,
         ),
         # Working tree versus Git baseline latency, interleaved on one GPU.
         StageSpec(
@@ -100,6 +108,7 @@ STAGES: dict[str, StageSpec] = {
             "gpu",
             ("-m", "tools.gpu_evidence.lever_bench"),
             GPU_WORKER_TIMEOUT_SECONDS,
+            compares_baseline=True,
         ),
         # The same comparison for the padded FlashAttention path, which needs the locked kernels.
         StageSpec(
@@ -113,6 +122,7 @@ STAGES: dict[str, StageSpec] = {
                 "esmpp-padded-b8-flash_attention_2",
             ),
             GPU_WORKER_TIMEOUT_SECONDS,
+            compares_baseline=True,
         ),
         # The same comparison for the levers added after the first lever-bench evidence.
         StageSpec(
@@ -128,6 +138,7 @@ STAGES: dict[str, StageSpec] = {
                 "esmpp-padded-b8-sdpa",
             ),
             GPU_WORKER_TIMEOUT_SECONDS,
+            compares_baseline=True,
         ),
         # Working-tree latency of every advertised backend on padded and full batches.
         StageSpec(
@@ -151,6 +162,7 @@ STAGES: dict[str, StageSpec] = {
             ("-m", "tools.gpu_evidence.fold_bench"),
             FOLD_WORKER_TIMEOUT_SECONDS,
             image="fold",
+            compares_baseline=True,
         ),
         # Which model source lines hold the memory at the peak of a fold.
         StageSpec(
@@ -176,6 +188,7 @@ STAGES: dict[str, StageSpec] = {
             ("-m", "tools.gpu_evidence.fold_bench", "--smoke"),
             GPU_WORKER_TIMEOUT_SECONDS,
             image="fold",
+            compares_baseline=True,
         ),
     )
 }

@@ -16,10 +16,15 @@ from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
 from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, TypeVar
 from einops import rearrange
 from torch.nn import functional as F
 
-from ._kernel_lock import load_locked_kernel
+from ._kernel_lock import load_locked_kernel, locked_variant_for_this_system
+
+
+if TYPE_CHECKING:
+    from transformers import PretrainedConfig
 
 
 try:
@@ -30,12 +35,16 @@ except ImportError:
     BlockMask = None
 
 _MAX_FLEX_CACHE_ENTRIES = 128
-_compiled_flex_attention: OrderedDict[tuple, object] = OrderedDict()
-_flex_block_masks: OrderedDict[tuple, BlockMask] = OrderedDict()
+_compiled_flex_attention: OrderedDict[tuple[Any, ...], object] = OrderedDict()
+_flex_block_masks: OrderedDict[tuple[Any, ...], BlockMask] = OrderedDict()
 _flex_cache_lock = RLock()
 
+_CacheValue = TypeVar("_CacheValue")
 
-def _remember(cache: OrderedDict, key: tuple, value):
+
+def _remember(
+    cache: OrderedDict[tuple[Any, ...], _CacheValue], key: tuple[Any, ...], value: _CacheValue
+) -> _CacheValue:
     """Insert an item into a bounded least-recently-used cache."""
     cache[key] = value
     cache.move_to_end(key)
@@ -64,7 +73,7 @@ def _get_flex_attention_fn(
     shape: tuple[int, ...] | None = None,
     sequence_lengths: tuple[int, ...] | None = None,
     mask_semantics: str = "padding",
-):
+) -> Callable[..., Any] | None:
     """Return a compiled Flex callable for an explicit execution signature.
 
     Compilation depends on execution shape, device, dtype, and mask semantics.
@@ -116,15 +125,17 @@ def _get_flex_block_mask(
     because compiled Flex plans can specialize on it even though the pattern
     tensor itself is boolean or integer.
     """
+    # mask_pattern: (b, l), the padding mask of the call
+    # mask_mod: ((), (), (), ()) -> (), taking the 0-d batch, head, query and key-value indices
     if create_block_mask is None:
         raise RuntimeError(
             "'flex_attention' was requested, but torch.create_block_mask is unavailable."
         )
-    pattern = mask_pattern.detach().to(device=device).contiguous()  # mask_pattern.shape
+    pattern = mask_pattern.detach().to(device=device).contiguous()  # (b, l)
     # One device-to-host transfer is required for an exact cache identity. Use
     # the contiguous buffer directly instead of materializing one Python int
     # per byte, which is prohibitively expensive for long batched sequences.
-    host_pattern = pattern.to(device="cpu").contiguous()  # mask_pattern.shape
+    host_pattern = pattern.to(device="cpu").contiguous()  # (b, l)
     pattern_bytes = host_pattern.view(torch.uint8).numpy().tobytes(order="C")  # bytes
     cache_key = (
         str(device),
@@ -153,7 +164,7 @@ def _get_flex_block_mask(
 
 # Hugging Face `kernels` exposes slightly different APIs for FlashAttention 2
 # and 3. Detect the loaded variant once so every caller uses the same dispatch.
-def _infer_kernels_flash_variant(kernel) -> str | None:
+def _infer_kernels_flash_variant(kernel: object) -> str | None:
     if hasattr(kernel, "fwd") and hasattr(kernel, "varlen_fwd"):
         return "flash_attn2"
     if hasattr(kernel, "flash_attn_func") and hasattr(kernel, "flash_attn_varlen_func"):
@@ -273,6 +284,40 @@ def _ensure_flash_kernels_loaded(implementation: str) -> tuple[object, str]:
     return loaded
 
 
+def flash_kernel_unsupported_reason(implementation: str) -> str | None:
+    """Return why this platform or GPU cannot run a manifest-locked kernel, or None if it can.
+
+    The answer comes from kernels.lock, the manifest, and the current CUDA device, so nothing
+    is downloaded or imported. A caller choosing between FlashAttention versions may skip a
+    kernel for this reason alone; any other loading failure must raise.
+    """
+    from fastplms.registry import get_model_registry
+
+    kernel_spec = get_model_registry().attention_kernels[implementation]
+    pinned = f"{kernel_spec.repository}@{kernel_spec.revision}"
+    if locked_variant_for_this_system(kernel_spec.repository, kernel_spec.revision) is None:
+        return f"kernels.lock pins no build of {pinned} for this platform."
+
+    # `kernels` matches a build to the PyTorch backend, so on a PyTorch without CUDA the
+    # build found above is a CPU or XPU one and needs no GPU.
+    if torch.version.cuda is None:
+        return None
+
+    if not torch.cuda.is_available():
+        return f"{pinned} runs on a CUDA device, and none is visible."
+
+    capability = torch.cuda.get_device_capability()
+    if capability < kernel_spec.min_cuda_capability:
+        required = ".".join(str(part) for part in kernel_spec.min_cuda_capability)
+        observed = ".".join(str(part) for part in capability)
+        return (
+            f"{pinned} requires CUDA compute capability {required} or newer; "
+            f"this GPU has {observed}."
+        )
+
+    return None
+
+
 def _kernels_flash_forward(
     query_states: torch.Tensor,
     key_states: torch.Tensor,
@@ -371,7 +416,7 @@ def _kernels_flash_varlen_forward(
 # before the kernel call and restore the original padded batch shape afterward.
 class IndexFirstAxis(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, indices) -> torch.Tensor:
+    def forward(ctx: Any, input: torch.Tensor, indices: torch.Tensor) -> torch.Tensor:
         # input: (n, ...); indices: (m,)
         ctx.save_for_backward(indices)
         if input.ndim < 2:
@@ -391,7 +436,7 @@ class IndexFirstAxis(torch.autograd.Function):
         ).reshape(-1, *other_shape)
 
     @staticmethod
-    def backward(ctx, grad_output) -> tuple[torch.Tensor, None]:
+    def backward(ctx: Any, grad_output: torch.Tensor) -> tuple[torch.Tensor, None]:
         # grad_output: (m, ...)
         (indices,) = ctx.saved_tensors
         if grad_output.ndim < 2:
@@ -412,7 +457,9 @@ class IndexFirstAxis(torch.autograd.Function):
 
 class IndexPutFirstAxis(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, values, indices, first_axis_dim) -> torch.Tensor:
+    def forward(
+        ctx: Any, values: torch.Tensor, indices: torch.Tensor, first_axis_dim: int
+    ) -> torch.Tensor:
         # values: (m, ...); indices: (m,)
         ctx.save_for_backward(indices)
         if indices.ndim != 1:
@@ -432,7 +479,7 @@ class IndexPutFirstAxis(torch.autograd.Function):
         return output  # (n, ...)
 
     @staticmethod
-    def backward(ctx, grad_output) -> tuple[torch.Tensor, None, None]:
+    def backward(ctx: Any, grad_output: torch.Tensor) -> tuple[torch.Tensor, None, None]:
         # grad_output: (n, ...)
         (indices,) = ctx.saved_tensors
         return grad_output[indices], None, None  # (m, ...), None, None
@@ -451,7 +498,7 @@ def _select_first_axis(states: torch.Tensor, indices: torch.Tensor) -> torch.Ten
     # states: (n, ...); indices: (m,)
     if states.requires_grad:
         selected: torch.Tensor = index_first_axis(states, indices)  # (m, ...)
-        return selected
+        return selected  # (m, ...)
     return states[indices]  # (m, ...)
 
 
@@ -528,7 +575,7 @@ def _unpad_input(
         indices,
         (cu_seqlens, cu_seqlens),
         (max_seqlen, max_seqlen),
-    )
+    )  # (t, h, d), (t, h, d), (t, h, d), (t,), ((b + 1,), (b + 1,)), (int, int)
 
 
 def _validate_flash_padding_mask(
@@ -786,7 +833,7 @@ def resolve_attention_backend(
     return resolved
 
 
-def get_attn_implementation(config) -> str:
+def get_attn_implementation(config: PretrainedConfig) -> str:
     """Read the Transformers attention setting, defaulting to SDPA."""
     requested = getattr(config, "_attn_implementation", None)
     if requested is None:
@@ -794,7 +841,7 @@ def get_attn_implementation(config) -> str:
     return resolve_attention_backend(requested).value
 
 
-def set_config_attn_implementation(config, implementation: str) -> str:
+def set_config_attn_implementation(config: PretrainedConfig, implementation: str) -> str:
     """Set both the Transformers field and the internal dispatch field."""
     resolved = resolve_attention_backend(implementation).value
     if hasattr(config, "_attn_implementation_internal"):
@@ -823,7 +870,7 @@ def get_attention_mask(
     """
     # attention_mask: (b, l) or None
     if attention_mask is None:
-        return None, None, None
+        return None, None, None  # (None, None, None)
 
     if attention_mask.ndim != 2:
         raise ValueError(
@@ -850,12 +897,15 @@ def get_attention_mask(
             raise RuntimeError(
                 "'flex_attention' was requested, but torch.create_block_mask is unavailable."
             )
-        def mask_mod(batch_idx, head_idx, q_idx, kv_idx):
+        def mask_mod(
+            batch_idx: torch.Tensor, head_idx: torch.Tensor, q_idx: torch.Tensor, kv_idx: torch.Tensor
+        ) -> torch.Tensor:
+            # batch_idx, head_idx, q_idx, kv_idx: ()
             del head_idx, q_idx
             # Match eager and SDPA: padding masks suppress invalid keys only.
             # Invalid queries still attend to real keys and therefore remain
             # finite; downstream residue masks exclude their outputs.
-            return attention_mask_2d[batch_idx, kv_idx]
+            return attention_mask_2d[batch_idx, kv_idx]  # ()
 
         flex_block_mask = _get_flex_block_mask(
             mask_pattern=attention_mask_2d,

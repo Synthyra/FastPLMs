@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import xml.etree.ElementTree as ET
-import pytest
 import benchmarks.suite as benchmark_suite
+import pytest
 
 from pathlib import Path
 from types import SimpleNamespace
 from benchmarks.suite import benchmark_cases, bind_local_artifacts
+from tests.unit.benchmark_stubs import stub_artifact_validation
 
 from fastplms.registry import ModelSpec, get_model_registry
 
@@ -58,20 +59,11 @@ def _write_identity_artifact(root: Path, spec: ModelSpec) -> Path:
     return path
 
 
-def _stub_complete_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(benchmark_suite, "_validate_built_artifact", lambda *_args: None)
-    monkeypatch.setattr(
-        benchmark_suite,
-        "_frozen_runtime_identity",
-        lambda *_args: (_RUNTIME_REVISION, _SOURCE_SHA256),
-    )
-
-
 def test_local_benchmark_artifact_identity_is_path_free_and_registry_stable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_complete_validation(monkeypatch)
+    stub_artifact_validation(monkeypatch, _RUNTIME_REVISION, _SOURCE_SHA256)
     spec = get_model_registry()["esm2_8m"]
     artifact = _write_identity_artifact(tmp_path, spec)
     cases = list(benchmark_cases(family="esm2", quick=True, local_files_only=False))
@@ -103,7 +95,7 @@ def test_local_benchmark_artifact_rejects_swapped_or_stale_config(
     field: str,
     stale_value: str,
 ) -> None:
-    _stub_complete_validation(monkeypatch)
+    stub_artifact_validation(monkeypatch, _RUNTIME_REVISION, _SOURCE_SHA256)
     spec = get_model_registry()["esm2_8m"]
     artifact = _write_identity_artifact(tmp_path, spec)
     config_path = artifact / "config.json"
@@ -120,7 +112,7 @@ def test_local_benchmark_artifact_rejects_linked_root_and_child(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_complete_validation(monkeypatch)
+    stub_artifact_validation(monkeypatch, _RUNTIME_REVISION, _SOURCE_SHA256)
     spec = get_model_registry()["esm2_8m"]
     actual_root = tmp_path / "actual"
     actual_root.mkdir()
@@ -144,7 +136,7 @@ def test_local_benchmark_artifact_propagates_complete_validator_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_complete_validation(monkeypatch)
+    stub_artifact_validation(monkeypatch, _RUNTIME_REVISION, _SOURCE_SHA256)
     spec = get_model_registry()["esm2_8m"]
     _write_identity_artifact(tmp_path, spec)
     cases = list(benchmark_cases(family="esm2", quick=True, local_files_only=True))

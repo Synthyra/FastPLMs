@@ -9,11 +9,12 @@ import torch.nn.functional as F
 
 from pathlib import Path
 from typing import Any
+from tests.parity.support.parity_helpers import alias_groups
+from tests.parity.support.reference_adapters.ankh import load_official_seq2seq
 from transformers import AutoModelForSeq2SeqLM
 
 from fastplms.models.ankh.modeling_ankh import tokenize_ankh_sequences
 from fastplms.registry import ModelSpec, get_model_registry
-from tests.parity.support.reference_adapters.ankh import load_official_seq2seq
 
 
 pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.slow]
@@ -25,13 +26,6 @@ def _parameter(spec: ModelSpec) -> Any:
     if spec.size_category == "xlarge":
         marks.append(pytest.mark.large)
     return pytest.param(spec, id=spec.id, marks=marks)
-
-
-def _alias_groups(model: torch.nn.Module) -> set[frozenset[str]]:
-    groups: dict[int, set[str]] = {}
-    for name, parameter in model.named_parameters(remove_duplicate=False):
-        groups.setdefault(id(parameter), set()).add(name)
-    return {frozenset(names) for names in groups.values() if len(names) > 1}
 
 
 @pytest.mark.parametrize("spec", [_parameter(spec) for spec in ANKH_SPECS])
@@ -64,7 +58,7 @@ def test_ankh_official_seq2seq_state_aliases_and_seeded_inference(
         assert torch.equal(fast_state[name], official_state[name]), (
             f"{spec.id}:{name}: sequence-to-sequence weight differs"
         )
-    assert _alias_groups(fast) == _alias_groups(official), (
+    assert alias_groups(fast) == alias_groups(official), (
         f"{spec.id}: sequence-to-sequence tied-weight contract differs"
     )
 

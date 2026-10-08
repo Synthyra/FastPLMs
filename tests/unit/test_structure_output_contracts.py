@@ -9,6 +9,7 @@ import torch
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+from tests.unit.tiny_families import tiny_esmfold2_config
 from torch import Tensor, nn
 from transformers.models.esm.modeling_esmfold import EsmForProteinFolding
 
@@ -23,7 +24,6 @@ from fastplms.models.esmfold.modeling_fast_esmfold import (
     FastEsmForProteinFolding,
     FastEsmForProteinFoldingOutput,
 )
-from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.modeling_esmfold2 import (
     ESMFold2Model,
     ESMFold2Output,
@@ -64,7 +64,7 @@ class _TinyBoltzCore(nn.Module):
         self.weight = nn.Parameter(torch.linspace(0.5, 1.0, width))  # (d=width,)
 
     def forward(self, feats: dict[str, Tensor], **_kwargs: Any) -> dict[str, Tensor]:
-        # feats["signal"]: (b, l, d)
+        # feats: (...) one tensor per name; signal (b, l, d)
         signal = feats["signal"] * self.weight  # (b, l, d)
         pair = signal[:, :, None, :] + signal[:, None, :, :]  # (b, l, l, d)
         return {
@@ -305,67 +305,14 @@ def test_fast_esmfold_tiny_model_saves_and_reloads_exact_state(tmp_path: Path) -
         )
 
 
-def _tiny_esmfold2_config(model_type: str) -> ESMFold2Config:
-    atom_token_width = 8
-    input_feature_width = atom_token_width // 2 + 2 * NUM_RES_TYPES + 1
-    return ESMFold2Config(
-        type=model_type,
-        d_single=8,
-        d_pair=8,
-        num_loops=0,
-        num_diffusion_samples=1,
-        lm_d_model=8,
-        lm_num_layers=1,
-        inputs={
-            "d_inputs": input_feature_width,
-            "atom_encoder": {
-                "d_atom": 8,
-                "d_token": atom_token_width,
-                "n_blocks": 0,
-                "n_heads": 2,
-                "swa_window_size": 32,
-                "expansion_ratio": 2,
-                "n_spatial_rope_pairs_per_axis": 1,
-                "n_uid_rope_pairs": 1,
-            },
-        },
-        folding_trunk={"n_layers": 0, "n_heads": 2, "dropout": 0.0},
-        structure_head={
-            "diffusion_module": {
-                "c_atom": 8,
-                "c_token": 8,
-                "c_z": 8,
-                "c_s_inputs": input_feature_width,
-                "fourier_dim": 8,
-                "atom_num_blocks": 0,
-                "atom_num_heads": 2,
-                "token_num_blocks": 0,
-                "token_num_heads": 2,
-                "transition_multiplier": 2,
-            },
-            "distogram_bins": 8,
-            "inference_num_steps": 1,
-        },
-        confidence_head={
-            "enabled": False,
-            "folding_trunk": {"n_layers": 0, "n_heads": 2, "dropout": 0.0},
-            "num_plddt_bins": 4,
-            "num_pde_bins": 4,
-            "num_pae_bins": 4,
-            "distogram_bins": 8,
-        },
-        msa_encoder={
-            "enabled": True,
-            "d_msa": 8,
-            "d_hidden": 4,
-            "n_layers": 0,
-            "n_heads_msa": 2,
-            "msa_head_width": 4,
-        },
-        msa_conditioning=True,
-        lm_encoder={"enabled": False, "n_layers": 0},
-        parcae={"enabled": True, "min_steps": 1, "max_steps": 1, "coda_n_layers": 0},
-    )
+_MSA_ENCODER = {
+    "enabled": True,
+    "d_msa": 8,
+    "d_hidden": 4,
+    "n_layers": 0,
+    "n_heads_msa": 2,
+    "msa_head_width": 4,
+}
 
 
 class _TinyStructureHead(nn.Module):
@@ -427,7 +374,7 @@ def test_esmfold2_public_forward_honors_output_controls_and_sampler_overrides(
     model_class: type[ESMFold2Model] | type[ESMFold2ExperimentalModel],
     model_type: str,
 ) -> None:
-    model = model_class(_tiny_esmfold2_config(model_type)).eval()
+    model = model_class(tiny_esmfold2_config(model_type, msa_encoder=_MSA_ENCODER, msa_conditioning=True)).eval()
     structure_head = _TinyStructureHead()
     model.structure_head = structure_head
     if model_type == "release":

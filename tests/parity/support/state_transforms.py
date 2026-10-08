@@ -16,19 +16,15 @@ State = Mapping[str, torch.Tensor]
 Transform = Callable[[State], dict[str, torch.Tensor]]
 
 
-def _identity(state: State) -> dict[str, torch.Tensor]:
-    return dict(state)
-
-
 def _cast_floating(state: State, dtype: torch.dtype) -> dict[str, torch.Tensor]:
-    return {
+    return {  # (...) one tensor per parameter name, checkpoint-defined shapes
         key: value.to(dtype=dtype) if value.is_floating_point() else value
         for key, value in state.items()
     }
 
 
 def _drop_unused_rotary_position_table(state: State) -> dict[str, torch.Tensor]:
-    return {
+    return {  # (...) one tensor per parameter name, checkpoint-defined shapes
         key: value
         for key, value in state.items()
         if key != "esm.embeddings.position_embeddings.weight"
@@ -87,7 +83,7 @@ def _esm2_fair_to_fastplms(state: State) -> dict[str, torch.Tensor]:
         if target is None:
             raise AssertionError(f"Unrecognized official ESM2 state key: {key}")
         mapped[target] = value
-    return mapped
+    return mapped  # (...) one tensor per parameter name, checkpoint-defined shapes
 
 
 def _esmc_to_fastplms(state: State) -> dict[str, torch.Tensor]:
@@ -112,7 +108,7 @@ def _esmc_to_fastplms(state: State) -> dict[str, torch.Tensor]:
         for source, target in replacements:
             key = key.replace(source, target)
         mapped[key] = value
-    return mapped
+    return mapped  # (...) one tensor per parameter name, checkpoint-defined shapes
 
 
 _ESMFOLD_DERIVED_BUFFERS = frozenset(
@@ -130,7 +126,7 @@ def _esmfold_meta_to_fastplms(state: State) -> dict[str, torch.Tensor]:
     """Map Meta ESMFold state and omit heads unused by structure inference."""
 
     if any(key.startswith("esm.encoder.") for key in state):
-        return {
+        return {  # (...) one tensor per parameter name, checkpoint-defined shapes
             key: value
             for key, value in state.items()
             if key not in _ESMFOLD_DERIVED_BUFFERS
@@ -153,18 +149,18 @@ def _esmfold_meta_to_fastplms(state: State) -> dict[str, torch.Tensor]:
     overlap = set(folding).intersection(mapped_esm)
     if overlap:
         raise AssertionError(f"ESMFold state-key collision: {sorted(overlap)[:20]}")
-    return {**folding, **mapped_esm}
+    return {**folding, **mapped_esm}  # (...) one tensor per parameter name, checkpoint-defined shapes
 
 
 TRANSFORMS: dict[str, Transform] = {
-    "identity": _identity,
+    "identity": dict,  # a copy of the state, unchanged
     "esm2_hf_to_fastplms_v1": _esm2_fair_to_fastplms,
     "esmc_to_fastplms_v1": _esmc_to_fastplms,
     "esm3_to_fastplms_v1": lambda state: _cast_floating(state, torch.float32),
     "e1_to_fastplms_v1": lambda state: _cast_floating(state, torch.bfloat16),
     "dplm_to_fastplms_v1": _drop_unused_rotary_position_table,
     "dplm2_to_fastplms_v1": _drop_unused_rotary_position_table,
-    "ankh_t5_to_fastplms_v1": _identity,
+    "ankh_t5_to_fastplms_v1": dict,  # a copy of the state, unchanged
     "esmfold_meta_to_fastplms_v1": _esmfold_meta_to_fastplms,
 }
 
@@ -176,7 +172,7 @@ def transform_state(name: str, state: State) -> dict[str, torch.Tensor]:
         transform = TRANSFORMS[name]
     except KeyError as error:
         raise AssertionError(f"No compliance state transform is registered for {name!r}") from error
-    return transform(state)
+    return transform(state)  # (...) one tensor per parameter name, checkpoint-defined shapes
 
 
 def transform_parameter_names(name: str, parameter_name: str) -> tuple[str, ...]:

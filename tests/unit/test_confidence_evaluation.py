@@ -18,14 +18,14 @@ def _target(plddt: list[int], pae: list[int]) -> dict[str, object]:
 
 
 def test_frequency_baseline_fits_training_only_and_normalizes_targets() -> None:
-    result = build_frequency_baseline(
+    baseline = build_frequency_baseline(
         [_target([1, 1], [2]), _target([3], [4, 4])], [_target([1], [2])]
     )
-    assert result["training_target_count"] == 2
-    assert result["evaluation_target_count"] == 1
-    assert len(result["plddt_probabilities"]) == 50
-    assert math.isfinite(result["plddt_ce"])
-    assert result["plddt_probabilities"][1] == result["plddt_probabilities"][3]
+    assert baseline["training_target_count"] == 2
+    assert baseline["evaluation_target_count"] == 1
+    assert len(baseline["plddt_probabilities"]) == 50
+    assert math.isfinite(baseline["plddt_ce"])
+    assert baseline["plddt_probabilities"][1] == baseline["plddt_probabilities"][3]
 
 
 def test_frequency_baseline_rejects_empty_or_invalid_targets() -> None:
@@ -38,9 +38,9 @@ def test_frequency_baseline_rejects_empty_or_invalid_targets() -> None:
 def test_frequency_baseline_accepts_single_pass_target_generators() -> None:
     training = (_target([index], [index]) for index in (1, 2, 3))
     evaluation = (_target([index], [index]) for index in (1, 2))
-    result = build_frequency_baseline(training, evaluation)
-    assert result["training_target_count"] == 3
-    assert result["evaluation_target_count"] == 2
+    baseline = build_frequency_baseline(training, evaluation)
+    assert baseline["training_target_count"] == 3
+    assert baseline["evaluation_target_count"] == 2
 
 
 def test_sample_ranking_is_paired_by_target_and_seed() -> None:
@@ -51,11 +51,11 @@ def test_sample_ranking_is_paired_by_target_and_seed() -> None:
         {"target_id": "b", "seed": 29, "plddt_pred": [0.7], "plddt_true": [0.9]},
         {"target_id": "unpaired", "seed": 17, "plddt_pred": [0.1]},
     ]
-    result = _sample_ranking(predictions)
-    assert result["paired_target_count"] == 2
-    assert result["seed_rank_spearman"] == pytest.approx(1.0)
-    assert result["plddt_selection"]["selection_accuracy"] == pytest.approx(0.5)
-    assert result["plddt_selection"]["mean_regret"] == pytest.approx(0.1)
+    ranking = _sample_ranking(predictions)
+    assert ranking["paired_target_count"] == 2
+    assert ranking["seed_rank_spearman"] == pytest.approx(1.0)
+    assert ranking["plddt_selection"]["selection_accuracy"] == pytest.approx(0.5)
+    assert ranking["plddt_selection"]["mean_regret"] == pytest.approx(0.1)
 
 
 def test_interface_selection_uses_only_complete_dimer_pairs() -> None:
@@ -93,6 +93,6 @@ def test_interface_selection_uses_only_complete_dimer_pairs() -> None:
             "dockq": None,
         },
     ]
-    result = _sample_ranking(predictions)
-    assert result["interface_selection"]["paired_target_count"] == 1
-    assert result["interface_selection"]["selection_accuracy"] == pytest.approx(1.0)
+    ranking = _sample_ranking(predictions)
+    assert ranking["interface_selection"]["paired_target_count"] == 1
+    assert ranking["interface_selection"]["selection_accuracy"] == pytest.approx(1.0)

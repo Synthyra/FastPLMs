@@ -45,7 +45,7 @@ def test_prepare_inputs_counts_residues_not_special_tokens() -> None:
             # Both sequences receive BOS and EOS control tokens.
             attention_mask[0, :8] = 1  # (l=8,)
             attention_mask[1, :5] = 1  # (l=5,)
-            return {"input_ids": input_ids, "attention_mask": attention_mask}
+            return {"input_ids": input_ids, "attention_mask": attention_mask}  # (...) input_ids, attention_mask: each (2, 8) = (b, l)
 
     class FakeModel:
         tokenizer = FakeTokenizer()
@@ -286,7 +286,7 @@ def test_esmfold2_esmc_projection_path_smoke() -> None:
             mol_type: torch.Tensor,
             residue_mask: torch.Tensor,
         ) -> torch.Tensor:
-            # Each input tensor has shape (b, l).
+            # input_ids, asym_id, residue_index, mol_type, residue_mask: (b, l)
             del asym_id, residue_index, mol_type
             H = input_ids.to(torch.bfloat16)[..., None, None].expand(  # (b, l, 81, d=4)
                 -1, -1, 81, 4

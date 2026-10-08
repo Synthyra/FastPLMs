@@ -8,7 +8,8 @@ import torch
 
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-
+from packaging.requirements import Requirement
+from tests.conftest import validation_pins
 from tests.structure.support.hardware import device_fingerprint
 
 
@@ -37,17 +38,32 @@ def test_fp8_validation_stack_uses_the_cuda13_transformer_engine_core() -> None:
         version("transformer-engine-cu12")
 
 
+def _declared(relative_path: str, distribution: str) -> Requirement:
+    """The one declaration of a distribution in a file under requirements/."""
+    path = ROOT / "requirements" / relative_path
+    declarations = [
+        Requirement(line.partition("#")[0].strip())
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.partition("#")[0].strip()
+    ]
+    (requirement,) = [item for item in declarations if item.name == distribution]
+    return requirement
+
+
 @pytest.mark.gpu
 def test_gpu_validation_stack_is_exactly_pinned() -> None:
     import transformers
 
+    pins = validation_pins()
     assert sys.version_info[:2] == (3, 12)
-    assert version("torch").split("+", maxsplit=1)[0] == "2.13.0"
-    assert torch.__version__.split("+", maxsplit=1)[0] == "2.13.0"
-    assert version("transformers") == "5.13.0"
-    assert transformers.__version__ == "5.13.0"
-    assert version("huggingface-hub") == "1.23.0"
-    assert version("kernels") == "0.15.2"
+    assert version("torch").split("+", maxsplit=1)[0] == pins["torch"]
+    assert torch.__version__.split("+", maxsplit=1)[0] == pins["torch"]
+    assert version("transformers") == pins["transformers"]
+    assert transformers.__version__ == pins["transformers"]
+    # validation.txt pins Torch and Transformers alone. The image resolves the Hub client and
+    # the kernel loader within their declared ranges.
+    assert _declared("core.in", "huggingface-hub").specifier.contains(version("huggingface-hub"))
+    assert _declared("features/flash.in", "kernels").specifier.contains(version("kernels"))
     assert torch.version.cuda is not None
     assert torch.version.cuda.startswith("13.0")
 

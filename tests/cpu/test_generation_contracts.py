@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 import torch
 
-from fastplms.models.esm3.modeling_esm3 import FastESM3Config, FastESM3Model
 from tests.integration import test_dplm_generation as dplm_contracts
 from tests.integration import test_esm3 as esm3_contracts
+from tests.unit.tiny_families import tiny_esm3_config
+
+from fastplms.models.esm3.modeling_esm3 import FastESM3Model
 
 
 _integration_dplm_config = dplm_contracts._common_config
@@ -29,24 +31,14 @@ def _cpu_dplm_config(vocab_size: int) -> dict[str, object]:
     return values
 
 
-def _cpu_small_esm3_config() -> FastESM3Config:
-    return FastESM3Config(
-        hidden_size=8,
-        num_attention_heads=2,
-        num_vector_heads=2,
-        num_hidden_layers=1,
-        attn_backend="eager",
-    )
-
-
 def _cpu_small_esm3_model() -> FastESM3Model:
-    return FastESM3Model(_cpu_small_esm3_config()).eval()
+    return FastESM3Model(tiny_esm3_config()).eval()
 
 
 # The integration contracts look up these helpers when each test executes.
 # Override them in this positive CPU allowlist so the gate never grows into a
 # benchmark-sized model while retaining the exact public behavior assertions.
-esm3_contracts._small_config = _cpu_small_esm3_config
+esm3_contracts._small_config = tiny_esm3_config
 esm3_contracts._small_model = _cpu_small_esm3_model
 dplm_contracts._common_config = _cpu_dplm_config
 

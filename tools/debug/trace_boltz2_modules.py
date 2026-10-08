@@ -6,12 +6,12 @@ import argparse
 import gc
 import json
 import torch
+
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
 from safetensors.torch import load_file, save_file
-
 from tests.structure.support import boltz2_bundle
 
 
@@ -84,19 +84,20 @@ def _tensor_leaves(value: Any, path: str = "value") -> dict[str, torch.Tensor]:
         leaves: dict[str, torch.Tensor] = {}
         for key in sorted(value, key=str):
             leaves.update(_tensor_leaves(value[key], f"{path}.{key}"))
-        return leaves
+        return leaves  # (...) one tensor per leaf path, each keeping its shape
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         leaves = {}
         for index, item in enumerate(value):
             leaves.update(_tensor_leaves(item, f"{path}.{index}"))
-        return leaves
-    return {}
+        return leaves  # (...) one tensor per leaf path, each keeping its shape
+    return {}  # (...) empty: no tensor leaves
 
 
 def _register_trace_hooks(
     core: torch.nn.Module,
     traces: dict[str, torch.Tensor],
 ) -> list[torch.utils.hooks.RemovableHandle]:
+    # traces: (...) one tensor per trace key, any shape
     call_counts: defaultdict[str, int] = defaultdict(int)
     handles: list[torch.utils.hooks.RemovableHandle] = []
 
@@ -162,7 +163,7 @@ def _load(
     else:
         features = boltz2_bundle._prepare_candidate_features(request)  # values: (...)
         model = boltz2_bundle._load_candidate_model(request)
-    return model, features
+    return model, features  # model, (...) one feature tensor per name
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+
 from pathlib import Path
 
 
@@ -31,7 +32,7 @@ def _symbol_matches(path: Path) -> list[str]:
 
 def main() -> None:
     paths = (CUDA_CUBLAS_LT, PYTHON_CUBLAS_LT)
-    result = {
+    probe_report = {
         "required_symbol": REQUIRED_SYMBOL,
         "transformer_engine_ldd": _output("ldd", str(TE_LIBRARY)).splitlines(),
         "cublas_lt": {
@@ -42,7 +43,7 @@ def main() -> None:
             for path in paths
         },
     }
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(probe_report, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

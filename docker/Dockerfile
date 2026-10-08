@@ -22,7 +22,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     XDG_CACHE_HOME=/cache/xdg \
     FASTPLMS_ARTIFACTS=/workspace/artifacts
 
-# PyTorch 2.13 pins its cuDNN runtime as a wheel. Keep that locked runtime ahead
+# The validated PyTorch pins its cuDNN runtime as a wheel. Keep that locked runtime ahead
 # of the CUDA base image so Transformer Engine behaves identically regardless
 # of whether a BF16 cuDNN kernel ran before the first FP8 reload.
 
@@ -371,7 +371,7 @@ FROM python312 AS reference-boltz2-same-runtime
 
 COPY --from=upstream_boltz --exclude=.git --exclude=.git/** . /opt/oracle/vendor/upstream/boltz
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu130 && \
+    pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cu130 && \
     pip install '/opt/oracle/vendor/upstream/boltz[test]' \
         huggingface-hub==0.36.0 safetensors==0.6.2
 COPY --from=reference-protocol /opt/oracle /opt/oracle

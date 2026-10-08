@@ -734,7 +734,12 @@ class Boltz2Model(PreTrainedModel):
         self.core = Boltz2InferenceCore(**config.core_kwargs)
 
     def _init_weights(self, module: nn.Module) -> None:
-        return
+        # Parameters keep their constructed or loaded values. Transformers 5 builds the
+        # model on the meta device and leaves a buffer no checkpoint holds uninitialized,
+        # so the diffusion module's non-persistent zero, which the loss breakdown
+        # reports when the smooth lDDT loss is off, is refilled here.
+        if isinstance(module, AtomDiffusion):
+            module.zero.zero_()
 
     def _detied_state_dict(self) -> dict[str, Tensor]:
         # Every state tensor has its parameter-defined shape (...).

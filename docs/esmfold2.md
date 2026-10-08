@@ -52,8 +52,8 @@ confidence-derived B factors.
 
 ## Dependencies and platform requirements
 
-ESMFold2 requires the structure dependencies, Python 3.11-3.14, PyTorch
-2.13, Transformers 5.13, and a CUDA device for its published execution
+ESMFold2 requires the structure dependencies, Python 3.12-3.14, PyTorch
+2.14, Transformers 5.17, and a CUDA device for its published execution
 contract. Docker execution with the required capabilities and numerical tests
 is valid on any compatible host. Record the actual accelerator, architecture,
 driver, and software versions in each validation report. The historical release
@@ -95,14 +95,14 @@ The cuEquivariance dependency file pins the version-aligned frontend and CUDA
 kernels used by the release contract: `cuequivariance==0.10.0`,
 `cuequivariance-torch==0.10.0`, and
 `cuequivariance-ops-torch-cu13==0.10.0`. It selects NVIDIA's
-CUDA 13 build because FastPLMs validates PyTorch 2.13 on CUDA 13.0. Do not
+CUDA 13 build because FastPLMs validates PyTorch 2.14 on CUDA 13.0. Do not
 install the CUDA 12 and CUDA 13 kernel packages into the same environment.
 FastPLMs requires both the frontend and the CUDA ops package before accepting
 `model.set_kernel_backend("cuequivariance")`; a frontend-only installation is
 not treated as backend availability.
 
 This backend is available only on Linux with an NVIDIA GPU, a compatible
-CUDA 13 driver, and CPython 3.11-3.14. NVIDIA publishes both x86-64 and ARM64
+CUDA 13 driver, and CPython 3.12-3.14. NVIDIA publishes both x86-64 and ARM64
 manylinux wheels for those interpreters. Results must identify the exact device
 and architecture, and performance baselines from different accelerator models
 are not interchangeable. Windows, macOS, CPU-only hosts, and the FastPLMs

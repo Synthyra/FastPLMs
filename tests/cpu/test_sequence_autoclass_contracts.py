@@ -6,10 +6,12 @@ import pytest
 import torch
 
 from pathlib import Path
+from tests.integration import test_dplm_generation as dplm_contracts
+from tests.unit import test_e1_cache_contract as e1_contracts
+from tests.unit.tiny_families import tiny_esm2_config
 from transformers.modeling_outputs import ModelOutput
 
 from fastplms.models.esm2.modeling_fastesm import (
-    FastEsmConfig,
     FastEsmForMaskedLM,
     FastEsmForSequenceClassification,
     FastEsmForTokenClassification,
@@ -22,26 +24,6 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusForTokenClassification,
     ESMplusplusModel,
 )
-from tests.integration import test_dplm_generation as dplm_contracts
-from tests.unit import test_e1_cache_contract as e1_contracts
-
-
-def _esm2_config() -> FastEsmConfig:
-    return FastEsmConfig(
-        vocab_size=16,
-        hidden_size=8,
-        num_hidden_layers=1,
-        num_attention_heads=2,
-        intermediate_size=16,
-        hidden_dropout_prob=0.0,
-        attention_probs_dropout_prob=0.0,
-        max_position_embeddings=16,
-        pad_token_id=1,
-        mask_token_id=5,
-        num_labels=3,
-        position_embedding_type="absolute",
-        attn_backend="eager",
-    )
 
 
 def _inputs() -> tuple[torch.Tensor, torch.Tensor]:
@@ -183,6 +165,7 @@ def _assert_exact_output_round_trip(
     reloaded: torch.nn.Module,
     **model_inputs: torch.Tensor,
 ) -> None:
+    # model_inputs: (b, l) one id or mask tensor per keyword, as each family's model takes
     forward_controls = {
         "output_attentions": True,
         "output_hidden_states": True,
@@ -232,7 +215,7 @@ def test_esm2_advertised_models_forward_loss_backward_resize_and_reload(
     model_class: type,
     tmp_path: Path,
 ) -> None:
-    model = model_class(_esm2_config()).eval()
+    model = model_class(tiny_esm2_config()).eval()
     input_ids, attention_mask = _inputs()
     structured = model(
         input_ids=input_ids,

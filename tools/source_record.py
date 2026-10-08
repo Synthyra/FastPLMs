@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import stat
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -139,7 +140,7 @@ def tracked_root_inventory(
     root = root.resolve()
     if not root.is_dir():
         raise SourceProvenanceError(f"Tracked root does not exist: {root}")
-    result: dict[str, dict[str, object]] = {}
+    inventory: dict[str, dict[str, object]] = {}
     for relative_name in _normalized_paths(tracked_files):
         path = _tracked_path(root, relative_name)
         try:
@@ -147,7 +148,7 @@ def tracked_root_inventory(
         except OSError as error:
             raise SourceProvenanceError(f"Tracked root path is missing: {path}") from error
         if stat.S_ISLNK(mode):
-            result[relative_name] = {
+            inventory[relative_name] = {
                 "mode": "120000",
                 "target": _safe_symlink_target(root, path),
             }
@@ -160,12 +161,12 @@ def tracked_root_inventory(
             while chunk := handle.read(1024 * 1024):
                 content.update(chunk)
                 size += len(chunk)
-        result[relative_name] = {
+        inventory[relative_name] = {
             "mode": "100755" if mode & stat.S_IXUSR else "100644",
             "size": size,
             "sha256": content.hexdigest(),
         }
-    return result
+    return inventory
 
 
 def root_inventory_digest(inventory: Mapping[str, Mapping[str, object]]) -> str:
@@ -201,7 +202,7 @@ def root_inventory_digest(inventory: Mapping[str, Mapping[str, object]]) -> str:
             isinstance(size, bool)
             or not isinstance(size, int)
             or size < 0
-            or not _valid_hex(sha256, _HEX_DIGEST_LENGTH)
+            or not is_lower_hex(sha256, _HEX_DIGEST_LENGTH)
         ):
             raise SourceProvenanceError(
                 f"Tracked root file has invalid size or digest: {relative_name!r}"
@@ -220,7 +221,7 @@ def archive_root_record(
 ) -> dict[str, object]:
     """Create the content attestation embedded in one Git-free source archive."""
 
-    if not _valid_hex(head_revision, _HEX_REVISION_LENGTH):
+    if not is_lower_hex(head_revision, _HEX_REVISION_LENGTH):
         raise SourceProvenanceError(f"Invalid root revision: {head_revision!r}")
     inventory = tracked_root_inventory(root, tracked_files)
     return {
@@ -237,14 +238,14 @@ def actual_tree_paths(root: Path) -> tuple[str, ...]:
     root = root.resolve()
     if not root.is_dir():
         raise SourceProvenanceError(f"Archived submodule does not exist: {root}")
-    result: list[str] = []
+    paths: list[str] = []
     for path in root.rglob("*"):
         relative = path.relative_to(root)
         if any(part.lower() == ".git" for part in relative.parts):
             raise SourceProvenanceError(f"Archived submodule contains Git metadata: {path}")
         if path.is_symlink() or path.is_file():
-            result.append(relative.as_posix())
-    return tuple(sorted(result))
+            paths.append(relative.as_posix())
+    return tuple(sorted(paths))
 
 
 def render_archive_provenance(
@@ -293,7 +294,7 @@ def _load_record(source_root: Path) -> dict[str, Any]:
     return value
 
 
-def _valid_hex(value: object, length: int) -> bool:
+def is_lower_hex(value: object, length: int) -> bool:
     return (
         isinstance(value, str)
         and len(value) == length
@@ -321,7 +322,7 @@ def validate_archived_root(
     if not isinstance(raw_root, dict) or set(raw_root) != expected_fields:
         raise SourceProvenanceError("Archive provenance has an invalid root record")
     head_revision = raw_root["head_revision"]
-    if not _valid_hex(head_revision, _HEX_REVISION_LENGTH):
+    if not is_lower_hex(head_revision, _HEX_REVISION_LENGTH):
         raise SourceProvenanceError("Archive provenance has an invalid root revision")
     raw_files = raw_root["files"]
     if not isinstance(raw_files, dict):
@@ -345,7 +346,7 @@ def validate_archived_root(
     ):
         raise SourceProvenanceError("Archive provenance root file_count differs")
     expected_tree = raw_root["tree_sha256"]
-    if not _valid_hex(expected_tree, _HEX_DIGEST_LENGTH):
+    if not is_lower_hex(expected_tree, _HEX_DIGEST_LENGTH):
         raise SourceProvenanceError("Archive provenance root digest is invalid")
     encoded_tree = root_inventory_digest(inventory)
     if encoded_tree != expected_tree:
@@ -382,7 +383,7 @@ def validate_archived_submodule(
         or any(":" in part for part in normalized.parts)
     ):
         raise SourceProvenanceError(f"Invalid archived submodule path: {relative_path!r}")
-    if not _valid_hex(expected_revision, _HEX_REVISION_LENGTH):
+    if not is_lower_hex(expected_revision, _HEX_REVISION_LENGTH):
         raise SourceProvenanceError(f"Invalid expected revision: {expected_revision!r}")
 
     provenance = _load_record(source_root.resolve())
@@ -415,7 +416,7 @@ def validate_archived_submodule(
     if file_count != len(normalized_files):
         raise SourceProvenanceError(f"Archived submodule {relative_path!r} file_count differs")
     expected_tree = raw_record["tree_sha256"]
-    if not _valid_hex(expected_tree, _HEX_DIGEST_LENGTH):
+    if not is_lower_hex(expected_tree, _HEX_DIGEST_LENGTH):
         raise SourceProvenanceError(f"Archived submodule {relative_path!r} has invalid digest")
 
     source_root = source_root.resolve()
@@ -453,6 +454,7 @@ __all__ = [
     "SourceProvenanceError",
     "actual_tree_paths",
     "archive_root_record",
+    "is_lower_hex",
     "render_archive_provenance",
     "root_inventory_digest",
     "tracked_root_inventory",

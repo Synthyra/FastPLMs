@@ -12,6 +12,8 @@ from fastplms.models.classification_probe import (
     SequenceClassificationProbe,
     TokenClassificationProbe,
 )
+from fastplms.models.esmfold2 import modeling_esmfold2 as released_model
+from fastplms.models.esmfold2 import modeling_esmfold2_experimental as experimental_model
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.modeling_esmfold2 import ESMFold2Model
 from fastplms.models.esmfold2.modeling_esmfold2_classification import (
@@ -75,10 +77,11 @@ def _attach_tiny_esmc_output(model: nn.Module) -> None:
         mol_type: torch.Tensor,
         residue_mask: torch.Tensor,
     ) -> torch.Tensor:
+        # input_ids, asym_id, residue_index, mol_type, residue_mask: (b, l)
         del self, asym_id, residue_index, mol_type
         hidden = torch.zeros(*input_ids.shape, 81, 4, device=input_ids.device)
         hidden[..., 0] = input_ids.unsqueeze(-1)
-        return hidden * residue_mask[..., None, None]
+        return hidden * residue_mask[..., None, None]  # (b, l, 81, 4)
 
     model._compute_lm_hidden_states = MethodType(compute, model)
 
@@ -164,6 +167,37 @@ def test_esmfold2_classifier_inputs_reject_non_protein_inputs(
     inputs["input_ids"][0, 0] = 0
     with pytest.raises(ValueError, match="residue-only single-chain"):
         model(**inputs)
+
+
+@pytest.mark.parametrize(
+    ("model_class", "experimental", "installer_module"),
+    [
+        (ESMFold2ForSequenceClassification, False, released_model),
+        (ESMFold2ExperimentalForSequenceClassification, True, experimental_model),
+    ],
+)
+def test_esmfold2_classifier_freezes_a_loaded_backbone_and_refuses_a_load_that_leaves_none(
+    monkeypatch: pytest.MonkeyPatch,
+    model_class: type[nn.Module],
+    experimental: bool,
+    installer_module,
+) -> None:
+    _replace_base_initializers(monkeypatch)
+    model = model_class(_tiny_config(experimental=experimental))
+    model._esmc = None
+
+    def install_trainable_backbone(target, path, **keywords):
+        target._esmc = nn.Linear(1, 1)
+
+    monkeypatch.setattr(installer_module, "_install_esmc_backbone", install_trainable_backbone)
+
+    model.load_esmc("an/esmc")
+
+    assert all(not parameter.requires_grad for parameter in model._esmc.parameters())
+    model._esmc = None
+    monkeypatch.setattr(installer_module, "_install_esmc_backbone", lambda target, path, **keywords: None)
+    with pytest.raises(RuntimeError, match="completed without a backbone"):
+        model.load_esmc("an/esmc")
 
 
 def test_esmfold2_classifier_config_round_trips(tmp_path) -> None:

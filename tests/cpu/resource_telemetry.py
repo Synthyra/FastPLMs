@@ -414,7 +414,7 @@ class ConcurrentProcessTreeSampler:
         while not self._stop_event.wait(self.sample_interval_seconds):
             try:
                 self.sample_now()
-            except Exception as error:  # pragma: no cover - exercised through stop()
+            except Exception as error:  # pragma: no cover - exercised through stop()  # noqa: broad-except  a sampling failure of any kind is kept and reported by stop()
                 with self._lock:
                     self._errors.append(f"{type(error).__name__}: {error}")
                 self._stop_event.set()
@@ -450,7 +450,7 @@ class ConcurrentProcessTreeSampler:
         if not self._errors:
             try:
                 self.sample_now()
-            except Exception as error:
+            except Exception as error:  # noqa: broad-except  a final sampling failure of any kind joins the recorded errors
                 with self._lock:
                     self._errors.append(f"{type(error).__name__}: {error}")
         self._stopped = True

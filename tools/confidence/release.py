@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 
@@ -10,14 +9,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from fastplms.digests import file_sha256
+
 
 def _read(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _sha256(path: Path) -> str:
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def _inventory(root: Path) -> list[dict[str, Any]]:
@@ -28,7 +24,7 @@ def _inventory(root: Path) -> list[dict[str, Any]]:
                 {
                     "path": path.relative_to(root).as_posix(),
                     "size": path.stat().st_size,
-                    "sha256": _sha256(path),
+                    "sha256": file_sha256(path),
                 }
             )
     return files
@@ -86,7 +82,7 @@ def prepare_release(root: Path, model_id: str) -> dict[str, Any]:
         or package_report.get("base_revision") != spec.confidence_training_base.revision
     ):
         raise ValueError("package source identity does not match the manifest")
-    if _sha256(artifact / "model.safetensors") != package_report.get("weight_sha256") or _sha256(
+    if file_sha256(artifact / "model.safetensors") != package_report.get("weight_sha256") or file_sha256(
         artifact / "config.json"
     ) != package_report.get("config_sha256"):
         raise ValueError("package files changed after validation")
@@ -169,7 +165,7 @@ def prepare_release(root: Path, model_id: str) -> dict[str, Any]:
         "model_id": model_id,
         "artifact": str(release_artifact),
         "head_sha256": package_report["head_sha256"],
-        "weight_sha256": _sha256(release_artifact / "model.safetensors"),
+        "weight_sha256": file_sha256(release_artifact / "model.safetensors"),
     }
     (release_root / "package").mkdir(parents=True, exist_ok=True)
     from .packaging import _validate_and_record

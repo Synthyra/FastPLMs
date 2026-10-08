@@ -8,8 +8,8 @@ from tools.execution.pricing import GPU_DOLLARS_PER_SECOND, resource_rate
 APP_NAME = "fastplms-gpu-evidence"
 # The validation stack pins these; a unit test keeps them equal to
 # requirements/constraints/validation.txt.
-TORCH_VERSION = "2.13.0"
-TRANSFORMERS_VERSION = "5.13.0"
+TORCH_VERSION = "2.14.0"
+TRANSFORMERS_VERSION = "5.17.0"
 PYTHON_VERSION = "3.12"
 CUDA_WHEEL_INDEX = "https://download.pytorch.org/whl/cu130"
 CPU_WHEEL_INDEX = "https://download.pytorch.org/whl/cpu"
@@ -17,7 +17,7 @@ CPU_WHEEL_INDEX = "https://download.pytorch.org/whl/cpu"
 # Only GPUs with a recorded per-second rate can be reserved against the cap.
 GPU_CHOICES = tuple(GPU_DOLLARS_PER_SECOND)
 # L4 is the least expensive recorded GPU that runs BF16 and, at compute
-# capability 8.9, can load the locked FlashAttention builds.
+# capability 8.9, meets the locked FlashAttention builds' hardware floor.
 DEFAULT_GPU = "L4"
 DEFAULT_MAX_DOLLARS = 25.0
 

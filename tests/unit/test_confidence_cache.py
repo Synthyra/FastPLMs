@@ -8,7 +8,6 @@ import torch
 
 from types import SimpleNamespace
 from unittest.mock import Mock
-
 from torch import nn
 
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
@@ -47,7 +46,7 @@ def _cache_tensors() -> dict[str, torch.Tensor]:
         "distogram_atom_idx": torch.tensor([[0, 2]]),
         "backbone_indices": torch.tensor([[0, 1, 2], [1, 2, 3]]),
     }
-    return tensors
+    return tensors  # (...) one tensor per cache name for 2 tokens and 4 atoms; s_inputs (1, 2, 4), z (1, 2, 2, 3), x_pred (1, 4, 3)
 
 
 class _PositionalModel(nn.Module):
@@ -56,11 +55,13 @@ class _PositionalModel(nn.Module):
         self.anchor = nn.Parameter(torch.zeros(()))
 
     def rel_pos(self, **values: torch.Tensor) -> torch.Tensor:
+        # values: (...) one tensor per keyword; residue_index (1, l)
         length = values["residue_index"].shape[-1]
-        return torch.zeros(1, length, length, 3)
+        return torch.zeros(1, length, length, 3)  # (1, l, l, 3)
 
     def token_bonds(self, values: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(1, 2, 2, 3)
+        # values: (1, 2, 2, 1)
+        return torch.zeros(1, 2, 2, 3)  # (1, 2, 2, 3)
 
 
 def test_confidence_inputs_reconstructs_derived_embeddings() -> None:
@@ -119,10 +120,10 @@ def test_ile_branch_atoms_are_not_swapped() -> None:
     true = torch.tensor([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])  # (2, 3)
     predicted = true.flip(0)
     resolved = torch.ones(2, dtype=torch.bool)  # (2,)
-    result = _resolve_ambiguous_atoms(
+    resolved_atoms = _resolve_ambiguous_atoms(
         predicted, true, resolved, torch.zeros(2, dtype=torch.long), ["CG1", "CG2"], {0: "ILE"}
     )
-    assert torch.equal(result, true)
+    assert torch.equal(resolved_atoms, true)
 
 
 def test_homodimer_assignment_ignores_padded_atoms() -> None:
@@ -166,7 +167,7 @@ def test_phe_aromatic_pairs_swap_jointly() -> None:
     )  # (7, 3)
     predicted = true[[1, 0, 3, 2, 4, 5, 6]]
     resolved = torch.ones(7, dtype=torch.bool)  # (7,)
-    result = _resolve_ambiguous_atoms(
+    resolved_atoms = _resolve_ambiguous_atoms(
         predicted,
         true,
         resolved,
@@ -174,7 +175,7 @@ def test_phe_aromatic_pairs_swap_jointly() -> None:
         ["CD1", "CD2", "CE1", "CE2", "N", "CA", "C"],
         {0: "PHE", 1: "ALA"},
     )
-    assert torch.equal(result, predicted)
+    assert torch.equal(resolved_atoms, predicted)
 
 
 def test_native_zero_based_residues_map_to_complete_structure_positions(tmp_path) -> None:

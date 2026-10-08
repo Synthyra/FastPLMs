@@ -8,7 +8,6 @@ import torch.nn as nn
 
 from collections.abc import Sequence
 from pathlib import Path
-
 from tests.parity.support.reference_adapters import move_model, snapshot_path
 from tests.parity.support.reference_adapters.esm2 import _asset_field, _verified_asset
 

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 
 from types import SimpleNamespace
 
-from fastplms.models.esmfold2.esmfold2_constants import MOL_TYPE_PROTEIN
+from fastplms.models.esmfold2.esmfold2_constants import MOL_TYPE_NONPOLYMER, MOL_TYPE_PROTEIN
+from fastplms.models.esmfold2.esmfold2_output import build_molecular_complex, get_element_symbol
 from fastplms.models.esmfold2.esmfold2_processor import ESMFold2InputBuilder
 
 
@@ -56,14 +58,45 @@ def test_confidence_disabled_decode_preserves_two_chain_cif_without_scores() -> 
     }
 
     builder = object.__new__(ESMFold2InputBuilder)
-    result = builder.decode(output, features, chain_infos, num_diffusion_samples=1)
+    decoded = builder.decode(output, features, chain_infos, num_diffusion_samples=1)
 
-    assert result.plddt is None
-    assert result.ptm is None
-    assert result.iptm is None
-    assert torch.isnan(torch.from_numpy(result.complex.plddt)).all()
-    assert result.complex.chain_id.tolist() == [0, 0, 1, 1]
+    assert decoded.plddt is None
+    assert decoded.ptm is None
+    assert decoded.iptm is None
+    assert torch.isnan(torch.from_numpy(decoded.complex.plddt)).all()
+    assert decoded.complex.chain_id.tolist() == [0, 0, 1, 1]
 
-    cif = result.complex.to_mmcif()
+    cif = decoded.complex.to_mmcif()
     assert "?" in cif
     assert "nan" not in cif.lower()
+
+
+def test_a_prepared_structure_decodes_into_one_token_per_residue_and_skips_absent_atoms() -> None:
+    chain_type = np.dtype(
+        [("asym_id", "i4"), ("mol_type", "i4"), ("entity_id", "i4"), ("name", "U4"), ("res_idx", "i4"), ("res_num", "i4")]
+    )
+    residue_type = np.dtype([("name", "U4"), ("atom_idx", "i4"), ("atom_num", "i4")])
+    atom_type = np.dtype([("is_present", "?"), ("element", "i4"), ("name", "i4", (4,))])
+    structure = SimpleNamespace(
+        chains=np.array([(0, MOL_TYPE_PROTEIN, 0, "A", 0, 2), (1, MOL_TYPE_NONPOLYMER, 1, "L", 2, 1)], dtype=chain_type),
+        residues=np.array([("ALA", 0, 2), ("GLY", 2, 1), ("ZN", 3, 1)], dtype=residue_type),
+        atoms=np.array(
+            [
+                (True, 7, _encoded_name("N")),
+                (True, 6, _encoded_name("CA")),
+                (False, 6, _encoded_name("C")),
+                (True, 30, _encoded_name("ZN")),
+            ],
+            dtype=atom_type,
+        ),
+    )  # three residues over four atoms, one of them absent
+    coordinates = torch.arange(9, dtype=torch.float32).reshape(3, 3)  # (present atoms, 3)
+
+    decoded = build_molecular_complex(structure, coordinates, torch.tensor([0.9, 0.8, 0.7]), "decoded")
+
+    assert decoded.id == "decoded" and decoded.sequence == ["ALA", "GLY", "ZN"]
+    assert decoded.chain_id.tolist() == [0, 0, 1] and decoded.token_to_atoms.tolist() == [[0, 2], [2, 2], [2, 3]]
+    assert decoded.atom_names.tolist() == ["N", "CA", "ZN"] and decoded.atom_hetero.tolist() == [False, False, True]
+    assert decoded.atom_elements.tolist() == [get_element_symbol(7), get_element_symbol(6), get_element_symbol(30)]
+    assert decoded.plddt.tolist() == pytest.approx([0.9, 0.8, 0.7]) and decoded.atom_positions.tolist() == coordinates.tolist()
+    assert decoded.metadata.chain_lookup == {0: "A", 1: "L"} and decoded.metadata.entity_lookup == {0: "polymer", 1: "non-polymer"}

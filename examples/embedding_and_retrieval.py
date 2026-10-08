@@ -4,21 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 
-if __package__:
-    from ._runtime import add_execution_arguments, resolve_execution
+if TYPE_CHECKING or __package__:
+    from ._runtime import add_execution_arguments, configure_offline, resolve_execution
 else:
-    from _runtime import add_execution_arguments, resolve_execution
-
-
-def configure_offline() -> None:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    from _runtime import add_execution_arguments, configure_offline, resolve_execution
 
 
 def run_embeddings(
@@ -94,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         trust_remote_code=True,
         local_files_only=True,
     )
-    result = run_embeddings(
+    records = run_embeddings(
         model,
         tokenizer,
         inputs,
@@ -102,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         output_format=arguments.output_format,
         max_length=arguments.max_length,
     )
-    for record in result:
+    for record in records:
         print(record.id, record.sequence, tuple(record.load_tensor().shape))
 
     if arguments.output is not None and arguments.output_format == "sqlite" and arguments.select_id:

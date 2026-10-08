@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-import importlib.util
 import re
 import struct
-import sys
 import tokenize
 import types
 import numpy as np
 import pytest
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import asdict
 from difflib import SequenceMatcher
 from io import StringIO
 from pathlib import Path
 from typing import Any
+from tests.parity.support.parity_helpers import load_pinned_source, namespace_package
+from tests.release.source_independence import meaningful_lines
 
 from fastplms.models.esmfold2 import configuration_esmfold2 as local_config
 from fastplms.models.esmfold2 import esmfold2_residue_constants as local_residues
@@ -33,46 +31,11 @@ OFFICIAL_CONFIG = (
     / "vendor/upstream/biohub-transformers/src/transformers/models/esmfold2"
     / "configuration_esmfold2.py"
 )
-_MISSING = object()
-
-
-def _package(name: str) -> types.ModuleType:
-    package = types.ModuleType(name)
-    package.__path__ = []  # type: ignore[attr-defined]
-    return package
-
-
-@contextmanager
-def _temporary_modules(modules: dict[str, types.ModuleType]) -> Iterator[None]:
-    previous = {name: sys.modules.get(name, _MISSING) for name in modules}
-    sys.modules.update(modules)
-    try:
-        yield
-    finally:
-        for name, module in previous.items():
-            if module is _MISSING:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module  # type: ignore[assignment]
-
-
-def _load_source(
-    module_name: str,
-    path: Path,
-    aliases: dict[str, types.ModuleType] | None = None,
-) -> types.ModuleType:
-    assert path.is_file(), f"pinned source is missing: {path}"
-    specification = importlib.util.spec_from_file_location(module_name, path)
-    assert specification is not None and specification.loader is not None
-    module = importlib.util.module_from_spec(specification)
-    with _temporary_modules({**(aliases or {}), module_name: module}):
-        specification.loader.exec_module(module)
-    return module
 
 
 @pytest.fixture(scope="module")
 def official_residues() -> types.ModuleType:
-    return _load_source("_fastplms_pinned_biohub_residue_constants", OFFICIAL_RESIDUES)
+    return load_pinned_source("_fastplms_pinned_biohub_residue_constants", OFFICIAL_RESIDUES)
 
 
 @pytest.fixture(scope="module")
@@ -81,12 +44,12 @@ def official_config() -> types.ModuleType:
 
     root_name = "_fastplms_pinned_biohub_transformers"
     aliases = {
-        root_name: _package(root_name),
-        f"{root_name}.models": _package(f"{root_name}.models"),
-        f"{root_name}.models.esmfold2": _package(f"{root_name}.models.esmfold2"),
+        root_name: namespace_package(root_name),
+        f"{root_name}.models": namespace_package(f"{root_name}.models"),
+        f"{root_name}.models.esmfold2": namespace_package(f"{root_name}.models.esmfold2"),
         f"{root_name}.configuration_utils": configuration_utils,
     }
-    return _load_source(
+    return load_pinned_source(
         f"{root_name}.models.esmfold2.configuration_esmfold2",
         OFFICIAL_CONFIG,
         aliases,
@@ -401,11 +364,11 @@ def test_fastplms_configuration_extensions_are_strict(tmp_path: Path) -> None:
 
 
 def test_modules_have_standalone_artifact_import_closure() -> None:
-    residues = _load_source(
+    residues = load_pinned_source(
         "_fastplms_artifact_residue_constants",
         LOCAL_ROOT / "esmfold2_residue_constants.py",
     )
-    configuration = _load_source(
+    configuration = load_pinned_source(
         "_fastplms_artifact_configuration_esmfold2",
         LOCAL_ROOT / "configuration_esmfold2.py",
     )
@@ -413,14 +376,6 @@ def test_modules_have_standalone_artifact_import_closure() -> None:
     config = configuration.ESMFold2Config(type="release")
     assert config.model_type == "esmfold2"
     assert config.esmc_id == "Synthyra/ESMplusplus_6B"
-
-
-def _meaningful_lines(text: str) -> list[str]:
-    return [
-        " ".join(line.strip().split())
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
 
 
 @pytest.mark.parametrize(
@@ -434,8 +389,8 @@ def test_runtime_source_is_independently_organized(local_name: str, official_pat
     local_path = LOCAL_ROOT / local_name
     similarity = SequenceMatcher(
         None,
-        _meaningful_lines(local_path.read_text(encoding="utf-8")),
-        _meaningful_lines(official_path.read_text(encoding="utf-8")),
+        meaningful_lines(local_path.read_text(encoding="utf-8")),
+        meaningful_lines(official_path.read_text(encoding="utf-8")),
         autojunk=False,
     ).ratio()
     assert similarity < 0.75, f"{local_name} has line similarity {similarity:.3f}"

@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
-import sys
 import types
 import pytest
 import torch
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from tests.parity.support.parity_helpers import load_pinned_source, namespace_package
 from torch import Tensor, nn
 
 from fastplms.models.esmfold2 import modeling_esmfold2_common as local
@@ -22,37 +19,6 @@ pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
 ROOT = Path(__file__).resolve().parents[2]
 OFFICIAL_ROOT = ROOT / "vendor/upstream/biohub-transformers/src/transformers/models/esmfold2"
-_MISSING = object()
-
-
-def _package(name: str) -> types.ModuleType:
-    package = types.ModuleType(name)
-    package.__path__ = []  # type: ignore[attr-defined]
-    return package
-
-
-@contextmanager
-def _temporary_modules(modules: dict[str, types.ModuleType]) -> Iterator[None]:
-    previous = {name: sys.modules.get(name, _MISSING) for name in modules}
-    sys.modules.update(modules)
-    try:
-        yield
-    finally:
-        for name, module in previous.items():
-            if module is _MISSING:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module  # type: ignore[assignment]
-
-
-def _load_source(name: str, path: Path, aliases: dict[str, types.ModuleType]) -> types.ModuleType:
-    assert path.is_file(), f"pinned source is missing: {path}"
-    specification = importlib.util.spec_from_file_location(name, path)
-    assert specification is not None and specification.loader is not None
-    module = importlib.util.module_from_spec(specification)
-    with _temporary_modules({**aliases, name: module}):
-        specification.loader.exec_module(module)
-    return module
 
 
 @pytest.fixture(scope="module")
@@ -61,15 +27,15 @@ def official() -> types.ModuleType:
 
     root_name = "_fastplms_pinned_esmfold2_common"
     aliases = {
-        root_name: _package(root_name),
-        f"{root_name}.models": _package(f"{root_name}.models"),
-        f"{root_name}.models.esmfold2": _package(f"{root_name}.models.esmfold2"),
+        root_name: namespace_package(root_name),
+        f"{root_name}.models": namespace_package(f"{root_name}.models"),
+        f"{root_name}.models.esmfold2": namespace_package(f"{root_name}.models.esmfold2"),
         f"{root_name}.configuration_utils": configuration_utils,
     }
     config_name = f"{root_name}.models.esmfold2.configuration_esmfold2"
-    config = _load_source(config_name, OFFICIAL_ROOT / "configuration_esmfold2.py", aliases)
+    config = load_pinned_source(config_name, OFFICIAL_ROOT / "configuration_esmfold2.py", aliases)
     aliases[config_name] = config
-    return _load_source(
+    return load_pinned_source(
         f"{root_name}.models.esmfold2.modeling_esmfold2_common",
         OFFICIAL_ROOT / "modeling_esmfold2_common.py",
         aliases,
@@ -77,7 +43,7 @@ def official() -> types.ModuleType:
 
 
 def _assert_tensor_exact(actual: Tensor, expected: Tensor) -> None:
-    # This exact comparator accepts any shared shape, checked before comparing values.
+    # actual, expected: (...) any shared shape, checked before comparing values.
     assert actual.shape == expected.shape
     assert actual.dtype == expected.dtype
     assert actual.device == expected.device

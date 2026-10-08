@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import textwrap
+
 from collections.abc import Iterable
+from pathlib import Path
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 from fastplms.registry import ModelFamily, ModelSpec
 from tools.artifacts.doc_generation.capabilities import (
     AUTO_CLASS_STATUS,
 )
 from tools.artifacts.license_metadata import render_checkpoint_terms
+from tools.remote.python_matrix import CANONICAL_GPU_PYTHON, PYTHON_SUPPORT_VERSIONS
 
 
 GENERATED_MARKER = "<!-- Generated from src/fastplms/models.toml. Do not edit. -->"
+REQUIREMENTS_ROOT = Path(__file__).resolve().parents[3] / "requirements"
 
 
 def _code(values: Iterable[str]) -> str:
@@ -58,8 +64,34 @@ def _auto_class_status(family: ModelFamily, auto_class: str) -> str:
         raise ValueError(f"No model-card weight status is defined for {auto_class!r}.") from error
 
 
+def declared_requirement(relative_path: str, distribution: str) -> Requirement:
+    """One distribution's declaration in a FastPLMs requirements file."""
+
+    for line in (REQUIREMENTS_ROOT / relative_path).read_text(encoding="utf-8").splitlines():
+        declaration = line.partition("#")[0].strip()
+        if declaration and Requirement(declaration).name == distribution:
+            return Requirement(declaration)
+    raise ValueError(f"requirements/{relative_path} does not declare {distribution}.")
+
+
+def _release_line(distribution: str) -> str:
+    """The release line requirements/core.in floors a distribution at, such as `2.14`."""
+
+    (floor,) = declared_requirement("core.in", distribution).specifier
+    return floor.version
+
+
+def _supported_python_range() -> str:
+    supported = sorted((CANONICAL_GPU_PYTHON, *PYTHON_SUPPORT_VERSIONS), key=Version)
+    return f"{supported[0]}-{supported[-1]}"
+
+
 def _platform_requirements(family: ModelFamily) -> str:
-    paragraphs = ["This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13."]
+    paragraphs = [
+        f"This model requires Python {_supported_python_range()}, "
+        f"PyTorch {_release_line('torch')}, and "
+        f"Transformers {_release_line('transformers')}."
+    ]
     if family.tokenizer_mode == "structure":
         paragraphs.extend(
             (

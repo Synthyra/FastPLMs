@@ -9,12 +9,6 @@ from transformers.modeling_outputs import ModelOutput
 from transformers.utils import logging
 
 
-def _get_logger():
-    """Resolve the Transformers logger only when a cache path emits a message."""
-
-    return logging.get_logger(__name__)
-
-
 class DynamicCache:
     """A cache that grows K and V along their sequence dimension.
 
@@ -149,7 +143,7 @@ class KVCache:
     def before_forward(self, batch: dict[str, torch.Tensor]) -> None:
         contexts: list[str] | None = batch.get("context")
         if contexts is None or "context_len" not in batch:
-            _get_logger().warning_once(
+            logging.get_logger(__name__).warning_once(
                 "KVCache requires both `context` and `context_len`; cache setup was skipped."
             )
             return
@@ -157,7 +151,7 @@ class KVCache:
         context_lens: list[int] = list(set(batch["context_len"]))
         contexts: list[str] = list(set(contexts))  # type: ignore[no-redef]
         if len(contexts) != 1 or len(context_lens) != 1:
-            _get_logger().warning(
+            logging.get_logger(__name__).warning(
                 "SingleContextKVCache requires a single context and context length. "
                 "Multiple contexts or context lengths found in a single batch. Skipping."
             )
@@ -199,7 +193,7 @@ class KVCache:
 
         past_key_values = getattr(outputs, "past_key_values", None)
         if not isinstance(past_key_values, DynamicCache):
-            _get_logger().warning_once(
+            logging.get_logger(__name__).warning_once(
                 "KVCache is incompatible with models that don't return a DynamicCache. Skipping."
             )
             return

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import ast
 import os
-import subprocess
-import sys
 import textwrap
 import pytest
 import torch
 
 from pathlib import Path
 from types import SimpleNamespace
+from tests.conftest import run_optimized_script
 
 from fastplms.models.dplm.modeling_dplm import FAST_DPLM_ENCODER
 from fastplms.models.dplm2.modeling_dplm2 import (
@@ -503,15 +502,7 @@ def test_representative_public_validation_survives_python_optimized_mode() -> No
     )
     environment = dict(os.environ)
     environment["PYTHONHASHSEED"] = "0"
-    completed = subprocess.run(
-        [sys.executable, "-O", "-c", script],
-        cwd=Path(__file__).resolve().parents[2],
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    completed = run_optimized_script(script, environment=environment, timeout=30)
 
     assert completed.returncode == 0, completed.stderr
 

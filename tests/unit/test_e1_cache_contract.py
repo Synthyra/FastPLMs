@@ -9,12 +9,12 @@ import pytest
 import torch
 import torch.nn.functional as F
 
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Barrier
 from typing import Any
+from tests.unit.compile_counting import counting_compile_backend
 from transformers import PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
 
@@ -260,7 +260,7 @@ def _tiny_e1_config() -> E1Config:
 
 
 def _tiny_e1_batch() -> dict[str, torch.Tensor]:
-    return {
+    return {  # (...) input_ids, within_seq_position_ids, global_position_ids, sequence_ids: each (1, 4)
         "input_ids": torch.tensor([[1, 5, 6, 2]], dtype=torch.long),
         "within_seq_position_ids": torch.arange(4).unsqueeze(0),
         "global_position_ids": torch.arange(4).unsqueeze(0),
@@ -285,7 +285,8 @@ def test_e1_sdpa_scalar_validation_runs_outside_torch_compile(
         global_position_ids: torch.Tensor,
         sequence_ids: torch.Tensor,
     ) -> torch.Tensor:
-        return model(
+        # input_ids, within_seq_position_ids, global_position_ids, sequence_ids: (b, l)
+        return model(  # (b, l, d)
             input_ids=input_ids,
             within_seq_position_ids=within_seq_position_ids,
             global_position_ids=global_position_ids,
@@ -298,15 +299,7 @@ def test_e1_sdpa_scalar_validation_runs_outside_torch_compile(
         expected_first = run(**first_batch)
         expected_second = run(**second_batch)
 
-    compiled_graphs: list[torch.fx.GraphModule] = []
-
-    def counting_backend(
-        graph_module: torch.fx.GraphModule,
-        example_inputs: list[torch.Tensor],
-    ) -> Callable[..., object]:
-        del example_inputs
-        compiled_graphs.append(graph_module)
-        return graph_module.forward
+    counting_backend, compiled_graphs = counting_compile_backend()
 
     compiled_run = torch.compile(run, backend=counting_backend, dynamic=False)
     try:
@@ -349,10 +342,11 @@ def test_e1_cached_query_and_packed_metadata_run_outside_torch_compile(
     def packed_metadata(
         sequence_ids: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, int, tuple[int, ...]]:
+        # sequence_ids: (b, l), with -1 marking padding
         indices, cumulative_lengths, maximum_length = _get_unpad_data(sequence_ids)
         sequence_lengths = cumulative_lengths[1:] - cumulative_lengths[:-1]
         cache_key = _packed_lengths_cache_key(sequence_lengths, sequence_lengths)
-        return indices, cumulative_lengths, maximum_length, cache_key
+        return indices, cumulative_lengths, maximum_length, cache_key  # indices (t,), cumulative_lengths (n + 1,), maximum_length, cache_key; t real tokens, n sequences
 
     compiled_metadata = torch.compile(packed_metadata, backend="eager", dynamic=False)
     try:

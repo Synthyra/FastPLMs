@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import random
 import sys
 import pytest
 import torch
@@ -24,10 +23,11 @@ import torch.nn.functional as F
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from huggingface_hub import snapshot_download
+from tests.conftest import SEED
+from tests.conftest import seeded_sequences
 
 from fastplms.models.e1 import modeling_e1
 from fastplms.registry import get_model_registry
-from tests.conftest import CANONICAL_AAS, SEED
 
 
 # The kernel repository is a plain model repository without the kernel status
@@ -68,14 +68,6 @@ def triton_rms_norm() -> Iterator[Callable[..., torch.Tensor]]:
         sys.modules.pop("triton_layer_norm", None)
 
 
-def _sequences() -> list[str]:
-    generator = random.Random(SEED)
-    return [
-        "M" + "".join(generator.choices(CANONICAL_AAS, k=SEQUENCE_LENGTH - 1))
-        for _ in range(NUM_SEQUENCES)
-    ]
-
-
 def _load_model(attn_backend: str, device: torch.device) -> torch.nn.Module:
     spec = get_model_registry()[MODEL_ID]
     model = modeling_e1.E1ForMaskedLM.from_pretrained(
@@ -91,8 +83,8 @@ def _load_model(attn_backend: str, device: torch.device) -> torch.nn.Module:
 def _encoder_inputs(model: torch.nn.Module, device: torch.device) -> dict[str, torch.Tensor]:
     """Return the four aligned encoder tensors, each of shape (b, l)."""
 
-    batch = model.model.prep_tokens.get_batch_kwargs(_sequences(), device=device)
-    return {
+    batch = model.model.prep_tokens.get_batch_kwargs(seeded_sequences(NUM_SEQUENCES, SEQUENCE_LENGTH), device=device)
+    return {  # (...) input_ids, within_seq_position_ids, global_position_ids, sequence_ids: each (b, l)
         name: batch[name]
         for name in (
             "input_ids",
@@ -104,7 +96,7 @@ def _encoder_inputs(model: torch.nn.Module, device: torch.device) -> dict[str, t
 
 
 def _relative_l2(candidate: torch.Tensor, reference: torch.Tensor) -> float:
-    # candidate, reference: equal shapes, compared in float32
+    # candidate, reference: (...) equal shapes of any rank, compared in float32
     tiny = torch.finfo(torch.float32).tiny
     difference = torch.linalg.vector_norm(candidate.float() - reference.float())  # ()
     reference_norm = torch.linalg.vector_norm(reference.float()).clamp_min(tiny)  # ()
@@ -145,6 +137,7 @@ def test_elementwise_normalization_matches_the_fused_triton_kernel(
 ) -> None:
     """Record how far the two RMSNorm implementations drift elementwise."""
 
+    # triton_rms_norm: (b, l, d) fused RMSNorm of x (b, l, d) with weight (d,)
     device = torch.device("cuda")
     generator = torch.Generator(device=device).manual_seed(SEED)
     for hidden_size in (960, 1152, 1536):
@@ -193,6 +186,7 @@ def test_full_forward_pass_survives_swapping_the_normalization_kernel(
     so a residual difference here is attributable to the kernel and nothing else.
     """
 
+    # triton_rms_norm: (b, l, d) fused RMSNorm of x (b, l, d) with weight (d,)
     device = torch.device("cuda")
     model = _load_model("flex_attention", device)
     inputs = _encoder_inputs(model, device)

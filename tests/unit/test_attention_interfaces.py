@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import inspect
 import json
 import sys
@@ -16,7 +17,7 @@ from importlib.metadata import version
 from pathlib import Path
 from threading import Barrier
 from types import SimpleNamespace
-from transformers import AttentionInterface, PretrainedConfig
+from transformers import AttentionInterface, PretrainedConfig, PreTrainedModel
 
 
 _TRANSFORMERS_FLASH_HANDLERS = {
@@ -37,6 +38,7 @@ from fastplms.attention import (  # noqa: E402
     _core,
     _kernel_lock,
     canonical_checkpoint_attention_backend,
+    flash_kernel_unsupported_reason,
     validate_transformers_attention_interfaces,
 )
 from fastplms.embeddings.runner import _attention_kernel_metadata  # noqa: E402
@@ -60,6 +62,7 @@ from fastplms.models.esm2.modeling_fastesm import (  # noqa: E402
     FastEsmModel,
 )
 from fastplms.registry import get_model_registry  # noqa: E402
+from tests.conftest import validation_pins  # noqa: E402
 
 
 FUNCTION_BACKENDS = (
@@ -101,7 +104,7 @@ class _SupportedFlashMixin(FastPLMsAttentionMixin, _RejectingTransformersBase):
         (
             "flash_attention_2",
             "kernels-community/flash-attn2",
-            "db6b51744f0cd7061386442c09df890fc6d9f47e",
+            "81fb77c12b2ad5d69380669b46739d5868614502",
             SimpleNamespace(
                 fwd=lambda **kwargs: kwargs["q"],
                 varlen_fwd=lambda **kwargs: kwargs["q"],
@@ -164,7 +167,7 @@ def test_flash_kernel_variant_mismatch_fails_closed(
         RuntimeError,
         match=(
             "kernels-community/flash-attn2@"
-            "db6b51744f0cd7061386442c09df890fc6d9f47e exposed 'flash_attn3'; "
+            "81fb77c12b2ad5d69380669b46739d5868614502 exposed 'flash_attn3'; "
             "expected 'flash_attn2'"
         ),
     ):
@@ -172,7 +175,7 @@ def test_flash_kernel_variant_mismatch_fails_closed(
     assert requested == [
         (
             "kernels-community/flash-attn2",
-            "db6b51744f0cd7061386442c09df890fc6d9f47e",
+            "81fb77c12b2ad5d69380669b46739d5868614502",
         )
     ]
 
@@ -202,70 +205,333 @@ def test_flash_kernel_load_error_retains_pinned_identity_and_cause(
     assert captured.value.__cause__ is failure
 
 
+# Calls that fetch a kernel from the Hub. Since kernels 0.17 a fetch that names neither a
+# version nor a revision refuses to load, and code that catches the refusal quietly runs
+# without its kernel.
+_KERNEL_FETCHES = frozenset(
+    {
+        "FuncRepository",
+        "LayerRepository",
+        "get_kernel",
+        "get_kernel_variants",
+        "has_kernel",
+        "install_kernel",
+    }
+)
+
+
+def _unpinned_kernel_fetches(source_root: Path) -> list[str]:
+    """Every kernel fetch under a source tree that names neither a version nor a revision."""
+
+    findings: list[str] = []
+    for path in sorted(source_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            function = node.func
+            if isinstance(function, ast.Attribute):
+                name = function.attr
+            else:
+                name = getattr(function, "id", None)
+            kernel_snapshot = name == "snapshot_download" and any(
+                keyword.arg == "repo_type"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value == "kernel"
+                for keyword in node.keywords
+            )
+            pinned = {keyword.arg for keyword in node.keywords} & {"revision", "version"}
+            if (name in _KERNEL_FETCHES or kernel_snapshot) and not pinned:
+                findings.append(f"{path.relative_to(source_root).as_posix()}:{node.lineno} {name}")
+    return findings
+
+
+def test_every_kernel_fetch_names_a_revision_or_version() -> None:
+    """Runtime source and tooling pin each Hub kernel they fetch, so none can fall back."""
+
+    import fastplms
+
+    repository_root = Path(__file__).resolve().parents[2]
+    for source_root in (Path(fastplms.__file__).resolve().parent, repository_root / "tools"):
+        assert _unpinned_kernel_fetches(source_root) == [], source_root
+
+
+def test_an_unpinned_kernel_fetch_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "norms.py").write_text(
+        "from kernels import get_kernel\n"
+        'layer_norm = get_kernel("kernels-community/triton-layer-norm")\n'
+        'pinned = get_kernel("kernels-community/triton-layer-norm", version=1)\n',
+        encoding="utf-8",
+    )
+
+    assert _unpinned_kernel_fetches(tmp_path) == ["norms.py:2 get_kernel"]
+
+
+def _write_single_kernel_lock(
+    path: Path,
+    repository: str,
+    revision: str,
+    variant_hashes: dict[str, str],
+) -> None:
+    variants = {
+        variant_name: {"hash": expected_hash, "hash_type": "git_lfs_concat"}
+        for variant_name, expected_hash in variant_hashes.items()
+    }
+    path.write_text(
+        json.dumps([{"repo_id": repository, "sha": revision, "variants": variants}]),
+        encoding="utf-8",
+    )
+
+
 def test_locked_kernel_is_hash_validated_before_import(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
     monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    repository = "kernels-community/flash-attn3"
     revision = "d" * 40
+    selected = "torch-stable-abi29-cu130-x86_64-linux"
+    expected_hash = f"sha256-{'a' * 64}"
     lock_path = tmp_path / "kernels.lock"
-    lock_path.write_text(
-        json.dumps(
-            [
-                {
-                    "repo_id": "kernels-community/flash-attn2",
-                    "sha": revision,
-                    "variants": {
-                        "torch213-cxx11-cu130-x86_64-linux": {
-                            "hash": f"sha256-{'a' * 64}",
-                            "hash_type": "git_lfs_concat",
-                        }
-                    },
-                }
-            ]
-        ),
-        encoding="utf-8",
+    _write_single_kernel_lock(
+        lock_path,
+        repository,
+        revision,
+        {selected: expected_hash, "torch212-cxx11-cu130-x86_64-linux": f"sha256-{'b' * 64}"},
     )
+    snapshot = tmp_path / "snapshot"
     events: list[str] = []
     kernel = object()
-    validated_path = tmp_path / "validated-variant"
 
-    class KernelLock:
-        @classmethod
-        def from_json(cls, entry: dict[str, object]) -> SimpleNamespace:
-            return SimpleNamespace(sha=entry["sha"], variants=entry["variants"])
+    def resolve_variants(variants: list[SimpleNamespace]) -> tuple[list[SimpleNamespace], list]:
+        # Selection sees the locked variants only, never a Hub listing.
+        assert {variant.variant_str for variant in variants} == {
+            selected,
+            "torch212-cxx11-cu130-x86_64-linux",
+        }
+        return [variant for variant in variants if variant.variant_str == selected], []
 
-    def install_kernel(
-        repository: str,
+    def snapshot_download(
+        repo_id: str,
         *,
+        repo_type: str,
         revision: str,
-        variant_locks: dict[str, object],
-    ) -> Path:
-        assert repository == "kernels-community/flash-attn2"
-        assert revision == "d" * 40
-        assert set(variant_locks) == {"torch213-cxx11-cu130-x86_64-linux"}
+        allow_patterns: list[str],
+        cache_dir: str | None,
+    ) -> str:
+        assert (repo_id, repo_type, revision) == (repository, "kernel", "d" * 40)
+        assert allow_patterns == [f"build/{selected}/*"]
+        events.append("download")
+        return str(snapshot)
+
+    def validate_variant_digest(path: Path, variant_name: str, digest: str) -> None:
+        assert (path, variant_name, digest) == (snapshot, selected, expected_hash)
         events.append("validate")
-        return validated_path
 
     def get_local_kernel(path: Path) -> object:
-        assert path == validated_path
+        assert path == snapshot / "build" / selected
         events.append("import")
         return kernel
 
     monkeypatch.setattr(_kernel_lock, "_kernel_lock_path", lambda: lock_path)
+    monkeypatch.setattr(_kernel_lock, "validate_variant_digest", validate_variant_digest)
+    monkeypatch.setitem(sys.modules, "kernels", SimpleNamespace(get_local_kernel=get_local_kernel))
     monkeypatch.setitem(
         sys.modules,
-        "kernels",
+        "kernels.variants",
         SimpleNamespace(
-            get_local_kernel=get_local_kernel,
-            install_kernel=install_kernel,
+            parse_variant=lambda name: SimpleNamespace(variant_str=name),
+            resolve_variants=resolve_variants,
         ),
     )
-    monkeypatch.setitem(sys.modules, "kernels.lockfile", SimpleNamespace(KernelLock=KernelLock))
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=snapshot_download),
+    )
 
-    assert _kernel_lock.load_locked_kernel("kernels-community/flash-attn2", revision) is kernel
-    assert events == ["validate", "import"]
+    assert _kernel_lock.load_locked_kernel(repository, revision) is kernel
+    assert events == ["download", "validate", "import"]
+
+
+def test_locked_kernel_without_a_build_for_this_system_downloads_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.delenv("TRANSFORMERS_OFFLINE", raising=False)
+    repository = "kernels-community/flash-attn2"
+    revision = "d" * 40
+    lock_path = tmp_path / "kernels.lock"
+    _write_single_kernel_lock(
+        lock_path,
+        repository,
+        revision,
+        {"torch213-cxx11-cu130-x86_64-linux": f"sha256-{'a' * 64}"},
+    )
+
+    def unexpected_download(*_args: object, **_kwargs: object) -> str:
+        raise AssertionError("an unlockable system must fail before any download")
+
+    monkeypatch.setattr(_kernel_lock, "_kernel_lock_path", lambda: lock_path)
+    monkeypatch.setitem(sys.modules, "kernels", SimpleNamespace(get_local_kernel=object))
+    monkeypatch.setitem(
+        sys.modules,
+        "kernels.variants",
+        SimpleNamespace(
+            parse_variant=lambda name: SimpleNamespace(variant_str=name),
+            resolve_variants=lambda variants: ([], []),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=unexpected_download),
+    )
+
+    with pytest.raises(RuntimeError, match=r"locks no build .* for this system"):
+        _kernel_lock.load_locked_kernel(repository, revision)
+
+
+def test_locked_variant_for_this_system_reads_only_the_lock(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repository = "kernels-community/flash-attn2"
+    revision = "d" * 40
+    selected = "torch-stable-abi210-cu130-x86_64-linux"
+    lock_path = tmp_path / "kernels.lock"
+    _write_single_kernel_lock(
+        lock_path,
+        repository,
+        revision,
+        {selected: f"sha256-{'a' * 64}", "torch214-cxx11-cpu-x86_64-linux": f"sha256-{'b' * 64}"},
+    )
+    loadable = {selected}
+
+    monkeypatch.setattr(_kernel_lock, "_kernel_lock_path", lambda: lock_path)
+    monkeypatch.setitem(
+        sys.modules,
+        "kernels.variants",
+        SimpleNamespace(
+            parse_variant=lambda name: SimpleNamespace(variant_str=name),
+            resolve_variants=lambda variants: (
+                [variant for variant in variants if variant.variant_str in loadable],
+                [],
+            ),
+        ),
+    )
+
+    assert _kernel_lock.locked_variant_for_this_system(repository, revision) == selected
+    loadable.clear()
+    assert _kernel_lock.locked_variant_for_this_system(repository, revision) is None
+    with pytest.raises(RuntimeError, match=r"but kernels\.lock pins"):
+        _kernel_lock.locked_variant_for_this_system(repository, "e" * 40)
+
+
+@pytest.mark.parametrize(
+    ("locked_variant", "cuda_version", "cuda_visible", "capability", "expected"),
+    (
+        (
+            None,
+            "13.0",
+            True,
+            (9, 0),
+            "kernels.lock pins no build of kernels-community/flash-attn3@",
+        ),
+        ("torch-stable-abi29-cu130-x86_64-linux", "13.0", False, (9, 0), "none is visible"),
+        (
+            "torch-stable-abi29-cu130-x86_64-linux",
+            "13.0",
+            True,
+            (7, 5),
+            "requires CUDA compute capability 8.0 or newer; this GPU has 7.5",
+        ),
+        ("torch-stable-abi29-cu130-x86_64-linux", "13.0", True, (9, 0), None),
+        ("torch214-cxx11-cpu-x86_64-linux", None, False, (0, 0), None),
+    ),
+    ids=("no-locked-build", "no-visible-gpu", "old-gpu", "supported", "cpu-build"),
+)
+def test_flash_kernel_unsupported_reason_names_only_platform_and_gpu_limits(
+    monkeypatch: pytest.MonkeyPatch,
+    locked_variant: str | None,
+    cuda_version: str | None,
+    cuda_visible: bool,
+    capability: tuple[int, int],
+    expected: str | None,
+) -> None:
+    def unexpected_load(*_args: object) -> object:
+        raise AssertionError("judging platform support must not download or import a kernel")
+
+    monkeypatch.setattr(
+        _core,
+        "locked_variant_for_this_system",
+        lambda _repository, _revision: locked_variant,
+    )
+    monkeypatch.setattr(_core, "load_locked_kernel", unexpected_load)
+    monkeypatch.setattr(torch.version, "cuda", cuda_version)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda_visible)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda _device=None: capability)
+
+    reason = flash_kernel_unsupported_reason("flash_attention_3")
+
+    if expected is None:
+        assert reason is None
+    else:
+        assert reason is not None and expected in reason
+
+
+def test_kernel_lock_rejects_a_variant_without_a_git_lfs_digest(tmp_path: Path) -> None:
+    lock_path = tmp_path / "kernels.lock"
+    _write_single_kernel_lock(
+        lock_path,
+        "kernels-community/flash-attn2",
+        "d" * 40,
+        {"torch213-cxx11-cu130-x86_64-linux": "sha256-not-a-digest"},
+    )
+    entry = _kernel_lock._locked_entry(lock_path, "kernels-community/flash-attn2")
+
+    with pytest.raises(RuntimeError, match="has no valid SHA-256 digest"):
+        _kernel_lock._locked_variant_digests(entry)
+
+
+def test_variant_digest_matches_a_lock_computed_from_hub_object_ids(tmp_path: Path) -> None:
+    """The digest a lock records from Hub object IDs must match one computed from the cache."""
+    snapshot = tmp_path / "snapshots" / ("d" * 40)
+    variant_root = snapshot / "build" / "torch214-cxx11-cu130-x86_64-linux"
+    blobs = tmp_path / "blobs"
+    (variant_root / "flash_attn3").mkdir(parents=True)
+    blobs.mkdir()
+    # Known object IDs of b"hello\n": its Git blob SHA-1 and its SHA-256 as Git LFS content.
+    git_object_id = "ce013625030ba8dba906f756967f9e9ca394464a"
+    lfs_object_id = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+    linked = {
+        "metadata.json": git_object_id,
+        "flash_attn3/_ops.so": lfs_object_id,
+    }
+    for relative_name, object_id in linked.items():
+        (blobs / object_id).write_bytes(b"hello\n")
+        try:
+            (variant_root / relative_name).symlink_to(blobs / object_id)
+        except OSError as error:
+            pytest.skip(f"needs symbolic links, which this account cannot create: {error}")
+    # Bytecode written beside an imported kernel is not a cache link and does not count.
+    (variant_root / "flash_attn3" / "__pycache__").mkdir()
+    (variant_root / "flash_attn3" / "__pycache__" / "_ops.pyc").write_bytes(b"bytecode")
+    lock_digest = hashlib.sha256()
+    for relative_name, object_id in sorted(
+        (name.encode("utf-8"), object_id) for name, object_id in linked.items()
+    ):
+        lock_digest.update(relative_name)
+        lock_digest.update(bytes.fromhex(object_id))
+    expected_hash = f"sha256-{lock_digest.hexdigest()}"
+
+    _kernel_lock.validate_variant_digest(snapshot, variant_root.name, expected_hash)
+
+    (blobs / lfs_object_id).write_bytes(b"tampered\n")
+    with pytest.raises(RuntimeError, match="hashes to sha256-"):
+        _kernel_lock.validate_variant_digest(snapshot, variant_root.name, expected_hash)
 
 
 def test_locked_kernel_offline_resolves_sparse_snapshot_without_hub_api(
@@ -280,10 +546,10 @@ def test_locked_kernel_offline_resolves_sparse_snapshot_without_hub_api(
     events: list[str] = []
     kernel = object()
 
-    def validate_kernel(*, repo_path: Path, variant: str, hash: str) -> None:
-        assert repo_path == snapshot
-        assert variant == variant_path.name
-        assert hash == expected_hash
+    def validate_variant_digest(path: Path, variant_name: str, digest: str) -> None:
+        assert path == snapshot
+        assert variant_name == variant_path.name
+        assert digest == expected_hash
         events.append("validate")
 
     def get_local_kernel(path: Path) -> object:
@@ -292,12 +558,8 @@ def test_locked_kernel_offline_resolves_sparse_snapshot_without_hub_api(
         return kernel
 
     monkeypatch.setattr(_kernel_lock, "_offline_snapshot_path", lambda *_: snapshot)
+    monkeypatch.setattr(_kernel_lock, "validate_variant_digest", validate_variant_digest)
     monkeypatch.setitem(sys.modules, "kernels", SimpleNamespace(get_local_kernel=get_local_kernel))
-    monkeypatch.setitem(
-        sys.modules,
-        "kernels.utils",
-        SimpleNamespace(validate_kernel=validate_kernel),
-    )
     monkeypatch.setitem(
         sys.modules,
         "kernels.variants",
@@ -311,7 +573,7 @@ def test_locked_kernel_offline_resolves_sparse_snapshot_without_hub_api(
         _kernel_lock._load_offline_locked_kernel(
             "kernels-community/flash-attn2",
             "d" * 40,
-            {variant_path.name: SimpleNamespace(hash=expected_hash)},
+            {variant_path.name: expected_hash},
         )
         is kernel
     )
@@ -330,7 +592,7 @@ def test_locked_kernel_offline_rejects_unlocked_cached_variant(
         _kernel_lock._load_offline_locked_kernel(
             "kernels-community/flash-attn2",
             "d" * 40,
-            {"expected-variant": SimpleNamespace(hash=f"sha256-{'a' * 64}")},
+            {"expected-variant": f"sha256-{'a' * 64}"},
         )
 
 
@@ -386,7 +648,7 @@ def test_transformers_flash_hook_rejects_an_unadvertised_family() -> None:
         model._check_and_adjust_attn_implementation("flash_attention_2")
 
 
-def test_public_attention_setter_matches_transformers_513_kernel_policy(
+def test_public_attention_setter_matches_the_transformers_kernel_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     signature = inspect.signature(FastPLMsAttentionMixin.set_attn_implementation)
@@ -396,6 +658,11 @@ def test_public_attention_setter_matches_transformers_513_kernel_policy(
         "allow_all_kernels",
     )
     assert signature.parameters["allow_all_kernels"].default is False
+    # The mixin overrides the public setter of the installed Transformers, so the two must
+    # take the same parameters and the same kernel-trust default.
+    upstream = inspect.signature(PreTrainedModel.set_attn_implementation)
+    assert tuple(upstream.parameters) == tuple(signature.parameters)
+    assert upstream.parameters["allow_all_kernels"].default is False
 
     model = object.__new__(_SupportedFlashMixin)
     with pytest.raises(ValueError, match="does not load external"):
@@ -430,8 +697,8 @@ def test_flash_kernel_identity_is_typed_and_manifest_owned() -> None:
     } == {
         "flash_attention_2": (
             "kernels-community/flash-attn2",
-            "db6b51744f0cd7061386442c09df890fc6d9f47e",
-            2,
+            "81fb77c12b2ad5d69380669b46739d5868614502",
+            3,
             "flash_attn2",
             ("bfloat16",),
         ),
@@ -615,8 +882,8 @@ def test_flash_dependency_profile_has_no_source_build_path() -> None:
         assert "import flash_attn" not in text
 
 
-def test_transformers_513_exposes_every_advertised_handler() -> None:
-    assert version("transformers") == "5.13.0"
+def test_validated_transformers_exposes_every_advertised_handler() -> None:
+    assert version("transformers") == validation_pins()["transformers"]
     validate_transformers_attention_interfaces()
     for name in FUNCTION_BACKENDS:
         assert name in FASTPLMS_ATTENTION_FUNCTIONS
@@ -1439,9 +1706,9 @@ def test_compiled_flex_cache_key_covers_execution_not_batch_contents(
     def fake_compile(function, *, dynamic):
         assert function is source
         assert dynamic is False
-        result = object()
-        compiled.append(result)
-        return result
+        fake_compiled = object()
+        compiled.append(fake_compiled)
+        return fake_compiled
 
     monkeypatch.setattr(_core, "flex_attention", source)
     monkeypatch.setattr(torch, "compile", fake_compile)

@@ -16,7 +16,6 @@ from collections.abc import Iterator
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
-
 from tests.cpu.resource_telemetry import (
     ConcurrentProcessTreeSampler,
     MemoryEvidenceError,
@@ -73,7 +72,7 @@ def _install_checkpoint_loader_guards() -> None:
     try:
         import safetensors
         import safetensors.torch
-    except ImportError:
+    except ImportError:  # noqa: silent-except  safetensors is optional; without it there is no loader to guard
         pass
     else:
         original_safe_open = safetensors.safe_open

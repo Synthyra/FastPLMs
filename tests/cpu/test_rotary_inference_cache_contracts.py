@@ -28,7 +28,7 @@ ROTARY_CLASSES = [
 def _queries_and_keys() -> tuple[torch.Tensor, torch.Tensor]:
     query = torch.randn(1, TOKEN_COUNT, HEADS, HEAD_DIM, requires_grad=True)  # (b, l, h, d)
     key = torch.randn(1, TOKEN_COUNT, HEADS, HEAD_DIM, requires_grad=True)  # (b, l, h, d)
-    return query, key
+    return query, key  # each (b, l, h, d)
 
 
 @pytest.mark.parametrize("rotary_class", ROTARY_CLASSES)

@@ -23,8 +23,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from safetensors.torch import load_file
-
-from fastplms.registry import ModelSpec, get_model_registry
 from tests.conftest import strict_fp32_matmul
 from tests.parity.support.esmc_calibration import (
     ESMC_BOUNDARY_LENGTHS,
@@ -33,6 +31,7 @@ from tests.parity.support.esmc_calibration import (
     validate_esmc_calibration_batch,
 )
 from tests.parity.support.native_reference import _tensor_digest, _token_result
+from tests.parity.support.parity_helpers import alias_groups
 from tests.parity.support.reference_adapters.biohub_source import (
     BIOHUB_ESM_REVISION,
     BIOHUB_ESM_TREE_SHA256,
@@ -51,7 +50,6 @@ from tests.parity.test_model_parity import (
     ESMC_CATASTROPHIC_BF16_CONTRACT,
     LogitsMetrics,
     TensorMetricRecord,
-    _alias_groups,
     _assert_esmc_alternate_backend_outputs,
     _assert_esmc_sdpa_exact,
     _assert_outputs,
@@ -63,6 +61,9 @@ from tests.parity.test_model_parity import (
     _numeric_contract,
     _semantic_config,
 )
+
+from fastplms.digests import json_sha256
+from fastplms.registry import ModelSpec, get_model_registry
 from tools.remote.biohub_reference_environment import (
     BiohubReferenceEnvironmentError,
     validate_biohub_reference_environment_evidence,
@@ -204,8 +205,8 @@ def _load_package_generation_model(
 
 
 def _normalized_token_result(tokenizer: object, options: dict[str, Any]) -> Any:
-    result = _token_result(tokenizer, EDGE_SEQUENCES, options)
-    return json.loads(json.dumps(result))
+    token_result = _token_result(tokenizer, EDGE_SEQUENCES, options)
+    return json.loads(json.dumps(token_result))
 
 
 @pytest.mark.parametrize("spec", [_parameter(spec) for spec in SEQUENCE_SPECS])
@@ -225,7 +226,7 @@ def test_native_exact_checkpoint_contract(spec: ModelSpec) -> None:
     assert candidate_state == metadata["state"]["tensors"], (
         f"{spec.id}: candidate state differs from the native official state"
     )
-    candidate_aliases = sorted(sorted(group) for group in _alias_groups(fast))
+    candidate_aliases = sorted(sorted(group) for group in alias_groups(fast))
     assert candidate_aliases == metadata["state"]["aliases"]
 
     if spec.family.tokenizer_mode == "tokenizer":
@@ -265,6 +266,7 @@ def test_native_dplm2_150m_exact_head_contract() -> None:
 
 
 def _official_output(tensors: dict[str, torch.Tensor], device: torch.device) -> object:
+    # tensors: (...) one tensor per name; output__hidden_NNNN and output__last_hidden_state (..., d), output__logits (..., c)
     hidden_names = sorted(name for name in tensors if name.startswith("output__hidden_"))
     hidden_states = tuple(tensors[name].to(device) for name in hidden_names)
     values: dict[str, Any] = {
@@ -571,11 +573,11 @@ def _structured_metric_payloads(
         raise ValueError(
             f"ESMC metric record count {len(records)} differs from expected {expected_count}"
         )
-    result = [
+    payloads = [
         _metric_payload(record, output="hidden_state", layer_index=layer)
         for layer, record in enumerate(records[:hidden_count])
     ]
-    result.append(
+    payloads.append(
         _metric_payload(
             records[hidden_count],
             output="last_hidden_state",
@@ -583,8 +585,8 @@ def _structured_metric_payloads(
         )
     )
     if has_logits:
-        result.append(_metric_payload(records[-1], output="logits", layer_index=None))
-    return result
+        payloads.append(_metric_payload(records[-1], output="logits", layer_index=None))
+    return payloads
 
 
 def _logits_metric_payload(metrics: LogitsMetrics | None) -> dict[str, float] | None:
@@ -647,7 +649,7 @@ def _case_metric_distributions(
         raise ValueError(
             f"ESMC panel has {len(cases)} cases for batch size {residue_mask.shape[0]}"
         )
-    result: list[dict[str, object]] = []
+    distributions: list[dict[str, object]] = []
     violations: list[str] = []
     for index, case in enumerate(cases):
         if not isinstance(case, Mapping):
@@ -676,14 +678,14 @@ def _case_metric_distributions(
             f"{context}:case={case_id}",
         )
         violations.extend(_esmc_published_band_violations(records, logits))
-        result.append(
+        distributions.append(
             {
                 **_case_identity(case),
                 "tensor_metrics": _structured_metric_payloads(candidate_case, records),
                 "logits_metrics": _logits_metric_payload(logits),
             }
         )
-    return result, violations
+    return distributions, violations
 
 
 def _esmc_published_band_violations(
@@ -1034,12 +1036,7 @@ def _expected_panel_identity(kind: object) -> dict[str, object]:
 def _report_sha256(payload: Mapping[str, object]) -> str:
     digest_payload = dict(payload)
     digest_payload.pop("report_sha256", None)
-    encoded = json.dumps(
-        digest_payload,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return json_sha256(digest_payload)
 
 
 def _validate_esmc_diagnostic_report(

@@ -825,6 +825,38 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
     ) -> torch.Tensor:
         return _infer_modality_type(input_ids, attention_mask)
 
+    def _token_embeddings(
+        self,
+        input_ids: torch.Tensor | None,
+        attention_mask: torch.Tensor | None,
+        position_ids: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Embed tokens the way the official checkpoint does.
+
+        The official multimodal wrapper embeds the tokens, then its inner ESM model embeds that
+        output again with the same token ids. Transformers 4.39, which the official code pins,
+        applies ESM token-dropout scaling on both passes, so a multimodal checkpoint scales its
+        embeddings twice. The 3B checkpoint (`dplm_type == "dplm_esm"`) calls the inner model
+        directly and embeds once.
+        """
+        # input_ids, attention_mask, position_ids: (b, l); inputs_embeds: (b, l, d)
+        token_embeddings = self.embeddings(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            inputs_embeds=inputs_embeds,
+        )  # (b, l, d)
+        if input_ids is None or getattr(self.config, "dplm_type", None) == "dplm_esm":
+            return token_embeddings  # (b, l, d)
+
+        return self.embeddings(
+            input_ids=input_ids,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            inputs_embeds=token_embeddings,
+        )  # (b, l, d)
+
     def _embed(
         self,
         input_ids: torch.Tensor,
@@ -836,7 +868,7 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
         if attention_mask is None:
             attention_mask = input_ids.ne(self.config.pad_token_id)
         type_ids = _infer_modality_type(input_ids, attention_mask)
-        token_embedding_output = self.embeddings(input_ids, attention_mask=attention_mask)
+        token_embedding_output = self._token_embeddings(input_ids, attention_mask)  # (b, l, d)
         output_hidden_states = store_all_hidden_states or hidden_state_index != -1
         encoder_outputs = self.encoder(
             token_embedding_output,
@@ -883,12 +915,12 @@ class FAST_DPLM2_ENCODER(DPLM2PreTrainedModel, EmbeddingMixin):
 
         if input_ids is not None:
             input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
-        token_embedding_output = self.embeddings(
-            input_ids=input_ids,
+        token_embedding_output = self._token_embeddings(
+            input_ids,
+            attention_mask,
             position_ids=position_ids,
-            attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
-        )
+        )  # (b, l, d)
         encoder_outputs = self.encoder(
             token_embedding_output,
             attention_mask=attention_mask,
@@ -1202,10 +1234,8 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
                 )
             attention_mask = input_ids.ne(self.pad_id)
 
-        encoder_input_ids = input_ids
         if input_ids is not None:
             input_ids = _normalize_dplm2_input_ids(input_ids, self.config.vocab_size)
-            encoder_input_ids = input_ids
         if type_ids is None and not direct_dplm_esm:
             if input_ids is None:
                 raise ValueError(
@@ -1213,18 +1243,9 @@ class DPLM2ForMaskedLM(FastPLMTestTimeTrainingMixin, DPLM2PreTrainedModel, Embed
                 )
             type_ids = self._get_modality_type(input_ids, attention_mask)
 
-        if input_ids is not None and inputs_embeds is None and not direct_dplm_esm:
-            # The official multimodal wrapper applies the embedding block
-            # once before entering EsmForDPLM2. The inner ESM model then
-            # applies it a second time using these intermediate embeddings.
-            inputs_embeds = self.esm.embeddings(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-            )
-            encoder_input_ids = None
-
+        # The encoder repeats the official multimodal wrapper's second embedding pass.
         outputs = self.esm(
-            input_ids=encoder_input_ids,
+            input_ids=input_ids,
             inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             output_attentions=output_attentions,

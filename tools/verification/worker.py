@@ -96,11 +96,11 @@ def run_batches(root: Path, output: Path, maximum_seconds: float = 1050) -> dict
             )
             continue
         try:
-            result = subprocess.run(
+            completed = subprocess.run(
                 command, cwd=root, capture_output=True, text=True, timeout=remaining
             )
-            stdout, stderr = result.stdout, result.stderr
-            code = result.returncode
+            stdout, stderr = completed.stdout, completed.stderr
+            code = completed.returncode
             status = "passed" if code == 0 else "failed"
         except subprocess.TimeoutExpired as error:
             stdout = error.stdout or b""

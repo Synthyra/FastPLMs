@@ -1,4 +1,6 @@
 -r ../core.in
 -r ../features/dev.in
+-r ../features/oracles.in
+-r ../features/confidence.in
 -r ../features/flash.in
 -r ../features/train.in

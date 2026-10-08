@@ -17,7 +17,6 @@ import torch
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-
 from scipy.optimize import linear_sum_assignment
 from torch import Tensor
 
@@ -182,6 +181,7 @@ def atom_layout(chain_infos: Sequence[object], sequences: Sequence[str], num_ato
 
 def kabsch_transform(mobile: np.ndarray, fixed: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Rotation and translation that map row-vector `mobile` (n, 3) onto `fixed` (n, 3)."""
+    # mobile, fixed: (n, 3)
     mobile_center, fixed_center = mobile.mean(0), fixed.mean(0)  # (3,), (3,)
     covariance = (mobile - mobile_center).T @ (fixed - fixed_center)  # (3, 3)
     left, _, right = np.linalg.svd(covariance)  # (3, 3), (3,), (3, 3)
@@ -197,7 +197,7 @@ def chain_assignment(predicted_ca: Sequence[np.ndarray], true_ca: Sequence[np.nd
     fewest copies fixes the frame for each candidate; chains of every entity are then matched by
     resolved CA centroid distance, and the candidate with the lowest CA RMSD wins.
     """
-    # predicted_ca/true_ca contain per-chain (l_c, 3) coordinate arrays.
+    # predicted_ca, true_ca: (l_c, 3) one coordinate array per chain, held in a sequence
     num_chains = len(predicted_ca)
     identity = list(range(num_chains))
     if all(len(chains) == 1 for chains in entity_chains):
@@ -238,6 +238,7 @@ def chain_assignment(predicted_ca: Sequence[np.ndarray], true_ca: Sequence[np.nd
 
 def _aligned(mobile: Tensor, fixed: Tensor, valid: Tensor) -> Tensor:
     """Rigidly align `mobile` (a, 3) onto `fixed` (a, 3) using `valid` (a,) atoms."""
+    # mobile, fixed: (a, 3); valid: (a,)
     rotation, translation = kabsch_transform(
         mobile[valid].double().cpu().numpy(), fixed[valid].double().cpu().numpy()
     )  # (3, 3), (3,)
@@ -248,7 +249,7 @@ def _aligned(mobile: Tensor, fixed: Tensor, valid: Tensor) -> Tensor:
 
 def resolve_ambiguous_atoms(predicted: Tensor, true: Tensor, layout: AtomLayout) -> Tensor:
     """Swap symmetric atom labels of a residue when the swap sits closer to the prediction."""
-    # predicted/true: (a, 3); layout holds the per-atom and per-pair index vectors.
+    # predicted, true: (a, 3); layout holds the per-atom and per-pair index vectors.
     if layout.ambiguous_left.numel() == 0:
         return true  # (a, 3)
     valid = torch.isfinite(true).all(-1) & torch.isfinite(predicted).all(-1)  # (a,)
@@ -274,7 +275,7 @@ def resolve_ambiguous_atoms(predicted: Tensor, true: Tensor, layout: AtomLayout)
 
 def true_tm_scores(pae_error: Tensor, pae_mask: Tensor, asym_id: Tensor, token_mask: Tensor) -> tuple[float, float]:
     """pTM and ipTM of the true aligned errors, defined as the head defines its predictions."""
-    # pae_error/pae_mask: (t, t); asym_id/token_mask: (t,).
+    # pae_error, pae_mask: (t, t); asym_id, token_mask: (t,).
     num_tokens = token_mask.float().sum()  # ()
     d0 = 1.24 * (num_tokens.clamp(min=19) - 15) ** (1 / 3) - 1.8  # ()
     tm = 1.0 / (1.0 + (pae_error.clamp(max=PAE_MAX_ANGSTROM) / d0) ** 2)  # (t, t)

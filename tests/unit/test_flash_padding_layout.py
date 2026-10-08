@@ -77,11 +77,12 @@ def _count_layout_builds(monkeypatch: pytest.MonkeyPatch) -> list[torch.Tensor]:
     build_layout = _core._flash_padding_layout
 
     def counting_build(attention_mask_2d: torch.Tensor) -> FlashPaddingLayout:
+        # attention_mask_2d: (b, l)
         built_from.append(attention_mask_2d)
         return build_layout(attention_mask_2d)
 
     monkeypatch.setattr(_core, "_flash_padding_layout", counting_build)
-    return built_from
+    return built_from  # (b, l) each, one attention mask per layout build
 
 
 def _esm2_encoder() -> tuple[torch.nn.Module, Callable[..., torch.Tensor]]:
@@ -100,7 +101,7 @@ def _esm2_encoder() -> tuple[torch.nn.Module, Callable[..., torch.Tensor]]:
             attn_backend="flash_attention_2",
         )
     ).eval()
-    return encoder, lambda hidden_states, mask: encoder(hidden_states, mask).last_hidden_state
+    return encoder, lambda hidden_states, mask: encoder(hidden_states, mask).last_hidden_state  # the encoder and a callable from hidden_states (b, l, d) and mask (b, l) to (b, l, d)
 
 
 def _dplm_encoder() -> tuple[torch.nn.Module, Callable[..., torch.Tensor]]:
@@ -117,14 +118,14 @@ def _dplm_encoder() -> tuple[torch.nn.Module, Callable[..., torch.Tensor]]:
             attn_backend="flash_attention_3",
         )
     ).eval()
-    return encoder, lambda hidden_states, mask: encoder(hidden_states, mask).last_hidden_state
+    return encoder, lambda hidden_states, mask: encoder(hidden_states, mask).last_hidden_state  # the encoder and a callable from hidden_states (b, l, d) and mask (b, l) to (b, l, d)
 
 
 def _esmpp_stack() -> tuple[torch.nn.Module, Callable[..., torch.Tensor]]:
     stack = esmpp_module.TransformerStack(
         d_model=HIDDEN_SIZE, n_heads=2, n_layers=NUM_LAYERS, attn_backend="flash_attention_2"
     ).eval()
-    return stack, lambda hidden_states, mask: stack(hidden_states, mask).last_hidden_state
+    return stack, lambda hidden_states, mask: stack(hidden_states, mask).last_hidden_state  # the stack and a callable from hidden_states (b, l, d) and mask (b, l) to (b, l, d)
 
 
 _FAMILIES = {

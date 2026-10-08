@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-import importlib.util
 import random
-import sys
 import types
 import numpy as np
 import pytest
 import torch
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+from tests.parity.support.parity_helpers import load_pinned_source, namespace_package, namespace_packages
 
 from fastplms.models.esmfold2 import configuration_esmfold2 as local_configuration
 from fastplms.models.esmfold2 import esmfold2_affine3d as local_affine
@@ -39,52 +36,17 @@ pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 ROOT = Path(__file__).resolve().parents[2]
 BIOHUB_ESM = ROOT / "vendor/upstream/biohub-esm/esm"
 BIOHUB_TRANSFORMERS = ROOT / "vendor/upstream/biohub-transformers/src/transformers/models/esmfold2"
-_MISSING = object()
-
-
-def _package(name: str) -> types.ModuleType:
-    package = types.ModuleType(name)
-    package.__path__ = []  # type: ignore[attr-defined]
-    return package
-
-
-@contextmanager
-def _temporary_modules(modules: dict[str, types.ModuleType]) -> Iterator[None]:
-    previous = {name: sys.modules.get(name, _MISSING) for name in modules}
-    sys.modules.update(modules)
-    try:
-        yield
-    finally:
-        for name, module in previous.items():
-            if module is _MISSING:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module  # type: ignore[assignment]
-
-
-def _load_source(
-    module_name: str,
-    path: Path,
-    aliases: dict[str, types.ModuleType],
-) -> types.ModuleType:
-    assert path.is_file(), f"pinned parity source is missing: {path}"
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    with _temporary_modules({**aliases, module_name: module}):
-        spec.loader.exec_module(module)
-    return module
 
 
 def _biohub_packages() -> dict[str, types.ModuleType]:
-    return {
-        "esm": _package("esm"),
-        "esm.models": _package("esm.models"),
-        "esm.models.esmfold2": _package("esm.models.esmfold2"),
-        "esm.utils": _package("esm.utils"),
-        "esm.utils.msa": _package("esm.utils.msa"),
-        "esm.utils.structure": _package("esm.utils.structure"),
-    }
+    return namespace_packages(
+        "esm",
+        "esm.models",
+        "esm.models.esmfold2",
+        "esm.utils",
+        "esm.utils.msa",
+        "esm.utils.structure",
+    )
 
 
 def _msa_compatibility_module() -> types.ModuleType:
@@ -99,12 +61,12 @@ def _load_official_configuration() -> types.ModuleType:
 
     root_name = "_fastplms_pinned_transformers"
     aliases = {
-        root_name: _package(root_name),
-        f"{root_name}.models": _package(f"{root_name}.models"),
-        f"{root_name}.models.esmfold2": _package(f"{root_name}.models.esmfold2"),
+        root_name: namespace_package(root_name),
+        f"{root_name}.models": namespace_package(f"{root_name}.models"),
+        f"{root_name}.models.esmfold2": namespace_package(f"{root_name}.models.esmfold2"),
         f"{root_name}.configuration_utils": configuration_utils,
     }
-    return _load_source(
+    return load_pinned_source(
         f"{root_name}.models.esmfold2.configuration_esmfold2",
         BIOHUB_TRANSFORMERS / "configuration_esmfold2.py",
         aliases,
@@ -118,7 +80,7 @@ def _load_official_structure() -> types.ModuleType:
         "esm.utils.misc": local_misc,
         "esm.utils.structure.affine3d": local_affine,
     }
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_protein_structure",
         BIOHUB_ESM / "utils/structure/protein_structure.py",
         aliases,
@@ -132,7 +94,7 @@ def _load_official_metrics(official_structure: types.ModuleType) -> types.Module
         "esm.utils.misc": local_misc,
         "esm.utils.structure.protein_structure": official_structure,
     }
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_metrics",
         BIOHUB_ESM / "utils/structure/metrics.py",
         aliases,
@@ -145,7 +107,7 @@ def _load_official_paired_msa() -> types.ModuleType:
         "esm.models.esmfold2.constants": local_constants,
         "esm.utils.msa.msa": _msa_compatibility_module(),
     }
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_paired_msa",
         BIOHUB_ESM / "models/esmfold2/paired_msa.py",
         aliases,
@@ -161,7 +123,7 @@ def _load_official_processor() -> types.ModuleType:
         "esm.models.esmfold2.types": local_types,
         "esm.utils.structure.molecular_complex": local_complex,
     }
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_processor",
         BIOHUB_ESM / "models/esmfold2/processor.py",
         aliases,
@@ -169,7 +131,7 @@ def _load_official_processor() -> types.ModuleType:
 
 
 def _assert_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
-    # This exact comparator accepts matching tensor shapes of any rank.
+    # actual, expected: (...) matching shapes of any rank, compared exactly.
     torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 

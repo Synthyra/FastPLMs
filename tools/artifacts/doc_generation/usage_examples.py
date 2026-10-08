@@ -11,6 +11,7 @@ from tools.artifacts.doc_generation.capabilities import (
 )
 from tools.artifacts.doc_generation.card_metadata import (
     _code,
+    declared_requirement,
 )
 from tools.artifacts.doc_generation.esmc_evidence import (
     EsmcReportSet,
@@ -145,13 +146,16 @@ def _peft_usage(spec: ModelSpec) -> str:
             "This checkpoint has no advertised classifier. Supply the task objective "
             "and preserve any new head through `modules_to_save`."
         )
+    training_requirements = " ".join(
+        f'"{declared_requirement("features/train.in", name)}"' for name in ("datasets", "peft")
+    )
     return f"""\
 ## PEFT fine-tuning
 
 Install the training dependencies. Then attach LoRA to the loaded checkpoint:
 
 ```bash
-python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
+python -m pip install {training_requirements}
 ```
 
 ```python

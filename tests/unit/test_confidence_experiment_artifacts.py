@@ -356,13 +356,13 @@ def create_group_member(
 def test_paired_group_allows_distinct_skips_and_requested_subsets(tmp_path):
     candidate = create_group_member(tmp_path, "esmfold2_300")
     reference = create_group_member(tmp_path, "esmfold2")
-    result = verify_evaluation_group(
+    groups = verify_evaluation_group(
         {
             "esmfold2_300": candidate.directory,
             "esmfold2": reference.directory,
         }
     )
-    assert set(result) == {"esmfold2_300", "esmfold2"}
+    assert set(groups) == {"esmfold2_300", "esmfold2"}
 
 
 @pytest.mark.parametrize(

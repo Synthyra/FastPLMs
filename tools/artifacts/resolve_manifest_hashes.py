@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import tomllib
+
 from pathlib import Path
 from typing import Any
 from huggingface_hub import HfApi, hf_hub_download
@@ -49,15 +50,15 @@ def resolve_manifest(manifest: Path) -> dict[str, dict[str, str]]:
             repo_id = model[f"{label}_repo"]
             revision = model[f"{label}_revision"]
             try:
-                info = api.model_info(
+                repository_info = api.model_info(
                     repo_id=repo_id,
                     revision=revision,
                     files_metadata=True,
                 )
-            except Exception as error:  # pragma: no cover - network diagnostic
+            except Exception as error:  # pragma: no cover - network diagnostic  # noqa: broad-except  a Hub failure of any kind is listed with the others
                 failures.append(f"{repo_id}@{revision}: {type(error).__name__}: {error}")
                 continue
-            siblings = {sibling.rfilename: sibling for sibling in info.siblings}
+            siblings = {sibling.rfilename: sibling for sibling in repository_info.siblings}
             for path in paths:
                 key = f"{label}:{path}"
                 sibling = siblings.get(path)
@@ -75,7 +76,7 @@ def resolve_manifest(manifest: Path) -> dict[str, dict[str, str]]:
                         revision=revision,
                     )
                     payload = Path(downloaded).read_bytes()
-                except Exception as error:  # pragma: no cover - network diagnostic
+                except Exception as error:  # pragma: no cover - network diagnostic  # noqa: broad-except  a download failure of any kind is listed with the others
                     failures.append(f"{repo_id}@{revision}:{path}: {type(error).__name__}: {error}")
                     continue
                 model_result[key] = f"git-sha1:{_git_blob_sha1(payload)}"
@@ -93,8 +94,8 @@ def main() -> None:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    result = resolve_manifest(args.manifest)
-    encoded = json.dumps(result, indent=2, sort_keys=True) + "\n"
+    resolved = resolve_manifest(args.manifest)
+    encoded = json.dumps(resolved, indent=2, sort_keys=True) + "\n"
     if args.output is None:
         print(encoded, end="")
     else:

@@ -9,19 +9,19 @@ an external manifest.  Structure arrays use the compact atom14 contract:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import shutil
 import tarfile
 import zipfile
-
 import numpy as np
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from random import Random
+
+from fastplms.digests import file_sha256
 
 
 ATLASFOLD_REVISION = "444f376d85b9954a5f2f5f3f8b3cbcae1201ebb1"
@@ -218,7 +218,7 @@ def _decode_npz(value: bytes) -> dict[str, np.ndarray]:
     import io
 
     with np.load(io.BytesIO(value), allow_pickle=False) as arrays:
-        return {name: arrays[name] for name in arrays.files}
+        return {name: arrays[name] for name in arrays.files}  # (...) one array per stored name, shapes as saved
 
 
 def _normalize_chain(value: bytes, *, chain_index: int) -> tuple[str, dict[str, np.ndarray]]:
@@ -374,7 +374,7 @@ def _normalize_record(
         "cluster_id": metadata.get("cluster_id")
         or "__".join(str(chain.get("cluster_id")) for chain in chain_metadata or []),
         "structure_path": str(output_path),
-        "structure_sha256": hashlib.sha256(output_path.read_bytes()).hexdigest(),
+        "structure_sha256": file_sha256(output_path),
         "source": source,
         "source_metadata": dict(metadata),
     }
@@ -417,6 +417,7 @@ def _biologically_eligible(record: Mapping[str, object]) -> bool:
 def np_to_npz_bytes(arrays: Mapping[str, np.ndarray]) -> bytes:
     """Serialize a chain-array mapping for reuse by the normalizer."""
 
+    # arrays: (...) one array per chain-array name, shapes as supplied
     import io
 
     buffer = io.BytesIO()

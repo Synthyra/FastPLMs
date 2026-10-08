@@ -8,17 +8,20 @@ import subprocess
 import sys
 import tempfile
 import time
-
 import modal
 
 from pathlib import Path
 
+from tools.execution.source import excluded_from_upload
+from tools.stored_files import write_stored_json
 from .modal_v2 import MOUNTS, ROOT, campaign_root, credentials, image as runtime_image, volume
-from .v2_campaign import MODEL_IDS, write_json
+from .v2_campaign import MODEL_IDS
 
 
 app = modal.App("fastplms-confidence-live-publication")
-image = runtime_image.add_local_dir(str(ROOT / "tests/release"), "/workspace/tests/release")
+image = runtime_image.add_local_dir(
+    str(ROOT / "tests/release"), "/workspace/tests/release", ignore=excluded_from_upload
+)
 POLL_SECONDS = 120
 MAXIMUM_SECONDS = 23 * 3600 + 1800
 MAX_CONSECUTIVE_ERRORS = 3
@@ -37,10 +40,10 @@ def verify() -> dict[str, object]:
         "tests/release/test_model_card_licenses.py",
     ]
     completed = subprocess.run([sys.executable, "-m", "pytest", "-q", "-m", "not gpu", *paths], capture_output=True, text=True)
-    result = {"returncode": completed.returncode, "output": completed.stdout + completed.stderr}
+    verification = {"returncode": completed.returncode, "output": completed.stdout + completed.stderr}
     if completed.returncode:
-        raise RuntimeError(result["output"])
-    return result
+        raise RuntimeError(verification["output"])
+    return verification
 
 
 @app.function(image=image, cpu=1, memory=8192, timeout=86400, startup_timeout=900, volumes=MOUNTS, secrets=[credentials], max_containers=1)
@@ -86,7 +89,7 @@ def publish(campaign: str, calls: dict[str, str]) -> dict[str, object]:
                 errors = 0
             except Exception as error:
                 errors += 1
-                write_json(status_path, {"status": "retrying", "error_type": type(error).__name__, "error": str(error), "consecutive_errors": errors, "publications": publications, "training": terminal})
+                write_stored_json(status_path, {"status": "retrying", "error_type": type(error).__name__, "error": str(error), "consecutive_errors": errors, "publications": publications, "training": terminal}, sort_keys=False)
                 volume.commit()
                 if errors >= MAX_CONSECUTIVE_ERRORS:
                     raise
@@ -104,15 +107,15 @@ def publish(campaign: str, calls: dict[str, str]) -> dict[str, object]:
                         final_signatures[model_id] = (stat.st_size, stat.st_mtime_ns)
                 if all(signatures.get(model_id) == signature for model_id, signature in final_signatures.items()):
                     status["status"] = "complete" if all(value == "complete" for value in terminal.values()) else "training_failed"
-                    write_json(status_path, status)
+                    write_stored_json(status_path, status, sort_keys=False)
                     volume.commit()
                     return status
-            write_json(status_path, status)
+            write_stored_json(status_path, status, sort_keys=False)
             volume.commit()
             time.sleep(POLL_SECONDS)
         raise TimeoutError("Live checkpoint publication exceeded its 23.5-hour limit")
     except BaseException as error:
-        write_json(status_path, {"status": "failed", "error_type": type(error).__name__, "error": str(error), "publications": publications, "training": terminal})
+        write_stored_json(status_path, {"status": "failed", "error_type": type(error).__name__, "error": str(error), "publications": publications, "training": terminal}, sort_keys=False)
         volume.commit()
         raise
 
@@ -130,14 +133,14 @@ def main() -> None:
     if not args.verify_only and receipt_path.exists():
         raise FileExistsError("Live publication is already dispatched; inspect its receipt before retrying")
     with modal.enable_output(), app.run(detach=True):
-        result = verify.remote()
-        write_json(local_root / "live-publication-verification.json", result)
-        print(result["output"])
+        verification = verify.remote()
+        write_stored_json(local_root / "live-publication-verification.json", verification, sort_keys=False)
+        print(verification["output"])
         if not args.verify_only:
             calls = json.loads((local_root / "resume-dispatch.json").read_text(encoding="utf-8"))["calls"]
             call = publish.spawn(campaign, calls)
             receipt = {"app_id": app.app_id, "call_id": call.object_id, "campaign": campaign, "training_calls": calls}
-            write_json(receipt_path, receipt)
+            write_stored_json(receipt_path, receipt, sort_keys=False)
             print(json.dumps(receipt, indent=2))
 
 

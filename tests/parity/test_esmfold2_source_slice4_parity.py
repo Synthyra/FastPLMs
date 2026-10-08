@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 import types
 import numpy as np
 import pytest
 import torch
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from tests.parity.support.parity_helpers import load_pinned_source, namespace_packages, temporary_modules
 
 from fastplms.models.esmfold2 import esmfold2_conformers as local_conformers
 from fastplms.models.esmfold2 import esmfold2_constants as local_constants
@@ -30,51 +27,16 @@ pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
 ROOT = Path(__file__).resolve().parents[2]
 BIOHUB_ESM = ROOT / "vendor/upstream/biohub-esm/esm"
-_MISSING = object()
-
-
-def _package(name: str) -> types.ModuleType:
-    package = types.ModuleType(name)
-    package.__path__ = []  # type: ignore[attr-defined]
-    return package
-
-
-@contextmanager
-def _temporary_modules(modules: dict[str, types.ModuleType]) -> Iterator[None]:
-    previous = {name: sys.modules.get(name, _MISSING) for name in modules}
-    sys.modules.update(modules)
-    try:
-        yield
-    finally:
-        for name, module in previous.items():
-            if module is _MISSING:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module  # type: ignore[assignment]
-
-
-def _load_source(
-    module_name: str,
-    path: Path,
-    aliases: dict[str, types.ModuleType],
-) -> types.ModuleType:
-    assert path.is_file(), f"pinned source is missing: {path}"
-    specification = importlib.util.spec_from_file_location(module_name, path)
-    assert specification is not None and specification.loader is not None
-    module = importlib.util.module_from_spec(specification)
-    with _temporary_modules({**aliases, module_name: module}):
-        specification.loader.exec_module(module)
-    return module
 
 
 def _biohub_packages() -> dict[str, types.ModuleType]:
-    return {
-        "esm": _package("esm"),
-        "esm.models": _package("esm.models"),
-        "esm.models.esmfold2": _package("esm.models.esmfold2"),
-        "esm.utils": _package("esm.utils"),
-        "esm.utils.structure": _package("esm.utils.structure"),
-    }
+    return namespace_packages(
+        "esm",
+        "esm.models",
+        "esm.models.esmfold2",
+        "esm.utils",
+        "esm.utils.structure",
+    )
 
 
 def _prepare_aliases() -> dict[str, types.ModuleType]:
@@ -88,7 +50,7 @@ def _prepare_aliases() -> dict[str, types.ModuleType]:
 
 
 def _official_prepare() -> types.ModuleType:
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_prepare_input",
         BIOHUB_ESM / "models/esmfold2/prepare_input.py",
         _prepare_aliases(),
@@ -97,7 +59,7 @@ def _official_prepare() -> types.ModuleType:
 
 def _official_complex() -> types.ModuleType:
     aliases = _complex_aliases()
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_molecular_complex",
         BIOHUB_ESM / "utils/structure/molecular_complex.py",
         aliases,
@@ -179,11 +141,11 @@ def _install_fake_ccd(monkeypatch: pytest.MonkeyPatch, official: types.ModuleTyp
 
     def idealized(residue_type: int, atom_name: str) -> np.ndarray:
         base = residue_type + sum(map(ord, atom_name)) / 1000
-        return np.asarray([base, base + 1, base + 2], dtype=np.float32)
+        return np.asarray([base, base + 1, base + 2], dtype=np.float32)  # (3,)
 
     def ligand_position(residue_name: str, atom_name: str) -> np.ndarray:
         base = (sum(map(ord, residue_name + atom_name)) % 97) / 10
-        return np.asarray([base, base + 0.5, base + 1], dtype=np.float32)
+        return np.asarray([base, base + 0.5, base + 1], dtype=np.float32)  # (3,)
 
     replacements = {
         "get_idealized_atom_pos": idealized,
@@ -238,7 +200,7 @@ def test_mixed_input_pipeline_matches_pinned_biohub(
     actual_parts = local_prepare.build_chains_from_input(input_value, seed=71)
     expected_parts = official.build_chains_from_input(input_value, seed=71)
     _assert_prepared_equal(actual_parts, expected_parts)
-    with _temporary_modules(_prepare_aliases()):
+    with temporary_modules(_prepare_aliases()):
         actual = local_prepare.build_feature_tensors(*actual_parts, input_value)
         expected = official.build_feature_tensors(*expected_parts, input_value)
     assert actual.keys() == expected.keys()
@@ -373,11 +335,11 @@ def test_molecular_complex_conversion_extends_pinned_biohub_with_identity_storag
     official = _official_complex()
     protein = _protein_fixture()
     actual = local_complex.MolecularComplex.from_protein_complex(protein)
-    with _temporary_modules(_complex_aliases()):
+    with temporary_modules(_complex_aliases()):
         expected = official.MolecularComplex.from_protein_complex(protein)
     _assert_complex_equal(actual, expected)
     _assert_records_equal(actual[1], expected[1])
-    with _temporary_modules(_complex_aliases()):
+    with temporary_modules(_complex_aliases()):
         expected_protein = expected.to_protein_complex()
     _assert_protein_equal(actual.to_protein_complex(), expected_protein)
 
@@ -409,7 +371,7 @@ def test_molecular_complex_metrics_match_pinned_biohub() -> None:
     official = _official_complex()
     protein = _protein_fixture()
     actual = local_complex.MolecularComplex.from_protein_complex(protein)
-    with _temporary_modules(_complex_aliases()):
+    with temporary_modules(_complex_aliases()):
         expected = official.MolecularComplex.from_protein_complex(protein)
     shifted_positions = actual.atom_positions.copy()
     shifted_positions[:, 0] += np.linspace(0.0, 0.2, len(shifted_positions))

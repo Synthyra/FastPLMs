@@ -10,12 +10,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from fastplms.digests import file_sha256, json_sha256
+from fastplms.json_files import compact_json, indented_json
 from fastplms.registry import ModelRegistry, ModelSpec, OfficialGolden
+from tools.tensor_digests import tensor_bytes
 
 
 _SCHEMA_VERSION = 1
@@ -35,23 +39,6 @@ class GoldenBundleRecord:
     tensor_hashes: Mapping[str, str]
 
 
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-
-
 def _is_sha256(value: object) -> bool:
     return (
         isinstance(value, str)
@@ -69,9 +56,9 @@ def _tensor_hash(tensor: Any) -> str:
     T = tensor.detach().to(device="cpu").contiguous()  # (...)
     shape = list(T.shape)
     dtype = str(T.dtype).removeprefix("torch.")
-    raw = T.reshape(-1).view(torch.uint8).numpy().tobytes()
+    raw = tensor_bytes(T)
     digest = hashlib.sha256()
-    digest.update(_canonical_json({"dtype": dtype, "shape": shape}))
+    digest.update(compact_json({"dtype": dtype, "shape": shape}).encode("utf-8"))
     digest.update(b"\0")
     digest.update(raw)
     return digest.hexdigest()
@@ -114,14 +101,14 @@ def _environment_record(environment: Mapping[str, str]) -> dict[str, object]:
     details = {key: environment[key] for key in sorted(environment)}
     return {
         "details": details,
-        "fingerprint": hashlib.sha256(_canonical_json(details)).hexdigest(),
+        "fingerprint": json_sha256(details),
     }
 
 
 def _source_file_record(source_files: Mapping[str, str] | None) -> dict[str, str]:
     if source_files is None:
         return {}
-    result: dict[str, str] = {}
+    digests_by_name: dict[str, str] = {}
     if not isinstance(source_files, Mapping):
         raise GoldenError("Official-golden source files must be a mapping.")
     for name, digest in source_files.items():
@@ -136,8 +123,8 @@ def _source_file_record(source_files: Mapping[str, str] | None) -> dict[str, str
             or not _is_sha256(digest)
         ):
             raise GoldenError(f"Invalid official-golden source file record: {name!r}.")
-        result[name] = digest
-    return dict(sorted(result.items()))
+        digests_by_name[name] = digest
+    return dict(sorted(digests_by_name.items()))
 
 
 def _limitation_records(
@@ -154,7 +141,7 @@ def _limitation_records(
         "exception_type",
         "reason",
     }
-    result: list[dict[str, str]] = []
+    validated: list[dict[str, str]] = []
     for limitation in limitations:
         if not isinstance(limitation, Mapping) or set(limitation) != required:
             raise GoldenError("Official-golden capability limitation schema is invalid.")
@@ -165,11 +152,11 @@ def _limitation_records(
             or any(not isinstance(value, str) or not value for value in record.values())
         ):
             raise GoldenError("Official-golden capability limitation is invalid.")
-        result.append(record)
-    capabilities = [record["capability"] for record in result]
+        validated.append(record)
+    capabilities = [record["capability"] for record in validated]
     if len(capabilities) != len(set(capabilities)):
         raise GoldenError("Official-golden capability limitations contain duplicates.")
-    return sorted(result, key=lambda record: record["capability"])
+    return sorted(validated, key=lambda record: record["capability"])
 
 
 def _source_records(spec: ModelSpec, registry: ModelRegistry) -> list[dict[str, str]]:
@@ -244,7 +231,7 @@ def write_golden_bundle(
             # metadata entry avoids implementation-dependent map ordering.
             metadata={"format": "pt"},
         )
-        tensors_sha256 = _sha256_file(temporary_tensors)
+        tensors_sha256 = file_sha256(temporary_tensors)
         metadata = {
             "schema_version": _SCHEMA_VERSION,
             "model_id": spec.id,
@@ -264,11 +251,11 @@ def write_golden_bundle(
         if normalized_limitations:
             metadata["limitations"] = normalized_limitations
         temporary_metadata.write_text(
-            json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+            indented_json(metadata),
             encoding="utf-8",
             newline="\n",
         )
-        metadata_sha256 = _sha256_file(temporary_metadata)
+        metadata_sha256 = file_sha256(temporary_metadata)
         os.replace(temporary_tensors, tensors_path)
         os.replace(temporary_metadata, metadata_path)
     except BaseException:
@@ -327,8 +314,8 @@ def validate_golden_bundle(
     _validate_output_paths(metadata_path, tensors_path)
     if not metadata_path.is_file() or not tensors_path.is_file():
         raise GoldenError(f"Missing required official golden for check tier: {spec.id}.")
-    metadata_sha256 = _sha256_file(metadata_path)
-    tensors_sha256 = _sha256_file(tensors_path)
+    metadata_sha256 = file_sha256(metadata_path)
+    tensors_sha256 = file_sha256(tensors_path)
     if declaration is not None:
         if metadata_sha256 != declaration.metadata.digest:
             raise GoldenError(f"Official golden metadata digest mismatch for {spec.id}.")
@@ -366,7 +353,7 @@ def validate_golden_bundle(
         for key, value in details.items()
     ):
         raise GoldenError(f"Official golden environment details are invalid for {spec.id}.")
-    expected_environment = hashlib.sha256(_canonical_json(details)).hexdigest()
+    expected_environment = json_sha256(details)
     if environment["fingerprint"] != expected_environment:
         raise GoldenError(f"Official golden environment fingerprint mismatch for {spec.id}.")
 

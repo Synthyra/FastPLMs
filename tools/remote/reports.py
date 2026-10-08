@@ -9,7 +9,6 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 
 from tools.execution.source import excluded_from_upload as _is_sensitive
-
 from .contracts import (
     _BIOHUB_REFERENCE_TARGETS,
     _CONTROL_TIMEOUT_SECONDS,

@@ -4,23 +4,17 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 
 # Shapes: l_s = source tokens, l_p = prompt tokens, l_o = generated tokens.
 
-if __package__:
-    from ._runtime import add_execution_arguments, resolve_execution
+if TYPE_CHECKING or __package__:
+    from ._runtime import add_execution_arguments, configure_offline, resolve_execution
 else:
-    from _runtime import add_execution_arguments, resolve_execution
-
-
-def configure_offline() -> None:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    from _runtime import add_execution_arguments, configure_offline, resolve_execution
 
 
 def extract_ankh_layers(

@@ -22,10 +22,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from transformers import AutoModel, AutoModelForMaskedLM
-
-from fastplms.registry import ModelSpec, get_model_registry
 from tests.conftest import CANONICAL_AAS, SEED, strict_fp32_matmul
+from tests.parity.support.native_reference import normalize_tokenizer_error
+from tests.parity.support.parity_helpers import alias_groups
 from tests.parity.support.semantic_config import (
     semantic_config,
     transformed_semantic_config,
@@ -36,6 +35,9 @@ from tests.parity.support.state_transforms import (
     transform_preserves_aliases,
     transform_state,
 )
+from transformers import AutoModel, AutoModelForMaskedLM
+
+from fastplms.registry import ModelSpec, get_model_registry
 
 
 _semantic_config = semantic_config
@@ -350,13 +352,6 @@ def _assert_state_equal(spec: ModelSpec, fast: nn.Module, reference: nn.Module) 
         assert torch.equal(candidate, official), f"{spec.id}:{name}: tensor values are not exact"
 
 
-def _alias_groups(model: nn.Module) -> set[frozenset[str]]:
-    by_parameter: dict[int, set[str]] = {}
-    for name, parameter in model.named_parameters(remove_duplicate=False):
-        by_parameter.setdefault(id(parameter), set()).add(name)
-    return {frozenset(names) for names in by_parameter.values() if len(names) > 1}
-
-
 def _transformed_alias_groups(spec: ModelSpec, model: nn.Module) -> set[frozenset[str]]:
     if not transform_preserves_aliases(spec.family.state_transform):
         return set()
@@ -368,7 +363,7 @@ def _transformed_alias_groups(spec: ModelSpec, model: nn.Module) -> set[frozense
 
 
 def _assert_aliases_equal(spec: ModelSpec, fast: nn.Module, reference: nn.Module) -> None:
-    candidate = _alias_groups(fast)
+    candidate = alias_groups(fast)
     official = _transformed_alias_groups(spec, _reference_core(reference))
     assert candidate == official, (
         f"{spec.id}: tied-parameter aliases differ; "
@@ -377,24 +372,15 @@ def _assert_aliases_equal(spec: ModelSpec, fast: nn.Module, reference: nn.Module
     )
 
 
-def _normalize_tokenizer_error(message: str) -> str:
-    """Remove a dependency-list difference between Transformers v4 and v5."""
-
-    return message.replace(
-        "python, numpy, pytorch or tensorflow object.",
-        "python, numpy or pytorch object.",
-    ).replace("python, numpy, or pytorch object.", "python, numpy or pytorch object.")
-
-
 def _token_result(tokenizer: object, sequences: Sequence[str], **kwargs: Any) -> Any:
     try:
         encoded = tokenizer(sequences, return_tensors="pt", **kwargs)
-    except Exception as error:  # Exact error behavior is part of the token contract.
+    except Exception as error:  # noqa: broad-except  the exact error is part of the token contract
         return (
             "error",
             type(error).__module__,
             type(error).__qualname__,
-            _normalize_tokenizer_error(str(error)),
+            normalize_tokenizer_error(str(error)),
         )
     normalized: dict[str, Any] = {}
     for key, value in encoded.items():
@@ -437,7 +423,7 @@ def _assert_tokenizer_equal(
 
 
 def _to_device(values: Mapping[str, Any], device: torch.device) -> dict[str, torch.Tensor]:
-    return {name: value.to(device) for name, value in values.items() if torch.is_tensor(value)}
+    return {name: value.to(device) for name, value in values.items() if torch.is_tensor(value)}  # (...) the tensor entries of values, one per name, shapes unchanged
 
 
 def _prepare_inputs(
@@ -463,7 +449,7 @@ def _prepare_inputs(
         fast_inputs["attention_mask"] = residue_mask.long()
         # official_inputs['attention_mask']: (b, l)
         official_inputs["attention_mask"] = residue_mask.long()
-        return fast_inputs, official_inputs, residue_mask
+        return fast_inputs, official_inputs, residue_mask  # (...) fast_inputs and official_inputs: (b, l) tensors; residue_mask (b, l)
 
     fast_tokenizer = fast.tokenizer
     fast_encoded = _to_device(
@@ -495,7 +481,7 @@ def _prepare_inputs(
         sequence_id = fast_encoded["attention_mask"].bool()
         fast_inputs["sequence_id"] = sequence_id
         official_inputs["sequence_id"] = sequence_id
-    return fast_inputs, official_inputs, residue_mask
+    return fast_inputs, official_inputs, residue_mask  # (...) fast_inputs and official_inputs: (b, l) tensors; residue_mask (b, l)
 
 
 def _hidden_state_tuple(output: object) -> tuple[torch.Tensor, ...]:
@@ -503,17 +489,17 @@ def _hidden_state_tuple(output: object) -> tuple[torch.Tensor, ...]:
 
     raw = getattr(output, "hidden_states", None)
     if torch.is_tensor(raw):
-        return tuple(raw.unbind(dim=0))
-    return tuple(raw or ())
+        return tuple(raw.unbind(dim=0))  # (b, l, d) per layer, unbound along the layer axis
+    return tuple(raw or ())  # (b, l, d) per layer
 
 
 def _last_hidden(output: object) -> torch.Tensor:
     value = getattr(output, "last_hidden_state", None)
     if value is not None:
-        return value
+        return value  # (b, l, d)
     hidden_states = _hidden_state_tuple(output)
     assert hidden_states, "Model output omitted last_hidden_state and hidden_states"
-    return hidden_states[-1]
+    return hidden_states[-1]  # (b, l, d)
 
 
 def tensor_metrics(

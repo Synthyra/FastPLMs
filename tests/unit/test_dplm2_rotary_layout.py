@@ -39,6 +39,7 @@ def _layout(rows: list[list[int]]) -> torch.Tensor:
 def test_packed_multimodal_layout_truth_table(
     type_ids: torch.Tensor | None, expected: bool
 ) -> None:
+    # type_ids: (b, l) modality ids, or None
     assert _has_packed_multimodal_layout(type_ids, AA, STRUCT, PAD) is expected
 
 
@@ -68,6 +69,7 @@ def test_packed_layout_rotates_each_half_from_position_zero() -> None:
 
 @pytest.mark.parametrize("type_ids", (None, _layout([[AA] * 6])), ids=("no-type-ids", "plain"))
 def test_unpacked_layout_rotates_the_full_sequence(type_ids: torch.Tensor | None) -> None:
+    # type_ids: (1, 6) = (b, l), or None
     head_dim, seq_len = 8, 6
     query = torch.randn(1, 2, seq_len, head_dim)  # (b=1, h=2, l=6, d=8)
     key = torch.randn(1, 2, seq_len, head_dim)  # (b=1, h=2, l=6, d=8)
@@ -108,12 +110,14 @@ def test_rotary_call_detects_the_layout_once(
     type_ids: torch.Tensor, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Layout detection synchronizes with the host, so one call must probe once."""
+    # type_ids: (1, 6) = (b, l)
     from fastplms.models.dplm2 import modeling_dplm2
 
     probes: list[torch.Tensor | None] = []
     detect = modeling_dplm2._has_packed_multimodal_layout
 
     def counting_detect(type_ids: torch.Tensor | None, *args: int, **kwargs: int) -> bool:
+        # type_ids: (b, l), or None
         probes.append(type_ids)
         return detect(type_ids, *args, **kwargs)
 

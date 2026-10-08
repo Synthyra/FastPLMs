@@ -12,6 +12,7 @@ from torch import Tensor
 from . import identity
 from .batches import (
     BatchExecutor,
+    TapExecutor,
     _residue_embeddings as _residue_embeddings,
     _temporary_eval,
     select_hidden_state_embeddings as select_hidden_state_embeddings,
@@ -36,8 +37,11 @@ from .inputs import (
     parse_fasta as parse_fasta,
 )
 from .output import EmbeddingOutput
-from .pooling import Pooler
-from .types import EmbeddingBatch, EmbeddingInput, EmbeddingResult
+from .pooling import POOLING_SEMANTICS, Pooler
+from .taps import Tap, TapPlan, plan_taps
+from .types import (
+    EmbeddingBatch, EmbeddingInput, EmbeddingResult, TapRecord, TapResult, TapRunReceipt,
+)
 
 
 _DEFAULT_BATCH_WINDOW_MULTIPLIER = 16
@@ -51,6 +55,9 @@ def embed_dataset(
     batch_size: int = 2,
     pooling: str | Sequence[str] | None = None,
     full_embeddings: bool = False,
+    taps: Sequence[Tap] | None = None,
+    tap_sink: Callable[[Sequence[TapRecord], Mapping[str, str]], None] | None = None,
+    require_residue_identity: bool = False,
     output: str | Path | None = None,
     format: str = "safetensors",
     resume: bool = True,
@@ -70,9 +77,16 @@ def embed_dataset(
     _embedding_batch_identity: Mapping[str, Any] | None = None,
     _allowed_unsupported_pooling: Sequence[str] = (),
     **model_kwargs: Any,
-) -> EmbeddingResult:
-    """Embed protein sequences with stable ordering and residue-only pooling."""
+) -> EmbeddingResult | TapResult | TapRunReceipt:
+    """Embed protein sequences with stable ordering and residue-only pooling.
 
+    ``taps`` instead returns a ``TapResult``: each tap's output from one forward pass per
+    batch, kept in memory. With ``tap_sink``, deliver bounded windows to the callback and return
+    a ``TapRunReceipt`` without retaining their tensors. The callback receives ordered records
+    and the run/input fingerprints; it must release the records to preserve bounded memory.
+    """
+
+    # decoder_input_ids, decoder_attention_mask: (n_records, l_decoder), aligned with the inputs
     for name, value in (
         ("batch_size", batch_size),
         ("shard_size", shard_size),
@@ -94,11 +108,16 @@ def embed_dataset(
             raise ValueError(f"{optional_name} must be a positive integer when provided.")
     for name, value in (
         ("full_embeddings", full_embeddings),
+        ("require_residue_identity", require_residue_identity),
         ("resume", resume),
         ("truncate", truncate),
     ):
         if not isinstance(value, bool):
             raise TypeError(f"{name} must be a boolean.")
+    if require_residue_identity and taps is None:
+        raise ValueError("Residue identity validation requires a tap plan.")
+    if tap_sink is not None and (taps is None or not callable(tap_sink)):
+        raise ValueError("tap_sink requires a tap plan and a callable destination.")
     if not isinstance(format, str):
         raise TypeError("format must be a string.")
     if output is not None and not isinstance(output, (str, Path)):
@@ -135,15 +154,26 @@ def embed_dataset(
             raise ValueError("decoder_attention_mask must contain finite binary values.")
         if not bool(((decoder_attention_mask == 0) | (decoder_attention_mask == 1)).all()):
             raise ValueError("decoder_attention_mask must contain finite binary values.")
-    pooling_names = (
-        (("mean",) if not full_embeddings else ())
-        if pooling is None
-        else ((pooling,) if isinstance(pooling, str) else tuple(pooling))
+    tap_plan = (
+        _tap_plan(
+            model,
+            taps,
+            pooling=pooling,
+            full_embeddings=full_embeddings,
+            output=output,
+            model_kwargs=model_kwargs,
+            family_adapter=(
+                _embedding_batch_fn is not None or _embedding_batch_identity is not None
+            ),
+        )
+        if taps is not None
+        else None
     )
-    if full_embeddings and pooling is not None:
-        raise ValueError("full_embeddings=True cannot be combined with pooling.")
-    if not full_embeddings and not pooling_names:
-        raise ValueError("pooling is required unless full_embeddings=True.")
+    pooling_names = _requested_pooling(
+        pooling,
+        full_embeddings=full_embeddings,
+        taps_requested=tap_plan is not None,
+    )
     pooler = Pooler(pooling_names) if pooling_names else None
 
     if batch_size <= 0:
@@ -187,22 +217,12 @@ def embed_dataset(
     )
     if resolved_batch_window_size < batch_size:
         raise ValueError("batch_window_size must be at least batch_size.")
-    records = _normalize_inputs(inputs, disk_backed=output is not None)
+    records = _normalize_inputs(inputs, disk_backed=output is not None or tap_sink is not None)
     _validate_untruncated_lengths(
         records,
         max_length=max_length,
         truncate=truncate,
     )
-    pooling_names = (
-        (("mean",) if not full_embeddings else ())
-        if pooling is None
-        else ((pooling,) if isinstance(pooling, str) else tuple(pooling))
-    )
-    if full_embeddings:
-        if pooling is not None:
-            raise ValueError("full_embeddings=True cannot be combined with pooling.")
-    elif not pooling_names:
-        raise ValueError("pooling is required unless full_embeddings=True.")
     store_all_hidden_states = bool(model_kwargs.get("store_all_hidden_states", False))
     if store_all_hidden_states and not full_embeddings:
         raise ValueError("store_all_hidden_states=True requires full_embeddings=True.")
@@ -215,7 +235,10 @@ def embed_dataset(
             f"by the model; unknown overrides: {sorted(unknown_pooling_overrides)}."
         )
     unsupported.difference_update(allowed_unsupported_pooling)
-    requested_unsupported = unsupported.intersection(pooling_names)
+    requested_pooling = set(pooling_names)
+    if tap_plan is not None:
+        requested_pooling.update(tap_plan.pooling_names)
+    requested_unsupported = unsupported.intersection(requested_pooling)
     if requested_unsupported:
         raise ValueError(
             f"{model.__class__.__name__} does not support pooling operations "
@@ -248,6 +271,7 @@ def embed_dataset(
         model.resolve_attn_implementation()
 
     tokenizer_metadata = _tokenizer_metadata(model, tokenizer)
+    tap_identity = tap_plan.identity() if tap_plan is not None else None
     (
         input_fingerprint,
         run_fingerprint,
@@ -269,7 +293,64 @@ def embed_dataset(
         batch_size=batch_size,
         batch_window_size=resolved_batch_window_size,
         max_tokens_per_batch=max_tokens_per_batch,
+        taps=tap_identity,
     )
+    attention_backend = _attention_backend(model)
+    if tap_plan is not None:
+        tap_records, tap_pool_slices = _embed_tap_windows(
+            model,
+            records,
+            TapExecutor(
+                model=model,
+                plan=tap_plan,
+                batch_size=batch_size,
+                max_tokens_per_batch=max_tokens_per_batch,
+                max_length=max_length,
+                truncate=truncate,
+                tokenizer=tokenizer,
+                dtype=dtype,
+                attention_backend=attention_backend,
+                require_residue_identity=require_residue_identity,
+            ),
+            window_size=resolved_batch_window_size,
+            sink=tap_sink,
+            run_identity={
+                "run_fingerprint": run_fingerprint, "input_fingerprint": input_fingerprint,
+            },
+        )
+        metadata = _run_metadata(
+            model,
+            records,
+            run_fingerprint=run_fingerprint,
+            input_fingerprint=input_fingerprint,
+            model_state_fingerprint=resolved_model_state_fingerprint,
+            model_state_fingerprint_source=model_state_fingerprint_source,
+            dtype=dtype,
+            attention_backend=attention_backend,
+            layer=None,
+            tokenizer_metadata=tokenizer_metadata,
+            embedding_context=embedding_context,
+            pooling_names=pooling_names,
+            pool_slices={},
+            full_embeddings=full_embeddings,
+            max_length=max_length,
+            truncate=truncate,
+            batch_size=batch_size,
+            batch_window_size=resolved_batch_window_size,
+            max_tokens_per_batch=max_tokens_per_batch,
+            output=output,
+            format=format,
+            descriptor_index="not-recorded",
+            taps={
+                "plan": tap_identity,
+                "stop_after_layer": tap_plan.deepest_layer,
+                "pool_slices": tap_pool_slices,
+            },
+        )
+        if tap_sink is not None:
+            metadata["storage_format"] = "tap-sink"
+            return TapRunReceipt(len(records), metadata)
+        return TapResult(tap_records, metadata)
     destination = EmbeddingOutput(
         records,
         output=output,
@@ -286,7 +367,6 @@ def embed_dataset(
     if destination.completed is not None:
         return destination.completed
 
-    attention_backend = _attention_backend(model)
     executor = BatchExecutor(
         model=model,
         batch_size=batch_size,
@@ -321,13 +401,181 @@ def embed_dataset(
             )
             destination.append(window_start, new_records)
 
+    metadata = _run_metadata(
+        model,
+        records,
+        run_fingerprint=run_fingerprint,
+        input_fingerprint=input_fingerprint,
+        model_state_fingerprint=resolved_model_state_fingerprint,
+        model_state_fingerprint_source=model_state_fingerprint_source,
+        dtype=dtype,
+        attention_backend=attention_backend,
+        layer=getattr(
+            model,
+            "embedding_layer",
+            model_kwargs.get("hidden_state_index", -1),
+        ),
+        tokenizer_metadata=tokenizer_metadata,
+        embedding_context=embedding_context,
+        pooling_names=pooling_names,
+        pool_slices=pool_slices,
+        full_embeddings=full_embeddings,
+        max_length=max_length,
+        truncate=truncate,
+        batch_size=batch_size,
+        batch_window_size=resolved_batch_window_size,
+        max_tokens_per_batch=max_tokens_per_batch,
+        output=output,
+        format=format,
+        descriptor_index=(
+            "memory-metadata"
+            if output is None
+            else "sqlite-records"
+            if format == "sqlite"
+            else "safetensors-generation-index"
+        ),
+    )
+    if destination.output_descriptors is not None:
+        metadata["outputs"] = destination.output_descriptors
+        metadata["tensor_hashes"] = [item["sha256"] for item in destination.output_descriptors]
+    return destination.finish(metadata)
+
+
+def _tap_plan(
+    model: Any,
+    taps: Sequence[Tap],
+    *,
+    pooling: str | Sequence[str] | None,
+    full_embeddings: bool,
+    output: str | Path | None,
+    model_kwargs: Mapping[str, Any],
+    family_adapter: bool,
+) -> TapPlan:
+    """Validate a tap request against the arguments it excludes and the model's hidden states."""
+
+    excluded = [
+        name
+        for name, requested in (
+            ("pooling", pooling is not None),
+            ("full_embeddings", full_embeddings),
+            ("hidden_state_index", "hidden_state_index" in model_kwargs),
+            ("store_all_hidden_states", "store_all_hidden_states" in model_kwargs),
+        )
+        if requested
+    ]
+    if excluded:
+        raise ValueError(
+            f"taps= cannot be combined with {', '.join(excluded)}; each tap names its own "
+            "layer and pooling."
+        )
+    if model_kwargs:
+        raise ValueError(
+            f"taps= takes no model keyword arguments; received {sorted(model_kwargs)}."
+        )
+    if family_adapter:
+        raise ValueError(
+            "taps= runs the model's own one-pass path; _embedding_batch_fn and "
+            "_embedding_batch_identity do not apply."
+        )
+    if output is not None:
+        raise ValueError(
+            "taps= returns its records in memory; omit output=. To persist them, call "
+            "embed_into_features, which writes each tap into the feature store of its key and "
+            "embeds only the sequences that store lacks."
+        )
+    if getattr(model, "embedding_tap_support", False) is not True:
+        raise ValueError(
+            f"{model.__class__.__name__} does not support taps=. One-pass taps need a model "
+            "family that implements them, such as ESM++ (ESMC)."
+        )
+    return plan_taps(taps, int(model.embedding_tap_state_count))
+
+
+def _requested_pooling(
+    pooling: str | Sequence[str] | None,
+    *,
+    full_embeddings: bool,
+    taps_requested: bool,
+) -> tuple[str, ...]:
+    """Pooler names of a single-output run: mean by default, none for residues or taps."""
+
+    if taps_requested:
+        return ()
+    if full_embeddings:
+        if pooling is not None:
+            raise ValueError("full_embeddings=True cannot be combined with pooling.")
+        return ()
+    names = (
+        ("mean",)
+        if pooling is None
+        else ((pooling,) if isinstance(pooling, str) else tuple(pooling))
+    )
+    if not names:
+        raise ValueError("pooling is required unless full_embeddings=True.")
+    return names
+
+
+def _embed_tap_windows(
+    model: Any,
+    records: Sequence[EmbeddingInput],
+    executor: TapExecutor,
+    *,
+    window_size: int,
+    sink: Callable[[Sequence[TapRecord], Mapping[str, str]], None] | None = None,
+    run_identity: Mapping[str, str] | None = None,
+) -> tuple[list[TapRecord], dict[str, dict[str, tuple[int, int]]]]:
+    """Run bounded windows in source order, retaining tensors only without a sink."""
+
+    tap_records: list[TapRecord] = []
+    pool_slices: dict[str, dict[str, tuple[int, int]]] = {}
+    with _temporary_eval(model), torch.inference_mode():
+        for window_start in range(0, len(records), window_size):
+            window_stop = min(window_start + window_size, len(records))
+            window_records = records[window_start:window_stop]
+            if not isinstance(window_records, Sequence):
+                raise RuntimeError("The immutable embedding spool returned a non-sequence window.")
+            new_records, pool_slices = executor.run_window(
+                window_records, window_start=window_start
+            )
+            if sink is None:
+                tap_records.extend(new_records)
+            else:
+                sink(new_records, dict(run_identity or {}))
+            # Release the previous window before allocating the next, including on CPU.
+            del new_records
+    return tap_records, pool_slices
+
+
+def _run_metadata(
+    model: Any,
+    records: Sequence[EmbeddingInput],
+    *,
+    run_fingerprint: str,
+    input_fingerprint: str,
+    model_state_fingerprint: str | None,
+    model_state_fingerprint_source: str,
+    dtype: torch.dtype | None,
+    attention_backend: str | None,
+    layer: Any,
+    tokenizer_metadata: dict[str, Any],
+    embedding_context: Mapping[str, Any],
+    pooling_names: Sequence[str],
+    pool_slices: Mapping[str, tuple[int, int]],
+    full_embeddings: bool,
+    max_length: int | None,
+    truncate: bool,
+    batch_size: int,
+    batch_window_size: int,
+    max_tokens_per_batch: int | None,
+    output: str | Path | None,
+    format: str,
+    descriptor_index: str,
+    taps: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Everything a finished run records so that it can be reproduced and resumed."""
+
     software_versions = identity._software_versions()
     projection = getattr(model, "embedding_projection", None)
-    resolved_layer = getattr(
-        model,
-        "embedding_layer",
-        model_kwargs.get("hidden_state_index", -1),
-    )
     token_policy = getattr(
         model,
         "embedding_token_policy",
@@ -349,14 +597,14 @@ def embed_dataset(
         "fingerprint_schema_version": _RUN_FINGERPRINT_SCHEMA_VERSION,
         "run_fingerprint": run_fingerprint,
         "input_fingerprint": input_fingerprint,
-        "model_state_fingerprint": resolved_model_state_fingerprint,
+        "model_state_fingerprint": model_state_fingerprint,
         "model_state_fingerprint_source": model_state_fingerprint_source,
         "model_class": f"{model.__class__.__module__}.{model.__class__.__qualname__}",
         **model_identity,
         "dtype": str(dtype).removeprefix("torch.") if dtype is not None else "model",
         "attention_backend": attention_backend,
         "attention_kernel": _attention_kernel_metadata(attention_backend),
-        "layer": resolved_layer,
+        "layer": layer,
         "projection": projection,
         "esmc_source": getattr(model, "_esmc_source", None),
         "esmc_revision": getattr(model, "_esmc_source_revision", None),
@@ -365,14 +613,18 @@ def embed_dataset(
         "tokenizer": tokenizer_metadata,
         **embedding_context,
         "pooling": list(pooling_names),
+        "pooling_semantics": dict(POOLING_SEMANTICS),
         "pool_slices": pool_slices,
         "full_embeddings": full_embeddings,
         "max_length": max_length,
         "truncate": truncate,
         "truncation": {"enabled": truncate, "max_length": max_length},
+        "retained_positions": (
+            "biological_residues_in_input_order_after_optional_prefix_crop_before_forward"
+        ),
         "batching": {
             "batch_size": batch_size,
-            "batch_window_size": resolved_batch_window_size,
+            "batch_window_size": batch_window_size,
             "max_tokens_per_batch": max_tokens_per_batch,
             "input_storage": ("disk-spool" if isinstance(records, _InputSpool) else "memory"),
             "ordering": "bounded-length-bucketed-stable-output",
@@ -386,13 +638,7 @@ def embed_dataset(
         },
         "residue_mask_policy": "biological-residues-only",
         "record_count": len(records),
-        "descriptor_index": (
-            "memory-metadata"
-            if output is None
-            else "sqlite-records"
-            if format == "sqlite"
-            else "safetensors-generation-index"
-        ),
+        "descriptor_index": descriptor_index,
         "storage_format": format if output is not None else "memory",
         "software": software_versions,
         "execution": _execution_identity_metadata(model),
@@ -401,19 +647,20 @@ def embed_dataset(
         "transformers_version": software_versions["transformers"],
         "complete": True,
     }
-    if destination.output_descriptors is not None:
-        metadata["outputs"] = destination.output_descriptors
-        metadata["tensor_hashes"] = [item["sha256"] for item in destination.output_descriptors]
+    if taps is not None:
+        metadata["taps"] = taps
     status = getattr(model, "esmc_precision_status", None)
     if status is not None:
         metadata["esmc_precision"] = status.as_dict() if hasattr(status, "as_dict") else status
-    return destination.finish(metadata)
+    return metadata
 
 
 class EmbeddingMixin:
     """Small delegation mixin shared by FastPLMs model classes."""
 
-    def embed_dataset(self, inputs: Any, **kwargs: Any) -> EmbeddingResult:
+    def embed_dataset(
+        self, inputs: Any, **kwargs: Any,
+    ) -> EmbeddingResult | TapResult | TapRunReceipt:
         return embed_dataset(self, inputs, **kwargs)
 
 

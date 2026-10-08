@@ -8,9 +8,9 @@ import pytest
 import torch
 
 from pathlib import Path
+from examples.ankh_embeddings import generate_ankh_task
 from transformers import AutoTokenizer
 
-from examples.ankh_embeddings import generate_ankh_task
 from fastplms.models.ankh.modeling_ankh import (
     FastAnkhConfig,
     FastAnkhForConditionalGeneration,

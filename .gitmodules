@@ -6,7 +6,7 @@
 	url = https://github.com/Biohub/esm.git
 [submodule "vendor/upstream/biohub-transformers"]
 	path = vendor/upstream/biohub-transformers
-	url = https://github.com/Biohub/transformers.git
+	url = https://github.com/huggingface/transformers.git
 [submodule "vendor/upstream/boltz"]
 	path = vendor/upstream/boltz
 	url = https://github.com/jwohlwend/boltz.git

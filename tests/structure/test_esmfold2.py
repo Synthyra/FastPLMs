@@ -493,7 +493,7 @@ def test_compute_lm_hidden_states_pads_and_masks_non_special_tokens() -> None:
     mol_type = torch.zeros_like(input_ids)  # (1, 3)
     token_mask = torch.ones_like(input_ids, dtype=torch.bool)  # (1, 3)
 
-    result = compute_lm_hidden_states(
+    computed_states = compute_lm_hidden_states(
         esmc,
         input_ids,
         asym_id,
@@ -509,7 +509,7 @@ def test_compute_lm_hidden_states_pads_and_masks_non_special_tokens() -> None:
     assert esmc.sequence_id is not None
     assert esmc.input_ids.tolist() == [[0, 32, 32, 32, 2, 1, 1, 1]]
     assert esmc.sequence_id.tolist() == [[0, 0, 0, 0, 0, -1, -1, -1]]
-    assert result.shape == (1, 3, 2, 3)
+    assert computed_states.shape == (1, 3, 2, 3)
 
 
 def test_msa_subsample_keeps_query_row() -> None:
@@ -597,7 +597,7 @@ def test_esmfold2_fold_protein_accepts_msa_path(tmp_path, monkeypatch) -> None:
     msa_path.write_text(">query\nMSTN\n>hit\nMSTN\n", encoding="utf-8")
     model = object.__new__(ESMFold2Model)
 
-    result = ESMFold2Model.fold_protein(
+    outcome = ESMFold2Model.fold_protein(
         model,
         "MSTN",
         msa_path=msa_path,
@@ -605,7 +605,7 @@ def test_esmfold2_fold_protein_accepts_msa_path(tmp_path, monkeypatch) -> None:
         seed=7,
     )
 
-    assert result == "ok"
+    assert outcome == "ok"
     protein_input = captured["input"].sequences[0]
     assert protein_input.sequence == "MSTN"
     assert protein_input.msa is not None
@@ -642,9 +642,9 @@ def test_esmfold2_fold_protein_without_msa_preserves_single_sequence(monkeypatch
     monkeypatch.setattr(ESMFold2Model, "fold", fake_fold)
     model = object.__new__(ESMFold2Model)
 
-    result = ESMFold2Model.fold_protein(model, "MSTN")
+    outcome = ESMFold2Model.fold_protein(model, "MSTN")
 
-    assert result == "ok"
+    assert outcome == "ok"
     protein_input = captured["input"].sequences[0]
     assert protein_input.sequence == "MSTN"
     assert protein_input.msa is None
@@ -690,19 +690,19 @@ def test_esmfold2_input_builder_complex_and_exports() -> None:
     assert len(chain_infos) == 3
     inspect.signature(type(model).forward).bind(model, **features)
 
-    result = model.fold_protein(
+    prediction = model.fold_protein(
         TEST_SEQUENCE,
         num_loops=1,
         num_sampling_steps=1,
         num_diffusion_samples=1,
         seed=0,
     )
-    cif = model.result_to_cif(result)
-    pdb = model.result_to_pdb(result)
+    cif = model.result_to_cif(prediction)
+    pdb = model.result_to_pdb(prediction)
     assert "data_" in cif
     assert "ATOM" in pdb
-    assert result.plddt.ndim == 1
-    assert result.ptm is not None
+    assert prediction.plddt.ndim == 1
+    assert prediction.ptm is not None
 
     multimer = model.fold_protein(
         f"{TEST_SEQUENCE}:MKTIIALSYIFCLVFA",
@@ -713,5 +713,5 @@ def test_esmfold2_input_builder_complex_and_exports() -> None:
     )
     assert len(set(multimer.complex.chain_id.tolist())) == 2
 
-    del model, features, result, multimer
+    del model, features, prediction, multimer
     torch.cuda.empty_cache()

@@ -339,7 +339,7 @@ def binned_entropy(dgram: torch.Tensor, bin_distance: torch.Tensor, cutoff: floa
 
 
 def masked_min_k(x: torch.Tensor, mask: torch.Tensor, k: int) -> torch.Tensor:
-    # x/mask: (..., n)
+    # x, mask: (..., n)
     mask = mask.bool()  # (..., n)
     y = torch.sort(torch.where(mask, x, float("nan")))[0]  # (..., n)
     k_mask = (torch.arange(y.shape[-1]).to(y.device) < k) & (
@@ -349,7 +349,7 @@ def masked_min_k(x: torch.Tensor, mask: torch.Tensor, k: int) -> torch.Tensor:
 
 
 def masked_average(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-    # x/mask: (..., n)
+    # x, mask: (..., n)
     mask = mask.bool()  # (..., n)
     return torch.where(mask, x, 0).sum(-1) / (
         torch.where(mask, 1, 0).sum(-1) + 1e-8
@@ -366,7 +366,7 @@ def compute_contact_loss(
     binder_mask: torch.Tensor,
 ) -> torch.Tensor:
     # distogram_logits: (b, l, l, z); bin_distance: (z,)
-    # chain_mask/binder_mask: (l,) or broadcast-compatible with (b, l, l)
+    # chain_mask, binder_mask: (l,)
     con_loss = binned_entropy(distogram_logits, bin_distance, cutoff)  # (b, l, l)
     position = torch.arange(distogram_logits.shape[1])  # (l,)
     p_dist = position[:, None] - position[None, :]  # (l, l)
@@ -392,7 +392,7 @@ def compute_intra_contact_loss(
     full_len = distogram_logits.shape[1]  # l: total residues
     is_binder = torch.ones(full_len, device=distogram_logits.device)  # (l,)
     is_binder[:-binder_length] *= 0.0  # (l,)
-    return compute_contact_loss(
+    return compute_contact_loss(  # (b,)
         distogram_logits,
         bin_distance,
         num_contacts=2,
@@ -410,7 +410,7 @@ def compute_inter_contact_loss(
     full_len = distogram_logits.shape[1]  # l: total residues
     is_binder = torch.ones(full_len, device=distogram_logits.device)  # (l,)
     is_binder[:-binder_length] *= 0.0  # (l,)
-    return compute_contact_loss(
+    return compute_contact_loss(  # (b,)
         distogram_logits,
         bin_distance,
         num_contacts=1,
@@ -463,7 +463,7 @@ def compute_structure_losses(
     total = total + LOSS_WEIGHTS["inter_contact"] * losses["inter_contact_loss"]  # (b,)
     total = total + LOSS_WEIGHTS["glob"] * losses["glob_loss"]  # (b,)
     losses["total_loss"] = total  # (b,)
-    return losses
+    return losses  # (b,) per loss name: intra_contact_loss, inter_contact_loss, glob_loss, total_loss
 
 
 def _binding_confidence_entropy(
@@ -604,6 +604,7 @@ def _resize_tensor(tensor: torch.Tensor, *, dim: int, size: int) -> torch.Tensor
 
 
 def _prepared_atom_count(features: dict[str, torch.Tensor]) -> int:
+    # features: (...) one tensor per feature name; each tensor in _ATOM_FEATURE_DIMS has a atoms on the listed dimension
     sizes = {features[key].shape[dim] for key, dim in _ATOM_FEATURE_DIMS.items() if key in features}
     if not sizes:
         raise ValueError("Prepared ESMFold2 features contain no atom-axis tensors.")
@@ -617,6 +618,7 @@ def _pad_prepared_atom_features(
 ) -> list[tuple[dict[str, torch.Tensor], list[Any]]]:
     """Pad a prepared batch to its largest atom table without truncation."""
 
+    # prepared: (...) per input, one tensor per feature name with model-defined shapes; atom axes hold a atoms
     if not prepared:
         raise ValueError("At least one prepared ESMFold2 input is required.")
     largest = max(_prepared_atom_count(features) for features, _ in prepared)
@@ -630,7 +632,7 @@ def _pad_prepared_atom_features(
                     resized[key], dim=dim, size=max_atoms
                 )  # atom axis -> max_atoms
         padded.append((resized, chain_infos))
-    return padded
+    return padded  # (...) per input, one tensor per feature name; atom axes padded to max_atoms, the next multiple of 32 above the largest a
 
 
 def prepare_esmfold2_tensors(
@@ -648,7 +650,7 @@ def prepare_esmfold2_tensors(
                 features[key] = _resize_tensor(
                     features[key], dim=dim, size=max_atoms
                 )  # atom axis -> max_atoms
-    return features, chain_infos
+    return features, chain_infos  # (...) one tensor per feature name with model-defined shapes, atom axes resized to max_atoms when given; then chain infos
 
 
 def _prepare_model_forward_kwargs(
@@ -656,13 +658,14 @@ def _prepare_model_forward_kwargs(
     features: dict[str, torch.Tensor],
     controls: dict[str, int | bool | None],
 ) -> dict[str, torch.Tensor | int | bool | None]:
+    # features: (...) one tensor per feature name, model-defined shapes
     signature = inspect.signature(model.forward)
     parameters = signature.parameters
     accepts_kwargs = any(
         parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
     )
     if accepts_kwargs:
-        return {**features, **controls}
+        return {**features, **controls}  # (...) features and controls, one entry per name
     unexpected_features = sorted(set(features) - set(parameters))
     if unexpected_features:
         raise TypeError(
@@ -670,7 +673,7 @@ def _prepare_model_forward_kwargs(
             f"{', '.join(unexpected_features)}."
         )
     supported_controls = {key: value for key, value in controls.items() if key in parameters}
-    return {**features, **supported_controls}
+    return {**features, **supported_controls}  # (...) features and supported controls, one entry per name
 
 
 def fold_and_get_distogram(
@@ -733,7 +736,7 @@ def fold_and_get_distogram(
             **_prepare_model_forward_kwargs(model, inputs, forward_controls)
         )  # distogram_logits: (b, l_t + l_b, l_t + l_b, z)
 
-    result: dict[str, Any] = {
+    fold_outputs: dict[str, Any] = {
         "distogram_logits": output["distogram_logits"],
         "inputs": inputs,
         "chain_info_list": chain_info_list,
@@ -743,8 +746,8 @@ def fold_and_get_distogram(
     if calculate_confidence:
         for key in ("ptm", "iptm", "plddt"):
             if key in output:
-                result[key] = output[key]
-    return result
+                fold_outputs[key] = output[key]
+    return fold_outputs
 
 
 @cache
@@ -769,7 +772,7 @@ def _one_hot_from_probs(probs: torch.Tensor) -> torch.Tensor:
 
 
 def _straight_through(discrete: torch.Tensor, continuous: torch.Tensor) -> torch.Tensor:
-    # discrete/continuous: (..., a)
+    # discrete, continuous: (..., a)
     return continuous + (discrete - continuous).detach()  # (..., a)
 
 
@@ -870,7 +873,7 @@ def compute_fastplms_pseudoperplexity_nll(
 
 
 def normalized_gradient_tensor(grad: torch.Tensor, gradient_mask: torch.Tensor) -> torch.Tensor:
-    # grad/gradient_mask: (b, l, a)
+    # grad, gradient_mask: (b, l, a)
     masked_grad = grad * gradient_mask  # (b, l, a)
     index_has_nonzero_grad = torch.square(masked_grad).sum(-1) > 0  # (b, l)
     eff_l = index_has_nonzero_grad.sum(-1)  # (b,)
@@ -1239,10 +1242,11 @@ def design_binder(
             lm_model=lm_model,
             device=device,
         )
-    return best_sequences, trajectory, critic_results
+    return best_sequences, trajectory, critic_results  # best sequences, trajectory (b,) per loss name per step, critic result rows
 
 
 def _write_trajectory(path: Path, trajectory: dict[int, dict[str, torch.Tensor]]) -> None:
+    # trajectory: (b,) one loss tensor per loss name, keyed by optimization step
     with path.open("w", encoding="utf-8") as handle:
         for step, losses in trajectory.items():
             row = {"step": step}
@@ -1832,7 +1836,7 @@ class FastPLMsBinderDesign:
         steps: int = DEFAULT_STEPS,
         output_dir: str | None = None,
     ) -> tuple[list[str], dict[int, dict[str, torch.Tensor]], list[dict[str, Any]]]:
-        return design_binder(
+        return design_binder(  # best sequences, trajectory (b,) per loss name per step, critic result rows
             self.inversion_models,
             self.critic_models,
             self.lm_model,

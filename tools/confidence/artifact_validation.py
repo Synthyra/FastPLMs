@@ -5,13 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
-
 import gemmi
 import torch
 
 from pathlib import Path
 from typing import Any
-
 from safetensors.torch import load_file
 from transformers import AutoModel
 
@@ -138,8 +136,8 @@ def _validate_reload(
             raise ValueError("Disabled confidence still produced scores")
         shapes[str(samples)] = _validate_outputs(enabled, samples, atoms, tokens)
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.bfloat16):
-        result = model.fold(inputs, seed=17, num_loops=3, num_sampling_steps=15)
-    cif = model.result_to_cif(result)
+        fold_output = model.fold(inputs, seed=17, num_loops=3, num_sampling_steps=15)
+    cif = model.result_to_cif(fold_output)
     (artifact.parent / "validation-complex.cif").write_text(cif)
     block = gemmi.cif.read_string(cif).sole_block()
     chains = set(block.find_values("_atom_site.label_asym_id"))

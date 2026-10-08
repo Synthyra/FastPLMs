@@ -374,7 +374,7 @@ def verify_evaluation(
     public_files = completion.get("public_files")
     if (
         not isinstance(public_files, dict)
-        or not RESULT_FILES | {"targets.json"} <= public_files.keys()
+        or not public_files.keys() >= RESULT_FILES | {"targets.json"}
     ):
         raise ValueError("Completion manifest omits required public evaluation files")
     _verify_files(directory, public_files)

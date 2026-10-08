@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import platform
 import torch
 
@@ -12,12 +11,14 @@ from pathlib import Path
 from typing import Any
 from torch import Tensor
 
-from .inputs import _InputSpool
+from .pooling import POOLING_SEMANTICS
 from .storage import tensor_sha256
 from .types import EmbeddingInput
+from ..digests import json_sha256
+from ..json_files import compact_json
 
 
-_RUN_FINGERPRINT_SCHEMA_VERSION = 3
+_RUN_FINGERPRINT_SCHEMA_VERSION = 5
 _MODEL_STATE_HASH_CHUNK_BYTES = 16 * 1024**2
 
 
@@ -79,6 +80,33 @@ def _fingerprint_jsonable(value: Any) -> Any:
     }
 
 
+def _backend_tokenizer_content(backend: Any) -> str | None:
+    """The backend tokenizer's serialization, without the padding and truncation of its last call.
+
+    Transformers sets padding and truncation on the Rust tokenizer at the start of every encode
+    call, from that call's own arguments, and leaves them set. What the backend holds is
+    therefore the previous call's settings, which never change the next encoding. Hashing them
+    gave the first run in a process a different fingerprint from every identical run after it.
+    This run's own padding and truncation are fingerprinted through ``max_length``,
+    ``truncate``, and the batching policy.
+
+    The settings are cleared on a copy, so the caller's tokenizer keeps its state. A tokenizer
+    that was never called already serializes without them, so this normalization itself
+    does not change its identity. The enclosing run schema also versions pooling semantics.
+    """
+    to_str = getattr(backend, "to_str", None)
+    if not callable(to_str):
+        return None
+    serialized = to_str()
+    from_str = getattr(type(backend), "from_str", None)
+    if not callable(from_str):
+        return serialized
+    call_free = from_str(serialized)
+    call_free.no_truncation()
+    call_free.no_padding()
+    return call_free.to_str()
+
+
 def _tokenizer_content_sha256(tokenizer: Any) -> str:
     content: dict[str, Any] = {
         "init_kwargs": getattr(tokenizer, "init_kwargs", None),
@@ -93,17 +121,10 @@ def _tokenizer_content_sha256(tokenizer: Any) -> str:
     get_added_vocab = getattr(tokenizer, "get_added_vocab", None)
     if callable(get_added_vocab):
         content["added_vocabulary"] = get_added_vocab()
-    backend = getattr(tokenizer, "backend_tokenizer", None)
-    backend_to_str = getattr(backend, "to_str", None)
-    if callable(backend_to_str):
-        content["backend"] = backend_to_str()
-    serialized = json.dumps(
-        _fingerprint_jsonable(content),
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode()
-    return hashlib.sha256(serialized).hexdigest()
+    backend_content = _backend_tokenizer_content(getattr(tokenizer, "backend_tokenizer", None))
+    if backend_content is not None:
+        content["backend"] = backend_content
+    return json_sha256(_fingerprint_jsonable(content), ensure_ascii=False)
 
 
 def _tokenizer_metadata(model: Any, tokenizer: Any | None) -> dict[str, Any]:
@@ -301,14 +322,12 @@ def _model_state_sha256(model: Any) -> str:
                 f"Cannot fingerprint meta-device model state entry {name!r}; pass "
                 "model_state_fingerprint with a caller-owned state identity."
             )
-        header = json.dumps(
+        header = compact_json(
             {
                 "name": name,
                 "dtype": str(value.dtype).removeprefix("torch."),
                 "shape": list(value.shape),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
+            }
         ).encode()
         digest.update(len(header).to_bytes(8, "big"))
         digest.update(header)
@@ -354,6 +373,7 @@ def _run_fingerprint(
     batch_size: int,
     batch_window_size: int,
     max_tokens_per_batch: int | None,
+    taps: Sequence[Mapping[str, Any]] | None = None,
 ) -> tuple[str, str, str | None, str]:
     input_fingerprint = _input_sha256(records)
     attention_backend = _attention_backend(model)
@@ -391,6 +411,7 @@ def _run_fingerprint(
         "execution": _execution_identity_metadata(model),
         "embedding_context": _fingerprint_jsonable(embedding_context),
         "pooling": list(pooling),
+        "pooling_semantics": dict(POOLING_SEMANTICS),
         "full_embeddings": full_embeddings,
         "max_length": max_length,
         "truncate": truncate,
@@ -399,16 +420,16 @@ def _run_fingerprint(
             "batch_size": batch_size,
             "batch_window_size": batch_window_size,
             "max_tokens_per_batch": max_tokens_per_batch,
-            "input_storage": ("disk-spool" if isinstance(records, _InputSpool) else "memory"),
         },
         "model_kwargs": {
             key: _fingerprint_jsonable(value) for key, value in sorted(model_kwargs.items())
         },
         "residue_mask_policy": "attention-mask-minus-special-tokens",
     }
-    run_fingerprint = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    if taps is not None:
+        # Each hidden tap binds its requested dtype; each reduced tap binds its own contract.
+        payload["taps"] = _fingerprint_jsonable(taps)
+    run_fingerprint = json_sha256(payload)
     return (
         input_fingerprint,
         run_fingerprint,
@@ -437,6 +458,7 @@ def _embedding_context(
     decoder_attention_mask: Tensor | None,
     model_kwargs: Mapping[str, Any],
 ) -> tuple[dict[str, Any], tuple[str, ...] | None]:
+    # decoder_input_ids, decoder_attention_mask: (n_records, l_decoder), aligned with records
     if hidden_state_source not in {"encoder", "decoder"}:
         raise ValueError("hidden_state_source must be 'encoder' or 'decoder'.")
     hidden_state_index = model_kwargs.get("hidden_state_index", -1)

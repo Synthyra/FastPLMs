@@ -11,8 +11,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
 from typing import Any
-
 from examples.binder_design_fastplms import compute_structure_losses
+
 from fastplms.models.boltz import modeling_boltz2, vb_modules_confidencev2
 from fastplms.models.boltz.minimal_featurizer import build_boltz2_features
 from fastplms.models.boltz.vb_loss_diffusionv2 import smooth_lddt_loss
@@ -48,12 +48,13 @@ class _FakeBoltz:
         feats: dict[str, torch.Tensor],
         float_dtype: torch.dtype,
     ) -> dict[str, torch.Tensor]:
+        # feats: (...) one tensor per feature name, any shape; returned unchanged.
         assert float_dtype == torch.float32
-        return feats
+        return feats  # (...) the same feature tensors
 
     def forward(self, **kwargs: Any) -> dict[str, torch.Tensor]:
         del kwargs
-        return {
+        return {  # (...) one tensor per output name: sample_atom_coords (1, 1, 3), plddt (1, 1), per-complex scores (1,)
             "sample_atom_coords": torch.randn((1, 1, 3)),
             "plddt": torch.rand((1, 1)),
             "complex_plddt": torch.rand((1,)),
@@ -72,7 +73,7 @@ def _fake_boltz_features(
     # Exercise every ambient stream that the public helper promises to scope.
     random.random()
     np.random.random()
-    return {
+    return {  # (...) one tensor per feature name: atom_pad_mask (1, 1), ref_pos (1, 1, 3)
         "atom_pad_mask": torch.ones((1, 1)),
         "ref_pos": torch.randn((1, 1, 3)),
     }, SimpleNamespace(sequence=amino_acid_sequence)
@@ -419,21 +420,21 @@ def test_esmfold_fold_single_uses_linker_masked_mean_plddt() -> None:
     class FakeESMFold:
         def infer(self, sequence: str) -> dict[str, torch.Tensor]:
             assert sequence == "AC:DE"
-            return {
+            return {  # (...) one tensor per output name: plddt (1, 29, 37), mean_plddt (1,), ptm (1,)
                 "plddt": torch.full((1, 29, 37), 1.0),
                 "mean_plddt": torch.tensor([87.5]),
                 "ptm": torch.tensor([0.75]),
             }
 
-    result = FastEsmForProteinFolding._fold_single(
+    folded = FastEsmForProteinFolding._fold_single(
         FakeESMFold(),
         "AC:DE",
         return_pdb_string=False,
     )
 
-    assert result["plddt"] == 87.5
-    assert result["ptm"] == 0.75
-    assert "pdb_string" not in result
+    assert folded["plddt"] == 87.5
+    assert folded["ptm"] == 0.75
+    assert "pdb_string" not in folded
 
 
 def test_boltz_real_features_flow_through_tiny_core_and_structure_loss() -> None:

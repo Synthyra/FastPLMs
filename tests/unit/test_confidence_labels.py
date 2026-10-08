@@ -23,7 +23,7 @@ def _example() -> tuple[torch.Tensor, ...]:
     atom_to_token = torch.tensor([0, 0, 0, 1, 1, 1])  # (6,)
     backbone = torch.tensor([[0, 1, 2], [3, 4, 5]])  # (2, 3)
     token_mask = torch.ones(2, dtype=torch.bool)  # (2,)
-    return predicted, true, resolved, atom_to_token, backbone, token_mask
+    return predicted, true, resolved, atom_to_token, backbone, token_mask  # predicted (6, 3), true (6, 3), resolved (6,), atom_to_token (6,), backbone (2, 3), token_mask (2,)
 
 
 def test_identity_has_perfect_scores_and_zero_pae() -> None:
@@ -76,12 +76,13 @@ def test_pae_matches_atlasfold_frame_projection_for_unequal_bond_angles() -> Non
     )
 
     def atlas_basis(n: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        # n, c: (3,)
         n = torch.nn.functional.normalize(n, dim=0)
         c = torch.nn.functional.normalize(c, dim=0)
         e1 = torch.nn.functional.normalize(n + c, dim=0)
         e2 = torch.nn.functional.normalize(c - n, dim=0)
         e3 = torch.linalg.cross(e1, e2, dim=0)
-        return torch.stack((e1, e2, e3))
+        return torch.stack((e1, e2, e3))  # (3, 3)
 
     predicted_basis = atlas_basis(predicted[0] - predicted[1], predicted[2] - predicted[1])
     true_basis = atlas_basis(true[0] - true[1], true[2] - true[1])

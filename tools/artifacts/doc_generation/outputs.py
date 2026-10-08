@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+
 from pathlib import Path
 
 from fastplms.registry import ModelRegistry, get_model_registry

@@ -612,7 +612,7 @@ def test_batch_probe_establishes_artifact_isolation_once(
     monkeypatch.setattr("tools.artifacts.offline_probe.probe", run_case)
     monkeypatch.setattr("tools.artifacts.offline_probe._release_case_memory", lambda: None)
 
-    result = probe_many(
+    reports = probe_many(
         artifact=tmp_path,
         family="toy",
         bf16_execution="static_parameters",
@@ -626,7 +626,7 @@ def test_batch_probe_establishes_artifact_isolation_once(
 
     assert preparations == [("artifact", None, False)]
     assert observed == [("AutoConfig", True), ("AutoModel", True)]
-    assert set(result) == {"AutoConfig", "AutoModel"}
+    assert set(reports) == {"AutoConfig", "AutoModel"}
 
 
 @pytest.mark.parametrize(

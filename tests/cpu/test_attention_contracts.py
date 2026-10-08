@@ -7,16 +7,14 @@ import fastplms.attention.interfaces as attention_interfaces
 import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module
 
 from collections import OrderedDict
-
-from fastplms.attention import _core as attention_core
-from fastplms.models.esm2.modeling_fastesm import FastEsmConfig, FastEsmModel
-from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
-    ESMplusplusConfig,
-    ESMplusplusModel,
-)
 from tests.unit import test_attention_interfaces as interface_contracts
 from tests.unit import test_attention_regressions as contracts
 from tests.unit import test_esmc_diagnostics as esmc_contracts
+from tests.unit.tiny_families import tiny_esmc_config
+
+from fastplms.attention import _core as attention_core
+from fastplms.models.esm2.modeling_fastesm import FastEsmConfig, FastEsmModel
+from fastplms.models.esm_plusplus.modeling_esm_plusplus import ESMplusplusModel
 
 
 test_flash_backend_loads_only_its_hugging_face_kernel = (
@@ -28,8 +26,8 @@ test_causal_masked_flash_uses_varlen_and_zeroes_padding = (
 test_masked_flash_validates_padding_mask_shape_before_kernel_loading = (
     interface_contracts.test_masked_flash_validates_padding_mask_shape_before_kernel_loading
 )
-test_public_attention_setter_matches_transformers_513_kernel_policy = (
-    interface_contracts.test_public_attention_setter_matches_transformers_513_kernel_policy
+test_public_attention_setter_matches_the_transformers_kernel_policy = (
+    interface_contracts.test_public_attention_setter_matches_the_transformers_kernel_policy
 )
 test_model_flash_flags_match_the_manifest = (
     interface_contracts.test_model_flash_flags_match_the_manifest
@@ -196,18 +194,7 @@ def _tiny_esm2(attn_backend: str) -> FastEsmModel:
 
 
 def _tiny_esmc(attn_backend: str) -> ESMplusplusModel:
-    return ESMplusplusModel(
-        ESMplusplusConfig(
-            vocab_size=16,
-            hidden_size=8,
-            num_hidden_layers=1,
-            num_attention_heads=2,
-            dropout=0.0,
-            pad_token_id=1,
-            mask_token_id=5,
-            attn_backend=attn_backend,
-        )
-    ).eval()
+    return ESMplusplusModel(tiny_esmc_config(attn_backend=attn_backend)).eval()
 
 
 def test_esmc_flex_dispatch_is_compiled_once_and_receives_exact_padding_mask(

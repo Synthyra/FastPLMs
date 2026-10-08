@@ -31,12 +31,13 @@ class _TinyDiffusion(AtomDiffusion):
         self.alignment_reverse_diff = False
 
     def sample_schedule(self, num_sampling_steps: int) -> Tensor:
-        return torch.linspace(1.0, 0.0, num_sampling_steps + 1)
+        return torch.linspace(1.0, 0.0, num_sampling_steps + 1)  # (num_sampling_steps + 1,)
 
     def preconditioned_network_forward(
         self, noised_atom_coords: Tensor, sigma: float, network_condition_kwargs: dict
     ) -> Tensor:
-        return noised_atom_coords * 0.5
+        # noised_atom_coords: (s, a, 3)
+        return noised_atom_coords * 0.5  # (s, a, 3)
 
 
 def _tiny_core() -> Boltz2InferenceCore:

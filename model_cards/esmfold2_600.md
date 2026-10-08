@@ -60,7 +60,7 @@ The packaged model includes the trained confidence head and enables it by defaul
 
 The confidence head completed 780 training updates in
 18.1 hours on
-[AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data). The backbone and folding
+[AtlasFold-Data](https://huggingface.co/datasets/lhallee/AtlasFold-Data). The backbone and folding
 model stayed frozen, and evaluation used the final exponential moving-average
 checkpoint. Training sampled from 475,969 eligible
 structures, including monomers, dimers, and larger complexes.
@@ -145,7 +145,7 @@ python -m pip install -r \
 The FastPLMs implementation itself is embedded in the model repository.
 Transformers loads it through `trust_remote_code=True`.
 
-This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
+This model requires Python 3.12-3.14, PyTorch 2.14, and Transformers 5.17.
 
 The artifact requirements include the structure dependencies.
 
@@ -210,7 +210,7 @@ print(token_output.logits.shape)     # (b, l, 3)
 Install the training dependencies. Then attach LoRA to the loaded checkpoint:
 
 ```bash
-python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
+python -m pip install "datasets>=5.0" "peft>=0.21"
 ```
 
 ```python

@@ -7,8 +7,12 @@ import io
 import json
 import subprocess
 import sys
+import pytest
 import torch
 
+import fastplms.models.esmfold2 as esmfold2_package
+
+from fastplms.digests import json_sha256
 from fastplms.models.esmfold2 import esmfold2_constants as molecular_schema
 from fastplms.models.esmfold2 import esmfold2_constants_esm3 as token_schema
 from fastplms.models.esmfold2.esmfold2_parsing import parse_fasta, read_sequences
@@ -109,8 +113,7 @@ def _schema_digest() -> str:
         [*key, value] for key, value in molecular_schema.CHARGED_ATOMS.items()
     )
     payload["tokens"] = {name: getattr(token_schema, name) for name in _TOKEN_SCHEMA_NAMES}
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode()).hexdigest()
+    return json_sha256(payload)
 
 
 def test_protein_features_match_pinned_official_tensor_digest() -> None:
@@ -183,3 +186,13 @@ assert not loaded, sorted(loaded)
         capture_output=True,
         text=True,
     )
+
+
+def test_esmfold2_package_resolves_an_export_once_and_lists_every_export_in_dir() -> None:
+    exports = set(esmfold2_package._EXPORT_MODULES)
+
+    assert exports <= set(dir(esmfold2_package))
+    assert esmfold2_package.ESMFold2Config is esmfold2_package.ESMFold2Config
+    assert esmfold2_package.__dict__["ESMFold2Config"] is esmfold2_package.ESMFold2Config
+    with pytest.raises(AttributeError, match="has no attribute 'not_an_export'"):
+        esmfold2_package.__getattr__("not_an_export")

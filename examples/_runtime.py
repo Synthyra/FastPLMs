@@ -1,10 +1,18 @@
-"""Shared fail-closed execution arguments for runnable examples."""
+"""Shared offline switch and fail-closed execution arguments for runnable examples."""
 
 from __future__ import annotations
 
 import argparse
+import os
 
 from typing import Any
+
+
+def configure_offline() -> None:
+    """Keep Hugging Face from reaching the network while an example runs."""
+
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 
 def add_execution_arguments(parser: argparse.ArgumentParser) -> None:

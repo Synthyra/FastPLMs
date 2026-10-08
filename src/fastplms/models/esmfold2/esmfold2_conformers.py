@@ -116,6 +116,9 @@ def _open_verified_asset(
                 remaining -= len(chunk)
             copied_size = snapshot.tell()
             extra_byte = source.read(1)
+            # Release the asset once the snapshot holds its bytes. An open handle
+            # would block another process from replacing the path on Windows.
+            source.close()
             if remaining or extra_byte:
                 observed_size = copied_size if remaining else copied_size + len(extra_byte)
                 raise ValueError(

@@ -6,15 +6,14 @@ import copy
 import json
 import os
 import shutil
-import subprocess
-import sys
 import pytest
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from tests.conftest import run_optimized_script
+from tests.unit.test_biohub_reference_lock import _reference_environment_payload
 
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
-from tests.unit.test_biohub_reference_lock import _reference_environment_payload
 from tools.artifacts import generate_docs
 from tools.artifacts.doc_generation import esmc_evidence
 from tools.artifacts.doc_generation.esmc_evidence import (
@@ -127,14 +126,14 @@ def _kernel(registry: ModelRegistry, backend: str) -> dict[str, object]:
 
 
 def _tensor_metrics(context: str, base: float) -> list[dict[str, object]]:
-    result = []
+    metrics = []
     for output, layer_index, offset in (
         ("hidden_state", 0, 0.0),
         ("last_hidden_state", None, 0.00001),
         ("logits", None, 0.00002),
     ):
         value = base + offset
-        result.append(
+        metrics.append(
             {
                 "context": context,
                 "output": output,
@@ -145,7 +144,7 @@ def _tensor_metrics(context: str, base: float) -> list[dict[str, object]]:
                 "pooled_cosine_min": 1.0 - value / 2,
             }
         )
-    return result
+    return metrics
 
 
 def _logits_metrics(base: float) -> dict[str, float]:
@@ -430,16 +429,8 @@ else:
     environment["PYTHONPATH"] = os.pathsep.join(
         (*import_roots, environment.get("PYTHONPATH", ""))
     ).rstrip(os.pathsep)
-    result = subprocess.run(
-        [sys.executable, "-O", "-c", script],
-        cwd=ROOT,
-        env=environment,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stderr or result.stdout
+    completed = run_optimized_script(script, environment=environment, timeout=30)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 @pytest.mark.parametrize(
@@ -616,7 +607,7 @@ def test_cli_explicit_report_root_renders_only_after_complete_validation(
         lambda source, registry: RUNTIME_IDENTITY,
     )
 
-    result = generate_docs.main(
+    exit_code = generate_docs.main(
         (
             "--source-root",
             str(source_root),
@@ -625,7 +616,7 @@ def test_cli_explicit_report_root_renders_only_after_complete_validation(
         )
     )
 
-    assert result == 0
+    assert exit_code == 0
     card = (source_root / "model_cards" / "esmc_small.md").read_text(encoding="utf-8")
     assert "NVIDIA GH200 480GB" in card
     assert "Per-case distributions" in card

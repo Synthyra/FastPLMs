@@ -7,6 +7,13 @@ import torch
 
 from pathlib import Path
 from typing import Any, ClassVar
+from tests.cpu.test_sequence_autoclass_contracts import (
+    _dplm_config_values,
+)
+from tests.unit import test_embeddings_api as contracts
+from tests.unit.test_ankh_cpu_contract import _config as _ankh_config
+from tests.unit.test_e1_cache_contract import _tiny_e1_config
+from tests.unit.tiny_families import tiny_esm2_config
 
 from fastplms.embeddings import embed_dataset, load_sqlite_result
 from fastplms.models.ankh.modeling_ankh import FastAnkhModel
@@ -19,13 +26,6 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
     ESMplusplusModel,
 )
-from tests.cpu.test_sequence_autoclass_contracts import (
-    _dplm_config_values,
-    _esm2_config,
-)
-from tests.unit import test_embeddings_api as contracts
-from tests.unit.test_ankh_cpu_contract import _config as _ankh_config
-from tests.unit.test_e1_cache_contract import _tiny_e1_config
 
 
 test_all_hidden_state_embeddings_trim_token_axis_and_round_trip = (
@@ -74,8 +74,8 @@ test_model_state_fingerprint_rehashes_data_and_storage_alias_mutations = (
 test_runtime_versions_are_part_of_resume_identity = (
     contracts.test_runtime_versions_are_part_of_resume_identity
 )
-test_schema_three_fingerprint_matches_existing_embedding_runs = (
-    contracts.test_schema_three_fingerprint_matches_existing_embedding_runs
+test_schema_five_preserves_pooling_and_removes_physical_input_storage = (
+    contracts.test_schema_five_preserves_pooling_and_removes_physical_input_storage
 )
 test_tokenizer_content_changes_run_fingerprint = (
     contracts.test_tokenizer_content_changes_run_fingerprint
@@ -240,9 +240,9 @@ class _TinyProteinTokenizer:
         width = max(map(len, rows))
         padded = [row + [self.pad_token_id] * (width - len(row)) for row in rows]
         if kwargs.get("return_tensors") != "pt":
-            return {"input_ids": padded[0] if scalar else padded}
+            return {"input_ids": padded[0] if scalar else padded}  # (...) input_ids as plain lists of ids, not tensors
         input_ids = torch.tensor(padded, dtype=torch.long)
-        return {
+        return {  # (...) input_ids, attention_mask: each (b, l)
             "input_ids": input_ids,
             "attention_mask": input_ids.ne(self.pad_token_id).long(),
         }
@@ -261,7 +261,7 @@ def _real_family_model(
 ):
     tokenizer = _TinyProteinTokenizer()
     if family == "esm2":
-        model = FastEsmModel(_esm2_config())
+        model = FastEsmModel(tiny_esm2_config())
     elif family == "esm_plusplus":
         model = ESMplusplusModel(
             ESMplusplusConfig(
@@ -322,7 +322,7 @@ def test_every_real_sequence_family_uses_ordered_biological_embedding_path(
     sequences = ["ACD", "G", "ACD"]
     output = tmp_path / "real-family.sqlite" if persist else None
 
-    result = model.embed_dataset(  # record tensors: (l_i, d)
+    embeddings = model.embed_dataset(  # record tensors: (l_i, d)
         sequences,
         batch_size=3,
         full_embeddings=True,
@@ -330,17 +330,17 @@ def test_every_real_sequence_family_uses_ordered_biological_embedding_path(
         format="sqlite",
     )
 
-    assert [record.id for record in result] == ["0", "1", "2"]
-    assert [record.sequence for record in result] == sequences
-    assert [record.load_tensor().shape[0] for record in result] == [3, 1, 3]
-    assert all(torch.isfinite(record.load_tensor()).all() for record in result)
-    torch.testing.assert_close(result[0].load_tensor(), result[2].load_tensor())
-    assert result.metadata["residue_mask_policy"] == "biological-residues-only"
+    assert [record.id for record in embeddings] == ["0", "1", "2"]
+    assert [record.sequence for record in embeddings] == sequences
+    assert [record.load_tensor().shape[0] for record in embeddings] == [3, 1, 3]
+    assert all(torch.isfinite(record.load_tensor()).all() for record in embeddings)
+    torch.testing.assert_close(embeddings[0].load_tensor(), embeddings[2].load_tensor())
+    assert embeddings.metadata["residue_mask_policy"] == "biological-residues-only"
 
     if output is not None:
         reopened = load_sqlite_result(output)
         assert [record.sequence for record in reopened] == sequences
-        for source, restored in zip(result, reopened, strict=True):
+        for source, restored in zip(embeddings, reopened, strict=True):
             torch.testing.assert_close(
                 restored.load_tensor(),
                 source.load_tensor(),
@@ -357,7 +357,7 @@ def test_generator_inputs_are_consumed_once_and_keep_stable_order() -> None:
             consumed.append(sequence)
             yield sequence
 
-    result = embed_dataset(  # pooled record tensors: (d,)
+    embeddings = embed_dataset(  # pooled record tensors: (d,)
         contracts.SyntheticEmbeddingModel(),
         sequences(),
         batch_size=2,
@@ -365,7 +365,7 @@ def test_generator_inputs_are_consumed_once_and_keep_stable_order() -> None:
     )
 
     assert consumed == ["A", "CCCC", "GG"]
-    assert [record.sequence for record in result] == consumed
+    assert [record.sequence for record in embeddings] == consumed
 
 
 test_strict_embedding_controls_fail_before_consuming_inputs = (

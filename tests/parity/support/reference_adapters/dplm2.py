@@ -7,18 +7,15 @@ The official tokenizer and multimodal model receive the inputs directly.
 from __future__ import annotations
 
 import inspect
-import sys
 import torch
 import torch.nn as nn
 
 from collections.abc import Mapping, Sequence
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol, cast
-
 from tests.parity.support.reference_adapters import (
     OfficialGenerationUnavailable,
-    install_byprot_sequence_namespace,
+    install_dplm_source_path,
     move_model,
     snapshot_path,
 )
@@ -85,8 +82,6 @@ DPLM2_150M_OFFICIAL_HEAD_CONTRACT = {
     },
 }
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-_DPLM_SOURCE = _REPOSITORY_ROOT / "vendor" / "upstream" / "dplm" / "src"
 
 
 class _DPLM2Encoder(Protocol):
@@ -112,17 +107,6 @@ class _DPLM2ModelWithEsm(Protocol):
     """Static shape of the checkpoint-selected model wrapper."""
 
     esm: _DPLM2Esm
-
-
-def _install_source_path() -> None:
-    if not _DPLM_SOURCE.is_dir():
-        raise FileNotFoundError(
-            "DPLM submodule is missing; run git submodule update --init --recursive"
-        )
-    source = str(_DPLM_SOURCE)
-    if source not in sys.path:
-        sys.path.insert(0, source)
-    install_byprot_sequence_namespace(_DPLM_SOURCE)
 
 
 def _field(output: Any, name: str) -> Any:
@@ -227,7 +211,7 @@ class _OfficialDPLM2ForwardWrapper(nn.Module):
         attention_mask: torch.Tensor | None = None,
         **kwargs: Any,
     ) -> SimpleNamespace:
-        # input_ids: (b, l)
+        # input_ids, attention_mask: (b, l); attention_mask is deleted unused
         del attention_mask
         captured: list[torch.Tensor] = []
 
@@ -292,7 +276,7 @@ def load_official_model(
 ) -> tuple[nn.Module, object]:
     """Load DPLM2 through its pinned official ``from_pretrained`` method."""
 
-    _install_source_path()
+    install_dplm_source_path()
     # The 3B DPLM2 checkpoint declares the upstream ``dplm_esm`` network
     # architecture, so its official registry module must be imported before
     # the public loader resolves the class name.

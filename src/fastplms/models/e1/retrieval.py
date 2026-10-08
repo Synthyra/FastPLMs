@@ -34,7 +34,11 @@ from transformers import PreTrainedModel
 from transformers.utils import logging
 
 from .cache import KVCache
+from fastplms.atomic_files import write_text_atomically
+from fastplms.digests import file_sha256, json_sha256
 from fastplms.embeddings import Pooler
+from fastplms.embeddings.inputs import FastaDialect, scan_fasta_lines
+from fastplms.json_files import compact_json, indented_json
 from .preparation import DataPrepConfig, E1BatchPreparer, get_context
 
 
@@ -42,10 +46,16 @@ if TYPE_CHECKING:
     from .modeling_e1 import E1MaskedLMOutputWithPast
 
 
-def _get_logger():
-    """Resolve the Transformers logger only when a retrieval path emits a message."""
-
-    return logging.get_logger(__name__)
+# E1 keeps a header's full text, every non-blank line is sequence data as stripped, and sequence
+# data before a header is an error. Empty input is not.
+E1_FASTA = FastaDialect(
+    strip_lines=True,
+    comment_prefix=None,
+    first_word_header=False,
+    squeeze_sequence_whitespace=False,
+    orphan_message="FASTA sequence found before header in {source}",
+    empty_message=None,
+)
 
 
 MMSEQS2_IMAGE_REPOSITORY = "ghcr.io/soedinglab/mmseqs2"
@@ -151,19 +161,6 @@ def _docker_architecture() -> str:
         raise RuntimeError(f"Unsupported Docker host architecture: {machine!r}") from error
 
 
-def _json_sha256(payload: Any) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _file_sha256(path: str) -> str:
-    hasher = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(block)
-    return hasher.hexdigest()
-
-
 def _sequence_output_dir(output_dir: str, seq_id: str) -> str:
     """Return the per-sequence directory after enforcing path containment."""
 
@@ -206,24 +203,9 @@ class E1Prediction(TypedDict, total=False):
 
 def read_fasta_sequences(path: str) -> dict[str, str]:
     sequences: dict[str, str] = {}
-    header: str | None = None
-    parts: list[str] = []
     with open(path, encoding="utf-8") as handle:
-        for raw_line in handle:
-            line = raw_line.strip()
-            if not line:
-                continue
-            if line.startswith(">"):
-                if header is not None:
-                    sequences[header] = "".join(parts)
-                header = line[1:].strip()
-                parts = []
-            else:
-                if header is None:
-                    raise ValueError(f"FASTA sequence found before header in {path}")
-                parts.append(line)
-    if header is not None:
-        sequences[header] = "".join(parts)
+        for record in scan_fasta_lines(handle, E1_FASTA, source=path):
+            sequences[record.header] = record.sequence
     return sequences
 
 
@@ -478,7 +460,7 @@ def load_msa_dir(msa_dir: str) -> dict[str, str]:
     for a3m_path in tqdm(a3m_files, desc="Loading MSAs"):
         query_seq = get_query_from_a3m(str(a3m_path))
         msa_lookup[query_seq] = str(a3m_path)
-    _get_logger().info("Loaded %d MSAs from %s", len(msa_lookup), msa_dir)
+    logging.get_logger(__name__).info("Loaded %d MSAs from %s", len(msa_lookup), msa_dir)
     return msa_lookup
 
 
@@ -574,15 +556,10 @@ class ContextCache:
             "specs_hash": self.specs_hash,
         }
         if os.path.isfile(key):
-            hasher = hashlib.sha256()
-            with open(key, "rb") as handle:
-                for block in iter(lambda: handle.read(1024 * 1024), b""):
-                    hasher.update(block)
-            descriptor["content_sha256"] = hasher.hexdigest()
+            descriptor["content_sha256"] = file_sha256(key)
         else:
             descriptor["literal_key"] = key
-        payload = json.dumps(descriptor, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        return json_sha256(descriptor)
 
     def load(self, key: str) -> dict[str, str] | None:
         path = self._cache_path(key)
@@ -620,26 +597,7 @@ class ContextCache:
             "input_fingerprint": self._input_fingerprint(key),
             "contexts": contexts,
         }
-        temp_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=self.cache_dir,
-                prefix=".context-",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temp_path = handle.name
-                json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temp_path, path)
-            temp_path = None
-        finally:
-            if temp_path is not None:
-                Path(temp_path).unlink(missing_ok=True)
+        write_text_atomically(Path(path), compact_json(payload) + "\n")
 
 
 def compute_ppll(logits: torch.Tensor, token_ids: torch.Tensor) -> float:
@@ -1161,7 +1119,7 @@ class HomologueSearcher:
             raise FileNotFoundError(
                 f"No MMseqs2 database files found for target_db prefix {self.target_db!r}"
             )
-        derived_identity = _json_sha256(files)
+        derived_identity = json_sha256(files)
         return {
             "prefix": prefix.relative_to(self._working_root()).as_posix(),
             "identity": self.target_db_identity or derived_identity,
@@ -1209,7 +1167,7 @@ class HomologueSearcher:
                 return False
             if payload.get("request") != request_provenance:
                 return False
-            request_identity = _json_sha256(request_provenance)
+            request_identity = json_sha256(request_provenance)
             if payload.get("request_identity_sha256") != request_identity:
                 return False
             runtime = payload.get("runtime")
@@ -1230,7 +1188,7 @@ class HomologueSearcher:
             image_id = runtime.get("image_id")
             if not isinstance(image_id, str) or _SHA256_DIGEST_RE.fullmatch(image_id) is None:
                 return False
-            cache_identity = _json_sha256(
+            cache_identity = json_sha256(
                 {"request_identity_sha256": request_identity, "runtime": runtime}
             )
             if payload.get("cache_identity_sha256") != cache_identity:
@@ -1242,7 +1200,7 @@ class HomologueSearcher:
                 return False
             if result.get("size") != Path(a3m_output).stat().st_size:
                 return False
-            return result.get("sha256") == _file_sha256(a3m_output)
+            return result.get("sha256") == file_sha256(a3m_output)
         except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
             return False
 
@@ -1253,43 +1211,23 @@ class HomologueSearcher:
         request_provenance: dict[str, Any],
         identity: _DockerImageIdentity,
     ) -> None:
-        request_identity = _json_sha256(request_provenance)
+        request_identity = json_sha256(request_provenance)
         runtime = identity.to_dict()
         payload = {
             "schema_version": self._PROVENANCE_SCHEMA_VERSION,
             "request": request_provenance,
             "request_identity_sha256": request_identity,
             "runtime": runtime,
-            "cache_identity_sha256": _json_sha256(
+            "cache_identity_sha256": json_sha256(
                 {"request_identity_sha256": request_identity, "runtime": runtime}
             ),
             "result": {
                 "path": Path(a3m_output).name,
                 "size": Path(a3m_output).stat().st_size,
-                "sha256": _file_sha256(a3m_output),
+                "sha256": file_sha256(a3m_output),
             },
         }
-        output_dir = os.path.dirname(provenance_path) or "."
-        temporary_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                dir=output_dir,
-                prefix=".mmseqs2-provenance-",
-                suffix=".tmp",
-                delete=False,
-            ) as handle:
-                temporary_path = handle.name
-                json.dump(payload, handle, indent=2, sort_keys=True)
-                handle.write("\n")
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary_path, provenance_path)
-            temporary_path = None
-        finally:
-            if temporary_path is not None:
-                Path(temporary_path).unlink(missing_ok=True)
+        write_text_atomically(Path(provenance_path), indented_json(payload))
 
     def create_db(self, fasta_path: str, db_path: str) -> str:
         self._validate_paths_under_cwd(fasta_path, db_path)
@@ -1460,7 +1398,7 @@ class HomologueSearcher:
             except Exception as error:
                 if not continue_on_error:
                     raise
-                _get_logger().warning(
+                logging.get_logger(__name__).warning(
                     "Homologue search failed and was skipped: "
                     "provider=mmseqs2 seq_id=%s error_type=%s",
                     sid,
@@ -1782,7 +1720,7 @@ class ColabFoldSearcher:
             except Exception as error:
                 if not continue_on_error:
                     raise
-                _get_logger().warning(
+                logging.get_logger(__name__).warning(
                     "Homologue search failed and was skipped: "
                     "provider=colabfold seq_id=%s error_type=%s",
                     sid,

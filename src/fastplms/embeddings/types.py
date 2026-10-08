@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, overload
 from torch import Tensor
 
+from types import MappingProxyType
+from ..features.layouts import TopKRow
+
 
 @dataclass(frozen=True, slots=True)
 class EmbeddingInput:
@@ -38,7 +41,7 @@ class LazyTensorReference:
 
         if not isinstance(verify, bool):
             raise TypeError("verify must be a boolean.")
-        X = self._loader()  # self.shape
+        X = self._loader()  # (...), equal to self.shape
         if not isinstance(X, Tensor):
             raise TypeError(f"Stored tensor loader for {self.key!r} must return a Tensor.")
         if tuple(X.shape) != self.shape:
@@ -56,7 +59,7 @@ class LazyTensorReference:
             digest = tensor_sha256(X)
             if digest != self.sha256:
                 raise ValueError(f"Stored tensor {self.key!r} failed SHA-256 verification.")
-        return X  # self.shape
+        return X  # (...), equal to self.shape
 
 
 TensorValue = Tensor | LazyTensorReference
@@ -176,11 +179,75 @@ class EmbeddingBatch:
     attentions: Tensor | tuple[Tensor, ...] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class TapRecord:
+    """One sequence's outputs from a tap plan, keyed by tap name."""
+
+    id: str
+    sequence: str
+    tensors: Mapping[str, Tensor | TopKRow]
+    retained_positions: tuple[int, ...] | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, str) or not self.id:
+            raise ValueError("TapRecord.id must be a non-empty string.")
+        if not isinstance(self.sequence, str) or not self.sequence:
+            raise ValueError("TapRecord.sequence must be a non-empty string.")
+        if not isinstance(self.tensors, Mapping) or not self.tensors:
+            raise TypeError("TapRecord.tensors must be a non-empty mapping of tap name to Tensor.")
+        if not all(
+            isinstance(name, str) and isinstance(value, (Tensor, TopKRow))
+            for name, value in self.tensors.items()
+        ):
+            raise TypeError("TapRecord.tensors must map tap names to Tensor or TopKRow values.")
+        object.__setattr__(self, "tensors", MappingProxyType(dict(self.tensors)))
+        if self.retained_positions is not None:
+            positions = self.retained_positions
+            if (type(positions) is not tuple or not positions
+                    or any(type(p) is not int or not 0 <= p < len(self.sequence) for p in positions)
+                    or tuple(sorted(set(positions))) != positions):
+                raise ValueError(
+                    "TapRecord retained positions must be ordered original-sequence indices."
+                )
+
+
+@dataclass(frozen=True, slots=True)
+class TapRunReceipt:
+    """Completed sink delivery, retaining run metadata but no output tensors."""
+
+    record_count: int
+    metadata: Mapping[str, Any]
+
+
+class TapResult:
+    """Ordered tap records and the metadata needed to reproduce them."""
+
+    def __init__(
+        self,
+        records: Sequence[TapRecord],
+        metadata: Mapping[str, Any] | None = None,
+    ) -> None:
+        self.records: tuple[TapRecord, ...] = tuple(records)
+        self.metadata = dict(metadata or {})
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __iter__(self) -> Iterator[TapRecord]:
+        return iter(self.records)
+
+    def __getitem__(self, index: int) -> TapRecord:
+        return self.records[index]
+
+
 __all__ = [
     "EmbeddingBatch",
     "EmbeddingInput",
     "EmbeddingRecord",
     "EmbeddingResult",
     "LazyTensorReference",
+    "TapRecord",
+    "TapResult",
+    "TapRunReceipt",
     "TensorValue",
 ]

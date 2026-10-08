@@ -14,11 +14,11 @@ import torch
 
 from pathlib import Path
 from safetensors.torch import load_file
-
-from fastplms.registry import ModelSpec, get_model_registry
 from tests.structure import test_esmfold2_folding_compliance as esmfold2_metrics
 from tests.structure import test_esmfold_folding_compliance as esmfold_metrics
 from tests.structure.support import esmfold2_bundle, esmfold_bundle
+
+from fastplms.registry import ModelSpec, get_model_registry
 from tools.goldens import validate_golden_bundle
 
 
@@ -43,7 +43,7 @@ def _golden(spec: ModelSpec) -> tuple[dict[str, torch.Tensor], dict[str, object]
         declaration=declaration,
     )
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    return load_file(tensors_path, device="cpu"), metadata
+    return load_file(tensors_path, device="cpu"), metadata  # (...) one tensor per bundle name, any shape
 
 
 def _release_parameter(spec: ModelSpec) -> object:

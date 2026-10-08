@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
-import pytest
 import benchmarks.suite as benchmark_suite
+import pytest
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +31,7 @@ from benchmarks.suite import (
     build_parser,
     exhaustive_benchmark_cases,
 )
+from tests.unit.benchmark_stubs import stub_artifact_validation
 
 from fastplms.registry import ModelSpec, get_model_registry
 
@@ -87,15 +88,6 @@ def _write_benchmark_artifact(
         encoding="utf-8",
     )
     return path
-
-
-def _stub_artifact_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(benchmark_suite, "_validate_built_artifact", lambda *_args: None)
-    monkeypatch.setattr(
-        benchmark_suite,
-        "_frozen_runtime_identity",
-        lambda *_args: (_RUNTIME_REVISION, _SOURCE_SHA256),
-    )
 
 
 def _shape(case: SimpleNamespace) -> tuple[int, int, tuple[int, ...]]:
@@ -450,7 +442,7 @@ def test_local_artifact_binding_preserves_registry_report_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_artifact_validation(monkeypatch)
+    stub_artifact_validation(monkeypatch, _RUNTIME_REVISION, _SOURCE_SHA256)
     spec = get_model_registry()["esm2_8m"]
     artifact = _write_benchmark_artifact(tmp_path, spec)
     cases = list(benchmark_cases(family="esm2", quick=True, local_files_only=False))
@@ -472,7 +464,7 @@ def test_local_artifact_binding_rejects_missing_and_stale_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_artifact_validation(monkeypatch)
+    stub_artifact_validation(monkeypatch, _RUNTIME_REVISION, _SOURCE_SHA256)
     spec = get_model_registry()["esm2_8m"]
     cases = list(benchmark_cases(family="esm2", quick=True, local_files_only=True))
 
@@ -493,7 +485,7 @@ def test_local_artifact_binding_rejects_swapped_or_forged_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_artifact_validation(monkeypatch)
+    stub_artifact_validation(monkeypatch, _RUNTIME_REVISION, _SOURCE_SHA256)
     spec = get_model_registry()["esm2_8m"]
     _write_benchmark_artifact(
         tmp_path,
@@ -522,7 +514,7 @@ def test_esmfold2_local_artifact_binding_requires_and_records_esmc_backbone(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_artifact_validation(monkeypatch)
+    stub_artifact_validation(monkeypatch, _RUNTIME_REVISION, _SOURCE_SHA256)
     registry = get_model_registry()
     spec = registry["esmfold2"]
     backbone_id = spec.family.backbone_model

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import shutil
 import time
-
 import requests
 
 from html.parser import HTMLParser
 from pathlib import Path
+from typing import Any
+
+from fastplms.digests import file_sha256
 
 
 ARCHIVES = {
@@ -22,11 +23,6 @@ ARCHIVES = {
 }
 ARCHIVE_COPIES = {"rcsb_multimer": "1K-yAbtbFvSYTQ2q8PGhO4d7LHrU3KvrG"}
 EXCLUDED_TEMPLATE_DIRECTORIES = frozenset({"template.lmdb", "template_mapping.lmdb"})
-
-
-def sha256(path: Path) -> str:
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 class DriveConfirmation(HTMLParser):
@@ -112,7 +108,7 @@ def prepare_data(
     source: str = "cameo_val",
     drive_id: str | None = None,
     candidate_multiplier: int = 4,
-) -> dict:
+) -> dict[str, Any]:
     from .data import SelectionSpec, prepare, safe_extract_archive, write_records_json
 
     if phase == "prune_templates":
@@ -152,7 +148,7 @@ def prepare_data(
             "drive_id": selected_id,
             "official_drive_id": ARCHIVES[source],
             "bytes": archive.stat().st_size,
-            "sha256": sha256(archive),
+            "sha256": file_sha256(archive),
             "manifests": [
                 str(path.relative_to(extracted)) for path in extracted.rglob("manifest*.msgpack")
             ],
@@ -197,7 +193,7 @@ def prepare_data(
             validation=SelectionSpec(split="validation", count=128, monomers=64, dimers=64),
             return_candidates=True,
         )["validation"]
-        selected = []
+        smoke_records: list[dict[str, Any]] = []
         for chain_count in (1, 2):
             eligible = [record for record in candidates if len(record["chains"]) == chain_count]
             if not eligible:
@@ -212,14 +208,14 @@ def prepare_data(
             item["structure_path"] = str(
                 Path(item["structure_path"]).resolve().relative_to(smoke_data.resolve())
             )
-            selected.append(item)
+            smoke_records.append(item)
         destination = smoke_data / "records.json"
-        write_records_json(selected, destination)
+        write_records_json(smoke_records, destination)
         report = {
             "status": "verified",
-            "records_sha256": sha256(destination),
+            "records_sha256": file_sha256(destination),
             "scope": "two-target smoke check; no optimization or quality evaluation",
-            "targets": [{"id": item["id"], "kind": item["kind"]} for item in selected],
+            "targets": [{"id": item["id"], "kind": item["kind"]} for item in smoke_records],
         }
         (smoke_data / "split-report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
@@ -240,14 +236,14 @@ def prepare_data(
                 record["split"] = "validation"
                 record["id"] = f"{record['source']}/{record['id']}"
             clusters = chain_clusters(records, root / "inspection/sequence_exclusion")
-            selected = select_disjoint(
+            disjoint = select_disjoint(
                 records,
                 clusters,
                 counts={"final_test": {}, "validation": {1: 64, 2: 64}, "train": {}},
             )
             return {
                 "status": "verified",
-                "targets": len(selected),
+                "targets": len(disjoint),
                 "scope": "validation-only sequence and PDB exclusions; cross-split checks remain",
             }
         return {
@@ -272,7 +268,7 @@ def prepare_data(
     raise ValueError(f"Unknown data-preparation phase: {phase}")
 
 
-def run_gpu_stage(root: Path, stage: str, model_id: str, **options) -> dict:
+def run_gpu_stage(root: Path, stage: str, model_id: str, **options: Any) -> dict[str, Any]:
     from .training import benchmark, generate_caches, train_head, evaluate_head
     from .campaign import run_campaign
     from .packaging import package_head

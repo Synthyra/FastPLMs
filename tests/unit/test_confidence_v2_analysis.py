@@ -147,7 +147,7 @@ assert report["refolding"] is False
 assert report["bootstrap_samples"] == 5
 assert not blocked.intersection(sys.modules)
 """
-    result = subprocess.run(
+    completed = subprocess.run(
         [
             sys.executable,
             "-I",
@@ -162,7 +162,7 @@ assert not blocked.intersection(sys.modules)
         timeout=30,
         check=False,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     corrected = json.loads(
         (tmp_path / "corrected" / "esmfold2_300" / "summary.json").read_text()
     )

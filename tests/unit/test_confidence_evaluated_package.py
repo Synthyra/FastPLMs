@@ -2,12 +2,10 @@
 
 import hashlib
 import json
-
 import pytest
 import torch
 
 from types import SimpleNamespace
-
 from safetensors.torch import save_file
 
 from tools.confidence import evaluated_package

@@ -32,7 +32,7 @@ def _head_inputs() -> tuple[dict[str, torch.Tensor], tuple[torch.Tensor, ...]]:
     z = torch.randn(1, length, length, d_pair)  # (1, length, length, d_pair)
     x_pred = torch.randn(1, atoms, 3)  # (1, atoms, 3)
     atom_to_token = torch.arange(length).repeat_interleave(3).reshape(1, atoms)
-    return (
+    return (  # (...) head inputs s_inputs (1, 3, 4), z (1, 3, 3, 8), x_pred (1, 9, 3); then predicted, true (9, 3), resolved (9,), atom_to_token (9,), backbone (3, 3), token_mask (3,)
         {
             "s_inputs": s_inputs,
             "z": z,

@@ -26,6 +26,8 @@ from typing import Any, Literal
 from safetensors import safe_open
 from safetensors.torch import load_file, save_file
 
+from tools.tensor_digests import tensor_set_sha256, typed_tensor_sha256
+
 
 MODEL_ID = "esmfold2-300"
 SEQUENCE = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
@@ -63,46 +65,15 @@ _ALLOWED_CANDIDATE_OUTPUTS = {
 }
 
 
-def _tensor_bytes(tensor: torch.Tensor) -> bytes:
-    # value: (...)
-    value = tensor.detach().cpu().contiguous()
-    return value.view(torch.uint8).numpy().tobytes()
+def _unnamed_state_sha256(state: Mapping[str, torch.Tensor]) -> str:
+    """Hash the typed digest of every tensor in sorted order, so a producer's key names do not change the value."""
 
-
-def tensor_sha256(tensor: torch.Tensor) -> str:
-    """Hash one tensor with its dtype, shape, and raw values."""
-
-    value = tensor.detach().cpu().contiguous()  # (...)
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
+    # A producer-specific key namespace must not change the canonical value fingerprint. Retain only one small digest
+    # per tensor, rather than every checkpoint tensor, while the model remains resident on the GPU.
+    tensor_digests = sorted(bytes.fromhex(typed_tensor_sha256(tensor)) for tensor in state.values())
     digest = hashlib.sha256()
-    digest.update(str(value.dtype).encode("ascii"))
-    digest.update(repr(tuple(value.shape)).encode("ascii"))
-    digest.update(_tensor_bytes(value))
-    return digest.hexdigest()
-
-
-def _state_sha256(state: Mapping[str, torch.Tensor], *, include_names: bool) -> str:
-    digest = hashlib.sha256()
-    if include_names:
-        for name in sorted(state):
-            value = state[name].detach().cpu().contiguous()  # (...)
-            digest.update(name.encode("utf-8"))
-            digest.update(str(value.dtype).encode("ascii"))
-            digest.update(repr(tuple(value.shape)).encode("ascii"))
-            digest.update(_tensor_bytes(value))
-        return digest.hexdigest()
-
-    # A producer-specific key namespace must not change the canonical value
-    # fingerprint. Retain only one small digest per tensor, rather than every
-    # checkpoint tensor, while the model remains resident on the GPU.
-    tensor_digests: list[bytes] = []
-    for tensor in state.values():
-        value = tensor.detach().cpu().contiguous()  # (...)
-        tensor_digest = hashlib.sha256()
-        tensor_digest.update(str(value.dtype).encode("ascii"))
-        tensor_digest.update(repr(tuple(value.shape)).encode("ascii"))
-        tensor_digest.update(_tensor_bytes(value))
-        tensor_digests.append(tensor_digest.digest())
-    for tensor_digest in sorted(tensor_digests):
+    for tensor_digest in tensor_digests:
         digest.update(tensor_digest)
     return digest.hexdigest()
 
@@ -355,7 +326,7 @@ def _prepare_features(model: torch.nn.Module) -> dict[str, torch.Tensor]:
         torch.is_tensor(value) for value in features.values()
     ):
         raise TypeError("Protein feature preparation must return a tensor mapping.")
-    return {name: value.to(device="cuda") for name, value in features.items()}
+    return {name: value.to(device="cuda") for name, value in features.items()}  # (...) one feature tensor per name, on the GPU
 
 
 def _capture_initial_noise(
@@ -363,6 +334,7 @@ def _capture_initial_noise(
     forward_features: Mapping[str, torch.Tensor],
     hidden_states: torch.Tensor,
 ) -> tuple[dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:
+    # forward_features: (...) one feature tensor per name; hidden_states: (b, l, n_states, d_lm)
     atom_count = int(forward_features["atom_attention_mask"].shape[-1])
     expected_shape = (1, atom_count, 3)
     noise: list[torch.Tensor] = []
@@ -372,7 +344,7 @@ def _capture_initial_noise(
         value = original_randn(*args, **kwargs)  # (b, a, 3) for initial diffusion noise
         if not noise and tuple(value.shape) == expected_shape:
             noise.append(value.detach().cpu().contiguous().clone())
-        return value
+        return value  # (...) as drawn by torch.randn
 
     projection: list[torch.Tensor] = []  # each tensor: (b, l, d_pair)
 
@@ -410,7 +382,7 @@ def _capture_initial_noise(
     }
     if any(name.removeprefix("output__") in _CONFIDENCE_NAMES for name in outputs):
         raise RuntimeError("Confidence tensors were emitted by a confidence-disabled model.")
-    return outputs, noise[0], projection[0]
+    return outputs, noise[0], projection[0]  # (...) one output tensor per name, (1, a, 3) initial noise, (1, l, d_pair) input of base_z_mlp
 
 
 def _produce(
@@ -486,11 +458,11 @@ def _produce(
             "state_identity": {
                 "fold": {
                     "tensor_count": len(fold_state),
-                    "sha256": _state_sha256(fold_state, include_names=True),
+                    "sha256": tensor_set_sha256(fold_state),
                 },
                 "backbone": {
                     "tensor_count": len(backbone_state),
-                    "sha256": _state_sha256(backbone_state, include_names=False),
+                    "sha256": _unnamed_state_sha256(backbone_state),
                 },
             },
             "environment": _environment_metadata(),
@@ -501,7 +473,7 @@ def _produce(
         }
         metadata["tensor_keys"] = sorted(normalized)
         metadata["tensor_hashes"] = {
-            name: tensor_sha256(value) for name, value in normalized.items()
+            name: typed_tensor_sha256(value) for name, value in normalized.items()
         }
         handle, temporary_name = tempfile.mkstemp(
             dir=output, prefix=".bundle.", suffix=".safetensors.tmp"
@@ -527,13 +499,14 @@ def _load_bundle(path: Path) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
     tensors = load_file(str(path / "bundle.safetensors"), device="cpu")
     if sorted(tensors) != metadata.get("tensor_keys"):
         raise ValueError(f"Tensor keys differ from metadata: {path}")
-    observed = {name: tensor_sha256(value) for name, value in tensors.items()}
+    observed = {name: typed_tensor_sha256(value) for name, value in tensors.items()}
     if observed != metadata.get("tensor_hashes"):
         raise ValueError(f"Tensor hashes differ from metadata: {path}")
-    return tensors, metadata
+    return tensors, metadata  # (...) one tensor per bundle name, then the metadata
 
 
 def _metric(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
+    # actual, expected: (...) equal shapes of any rank
     if actual.shape != expected.shape:
         raise ValueError(f"Tensor shapes differ: {tuple(actual.shape)} != {tuple(expected.shape)}")
     difference = actual.float() - expected.float()  # (...)
@@ -550,7 +523,7 @@ def _esmc_metric(
     expected: torch.Tensor,
     residue_mask: torch.Tensor,
 ) -> dict[str, float]:
-    # actual/expected: (b, l, ...); mask: (b, l); n selected residues; d flattened channels.
+    # actual, expected: (b, l, ...); residue_mask: (b, l);
     if actual.shape != expected.shape or actual.ndim < 3:
         raise ValueError("ESMC tensors must have equal shape and at least three dimensions")
     if residue_mask.shape != actual.shape[:2]:
@@ -586,6 +559,7 @@ def _esmc_metric(
 
 
 def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    # tensors: (...) one tensor per bundle name; feature__ref_atom_name_chars (b, a, 4), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3)
     # a atoms; l residues; b batches; s diffusion samples.
     names = tensors["feature__ref_atom_name_chars"][0]  # (a, 4)
     atom_mask = tensors["feature__atom_attention_mask"][0].bool()  # (a,)
@@ -644,6 +618,7 @@ def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
 def _validate_candidate_outputs(tensors: Mapping[str, torch.Tensor]) -> list[str]:
     """Validate the two candidate-only output extensions when present."""
 
+    # tensors: (...) one tensor per bundle name; output__last_hidden_state (b, l, l, d_pair), output__representative_atom_coords (b, l, 3), feature__distogram_atom_idx (b, l)
     failures: list[str] = []
     last_hidden = tensors.get("output__last_hidden_state")
     if last_hidden is not None:
@@ -677,6 +652,7 @@ def _validate_candidate_outputs(tensors: Mapping[str, torch.Tensor]) -> list[str
 
 
 def _validate_bundle_geometry(tensors: Mapping[str, torch.Tensor], label: str) -> None:
+    # tensors: (...) one tensor per bundle name; feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3)
     atom_mask = tensors["feature__atom_attention_mask"].bool()  # (b, a)
     coordinates = tensors["output__sample_atom_coords"].float()  # (b, a, 3) or (b, s, a, 3)
     if coordinates.ndim == 4:
@@ -714,7 +690,7 @@ def compare_bundles(reference: Path, candidate: Path) -> dict[str, Any]:
     try:
         reference_tensors, reference_metadata = _load_bundle(reference)
         candidate_tensors, candidate_metadata = _load_bundle(candidate)
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  a bundle that does not load fails the comparison with its message
         return {"schema_version": SCHEMA_VERSION, "status": "failed", "failures": [str(error)]}
     for name, expected in (
         ("reference", "reference"),

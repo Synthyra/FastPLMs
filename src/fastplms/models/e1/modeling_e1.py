@@ -130,12 +130,6 @@ from .retrieval import (  # noqa: F401
 )
 
 
-def _get_logger():
-    """Resolve the Transformers logger only when a runtime path emits a message."""
-
-    return logging.get_logger(__name__)
-
-
 @torch.compiler.disable
 def _validate_cached_global_query_start(first_sequence_id: torch.Tensor) -> None:
     """Keep cached-query validation eager while preserving padding semantics."""
@@ -287,27 +281,27 @@ class E1Config(PretrainedConfig):
 
         if vocab_size is not None:
             if vocab_size < self.vocab_size:
-                _get_logger().warning(
+                logging.get_logger(__name__).warning(
                     f"Using vocab_size {vocab_size} smaller than {self.vocab_size} "
                     "from the tokenizer contract."
                 )
                 self.vocab_size = vocab_size
             elif vocab_size > self.vocab_size:
-                _get_logger().warning(
+                logging.get_logger(__name__).warning(
                     f"Using vocab_size {vocab_size} instead of smaller {self.vocab_size} "
                     "from E1 tokenizer contract."
                 )
                 self.vocab_size = vocab_size
         if pad_token_id is not None and pad_token_id != self.pad_token_id:
-            _get_logger().warning(
+            logging.get_logger(__name__).warning(
                 f"Ignoring pad_token_id. Using {self.pad_token_id} from E1 tokenizer contract"
             )
         if bos_token_id is not None and bos_token_id != self.bos_token_id:
-            _get_logger().warning(
+            logging.get_logger(__name__).warning(
                 f"Ignoring bos_token_id. Using {self.bos_token_id} from E1 tokenizer contract"
             )
         if eos_token_id is not None and eos_token_id != self.eos_token_id:
-            _get_logger().warning(
+            logging.get_logger(__name__).warning(
                 f"Ignoring eos_token_id. Using {self.eos_token_id} from E1 tokenizer contract"
             )
 
@@ -527,7 +521,7 @@ class Attention(nn.Module):
         else:
             target_dtype = self.q_proj.weight.dtype
         if input_dtype != target_dtype:
-            _get_logger().warning_once(
+            logging.get_logger(__name__).warning_once(
                 f"The input hidden states seems to be silently casted in {input_dtype}. "
                 f"This might be because you have upcasted embedding or layer norm layers "
                 f"in {input_dtype}. We will cast back the input in {target_dtype}."
@@ -1443,7 +1437,7 @@ class FAST_E1_ENCODER(E1PreTrainedModel, EmbeddingMixin):
     ) -> tuple[DynamicCache | None, bool]:
         checkpointing = self.gradient_checkpointing and self.training and torch.is_grad_enabled()
         if checkpointing and use_cache:
-            _get_logger().warning_once(
+            logging.get_logger(__name__).warning_once(
                 "`use_cache=True` is incompatible with gradient checkpointing; "
                 "setting `use_cache=False`."
             )

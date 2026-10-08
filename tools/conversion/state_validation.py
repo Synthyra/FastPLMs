@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import torch
+
 from collections.abc import Mapping
 
 
@@ -26,6 +27,7 @@ def assert_state_dict_floating_tensors_fp32(
     state_dict: Mapping[str, torch.Tensor],
     state_dict_name: str,
 ) -> None:
+    # state_dict: (...) one tensor per parameter name, checkpoint-defined shapes
     non_fp32: list[dict[str, str]] = []
     for tensor_name in sorted(state_dict.keys()):
         tensor = state_dict[tensor_name]  # (...)
@@ -50,6 +52,7 @@ def assert_state_dict_equal(
     context: str,
     max_report: int = 10,
 ) -> None:
+    # reference_state_dict, candidate_state_dict: (...) one tensor per parameter name, checkpoint-defined shapes
     reference_keys = set(reference_state_dict)
     candidate_keys = set(candidate_state_dict)
     missing = sorted(reference_keys - candidate_keys)

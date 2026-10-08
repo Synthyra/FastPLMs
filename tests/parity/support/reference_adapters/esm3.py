@@ -6,7 +6,6 @@ import torch
 import torch.nn as nn
 
 from typing import Any
-
 from tests.parity.support.reference_adapters import (
     move_model,
     pinned_biohub_snapshot,
@@ -29,6 +28,7 @@ class _ESM3ComplianceOutput:
     """Normalize official output names without changing official computation."""
 
     def __init__(self, output: Any, hidden_states: tuple[torch.Tensor, ...]) -> None:
+        # hidden_states: (b, l, d) one tensor per layer, in a tuple
         self.logits = output.sequence_logits
         self.last_hidden_state = output.embeddings
         self.hidden_states = hidden_states
@@ -65,6 +65,7 @@ class _OfficialESM3ForwardWrapper(nn.Module):
         output_hidden_states: bool | None = None,
         **kwargs: Any,
     ) -> _ESM3ComplianceOutput:
+        # input_ids, attention_mask, sequence_tokens: (b, l)
         if sequence_tokens is None:
             sequence_tokens = input_ids
         if sequence_id is None and attention_mask is not None:

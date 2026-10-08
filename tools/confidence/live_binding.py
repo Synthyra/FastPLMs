@@ -68,9 +68,9 @@ def bind_live_head(checkpoint: LiveCheckpoint, api: HfApi) -> str:
         raise ValueError("Public head differs from the staged trained update")
 
     repo_id = spec.fast.repo_id
-    info = api.model_info(repo_id, revision="main", files_metadata=True)
-    parent = _parent_sha(info.sha)
-    weights = [entry for entry in info.siblings if entry.rfilename == "model.safetensors"]
+    repository_info = api.model_info(repo_id, revision="main", files_metadata=True)
+    parent = _parent_sha(repository_info.sha)
+    weights = [entry for entry in repository_info.siblings if entry.rfilename == "model.safetensors"]
     if len(weights) != 1:
         raise ValueError("Published model must contain its pinned base model.safetensors")
     lfs = weights[0].lfs

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+
 from importlib.metadata import version
 from pathlib import Path
 from kernels import get_kernel_variants, has_kernel
@@ -35,7 +36,7 @@ def _variant_summary(decisions: list[object]) -> dict[str, object]:
 
 
 def main() -> None:
-    result = {
+    probe_report = {
         "kernels_version": version("kernels"),
         "api_signatures": {
             "get_kernel_variants": str(inspect.signature(get_kernel_variants)),
@@ -55,8 +56,8 @@ def main() -> None:
         )
         try:
             kernel = load_locked_kernel(repository, spec.revision)
-        except Exception as error:
-            result["repositories"][repository] = {
+        except Exception as error:  # noqa: broad-except  a kernel load failure of any kind is recorded in the probe report
+            probe_report["repositories"][repository] = {
                 "error": f"{type(error).__name__}: {error}",
                 "revision": spec.revision,
                 "version": spec.version,
@@ -64,7 +65,7 @@ def main() -> None:
                 "variants": _variant_summary(compatible_variants),
             }
             continue
-        result["repositories"][repository] = {
+        probe_report["repositories"][repository] = {
             "revision": spec.revision,
             "version": spec.version,
             "has_kernel": available,
@@ -72,7 +73,7 @@ def main() -> None:
             "module_file": str(Path(kernel.__file__).resolve()),
             "api": {name: callable(getattr(kernel, name, None)) for name in API_NAMES},
         }
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(probe_report, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

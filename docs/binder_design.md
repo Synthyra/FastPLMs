@@ -34,8 +34,8 @@ sequence or rounded downward, so dense binder batches cannot truncate atoms.
 ## Run
 
 Run from a source checkout with the `binder` dependency profile. The published
-workflow requires Python 3.11-3.14,
-PyTorch 2.13, Transformers 5.13, verified ESMFold2 runtime assets, and CUDA.
+workflow requires Python 3.12-3.14,
+PyTorch 2.14, Transformers 5.17, verified ESMFold2 runtime assets, and CUDA.
 Docker execution with the required capabilities and numerical tests is valid on
 any compatible host. Record the actual accelerator and software stack in the
 run manifest. Historical release measurements from the containerized Linux

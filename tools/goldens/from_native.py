@@ -12,14 +12,18 @@ import argparse
 import hashlib
 import json
 import torch
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from safetensors.torch import load_file
 
+from fastplms.digests import file_sha256
+from fastplms.json_files import compact_json
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
 from tools.goldens.bundle import GoldenBundleRecord, GoldenError, write_golden_bundle
+from tools.tensor_digests import raw_tensor_sha256, tensor_bytes
 
 
 NativeResultKind = Literal["sequence", "structure"]
@@ -212,52 +216,26 @@ def require_complete_check_goldens(registry: ModelRegistry) -> None:
         )
 
 
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _tensor_bytes(T: torch.Tensor) -> bytes:
-    # T: (...)
-    return T.detach().to(device="cpu").contiguous().view(torch.uint8).numpy().tobytes()
-
-
-def _raw_tensor_sha256(T: torch.Tensor) -> str:
-    # T: (...)
-    return hashlib.sha256(_tensor_bytes(T)).hexdigest()
-
-
 def _tensor_set_fingerprint(tensors: Mapping[str, torch.Tensor]) -> str:
+    # tensors: (...) one tensor per name, any shape
     if not tensors:
         raise GoldenError("A native golden input fingerprint requires tensors.")
     digest = hashlib.sha256()
     for name in sorted(tensors):
         T = tensors[name].detach().to(device="cpu").contiguous()  # (...)
         digest.update(
-            _canonical_json(
+            compact_json(
                 {"dtype": str(T.dtype), "name": name, "shape": list(T.shape)}
-            )
+            ).encode("utf-8")
         )
         digest.update(b"\0")
-        digest.update(_tensor_bytes(T))
+        digest.update(tensor_bytes(T))
         digest.update(b"\0")
     return digest.hexdigest()
 
 
 def _ensure_compact(tensors: Mapping[str, torch.Tensor], *, model_id: str) -> None:
-    # tensors[name]: (...)
+    # tensors: (...) one tensor per name, any shape
     size = sum(T.numel() * T.element_size() for T in tensors.values())
     if size > _MAX_GOLDEN_TENSOR_BYTES:
         raise GoldenError(
@@ -283,7 +261,7 @@ def _environment(raw: object, *, model_id: str) -> dict[str, str]:
             f"{model_id}: native result has no environment record; regenerate it in the "
             "pinned reference container."
         )
-    result: dict[str, str] = {}
+    environment: dict[str, str] = {}
     for key, value in raw.items():
         if not isinstance(key, str) or not key:
             raise GoldenError(f"{model_id}: native environment contains an invalid key.")
@@ -294,15 +272,15 @@ def _environment(raw: object, *, model_id: str) -> dict[str, str]:
         elif isinstance(value, (bool, int, float)):
             normalized = json.dumps(value, separators=(",", ":"))
         elif isinstance(value, (Mapping, list, tuple)):
-            normalized = _canonical_json(value).decode("ascii")
+            normalized = compact_json(value)
         else:
             raise GoldenError(
                 f"{model_id}: native environment value {key!r} is not serializable."
             )
         if not normalized:
             raise GoldenError(f"{model_id}: native environment value {key!r} is empty.")
-        result[key] = normalized
-    return result
+        environment[key] = normalized
+    return environment
 
 
 def _expected_files(spec: ModelSpec) -> list[dict[str, str]]:
@@ -408,7 +386,7 @@ def _load_sequence_result(
         name: selected[name]  # (...)
         for name in (*input_names, "residue_mask")
     }  # values: (...)
-    return (
+    return (  # (...) selected tensors by name, environment, input fingerprint, limitations
         selected,
         _environment(metadata.get("environment"), model_id=spec.id),
         _tensor_set_fingerprint(input_tensors),
@@ -442,14 +420,14 @@ def _load_structure_result(
     if metadata.get("tensor_keys") != sorted(tensors):
         raise GoldenError(f"{spec.id}: native structure tensor-key contract mismatch.")
     observed_hashes = {
-        name: _raw_tensor_sha256(T)  # T: (...)
+        name: raw_tensor_sha256(T)  # T: (...)
         for name, T in sorted(tensors.items())
     }
     if metadata.get("tensor_hashes") != observed_hashes:
         raise GoldenError(f"{spec.id}: native structure tensor hash mismatch.")
     if not any(name.startswith("output__") for name in tensors):
         raise GoldenError(f"{spec.id}: native structure result contains no outputs.")
-    return (
+    return (  # (...) tensors by name, environment, request fingerprint
         dict(tensors),
         _environment(metadata.get("environment"), model_id=spec.id),
         request_sha256,
@@ -503,8 +481,8 @@ def convert_native_result(
         "native/bf16.safetensors" if kind == "sequence" else "native/bundle.safetensors"
     )
     source_files = {
-        "native/metadata.json": _sha256_file(result_dir / "metadata.json"),
-        native_tensor_name: _sha256_file(
+        "native/metadata.json": file_sha256(result_dir / "metadata.json"),
+        native_tensor_name: file_sha256(
             result_dir / ("bf16.safetensors" if kind == "sequence" else "bundle.safetensors")
         ),
     }

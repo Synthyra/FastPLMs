@@ -24,7 +24,6 @@ from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-
 from safetensors.torch import load_file
 
 from .experiment_artifacts import write_new_json

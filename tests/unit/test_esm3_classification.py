@@ -27,7 +27,7 @@ def _config(*, num_labels: int, problem_type: str | None = None) -> FastESM3Conf
 
 def _input_ids() -> torch.Tensor:
     # BOS, two biological residues, EOS, then right padding.
-    return torch.tensor(((0, 4, 5, 2, 1), (0, 6, 7, 2, 1)), dtype=torch.long)
+    return torch.tensor(((0, 4, 5, 2, 1), (0, 6, 7, 2, 1)), dtype=torch.long)  # (2, 5) = (b, l)
 
 
 def test_esm3_sequence_classifier_uses_final_residue_embeddings() -> None:
@@ -85,6 +85,7 @@ def test_esm3_sequence_classifier_problem_type_losses(
     labels: torch.Tensor,
     expected_problem_type: str,
 ) -> None:
+    # labels: (2,) = (b,) for regression and single-label, (2, 3) = (b, num_labels) for multi-label
     model = FastESM3ForSequenceClassification(_config(num_labels=num_labels)).train()
 
     output = model(input_ids=_input_ids(), labels=labels)
@@ -176,6 +177,7 @@ def test_esm3_token_classifier_regression_and_multilabel_losses(
     problem_type: str | None,
     labels: torch.Tensor,
 ) -> None:
+    # labels: (2, 5) = (b, l) when num_labels is 1, else (2, 5, num_labels)
     model = FastESM3ForTokenClassification(
         _config(num_labels=num_labels, problem_type=problem_type)
     ).train()

@@ -12,13 +12,16 @@ import subprocess
 import tempfile
 import time
 import xml.etree.ElementTree as ET
+
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from tools.stored_files import write_stored_json
+
 
 CANONICAL_GPU_PYTHON = "3.12"
-PYTHON_SUPPORT_VERSIONS = ("3.11", "3.13", "3.14")
+PYTHON_SUPPORT_VERSIONS = ("3.13", "3.14")
 OFFLINE_SMOKE_ENVIRONMENT = {
     "CUDA_VISIBLE_DEVICES": "",
     "HF_DATASETS_OFFLINE": "1",
@@ -184,7 +187,7 @@ def _run_member(
             "stdout": _output_fingerprint(error.completed.stdout),
             "stderr": _output_fingerprint(error.completed.stderr),
         }
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  a failure of any kind makes the matrix member a failed record
         elapsed = time.perf_counter() - started
         return {
             "target": target,
@@ -195,15 +198,8 @@ def _run_member(
         }
 
 
-def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
-
-
 def _write_junit(path: Path, results: Sequence[Mapping[str, Any]], elapsed: float) -> None:
-    failures = sum(result["status"] != "passed" for result in results)
+    failures = sum(member["status"] != "passed" for member in results)
     suite = ET.Element(
         "testsuite",
         {
@@ -221,28 +217,28 @@ def _write_junit(path: Path, results: Sequence[Mapping[str, Any]], elapsed: floa
         "property",
         {"name": "canonical_gpu_python", "value": CANONICAL_GPU_PYTHON},
     )
-    for result in results:
+    for member in results:
         case = ET.SubElement(
             suite,
             "testcase",
             {
                 "classname": "tools.remote.python_matrix",
-                "name": f"python-{result['target']}",
-                "time": f"{float(result['elapsed_seconds']):.3f}",
+                "name": f"python-{member['target']}",
+                "time": f"{float(member['elapsed_seconds']):.3f}",
             },
         )
-        if result["status"] != "passed":
+        if member["status"] != "passed":
             failure = ET.SubElement(
                 case,
                 "failure",
                 {
-                    "message": str(result.get("stage", "matrix-member")),
+                    "message": str(member.get("stage", "matrix-member")),
                     "type": "PythonSupportFailure",
                 },
             )
-            failure.text = json.dumps(result, indent=2, sort_keys=True)
+            failure.text = json.dumps(member, indent=2, sort_keys=True)
         output = ET.SubElement(case, "system-out")
-        output.text = json.dumps(result, sort_keys=True)
+        output.text = json.dumps(member, sort_keys=True)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -301,9 +297,9 @@ def run_matrix(
         "elapsed_seconds": round(elapsed, 3),
         "results": results,
     }
-    _atomic_json(output, payload)
+    write_stored_json(output, payload)
     _write_junit(junit_output, results, elapsed)
-    passed = sum(result["status"] == "passed" for result in results)
+    passed = sum(member["status"] == "passed" for member in results)
     print(f"Python support matrix: {passed}/{len(results)} passed", flush=True)
     print(output, flush=True)
     print(junit_output, flush=True)

@@ -133,7 +133,7 @@ def test_ankh_tokenization_rejects_empty_inputs_and_real_slow_tokenizers() -> No
 def test_offline_auto_tokenizer_flags_and_seq2seq_generation_config(
     tmp_path: Path,
 ) -> None:
-    """Transformers 5.13 must resolve both tokenizer flags from local artifact bytes."""
+    """Transformers must resolve both tokenizer flags from local artifact bytes."""
 
     vocabulary = [
         ("<pad>", 0.0),
@@ -243,13 +243,13 @@ def test_ankh_explicit_and_model_owned_tokenizers_share_the_raw_sequence_contrac
     assert owned.calls[-1][0] == ["ACD", "EF"]
     torch.testing.assert_close(explicit_ids, owned_ids)
 
-    result = model.embed_dataset(
+    embeddings = model.embed_dataset(
         ["A C D"],
         tokenizer=explicit,
         full_embeddings=True,
     )
     assert explicit.calls[-1][0] == ["ACD"]
-    assert result[0].load_tensor().shape == (3, model.config.d_model)
+    assert embeddings[0].load_tensor().shape == (3, model.config.d_model)
 
 
 def test_ankh_ttt_uses_raw_residue_tokenization() -> None:
@@ -549,7 +549,7 @@ def test_decoder_embed_dataset_slices_aligned_inputs_and_records_provenance() ->
     decoder_input_ids = torch.tensor([[2, 7, 1, 0], [3, 1, 0, 0]])  # (b=2, l_dec=4)
     decoder_attention_mask = decoder_input_ids.ne(0)  # (b, l_dec)
 
-    result = model.embed_dataset(
+    embeddings = model.embed_dataset(
         ["ACD", "EF"],
         tokenizer=tokenizer,
         batch_size=1,
@@ -559,16 +559,16 @@ def test_decoder_embed_dataset_slices_aligned_inputs_and_records_provenance() ->
         decoder_attention_mask=decoder_attention_mask,
     )
 
-    assert [tuple(record.load_tensor().shape) for record in result] == [(1, 8), (1, 8)]
-    assert result.metadata["hidden_state_source"] == "decoder"
-    assert result.metadata["hidden_state_index"] == -1
-    assert result.metadata["store_all_hidden_states"] is False
-    assert result.metadata["decoder_alignment"] == "input-position"
-    assert len(result.metadata["decoder_input_fingerprint"]) == 64
-    assert len(result.metadata["decoder_attention_mask_fingerprint"]) == 64
-    assert result.metadata["model_embedding"]["hidden_state_stack"] == "decoder"
+    assert [tuple(record.load_tensor().shape) for record in embeddings] == [(1, 8), (1, 8)]
+    assert embeddings.metadata["hidden_state_source"] == "decoder"
+    assert embeddings.metadata["hidden_state_index"] == -1
+    assert embeddings.metadata["store_all_hidden_states"] is False
+    assert embeddings.metadata["decoder_alignment"] == "input-position"
+    assert len(embeddings.metadata["decoder_input_fingerprint"]) == 64
+    assert len(embeddings.metadata["decoder_attention_mask_fingerprint"]) == 64
+    assert embeddings.metadata["model_embedding"]["hidden_state_stack"] == "decoder"
     assert (
-        result.metadata["model_embedding"]["decoder_residue_mask"]
+        embeddings.metadata["model_embedding"]["decoder_residue_mask"]
         == "attention-mask-minus-tokenizer-specials"
     )
 
@@ -707,6 +707,7 @@ def test_encoder_task_heads_produce_finite_loss_and_gradients(
     ),
     labels: torch.Tensor,
 ) -> None:
+    # labels: (2, 3) = (b, l) for masked-LM and token labels, (2,) = (b,) for sequence labels
     model = model_class(_config(num_labels=3)).train()
     input_ids = torch.tensor([[2, 3, 1], [4, 1, 0]])  # (b=2, l=3)
     output = model(

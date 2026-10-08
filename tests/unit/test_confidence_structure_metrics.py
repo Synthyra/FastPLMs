@@ -12,7 +12,7 @@ from tools.confidence.structure_metrics import compute_structure_metrics
 
 def _cache(token_count: int = 2) -> dict[str, np.ndarray]:
     atom_count = token_count * 3
-    return {
+    return {  # (...) x_pred (1, 1, atoms, 3), true_coords (atoms, 3), resolved_mask (atoms,), backbone_indices (tokens, 3), atom_to_token (atoms,), asym_id (tokens,), ref_atom_name_chars (atoms, 4), token_attention_mask (tokens,)
         "x_pred": np.arange(atom_count * 3, dtype=float).reshape(1, 1, atom_count, 3),
         "true_coords": np.arange(atom_count * 3, dtype=float).reshape(atom_count, 3),
         "resolved_mask": np.ones(atom_count, dtype=bool),
@@ -28,10 +28,10 @@ def test_monomer_returns_tm_and_no_dockq(monkeypatch, tmp_path) -> None:
     tmtools = types.ModuleType("tmtools")
     tmtools.tm_align = lambda *args: types.SimpleNamespace(tm_norm_chain1=0.7, tm_norm_chain2=0.6)
     monkeypatch.setitem(sys.modules, "tmtools", tmtools)
-    result = compute_structure_metrics(
+    metrics = compute_structure_metrics(
         _cache(), {"id": "mono", "chains": [{"id": "A", "sequence": "AC"}]}, tmp_path
     )
-    assert result == {"tm_score": 0.7, "dockq": None}
+    assert metrics == {"tm_score": 0.7, "dockq": None}
 
 
 def test_installed_structure_metrics_on_toy_complex(tmp_path) -> None:
@@ -65,13 +65,13 @@ def test_installed_structure_metrics_on_toy_complex(tmp_path) -> None:
         ),
         "token_attention_mask": np.ones(4, dtype=bool),
     }
-    result = compute_structure_metrics(
+    metrics = compute_structure_metrics(
         cache,
         {"id": "toy", "chains": [{"id": "A", "sequence": "AC"}, {"id": "B", "sequence": "DE"}]},
         tmp_path,
     )
-    assert np.isfinite(result["tm_score"])
-    assert result["dockq"] == pytest.approx(1.0, abs=1e-6)
+    assert np.isfinite(metrics["tm_score"])
+    assert metrics["dockq"] == pytest.approx(1.0, abs=1e-6)
 
 
 def test_dimer_calls_native_dockq(monkeypatch, tmp_path) -> None:
@@ -91,8 +91,8 @@ def test_dimer_calls_native_dockq(monkeypatch, tmp_path) -> None:
         "id": "dimer",
         "chains": [{"id": "A", "sequence": "AC"}, {"id": "B", "sequence": "DE"}],
     }
-    result = compute_structure_metrics(_cache(4), record, tmp_path)
-    assert result["dockq"] == 0.8
+    metrics = compute_structure_metrics(_cache(4), record, tmp_path)
+    assert metrics["dockq"] == 0.8
 
 
 def test_padded_tokens_are_masked() -> None:

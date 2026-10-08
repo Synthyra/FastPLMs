@@ -32,7 +32,7 @@ python -m pip install -r \
 The FastPLMs implementation itself is embedded in the model repository.
 Transformers loads it through `trust_remote_code=True`.
 
-This model requires Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
+This model requires Python 3.12-3.14, PyTorch 2.14, and Transformers 5.17.
 
 The artifact requirements include the structure dependencies.
 
@@ -74,7 +74,7 @@ materialize attention tensors. The configured backend does not change.
 Install the training dependencies. Then attach LoRA to the loaded checkpoint:
 
 ```bash
-python -m pip install "datasets>=4.8,<5" "peft>=0.19,<0.20"
+python -m pip install "datasets>=5.0" "peft>=0.21"
 ```
 
 ```python

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import zipfile
 import io
+import zipfile
 import numpy as np
 import pytest
 

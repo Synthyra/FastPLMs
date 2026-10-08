@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import gc
-import hashlib
 import importlib
 import json
 import os
@@ -26,10 +25,19 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 from safetensors.torch import load_file, save_file
-
 from tests.structure.support.state_contract import (
+    atomic_write_text,
+    checkpoint_metadata,
     exact_state_contract,
+    file_sha256,
+    load_request_object,
+    request_fingerprint,
+    result_directory,
     semantic_config_contract,
+    stored_json_text,
+    tensor_set_sha256,
+    tensor_sha256,
+    upstream_metadata,
     validate_exact_state_contract,
     validate_semantic_config_contract,
 )
@@ -178,68 +186,6 @@ _exact_features = (
 )
 
 
-def _canonical_json(value: Mapping[str, Any]) -> str:
-    return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-
-
-def _request_fingerprint(request: Mapping[str, Any]) -> str:
-    payload = json.dumps(
-        request,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _tensor_bytes(tensor: torch.Tensor) -> bytes:
-    # tensor and value share the caller's arbitrary tensor shape through the CPU copy.
-    value = tensor.detach().cpu().contiguous()
-    return value.reshape(-1).view(torch.uint8).numpy().tobytes()
-
-
-def tensor_sha256(tensor: torch.Tensor) -> str:
-    """Return the exact byte digest of one tensor."""
-
-    # Retain the named tensor's arbitrary shape; the digest includes its byte representation.
-    return hashlib.sha256(_tensor_bytes(tensor)).hexdigest()
-
-
-def tensor_set_sha256(tensors: Mapping[str, torch.Tensor]) -> str:
-    """Hash tensor names, dtypes, shapes, and values in stable order."""
-
-    digest = hashlib.sha256()
-    for name in sorted(tensors):
-        # Retain the named tensor's arbitrary shape; the digest includes its byte representation.
-        tensor = tensors[name].detach().cpu().contiguous()
-        digest.update(name.encode("utf-8"))
-        digest.update(str(tensor.dtype).encode("ascii"))
-        digest.update(repr(tuple(tensor.shape)).encode("ascii"))
-        digest.update(_tensor_bytes(tensor))
-    return digest.hexdigest()
-
-
-def _checkpoint_metadata(checkpoint: Any) -> dict[str, Any]:
-    return {
-        "repo_id": checkpoint.repo_id,
-        "revision": checkpoint.revision,
-        "files": [
-            {"path": item.path, "algorithm": item.algorithm, "digest": item.digest}
-            for item in checkpoint.files
-        ],
-    }
-
-
-def _upstream_metadata(upstream: Any) -> dict[str, Any]:
-    return {
-        "id": upstream.id,
-        "path": upstream.path,
-        "url": upstream.url,
-        "revision": upstream.revision,
-        "license_expression": upstream.license_expression,
-    }
-
-
 def prepare_request(exchange_root: Path) -> Path:
     """Write one manifest-derived request for the isolated Boltz service."""
 
@@ -260,10 +206,10 @@ def prepare_request(exchange_root: Path) -> Path:
         "model_id": model_id,
         "architecture": spec.family.architecture,
         "reference_container": spec.family.reference_container,
-        "official": _checkpoint_metadata(spec.official),
-        "candidate": _checkpoint_metadata(spec.fast),
+        "official": checkpoint_metadata(spec.official),
+        "candidate": checkpoint_metadata(spec.fast),
         "candidate_auto_model": spec.auto_map["AutoModel"],
-        "upstream": _upstream_metadata(registry.upstreams["boltz"]),
+        "upstream": upstream_metadata(registry.upstreams["boltz"]),
         "state_transform": spec.family.state_transform,
         "sequence": fold_sequence,
         "feature_seed": feature_seed,
@@ -281,9 +227,9 @@ def prepare_request(exchange_root: Path) -> Path:
         "feature_names": list(_feature_names),
         "output_names": list(_required_outputs),
     }
-    request["request_sha256"] = _request_fingerprint(request)
+    request["request_sha256"] = request_fingerprint(request)
     path = exchange_root / "structure" / "requests" / reference_container / f"{model_id}.json"
-    _atomic_write_text(path, _canonical_json(request))
+    atomic_write_text(path, stored_json_text(request))
     return path
 
 
@@ -331,7 +277,7 @@ def _validate_request(request: Mapping[str, Any]) -> None:
         raise ValueError("Boltz2 request output schema mismatch.")
     expected = dict(request)
     observed_fingerprint = expected.pop("request_sha256", None)
-    if observed_fingerprint != _request_fingerprint(expected):
+    if observed_fingerprint != request_fingerprint(expected):
         raise ValueError("Boltz2 request fingerprint mismatch.")
     _validate_checkpoint(request.get("official"), label="official")
     _validate_checkpoint(request.get("candidate"), label="candidate")
@@ -351,19 +297,9 @@ def _validate_request(request: Mapping[str, Any]) -> None:
 def load_request(path: Path) -> dict[str, Any]:
     """Load and validate one manifest-derived Boltz2 request."""
 
-    request = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(request, dict):
-        raise TypeError(f"Boltz2 request must be a JSON object: {path}")
+    request = load_request_object(path, "Boltz2")
     _validate_request(request)
     return request
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _download_official_file(request: Mapping[str, Any], filename: str) -> Path:
@@ -381,7 +317,7 @@ def _download_official_file(request: Mapping[str, Any], filename: str) -> Path:
         )
     )
     identity = identities[filename]
-    if identity["algorithm"] == "sha256" and _file_sha256(path) != identity["digest"]:
+    if identity["algorithm"] == "sha256" and file_sha256(path) != identity["digest"]:
         raise RuntimeError(f"Boltz2 official asset hash mismatch: {filename}")
     return path
 
@@ -398,7 +334,7 @@ def _required_residue_names(sequence: str) -> tuple[str, ...]:
 
 def _extract_molecules(archive_path: Path, sequence: str) -> Path:
     wanted_names = _required_residue_names(sequence)
-    archive_hash = _file_sha256(archive_path)
+    archive_hash = file_sha256(archive_path)
     cache_root = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
     output = cache_root / "fastplms-boltz2" / archive_hash / "mols"
     if all((output / f"{name}.pkl").is_file() for name in wanted_names):
@@ -452,7 +388,7 @@ def _normalize_features(features: Mapping[str, object]) -> dict[str, torch.Tenso
             raise TypeError(f"Boltz2 feature {name!r} is not a tensor.")
         # Preserve this named model feature's shape in the CPU snapshot.
         tensors[f"feature__{name}"] = value.detach().cpu().contiguous().clone()
-    return tensors
+    return tensors  # (...) feature__<name> per required feature, shapes as the featurizer emitted them
 
 
 def _prepare_reference_features(
@@ -515,7 +451,7 @@ def _prepare_reference_features(
     )
     features = collate([features])
     normalized = _normalize_features(features)
-    return {name.removeprefix("feature__"): tensor for name, tensor in normalized.items()}
+    return {name.removeprefix("feature__"): tensor for name, tensor in normalized.items()}  # (...) one tensor per feature name, model-defined shapes
 
 
 def _prepare_candidate_features(request: Mapping[str, Any]) -> dict[str, torch.Tensor]:
@@ -526,7 +462,7 @@ def _prepare_candidate_features(request: Mapping[str, Any]) -> dict[str, torch.T
     if template.sequence != request["sequence"]:
         raise RuntimeError("Boltz2 candidate normalized the sequence unexpectedly.")
     normalized = _normalize_features(features)
-    return {name.removeprefix("feature__"): tensor for name, tensor in normalized.items()}
+    return {name.removeprefix("feature__"): tensor for name, tensor in normalized.items()}  # (...) one tensor per feature name, model-defined shapes
 
 
 def _require_floating_parameter_dtype(
@@ -658,31 +594,32 @@ def _portable_random_draws(seed: int):
     portable_rng = np.random.default_rng(seed)
 
     def portable_draw(template: torch.Tensor) -> torch.Tensor:
+        # template: (...) the shape of the sampler draw, which the portable draw keeps
         # N is the portable normal tensor with shape matching the sampler draw.
         N = portable_rng.standard_normal(tuple(template.shape), dtype=np.float32)
         # result: template.shape, unchanged by the device/dtype conversion.
-        result = torch.from_numpy(N).to(device=template.device, dtype=template.dtype)
-        result.requires_grad_(template.requires_grad)
-        captured.append(result.detach().cpu().contiguous().clone())
-        return result
+        draw = torch.from_numpy(N).to(device=template.device, dtype=template.dtype)
+        draw.requires_grad_(template.requires_grad)
+        captured.append(draw.detach().cpu().contiguous().clone())
+        return draw  # (...) the shape of template
 
     def recording_randn(*args: Any, **kwargs: Any) -> torch.Tensor:
         out = kwargs.pop("out", None)
         kwargs.pop("generator", None)
         # template: (*args,)
         template = torch.empty(*args, **kwargs)
-        result = portable_draw(template)
+        draw = portable_draw(template)
         if out is not None:
-            out.copy_(result)
+            out.copy_(draw)
             # captured[-1]: out.shape, matching the supplied output buffer.
             captured[-1] = out.detach().cpu().contiguous().clone()
-            return out
-        return result
+            return out  # (...) the shape of out
+        return draw  # (...) the shape the caller requested
 
     def recording_randn_like(*args: Any, **kwargs: Any) -> torch.Tensor:
         kwargs.pop("generator", None)
         template = torch.empty_like(*args, **kwargs)
-        return portable_draw(template)
+        return portable_draw(template)  # (...) the shape of its argument
 
     torch.randn = recording_randn
     torch.randn_like = recording_randn_like
@@ -698,6 +635,7 @@ def _run_model(
     features: Mapping[str, torch.Tensor],
     request: Mapping[str, Any],
 ) -> dict[str, torch.Tensor]:
+    # features: (...) one tensor per feature name, model-defined shapes
     device_features = {
         name: tensor.to(device="cuda", non_blocking=False) for name, tensor in features.items()
     }
@@ -736,7 +674,7 @@ def _run_model(
             raise TypeError(f"Boltz2 output {name!r} is not a tensor.")
         # Preserve this named model output's shape in the CPU snapshot.
         tensors[f"output__{name}"] = value.detach().cpu().contiguous().clone()
-    return tensors
+    return tensors  # (...) feature__, noise__ and output__ tensors by name, shapes as emitted
 
 
 def _environment_metadata() -> dict[str, Any]:
@@ -893,25 +831,6 @@ def normalize_inference_config_contract(contract: Mapping[str, Any]) -> dict[str
     return semantic_config_contract(fields)
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        text=True,
-    )
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_name, path)
-    except BaseException:
-        Path(temporary_name).unlink(missing_ok=True)
-        raise
-
-
 def write_bundle(
     output_dir: Path,
     tensors: Mapping[str, torch.Tensor],
@@ -919,6 +838,7 @@ def write_bundle(
 ) -> None:
     """Atomically publish one normalized Boltz2 structure bundle."""
 
+    # tensors: (...) one tensor per bundle name, any shape
     output_dir.mkdir(parents=True, exist_ok=True)
     normalized = {
         name: tensor.detach().cpu().contiguous().clone() for name, tensor in sorted(tensors.items())
@@ -953,7 +873,7 @@ def write_bundle(
     except BaseException:
         Path(temporary_name).unlink(missing_ok=True)
         raise
-    _atomic_write_text(output_dir / "metadata.json", _canonical_json(complete_metadata))
+    atomic_write_text(output_dir / "metadata.json", stored_json_text(complete_metadata))
 
 
 def load_bundle(path: Path) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
@@ -988,7 +908,7 @@ def load_bundle(path: Path) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
         raise ValueError(f"Diffusion-noise hash mismatch in Boltz2 bundle {path}.")
     validate_exact_state_contract(metadata.get("state"))
     validate_semantic_config_contract(metadata.get("semantic_config"))
-    return tensors, metadata
+    return tensors, metadata  # (...) one tensor per bundle name, then the metadata
 
 
 def produce_reference(request_path: Path, output_dir: Path) -> None:
@@ -1042,13 +962,6 @@ def _default_request(exchange_root: Path) -> Path:
     return exchange_root / "structure" / "requests" / reference_container / f"{model_id}.json"
 
 
-def _default_output(
-    exchange_root: Path,
-    producer: Literal["reference", "candidate"],
-) -> Path:
-    return exchange_root / "structure" / "results" / producer / model_id / fold_dtype
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1069,7 +982,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         request_path = _default_request(arguments.exchange_root)
         producer = "reference" if arguments.command == "produce-reference" else "candidate"
-        output = _default_output(arguments.exchange_root, producer)
+        output = result_directory(arguments.exchange_root, model_id, producer=producer, precision=fold_dtype)
         if producer == "reference":
             produce_reference(request_path, output)
         else:

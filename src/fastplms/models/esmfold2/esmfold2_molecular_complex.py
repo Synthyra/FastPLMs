@@ -242,14 +242,21 @@ def _protein_sequence_and_indices(
     return protein_indices, "".join(sequence), chain_ids, entity_ids, sym_ids, confidences
 
 
-def _protein_entity_metadata_value(value: int | str) -> int | str:
-    """Restore the numeric entity labels used by ProteinComplex metadata."""
+def _protein_entity_metadata_value(value: int | str, entity: int) -> int:
+    """Restore the numeric entity label ProteinComplex metadata carries for `entity`.
+
+    A complex converted from a ProteinComplex keeps its labels as numeric strings. A folded
+    complex records the entity type ("polymer", "non-polymer") under the same key instead, which
+    is no label, so the entity keeps its own number. ProteinChain accepts only an integer label.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
     if isinstance(value, str):
         try:
             return int(value)
         except ValueError:
             pass
-    return value
+    return entity
 
 
 def _atom37_from_flat(
@@ -787,7 +794,7 @@ class MolecularComplex:
         metadata = ProteinComplexMetadata(
             entity_lookup={
                 int(entity): _protein_entity_metadata_value(
-                    self.metadata.entity_lookup.get(int(entity), int(entity))
+                    self.metadata.entity_lookup.get(int(entity), int(entity)), int(entity)
                 )
                 for entity in unique_entities
             },

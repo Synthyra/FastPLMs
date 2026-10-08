@@ -15,14 +15,16 @@ import torch
 import transformers
 
 from pathlib import Path
-
+from tests.conftest import validation_pins
+from tests.conftest import run_optimized_script
 from tests.cpu.resource_telemetry import aggregate_process_memory
 
 
 def test_locked_cpu_runtime() -> None:
+    pins = validation_pins()
     assert sys.version_info[:2] == (3, 12)
-    assert torch.__version__.split("+", maxsplit=1)[0] == "2.13.0"
-    assert transformers.__version__ == "5.13.0"
+    assert torch.__version__.split("+", maxsplit=1)[0] == pins["torch"]
+    assert transformers.__version__ == pins["transformers"]
     assert not torch.cuda.is_available()
     assert os.environ["HF_HUB_OFFLINE"] == "1"
     assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
@@ -112,15 +114,7 @@ def test_optimized_subprocess_inherits_socket_and_hub_guards() -> None:
                     raise AssertionError("Inherited CPU UDP guard was not active")
         """
     )
-    completed = subprocess.run(
-        [sys.executable, "-O", "-c", script],
-        cwd=Path(__file__).resolve().parents[2],
-        env=dict(os.environ),
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
+    completed = run_optimized_script(script, environment=dict(os.environ), timeout=5)
     assert completed.returncode == 0, completed.stderr
 
 

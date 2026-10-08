@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests.conftest import assert_nested_close
+from tests.unit.tiny_families import dplm_values
 from transformers.modeling_outputs import SequenceClassifierOutput, TokenClassifierOutput
 
 from fastplms.models.dplm.modeling_dplm import (
@@ -35,37 +37,8 @@ from fastplms.models.dplm2.modeling_dplm2 import (
 pytestmark = pytest.mark.feature
 
 
-def _common_config(vocab_size: int) -> dict[str, object]:
-    return {
-        "vocab_size": vocab_size,
-        "hidden_size": 32,
-        "num_hidden_layers": 1,
-        "num_attention_heads": 4,
-        "intermediate_size": 64,
-        "hidden_dropout_prob": 0.0,
-        "attention_probs_dropout_prob": 0.0,
-        "max_position_embeddings": 64,
-        "pad_token_id": 1,
-        "bos_token_id": 0,
-        "eos_token_id": 2,
-        "mask_token_id": 32,
-        "position_embedding_type": "rotary",
-        "attn_backend": "sdpa",
-    }
-
-
-def _assert_nested_close(actual, expected) -> None:
-    if torch.is_tensor(expected):
-        assert torch.is_tensor(actual)
-        torch.testing.assert_close(actual, expected)
-        return
-    if isinstance(expected, (tuple, list)):
-        assert isinstance(actual, type(expected))
-        assert len(actual) == len(expected)
-        for actual_value, expected_value in zip(actual, expected, strict=True):
-            _assert_nested_close(actual_value, expected_value)
-        return
-    assert actual == expected
+# The CPU contract lane replaces this name before the tests run (tests/cpu/test_generation_contracts.py).
+_common_config = dplm_values
 
 
 def test_dplm_argmax_generation_preserves_fixed_positions() -> None:
@@ -290,7 +263,7 @@ def test_dplm_task_heads_honor_config_and_explicit_return_dict(
         "s_max",
     )
     assert isinstance(labeled_tuple, tuple)
-    _assert_nested_close(labeled_tuple, labeled_output.to_tuple())
+    assert_nested_close(labeled_tuple, labeled_output.to_tuple())
 
 
 @pytest.mark.parametrize(
@@ -341,7 +314,7 @@ def test_dplm2_base_and_mlm_preserve_full_structured_tuple_contract(
     assert tuple(structured.keys()) == expected_keys
     assert structured.s_max is not None
     assert all(value is not None for value in tuple_output)
-    _assert_nested_close(tuple_output, structured.to_tuple())
+    assert_nested_close(tuple_output, structured.to_tuple())
 
 
 @pytest.mark.parametrize(
@@ -412,6 +385,7 @@ def test_dplm2_public_models_validate_mask_and_type_shapes_before_forward(
     argument: str,
     value: torch.Tensor,
 ) -> None:
+    # value: (1, 3) attention_mask or (2, 4) type_ids, both invalid against input_ids (1, 4)
     # value deliberately uses an invalid shape selected by the test parametrization.
     model = model_class(DPLM2Config(**_common_config(64))).eval()
 
@@ -433,6 +407,7 @@ def test_dplm_masked_lm_rejects_decoder_and_cross_attention_arguments(
     argument: str,
     value: torch.Tensor,
 ) -> None:
+    # value: (1, 2) ids or masks and (1, 2, 32) embeddings or states, all invalid against input_ids (1, 3)
     # value deliberately uses an invalid shape selected by the test parametrization.
     model = DPLMForMaskedLM(DPLMConfig(**_common_config(33)), dropout=0.0).eval()
     # input_ids: (1, 3)

@@ -77,7 +77,7 @@ selected contracts; it does not establish live GPU or structure equivalence.
 | `feature` | DPLM generation, DPLM2 generation, ESM3 multimodal generation, TTT, E1 sequence and RAG adapters, binder flow, pooling, and conversion |
 | `artifact` | Fresh offline remote-code loading and save-reload for every local artifact |
 | `benchmark` | Separate latency, throughput, padding, memory, and exact-device regression suite with recorded hardware |
-| `python-matrix` | Isolated repository-source smokes with runtime dependencies on Python 3.11-3.14 |
+| `python-matrix` | Isolated repository-source smokes with runtime dependencies on Python 3.13 and 3.14 |
 
 Routine `check` uses goldens and does not build an official reference image.
 Live references are reserved for the frozen exact-head `compliance` release
@@ -99,7 +99,7 @@ python -m pytest tests/cpu -m cpu_contract -n auto --dist=loadscope \
   --durations=25 --junitxml=artifacts/junit/cpu-contract.xml
 ```
 
-The command uses Python 3.12, CPU-only Torch 2.13, Transformers 5.13, four CPU
+The command uses Python 3.12, CPU-only Torch 2.14, Transformers 5.17, four CPU
 workers, fixed seeds and thread counts, hidden CUDA, and empty temporary caches.
 It sets `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1`, guards sockets and Hub
 download functions, and fails on a skip or xfail. Tiny models use one layer,
@@ -281,7 +281,7 @@ uses this record only in an extracted tree with no Git metadata. It rejects
 missing, added, or modified upstream files.
 
 Python 3.12 is the canonical GPU validation interpreter. Source compatibility
-for Python 3.11, 3.13, and 3.14 is checked separately on the same workstation:
+for Python 3.13 and 3.14 is checked separately on the same workstation:
 
 ```bash
 python -m tools.remote \
@@ -295,7 +295,7 @@ installs `requirements/profiles/runtime.in`, enables offline Hub behavior,
 disables CUDA visibility, compiles the repository source, loads `models.toml`,
 and runs a small ESM2 CPU forward from an explicit source root. Results are
 recorded in JSON and JUnit. Python 3.12 remains the only environment used for
-the pinned CUDA 13.0, PyTorch 2.13.0, and Transformers 5.13.0 GPU release gates.
+the pinned CUDA 13.0, PyTorch 2.14.0, and Transformers 5.17.0 GPU release gates.
 
 For direct execution in an already synchronized checkout:
 
@@ -342,6 +342,11 @@ baseline. It reserves the worst-case cost of the stage in
 would exceed `--max-dollars`, which defaults to 25. Receipts, JUnit reports, and
 worker output land in the ignored `artifacts/gpu_evidence/<run>/` directory.
 Run one launch at a time, because the ledger has a single writer.
+
+A tree without Git metadata, such as a projection of the research workspace, has
+no revision and no baseline. Its receipt identifies the upload by the snapshot
+digest alone, and the stages that compare against the baseline (`typing`, the
+three lever benches, `fold-bench`, and `fold-bench-smoke`) refuse to launch.
 
 The bench stages compare alternating worker processes in one container on one
 GPU, with randomly initialized models at published dimensions. Their numbers
@@ -427,6 +432,55 @@ Lightning Utilities `0.15.2`, and NVIDIA DLLogger revision
 `0478734ff7be75adde8d160e04872664d1c62e5f`. Pinned OpenFold imports those
 packages eagerly; they are reference-container dependencies and are excluded
 from FastPLMs runtime images and direct dependency profiles.
+
+## CPU equivalence with official code
+
+`tests/unit/test_<family>_official_equivalence.py` run a family's official
+code unchanged beside FastPLMs in one CPU process. Both sides hold one small
+random network, FastPLMs receiving the official state through the declared
+transform, and the tests compare every module on the forward path and then the
+whole model. The official code comes from the commit its `[[upstreams]]` entry
+pins: the `vendor/upstream` submodule when it is populated, otherwise a tree
+that `python -m tests.parity.support.pinned_oracles fetch <upstream>`
+downloads once to `$FASTPLMS_PARITY_ORACLES` (default
+`C:/ws-cache/parity-oracles`). A missing tree skips its tests and names that
+command. Tests marked `checkpoint` read the smallest official checkpoint from
+the Hugging Face cache and never download. These tests share one interpreter,
+so they complement the isolated `compliance` containers rather than replace
+them.
+
+| Family | Official code | Unit | `checkpoint` | Comparison |
+| --- | --- | ---: | ---: | --- |
+| ESM2 | fair-esm `2b369911` | 98 | 11 | Exact with eager attention on one sequence. Batches and SDPA within `1e-5` of the largest value: fair-esm's (l, b, d) layout reorders the CPU GEMM's rows, and SDPA fuses its sums. |
+| ESMC (ESM++) | Biohub ESM `82ee3555` | 44 | 15 | Exact. The checkpoint tests load ESMC-300M, Biohub's native file, and `ESMplusplus_small`. |
+| E1 | Profluent E1 `bfd2620a` | 22 | 3 | Preparation, tokenizer, masks, norms, feed-forward, and head exact. Attention and what follows within `1e-5`: official FlexAttention against SDPA. |
+| ESM3 | Biohub ESM `82ee3555` | 34 | 0 | Exact, every input track. The smallest checkpoint has 1.4B parameters. |
+| ANKH | transformers T5, which ankh `02b4e25c` loads | 25 | 3 | Exact. The checkpoint tests cover the tokenizer. |
+| DPLM, DPLM2 | ByProt `8a2e15e5` | 0 | 0 | The official modules subclass transformers 4.39 ESM classes. |
+| ESMFold | fair-esm, OpenFold `4b410596` | 0 | 0 | OpenFold imports DLLogger and PyTorch Lightning 1.9. |
+| ESMFold2 | Biohub Transformers `3a8956fb` | 0 | 0 | The pinned commit returns HTTP 404. |
+| Boltz2 | Boltz `b1ebfc46` | 0 | 0 | Imports on CPU; no test yet. |
+
+## Weight-load tests by family
+
+Each of the ten families keeps a `checkpoint`-marked test that loads its pinned weights and compares them, so a
+broken load path surfaces when someone runs `-m checkpoint` with the checkpoints cached. They read real checkpoints
+and stay out of the default selection. `tests/unit/test_checkpoint_inventory.py` fails when one loses its marker,
+its name, or its place in this table.
+
+| Family | Weight-load test | Compared with |
+| --- | --- | --- |
+| ESM2 | `test_esm2_official_equivalence.py::test_the_official_checkpoint_loads_key_for_key`; the sequence golden | The official tensors; the checked-in golden |
+| ESMC (ESM++) | `test_esmc_official_equivalence.py::test_the_official_checkpoint_loads_key_for_key`; the sequence golden | The official tensors; the checked-in golden |
+| E1 | `test_e1_official_equivalence.py::test_the_official_checkpoint_loads_completely_and_matches_e1`; the sequence golden | The official checkpoint; the checked-in golden |
+| ESM3, DPLM, DPLM2 | `test_pretrained_buffers.py::test_cached_checkpoint_loads_with_constructed_unsaved_tensors`; the sequence golden | Finite output and every unsaved tensor equal to a constructed twin; the checked-in golden |
+| ANKH | The sequence golden | The checked-in golden |
+| ESMFold, ESMFold2 | `test_structure_official_goldens.py` | The checked-in structure golden |
+| Boltz2 | `test_boltz_checkpoint_io.py::test_pinned_checkpoint_loads_every_saved_tensor_and_nothing_else` | No golden is declared. The exact-load invariant: no missing, extra, or mismatched key, every tensor equal to the file's, all finite |
+
+The sequence golden is `tests/integration/test_official_goldens.py::test_declared_sequence_golden_matches_candidate`.
+It also needs a GPU, so it carries `gpu` beside `checkpoint`, and it carries `large` for the checkpoints that need
+24 GiB of accelerator memory.
 
 ## Exact contracts
 

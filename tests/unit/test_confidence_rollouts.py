@@ -20,7 +20,7 @@ from tools.confidence.rollouts import (
 
 def _rotation(angle: float) -> np.ndarray:
     cosine, sine = math.cos(angle), math.sin(angle)
-    return np.array([[cosine, -sine, 0.0], [sine, cosine, 0.0], [0.0, 0.0, 1.0]])
+    return np.array([[cosine, -sine, 0.0], [sine, cosine, 0.0], [0.0, 0.0, 1.0]])  # (3, 3)
 
 
 def test_chain_labels_continue_past_z():

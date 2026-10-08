@@ -2,30 +2,23 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import subprocess
 import sys
-
 import torch
 import wandb
 
-from pathlib import Path
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
-
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file, save_file
 
+from fastplms.digests import file_sha256
 from fastplms.registry import get_model_spec
 from .config import DONOR_REPO, DONOR_REVISION, DONOR_WEIGHT_SHA256, MODEL_IDS
 from .training import HeadContext, _wandb_run
-
-
-def _hash(path: Path) -> str:
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -40,19 +33,20 @@ def merge_head(
     base: Mapping[str, torch.Tensor], head: Mapping[str, torch.Tensor]
 ) -> dict[str, torch.Tensor]:
     """Replace only the confidence subtree, preserving all folding tensors."""
-    # State tensors have parameter-specific shapes; replacement preserves each supplied shape.
+    # base, head: (...) one tensor per parameter name, checkpoint-defined shapes; replacement preserves each supplied shape.
     if not head or any(key.startswith("confidence_head.") for key in head):
         raise ValueError("Expected a nonempty native head state without a module prefix")
     if any(not torch.isfinite(value).all() for value in head.values()):
         raise ValueError("Confidence head contains nonfinite values")
     merged = {key: value for key, value in base.items() if not key.startswith("confidence_head.")}
     merged.update({f"confidence_head.{key}": value for key, value in head.items()})
-    return merged
+    return merged  # (...) one tensor per parameter name, checkpoint-defined shapes
 
 
 def verify_folding_state(
     base: Mapping[str, torch.Tensor], packaged: Mapping[str, torch.Tensor]
 ) -> int:
+    # base, packaged: (...) one tensor per parameter name, checkpoint-defined shapes
     keys = {key for key in base if not key.startswith("confidence_head.")}
     if keys != {key for key in packaged if not key.startswith("confidence_head.")}:
         raise ValueError("Packaging changed folding tensor keys")
@@ -114,7 +108,7 @@ def package_head(root: Path, model_id: str, validate_only: bool = False) -> dict
     if training.get("status") != "complete":
         raise ValueError("Training is not complete")
     head_path = directory / "train/best.safetensors"
-    head_hash = _hash(head_path)
+    head_hash = file_sha256(head_path)
     checkpoint = torch.load(directory / "train/last.pt", map_location="cpu", weights_only=True)
     if checkpoint["best_sha256"] != head_hash or checkpoint["model_id"] != model_id:
         raise ValueError("Selected confidence head differs from the training checkpoint")
@@ -128,15 +122,15 @@ def package_head(root: Path, model_id: str, validate_only: bool = False) -> dict
             artifact = Path(report["artifact"])
             if report["model_id"] != model_id or report["head_sha256"] != head_hash:
                 raise ValueError("Prepared artifact identifies a different confidence head")
-            if report["weight_sha256"] != _hash(artifact / "model.safetensors") or report[
+            if report["weight_sha256"] != file_sha256(artifact / "model.safetensors") or report[
                 "config_sha256"
-            ] != _hash(artifact / "config.json"):
+            ] != file_sha256(artifact / "config.json"):
                 raise ValueError("Prepared artifact changed before validation")
             return _validate_and_record(directory, report, run)
         snapshot = Path(snapshot_download(spec.confidence_training_base.repo_id, revision=spec.confidence_training_base.revision))
         expected_base = spec.confidence_training_base.file_map["model.safetensors"].digest
         if (
-            _hash(snapshot / "model.safetensors") != expected_base
+            file_sha256(snapshot / "model.safetensors") != expected_base
             or training["base_weight_sha256"] != expected_base
         ):
             raise ValueError("Base checkpoint differs from the frozen training source")
@@ -162,7 +156,7 @@ def package_head(root: Path, model_id: str, validate_only: bool = False) -> dict
         payload = _read(artifact / "config.json")
         payload["confidence_head"]["enabled"] = True
         payload["fastplms_checkpoint_repo_id"] = spec.fast.repo_id
-        payload["fastplms_checkpoint_hash"] = _hash(artifact / "model.safetensors")
+        payload["fastplms_checkpoint_hash"] = file_sha256(artifact / "model.safetensors")
         payload.pop("fastplms_checkpoint_revision", None)
         payload.pop("fastplms_weights_revision", None)
         _write(artifact / "config.json", payload)
@@ -174,8 +168,8 @@ def package_head(root: Path, model_id: str, validate_only: bool = False) -> dict
             "base_revision": spec.confidence_training_base.revision,
             "base_weight_sha256": expected_base,
             "head_sha256": head_hash,
-            "weight_sha256": _hash(artifact / "model.safetensors"),
-            "config_sha256": _hash(artifact / "config.json"),
+            "weight_sha256": file_sha256(artifact / "model.safetensors"),
+            "config_sha256": file_sha256(artifact / "config.json"),
             "preserved_folding_tensors": preserved,
             "donor_repo": DONOR_REPO,
             "donor_revision": DONOR_REVISION,
@@ -183,7 +177,7 @@ def package_head(root: Path, model_id: str, validate_only: bool = False) -> dict
             "training_run": training["wandb_url"],
             "evaluation_run": evaluation["wandb_url"],
             "wandb_url": run.url,
-            "evaluation_sha256": _hash(directory / "evaluate/result.json"),
+            "evaluation_sha256": file_sha256(directory / "evaluate/result.json"),
             "training_settings": settings,
             "complete_artifact_compliance": False,
         }

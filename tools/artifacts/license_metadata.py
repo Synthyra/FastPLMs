@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+
 from collections.abc import Mapping
 from typing import cast
 from urllib.parse import urlparse
@@ -74,12 +75,12 @@ def parse_hub_license_metadata(card_text: str) -> dict[str, str]:
     """Parse and validate a card's Hugging Face license fields."""
 
     try:
-        data = ModelCard(card_text).data
+        card_data = ModelCard(card_text).data
     except Exception as error:
         raise ValueError(f"Invalid model-card metadata: {error}") from error
     metadata: dict[str, object] = {}
     for key in ("license", "license_name", "license_link"):
-        value = getattr(data, key, None)
+        value = getattr(card_data, key, None)
         if value is not None:
             metadata[key] = value
     return validate_hub_license_metadata(metadata)

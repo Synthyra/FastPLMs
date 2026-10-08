@@ -6,14 +6,14 @@ load time with `attn_implementation` or after loading with
 
 ## Dependencies and platform requirements
 
-FastPLMs runs on Python 3.11 through 3.14. The release validation environment
-uses PyTorch 2.13 and Transformers 5.13. Install the core dependencies.
+FastPLMs runs on Python 3.12 through 3.14. The release validation environment
+uses PyTorch 2.14 and Transformers 5.17. Install the core dependencies.
 Transformers loads FastPLMs runtime source from the Hugging Face model:
 
 ```bash
 python -m pip install \
-  "torch>=2.13,<2.14" \
-  "transformers>=5.13,<5.14"
+  "torch>=2.14" \
+  "transformers>=5.17"
 ```
 
 FlashAttention 2 and 3 additionally require Hugging Face `kernels`, a
@@ -22,9 +22,9 @@ already in cache for offline use:
 
 ```bash
 python -m pip install \
-  "torch>=2.13,<2.14" \
-  "transformers>=5.13,<5.14" \
-  "kernels>=0.15,<0.16"
+  "torch>=2.14" \
+  "transformers>=5.17" \
+  "kernels>=0.17"
 ```
 
 The Hub quick start below needs network access for the first model download.
@@ -61,7 +61,7 @@ a warning. This does not change the configured backend.
 | `eager` | Explicit score, softmax, and value products | Additive 4D mask | Materializes attention scores |
 | `sdpa` | `scaled_dot_product_attention` | Boolean or additive 4D mask | Kernel dispatch is selected by Torch |
 | `flex_attention` | Compiled Flex Attention score function | `BlockMask` | First shape and semantics require compilation |
-| `flash_attention_2` | Precompiled `kernels-community/flash-attn2` handler at revision `db6b51744f0c` | Packed 2D mask | ESM2 and ESM++ only |
+| `flash_attention_2` | Precompiled `kernels-community/flash-attn2` handler at revision `81fb77c12b2a` | Packed 2D mask | ESM2 and ESM++ only |
 | `flash_attention_3` | Precompiled `kernels-community/flash-attn3` handler at revision `43f0bd269777` | Packed 2D mask | ESM2, ESM++, and DPLM only |
 
 The manifest lists the backends for each family. A name not listed for that
@@ -195,24 +195,39 @@ for later calls.
 
 The Flash dependency is Hugging Face `kernels`, not the `flash-attn` Python
 distribution. The adapters follow the
-[Transformers kernel-loading contract](https://huggingface.co/docs/transformers/v5.13.0/kernel_doc/loading_kernels)
+[Transformers kernel-loading contract](https://huggingface.co/docs/transformers/v5.17.0/kernel_doc/loading_kernels)
 and resolve only the snapshot-pinned `kernels-community` repositories recorded
 in the manifest. The immutable snapshot revisions are
-`db6b51744f0cd7061386442c09df890fc6d9f47e` for FlashAttention 2 and
+`81fb77c12b2ad5d69380669b46739d5868614502` for FlashAttention 2 and
 `43f0bd269777115d94ff826e0d113ce9c1c9087b` for FlashAttention 3. The tracked
 `kernels.lock` records the exact hash of every published binary variant. The
-loader asks `kernels` to download and hash-validate the compatible variant
-before importing it. It never falls back to a branch, compiles source, imports
-the `flash_attn` package, or substitutes one FlashAttention version for another.
+loader selects the preferred locked variant for the running system, downloads
+only that variant at the pinned revision, checks its files against the locked
+hash, and only then asks `kernels` to import it. It never falls back to a
+branch, compiles source, imports the `flash_attn` package, or substitutes one
+FlashAttention version for another.
 
-After installing `kernels`, use `kernels download .` during image build or
-cache preparation to fetch both locked binaries. This command downloads only
-precompiled artifacts. It is not required when the runtime populates its
-Hugging Face cache on first use.
+The pinned FlashAttention 2 revision is on the kernel's `v3` branch, which the
+manifest records as `version = 3`. Its CUDA builds target the PyTorch 2.10
+stable ABI, which `kernels` accepts on PyTorch 2.10 and later, on x86-64 and
+aarch64. Version 3 removed the kernel's `bert_padding` and `flash_attn2`
+modules, which FastPLMs does not import; the interface files it calls are
+unchanged from version 2. The FlashAttention 3 revision's stable-ABI builds,
+which target PyTorch 2.9, serve PyTorch 2.14 on x86-64 only.
+
+`kernels` 0.17 no longer reads this lock format, so `kernels download` cannot
+prefetch these binaries. The first online load populates the Hugging Face
+cache, and offline runs reuse that cached variant.
 
 An explicit kernel-load failure reports the manifest-pinned repository and
 revision together with the underlying cause. The exception is not replaced by
 a generic dependency error, and no alternate backend is selected.
+
+A caller that chooses between the two versions asks
+`fastplms.attention.flash_kernel_unsupported_reason(implementation)` first. It
+answers from `kernels.lock`, the manifest, and the current CUDA device, and
+downloads nothing. The caller may pass over a version only when it returns a
+reason; any failure to load a version it did not rule out must raise.
 
 Both pinned FlashAttention kernels are BF16-only. The Q, K, and V tensors must
 share one dtype and one CUDA device. CPU tensors and mixed-device inputs raise
@@ -293,7 +308,7 @@ The current locked GH200/aarch64 release image has no validated FlashAttention
 the immutable report and environment attestation are not bundled in this
 repository. It is not copied into the current ESMC release distribution or
 used for a numerical claim. The manifest-pinned FlashAttention 3 revision contains x86-64
-variants but no locked PyTorch 2.13, CUDA 13 aarch64 artifact. Older ARM
+variants but no locked PyTorch 2.14, CUDA 13 aarch64 artifact. Older ARM
 artifacts target different PyTorch/CUDA combinations and are not substituted.
 Both backends remain supported and non-experimental, but current-platform
 requests raise before dispatch and their schema-v3 records explicitly attest

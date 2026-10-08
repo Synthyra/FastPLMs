@@ -7,6 +7,7 @@ import contextlib
 import gc
 import json
 import torch
+
 from collections.abc import Sequence
 from typing import Any
 from torch.nn import functional as F
@@ -100,7 +101,7 @@ def _run_checkpoint(
             with numeric_context:
                 outputs[backend] = _hidden_state(model(**batch)).detach()  # (b, l, d)
     valid = batch["attention_mask"].bool()  # (b, l)
-    result = {
+    backend_results = {
         backend: {
             **_metrics(
                 outputs[backend][valid],  # (n_valid, d)
@@ -110,7 +111,7 @@ def _run_checkpoint(
         }
         for backend in BACKENDS_BY_CHECKPOINT[model_id]
     }
-    if not all(value["finite"] for value in result.values()):
+    if not all(value["finite"] for value in backend_results.values()):
         raise RuntimeError(f"{model_id} produced non-finite checkpoint output.")
     del model
     gc.collect()
@@ -118,7 +119,7 @@ def _run_checkpoint(
     return {
         "checkpoint": spec.fast.repo_id,
         "revision": spec.fast.revision,
-        "backends": result,
+        "backends": backend_results,
     }
 
 
@@ -129,14 +130,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--model-id", action="append", choices=tuple(CHECKPOINTS))
     arguments = parser.parse_args(argv)
     model_ids = tuple(arguments.model_id or CHECKPOINTS)
-    result = {
+    probe_report = {
         "device": torch.cuda.get_device_name(0),
         "models": {
             model_id: _run_checkpoint(model_id, CHECKPOINTS[model_id]) for model_id in model_ids
         },
         "torch": torch.__version__,
     }
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(probe_report, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

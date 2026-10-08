@@ -24,6 +24,10 @@ def test_invalid_job_names_fail_before_connecting(job, monkeypatch):
         ssh.start("unused", Path("unused"), "valid", [], job)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="runs the Linux host's wait script in a local POSIX bash, which Windows lacks",
+)
 @pytest.mark.parametrize("status", [0, 7, 137])
 def test_wait_propagates_recorded_job_status(status, tmp_path, monkeypatch):
     log = tmp_path / "train-300.log"
@@ -34,11 +38,11 @@ def test_wait_propagates_recorded_job_status(status, tmp_path, monkeypatch):
 
     def execute_remote_locally(command, **kwargs):
         assert command[0] == "ssh"
-        result = run(["bash", "-c", command[-1]], capture_output=True, text=True, timeout=5)
-        results.append(result)
+        completed = run(["bash", "-c", command[-1]], capture_output=True, text=True, timeout=5)
+        results.append(completed)
         if kwargs.get("check"):
-            result.check_returncode()
-        return result
+            completed.check_returncode()
+        return completed
 
     monkeypatch.setattr(ssh.subprocess, "run", execute_remote_locally)
     if status:

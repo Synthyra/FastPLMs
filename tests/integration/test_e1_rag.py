@@ -213,9 +213,9 @@ def test_safe_tar_extraction_blocks_traversal(tmp_path) -> None:
     tar_path = tmp_path / "bad.tar"
     payload = b"bad"
     with tarfile.open(tar_path, "w") as tar:
-        info = tarfile.TarInfo("../escape.a3m")
-        info.size = len(payload)
-        tar.addfile(info, io.BytesIO(payload))
+        tar_entry = tarfile.TarInfo("../escape.a3m")
+        tar_entry.size = len(payload)
+        tar.addfile(tar_entry, io.BytesIO(payload))
 
     with tarfile.open(tar_path) as tar, pytest.raises(ValueError):
         _safe_extract_tar(tar, str(tmp_path / "out"))
@@ -225,11 +225,11 @@ def test_safe_tar_extraction_blocks_traversal(tmp_path) -> None:
 def test_safe_tar_extraction_rejects_links_and_devices(tmp_path, entry_type) -> None:
     tar_path = tmp_path / "unsafe.tar"
     with tarfile.open(tar_path, "w") as tar:
-        info = tarfile.TarInfo("unsafe-entry")
-        info.type = entry_type
+        tar_entry = tarfile.TarInfo("unsafe-entry")
+        tar_entry.type = entry_type
         if entry_type in {tarfile.SYMTYPE, tarfile.LNKTYPE}:
-            info.linkname = "../escape.a3m"
-        tar.addfile(info)
+            tar_entry.linkname = "../escape.a3m"
+        tar.addfile(tar_entry)
 
     with tarfile.open(tar_path) as tar, pytest.raises(ValueError):
         _safe_extract_tar(tar, str(tmp_path / "out"))
@@ -390,9 +390,9 @@ def test_colabfold_searcher_http_path_is_mockable(tmp_path, monkeypatch) -> None
     def fake_download(ticket_id: str, output_path: str) -> None:
         payload = b">query\nACDEFG\n"
         with tarfile.open(output_path, "w:gz") as tar:
-            info = tarfile.TarInfo("uniref.a3m")
-            info.size = len(payload)
-            tar.addfile(info, io.BytesIO(payload))
+            tar_entry = tarfile.TarInfo("uniref.a3m")
+            tar_entry.size = len(payload)
+            tar.addfile(tar_entry, io.BytesIO(payload))
 
     monkeypatch.setattr(
         searcher,
@@ -438,14 +438,14 @@ def test_batch_search_warns_on_partial_failure_without_sequence_leak(
 
     monkeypatch.setattr(searcher, "search", fail_search)
     with caplog.at_level("WARNING", logger=e1_retrieval.__name__):
-        result = searcher.batch_search(
+        search_results = searcher.batch_search(
             [sensitive_sequence],
             "results",
             seq_ids=["public-seq-id"],
             continue_on_error=True,
         )
 
-    assert result == {}
+    assert search_results == {}
     assert provider in caplog.text
     assert "public-seq-id" in caplog.text
     assert "RuntimeError" in caplog.text

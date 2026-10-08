@@ -4,11 +4,58 @@ legal_files = [
   "THIRD_PARTY_NOTICES.md=sha256:d35e506b728868b52290672d54a89c6aade09529af99dbc8a4db72d9e9ca3460",
 ]
 
+# Released hidden-state SAEs used by the canonical suite. The training-backbone revision
+# is not reported upstream; base_model names the selected inference base, not that history.
+[[sparse_autoencoders]]
+id = "esmc_small_sae_depth"
+base_model = "esmc_small"
+layer = 23
+input_width = 960
+k = 64
+codebook_dim = 16384
+input_kind = "hidden_state"
+checkpoint_repo = "biohub/ESMC-300M-sae-layer23-k64-codebook16384"
+checkpoint_revision = "71b054fc726a9f11153a601118f03657ac6e6e80"
+checkpoint_files = [
+  "config.json=sha256:e2864c5f9756c052f343310bafeddafc3edc9514ad85981a51a1a3411186434d",
+  "layer_23.safetensors=sha256:825257f785600a7a9d462882d5cf3431ebbbba94761434e33b0c4814a7cc6270",
+]
+
+[[sparse_autoencoders]]
+id = "esmc_large_sae_depth"
+base_model = "esmc_large"
+layer = 27
+input_width = 1152
+k = 64
+codebook_dim = 16384
+input_kind = "hidden_state"
+checkpoint_repo = "biohub/ESMC-600M-sae-layer27-k64-codebook16384"
+checkpoint_revision = "b96480999aca49b7684e093f1adfcb09b55a1720"
+checkpoint_files = [
+  "config.json=sha256:0e74c8af3ff4ac644f26be308e0fe6da6c75a4a52f0d3f05b0cbbdda27efc9ce",
+  "layer_27.safetensors=sha256:5e93c230aa200876cb300377c8e22a141a7e2e316c6a3b962b2a78c4518535db",
+]
+
+[[sparse_autoencoders]]
+id = "esmc_6b_sae_depth"
+base_model = "esmc_6b"
+layer = 60
+input_width = 2560
+k = 64
+codebook_dim = 16384
+input_kind = "hidden_state"
+checkpoint_repo = "biohub/ESMC-6B-sae-layer60-k64-codebook16384"
+checkpoint_revision = "99752fe6e4d25fbb26f887db2d9225e7a577da73"
+checkpoint_files = [
+  "config.json=sha256:42567d3f757bea5c6b618abf55ed905ce4304d1eed891a2c1feae8e1ef393fd0",
+  "layer_60.safetensors=sha256:ddc1417b42cffe2d7fc2ec31783a04ac88800e6a8f8c8542f1f92d8f4f16094c",
+]
+
 [[attention_kernels]]
 implementation = "flash_attention_2"
 repository = "kernels-community/flash-attn2"
-revision = "db6b51744f0cd7061386442c09df890fc6d9f47e"
-version = 2
+revision = "81fb77c12b2ad5d69380669b46739d5868614502"
+version = 3
 expected_variant = "flash_attn2"
 dtypes = ["bfloat16"]
 min_cuda_capability = [8, 0]
@@ -64,6 +111,9 @@ distribution_files = [
 id = "biohub-transformers"
 path = "vendor/upstream/biohub-transformers"
 url = "https://github.com/Biohub/transformers.git"
+# Biohub/transformers left GitHub by 2026-10-08. Its pinned commit stays reachable through the
+# fork network of huggingface/transformers, which serves the clone and the source archive.
+fetch_url = "https://github.com/huggingface/transformers.git"
 revision = "3a8956fb4d4ea16b0ec8e71deef2c2909b6a5cbf"
 license = "Apache-2.0"
 license_files = ["LICENSE"]
@@ -177,7 +227,7 @@ conversion_provenance = "Input: the pinned official ESM2 state dictionary. Trans
 representative = "esm2_8m"
 documentation = "docs/models.md#esm2"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_esm_rotary.py", "models/esm2", "models/ttt.py"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/_esm_rotary.py", "models/esm2", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.esm2.modeling_fastesm.FastEsmConfig", AutoModel = "fastplms.models.esm2.modeling_fastesm.FastEsmModel", AutoModelForMaskedLM = "fastplms.models.esm2.modeling_fastesm.FastEsmForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.esm2.modeling_fastesm.FastEsmForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esm2.modeling_fastesm.FastEsmForTokenClassification" }
 
 [families.esm_plusplus]
@@ -204,7 +254,7 @@ conversion_provenance = "Input: the pinned Biohub ESMC checkpoint. Transformatio
 representative = "esmc_small"
 documentation = "docs/models.md#esm-and-esmc"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esm_plusplus", "models/ttt.py"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/esm_plusplus", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusConfig", AutoModel = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusModel", AutoModelForMaskedLM = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esm_plusplus.modeling_esm_plusplus.ESMplusplusForTokenClassification" }
 
 [families.esm3]
@@ -229,7 +279,7 @@ conversion_provenance = "Input: the pinned Biohub ESM3 checkpoint. Transformatio
 representative = "esm3_small"
 documentation = "docs/models.md#esm3"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/esm3", "models/ttt.py"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/esm3", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.esm3.modeling_esm3.FastESM3Config", AutoModel = "fastplms.models.esm3.modeling_esm3.FastESM3Model", AutoModelForSequenceClassification = "fastplms.models.esm3.modeling_esm3.FastESM3ForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esm3.modeling_esm3.FastESM3ForTokenClassification" }
 
 [families.e1]
@@ -256,7 +306,7 @@ conversion_provenance = "Input: the pinned Profluent-E1 checkpoint and tokenizer
 representative = "e1_150m"
 documentation = "docs/models.md#e1"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/e1", "models/ttt.py"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/e1", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.e1.modeling_e1.E1Config", AutoModel = "fastplms.models.e1.modeling_e1.E1Model", AutoModelForMaskedLM = "fastplms.models.e1.modeling_e1.E1ForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.e1.modeling_e1.E1ForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.e1.modeling_e1.E1ForTokenClassification" }
 
 [families.dplm]
@@ -282,7 +332,7 @@ conversion_provenance = "Input: the pinned official DPLM1 checkpoint. Transforma
 representative = "dplm_150m"
 documentation = "docs/models.md#dplm"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_diffusion_generation.py", "models/_esm_rotary.py", "models/dplm", "models/ttt.py"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/_diffusion_generation.py", "models/_esm_rotary.py", "models/dplm", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.dplm.modeling_dplm.DPLMConfig", AutoModel = "fastplms.models.dplm.modeling_dplm.DPLMModel", AutoModelForMaskedLM = "fastplms.models.dplm.modeling_dplm.DPLMForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.dplm.modeling_dplm.DPLMForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.dplm.modeling_dplm.DPLMForTokenClassification" }
 
 [families.dplm2]
@@ -307,7 +357,7 @@ conversion_provenance = "Input: the pinned official DPLM2 checkpoint. Transforma
 representative = "dplm2_150m"
 documentation = "docs/models.md#dplm2"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_diffusion_generation.py", "models/_esm_rotary.py", "models/dplm2", "models/ttt.py"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/_diffusion_generation.py", "models/_esm_rotary.py", "models/dplm2", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.dplm2.modeling_dplm2.DPLM2Config", AutoModel = "fastplms.models.dplm2.modeling_dplm2.DPLM2Model", AutoModelForMaskedLM = "fastplms.models.dplm2.modeling_dplm2.DPLM2ForMaskedLM", AutoModelForSequenceClassification = "fastplms.models.dplm2.modeling_dplm2.DPLM2ForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.dplm2.modeling_dplm2.DPLM2ForTokenClassification" }
 tokenizer_class = "fastplms.models.dplm2.tokenization_dplm2.DPLM2Tokenizer"
 
@@ -334,7 +384,7 @@ representative = "ankh_base"
 documentation = "docs/models.md#ankh"
 test_tiers = ["check", "compliance", "feature", "artifact", "benchmark"]
 requires_complete_weight_publication = false
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/ankh", "models/ttt.py"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/ankh", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.ankh.modeling_ankh.FastAnkhConfig", AutoModel = "fastplms.models.ankh.modeling_ankh.FastAnkhModel", AutoModelForMaskedLM = "fastplms.models.ankh.modeling_ankh.FastAnkhForMaskedLMExtension", AutoModelForSeq2SeqLM = "fastplms.models.ankh.modeling_ankh.FastAnkhForConditionalGeneration", AutoModelForSequenceClassification = "fastplms.models.ankh.modeling_ankh.FastAnkhForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.ankh.modeling_ankh.FastAnkhForTokenClassification" }
 
 [families.boltz2]
@@ -358,7 +408,7 @@ conversion_provenance = "Input: the pinned official Boltz2 checkpoint. Transform
 representative = "boltz2"
 documentation = "docs/models.md#boltz2"
 test_tiers = ["structure", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "models/boltz"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "models/boltz"]
 auto_map = { AutoConfig = "fastplms.models.boltz.modeling_boltz2.Boltz2Config", AutoModel = "fastplms.models.boltz.modeling_boltz2.Boltz2Model" }
 
 [families.esmfold]
@@ -383,7 +433,7 @@ conversion_provenance = "Input: the pinned native Meta ESMFold checkpoint plus i
 representative = "esmfold"
 documentation = "docs/models.md#esmfold"
 test_tiers = ["check", "compliance", "structure", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/_esm_rotary.py", "models/classification_probe.py", "models/esmfold"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/_esm_rotary.py", "models/classification_probe.py", "models/esmfold"]
 auto_map = { AutoConfig = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmFoldConfig", AutoModel = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForProteinFolding", AutoModelForSequenceClassification = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold.modeling_fast_esmfold.FastEsmForTokenClassification" }
 
 [families.esmfold2]
@@ -410,7 +460,7 @@ conversion_provenance = "Input: each pinned Biohub ESMFold2 checkpoint and its s
 representative = "esmfold2"
 documentation = "docs/esmfold2.md"
 test_tiers = ["check", "compliance", "structure", "feature", "artifact", "benchmark"]
-runtime_paths = ["__init__.py", "registry.py", "runtime.py", "models.toml", "models/__init__.py", "attention", "embeddings", "models/classification_probe.py", "models/_esm_rotary.py", "models/esmfold2", "models/esm_plusplus", "models/ttt.py"]
+runtime_paths = ["__init__.py", "registry.py", "runtime.py", "atomic_files.py", "digests.py", "json_files.py", "models.toml", "models/__init__.py", "attention", "embeddings", "features","models/classification_probe.py", "models/_esm_rotary.py", "models/esmfold2", "models/esm_plusplus", "models/ttt.py"]
 auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2.ESMFold2Model", AutoModelForSequenceClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ForTokenClassification" }
 
 [[models]]
@@ -681,6 +731,7 @@ fast_files = [
   "model-00004-of-00006.safetensors=sha256:e46c6113c89c6f3e9b072c1bef02d763a625c37bcd8f9da2ed9363891c9a0758",
   "model-00005-of-00006.safetensors=sha256:6d92cb2bf9791de644de2ae86f8523d802ac3b4aaabfff0716ab6c2b97f6fb14",
   "model-00006-of-00006.safetensors=sha256:5fc1a8632490bb34162823c35d0d591337b9e4195b22cc0560741397a6e9d0b3",
+  "model.safetensors.index.json=git-sha1:f30f0b6b35e11d09a516c078b0847ee023bd1817",
   "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b",
   "tokenizer.json=git-sha1:f49735e56cebab0e791aeaae777757b7fd114f71",
   "tokenizer_config.json=git-sha1:2985ed2b8aa8ecfb1d12f53f47d2b8a44cc21756",
@@ -1289,3 +1340,259 @@ notes = "Experimental Fast model with a frozen 600M ESM++ backbone, 24 folding b
 auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFold2Config", AutoModel = "fastplms.models.esmfold2.modeling_esmfold2_experimental.ESMFold2ExperimentalModel", AutoModelForSequenceClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForSequenceClassification", AutoModelForTokenClassification = "fastplms.models.esmfold2.modeling_esmfold2_classification.ESMFold2ExperimentalForTokenClassification" }
 backbone_model = "esmc_large"
 backbone = { repo = "biohub/ESMC-600M-1500000", revision = "21af9cc429af76ebda6c48074fb624db4735aaaf", files = ["config.json=git-sha1:ec29f6009b21d710f64bf1c058f3a9710833d692", "model.safetensors=sha256:d6869f5ae0f11e5dc829b195e062e87cfcc2f851a08a5edbaf5d1083ae7f76cc", "tokenizer.json=git-sha1:81c797f56768b22dec0301fa771f018b7e43e98c", "tokenizer_config.json=git-sha1:f49f57b24a1c93bd544974811e8ecbd61b7fae89", "special_tokens_map.json=git-sha1:c907ee1dc19b24241749b32d665c291c7e6e8e4b"] }
+
+# Parity goldens, uploaded 2026-09-22 so the reference tensors live somewhere durable
+# rather than only inside the GitHub repository. Each sha256 is the one already recorded
+# in that model's official_golden.tensors, so the existing integrity check is unchanged.
+
+[[golden_artifacts]]
+id = "esm2_8m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esm2_8m.safetensors"
+sha256 = "b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c"
+size = 270529
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esm2_35m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esm2_35m.safetensors"
+sha256 = "c9b8bb616cf884fb7744521a2fcc6eed23586342d11241e6c9ef16454ec31e17"
+size = 391489
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esm2_150m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esm2_150m.safetensors"
+sha256 = "c03fe9916dba137b452a6bbe944c7dc414db4019a6f0921e87b92d4bb6a8a42f"
+size = 512449
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esm2_650m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esm2_650m.safetensors"
+sha256 = "c3a66b75add03628e62e238cb63da6a9e4d321f8160e84bdf2a131c096977f86"
+size = 996297
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esm2_3b"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esm2_3b.safetensors"
+sha256 = "dfd5a8cb05d3e814a080185c4808c8e7ec2277f070f395562fcfbe4376789e4e"
+size = 1963977
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmc_small"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esmc_small.safetensors"
+sha256 = "03378d0f0fdd8161178ebb2c1f0da1b9776a726c8e8d3a10c009808a24de5654"
+size = 391010
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmc_large"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esmc_large.safetensors"
+sha256 = "e13302df4cf7e8381552f1043a8fd0f31f3e0d50b2ab6009fb86b7940ae8ff79"
+size = 463586
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmc_6b"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esmc_6b.safetensors"
+sha256 = "a948945e985c7deaca7be8b7eed09c0a9521a2af3f2b10fc2ec7a7d2a0f99ada"
+size = 995810
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esm3_small"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esm3_small.safetensors"
+sha256 = "d957922f810c9ab4c557d80d5aaaf6a3aab79a5a45e4638012a634a4134803b1"
+size = 1189077
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "e1_150m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/e1_150m.safetensors"
+sha256 = "6558bc8f1a7b20629eaaaa6f72601d0c2cdb859a5dc13595549b1773b6e2de41"
+size = 333099
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "e1_300m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/e1_300m.safetensors"
+sha256 = "92778b9ef95a803ddc84b3e3ca764c59e045872a94bcff0eb0cd47647732c188"
+size = 432939
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "e1_600m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/e1_600m.safetensors"
+sha256 = "22ed8417a4651ded255099f6d15c63c2c40552e700d2b0470d1adfde3a39c513"
+size = 532779
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "dplm_150m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/dplm_150m.safetensors"
+sha256 = "392992235195beed97ab8359b90a2e11e52f4326606f99a471447bed81d146bd"
+size = 512449
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "dplm_650m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/dplm_650m.safetensors"
+sha256 = "073f0a6abea7e48f28c2d921ff8329a28e22627f01979277cb324908a01b3378"
+size = 996297
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "dplm_3b"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/dplm_3b.safetensors"
+sha256 = "75b0a0854fc391133920b0feaaeb8f69ab7568a88b3759627aca1556c4338c1e"
+size = 1963977
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "dplm2_150m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/dplm2_150m.safetensors"
+sha256 = "17fc26600938ba5364b8ecb96750786d33e9f92bcd4ea4df3e12a389340748eb"
+size = 13416818
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "dplm2_650m"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/dplm2_650m.safetensors"
+sha256 = "c4e0e467c252c3ac813363d2d4b17a5e3bd99e75fad315e76d97689b4655ddac"
+size = 14384498
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "dplm2_3b"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/dplm2_3b.safetensors"
+sha256 = "838b11824d08f83bcb0c0b3268e579f3a87dbfb965370cfe5c3f8793b96b1964"
+size = 16319858
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "ankh_base"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/ankh_base.safetensors"
+sha256 = "f0e78aa15d11749e0c64ff57f9e88c51cec6538a0adf8951f839df70cc708b65"
+size = 289226
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "ankh_large"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/ankh_large.safetensors"
+sha256 = "3fb8d3ac27716d15a9ea92aeef6acf2b977bcc887d9b535000539e523673459b"
+size = 574922
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "ankh2_large"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/ankh2_large.safetensors"
+sha256 = "25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d"
+size = 574922
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "ankh3_large"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/ankh3_large.safetensors"
+sha256 = "e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513"
+size = 574922
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "ankh3_xl"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/ankh3_xl.safetensors"
+sha256 = "72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae"
+size = 955850
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmfold"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esmfold.safetensors"
+sha256 = "873b1b325a43d8e0f35f355c8914a2a9fe611cc48763875e9e6a22e09ec9ebcb"
+size = 179144
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmfold2"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esmfold2.safetensors"
+sha256 = "e4d6be4344c528e26b13f79a9303549e3de7e582da195c0078db3ce957fad420"
+size = 2573976
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmfold2_fast"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esmfold2_fast.safetensors"
+sha256 = "6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990"
+size = 2573976
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmfold2_experimental_cutoff2025"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esmfold2_experimental_cutoff2025.safetensors"
+sha256 = "9347466bbe803b6f5dc82e3356ca6cbbf2c2edd8765f9fd273385bda255019f6"
+size = 1771064
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmfold2_experimental_fast_cutoff2025"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+path = "goldens/esmfold2_experimental_fast_cutoff2025.safetensors"
+sha256 = "516e216d05d7e6bee59e77126d3e595e2bb7821929433f00c259c5d5241964bb"
+size = 1771064
+offline_behavior = "requires_cached_verified_file"

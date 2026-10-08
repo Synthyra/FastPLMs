@@ -152,15 +152,15 @@ def test_evidence_links_use_only_pinned_manifest_payloads(tmp_path: Path) -> Non
         "[external](https://example.org/docs/evidence/example.json)\n"
         "```python\ntext = '[code](../evidence/example.json)'\n```\n"
     )
-    result = rewrite_evidence_links(
+    rewritten = rewrite_evidence_links(
         markdown, root=tmp_path, document_path=tmp_path / "docs/generated/support.md"
     )
-    assert f"[relative]({url})" in result
-    assert f"[root]({url}#record)" in result
-    assert f"[github]({url})" in result
-    assert "[fixture](../../tests/fixtures/example.json)" in result
-    assert "[external](https://example.org/docs/evidence/example.json)" in result
-    assert "text = '[code](../evidence/example.json)'" in result
+    assert f"[relative]({url})" in rewritten
+    assert f"[root]({url}#record)" in rewritten
+    assert f"[github]({url})" in rewritten
+    assert "[fixture](../../tests/fixtures/example.json)" in rewritten
+    assert "[external](https://example.org/docs/evidence/example.json)" in rewritten
+    assert "text = '[code](../evidence/example.json)'" in rewritten
     assert evidence_reference("docs/evidence/example.json", tmp_path).endswith(f"]({url})")
 
 

@@ -2,12 +2,12 @@
 
 import json
 import weakref
-from concurrent.futures import Future
-from types import SimpleNamespace
-
 import numpy as np
 import pytest
 import torch
+
+from concurrent.futures import Future
+from types import SimpleNamespace
 
 from tools.confidence import test_evaluation as evaluation
 
@@ -37,7 +37,7 @@ class _DeferredFuture(Future):
         self.function = function
         self.argument = argument
 
-    def result(self, timeout=None):
+    def result(self, timeout=None):  # noqa: vague-name  overrides concurrent.futures.Future.result
         if not self.done():
             self.set_result(self.function(self.argument))
         return super().result(timeout)

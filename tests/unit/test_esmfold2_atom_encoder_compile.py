@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from collections.abc import Callable
+from tests.unit.compile_counting import counting_compile_backend
 
 from fastplms.models.esmfold2.modeling_esmfold2_common import (
     CHAR_VOCAB_SIZE,
@@ -19,7 +19,7 @@ def _atom_encoder_inputs() -> dict[str, torch.Tensor | int]:
     batch_size = 1
     n_atoms = 4
     num_diffusion_samples = 2
-    return {
+    return {  # (...) ref_pos (1, 4, 3), atom_attention_mask, ref_space_uid, ref_charge, atom_to_token (1, 4), ref_element (1, 4, z), ref_atom_name_chars (1, 4, c, v), r_l (2, 4, 3); z = MAX_ATOMIC_NUMBER, c = MAX_CHARS, v = CHAR_VOCAB_SIZE; num_diffusion_samples is an int
         "ref_pos": torch.randn(batch_size, n_atoms, 3),
         "atom_attention_mask": torch.tensor([[1, 1, 1, 0]], dtype=torch.float32),
         "ref_space_uid": torch.tensor([[0, 0, 1, 1]]),
@@ -52,15 +52,7 @@ def test_atom_encoder_mask_metadata_preserves_compiled_outputs(
     with torch.no_grad():
         expected = encoder(**inputs)
 
-    compiled_graphs: list[torch.fx.GraphModule] = []
-
-    def counting_backend(
-        graph_module: torch.fx.GraphModule,
-        example_inputs: list[torch.Tensor],
-    ) -> Callable[..., object]:
-        del example_inputs
-        compiled_graphs.append(graph_module)
-        return graph_module.forward
+    counting_backend, compiled_graphs = counting_compile_backend()
 
     compiled_encoder = torch.compile(encoder, backend=counting_backend, dynamic=False)
     try:

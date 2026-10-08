@@ -22,7 +22,12 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus_sae import (
     ESMplusplusSAEParams,
     load_esmc_sae_layers,
 )
-from .test_esmplusplus_sae import _config, _input_ids, _load_pinned_biohub_sae_layer
+from .test_esmplusplus_sae import (
+    _config,
+    _input_ids,
+    _load_pinned_biohub_sae_layer,
+    requires_pinned_sae_source,
+)
 
 
 D_MODEL = 4
@@ -36,7 +41,7 @@ def _params(layer: int = 0) -> ESMplusplusSAEParams:
 
 def _sae_state(seed: int = 11, d_model: int = D_MODEL) -> dict[str, torch.Tensor]:
     generator = torch.Generator().manual_seed(seed)
-    return {
+    return {  # (...) W_enc (d_model, codebook_dim), W_dec (codebook_dim, d_model), b_dec (d_model,), idf and max (codebook_dim,)
         "W_enc": torch.randn((d_model, CODEBOOK_DIM), generator=generator),
         "W_dec": torch.randn((CODEBOOK_DIM, d_model), generator=generator),
         "b_dec": torch.randn(d_model, generator=generator),
@@ -56,7 +61,7 @@ def _hidden_states(seed: int = 5) -> tuple[torch.Tensor, torch.Tensor]:
     # layer_states: (2, 5, d) for d = D_MODEL; token_mask: (2, 5)
     layer_states = torch.randn((2, 5, D_MODEL), generator=generator)
     token_mask = torch.tensor(((True, True, True, True, False), (True, True, True, False, False)))  # (2, 5)
-    return layer_states, token_mask
+    return layer_states, token_mask  # (2, 5, d_model), (2, 5)
 
 
 def _write_repository(
@@ -70,6 +75,7 @@ def _write_repository(
 ) -> Path:
     """Write a local copy of the published SAE repository layout."""
 
+    # state: (...) one tensor per SAE parameter name; W_enc (d_model, codebook_dim), W_dec (codebook_dim, d_model), b_dec (d_model,), idf and max (codebook_dim,)
     directory.mkdir(parents=True, exist_ok=True)
     declared = {
         "model_type": "esmc_sae",
@@ -99,6 +105,7 @@ def _official_layer(layer: int = 0, seed: int = 11) -> nn.Module:
     return official.eval()
 
 
+@requires_pinned_sae_source
 def test_ported_layer_features_match_the_pinned_biohub_layer_exactly() -> None:
     layer_states, token_mask = _hidden_states()
 
@@ -116,6 +123,7 @@ def test_ported_layer_features_match_the_pinned_biohub_layer_exactly() -> None:
     )
 
 
+@requires_pinned_sae_source
 def test_reconstruction_loss_is_opt_in_and_matches_the_pinned_biohub_layer() -> None:
     layer_states, token_mask = _hidden_states()
     residues = layer_states[token_mask]

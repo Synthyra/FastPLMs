@@ -12,7 +12,6 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing
-
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -71,6 +70,7 @@ def spatial_chain_subset(chain_ca: list[np.ndarray], lengths: list[int], budget:
     `chain_ca[i]` holds the resolved C-alpha coordinates (n_i, 3) of chain i. Chains that no longer fit
     the token budget are skipped, so a later, shorter chain can still be added.
     """
+    # chain_ca: (n_i, 3) resolved C-alpha coordinates of chain i, one array per chain in a list
     rng = np.random.default_rng(seed)
     candidates = [index for index, length in enumerate(lengths) if length <= budget]
     if not candidates:
@@ -101,6 +101,7 @@ def _row_seed(identifier: str) -> int:
 
 def _targets_for_row(source: str, identifier: str, sequences: list[str], positions: np.ndarray) -> list[tuple[str, ChainSubset]]:
     """Return (variant, subset) choices for one eligible row; `positions` is (l, 14, 3)."""
+    # positions: (l, 14, 3)
     lengths = [len(sequence) for sequence in sequences]
     total = sum(lengths)
     if source == "rcsb":

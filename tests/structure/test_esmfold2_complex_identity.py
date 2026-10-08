@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import numpy as np
 import pytest
 
@@ -70,6 +71,28 @@ def test_molecular_round_trip_preserves_identity_and_repeated_chain_boundaries()
     assert restored.metadata.chain_lookup == original.metadata.chain_lookup
     assert restored.metadata.entity_lookup == original.metadata.entity_lookup
     assert restored.metadata.assembly_composition == original.metadata.assembly_composition
+
+
+def test_folded_complex_with_entity_types_exports_pdb() -> None:
+    """A folded complex records entity types, not labels; PDB export must still name each entity.
+
+    Every ESMFold2 fold failed `result_to_pdb` with "entity_id must be an integer or None" while
+    the type string reached ProteinChain as the entity label.
+    """
+    molecular = MolecularComplex.from_protein_complex(_homomer_with_repeated_chain_label())
+    folded = dataclasses.replace(
+        molecular,
+        metadata=dataclasses.replace(
+            molecular.metadata,
+            entity_lookup={entity: "polymer" for entity in molecular.metadata.entity_lookup},
+        ),
+    )
+
+    restored = folded.to_protein_complex()
+
+    assert restored.metadata.entity_lookup == {7: 7, 9: 9}
+    assert [chain.entity_id for chain in restored.chain_iter()] == [7, 7, 9]
+    assert "ATOM" in restored.to_pdb_string()
 
 
 def test_backbone_state_dict_does_not_mutate_source_atom_mask() -> None:

@@ -12,6 +12,7 @@ evidence, and contributor workflows for FastPLMs 1.0. The model manifest at
 | Find a supported checkpoint or AutoClass | [Models](models.md) and the [generated support matrix](generated/support.md) |
 | Trace every capability to docs, examples, and tests | [Capability-to-evidence manifest](generated/capability_evidence.md) |
 | Embed sequences or FASTA datasets | [Embedding API](embedding_api.md) |
+| Store embeddings once and reuse them across projects | [Feature store](feature_store.md) |
 | Select SDPA, Flex Attention, or a pinned FlashAttention kernel | [Attention backends](attention_backends.md) |
 | Build and validate an offline Hub artifact | [Artifacts](artifacts.md) |
 | Run parity, structure, or release tests | [Testing](testing.md) |

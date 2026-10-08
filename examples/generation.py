@@ -4,24 +4,18 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 
 # Shapes: b = batch, l = residues, l_t = tokens including special tokens.
 # ESM3 conditioning uses l for its encoded token axis, including special tokens.
 
-if __package__:
-    from ._runtime import add_execution_arguments, resolve_execution
+if TYPE_CHECKING or __package__:
+    from ._runtime import add_execution_arguments, configure_offline, resolve_execution
 else:
-    from _runtime import add_execution_arguments, resolve_execution
-
-
-def configure_offline() -> None:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    from _runtime import add_execution_arguments, configure_offline, resolve_execution
 
 
 def generate_dplm(model: Any, tokenizer: Any, length: int, steps: int, seed: int) -> Any:

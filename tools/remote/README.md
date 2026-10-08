@@ -127,7 +127,7 @@ accelerator-heavy suite at one time.
 ## Python source-support matrix
 
 Python 3.12 is the canonical GPU validation environment. Before release, run
-the remote `python-matrix` suite for Python 3.11, 3.13, and 3.14. It creates a
+the remote `python-matrix` suite for Python 3.13 and 3.14. It creates a
 separate CPU-only environment for each interpreter. It installs
 `requirements/profiles/runtime.in` with the validation constraints:
 

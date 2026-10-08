@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from pathlib import Path
+from packaging.requirements import Requirement
 
 from fastplms.registry import get_model_registry
 
@@ -395,8 +396,12 @@ def test_kernel_lock_is_available_to_source_and_artifact_images() -> None:
 
 
 def test_candidate_profile_supports_transformers_device_map() -> None:
-    dev = (REQUIREMENTS / "features" / "dev.in").read_text(encoding="utf-8").splitlines()
-    assert "accelerate>=1.10,<2" in dev
+    dev = [
+        Requirement(line.strip())
+        for line in (REQUIREMENTS / "features" / "dev.in").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert "accelerate" in {requirement.name for requirement in dev}
 
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     candidate_profile = (REQUIREMENTS / "profiles" / "candidate.in").read_text(

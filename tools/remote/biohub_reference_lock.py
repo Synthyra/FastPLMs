@@ -11,6 +11,7 @@ import platform
 import re
 import subprocess
 import sys
+
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -333,17 +334,17 @@ def _parse_biotraj(value: object) -> BioTrajPolicy:
 
 def _parse_inventory(value: object, *, field: str) -> dict[str, str]:
     raw = _mapping(value, field=field)
-    result: dict[str, str] = {}
+    versions_by_name: dict[str, str] = {}
     for raw_name, raw_version in raw.items():
         if _NAME.fullmatch(raw_name) is None:
             raise BiohubReferenceLockError(f"Invalid distribution name in {field}: {raw_name!r}")
         name = canonical_distribution_name(raw_name)
-        if name != raw_name or name in result:
+        if name != raw_name or name in versions_by_name:
             raise BiohubReferenceLockError(f"{field} names must be unique and canonical.")
-        result[name] = normalize_distribution_version(
+        versions_by_name[name] = normalize_distribution_version(
             name, _string(raw_version, field=f"{field}.{name}")
         )
-    return dict(sorted(result.items()))
+    return dict(sorted(versions_by_name.items()))
 
 
 def _parse_pip_check_platform_exceptions(
@@ -1039,13 +1040,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     arguments = _parser().parse_args(argv)
     if arguments.command == "verify-contract":
-        result: object = verify_biohub_reference_lock_contract(arguments.root, arguments.contract)
+        report: object = verify_biohub_reference_lock_contract(arguments.root, arguments.contract)
     elif arguments.command == "verify-inventory":
-        result = verify_current_installed_inventory(
+        report = verify_current_installed_inventory(
             arguments.root, arguments.contract, profile=arguments.profile
         )
     elif arguments.command == "verify-pip-check":
-        result = verify_current_pip_check(arguments.root, arguments.contract)
+        report = verify_current_pip_check(arguments.root, arguments.contract)
     elif arguments.command == "materialize-wheel-lock":
         parsed = materialize_biotraj_wheel_lock(
             arguments.root,
@@ -1054,16 +1055,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             arguments.output,
             wheel_uri=arguments.wheel_uri,
         )
-        result = {"package_count": len(parsed.inventory), "output": str(arguments.output)}
+        report = {"package_count": len(parsed.inventory), "output": str(arguments.output)}
     else:
-        result = write_biohub_reference_build_evidence(
+        report = write_biohub_reference_build_evidence(
             arguments.root,
             arguments.contract,
             arguments.wheel,
             arguments.output,
             build_image_id=arguments.build_image_id,
         )
-    print(json.dumps(result, sort_keys=True))
+    print(json.dumps(report, sort_keys=True))
     return 0
 
 

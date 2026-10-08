@@ -97,6 +97,27 @@ def baseline_source_root() -> Path:
     return Path(os.environ.get("FASTPLMS_EVIDENCE_BASELINE_ROOT", str(BASELINE_DIRECTORY)))
 
 
+def is_git_checkout() -> bool:
+    """Whether the repository root is the top of a Git work tree.
+
+    The research workspace that develops FastPLMs keeps no Git metadata, and neither
+    do its projections. A launch from such a tree has no revision and no baseline, so
+    the snapshot digest alone identifies what a worker received.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "--show-toplevel"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+    # A tree nested inside some other repository is not that repository's checkout.
+    return completed.returncode == 0 and Path(completed.stdout.strip()).resolve() == ROOT.resolve()
+
+
 def export_baseline_source(revision: str = "HEAD", *, destination: Path | None = None) -> str:
     """Materialize the runtime source at a Git revision and return the resolved commit.
 
