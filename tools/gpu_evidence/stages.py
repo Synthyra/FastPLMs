@@ -22,8 +22,9 @@ from .config import (
 
 
 Device = Literal["cpu", "gpu"]
-# ``fold`` is the candidate image plus an isolated official ESMFold2 environment.
-WorkerImage = Literal["candidate", "fold"]
+# ``fold`` is the candidate image plus an isolated official ESMFold2 environment; ``check`` is
+# the CPU image plus the oracle and confidence packages the check tier imports.
+WorkerImage = Literal["candidate", "fold", "check"]
 _PYTEST = ("-m", "pytest")
 # A pytest ``-k`` expression: identifiers, boolean words, brackets, and spaces.
 _SELECTION_PATTERN = re.compile(r"[A-Za-z0-9_ ()\[\]\-.]+")
@@ -69,6 +70,25 @@ STAGES: dict[str, StageSpec] = {
             ),
             CPU_WORKER_TIMEOUT_SECONDS,
         ),
+        # The pre-merge ``check`` selection of docs/testing.md. It imports the oracle and
+        # confidence packages, which stay out of the CPU gate's image to keep its time budget.
+        StageSpec(
+            "check",
+            "cpu",
+            (
+                *_PYTEST,
+                "tests/unit",
+                "tests/integration",
+                "tests/release",
+                "-m",
+                "not gpu and not slow and not structure and not artifact",
+                "-n",
+                "8",
+                "-rfEs",
+            ),
+            CPU_WORKER_TIMEOUT_SECONDS,
+            image="check",
+        ),
         # The confidence-pilot tests need packages outside the requirement files and
         # are owned by the ``tests`` stage of tools.confidence.launch.
         StageSpec(
@@ -90,6 +110,21 @@ STAGES: dict[str, StageSpec] = {
             "flash-integration",
             "gpu",
             (*_PYTEST, "tests/integration/test_flash_attention_backends.py"),
+            GPU_WORKER_TIMEOUT_SECONDS,
+        ),
+        # Every declared sequence golden: FP32 truth and the BF16 error bound. The golden
+        # files are evidence (evidence.toml), so restore them into the tree before launch.
+        StageSpec(
+            "goldens",
+            "gpu",
+            (*_PYTEST, "tests/integration/test_official_goldens.py", "-m", "gpu", "-rfEs"),
+            GPU_WORKER_TIMEOUT_SECONDS,
+        ),
+        # Every declared ESMFold2 structure golden, the 6B checkpoints included.
+        StageSpec(
+            "structure-goldens",
+            "gpu",
+            (*_PYTEST, "tests/structure/test_structure_official_goldens.py", "-m", "gpu", "-rfEs"),
             GPU_WORKER_TIMEOUT_SECONDS,
         ),
         # Do the manifest-locked FlashAttention kernels still resolve and load?

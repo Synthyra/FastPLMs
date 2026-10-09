@@ -218,6 +218,16 @@ another by 4.7 to 7.9 angstrom, so that case does not separate the modes. On
 this small panel the windowed mode sits inside sampling spread. It is not the
 structure benchmark, which remains pending.
 
+These measurements, the cost measurements above, and the confidence-head training
+rollouts predate a sampler fix of 2026-10-08. Until then FastPLMs' forwards and `fold()`
+passed `max_inference_sigma=None` to the diffusion sampler unless a caller set it, which
+removed the official cap of 256 and started every fold at sigma 2,560. Each seed therefore
+gave a different sample than official ESMFold2 (0.17 to 1.10 angstrom C-alpha RMSD on one
+GPU); with the cap as the default, FastPLMs matches official at about 1e-6 angstrom. On
+100 held-out confidence targets the cap left fold quality and the ESMFold2-300 head's
+calibration unchanged within their intervals, so the comparisons above stand as relative
+measurements.
+
 ## Hash-pinned CCD asset
 
 Structure preparation requires `ccd.pkl` from the immutable snapshot

@@ -325,9 +325,11 @@ command. `tools/gpu_evidence/stages.py` holds the fixed stage table:
 | Stage | Worker | Runs |
 | --- | --- | --- |
 | `cpu-contract` | CPU | The required offline CPU gate |
+| `check` | CPU | The `check` selection above, with the oracle and confidence packages |
 | `typing` | CPU | mypy errors that the working tree adds to its Git baseline |
 | `unit` | GPU | `tests/unit` without the confidence-pilot tests |
 | `parity-local` | GPU | The local ESMFold2 source-parity tests of the release suite |
+| `goldens`, `structure-goldens` | GPU | Every declared sequence golden (FP32 truth and the BF16 error bound), and every ESMFold2 structure golden; restore `tests/goldens` with `evidence_store fetch` first |
 | `probe` | GPU | Resolution and loading of the manifest-locked FlashAttention kernels |
 | `lever-bench`, `flash-lever-bench`, `runner-lever-bench` | GPU | Latency of the working tree against its Git baseline |
 | `backend-bench` | GPU | Latency of every advertised attention backend on padded and full batches |
@@ -478,7 +480,8 @@ its name, or its place in this table.
 | ESMFold, ESMFold2 | `test_structure_official_goldens.py` | The checked-in structure golden |
 | Boltz2 | `test_boltz_checkpoint_io.py::test_pinned_checkpoint_loads_every_saved_tensor_and_nothing_else` | No golden is declared. The exact-load invariant: no missing, extra, or mismatched key, every tensor equal to the file's, all finite |
 
-The sequence golden is `tests/integration/test_official_goldens.py::test_declared_sequence_golden_matches_candidate`.
+The sequence golden is `tests/integration/test_official_goldens.py::test_declared_sequence_golden_matches_candidate`
+(FP32); `test_declared_sequence_golden_bounds_candidate_bf16_error` checks BF16 against the same golden.
 It also needs a GPU, so it carries `gpu` beside `checkpoint`, and it carries `large` for the checkpoints that need
 24 GiB of accelerator memory.
 
@@ -520,6 +523,9 @@ must meet the engineering target, not only the hard limit.
 | --- | ---: | ---: |
 | FP32 official relative L2 | `2e-6` | `2e-5` |
 | FP32 relative Q99.9 error | `1e-5` | `1e-4` |
+| FP32 golden relative L2, recorded on another device | `5e-5` | `1e-4` |
+| FP32 golden relative Q99.9, recorded on another device | `1e-4` | `2e-4` |
+| BF16 golden error, as a multiple of official BF16 error | `1.25` | `1.5` |
 | BF16 official or backend relative L2, except scoped rows below | `1e-2` | `3e-2` |
 | ESM2 optimized-backend BF16 relative L2 | `2e-2` | `3e-2` |
 | ESMC eager BF16 relative L2 | `2.9e-2` | `3e-2` |
@@ -658,9 +664,21 @@ checkpoints fail when generation output is absent. Feature tests retain viable
 family representatives even when one checkpoint's pinned official sampler is
 unusable.
 
-For sequence models, the input is `metadata.json` plus `bf16.safetensors`. The
-converter retains token inputs, the biological-residue mask, the final hidden
-state, and logits when the official head returns them. For structure models,
+For sequence models, the input is `metadata.json` plus `fp32.safetensors` and
+`bf16.safetensors`; every native run records both. The converter retains token
+inputs, the biological-residue mask, and the strict-FP32 final hidden state and
+logits as `output__*`. It keeps the same run's official BF16 outputs as
+`official_bf16__*`, and rejects a result whose two runs saw different inputs or
+whose FP32 outputs are not FP32.
+
+A reference container that pins a CUDA build the recording host cannot install
+(`reference-dplm` and `reference-e1` pin x86-only wheels) runs
+`native_reference --cpu-fp32` instead: the same pinned package versions with
+PyTorch's CPU build, recording the strict-FP32 run only. Its golden takes the
+official BF16 run from the golden `models.toml` currently declares, passed with
+`--official-bf16-golden-root`; the converter validates that golden against its
+pinned digests, requires identical inputs, and records both sources. For
+structure models,
 the input is the official `metadata.json` plus `bundle.safetensors`. In both
 cases it validates the model ID, checkpoint revision and file identities,
 reference environment, normalized tensor contract, and source-result hashes.
@@ -680,8 +698,15 @@ When replacing a golden, publish the reviewed payload to the evidence dataset
 and update `evidence.toml` to its immutable revision and file identities. Keep
 the `official_golden` identities in `models.toml` consistent with that payload.
 
-The sequence regression resolves the current repository-source class from the manifest
-`auto_map` and loads only the pinned checkpoint weights. Generated remote-code
+The sequence regression has two checks per checkpoint, and neither depends on
+the GPU that recorded the golden. FastPLMs in strict FP32 must match the
+official FP32 outputs under the cross-device FP32 golden contract below.
+FastPLMs in BF16 must be no farther from those FP32 outputs than the official
+BF16 run, within the BF16 golden error ratio: relative L2 and Q99.9 at most
+1.25 times the official error (hard limit 1.5), and logit Jensen-Shannon
+divergence at most 1.25 squared times it. It resolves the current
+repository-source class from the manifest `auto_map` and loads only the pinned
+checkpoint weights. Generated remote-code
 artifacts have their own offline suite. This separation prevents stale Hub code
 from substituting for the repository implementation under test.
 

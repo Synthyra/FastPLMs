@@ -91,6 +91,30 @@ FP32_CONTRACT = NumericContract(
     jsd_target=1e-8,
     jsd_hard=1e-6,
 )
+# A golden's FP32 truth was recorded on another device. Strict FP32 differs across
+# devices by reduction order, and the difference compounds with depth: FastPLMs on a
+# GH200 against official CPU outputs measured 1.5e-6 (ANKH-Base) to 1.8e-5 (DPLM2-3B)
+# relative L2. These limits sit above that floor and three orders of magnitude below
+# the smallest implementation error found (DPLM2 embedding scale, 3.7e-2 in 2026-10).
+FP32_GOLDEN_CONTRACT = NumericContract(
+    relative_l2_target=5e-5,
+    relative_l2_hard=1e-4,
+    relative_q999_target=1e-4,
+    relative_q999_hard=2e-4,
+    residue_cosine_target=0.99999,
+    residue_cosine_hard=0.9999,
+    pooled_cosine_target=0.99999,
+    pooled_cosine_hard=0.9999,
+    top1_target=FP32_CONTRACT.top1_target,
+    top1_hard=FP32_CONTRACT.top1_hard,
+    jsd_target=FP32_CONTRACT.jsd_target,
+    jsd_hard=FP32_CONTRACT.jsd_hard,
+)
+# FastPLMs BF16 may be at most this many times farther from a golden's FP32 truth
+# than the official BF16 run in the same golden. Both errors are BF16 rounding of
+# the same computation, so their ratio does not depend on which GPU ran either one.
+BF16_GOLDEN_ERROR_RATIO_TARGET = 1.25
+BF16_GOLDEN_ERROR_RATIO_HARD = 1.5
 BF16_CONTRACT = NumericContract(
     relative_l2_target=1e-2,
     relative_l2_hard=3e-2,

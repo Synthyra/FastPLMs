@@ -43,13 +43,27 @@ SOURCE_DIRECTORIES = (
     "vendor/upstream/biohub-esm/esm",
     # The pinned official ESMC source that the sparse-autoencoder tests compare against.
     "vendor/upstream/biohub-transformers/src/transformers/models/esmc",
+    # The other pinned official sources are small enough to upload whole; the check tier's
+    # source-independence, legal-inventory and submodule tests read them.
+    "vendor/upstream/ankh",
+    "vendor/upstream/boltz",
+    "vendor/upstream/dplm",
+    "vendor/upstream/e1",
+    "vendor/upstream/fair-esm",
+    "vendor/upstream/openfold",
+    "vendor/upstream/protein-ttt",
 )
 SOURCE_FILES = (
     "pytest.ini",
+    ".python-version",
     "mypy.ini",
     "kernels.lock",
     "evidence.toml",
     "vendor/README.md",
+    # Legal texts of the two upstreams uploaded only in part.
+    "vendor/upstream/biohub-esm/LICENSE.md",
+    "vendor/upstream/biohub-esm/THIRD_PARTY_NOTICE.md",
+    "vendor/upstream/biohub-transformers/LICENSE",
     # The source-inventory parity test checks the pinned submodule list.
     ".gitmodules",
     ".dockerignore",

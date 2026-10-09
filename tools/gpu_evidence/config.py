@@ -21,15 +21,18 @@ GPU_CHOICES = tuple(GPU_DOLLARS_PER_SECOND)
 DEFAULT_GPU = "L4"
 DEFAULT_MAX_DOLLARS = 25.0
 
-CPU_CORES = 8.0
-CPU_MEMORY_GIB = 16.0
+# Sixteen cores leave the check stage's eight test processes room for the cold
+# interpreters its subprocess contracts start under a time limit.
+CPU_CORES = 16.0
+CPU_MEMORY_GIB = 32.0
 GPU_CORES = 4.0
 GPU_MEMORY_GIB = 32.0
 STARTUP_TIMEOUT_SECONDS = 900
 ENVIRONMENT_PROBE_TIMEOUT_SECONDS = 300
 # Modal fixes a function's timeout at decoration, so each worker class takes
 # the longest stage it can host; the stage's own timeout bounds the subprocess.
-CPU_WORKER_TIMEOUT_SECONDS = 1_800
+# The check stage runs about 4,700 tests in 25 to 30 minutes on sixteen cores.
+CPU_WORKER_TIMEOUT_SECONDS = 3_600
 GPU_WORKER_TIMEOUT_SECONDS = 3_600
 # The folding sweep loads eight models in turn and folds each up to 1,024 residues.
 FOLD_WORKER_TIMEOUT_SECONDS = 7_200

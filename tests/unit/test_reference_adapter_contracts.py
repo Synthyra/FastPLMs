@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import sys
 import pytest
 import torch
 import torch.nn as nn
 
-from types import SimpleNamespace
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from tests.parity.support.native_reference import (
     _adapter_reference_sources,
     _generation_contract,
@@ -21,7 +23,10 @@ from tests.parity.support.reference_adapters.dplm2 import (
     _call_checkpoint_generate,
 )
 
-from tools.remote.reference_source_attestation import ReferenceSourceAttestationError
+from tools.remote.reference_source_attestation import (
+    ReferenceSourceAttestationError,
+    _validate_cached_package_modules,
+)
 
 
 class _AcceptsTypeIds(nn.Module):
@@ -219,6 +224,36 @@ def test_native_adapter_rejects_malformed_source_attestation() -> None:
             adapter,
             {"model_id": "esmc_small", "family": "esm_plusplus"},
         )
+
+
+def test_cached_namespace_package_must_lie_in_the_pinned_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Biohub's esm.models has no __init__.py; its directories still have to be pinned source."""
+
+    import_root = (tmp_path / "site-packages" / "esmtoy").resolve()
+    (import_root / "models").mkdir(parents=True)
+    (import_root / "__init__.py").write_text("", encoding="utf-8")
+    package = ModuleType("esmtoy")
+    package.__file__ = str(import_root / "__init__.py")
+    namespace = ModuleType("esmtoy.models")
+    namespace.__path__ = [str(import_root / "models")]
+    monkeypatch.setitem(sys.modules, "esmtoy", package)
+    monkeypatch.setitem(sys.modules, "esmtoy.models", namespace)
+    assert _validate_cached_package_modules("esmtoy", import_root) is package
+
+    namespace.__path__ = [str(import_root / "models"), str(tmp_path / "elsewhere")]
+    with pytest.raises(ReferenceSourceAttestationError, match="outside the pinned source"):
+        _validate_cached_package_modules("esmtoy", import_root)
+
+    namespace.__path__ = []
+    with pytest.raises(ReferenceSourceAttestationError, match="spans no directory"):
+        _validate_cached_package_modules("esmtoy", import_root)
+
+    monkeypatch.setitem(sys.modules, "esmtoy.models", ModuleType("esmtoy.models"))
+    with pytest.raises(ReferenceSourceAttestationError, match="has no source file"):
+        _validate_cached_package_modules("esmtoy", import_root)
 
 
 def test_dplm2_checkpoint_forward_selection_is_signature_gated() -> None:

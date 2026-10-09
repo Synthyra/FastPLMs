@@ -333,6 +333,18 @@ def _validate_cached_package_modules(
             raise ReferenceSourceAttestationError(
                 f"Cached reference module {module_name!r} has no module object."
             )
+        namespace_paths = getattr(module, "__path__", None)
+        if getattr(module, "__file__", None) is None and namespace_paths is not None:
+            # A namespace package (Biohub's esm.models) has no file; each directory it
+            # spans must still lie in the pinned source.
+            directories = list(namespace_paths)
+            if not directories:
+                raise ReferenceSourceAttestationError(
+                    f"Cached {module_name!r} namespace package spans no directory."
+                )
+            for directory in directories:
+                _assert_source_file(directory, import_root, context=f"Cached {module_name!r}")
+            continue
         _module_source_file(module, import_root, context=f"Cached {module_name!r}")
         if module_name == import_name:
             cached_top_level = module

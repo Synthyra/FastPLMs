@@ -17,6 +17,7 @@ from tools.typing_gate import (
     BASELINE_MYPY_VERSION,
     BASELINE_PYTHON_VERSION,
     BASELINE_RAW_REPORT_SHA256,
+    BASELINE_RENAMES,
     BASELINE_REVISION,
     BASELINE_SOURCE_INVENTORY_SHA256,
     BASELINE_SOURCE_TREE_SHA256,
@@ -369,12 +370,68 @@ def test_load_baseline_rejects_valid_but_untrusted_attestation_digest(
         load_baseline(path)
 
 
+def _pin_baseline_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report the baseline interpreter and mypy, whatever the test host runs."""
+
+    monkeypatch.setattr(
+        typing_gate,
+        "toolchain_identity",
+        lambda: {"python": BASELINE_PYTHON_VERSION, "mypy": BASELINE_MYPY_VERSION},
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "message"),
+    [
+        ("baseline", "Baseline generation requires Python"),
+        ("compare", "Candidate typing environment differs from the baseline"),
+    ],
+)
+def test_cli_refuses_a_toolchain_other_than_the_baseline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    message: str,
+) -> None:
+    monkeypatch.setattr(
+        typing_gate,
+        "toolchain_identity",
+        lambda: {"python": BASELINE_PYTHON_VERSION, "mypy": "0.0.1"},
+    )
+
+    def refuse_mypy(repo_root: Path) -> tuple[int, bytes]:
+        pytest.fail("mypy ran under a toolchain other than the baseline's")
+
+    monkeypatch.setattr(typing_gate, "_run_mypy", refuse_mypy)
+    baseline_arguments = ["--baseline", str(BASELINE)] if command == "compare" else []
+
+    exit_code = main(
+        (
+            command,
+            *baseline_arguments,
+            "--raw-output",
+            str(tmp_path / "raw.txt"),
+            "--scope-manifest",
+            str(SCOPE),
+            "--repo-root",
+            str(ROOT),
+            "--output",
+            str(tmp_path / "output.json"),
+        )
+    )
+
+    assert exit_code == 2
+    assert message in capsys.readouterr().err
+
+
 def test_compare_cli_writes_report_for_unparseable_infrastructure_exit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw_output = tmp_path / "mypy.txt"
     report = tmp_path / "report.json"
+    _pin_baseline_toolchain(monkeypatch)
     monkeypatch.setattr(
         typing_gate,
         "_run_mypy",
@@ -423,6 +480,7 @@ def test_baseline_cli_executes_the_owned_mypy_command(
     output = tmp_path / "baseline.json"
     calls: list[Path] = []
 
+    _pin_baseline_toolchain(monkeypatch)
     monkeypatch.setattr(
         typing_gate,
         "verified_git_head",
@@ -517,4 +575,17 @@ def test_checked_baseline_manifest_and_command_are_complete() -> None:
     assert baseline["source_tree_sha256"] == BASELINE_SOURCE_TREE_SHA256
     assert baseline["raw_report_sha256"] == BASELINE_RAW_REPORT_SHA256
     assert baseline["fingerprint_sha256"] == BASELINE_FINGERPRINT_SHA256
-    assert set(baseline["source_files"]).issubset(source_files)
+    assert {BASELINE_RENAMES.get(name, name) for name in baseline["source_files"]}.issubset(source_files)
+
+
+def test_baseline_renames_name_real_renames() -> None:
+    baseline, fingerprints = load_baseline(BASELINE)
+    source_files = set(discover_source_files(ROOT, load_scope_manifest(SCOPE)))
+
+    for old_name, new_name in BASELINE_RENAMES.items():
+        assert old_name in baseline["source_files"]
+        assert old_name not in source_files
+        assert new_name in source_files
+        assert new_name not in baseline["source_files"]
+    # The map changes only inventory paths; a renamed file's recorded errors would need mapping too.
+    assert not {fingerprint.path for fingerprint in fingerprints} & set(BASELINE_RENAMES)

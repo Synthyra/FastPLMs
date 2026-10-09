@@ -1,7 +1,7 @@
 # Public evidence payloads; runtime configuration and test inputs remain in Git.
 schema_version = 1
 repository = "Synthyra/FastPLMs-artifacts"
-revision = "d7039a56e732e2de7685abefdbea57dfc6a9da13"
+revision = "62de7717d7462397b74ff04f3b54522f5739ef48"
 
 [[files]]
 path = "docs/evidence/attention/backend_latency.json"
@@ -100,233 +100,233 @@ sha256 = "ba9c674335b42e5ff7346e800049cc176ce186440d466235a12050d906891938"
 
 [[files]]
 path = "tests/goldens/ankh2_large.json"
-size = 4537
-sha256 = "e8df38994ca1a1e0c598ace34a0b257b264937e4fdbb01bc41544985116b02a4"
+size = 5198
+sha256 = "bdafcd179bc055ea223de43228801b1b6c35196741ac4cc4cca0571e3291e6dc"
 
 [[files]]
 path = "tests/goldens/ankh2_large.safetensors"
-size = 574922
-sha256 = "25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d"
+size = 1717818
+sha256 = "44d5fc5c74a0d166ceac54d12505a109f8338cb7090af2f37e39bd78545a3c52"
 
 [[files]]
 path = "tests/goldens/ankh3_large.json"
-size = 4635
-sha256 = "2e5bb05b3baa5baa78f61fef7d2a2c669b0da5dbfaf6b50b12abd3e17253a961"
+size = 5296
+sha256 = "ab3a671260bdad481635d4a4be1b8072d5a2e02e3df1178202713c9a7e56af49"
 
 [[files]]
 path = "tests/goldens/ankh3_large.safetensors"
-size = 574922
-sha256 = "e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513"
+size = 1717818
+sha256 = "cc55274281e87d22cf7828117678df2e37a1ece543f5b401b65a0cd6f8b6fa27"
 
 [[files]]
 path = "tests/goldens/ankh3_xl.json"
-size = 4872
-sha256 = "66bb12e033e4163be225d636108a479393228a4f5061015c8af114e766c3c486"
+size = 5533
+sha256 = "a2d302227ee616698af18502d03e2b6b136d589134058d82b018520f18498431"
 
 [[files]]
 path = "tests/goldens/ankh3_xl.safetensors"
-size = 955850
-sha256 = "72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae"
+size = 2860602
+sha256 = "d18c086a4849b220761019f219590fe0c1c6f17698c365ccb0a5a8804446286c"
 
 [[files]]
 path = "tests/goldens/ankh_base.json"
-size = 4444
-sha256 = "ebce8d7de821827ee995789c9b38d79252d3b2f76888130b0a8a7eedafaefe2b"
+size = 5104
+sha256 = "21f129b7b71c026cbd3b3fdb712af06d5b6f256b487ef8b01fcc506d2bc6c7b6"
 
 [[files]]
 path = "tests/goldens/ankh_base.safetensors"
-size = 289226
-sha256 = "f0e78aa15d11749e0c64ff57f9e88c51cec6538a0adf8951f839df70cc708b65"
+size = 860722
+sha256 = "449db3638117d5b6027380fdf4b05698bb156024b2b3f7e0ceb295a86e5ec756"
 
 [[files]]
 path = "tests/goldens/ankh_large.json"
-size = 4449
-sha256 = "59492518b021de5cfaea87d672c9448c8558e99a3443ba2cc7ab544963196ecb"
+size = 5110
+sha256 = "8f269215ee29887661abb6c139139dd1782f5112b94eb63be968282a7f050e1b"
 
 [[files]]
 path = "tests/goldens/ankh_large.safetensors"
-size = 574922
-sha256 = "3fb8d3ac27716d15a9ea92aeef6acf2b977bcc887d9b535000539e523673459b"
+size = 1717818
+sha256 = "4a7aea66e91cf880b0b839495d7704831725b672fe169f8e7258b5643d77aff9"
 
 [[files]]
 path = "tests/goldens/dplm2_150m.json"
-size = 7501
-sha256 = "d269de779ea1503de72c77e7b2e6224afc9797bd945b40c571ff6faec782e4aa"
+size = 13793
+sha256 = "5f2c496e4b557faf70bdde03b531f753fc7f20c5868bab79dcf378ee358781a1"
 
 [[files]]
 path = "tests/goldens/dplm2_150m.safetensors"
-size = 13416818
-sha256 = "17fc26600938ba5364b8ecb96750786d33e9f92bcd4ea4df3e12a389340748eb"
+size = 26826946
+sha256 = "7390559bc54f27f08972c8f0adcf17954065450d937b3984303c1ae1ec003855"
 
 [[files]]
 path = "tests/goldens/dplm2_3b.json"
-size = 8209
-sha256 = "d6e0e02af53b13cb129192f06e264758aa21c9ebf4ee82411cf67037082d2329"
+size = 14498
+sha256 = "ded7978cf84da1d56d8b4693418030ec3b0086bf6466be2242fb0ce424296b9f"
 
 [[files]]
 path = "tests/goldens/dplm2_3b.safetensors"
-size = 16319858
-sha256 = "838b11824d08f83bcb0c0b3268e579f3a87dbfb965370cfe5c3f8793b96b1964"
+size = 32633034
+sha256 = "7490f771f8b8f8137b333f98d6b7dbd2cb48708c8649d4459279a6711b9e5870"
 
 [[files]]
 path = "tests/goldens/dplm2_650m.json"
-size = 7502
-sha256 = "d9a7548f9af657a72d441ca70f27379863724fcce8ddd3da4f672104b7bfb772"
+size = 13795
+sha256 = "af7b8c4fab48773e1ddd2cfd941cf3d518ea27ed8519f467ddf0da788a0aa6be"
 
 [[files]]
 path = "tests/goldens/dplm2_650m.safetensors"
-size = 14384498
-sha256 = "c4e0e467c252c3ac813363d2d4b17a5e3bd99e75fad315e76d97689b4655ddac"
+size = 28762314
+sha256 = "c45f4ca267183b11dd06244ed3c3f39cf5b6139f778733fa63a6e2b5a46b0678"
 
 [[files]]
 path = "tests/goldens/dplm_150m.json"
-size = 7490
-sha256 = "3228551fe3bed951db9ec97347143ec4462ce7c221ac240b7ce7730948c1dc1f"
+size = 13776
+sha256 = "541167ffcd12b2d7e101046b2d17e800c70ba5db1b561212575301f2d1c407f8"
 
 [[files]]
 path = "tests/goldens/dplm_150m.safetensors"
-size = 512449
-sha256 = "392992235195beed97ab8359b90a2e11e52f4326606f99a471447bed81d146bd"
+size = 1021437
+sha256 = "f8e4ddd580d4708dad2d7da002735b2a01d69ece478c46c4932eb2f3933dc836"
 
 [[files]]
 path = "tests/goldens/dplm_3b.json"
-size = 7849
-sha256 = "a5b6df8b9c7b371976892ec1d6c45581a32ad3a6325c6c0a0b3267012848c8ed"
+size = 14132
+sha256 = "0f8d8fb7df562c30abf730abe55db4a8c13d40877dd21772375fe1f34030159a"
 
 [[files]]
 path = "tests/goldens/dplm_3b.safetensors"
-size = 1963977
-sha256 = "75b0a0854fc391133920b0feaaeb8f69ab7568a88b3759627aca1556c4338c1e"
+size = 3924485
+sha256 = "6942218079232a8185b1ae6e1578474c7784722e28f528b76ec89ca77777e2b9"
 
 [[files]]
 path = "tests/goldens/dplm_650m.json"
-size = 7491
-sha256 = "bf58d0ce73aaac7e6fb1923ef3d9adad67122df2a3dd414c3229488ef9587a6d"
+size = 13778
+sha256 = "2bd482c94b1b6b3ac901b5ff9b06e2d189cda1a8fe2f8ff32e5d52b64c2c446b"
 
 [[files]]
 path = "tests/goldens/dplm_650m.safetensors"
-size = 996297
-sha256 = "073f0a6abea7e48f28c2d921ff8329a28e22627f01979277cb324908a01b3378"
+size = 1989117
+sha256 = "70e2c46ed722942d3b628b556b92c9994688cb4853b278eb1e40a3dfbbd9dfc4"
 
 [[files]]
 path = "tests/goldens/e1_150m.json"
-size = 5051
-sha256 = "701a64a6ab1a2fec5a427555b6af96232526c15cb3d5b4dc7fb253ac8f20b922"
+size = 8556
+sha256 = "e7520331135fd4c98f52f21c470dbba5cb5f4defb418494c63199fb000621e65"
 
 [[files]]
 path = "tests/goldens/e1_150m.safetensors"
-size = 333099
-sha256 = "6558bc8f1a7b20629eaaaa6f72601d0c2cdb859a5dc13595549b1773b6e2de41"
+size = 958851
+sha256 = "03a2e93e7b3e54b12f99eea7678ff80828922f92c3683d4909346a05d74815bc"
 
 [[files]]
 path = "tests/goldens/e1_300m.json"
-size = 5052
-sha256 = "d3478f3f5957a0e0377864074dde0107de890019f96cb63548ee17ffb8f3ec3a"
+size = 8558
+sha256 = "d97637bf789fed61b4ad575f904f37befcea42e9436e8d841e8f8f2cff1d1b17"
 
 [[files]]
 path = "tests/goldens/e1_300m.safetensors"
-size = 432939
-sha256 = "92778b9ef95a803ddc84b3e3ca764c59e045872a94bcff0eb0cd47647732c188"
+size = 1258379
+sha256 = "d125ea866899d2788330d6877d77c48c69febbf7f01d629f4107f9647cfa13ff"
 
 [[files]]
 path = "tests/goldens/e1_600m.json"
-size = 5052
-sha256 = "914be191c28141c1f84535cdb69ead0588a2057bb19d46c5bc7f3891a3d6739e"
+size = 8558
+sha256 = "0c9afc83b96ed8ad7f339a26df4ba5853e7994ad54dd3cd837deb9869c0cd2a9"
 
 [[files]]
 path = "tests/goldens/e1_600m.safetensors"
-size = 532779
-sha256 = "22ed8417a4651ded255099f6d15c63c2c40552e700d2b0470d1adfde3a39c513"
+size = 1557899
+sha256 = "d470d6833f0b38bec070aa37e9f3c49717ea82d31c794af843550bb7e56253a6"
 
 [[files]]
 path = "tests/goldens/esm2_150m.json"
-size = 4014
-sha256 = "c04c93486024ba0fa1c81fbfbe92ee79d1d4c7f1cfcc2c9886728522f752feab"
+size = 4881
+sha256 = "864e1f9c1d8e939e8da050b8617b8a7d6983fbb11a5911275d1571d08e460a79"
 
 [[files]]
 path = "tests/goldens/esm2_150m.safetensors"
-size = 512449
-sha256 = "c03fe9916dba137b452a6bbe944c7dc414db4019a6f0921e87b92d4bb6a8a42f"
+size = 1021437
+sha256 = "20ad986b8e6e09f36d0158f5939d1914e0809b84329695028d767aab93338621"
 
 [[files]]
 path = "tests/goldens/esm2_35m.json"
-size = 4010
-sha256 = "e919d3ce6d20b6a942d27d92323814ae7594a0129dc9c4de27c5053e96675bcd"
+size = 4877
+sha256 = "61cd24fd91ef2dc49cbc0f97b14c0d5c97849eca6f36ed8c294295147909cb38"
 
 [[files]]
 path = "tests/goldens/esm2_35m.safetensors"
-size = 391489
-sha256 = "c9b8bb616cf884fb7744521a2fcc6eed23586342d11241e6c9ef16454ec31e17"
+size = 779509
+sha256 = "4f82d10286e16041c2f23365dfdd8508b911864633287dd76580425527c2d922"
 
 [[files]]
 path = "tests/goldens/esm2_3b.json"
-size = 4139
-sha256 = "5043b2333c57a34d54fac53916722d1acb4b6fd50395b9abafa805435b184a48"
+size = 5007
+sha256 = "aa441786329889d43983811cac155cabd37b38cfd47bc90d415732a295c33c6d"
 
 [[files]]
 path = "tests/goldens/esm2_3b.safetensors"
-size = 1963977
-sha256 = "dfd5a8cb05d3e814a080185c4808c8e7ec2277f070f395562fcfbe4376789e4e"
+size = 3924485
+sha256 = "61080e55e07db4a562a19e9b6b662e71a9fd3d8fee357aa3df00697d2fa58e33"
 
 [[files]]
 path = "tests/goldens/esm2_650m.json"
-size = 4015
-sha256 = "f18332172fcb3abf5dd2485fd55f5b0d193ad3b93a44cc744e0d02817c927477"
+size = 4883
+sha256 = "b57f18c8803e68e6c621f479fd7a70596fbc416fc4a17d2ab91c639b480006c4"
 
 [[files]]
 path = "tests/goldens/esm2_650m.safetensors"
-size = 996297
-sha256 = "c3a66b75add03628e62e238cb63da6a9e4d321f8160e84bdf2a131c096977f86"
+size = 1989117
+sha256 = "261a8b71c4b7c90b1f294031558ee0bf00d77a98352021eb78771200c8d40548"
 
 [[files]]
 path = "tests/goldens/esm2_8m.json"
-size = 4005
-sha256 = "6975e86d1d8f27488bf2a676551feaa48cc19254c9d24b6acb09198122745609"
+size = 4872
+sha256 = "06b3ccbf45a46a7aed3833b49503567f7534ffe60e6b3e49fcfcf17d04b7237e"
 
 [[files]]
 path = "tests/goldens/esm2_8m.safetensors"
-size = 270529
-sha256 = "b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c"
+size = 537589
+sha256 = "d08a7572cbef20b8b19b545bcb0427b7e9ae19b986d015c559cd5a3a2cfc8aa4"
 
 [[files]]
 path = "tests/goldens/esm3_small.json"
-size = 5855
-sha256 = "5470e8596cbba0e2882647eccbc53c36d8b48b0f3947d1fe0bcea68da1078c32"
+size = 6744
+sha256 = "e476bad7ccdfa2f908261a03e20116c0854eece292a553196f940b594088204d"
 
 [[files]]
 path = "tests/goldens/esm3_small.safetensors"
-size = 1189077
-sha256 = "d957922f810c9ab4c557d80d5aaaf6a3aab79a5a45e4638012a634a4134803b1"
+size = 2398877
+sha256 = "251e050926a1f2426401bac6b93b4cb00041d0b0a5c8a458d0ef0e6a5d0d87c3"
 
 [[files]]
 path = "tests/goldens/esmc_6b.json"
-size = 6480
-sha256 = "e229d938719782f280fab22dfc4c43e86109fdb0cc523631168c5a491afaace3"
+size = 7369
+sha256 = "7e044e7e8d106d43169c4148521c54d0d09bb989624543d648247a110f1907d4"
 
 [[files]]
 path = "tests/goldens/esmc_6b.safetensors"
-size = 995810
-sha256 = "a948945e985c7deaca7be8b7eed09c0a9521a2af3f2b10fc2ec7a7d2a0f99ada"
+size = 2979762
+sha256 = "46139de6b28ab4f9e3244fb6ef3f259fc5e6518a3825f0fb4fd4a4fece6da8e6"
 
 [[files]]
 path = "tests/goldens/esmc_large.json"
-size = 5891
-sha256 = "7a4d614f67b6fde417f3fd89f61e7ec442ae284769734b2b73e14945a816a8fd"
+size = 6780
+sha256 = "86ffe179a9feafd067793f440d25e3606f184f0d32063aeaeb1842b14aa55d3b"
 
 [[files]]
 path = "tests/goldens/esmc_large.safetensors"
-size = 463586
-sha256 = "e13302df4cf7e8381552f1043a8fd0f31f3e0d50b2ab6009fb86b7940ae8ff79"
+size = 1383082
+sha256 = "2b1ce3de5a7a27f171055f5c7aec4e7e50f0e809a1dc46508aaa0b472365015d"
 
 [[files]]
 path = "tests/goldens/esmc_small.json"
-size = 5890
-sha256 = "bb02652cf3cc484756b98ffa4ba55ed4c55870d2cea3342adb1d920ba9dfe10a"
+size = 6778
+sha256 = "15cbbf909a12b5b81ff47b5f142babb75ebf9b3d85673905f2320c2a119ae347"
 
 [[files]]
 path = "tests/goldens/esmc_small.safetensors"
-size = 391010
-sha256 = "03378d0f0fdd8161178ebb2c1f0da1b9776a726c8e8d3a10c009808a24de5654"
+size = 1165354
+sha256 = "98219356e2845cbd10a80715b19c95632956d40567a7a993409c426b56040b06"
 
 [[files]]
 path = "tests/goldens/esmfold.json"
@@ -340,43 +340,63 @@ sha256 = "873b1b325a43d8e0f35f355c8914a2a9fe611cc48763875e9e6a22e09ec9ebcb"
 
 [[files]]
 path = "tests/goldens/esmfold2.json"
-size = 8612
-sha256 = "f6e0ed1ec400b9a0fcc817db51774be968dc454b7a32645a07c479e42423ab20"
+size = 8698
+sha256 = "60b9e8827615a73acd89ac23f13e3d0a412c17879fbf3308444546e6bbb4ff03"
 
 [[files]]
 path = "tests/goldens/esmfold2.safetensors"
 size = 2573976
-sha256 = "e4d6be4344c528e26b13f79a9303549e3de7e582da195c0078db3ce957fad420"
+sha256 = "a1a9f3b7a9f7e36ef6a7077d76fa1b1c8b5529ed42ac2cfa485797162ce866fb"
+
+[[files]]
+path = "tests/goldens/esmfold2_300.json"
+size = 7379
+sha256 = "d4fd12f27352c53582bb40a8d85eab76d6d98f647ce7660a6f891a1dfe68c039"
+
+[[files]]
+path = "tests/goldens/esmfold2_300.safetensors"
+size = 865376
+sha256 = "40a954ff14edc7c2bff95a252241f08db4cae3821ca9b92ae216775cceed8e8b"
+
+[[files]]
+path = "tests/goldens/esmfold2_600.json"
+size = 7379
+sha256 = "ea249ff118975f29979143ea081cfa1c0fb60cb1fa393dd99a12caf413524230"
+
+[[files]]
+path = "tests/goldens/esmfold2_600.safetensors"
+size = 865376
+sha256 = "69bbb8d53a816b29e979e4469728df0a6b662e4d0be81a76068b36974d2b909e"
 
 [[files]]
 path = "tests/goldens/esmfold2_experimental_cutoff2025.json"
-size = 8494
-sha256 = "cfd0e35b2bc468a0dc4f614d3acfa2fce004f96e9ae2433256ed095b829d55cc"
+size = 8580
+sha256 = "2e42d958f7a99ca8edaf0d9fac8e1a58b78200df652116b7bc102ac799123633"
 
 [[files]]
 path = "tests/goldens/esmfold2_experimental_cutoff2025.safetensors"
 size = 1771064
-sha256 = "9347466bbe803b6f5dc82e3356ca6cbbf2c2edd8765f9fd273385bda255019f6"
+sha256 = "8168f8692c4932e1160e733b15210836120223615f6190fb0ecfa2f940c2420f"
 
 [[files]]
 path = "tests/goldens/esmfold2_experimental_fast_cutoff2025.json"
-size = 8514
-sha256 = "1d0b2da4f1579243f37ae04bd4b834b747005cd8e8e7665e00d088123c43afd9"
+size = 8600
+sha256 = "d41c54ca28270fc1c1b95485c5009990bd2c215d35ec5cc2c2fa611d096bad21"
 
 [[files]]
 path = "tests/goldens/esmfold2_experimental_fast_cutoff2025.safetensors"
 size = 1771064
-sha256 = "516e216d05d7e6bee59e77126d3e595e2bb7821929433f00c259c5d5241964bb"
+sha256 = "97b58525aefd21c23ec6cb2defa3b3b41982c872dfe70d94306648edbe40a5b9"
 
 [[files]]
 path = "tests/goldens/esmfold2_fast.json"
-size = 8632
-sha256 = "091b004c0b330217b59c12acd6da3d6edaf91e48d95f6d5f40fc20399cef9478"
+size = 8718
+sha256 = "659bb338be4584787faff619d1cbcb8766aece7b5facf8a84470e850299b662f"
 
 [[files]]
 path = "tests/goldens/esmfold2_fast.safetensors"
 size = 2573976
-sha256 = "6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990"
+sha256 = "8da91024a2cc63984585267a18f595892ebe489b2a05c4f79a994c3ac5de2f40"
 
 [[files]]
 path = "docs/evidence/confidence/esmfold2_300-v1.json"

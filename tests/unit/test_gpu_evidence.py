@@ -113,9 +113,12 @@ def test_ordinary_source_is_uploaded(path: str) -> None:
 def test_stage_table_is_well_formed() -> None:
     assert set(STAGES) == {
         "cpu-contract",
+        "check",
         "unit",
         "parity-local",
         "flash-integration",
+        "goldens",
+        "structure-goldens",
         "probe",
         "typing",
         "lever-bench",

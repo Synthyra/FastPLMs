@@ -47,7 +47,9 @@ def _golden(spec: ModelSpec) -> tuple[dict[str, torch.Tensor], dict[str, object]
 
 
 def _release_parameter(spec: ModelSpec) -> object:
-    return pytest.param(spec, id=spec.id, marks=pytest.mark.large)
+    # Only the 6B-backbone variants need a large accelerator.
+    marks = [] if spec.id in esmfold2_bundle.headless_model_ids else [pytest.mark.large]
+    return pytest.param(spec, id=spec.id, marks=marks)
 
 
 @pytest.mark.structure
@@ -123,11 +125,16 @@ def test_esmfold2_candidate_matches_checked_structure_golden(
         candidate,
         context=f"{spec.id} FastPLMs candidate",
     )
-    structure = esmfold2_metrics._structure_metrics(candidate, golden)
+    # A headless official checkpoint has no confidence outputs to compare with.
+    confidence = spec.id not in esmfold2_bundle.headless_model_ids
+    assert ("output__plddt" in golden) == confidence, (
+        f"{spec.id}: golden confidence outputs disagree with the declared official head"
+    )
+    structure = esmfold2_metrics._structure_metrics(candidate, golden, confidence=confidence)
     esmfold2_metrics._assert_thresholds(
         structure,
-        targets=esmfold2_metrics.bf16_targets,
-        hard_limits=esmfold2_metrics.bf16_hard_limits,
+        targets={name: esmfold2_metrics.bf16_targets[name] for name in structure},
+        hard_limits={name: esmfold2_metrics.bf16_hard_limits[name] for name in structure},
         context=f"{spec.id} checked BF16 golden",
     )
 

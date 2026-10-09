@@ -468,7 +468,7 @@ id = "esm2_8m"
 family = "esm2"
 size_category = "small"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esm2_8m.json=sha256:6975e86d1d8f27488bf2a676551feaa48cc19254c9d24b6acb09198122745609", tensors = "tests/goldens/esm2_8m.safetensors=sha256:b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c" }
+official_golden = { metadata = "tests/goldens/esm2_8m.json=sha256:06b3ccbf45a46a7aed3833b49503567f7534ffe60e6b3e49fcfcf17d04b7237e", tensors = "tests/goldens/esm2_8m.safetensors=sha256:d08a7572cbef20b8b19b545bcb0427b7e9ae19b986d015c559cd5a3a2cfc8aa4" }
 fast_repo = "Synthyra/ESM2-8M"
 fast_revision = "185ecbd45665d050a8dae326d91886d330c5f9d0"
 fast_files = [
@@ -507,7 +507,7 @@ id = "esm2_35m"
 family = "esm2"
 size_category = "small"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esm2_35m.json=sha256:e919d3ce6d20b6a942d27d92323814ae7594a0129dc9c4de27c5053e96675bcd", tensors = "tests/goldens/esm2_35m.safetensors=sha256:c9b8bb616cf884fb7744521a2fcc6eed23586342d11241e6c9ef16454ec31e17" }
+official_golden = { metadata = "tests/goldens/esm2_35m.json=sha256:61cd24fd91ef2dc49cbc0f97b14c0d5c97849eca6f36ed8c294295147909cb38", tensors = "tests/goldens/esm2_35m.safetensors=sha256:4f82d10286e16041c2f23365dfdd8508b911864633287dd76580425527c2d922" }
 fast_repo = "Synthyra/ESM2-35M"
 fast_revision = "37ab9f56b41e365b3bd9e25d6fefe9150fd910f0"
 fast_files = [
@@ -546,7 +546,7 @@ id = "esm2_150m"
 family = "esm2"
 size_category = "medium"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esm2_150m.json=sha256:c04c93486024ba0fa1c81fbfbe92ee79d1d4c7f1cfcc2c9886728522f752feab", tensors = "tests/goldens/esm2_150m.safetensors=sha256:c03fe9916dba137b452a6bbe944c7dc414db4019a6f0921e87b92d4bb6a8a42f" }
+official_golden = { metadata = "tests/goldens/esm2_150m.json=sha256:864e1f9c1d8e939e8da050b8617b8a7d6983fbb11a5911275d1571d08e460a79", tensors = "tests/goldens/esm2_150m.safetensors=sha256:20ad986b8e6e09f36d0158f5939d1914e0809b84329695028d767aab93338621" }
 fast_repo = "Synthyra/ESM2-150M"
 fast_revision = "979e0880dfc9e0c0080839b83d9d2dc05b92786a"
 fast_files = [
@@ -585,7 +585,7 @@ id = "esm2_650m"
 family = "esm2"
 size_category = "large"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esm2_650m.json=sha256:f18332172fcb3abf5dd2485fd55f5b0d193ad3b93a44cc744e0d02817c927477", tensors = "tests/goldens/esm2_650m.safetensors=sha256:c3a66b75add03628e62e238cb63da6a9e4d321f8160e84bdf2a131c096977f86" }
+official_golden = { metadata = "tests/goldens/esm2_650m.json=sha256:b57f18c8803e68e6c621f479fd7a70596fbc416fc4a17d2ab91c639b480006c4", tensors = "tests/goldens/esm2_650m.safetensors=sha256:261a8b71c4b7c90b1f294031558ee0bf00d77a98352021eb78771200c8d40548" }
 fast_repo = "Synthyra/ESM2-650M"
 fast_revision = "ca0718a5d52b80d5c60dd76860e55e061a95fb0a"
 fast_files = [
@@ -624,7 +624,7 @@ id = "esm2_3b"
 family = "esm2"
 size_category = "xlarge"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esm2_3b.json=sha256:5043b2333c57a34d54fac53916722d1acb4b6fd50395b9abafa805435b184a48", tensors = "tests/goldens/esm2_3b.safetensors=sha256:dfd5a8cb05d3e814a080185c4808c8e7ec2277f070f395562fcfbe4376789e4e" }
+official_golden = { metadata = "tests/goldens/esm2_3b.json=sha256:aa441786329889d43983811cac155cabd37b38cfd47bc90d415732a295c33c6d", tensors = "tests/goldens/esm2_3b.safetensors=sha256:61080e55e07db4a562a19e9b6b662e71a9fd3d8fee357aa3df00697d2fa58e33" }
 notes = "The pinned default SDPA BF16 path uses a checkpoint-specific numeric calibration: relative L2 target/hard limit 0.06/0.07, relative Q99.9 0.15/0.18, first-percentile residue cosine 0.994/0.992, and pooled cosine 0.998/0.997. Exact state identity and the global logits-distribution contract remain required."
 fast_repo = "Synthyra/ESM2-3B"
 fast_revision = "ff89d0180f414ab9c677219a25da79bf09185456"
@@ -667,7 +667,7 @@ id = "esmc_small"
 family = "esm_plusplus"
 size_category = "medium"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esmc_small.json=sha256:bb02652cf3cc484756b98ffa4ba55ed4c55870d2cea3342adb1d920ba9dfe10a", tensors = "tests/goldens/esmc_small.safetensors=sha256:03378d0f0fdd8161178ebb2c1f0da1b9776a726c8e8d3a10c009808a24de5654" }
+official_golden = { metadata = "tests/goldens/esmc_small.json=sha256:15cbbf909a12b5b81ff47b5f142babb75ebf9b3d85673905f2320c2a119ae347", tensors = "tests/goldens/esmc_small.safetensors=sha256:98219356e2845cbd10a80715b19c95632956d40567a7a993409c426b56040b06" }
 notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention and FlashAttention 3 remain selectable as opt-in alternatives, but they are not strict-parity choices: on the locked H100 BF16 generated-boundary panel, ESMC-6B Flex Attention exceeds the 0.03 relative-L2 hard limit and FlashAttention 3 falls below the 0.995 residue-cosine hard limit. The deviation is consistent with backend-specific BF16 kernel arithmetic; it is not a weight-conversion difference or silent fallback. Use SDPA for exact Biohub parity or FlashAttention 2 for release-gated acceleration."
 fast_repo = "Synthyra/ESMplusplus_small"
 fast_revision = "46c5f7d562e47d4c14165b424c71ab7db008e6fb"
@@ -693,7 +693,7 @@ id = "esmc_large"
 family = "esm_plusplus"
 size_category = "large"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esmc_large.json=sha256:7a4d614f67b6fde417f3fd89f61e7ec442ae284769734b2b73e14945a816a8fd", tensors = "tests/goldens/esmc_large.safetensors=sha256:e13302df4cf7e8381552f1043a8fd0f31f3e0d50b2ab6009fb86b7940ae8ff79" }
+official_golden = { metadata = "tests/goldens/esmc_large.json=sha256:86ffe179a9feafd067793f440d25e3606f184f0d32063aeaeb1842b14aa55d3b", tensors = "tests/goldens/esmc_large.safetensors=sha256:2b1ce3de5a7a27f171055f5c7aec4e7e50f0e809a1dc46508aaa0b472365015d" }
 notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention and FlashAttention 3 remain selectable as opt-in alternatives, but they are not strict-parity choices: on the locked H100 BF16 generated-boundary panel, ESMC-6B Flex Attention exceeds the 0.03 relative-L2 hard limit and FlashAttention 3 falls below the 0.995 residue-cosine hard limit. The deviation is consistent with backend-specific BF16 kernel arithmetic; it is not a weight-conversion difference or silent fallback. Use SDPA for exact Biohub parity or FlashAttention 2 for release-gated acceleration."
 fast_repo = "Synthyra/ESMplusplus_large"
 fast_revision = "f813401638b3fddab09748aec1ad2bf537aa4208"
@@ -719,7 +719,7 @@ id = "esmc_6b"
 family = "esm_plusplus"
 size_category = "xlarge"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esmc_6b.json=sha256:e229d938719782f280fab22dfc4c43e86109fdb0cc523631168c5a491afaace3", tensors = "tests/goldens/esmc_6b.safetensors=sha256:a948945e985c7deaca7be8b7eed09c0a9521a2af3f2b10fc2ec7a7d2a0f99ada" }
+official_golden = { metadata = "tests/goldens/esmc_6b.json=sha256:7e044e7e8d106d43169c4148521c54d0d09bb989624543d648247a110f1907d4", tensors = "tests/goldens/esmc_6b.safetensors=sha256:46139de6b28ab4f9e3244fb6ef3f259fc5e6518a3825f0fb4fd4a4fece6da8e6" }
 notes = "Release contract: SDPA must match the pinned Biohub implementation bit-for-bit across every hidden state, last hidden state, logits, special token, and padding position. Eager and FlashAttention 2 are release-gated in BF16 against the pinned boundary-length and biological panels with a relative-L2 engineering target of 0.029, hard limit of 0.03, relative-Q99.9 target of 0.049, first-percentile residue-cosine target of 0.997, and Jensen-Shannon target of 0.0004. The global pooled-cosine and top-1 thresholds remain unchanged. Flex Attention and FlashAttention 3 remain selectable as opt-in alternatives, but they are not strict-parity choices: on the locked H100 BF16 generated-boundary panel, ESMC-6B Flex Attention exceeds the 0.03 relative-L2 hard limit and FlashAttention 3 falls below the 0.995 residue-cosine hard limit. The deviation is consistent with backend-specific BF16 kernel arithmetic; it is not a weight-conversion difference or silent fallback. Use SDPA for exact Biohub parity or FlashAttention 2 for release-gated acceleration."
 fast_repo = "Synthyra/ESMplusplus_6B"
 fast_revision = "0d579cce3b0f09efa6b3baddf6cc3fd8c9b616c8"
@@ -757,7 +757,7 @@ family = "esm3"
 tokenizer_source = "esmc_small"
 size_category = "large"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/esm3_small.json=sha256:5470e8596cbba0e2882647eccbc53c36d8b48b0f3947d1fe0bcea68da1078c32", tensors = "tests/goldens/esm3_small.safetensors=sha256:d957922f810c9ab4c557d80d5aaaf6a3aab79a5a45e4638012a634a4134803b1" }
+official_golden = { metadata = "tests/goldens/esm3_small.json=sha256:e476bad7ccdfa2f908261a03e20116c0854eece292a553196f940b594088204d", tensors = "tests/goldens/esm3_small.safetensors=sha256:251e050926a1f2426401bac6b93b4cb00041d0b0a5c8a458d0ef0e6a5d0d87c3" }
 fast_repo = "Synthyra/ESM3_small"
 fast_revision = "7ddb5a740f9e5f93933eb6410c0ee8684bc63ec1"
 fast_files = [
@@ -783,7 +783,7 @@ id = "e1_150m"
 family = "e1"
 size_category = "small"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/e1_150m.json=sha256:701a64a6ab1a2fec5a427555b6af96232526c15cb3d5b4dc7fb253ac8f20b922", tensors = "tests/goldens/e1_150m.safetensors=sha256:6558bc8f1a7b20629eaaaa6f72601d0c2cdb859a5dc13595549b1773b6e2de41" }
+official_golden = { metadata = "tests/goldens/e1_150m.json=sha256:e7520331135fd4c98f52f21c470dbba5cb5f4defb418494c63199fb000621e65", tensors = "tests/goldens/e1_150m.safetensors=sha256:03a2e93e7b3e54b12f99eea7678ff80828922f92c3683d4909346a05d74815bc" }
 fast_repo = "Synthyra/Profluent-E1-150M"
 fast_revision = "7c5f3bbf697226a2e0900db7a100f9201774a907"
 fast_files = [
@@ -802,7 +802,7 @@ id = "e1_300m"
 family = "e1"
 size_category = "medium"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/e1_300m.json=sha256:d3478f3f5957a0e0377864074dde0107de890019f96cb63548ee17ffb8f3ec3a", tensors = "tests/goldens/e1_300m.safetensors=sha256:92778b9ef95a803ddc84b3e3ca764c59e045872a94bcff0eb0cd47647732c188" }
+official_golden = { metadata = "tests/goldens/e1_300m.json=sha256:d97637bf789fed61b4ad575f904f37befcea42e9436e8d841e8f8f2cff1d1b17", tensors = "tests/goldens/e1_300m.safetensors=sha256:d125ea866899d2788330d6877d77c48c69febbf7f01d629f4107f9647cfa13ff" }
 fast_repo = "Synthyra/Profluent-E1-300M"
 fast_revision = "5ef52c0ad2ae2578f40622696b763523810e8e26"
 fast_files = [
@@ -821,7 +821,7 @@ id = "e1_600m"
 family = "e1"
 size_category = "large"
 generation_contract = "not_applicable"
-official_golden = { metadata = "tests/goldens/e1_600m.json=sha256:914be191c28141c1f84535cdb69ead0588a2057bb19d46c5bc7f3891a3d6739e", tensors = "tests/goldens/e1_600m.safetensors=sha256:22ed8417a4651ded255099f6d15c63c2c40552e700d2b0470d1adfde3a39c513" }
+official_golden = { metadata = "tests/goldens/e1_600m.json=sha256:0c9afc83b96ed8ad7f339a26df4ba5853e7994ad54dd3cd837deb9869c0cd2a9", tensors = "tests/goldens/e1_600m.safetensors=sha256:d470d6833f0b38bec070aa37e9f3c49717ea82d31c794af843550bb7e56253a6" }
 fast_repo = "Synthyra/Profluent-E1-600M"
 fast_revision = "6c8bf0ec83b0e0178677c528b101efffd0677742"
 fast_files = [
@@ -840,7 +840,7 @@ id = "dplm_150m"
 family = "dplm"
 size_category = "small"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/dplm_150m.json=sha256:3228551fe3bed951db9ec97347143ec4462ce7c221ac240b7ce7730948c1dc1f", tensors = "tests/goldens/dplm_150m.safetensors=sha256:392992235195beed97ab8359b90a2e11e52f4326606f99a471447bed81d146bd" }
+official_golden = { metadata = "tests/goldens/dplm_150m.json=sha256:541167ffcd12b2d7e101046b2d17e800c70ba5db1b561212575301f2d1c407f8", tensors = "tests/goldens/dplm_150m.safetensors=sha256:f8e4ddd580d4708dad2d7da002735b2a01d69ece478c46c4932eb2f3933dc836" }
 fast_repo = "Synthyra/DPLM-150M"
 fast_revision = "90ba742754151a774f3b7ed580170d0a76b3e69d"
 fast_files = [
@@ -865,7 +865,7 @@ id = "dplm_650m"
 family = "dplm"
 size_category = "large"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/dplm_650m.json=sha256:bf58d0ce73aaac7e6fb1923ef3d9adad67122df2a3dd414c3229488ef9587a6d", tensors = "tests/goldens/dplm_650m.safetensors=sha256:073f0a6abea7e48f28c2d921ff8329a28e22627f01979277cb324908a01b3378" }
+official_golden = { metadata = "tests/goldens/dplm_650m.json=sha256:2bd482c94b1b6b3ac901b5ff9b06e2d189cda1a8fe2f8ff32e5d52b64c2c446b", tensors = "tests/goldens/dplm_650m.safetensors=sha256:70e2c46ed722942d3b628b556b92c9994688cb4853b278eb1e40a3dfbbd9dfc4" }
 fast_repo = "Synthyra/DPLM-650M"
 fast_revision = "05dc16d97c5c028aed924c9ed681cee4ab609760"
 fast_files = [
@@ -890,7 +890,7 @@ id = "dplm_3b"
 family = "dplm"
 size_category = "xlarge"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/dplm_3b.json=sha256:a5b6df8b9c7b371976892ec1d6c45581a32ad3a6325c6c0a0b3267012848c8ed", tensors = "tests/goldens/dplm_3b.safetensors=sha256:75b0a0854fc391133920b0feaaeb8f69ab7568a88b3759627aca1556c4338c1e" }
+official_golden = { metadata = "tests/goldens/dplm_3b.json=sha256:0f8d8fb7df562c30abf730abe55db4a8c13d40877dd21772375fe1f34030159a", tensors = "tests/goldens/dplm_3b.safetensors=sha256:6942218079232a8185b1ae6e1578474c7784722e28f528b76ec89ca77777e2b9" }
 fast_repo = "Synthyra/DPLM-3B"
 fast_revision = "7d764dd3d70ecf1ac0e64693de64a0064aacac65"
 fast_files = [
@@ -920,7 +920,7 @@ id = "dplm2_150m"
 family = "dplm2"
 size_category = "small"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/dplm2_150m.json=sha256:d269de779ea1503de72c77e7b2e6224afc9797bd945b40c571ff6faec782e4aa", tensors = "tests/goldens/dplm2_150m.safetensors=sha256:17fc26600938ba5364b8ecb96750786d33e9f92bcd4ea4df3e12a389340748eb" }
+official_golden = { metadata = "tests/goldens/dplm2_150m.json=sha256:5f2c496e4b557faf70bdde03b531f753fc7f20c5868bab79dcf378ee358781a1", tensors = "tests/goldens/dplm2_150m.safetensors=sha256:7390559bc54f27f08972c8f0adcf17954065450d937b3984303c1ae1ec003855" }
 artifact_source = "official"
 canonical_state_sha256 = "82e1751f59052b8de72b082517557db47947e8d9b4ac2f11278369e6c0cbf001"
 fast_repo = "Synthyra/DPLM2-150M"
@@ -947,7 +947,7 @@ id = "dplm2_650m"
 family = "dplm2"
 size_category = "large"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/dplm2_650m.json=sha256:d9a7548f9af657a72d441ca70f27379863724fcce8ddd3da4f672104b7bfb772", tensors = "tests/goldens/dplm2_650m.safetensors=sha256:c4e0e467c252c3ac813363d2d4b17a5e3bd99e75fad315e76d97689b4655ddac" }
+official_golden = { metadata = "tests/goldens/dplm2_650m.json=sha256:af7b8c4fab48773e1ddd2cfd941cf3d518ea27ed8519f467ddf0da788a0aa6be", tensors = "tests/goldens/dplm2_650m.safetensors=sha256:c45f4ca267183b11dd06244ed3c3f39cf5b6139f778733fa63a6e2b5a46b0678" }
 artifact_source = "official"
 canonical_state_sha256 = "cba76b6602d2258de9fffff953b608d93cb8ef4a9e89b0bbd27e160c81e78bb4"
 fast_repo = "Synthyra/DPLM2-650M"
@@ -976,7 +976,7 @@ size_category = "xlarge"
 # The pinned public sampler fails before generation because cls_token_id is None.
 # State, tokenizer, and inference parity remain required for this checkpoint.
 generation_contract = "official_unavailable"
-official_golden = { metadata = "tests/goldens/dplm2_3b.json=sha256:d6e0e02af53b13cb129192f06e264758aa21c9ebf4ee82411cf67037082d2329", tensors = "tests/goldens/dplm2_3b.safetensors=sha256:838b11824d08f83bcb0c0b3268e579f3a87dbfb965370cfe5c3f8793b96b1964" }
+official_golden = { metadata = "tests/goldens/dplm2_3b.json=sha256:ded7978cf84da1d56d8b4693418030ec3b0086bf6466be2242fb0ce424296b9f", tensors = "tests/goldens/dplm2_3b.safetensors=sha256:7490f771f8b8f8137b333f98d6b7dbd2cb48708c8649d4459279a6711b9e5870" }
 notes = "The pinned official DPLM2-3B sampler fails before generation, so live generation equivalence cannot be established for this checkpoint. State, tokenizer, and inference parity remain required."
 artifact_source = "official"
 canonical_state_sha256 = "8c46ec09115dbe6cbfb91d94ab5e906369d57e27fe620a7741c6f8cb1b6ca890"
@@ -1009,7 +1009,7 @@ id = "ankh_base"
 family = "ankh"
 size_category = "medium"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/ankh_base.json=sha256:ebce8d7de821827ee995789c9b38d79252d3b2f76888130b0a8a7eedafaefe2b", tensors = "tests/goldens/ankh_base.safetensors=sha256:f0e78aa15d11749e0c64ff57f9e88c51cec6538a0adf8951f839df70cc708b65" }
+official_golden = { metadata = "tests/goldens/ankh_base.json=sha256:21f129b7b71c026cbd3b3fdb712af06d5b6f256b487ef8b01fcc506d2bc6c7b6", tensors = "tests/goldens/ankh_base.safetensors=sha256:449db3638117d5b6027380fdf4b05698bb156024b2b3f7e0ceb295a86e5ec756" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 canonical_state_sha256 = "cdd8d30d88e5bf41f44e1eef4470d8e46607aba5f7c7c805b06c035b89c8c16f"
@@ -1038,7 +1038,7 @@ id = "ankh_large"
 family = "ankh"
 size_category = "large"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/ankh_large.json=sha256:59492518b021de5cfaea87d672c9448c8558e99a3443ba2cc7ab544963196ecb", tensors = "tests/goldens/ankh_large.safetensors=sha256:3fb8d3ac27716d15a9ea92aeef6acf2b977bcc887d9b535000539e523673459b" }
+official_golden = { metadata = "tests/goldens/ankh_large.json=sha256:8f269215ee29887661abb6c139139dd1782f5112b94eb63be968282a7f050e1b", tensors = "tests/goldens/ankh_large.safetensors=sha256:4a7aea66e91cf880b0b839495d7704831725b672fe169f8e7258b5643d77aff9" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 canonical_state_sha256 = "e498a2e9aea76ef784cbe3e596c6b3f5e9a40e209ad837f7e3207099e4d74483"
@@ -1068,7 +1068,7 @@ id = "ankh2_large"
 family = "ankh"
 size_category = "large"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/ankh2_large.json=sha256:e8df38994ca1a1e0c598ace34a0b257b264937e4fdbb01bc41544985116b02a4", tensors = "tests/goldens/ankh2_large.safetensors=sha256:25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d" }
+official_golden = { metadata = "tests/goldens/ankh2_large.json=sha256:bdafcd179bc055ea223de43228801b1b6c35196741ac4cc4cca0571e3291e6dc", tensors = "tests/goldens/ankh2_large.safetensors=sha256:44d5fc5c74a0d166ceac54d12505a109f8338cb7090af2f37e39bd78545a3c52" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 canonical_state_sha256 = "597c4fe2fa8711f11a25317905f1d62fa92905e55fdd5c0a79614cd9c9d2bca3"
@@ -1100,7 +1100,7 @@ id = "ankh3_large"
 family = "ankh"
 size_category = "large"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/ankh3_large.json=sha256:2e5bb05b3baa5baa78f61fef7d2a2c669b0da5dbfaf6b50b12abd3e17253a961", tensors = "tests/goldens/ankh3_large.safetensors=sha256:e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513" }
+official_golden = { metadata = "tests/goldens/ankh3_large.json=sha256:ab3a671260bdad481635d4a4be1b8072d5a2e02e3df1178202713c9a7e56af49", tensors = "tests/goldens/ankh3_large.safetensors=sha256:cc55274281e87d22cf7828117678df2e37a1ece543f5b401b65a0cd6f8b6fa27" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head."
 artifact_source = "official"
 canonical_state_sha256 = "60acb7ef86e85dc0c51fc1edf4c8e69a0480049723b6b2c95e6e9faa720c112a"
@@ -1134,7 +1134,7 @@ id = "ankh3_xl"
 family = "ankh"
 size_category = "xlarge"
 generation_contract = "required"
-official_golden = { metadata = "tests/goldens/ankh3_xl.json=sha256:66bb12e033e4163be225d636108a479393228a4f5061015c8af114e766c3c486", tensors = "tests/goldens/ankh3_xl.safetensors=sha256:72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae" }
+official_golden = { metadata = "tests/goldens/ankh3_xl.json=sha256:a2d302227ee616698af18502d03e2b6b136d589134058d82b018520f18498431", tensors = "tests/goldens/ankh3_xl.safetensors=sha256:d18c086a4849b220761019f219590fe0c1c6f17698c365ccb0a5a8804446286c" }
 notes = "ANKH parity covers the official encoder and sequence-to-sequence heads. AutoModelForMaskedLM exposes the separately named FastPLMs synthesized masked-LM extension and is not an official ANKH head. The official PyTorch shard index is deliberately excluded: the builder verifies every declared source shard directly and writes a new canonical safetensors index."
 artifact_source = "official"
 canonical_state_sha256 = "dd2188e0d2ca65232135714eef6de394239734d843ddae4928c7398685d858e7"
@@ -1227,7 +1227,7 @@ family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
 msa_conditioning = true
-official_golden = { metadata = "tests/goldens/esmfold2.json=sha256:f6e0ed1ec400b9a0fcc817db51774be968dc454b7a32645a07c479e42423ab20", tensors = "tests/goldens/esmfold2.safetensors=sha256:e4d6be4344c528e26b13f79a9303549e3de7e582da195c0078db3ce957fad420" }
+official_golden = { metadata = "tests/goldens/esmfold2.json=sha256:60b9e8827615a73acd89ac23f13e3d0a412c17879fbf3308444546e6bbb4ff03", tensors = "tests/goldens/esmfold2.safetensors=sha256:a1a9f3b7a9f7e36ef6a7077d76fa1b1c8b5529ed42ac2cfa485797162ce866fb" }
 fast_repo = "Synthyra/ESMFold2"
 fast_revision = "cd5a0927cec585a778d983b99a8db23d2e9b281e"
 fast_files = [
@@ -1247,7 +1247,7 @@ family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
 msa_conditioning = false
-official_golden = { metadata = "tests/goldens/esmfold2_fast.json=sha256:091b004c0b330217b59c12acd6da3d6edaf91e48d95f6d5f40fc20399cef9478", tensors = "tests/goldens/esmfold2_fast.safetensors=sha256:6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990" }
+official_golden = { metadata = "tests/goldens/esmfold2_fast.json=sha256:659bb338be4584787faff619d1cbcb8766aece7b5facf8a84470e850299b662f", tensors = "tests/goldens/esmfold2_fast.safetensors=sha256:8da91024a2cc63984585267a18f595892ebe489b2a05c4f79a994c3ac5de2f40" }
 fast_repo = "Synthyra/ESMFold2-Fast"
 fast_revision = "407875bfcaa42552bfcb25acd67ee1888b790170"
 fast_files = [
@@ -1267,7 +1267,7 @@ family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
 msa_conditioning = true
-official_golden = { metadata = "tests/goldens/esmfold2_experimental_cutoff2025.json=sha256:cfd0e35b2bc468a0dc4f614d3acfa2fce004f96e9ae2433256ed095b829d55cc", tensors = "tests/goldens/esmfold2_experimental_cutoff2025.safetensors=sha256:9347466bbe803b6f5dc82e3356ca6cbbf2c2edd8765f9fd273385bda255019f6" }
+official_golden = { metadata = "tests/goldens/esmfold2_experimental_cutoff2025.json=sha256:2e42d958f7a99ca8edaf0d9fac8e1a58b78200df652116b7bc102ac799123633", tensors = "tests/goldens/esmfold2_experimental_cutoff2025.safetensors=sha256:8168f8692c4932e1160e733b15210836120223615f6190fb0ecfa2f940c2420f" }
 fast_repo = "Synthyra/ESMFold2-Experimental-Cutoff2025"
 fast_revision = "632ff4a9e68f1de78ee956a613267bdcdb5b354d"
 fast_files = [
@@ -1288,7 +1288,7 @@ family = "esmfold2"
 size_category = "structure"
 generation_contract = "not_applicable"
 msa_conditioning = false
-official_golden = { metadata = "tests/goldens/esmfold2_experimental_fast_cutoff2025.json=sha256:1d0b2da4f1579243f37ae04bd4b834b747005cd8e8e7665e00d088123c43afd9", tensors = "tests/goldens/esmfold2_experimental_fast_cutoff2025.safetensors=sha256:516e216d05d7e6bee59e77126d3e595e2bb7821929433f00c259c5d5241964bb" }
+official_golden = { metadata = "tests/goldens/esmfold2_experimental_fast_cutoff2025.json=sha256:d41c54ca28270fc1c1b95485c5009990bd2c215d35ec5cc2c2fa611d096bad21", tensors = "tests/goldens/esmfold2_experimental_fast_cutoff2025.safetensors=sha256:97b58525aefd21c23ec6cb2defa3b3b41982c872dfe70d94306648edbe40a5b9" }
 fast_repo = "Synthyra/ESMFold2-Experimental-Fast-Cutoff2025"
 fast_revision = "8f022c2514a6c32692aaca078a8391d6bc6c4bac"
 fast_files = [
@@ -1305,6 +1305,7 @@ auto_map = { AutoConfig = "fastplms.models.esmfold2.configuration_esmfold2.ESMFo
 
 [[models]]
 id = "esmfold2_300"
+official_golden = { metadata = "tests/goldens/esmfold2_300.json=sha256:d4fd12f27352c53582bb40a8d85eab76d6d98f647ce7660a6f891a1dfe68c039", tensors = "tests/goldens/esmfold2_300.safetensors=sha256:40a954ff14edc7c2bff95a252241f08db4cae3821ca9b92ae216775cceed8e8b" }
 confidence_adaptation = { release = "v1", head_sha256 = "40fd7f3d82fcefe8ad20ab2b32a37a68a84b54a527a4bce6eb9437bad2b77e31", base_weight_sha256 = "44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd", donor_repo = "biohub/ESMFold2-Experimental-Fast-Cutoff2025", donor_revision = "74b88548bf19688b8727432db0d698cb2e1d8783", donor_weight_sha256 = "4e903b740ad6ad704ec60881bfd593e0d6c874a630ffa0f0838276e0b665088f", training_url = "https://wandb.ai/lhallee/fastplms-confidence/runs/9558b6d23daf", evaluation_url = "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/309f353b07e0e46de4d77a5266d4eddd695538e3/confidence-v2/v2-reproduction-20260922/public/evaluation/esmfold2_300", evidence_path = "docs/evidence/confidence/esmfold2_300-v1.json", frozen_base = { repo = "Synthyra/ESMFold2-300", revision = "a38a62ae930d157484b331c2bf4241684573adba", files = ["config.json=git-sha1:47ec20cf8b234c3b41d6f3ae1bdfe95d4eb4849e", "model.safetensors=sha256:44d6797c5efebf24753d502b40950e0874871c96ceea14f2d7f7e39cebac67fd"] } }
 family = "esmfold2"
 size_category = "structure"
@@ -1324,6 +1325,7 @@ backbone = { repo = "biohub/ESMC-300M-1500000", revision = "56803b6378b82e16c3b2
 
 [[models]]
 id = "esmfold2_600"
+official_golden = { metadata = "tests/goldens/esmfold2_600.json=sha256:ea249ff118975f29979143ea081cfa1c0fb60cb1fa393dd99a12caf413524230", tensors = "tests/goldens/esmfold2_600.safetensors=sha256:69bbb8d53a816b29e979e4469728df0a6b662e4d0be81a76068b36974d2b909e" }
 confidence_adaptation = { release = "v1", head_sha256 = "e84726a050722e1b722712c87d17a5388bd3699e2520e4a59abb1d828dfb8de7", base_weight_sha256 = "11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602", donor_repo = "biohub/ESMFold2-Experimental-Fast-Cutoff2025", donor_revision = "74b88548bf19688b8727432db0d698cb2e1d8783", donor_weight_sha256 = "4e903b740ad6ad704ec60881bfd593e0d6c874a630ffa0f0838276e0b665088f", training_url = "https://wandb.ai/lhallee/fastplms-confidence/runs/820d2cfa56c0", evaluation_url = "https://huggingface.co/datasets/Synthyra/FastPLMs-artifacts/tree/6e62186cd36b9047cc4691980076be9f76482192/confidence-v2/v2-reproduction-20260922/public/evaluation/esmfold2_600", evidence_path = "docs/evidence/confidence/esmfold2_600-v1.json", frozen_base = { repo = "Synthyra/ESMFold2-600", revision = "71c67d0b2b73dc245ea7c3cc0d0476439a882d08", files = ["config.json=git-sha1:8e271837cbdada96c4974c8e543f84065e0f06f1", "model.safetensors=sha256:11a53c1b4700b6c62a5a464fc3ec7076160c19e8584157f88e13275116cfd602"] } }
 family = "esmfold2"
 size_category = "structure"
@@ -1348,214 +1350,214 @@ backbone = { repo = "biohub/ESMC-600M-1500000", revision = "21af9cc429af76ebda6c
 [[golden_artifacts]]
 id = "esm2_8m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esm2_8m.safetensors"
-sha256 = "b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c"
-size = 270529
+sha256 = "d08a7572cbef20b8b19b545bcb0427b7e9ae19b986d015c559cd5a3a2cfc8aa4"
+size = 537589
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esm2_35m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esm2_35m.safetensors"
-sha256 = "c9b8bb616cf884fb7744521a2fcc6eed23586342d11241e6c9ef16454ec31e17"
-size = 391489
+sha256 = "4f82d10286e16041c2f23365dfdd8508b911864633287dd76580425527c2d922"
+size = 779509
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esm2_150m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esm2_150m.safetensors"
-sha256 = "c03fe9916dba137b452a6bbe944c7dc414db4019a6f0921e87b92d4bb6a8a42f"
-size = 512449
+sha256 = "20ad986b8e6e09f36d0158f5939d1914e0809b84329695028d767aab93338621"
+size = 1021437
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esm2_650m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esm2_650m.safetensors"
-sha256 = "c3a66b75add03628e62e238cb63da6a9e4d321f8160e84bdf2a131c096977f86"
-size = 996297
+sha256 = "261a8b71c4b7c90b1f294031558ee0bf00d77a98352021eb78771200c8d40548"
+size = 1989117
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esm2_3b"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esm2_3b.safetensors"
-sha256 = "dfd5a8cb05d3e814a080185c4808c8e7ec2277f070f395562fcfbe4376789e4e"
-size = 1963977
+sha256 = "61080e55e07db4a562a19e9b6b662e71a9fd3d8fee357aa3df00697d2fa58e33"
+size = 3924485
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esmc_small"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esmc_small.safetensors"
-sha256 = "03378d0f0fdd8161178ebb2c1f0da1b9776a726c8e8d3a10c009808a24de5654"
-size = 391010
+sha256 = "98219356e2845cbd10a80715b19c95632956d40567a7a993409c426b56040b06"
+size = 1165354
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esmc_large"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esmc_large.safetensors"
-sha256 = "e13302df4cf7e8381552f1043a8fd0f31f3e0d50b2ab6009fb86b7940ae8ff79"
-size = 463586
+sha256 = "2b1ce3de5a7a27f171055f5c7aec4e7e50f0e809a1dc46508aaa0b472365015d"
+size = 1383082
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esmc_6b"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esmc_6b.safetensors"
-sha256 = "a948945e985c7deaca7be8b7eed09c0a9521a2af3f2b10fc2ec7a7d2a0f99ada"
-size = 995810
+sha256 = "46139de6b28ab4f9e3244fb6ef3f259fc5e6518a3825f0fb4fd4a4fece6da8e6"
+size = 2979762
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esm3_small"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esm3_small.safetensors"
-sha256 = "d957922f810c9ab4c557d80d5aaaf6a3aab79a5a45e4638012a634a4134803b1"
-size = 1189077
+sha256 = "251e050926a1f2426401bac6b93b4cb00041d0b0a5c8a458d0ef0e6a5d0d87c3"
+size = 2398877
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "e1_150m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/e1_150m.safetensors"
-sha256 = "6558bc8f1a7b20629eaaaa6f72601d0c2cdb859a5dc13595549b1773b6e2de41"
-size = 333099
+sha256 = "03a2e93e7b3e54b12f99eea7678ff80828922f92c3683d4909346a05d74815bc"
+size = 958851
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "e1_300m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/e1_300m.safetensors"
-sha256 = "92778b9ef95a803ddc84b3e3ca764c59e045872a94bcff0eb0cd47647732c188"
-size = 432939
+sha256 = "d125ea866899d2788330d6877d77c48c69febbf7f01d629f4107f9647cfa13ff"
+size = 1258379
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "e1_600m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/e1_600m.safetensors"
-sha256 = "22ed8417a4651ded255099f6d15c63c2c40552e700d2b0470d1adfde3a39c513"
-size = 532779
+sha256 = "d470d6833f0b38bec070aa37e9f3c49717ea82d31c794af843550bb7e56253a6"
+size = 1557899
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "dplm_150m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/dplm_150m.safetensors"
-sha256 = "392992235195beed97ab8359b90a2e11e52f4326606f99a471447bed81d146bd"
-size = 512449
+sha256 = "f8e4ddd580d4708dad2d7da002735b2a01d69ece478c46c4932eb2f3933dc836"
+size = 1021437
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "dplm_650m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/dplm_650m.safetensors"
-sha256 = "073f0a6abea7e48f28c2d921ff8329a28e22627f01979277cb324908a01b3378"
-size = 996297
+sha256 = "70e2c46ed722942d3b628b556b92c9994688cb4853b278eb1e40a3dfbbd9dfc4"
+size = 1989117
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "dplm_3b"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/dplm_3b.safetensors"
-sha256 = "75b0a0854fc391133920b0feaaeb8f69ab7568a88b3759627aca1556c4338c1e"
-size = 1963977
+sha256 = "6942218079232a8185b1ae6e1578474c7784722e28f528b76ec89ca77777e2b9"
+size = 3924485
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "dplm2_150m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/dplm2_150m.safetensors"
-sha256 = "17fc26600938ba5364b8ecb96750786d33e9f92bcd4ea4df3e12a389340748eb"
-size = 13416818
+sha256 = "7390559bc54f27f08972c8f0adcf17954065450d937b3984303c1ae1ec003855"
+size = 26826946
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "dplm2_650m"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/dplm2_650m.safetensors"
-sha256 = "c4e0e467c252c3ac813363d2d4b17a5e3bd99e75fad315e76d97689b4655ddac"
-size = 14384498
+sha256 = "c45f4ca267183b11dd06244ed3c3f39cf5b6139f778733fa63a6e2b5a46b0678"
+size = 28762314
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "dplm2_3b"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/dplm2_3b.safetensors"
-sha256 = "838b11824d08f83bcb0c0b3268e579f3a87dbfb965370cfe5c3f8793b96b1964"
-size = 16319858
+sha256 = "7490f771f8b8f8137b333f98d6b7dbd2cb48708c8649d4459279a6711b9e5870"
+size = 32633034
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "ankh_base"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/ankh_base.safetensors"
-sha256 = "f0e78aa15d11749e0c64ff57f9e88c51cec6538a0adf8951f839df70cc708b65"
-size = 289226
+sha256 = "449db3638117d5b6027380fdf4b05698bb156024b2b3f7e0ceb295a86e5ec756"
+size = 860722
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "ankh_large"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/ankh_large.safetensors"
-sha256 = "3fb8d3ac27716d15a9ea92aeef6acf2b977bcc887d9b535000539e523673459b"
-size = 574922
+sha256 = "4a7aea66e91cf880b0b839495d7704831725b672fe169f8e7258b5643d77aff9"
+size = 1717818
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "ankh2_large"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/ankh2_large.safetensors"
-sha256 = "25fe1569f55c635fab8fa49c1d62a889a35a2a738bad921f5764a85b58fd4b5d"
-size = 574922
+sha256 = "44d5fc5c74a0d166ceac54d12505a109f8338cb7090af2f37e39bd78545a3c52"
+size = 1717818
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "ankh3_large"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/ankh3_large.safetensors"
-sha256 = "e5c494ac418e0a2fe7bdad1376676d48960d58ec9e044d19bfffccb8c3288513"
-size = 574922
+sha256 = "cc55274281e87d22cf7828117678df2e37a1ece543f5b401b65a0cd6f8b6fa27"
+size = 1717818
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "ankh3_xl"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/ankh3_xl.safetensors"
-sha256 = "72d34567d0228cb6f1ee701c578ed4039fead4346e3f161a52e0e74df28dc8ae"
-size = 955850
+sha256 = "d18c086a4849b220761019f219590fe0c1c6f17698c365ccb0a5a8804446286c"
+size = 2860602
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esmfold"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esmfold.safetensors"
 sha256 = "873b1b325a43d8e0f35f355c8914a2a9fe611cc48763875e9e6a22e09ec9ebcb"
 size = 179144
@@ -1564,35 +1566,53 @@ offline_behavior = "requires_cached_verified_file"
 [[golden_artifacts]]
 id = "esmfold2"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esmfold2.safetensors"
-sha256 = "e4d6be4344c528e26b13f79a9303549e3de7e582da195c0078db3ce957fad420"
+sha256 = "a1a9f3b7a9f7e36ef6a7077d76fa1b1c8b5529ed42ac2cfa485797162ce866fb"
 size = 2573976
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esmfold2_fast"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esmfold2_fast.safetensors"
-sha256 = "6e2e1cd07401538b4d9df994f82abe7a5b38a01e8d1ee26681e1216d44a81990"
+sha256 = "8da91024a2cc63984585267a18f595892ebe489b2a05c4f79a994c3ac5de2f40"
 size = 2573976
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esmfold2_experimental_cutoff2025"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esmfold2_experimental_cutoff2025.safetensors"
-sha256 = "9347466bbe803b6f5dc82e3356ca6cbbf2c2edd8765f9fd273385bda255019f6"
+sha256 = "8168f8692c4932e1160e733b15210836120223615f6190fb0ecfa2f940c2420f"
 size = 1771064
 offline_behavior = "requires_cached_verified_file"
 
 [[golden_artifacts]]
 id = "esmfold2_experimental_fast_cutoff2025"
 repository = "Synthyra/fastplms_parity_goldens"
-revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
 path = "goldens/esmfold2_experimental_fast_cutoff2025.safetensors"
-sha256 = "516e216d05d7e6bee59e77126d3e595e2bb7821929433f00c259c5d5241964bb"
+sha256 = "97b58525aefd21c23ec6cb2defa3b3b41982c872dfe70d94306648edbe40a5b9"
 size = 1771064
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmfold2_300"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
+path = "goldens/esmfold2_300.safetensors"
+sha256 = "40a954ff14edc7c2bff95a252241f08db4cae3821ca9b92ae216775cceed8e8b"
+size = 865376
+offline_behavior = "requires_cached_verified_file"
+
+[[golden_artifacts]]
+id = "esmfold2_600"
+repository = "Synthyra/fastplms_parity_goldens"
+revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"
+path = "goldens/esmfold2_600.safetensors"
+sha256 = "69bbb8d53a816b29e979e4469728df0a6b662e4d0be81a76068b36974d2b909e"
+size = 865376
 offline_behavior = "requires_cached_verified_file"

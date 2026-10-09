@@ -919,7 +919,7 @@ def test_manifest_parses_optional_hash_pinned_official_golden(tmp_path: Path) ->
     )
     # The Hub copy of these tensors must carry the same digest, so it changes with them.
     modified = modified.replace(
-        'sha256 = "b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c"',
+        'sha256 = "d08a7572cbef20b8b19b545bcb0427b7e9ae19b986d015c559cd5a3a2cfc8aa4"',
         'sha256 = "' + "b" * 64 + '"',
         1,
     )
@@ -965,7 +965,7 @@ def test_manifest_pins_a_hub_copy_of_every_official_golden() -> None:
     }
     artifact = registry.golden_artifacts["esm2_8m"]
     assert artifact.repository == "Synthyra/fastplms_parity_goldens"
-    assert artifact.revision == "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"
+    assert artifact.revision == "50b93a0fc2be21a36c2522118754c74c4a9631ad"
     assert artifact.path == "goldens/esm2_8m.safetensors"
     assert artifact.sha256 == registry["esm2_8m"].official_golden.tensors.digest
 
@@ -979,7 +979,7 @@ def test_manifest_pins_a_hub_copy_of_every_official_golden() -> None:
             r"golden_artifacts\[0\]\.id references unknown model",
         ),
         (
-            'revision = "f4706b4e10a52f70e9400fc27df9913dfc7acdf9"',
+            'revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"',
             'revision = "main"',
             r"golden_artifacts\[0\]\.revision must be an immutable",
         ),
@@ -989,12 +989,12 @@ def test_manifest_pins_a_hub_copy_of_every_official_golden() -> None:
             r"golden_artifacts\[0\]\.path must be 'goldens/esm2_8m\.safetensors'",
         ),
         (
-            'sha256 = "b40217566c33c71988d28869de353be54a3b3ebfc21fdfd29056e88cf7e99f4c"',
+            'sha256 = "d08a7572cbef20b8b19b545bcb0427b7e9ae19b986d015c559cd5a3a2cfc8aa4"',
             'sha256 = "' + "c" * 64 + '"',
             r"golden_artifacts\[0\]\.sha256 must equal the official_golden tensors digest",
         ),
-        ("size = 270529", "size = 0", r"golden_artifacts\[0\]\.size must be a positive"),
-        ("size = 270529", 'size = 270529\nlicense = "MIT"', "contains unknown fields"),
+        ("size = 537589", "size = 0", r"golden_artifacts\[0\]\.size must be a positive"),
+        ("size = 537589", 'size = 537589\nlicense = "MIT"', "contains unknown fields"),
     ),
 )
 def test_manifest_rejects_invalid_golden_artifact_fields(

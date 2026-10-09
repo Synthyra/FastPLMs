@@ -60,6 +60,12 @@ class StopWindow(TrainerCallback):
         if state.global_step == self.pilot.warmup + self.pilot.steps:
             self.loader.finish_window()
             control.should_training_stop = True
+            if args.load_best_model_at_end:
+                # A short pilot can end before its first scheduled validation.
+                # Select a real scratch checkpoint after timing closes so recipe
+                # bookkeeping remains truthful without changing the full schedule.
+                control.should_evaluate = True
+                control.should_save = True
         return control
 
 

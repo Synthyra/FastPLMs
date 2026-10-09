@@ -61,21 +61,27 @@ def _official_files(spec: ModelSpec) -> list[dict[str, str]]:
     ]
 
 
-def _write_native_sequence_result(path: Path, spec: ModelSpec) -> None:
-    tensors = {
+def _native_precision_tensors(dtype: torch.dtype) -> dict[str, torch.Tensor]:
+    return {
         "input__attention_mask": torch.tensor([[1, 1, 1], [1, 1, 0]]),
         "input__input_ids": torch.tensor([[1, 2, 3], [1, 3, 0]]),
-        "output__hidden_0000": torch.arange(24, dtype=torch.bfloat16).reshape(2, 3, 4),
-        "output__last_hidden_state": torch.arange(
-            24, dtype=torch.bfloat16
-        ).reshape(2, 3, 4),
-        "output__logits": torch.arange(30, dtype=torch.bfloat16).reshape(2, 3, 5),
+        "output__hidden_0000": torch.arange(24, dtype=dtype).reshape(2, 3, 4),
+        "output__last_hidden_state": torch.arange(24, dtype=dtype).reshape(2, 3, 4),
+        "output__logits": torch.arange(30, dtype=dtype).reshape(2, 3, 5),
         "residue_mask": torch.tensor(
             [[False, True, False], [False, True, False]], dtype=torch.bool
         ),
     }
+
+
+def _write_native_sequence_result(path: Path, spec: ModelSpec) -> None:
+    precision_tensors = {
+        "bf16": _native_precision_tensors(torch.bfloat16),
+        "fp32": _native_precision_tensors(torch.float32),
+    }
     path.mkdir(parents=True)
-    save_file(tensors, path / "bf16.safetensors")
+    for precision, tensors in precision_tensors.items():
+        save_file(tensors, path / f"{precision}.safetensors")
     metadata = {
         "schema_version": 1,
         "model_id": spec.id,
@@ -91,7 +97,9 @@ def _write_native_sequence_result(path: Path, spec: ModelSpec) -> None:
             "python": "3.12.12",
             "torch": "2.13.0",
         },
-        "precision_tensor_keys": {"bf16": sorted(tensors)},
+        "precision_tensor_keys": {
+            precision: sorted(tensors) for precision, tensors in precision_tensors.items()
+        },
     }
     (path / "metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True) + "\n",
@@ -313,18 +321,21 @@ def test_native_sequence_converter_is_compact_deterministic_and_fail_closed(
     assert sorted(golden_tensors) == [
         "input__attention_mask",
         "input__input_ids",
+        "official_bf16__last_hidden_state",
+        "official_bf16__logits",
         "output__last_hidden_state",
         "output__logits",
         "residue_mask",
     ]
+    # The FP32 run is the truth; the official BF16 run keeps its own dtype.
+    assert golden_tensors["output__last_hidden_state"].dtype == torch.float32
+    assert golden_tensors["output__logits"].dtype == torch.float32
+    assert golden_tensors["official_bf16__last_hidden_state"].dtype == torch.bfloat16
+    assert golden_tensors["official_bf16__logits"].dtype == torch.bfloat16
     metadata = json.loads(first.metadata_path.read_text(encoding="utf-8"))
     assert metadata["source_files"] == {
-        "native/bf16.safetensors": hashlib.sha256(
-            (native / "bf16.safetensors").read_bytes()
-        ).hexdigest(),
-        "native/metadata.json": hashlib.sha256(
-            (native / "metadata.json").read_bytes()
-        ).hexdigest(),
+        f"native/{name}": hashlib.sha256((native / name).read_bytes()).hexdigest()
+        for name in ("bf16.safetensors", "fp32.safetensors", "metadata.json")
     }
     assert metadata["environment"]["details"]["cuda_device"] == "Synthetic H100"
     assert metadata["input_fingerprint"] != "0" * 64
@@ -342,6 +353,141 @@ def test_native_sequence_converter_is_compact_deterministic_and_fail_closed(
             native,
             tmp_path / "broken",
             generation_command=command,
+        )
+
+
+def test_native_sequence_converter_requires_matching_fp32_and_bf16_runs(
+    tmp_path: Path,
+) -> None:
+    """A golden pairs FP32 truth with the BF16 run of the same inputs, or nothing."""
+
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, original_spec = _synthetic_registry(source_root, checkpoint)
+    family = replace(original_spec.family, test_tiers=("check",))
+    spec = replace(original_spec, family=family)
+    registry = _with_spec(registry, spec)
+    command = ("python", "-m", "tools.goldens.from_native", "--model", spec.id)
+
+    missing_fp32 = tmp_path / "missing-fp32" / spec.id
+    _write_native_sequence_result(missing_fp32, spec)
+    (missing_fp32 / "fp32.safetensors").unlink()
+    with pytest.raises(GoldenError, match="native FP32 result is missing"):
+        convert_native_result(
+            spec, registry, missing_fp32, tmp_path / "out-one", generation_command=command
+        )
+
+    different_inputs = tmp_path / "different-inputs" / spec.id
+    _write_native_sequence_result(different_inputs, spec)
+    shifted = _native_precision_tensors(torch.float32)
+    shifted["input__input_ids"] = shifted["input__input_ids"] + 1
+    save_file(shifted, different_inputs / "fp32.safetensors")
+    with pytest.raises(GoldenError, match="used different inputs"):
+        convert_native_result(
+            spec, registry, different_inputs, tmp_path / "out-two", generation_command=command
+        )
+
+    low_precision_truth = tmp_path / "low-precision-truth" / spec.id
+    _write_native_sequence_result(low_precision_truth, spec)
+    save_file(
+        _native_precision_tensors(torch.bfloat16),
+        low_precision_truth / "fp32.safetensors",
+    )
+    with pytest.raises(GoldenError, match="native FP32 output__last_hidden_state is"):
+        convert_native_result(
+            spec, registry, low_precision_truth, tmp_path / "out-three", generation_command=command
+        )
+
+
+def test_cpu_fp32_native_result_takes_bf16_from_the_declared_golden(tmp_path: Path) -> None:
+    """A reference without its pinned CUDA build records FP32 only; the pinned golden lends BF16."""
+
+    source_root = tmp_path / "source"
+    checkpoint = tmp_path / "checkpoint"
+    checkpoint.mkdir()
+    registry, original_spec = _synthetic_registry(source_root, checkpoint)
+    family = replace(original_spec.family, test_tiers=("check",))
+    spec = replace(original_spec, family=family)
+    registry = _with_spec(registry, spec)
+    bf16 = _native_precision_tensors(torch.bfloat16)
+    prior_root = tmp_path / "prior" / "tests" / "goldens"
+    prior_record = write_golden_bundle(
+        spec,
+        registry,
+        {name: bf16[name] for name in bf16 if name != "output__hidden_0000"},
+        metadata_path=prior_root / f"{spec.id}.json",
+        tensors_path=prior_root / f"{spec.id}.safetensors",
+        generation_command=("python", "-m", "tools.goldens", "--model", spec.id),
+        environment={"cuda_device": "Synthetic H100", "torch": "2.2.0"},
+        input_fingerprint=hashlib.sha256(b"prior").hexdigest(),
+    )
+    declared_registry, declared_spec = _declare_golden(registry, spec, prior_record)
+    declared_spec = replace(
+        declared_spec,
+        official_golden=OfficialGolden(
+            metadata=replace(declared_spec.official_golden.metadata, path=f"tests/goldens/{spec.id}.json"),
+            tensors=replace(
+                declared_spec.official_golden.tensors, path=f"tests/goldens/{spec.id}.safetensors"
+            ),
+        ),
+    )
+    declared_registry = _with_spec(declared_registry, declared_spec)
+
+    native = tmp_path / "native" / spec.id
+    _write_native_sequence_result(native, spec)
+    (native / "bf16.safetensors").unlink()
+    metadata = json.loads((native / "metadata.json").read_text(encoding="utf-8"))
+    metadata["precision_tensor_keys"].pop("bf16")
+    metadata["environment"]["cuda_device"] = "unavailable"
+    (native / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    command = ("python", "-m", "tools.goldens", "--model", spec.id)
+
+    with pytest.raises(GoldenError, match="pass --official-bf16-golden-root"):
+        convert_native_result(
+            declared_spec, declared_registry, native, tmp_path / "out-one", generation_command=command
+        )
+    record = convert_native_result(
+        declared_spec,
+        declared_registry,
+        native,
+        tmp_path / "out-two",
+        generation_command=command,
+        official_bf16_golden_root=prior_root,
+    )
+    golden = load_file(record.tensors_path, device="cpu")
+    assert golden["output__last_hidden_state"].dtype == torch.float32
+    assert torch.equal(golden["official_bf16__last_hidden_state"], bf16["output__last_hidden_state"])
+    assert torch.equal(golden["official_bf16__logits"], bf16["output__logits"])
+    compact = json.loads(record.metadata_path.read_text(encoding="utf-8"))
+    assert compact["source_files"][f"official_bf16/{spec.id}.safetensors"] == hashlib.sha256(
+        (prior_root / f"{spec.id}.safetensors").read_bytes()
+    ).hexdigest()
+    assert "Synthetic H100" in compact["environment"]["details"]["official_bf16_environment"]
+
+    shifted = _native_precision_tensors(torch.float32)
+    shifted["input__input_ids"] = shifted["input__input_ids"] + 1
+    save_file(shifted, native / "fp32.safetensors")
+    with pytest.raises(GoldenError, match="used different inputs"):
+        convert_native_result(
+            declared_spec,
+            declared_registry,
+            native,
+            tmp_path / "out-three",
+            generation_command=command,
+            official_bf16_golden_root=prior_root,
+        )
+
+    tensors_path = prior_root / f"{spec.id}.safetensors"
+    tensors_path.write_bytes(tensors_path.read_bytes() + b"tampered")
+    with pytest.raises(GoldenError, match="tensor-file digest mismatch"):
+        convert_native_result(
+            declared_spec,
+            declared_registry,
+            native,
+            tmp_path / "out-four",
+            generation_command=command,
+            official_bf16_golden_root=prior_root,
         )
 
 

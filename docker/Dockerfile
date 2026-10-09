@@ -195,6 +195,7 @@ COPY tests/structure/support/boltz2_bundle.py /opt/oracle/tests/structure/suppor
 COPY tests/structure/support/esmfold_bundle.py /opt/oracle/tests/structure/support/esmfold_bundle.py
 COPY tests/structure/support/esmfold2_bundle.py /opt/oracle/tests/structure/support/esmfold2_bundle.py
 COPY tools/source_record.py /opt/oracle/tools/source_record.py
+COPY tools/conversion/esmc_native.py /opt/oracle/tools/conversion/esmc_native.py
 COPY tools/remote/biohub_reference_environment.py /opt/oracle/tools/remote/biohub_reference_environment.py
 COPY tools/remote/biohub_reference_lock.py /opt/oracle/tools/remote/biohub_reference_lock.py
 COPY tools/remote/biohub_reference_requirements.py /opt/oracle/tools/remote/biohub_reference_requirements.py

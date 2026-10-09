@@ -121,7 +121,7 @@ def _environment_metadata() -> dict[str, object]:
             int(cuda_properties.total_memory) if cuda_properties is not None else None
         ),
         "cuda_runtime": str(torch.version.cuda or "unavailable"),
-        "cuda_driver": _cuda_driver_version(),
+        "cuda_driver": _cuda_driver_version() if cuda_properties is not None else "unavailable",
         "packages": json.dumps(distributions, separators=(",", ":"), sort_keys=True),
         "platform_machine": platform.machine(),
         "python": platform.python_version(),
@@ -721,8 +721,13 @@ def _validated_generation_limitation(
     return limitation
 
 
-def run_request(request_path: Path, output_root: Path) -> Path:
-    """Execute one official request and atomically publish its normalized result."""
+def run_request(request_path: Path, output_root: Path, *, cpu_fp32: bool = False) -> Path:
+    """Execute one official request and atomically publish its normalized result.
+
+    ``cpu_fp32`` records only the strict-FP32 run, on the CPU. It serves references whose
+    pinned CUDA build does not exist for this platform: FP32 is the hardware-independent
+    truth a golden needs, and the golden takes its BF16 run from an earlier GPU result.
+    """
 
     request = json.loads(request_path.read_text(encoding="utf-8"))
     if request.get("schema_version") != SCHEMA_VERSION:
@@ -730,7 +735,7 @@ def run_request(request_path: Path, output_root: Path) -> Path:
     adapter_name = request.get("adapter")
     if not isinstance(adapter_name, str) or not adapter_name.startswith(_ADAPTER_PREFIX):
         raise ValueError(f"Invalid official adapter in {request_path}")
-    if not torch.cuda.is_available():
+    if not cpu_fp32 and not torch.cuda.is_available():
         raise RuntimeError("Native BF16 compliance requires CUDA")
 
     adapter = importlib.import_module(adapter_name)
@@ -770,7 +775,7 @@ def run_request(request_path: Path, output_root: Path) -> Path:
     if reference_environment is not None:
         metadata["reference_environment"] = reference_environment
 
-    device = torch.device("cuda")
+    device = torch.device("cpu" if cpu_fp32 else "cuda")
     # ANKH's native encoder wrapper intentionally has no decoder. Defer its
     # generation contract until encoder inference is complete, then release the
     # encoder before loading the complete official T5 checkpoint.
@@ -786,19 +791,21 @@ def run_request(request_path: Path, output_root: Path) -> Path:
             device,
             adapter=adapter,
         )
-    precision_tensors: dict[str, dict[str, torch.Tensor]] = {}
-    if request["deep_reference"]:
-        precision_tensors["fp32"] = _inference_tensors(
-            model, tokenizer, request, device, torch.float32
+    # Every checkpoint records strict FP32: it is the hardware-independent truth that
+    # its golden stores. BF16 is the official mixed-precision output on this device.
+    precision_tensors: dict[str, dict[str, torch.Tensor]] = {
+        "fp32": _inference_tensors(model, tokenizer, request, device, torch.float32),
+    }
+    if not cpu_fp32:
+        precision_tensors["bf16"] = _inference_tensors(
+            model, tokenizer, request, device, torch.bfloat16
         )
-    precision_tensors["bf16"] = _inference_tensors(
-        model, tokenizer, request, device, torch.bfloat16
-    )
     metadata["precision_tensor_keys"] = {
         precision: sorted(tensors) for precision, tensors in precision_tensors.items()
     }
     calibration_tensors: dict[str, dict[str, torch.Tensor]] = {}
-    calibration_batches = request.get("calibration_batches", [])
+    # Calibration batches are BF16 diagnostics, so an FP32-only run has none.
+    calibration_batches = [] if cpu_fp32 else request.get("calibration_batches", [])
     if calibration_batches:
         if request["family"] != "esm_plusplus":
             raise ValueError("Calibration batches are reserved for ESM++/ESMC requests")
@@ -911,6 +918,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Run only this request ID; repeat to select multiple checkpoints.",
     )
     parser.add_argument(
+        "--cpu-fp32",
+        action="store_true",
+        help="Record only strict FP32 on the CPU, for a platform without the pinned CUDA build.",
+    )
+    parser.add_argument(
         "--deep-only",
         action="store_true",
         help="Run only manifest-declared deep architecture representatives.",
@@ -922,7 +934,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         deep_only=arguments.deep_only,
     )
     for request in requests:
-        print(run_request(request, arguments.output_dir))
+        print(run_request(request, arguments.output_dir, cpu_fp32=arguments.cpu_fp32))
     return 0
 
 

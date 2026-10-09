@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import gc
+import hashlib
 import importlib
 import json
 import os
@@ -47,6 +48,16 @@ supported_model_ids = (
     "esmfold2_fast",
     "esmfold2_experimental_cutoff2025",
     "esmfold2_experimental_fast_cutoff2025",
+    "esmfold2_300",
+    "esmfold2_600",
+)
+# The official base300M and base600M checkpoints have no confidence head, so their
+# bundles hold structure outputs only. FastPLMs adds a separately trained head.
+headless_model_ids = ("esmfold2_300", "esmfold2_600")
+# Live release compliance, including FP8, covers the four 6B-backbone variants; the
+# headless variants are checked against their structure goldens.
+compliance_model_ids = tuple(
+    model_id for model_id in supported_model_ids if model_id not in headless_model_ids
 )
 # Protein G B1 is a compact, experimentally characterized single-chain fold.
 fold_sequence = "MQYKLILNGKTLKGETTTEAVDAATAEKVFKQYANDNGVDGEWTYDDATKTFTVTE"
@@ -55,18 +66,24 @@ fold_seed = 17
 # leave even the official model outside physically valid C-alpha geometry.
 fold_sampling_steps = 14
 
-_required_outputs = (
+_structure_outputs = (
     "atom_pad_mask",
     "distogram_logits",
+    "sample_atom_coords",
+)
+_confidence_outputs = (
     "iptm",
     "pae",
     "pae_logits",
     "plddt",
     "plddt_logits",
     "ptm",
-    "sample_atom_coords",
 )
+_required_outputs = (*_structure_outputs, *_confidence_outputs)
 _optional_outputs = ("pde_logits",)
+_msa_features = frozenset(
+    {"msa", "msa_attention_mask", "has_deletion", "deletion_value", "deletion_mean"}
+)
 _semantic_config_fields = (
     "confidence_head",
     "d_pair",
@@ -102,12 +119,10 @@ def prepare_requests(
     from fastplms.registry import get_model_registry
 
     registry = get_model_registry()
-    actual_ids = tuple(
-        spec.id for spec in registry.by_family("esmfold2") if spec.backbone_model is None
-    )
+    actual_ids = tuple(spec.id for spec in registry.by_family("esmfold2"))
     if actual_ids != supported_model_ids:
         raise RuntimeError(
-            "The ESMFold2 bundle schema supports the four 6B-backbone variants; "
+            f"The ESMFold2 bundle schema supports {supported_model_ids}; "
             f"manifest contains {actual_ids}."
         )
 
@@ -126,13 +141,18 @@ def prepare_requests(
             "candidate": checkpoint_metadata(spec.fast),
             "candidate_auto_model": spec.auto_map["AutoModel"],
             "state_transform": spec.family.state_transform,
-            "backbone_model": spec.family.backbone_model,
+            "backbone_model": spec.backbone_model or spec.family.backbone_model,
             "attention_backend": "sdpa",
             "deterministic_algorithms": True,
             "sequence": fold_sequence,
             "seed": fold_seed,
             "sampling_steps": fold_sampling_steps,
         }
+        # An official config names its ESMC backbone by repository alone, and Biohub has
+        # since replaced those weights with a layout pinned ESMCModel cannot load (it leaves
+        # them randomly initialized). The request pins the backbone the manifest declares.
+        backbone = spec.backbone or registry[spec.family.backbone_model].official
+        request["official_backbone"] = checkpoint_metadata(backbone)
         request["request_sha256"] = request_fingerprint(request)
         path = request_root / f"{model_id}.json"
         atomic_write_text(path, stored_json_text(request))
@@ -170,6 +190,12 @@ def _validate_request(request: Mapping[str, Any]) -> None:
         raise ValueError(f"{model_id}: ESMFold2 folding compliance requires SDPA.")
     if request.get("deterministic_algorithms") is not True:
         raise ValueError(f"{model_id}: ESMFold2 folding compliance requires determinism.")
+    backbone = request.get("official_backbone")
+    if not isinstance(backbone, Mapping) or not isinstance(backbone.get("files"), list):
+        raise ValueError(f"{model_id}: missing the pinned official ESMC backbone.")
+    revision = backbone.get("revision")
+    if not isinstance(revision, str) or len(revision) != 40:
+        raise ValueError(f"{model_id}: official backbone revision is not immutable.")
 
 
 def load_request(path: Path) -> dict[str, Any]:
@@ -180,8 +206,10 @@ def load_request(path: Path) -> dict[str, Any]:
     return request
 
 
-def _is_experimental(request: Mapping[str, Any]) -> bool:
-    return "experimental" in str(request["model_id"])
+def _is_experimental(model: torch.nn.Module) -> bool:
+    """Read the variant from the loaded config; base300M and base600M ids omit the word."""
+
+    return getattr(model.config, "type", None) == "experimental"
 
 
 def _model_package(model: torch.nn.Module) -> str:
@@ -224,7 +252,15 @@ def _run_fold(
     ):
         raise TypeError("Official feature preparation did not return a tensor mapping.")
     device = next(model.parameters()).device
-    device_features = {name: tensor.to(device=device) for name, tensor in cpu_features.items()}
+    # The protein builder always emits a one-row MSA. A checkpoint without MSA conditioning
+    # has no MSA encoder, so the official forward never reads it, while FastPLMs rejects it;
+    # leave it out of the call for those checkpoints and keep it among the recorded features.
+    msa_conditioned = bool(model.config.msa_encoder.enabled)
+    device_features = {
+        name: tensor.to(device=device)
+        for name, tensor in cpu_features.items()
+        if msa_conditioned or name not in _msa_features
+    }
 
     captured_noise: list[torch.Tensor] = []
     original_randn = torch.randn
@@ -240,7 +276,7 @@ def _run_fold(
         "num_sampling_steps": int(request["sampling_steps"]),
         "num_diffusion_samples": 1,
     }
-    if _is_experimental(request):
+    if _is_experimental(model):
         forward_kwargs.update({"calculate_confidence": True, "seed": int(request["seed"])})
     else:
         forward_kwargs.update(
@@ -267,7 +303,14 @@ def _run_fold(
         )
     if not isinstance(output, Mapping):
         raise TypeError("ESMFold2 forward did not return a tensor mapping.")
-    missing_outputs = sorted(set(_required_outputs).difference(output))
+    # A headless official checkpoint folds without confidence outputs; a FastPLMs
+    # candidate for the same variant also returns its trained head's outputs.
+    required = (
+        _structure_outputs
+        if request["model_id"] in headless_model_ids
+        else _required_outputs
+    )
+    missing_outputs = sorted(set(required).difference(output))
     if missing_outputs:
         raise RuntimeError(f"ESMFold2 fold omitted required outputs: {missing_outputs}")
 
@@ -381,11 +424,98 @@ def _load_reference_model(
         dtype=torch.float32,
     )
     model = model.eval().to(device=device, dtype=torch.float32)
-    if config.type == "experimental":
-        model.load_esmc(model.config.esmc_id)
-    else:
-        model.load_esmc(model.config.esmc_id, precision="bf16")
+    with tempfile.TemporaryDirectory(prefix="esmc-reference-") as directory:
+        snapshot = _official_backbone_snapshot(request["official_backbone"], Path(directory))
+        if config.type == "experimental":
+            model.load_esmc(str(snapshot))
+        else:
+            model.load_esmc(str(snapshot), precision="bf16")
+        _validate_backbone_keys(snapshot, model)
     return model
+
+
+def _file_digest(path: Path, algorithm: str) -> str:
+    """Hash a Hub file the way ``models.toml`` records it."""
+
+    if algorithm == "sha256":
+        digest = hashlib.sha256()
+    elif algorithm == "git-sha1":
+        digest = hashlib.sha1()
+        digest.update(f"blob {path.stat().st_size}\0".encode())
+    else:
+        raise ValueError(f"Unsupported checkpoint digest algorithm: {algorithm!r}")
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 24), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _official_backbone_snapshot(backbone: Mapping[str, Any], output: Path) -> Path:
+    """Fetch the pinned ESMC checkpoint in a layout pinned ``ESMCModel`` loads.
+
+    A checkpoint already in that layout is used as downloaded. A native-layout one (the
+    base300M and base600M backbones) is rewritten into ``output`` by
+    ``esmc_native_to_reference_v1``, which only renames and concatenates tensors, so the
+    reference still reads the exact official weights.
+    """
+
+    from huggingface_hub import snapshot_download
+    from tools.conversion.esmc_native import write_reference_snapshot
+
+    files = {item["path"]: item for item in backbone["files"]}
+    snapshot = Path(
+        snapshot_download(
+            repo_id=backbone["repo_id"],
+            revision=backbone["revision"],
+            allow_patterns=sorted(files),
+        )
+    )
+    for path, item in files.items():
+        if _file_digest(snapshot / path, item["algorithm"]) != item["digest"]:
+            raise RuntimeError(f"{backbone['repo_id']}: {path} differs from its pinned digest.")
+    if not any(name.startswith("esmc.layers.") for name in _checkpoint_keys(snapshot)):
+        return snapshot
+    write_reference_snapshot(snapshot, output)
+    return output
+
+
+def _checkpoint_keys(snapshot: Path) -> set[str]:
+    """Return every tensor name across a snapshot's safetensors shards."""
+
+    from safetensors import safe_open
+
+    keys: set[str] = set()
+    for path in sorted(snapshot.glob("*.safetensors")):
+        with safe_open(str(path), framework="pt", device="cpu") as handle:
+            keys.update(handle.keys())
+    if not keys:
+        raise RuntimeError(f"No safetensors weights in the ESMC snapshot {snapshot}.")
+    return keys
+
+
+def _validate_backbone_keys(snapshot: Path, model: torch.nn.Module) -> None:
+    """Fail when any backbone weight was initialized instead of loaded.
+
+    A masked-language-model checkpoint prefixes its backbone with ``esmc.`` and also holds
+    the language-model head (``lm_head`` or ``sequence_head``) and Transformer Engine
+    state, which a backbone does not load.
+    """
+
+    snapshot_keys = {name.removeprefix("esmc.") for name in _checkpoint_keys(snapshot)}
+    backbone = getattr(model, "_esmc", None)
+    if backbone is None:
+        raise RuntimeError("The ESMC loader did not attach a backbone.")
+    loaded_keys = set(backbone.state_dict())
+    initialized = sorted(loaded_keys - snapshot_keys)
+    unused = sorted(
+        name
+        for name in snapshot_keys - loaded_keys
+        if not name.startswith(("lm_head.", "sequence_head.")) and not name.endswith("._extra_state")
+    )
+    if initialized or unused:
+        raise RuntimeError(
+            f"ESMC backbone keys differ: initialized={initialized[:8]}, unused={unused[:8]}"
+        )
 
 
 def _load_candidate_model(
@@ -616,15 +746,15 @@ def _all_prepared_requests(exchange_root: Path) -> tuple[Path, ...]:
 
     request_root = exchange_root / "structure" / "requests" / reference_container
     available = {path.stem: path for path in sorted(request_root.glob("*.json"))}
-    missing = sorted(set(supported_model_ids).difference(available))
+    missing = sorted(set(compliance_model_ids).difference(available))
     unexpected = sorted(set(available).difference(supported_model_ids))
     if missing or unexpected:
         raise FileNotFoundError(
             "ESMFold2 prepared-request inventory differs from the release schema: "
             f"missing={missing}, unexpected={unexpected}."
         )
-    paths = tuple(available[model_id] for model_id in supported_model_ids)
-    for model_id, path in zip(supported_model_ids, paths, strict=True):
+    paths = tuple(available[model_id] for model_id in compliance_model_ids)
+    for model_id, path in zip(compliance_model_ids, paths, strict=True):
         request = load_request(path)
         if request["model_id"] != model_id:
             raise ValueError(f"ESMFold2 request filename and model ID differ: {path}")
@@ -715,6 +845,8 @@ __all__ = [
     "produce_reference",
     "reference_container",
     "schema_version",
+    "compliance_model_ids",
+    "headless_model_ids",
     "supported_model_ids",
     "tensor_set_sha256",
     "tensor_sha256",

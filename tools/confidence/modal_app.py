@@ -27,7 +27,8 @@ REMOTE_ROOT = PILOT_ROOT
 app = modal.App("fastplms-confidence-pilot")
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 hf_volume = modal.Volume.from_name(HF_VOLUME)
-MOUNTS = {str(ARTIFACT_MOUNT): volume, "/hf": hf_volume}
+# Remote paths are POSIX even when the launcher runs on Windows.
+MOUNTS = {ARTIFACT_MOUNT.as_posix(): volume, "/hf": hf_volume}
 credentials = modal.Secret.from_local_environ(["HF_TOKEN", "WANDB_API_KEY"])
 base_image = (
     modal.Image.debian_slim(python_version="3.12")
@@ -57,7 +58,7 @@ base_image = (
             "HF_HOME": "/hf/huggingface",
             "PYTHONUNBUFFERED": "1",
             "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
-            "WANDB_DIR": str(REMOTE_ROOT / "wandb"),
+            "WANDB_DIR": (REMOTE_ROOT / "wandb").as_posix(),
             "WANDB_CONSOLE": "off",
         }
     )

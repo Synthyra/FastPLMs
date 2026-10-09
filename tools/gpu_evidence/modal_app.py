@@ -160,6 +160,12 @@ def _image(
             str(SOURCE_ROOT / "requirements/features" / feature_file)
         )
     image = image.uv_pip_install(f"transformers=={TRANSFORMERS_VERSION}")
+    # uv installs without bytecode and workers set PYTHONDONTWRITEBYTECODE, so every fresh
+    # interpreter a subprocess contract starts would compile torch and transformers again.
+    image = image.run_commands(
+        "python -c \"import compileall, sysconfig; "
+        "compileall.compile_dir(sysconfig.get_paths()['purelib'], quiet=1, workers=0)\""
+    )
     # Build steps must precede the working-tree mounts below.
     if reference_environment:
         image = _with_reference_environment(image)
@@ -189,6 +195,9 @@ def _image(
 
 # requirements/profiles/cpu-validation.in and candidate.in, plus structure extras.
 cpu_image = _image(CPU_WHEEL_INDEX, ("dev.in", "structure.in", "train.in"))
+check_image = _image(
+    CPU_WHEEL_INDEX, ("dev.in", "flash.in", "structure.in", "train.in", "oracles.in", "confidence.in")
+)
 gpu_image = _image(CUDA_WHEEL_INDEX, ("dev.in", "flash.in", "structure.in", "train.in"))
 fold_image = _image(
     CUDA_WHEEL_INDEX,
@@ -256,6 +265,18 @@ cpu_worker = app.function(
     timeout=CPU_WORKER_TIMEOUT_SECONDS,
     startup_timeout=STARTUP_TIMEOUT_SECONDS,
     volumes={CACHE_ROOT: cache_volume},
+    max_containers=1,
+)(_run_stage)
+
+check_worker = app.function(
+    name="check_worker",
+    image=check_image,
+    cpu=CPU_CORES,
+    memory=int(CPU_MEMORY_GIB * 1024),
+    timeout=CPU_WORKER_TIMEOUT_SECONDS,
+    startup_timeout=STARTUP_TIMEOUT_SECONDS,
+    volumes={CACHE_ROOT: cache_volume},
+    secrets=[credentials],
     max_containers=1,
 )(_run_stage)
 

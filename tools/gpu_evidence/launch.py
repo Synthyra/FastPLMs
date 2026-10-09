@@ -192,10 +192,10 @@ def main() -> None:
 
     # The Modal app reads credential names from the environment when it is imported.
     load_dotenv(ROOT / ".secrets.env", override=False)
-    from .modal_app import app, cpu_worker, fold_workers, gpu_workers
+    from .modal_app import app, check_worker, cpu_worker, fold_workers, gpu_workers
 
     if gpu is None:
-        worker = cpu_worker
+        worker = check_worker if spec.image == "check" else cpu_worker
     else:
         worker = (fold_workers if spec.image == "fold" else gpu_workers)[gpu]
     started = time.monotonic()

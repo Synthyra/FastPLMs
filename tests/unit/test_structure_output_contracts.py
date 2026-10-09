@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import warnings
 import pytest
 import torch
@@ -28,7 +29,11 @@ from fastplms.models.esmfold2.modeling_esmfold2 import (
     ESMFold2Model,
     ESMFold2Output,
 )
-from fastplms.models.esmfold2.modeling_esmfold2_common import NUM_RES_TYPES
+from fastplms.models.esmfold2.modeling_esmfold2_common import (
+    DEFAULT_MAX_INFERENCE_SIGMA,
+    NUM_RES_TYPES,
+    DiffusionStructureHead,
+)
 from fastplms.models.esmfold2.modeling_esmfold2_experimental import (
     ESMFold2ExperimentalModel,
 )
@@ -449,6 +454,16 @@ def test_esmfold2_public_forward_honors_output_controls_and_sampler_overrides(
         "max_inference_sigma": 32.0,
         "denoising_early_exit_rmsd": 0.10,
     }
+    # Leaving the cap out keeps the official sampler's starting noise level, not an uncapped
+    # schedule that starts ten times higher.
+    default_kwargs = {name: value for name, value in common_kwargs.items() if name != "max_inference_sigma"}
+    with seed_context(31):
+        model(**features, **default_kwargs, return_dict=True)
+    assert structure_head.observed["max_inference_sigma"] == DEFAULT_MAX_INFERENCE_SIGMA == 256.0
+    assert (
+        inspect.signature(DiffusionStructureHead.sample).parameters["max_inference_sigma"].default
+        == DEFAULT_MAX_INFERENCE_SIGMA
+    )
     with pytest.raises(NotImplementedError, match="output_attentions=True"):
         model(**features, output_attentions=True)
     with pytest.raises(TypeError):

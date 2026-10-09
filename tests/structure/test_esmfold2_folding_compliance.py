@@ -215,7 +215,11 @@ def _token_pair(
 def _structure_metrics(
     actual: Mapping[str, torch.Tensor],
     expected: Mapping[str, torch.Tensor],
+    *,
+    confidence: bool = True,
 ) -> dict[str, float]:
+    """Compare coordinates, and confidence outputs unless ``confidence`` is off."""
+
     # actual, expected: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3)
     actual_features = feature_tensors(actual)
     # token_mask: (l,), one flag per token in the first batch element.
@@ -223,7 +227,7 @@ def _structure_metrics(
     sequence_length = token_mask.numel()
     # pair_mask: (l, l)
     pair_mask = token_mask[:, None] & token_mask[None, :]
-    return {
+    structure = {
         "ca_rmsd": aligned_ca_rmsd(
             _ca_coordinates(actual),
             _ca_coordinates(expected),
@@ -232,6 +236,11 @@ def _structure_metrics(
             _ca_coordinates(actual),
             _ca_coordinates(expected),
         ),
+    }
+    if not confidence:
+        return structure
+    return {
+        **structure,
         "plddt_mae": (
             _token_vector(actual, "plddt", sequence_length)[token_mask]
             - _token_vector(expected, "plddt", sequence_length)[token_mask]
@@ -386,15 +395,19 @@ def test_prepare_structure_requests_is_manifest_exact(tmp_path: Path) -> None:
         assert request["official"] == checkpoint_metadata(spec.official)
         assert request["candidate"] == checkpoint_metadata(spec.fast)
         assert request["candidate_auto_model"] == spec.auto_map["AutoModel"]
-        assert request["backbone_model"] == spec.family.backbone_model
+        assert request["backbone_model"] == (spec.backbone_model or spec.family.backbone_model)
         assert request["attention_backend"] == "sdpa"
         assert request["deterministic_algorithms"] is True
+        backbone = spec.backbone or registry[spec.family.backbone_model].official
+        assert request["official_backbone"] == checkpoint_metadata(backbone)
 
 
 def test_all_prepared_requests_requires_the_exact_release_inventory(tmp_path: Path) -> None:
     paths = esmfold2_bundle.prepare_requests(tmp_path)
     selected = esmfold2_bundle._all_prepared_requests(tmp_path)
-    assert selected == paths
+    assert selected == tuple(
+        path for path in paths if path.stem in esmfold2_bundle.compliance_model_ids
+    )
 
     paths[0].unlink()
     with pytest.raises(FileNotFoundError, match=r"missing=.*esmfold2"):

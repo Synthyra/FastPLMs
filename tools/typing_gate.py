@@ -41,6 +41,9 @@ BASELINE_FINGERPRINT_SHA256 = (
     "4d2422a34fb52dcffa9d112e7203437c726d76ad8798fb14fea77ad3f6317784"
 )
 REQUIRED_SCOPE_TARGETS = ("benchmarks", "examples", "src/fastplms", "tools")
+# Files renamed since the baseline revision. The ledger stays byte-identical, so its digests
+# still verify; the gate reads its paths through this map when it compares inventories.
+BASELINE_RENAMES: Mapping[str, str] = {"tools/source_provenance.py": "tools/source_record.py"}
 MYPY_COMMAND = (
     "python",
     "-m",
@@ -81,6 +84,15 @@ _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 class TypingGateError(ValueError):
     """Raised when typing evidence is incomplete, malformed, or inconsistent."""
+
+
+def toolchain_identity() -> dict[str, str]:
+    """Return the interpreter and mypy versions that produce typing evidence."""
+
+    return {
+        "python": platform.python_version(),
+        "mypy": importlib.metadata.version("mypy"),
+    }
 
 
 @dataclass(frozen=True, order=True)
@@ -535,10 +547,7 @@ def baseline_payload(
     return {
         "schema_version": SCHEMA_VERSION,
         "baseline_revision": revision,
-        "environment": {
-            "python": platform.python_version(),
-            "mypy": importlib.metadata.version("mypy"),
-        },
+        "environment": toolchain_identity(),
         "mypy_command": list(MYPY_COMMAND),
         "mypy_exit_code": mypy_exit_code,
         "scope_targets": list(scope),
@@ -690,9 +699,10 @@ def compare_payload(
         reasons.append("mypy exit status contradicts its terminal summary")
     if candidate.checked_source_files != len(source_files):
         reasons.append("mypy checked-source count differs from candidate inventory")
-    baseline_files = set(
-        _require_string_tuple(baseline.get("source_files"), "baseline source files")
-    )
+    baseline_files = {
+        BASELINE_RENAMES.get(name, name)
+        for name in _require_string_tuple(baseline.get("source_files"), "baseline source files")
+    }
     missing_baseline_files = sorted(baseline_files.difference(source_files))
     if source_inventory_sha256 != _source_inventory_sha256(source_files):
         reasons.append("candidate source inventory digest is inconsistent")
@@ -707,10 +717,7 @@ def compare_payload(
         "status": "failed" if reasons else "passed",
         "failure_reasons": reasons,
         "baseline_revision": baseline["baseline_revision"],
-        "environment": {
-            "python": platform.python_version(),
-            "mypy": importlib.metadata.version("mypy"),
-        },
+        "environment": toolchain_identity(),
         "mypy_command": list(MYPY_COMMAND),
         "scope_targets": list(scope),
         "mypy_exit_code": mypy_exit_code,
@@ -752,10 +759,7 @@ def _failed_compare_payload(
         "status": "failed",
         "failure_reasons": list(reasons),
         "baseline_revision": baseline["baseline_revision"],
-        "environment": {
-            "python": platform.python_version(),
-            "mypy": importlib.metadata.version("mypy"),
-        },
+        "environment": toolchain_identity(),
         "mypy_command": list(MYPY_COMMAND),
         "scope_targets": list(scope),
         "mypy_exit_code": mypy_exit_code,
@@ -769,11 +773,7 @@ def _failed_compare_payload(
 
 def _baseline_command(arguments: argparse.Namespace) -> int:
     scope = load_scope_manifest(arguments.scope_manifest)
-    environment = {
-        "python": platform.python_version(),
-        "mypy": importlib.metadata.version("mypy"),
-    }
-    if environment != {
+    if toolchain_identity() != {
         "python": BASELINE_PYTHON_VERSION,
         "mypy": BASELINE_MYPY_VERSION,
     }:
@@ -822,11 +822,7 @@ def _baseline_command(arguments: argparse.Namespace) -> int:
 
 def _compare_command(arguments: argparse.Namespace) -> int:
     baseline, baseline_fingerprints = load_baseline(arguments.baseline)
-    environment = {
-        "python": platform.python_version(),
-        "mypy": importlib.metadata.version("mypy"),
-    }
-    if environment != baseline["environment"]:
+    if toolchain_identity() != baseline["environment"]:
         raise TypingGateError("Candidate typing environment differs from the baseline.")
     scope = load_scope_manifest(arguments.scope_manifest)
     source_files = discover_source_files(arguments.repo_root, scope)

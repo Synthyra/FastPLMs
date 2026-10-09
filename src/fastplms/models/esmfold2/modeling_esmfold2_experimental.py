@@ -21,8 +21,8 @@ from tqdm.auto import tqdm
 from transformers.modeling_utils import PreTrainedModel
 
 from .attention import ESMFold2AttentionMixin
-from .configuration_esmfold2 import ESMFold2Config
 from .confidence_checkpoint import install_confidence_checkpoint
+from .configuration_esmfold2 import ESMFold2Config
 from .embedding import ESMFold2EmbeddingMixin
 from .modeling_esmfold2 import (
     ESMCPrecision,
@@ -38,6 +38,7 @@ from .modeling_esmfold2 import (
 )
 from .modeling_esmfold2_common import (
     CHAR_VOCAB_SIZE,
+    DEFAULT_MAX_INFERENCE_SIGMA,
     MAX_ATOMIC_NUMBER,
     MSA_CONDITIONING_INPUT_NAMES,
     NUM_RES_TYPES,
@@ -731,7 +732,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         provide_soft_sequence_to_msa_and_profile: bool = True,
         noise_scale: float | None = None,
         step_scale: float | None = None,
-        max_inference_sigma: float | None = None,
+        max_inference_sigma: float | None = DEFAULT_MAX_INFERENCE_SIGMA,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
@@ -1094,7 +1095,7 @@ class ESMFold2ExperimentalModel(ESMFold2EmbeddingMixin, ESMFold2AttentionMixin, 
         seed: int | None = None,
         noise_scale: float | None = None,
         step_scale: float | None = None,
-        max_inference_sigma: int | None = None,
+        max_inference_sigma: float | None = DEFAULT_MAX_INFERENCE_SIGMA,
         early_exit: bool = False,
         complex_id: str = "pred",
         verbose: bool = False,

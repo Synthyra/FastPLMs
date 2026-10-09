@@ -57,6 +57,7 @@ from .esmfold2_constants_esm3 import (
 )
 from .modeling_esmfold2_common import (
     CHAR_VOCAB_SIZE,
+    DEFAULT_MAX_INFERENCE_SIGMA,
     MAX_ATOMIC_NUMBER,
     MSA_CONDITIONING_INPUT_NAMES,
     NUM_RES_TYPES,
@@ -1490,7 +1491,7 @@ class ESMFold2Model(
         early_exit: bool = False,
         noise_scale: float | None = None,
         step_scale: float | None = None,
-        max_inference_sigma: float | None = None,
+        max_inference_sigma: float | None = DEFAULT_MAX_INFERENCE_SIGMA,
         output_attentions: bool | None = None,
         output_hidden_states: bool | None = None,
         return_dict: bool | None = None,
@@ -1793,7 +1794,7 @@ class ESMFold2Model(
         seed: int | None = None,
         noise_scale: float | None = None,
         step_scale: float | None = None,
-        max_inference_sigma: int | None = None,
+        max_inference_sigma: float | None = DEFAULT_MAX_INFERENCE_SIGMA,
         early_exit: bool = False,
         complex_id: str = "pred",
         verbose: bool = False,
