@@ -8,7 +8,6 @@ import torch
 
 from types import ModuleType
 from typing import Any
-
 from examples import binder_design_fastplms as binder
 
 

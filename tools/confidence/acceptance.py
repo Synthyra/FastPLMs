@@ -20,7 +20,6 @@ targets. It is reported only and gates nothing, because the gates were fixed bef
 from __future__ import annotations
 
 import math
-
 import numpy as np
 
 from collections import defaultdict

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import sqlite3
 import struct
+import sys
 import pytest
 import torch
 
 from pathlib import Path
 from types import SimpleNamespace
+from tokenizers import Tokenizer, pre_tokenizers
+from tokenizers.models import Unigram, WordLevel
 from torch import nn
 
 from fastplms.embeddings import (
@@ -32,6 +36,7 @@ from fastplms.embeddings import (
 )
 from fastplms.embeddings import runner as embedding_runner
 from fastplms.embeddings.storage import SafetensorsStreamWriter
+from fastplms.models.esm_plusplus.modeling_esm_plusplus import ESMplusplusConfig, ESMplusplusModel
 
 
 class SyntheticEmbeddingModel(nn.Module):
@@ -164,18 +169,18 @@ def test_result_preserves_order_and_duplicates() -> None:
         EmbeddingInput("second", "GG"),
         EmbeddingInput("first", "ACD"),
     ]
-    result = embed_dataset(model, inputs, batch_size=2, pooling="mean")
+    embeddings = embed_dataset(model, inputs, batch_size=2, pooling="mean")
 
-    assert [record.id for record in result] == ["first", "second", "first"]
-    assert [record.sequence for record in result] == ["ACD", "GG", "ACD"]
-    assert torch.equal(result[0].load_tensor(), result[2].load_tensor())
-    assert len(result.metadata["tensor_hashes"]) == 3
-    assert result.metadata["outputs"][0]["sha256"] == result.metadata["tensor_hashes"][0]
-    assert result.metadata["token_policy"]["unit"] == "residue"
-    assert result.metadata["layer"] == -1
+    assert [record.id for record in embeddings] == ["first", "second", "first"]
+    assert [record.sequence for record in embeddings] == ["ACD", "GG", "ACD"]
+    assert torch.equal(embeddings[0].load_tensor(), embeddings[2].load_tensor())
+    assert len(embeddings.metadata["tensor_hashes"]) == 3
+    assert embeddings.metadata["outputs"][0]["sha256"] == embeddings.metadata["tensor_hashes"][0]
+    assert embeddings.metadata["token_policy"]["unit"] == "residue"
+    assert embeddings.metadata["layer"] == -1
     with pytest.raises(ValueError, match="Duplicate id"):
-        result.as_dict()
-    assert list(result.as_dict(duplicates="first")) == ["first", "second"]
+        embeddings.as_dict()
+    assert list(embeddings.as_dict(duplicates="first")) == ["first", "second"]
 
 
 def test_bounded_length_bucketing_restores_input_order() -> None:
@@ -189,7 +194,7 @@ def test_bounded_length_bucketing_restores_input_order() -> None:
 
     model._embedding_batch = recording_batch  # type: ignore[method-assign]
     inputs = ["A", "BBBB", "CC", "DDD"]
-    result = embed_dataset(
+    embeddings = embed_dataset(
         model,
         inputs,
         batch_size=2,
@@ -197,9 +202,9 @@ def test_bounded_length_bucketing_restores_input_order() -> None:
     )
 
     assert observed == [["BBBB", "DDD"], ["CC", "A"]]
-    assert [record.sequence for record in result] == inputs
-    assert result.metadata["batching"]["batch_window_size"] == 32
-    assert result.metadata["batching"]["ordering"] == ("bounded-length-bucketed-stable-output")
+    assert [record.sequence for record in embeddings] == inputs
+    assert embeddings.metadata["batching"]["batch_window_size"] == 32
+    assert embeddings.metadata["batching"]["ordering"] == ("bounded-length-bucketed-stable-output")
 
 
 def test_invalid_storage_and_pooling_fail_before_input_consumption(tmp_path: Path) -> None:
@@ -234,7 +239,7 @@ def test_decoder_companions_are_fingerprinted_and_bucket_aligned() -> None:
     decoder_input_ids = torch.tensor([[11, 11], [22, 22], [33, 33]])  # (3, 2)
     decoder_attention_mask = torch.ones_like(decoder_input_ids)  # (3, 2)
 
-    result = embed_dataset(
+    embeddings = embed_dataset(
         model,
         inputs,
         hidden_state_source="decoder",
@@ -245,12 +250,12 @@ def test_decoder_companions_are_fingerprinted_and_bucket_aligned() -> None:
     )
 
     assert model.observed_decoder_rows == [[22, 33], [11]]
-    assert [record.load_tensor().item() for record in result] == [11.0, 22.0, 33.0]
-    assert result.metadata["hidden_state_source"] == "decoder"
-    assert result.metadata["decoder_input_fingerprint"]
-    assert result.metadata["decoder_attention_mask_fingerprint"]
-    assert result.metadata["decoder_alignment"] == "input-position"
-    assert result.metadata["model_embedding"] == {
+    assert [record.load_tensor().item() for record in embeddings] == [11.0, 22.0, 33.0]
+    assert embeddings.metadata["hidden_state_source"] == "decoder"
+    assert embeddings.metadata["decoder_input_fingerprint"]
+    assert embeddings.metadata["decoder_attention_mask_fingerprint"]
+    assert embeddings.metadata["decoder_alignment"] == "input-position"
+    assert embeddings.metadata["model_embedding"] == {
         "hidden_state_stack": "decoder",
         "source": "decoder",
     }
@@ -275,11 +280,11 @@ def test_mapping_inputs_embed_values_with_mapping_keys_as_ids() -> None:
         "protein-b": "GG",
     }
 
-    result = embed_dataset(SyntheticEmbeddingModel(), inputs, pooling="mean")
+    embeddings = embed_dataset(SyntheticEmbeddingModel(), inputs, pooling="mean")
 
-    assert [record.id for record in result] == ["protein-a", "protein-b"]
-    assert [record.sequence for record in result] == ["ACD", "GG"]
-    assert result[0].load_tensor()[0].item() == pytest.approx(sum(map(ord, "ACD")) / len("ACD"))
+    assert [record.id for record in embeddings] == ["protein-a", "protein-b"]
+    assert [record.sequence for record in embeddings] == ["ACD", "GG"]
+    assert embeddings[0].load_tensor()[0].item() == pytest.approx(sum(map(ord, "ACD")) / len("ACD"))
     with pytest.raises(ValueError, match="at least one sequence"):
         embed_dataset(SyntheticEmbeddingModel(), {}, pooling="mean")
 
@@ -301,14 +306,14 @@ def test_embedding_temporarily_uses_eval_and_restores_training_state() -> None:
 
 
 def test_full_embeddings_contain_biological_residues_only() -> None:
-    result = embed_dataset(
+    embeddings = embed_dataset(
         SyntheticEmbeddingModel(),
         ["ACD", "GG"],
         full_embeddings=True,
     )
-    assert tuple(result[0].load_tensor().shape) == (3, 2)
-    assert tuple(result[1].load_tensor().shape) == (2, 2)
-    assert result.metadata["residue_mask_policy"] == "biological-residues-only"
+    assert tuple(embeddings[0].load_tensor().shape) == (3, 2)
+    assert tuple(embeddings[1].load_tensor().shape) == (2, 2)
+    assert embeddings.metadata["residue_mask_policy"] == "biological-residues-only"
 
 
 @pytest.mark.parametrize("format", ("safetensors", "sqlite"))
@@ -317,7 +322,7 @@ def test_all_hidden_state_embeddings_trim_token_axis_and_round_trip(
     format: str,
 ) -> None:
     output = tmp_path / ("all-states.sqlite" if format == "sqlite" else "all-states")
-    result = embed_dataset(
+    embeddings = embed_dataset(
         SyntheticAllStatesModel(),
         ["ACD", "GG"],
         full_embeddings=True,
@@ -326,11 +331,11 @@ def test_all_hidden_state_embeddings_trim_token_axis_and_round_trip(
         format=format,
     )
 
-    assert tuple(result[0].load_tensor().shape) == (2, 3, 2)
-    assert tuple(result[1].load_tensor().shape) == (2, 2, 2)
-    assert torch.equal(result[0].load_tensor()[1], result[0].load_tensor()[0] + 100)
+    assert tuple(embeddings[0].load_tensor().shape) == (2, 3, 2)
+    assert tuple(embeddings[1].load_tensor().shape) == (2, 2, 2)
+    assert torch.equal(embeddings[0].load_tensor()[1], embeddings[0].load_tensor()[0] + 100)
     loaded = load_sqlite_result(output) if format == "sqlite" else load_safetensors_result(output)
-    assert torch.equal(loaded[0].load_tensor(), result[0].load_tensor())
+    assert torch.equal(loaded[0].load_tensor(), embeddings[0].load_tensor())
     assert loaded.metadata["record_count"] == 2
     assert loaded.metadata["descriptor_index"] in {
         "sqlite-records",
@@ -358,15 +363,15 @@ def test_embedding_fingerprint_records_loaded_esmc_identity() -> None:
     model._esmc_source_revision = "a" * 40
     model._esmc_source_files = {"model.safetensors": "sha256:" + "b" * 64}
 
-    result = embed_dataset(model, ["ACD"], pooling="mean")
+    embeddings = embed_dataset(model, ["ACD"], pooling="mean")
 
-    assert result.metadata["esmc_source"] == model._esmc_source
-    assert result.metadata["esmc_revision"] == model._esmc_source_revision
-    assert result.metadata["esmc_files"] == model._esmc_source_files
+    assert embeddings.metadata["esmc_source"] == model._esmc_source
+    assert embeddings.metadata["esmc_revision"] == model._esmc_source_revision
+    assert embeddings.metadata["esmc_files"] == model._esmc_source_files
 
     model._esmc_source_revision = "c" * 40
     changed = embed_dataset(model, ["ACD"], pooling="mean")
-    assert changed.metadata["run_fingerprint"] != result.metadata["run_fingerprint"]
+    assert changed.metadata["run_fingerprint"] != embeddings.metadata["run_fingerprint"]
 
 
 def test_embedding_fingerprint_binds_persisted_parameters_and_buffers(
@@ -391,7 +396,7 @@ def test_embedding_fingerprint_binds_persisted_parameters_and_buffers(
         changed_buffer.metadata["model_state_fingerprint"]
         != (changed_parameter.metadata["model_state_fingerprint"])
     )
-    assert initial.metadata["fingerprint_schema_version"] == 3
+    assert initial.metadata["fingerprint_schema_version"] == 5
     assert initial.metadata["model_state_fingerprint_source"] == "computed"
 
 
@@ -435,10 +440,10 @@ def test_in_memory_embedding_skips_model_state_hash() -> None:
             del args, kwargs
             raise AssertionError("in-memory embeddings must not hash the full model state")
 
-    result = embed_dataset(NoStateDictEmbeddingModel(), ["ACD"])
+    embeddings = embed_dataset(NoStateDictEmbeddingModel(), ["ACD"])
 
-    assert result.metadata["model_state_fingerprint"] is None
-    assert result.metadata["model_state_fingerprint_source"] == "not-computed"
+    assert embeddings.metadata["model_state_fingerprint"] is None
+    assert embeddings.metadata["model_state_fingerprint_source"] == "not-computed"
 
 
 def test_caller_owned_model_state_fingerprint_overrides_state_hash() -> None:
@@ -480,7 +485,7 @@ def test_runtime_versions_are_part_of_resume_identity(monkeypatch) -> None:
         (True, "1b8a59b611cf8d0189a9ceb555627df8b5c8cd54c42f77eda26d631d741808d1"),
     ),
 )
-def test_schema_three_fingerprint_matches_existing_embedding_runs(
+def test_schema_five_preserves_pooling_and_removes_physical_input_storage(
     monkeypatch,
     disk_backed: bool,
     expected_run_fingerprint: str,
@@ -488,7 +493,16 @@ def test_schema_three_fingerprint_matches_existing_embedding_runs(
     from fastplms.embeddings import identity
     from fastplms.embeddings.inputs import _InputSpool, _normalize_inputs
 
-    # Captured from the original schema-3 runner before the module extraction.
+    # Restore exactly the historical fields to recover the unchanged schema-3 goldens.
+    payloads = []
+    original_dumps = json.dumps
+
+    def capture_payload(value, *args, **kwargs):
+        if isinstance(value, dict) and "fingerprint_schema_version" in value:
+            payloads.append(value.copy())
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "dumps", capture_payload)
     versions = {
         "fastplms": "test",
         "python": "3.test",
@@ -532,12 +546,26 @@ def test_schema_three_fingerprint_matches_existing_embedding_runs(
         if isinstance(records, _InputSpool):
             records.close()
 
-    assert observed == (
-        "659d9deeef1b010c975475655006e0e9919115b49522f2878a588cc2218c3e05",
-        expected_run_fingerprint,
-        "fixed-state",
-        "caller",
-    )
+    assert observed[0] == "659d9deeef1b010c975475655006e0e9919115b49522f2878a588cc2218c3e05"
+    assert observed[2:] == ("fixed-state", "caller")
+    assert observed[1] != expected_run_fingerprint
+    (payload,) = payloads
+    assert payload["fingerprint_schema_version"] == 5
+    assert "input_storage" not in payload["batching"]
+    assert payload.pop("pooling_semantics") == {
+        "version": 2,
+        "mask": "biological_residues_only",
+        "accumulator": "float64_for_float64_input_else_float32",
+        "output_dtype": "input_dtype_after_reduction",
+        "variance_correction": 0,
+        "empty_residues": "reject",
+        "singleton_variance": 0,
+    }
+    payload["fingerprint_schema_version"] = 3
+    payload["batching"]["input_storage"] = "disk-spool" if disk_backed else "memory"
+    legacy_payload = original_dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    legacy = hashlib.sha256(legacy_payload).hexdigest()
+    assert legacy == expected_run_fingerprint
 
 
 def test_tokenizer_content_changes_run_fingerprint() -> None:
@@ -585,6 +613,74 @@ def test_tokenizer_content_changes_run_fingerprint() -> None:
     assert first.metadata["run_fingerprint"] != changed_config.metadata["run_fingerprint"]
 
 
+def _tiny_esmplusplus() -> nn.Module:
+    torch.manual_seed(0)
+    config = ESMplusplusConfig(
+        hidden_size=32,
+        num_attention_heads=4,
+        num_hidden_layers=2,
+        attn_backend="sdpa",
+    )
+    return ESMplusplusModel(config).eval()
+
+
+def test_identical_runs_share_a_fingerprint_from_a_never_called_tokenizer() -> None:
+    """Padding or truncation an earlier call left on the tokenizer never reaches run identity."""
+    model = _tiny_esmplusplus()
+    backend = model.tokenizer.backend_tokenizer
+    assert backend.padding is None and backend.truncation is None, (
+        "the test needs a tokenizer no call has touched"
+    )
+
+    first = embed_dataset(model, ["ACD", "GG"], pooling="mean")
+    assert backend.padding is not None, "an embedding call leaves its padding on the backend"
+    second = embed_dataset(model, ["ACD", "GG"], pooling="mean")
+    # Another caller, with truncation.
+    model.tokenizer(["MKTAYIAKQR"], truncation=True, max_length=4)
+    assert backend.truncation is not None
+    after_another_caller = embed_dataset(model, ["ACD", "GG"], pooling="mean")
+
+    runs = (first, second, after_another_caller)
+    assert len({run.metadata["run_fingerprint"] for run in runs}) == 1
+    assert first.metadata["tokenizer"] == after_another_caller.metadata["tokenizer"]
+
+
+def _metaspace_word_level() -> Tokenizer:
+    vocabulary = {"<unk>": 0, "<pad>": 1, "A": 2, "C": 3}
+    tokenizer = Tokenizer(WordLevel(vocabulary, unk_token="<unk>"))
+    # ANKH's residue-aware pre-tokenizer, which must survive in the fingerprinted content.
+    tokenizer.pre_tokenizer = pre_tokenizers.Metaspace(
+        replacement="\u2581", prepend_scheme="never", split=True
+    )
+    return tokenizer
+
+
+def _unigram() -> Tokenizer:
+    pieces = [("<unk>", 0.0), ("<pad>", 0.0), ("A", -1.25), ("C", -2.5)]
+    return Tokenizer(Unigram(pieces, unk_id=0))
+
+
+@pytest.mark.parametrize(
+    "build_backend",
+    [lambda: _tiny_esmplusplus().tokenizer.backend_tokenizer, _metaspace_word_level, _unigram],
+    ids=["esmplusplus", "metaspace_word_level", "unigram"],
+)
+def test_clearing_call_state_leaves_a_never_called_backend_byte_identical(build_backend) -> None:
+    """Schema 3 hashed a never-called backend's raw serialization; it must hash the same bytes."""
+    from fastplms.embeddings import identity
+
+    backend = build_backend()
+    never_called = backend.to_str()
+    assert identity._backend_tokenizer_content(backend) == never_called
+
+    backend.enable_truncation(max_length=8)
+    backend.enable_padding(pad_id=1, pad_token="<pad>")
+    assert identity._backend_tokenizer_content(backend) == never_called
+    assert backend.truncation is not None and backend.padding is not None, (
+        "the caller's tokenizer keeps its state"
+    )
+
+
 def test_native_sequence_tokenizer_loader_context_is_bound_without_secret_values() -> None:
     model = SyntheticEmbeddingModel()
     model.__dict__["_fastplms_tokenizer_kwargs"] = {
@@ -619,22 +715,22 @@ def test_local_artifact_identity_fills_embedding_provenance() -> None:
     model.config.fastplms_checkpoint_revision = "d" * 40
     model.config.fastplms_checkpoint_hash = "e" * 64
 
-    result = embed_dataset(model, ["ACD"], pooling="mean")
+    embeddings = embed_dataset(model, ["ACD"], pooling="mean")
 
-    assert result.metadata["model_id"] == "esm2_8m"
-    assert result.metadata["model_revision"] == "d" * 40
-    assert result.metadata["checkpoint_repo_id"] == "Synthyra/ESM2-8M"
-    assert result.metadata["checkpoint_revision"] == "d" * 40
-    assert result.metadata["checkpoint_hash"] == "e" * 64
+    assert embeddings.metadata["model_id"] == "esm2_8m"
+    assert embeddings.metadata["model_revision"] == "d" * 40
+    assert embeddings.metadata["checkpoint_repo_id"] == "Synthyra/ESM2-8M"
+    assert embeddings.metadata["checkpoint_revision"] == "d" * 40
+    assert embeddings.metadata["checkpoint_hash"] == "e" * 64
 
     model.config.fastplms_checkpoint_hash = "f" * 64
     changed = embed_dataset(model, ["ACD"], pooling="mean")
-    assert changed.metadata["run_fingerprint"] != result.metadata["run_fingerprint"]
+    assert changed.metadata["run_fingerprint"] != embeddings.metadata["run_fingerprint"]
 
 
 def test_e1_native_path_removes_all_boundary_tokens() -> None:
-    result = embed_dataset(SyntheticE1Model(), ["AC"], pooling="mean")
-    assert torch.equal(result[0].load_tensor(), torch.tensor([5.5]))
+    embeddings = embed_dataset(SyntheticE1Model(), ["AC"], pooling="mean")
+    assert torch.equal(embeddings[0].load_tensor(), torch.tensor([5.5]))
 
 
 def test_generic_embedding_uses_a_model_sequence_tokenizer_adapter() -> None:
@@ -668,10 +764,10 @@ def test_generic_embedding_uses_a_model_sequence_tokenizer_adapter() -> None:
             return input_ids.float().unsqueeze(-1)
 
     model = AdaptedModel()
-    result = embed_dataset(model, ["AC"], full_embeddings=True)
+    embeddings = embed_dataset(model, ["AC"], full_embeddings=True)
 
     assert model.sequences == ["AC"]
-    assert torch.equal(result[0].load_tensor(), torch.tensor([[4.0], [5.0]]))
+    assert torch.equal(embeddings[0].load_tensor(), torch.tensor([[4.0], [5.0]]))
 
 
 def test_max_length_counts_biological_residues_not_special_tokens() -> None:
@@ -702,7 +798,7 @@ def test_max_length_counts_biological_residues_not_special_tokens() -> None:
             del attention_mask, kwargs
             return input_ids.float().unsqueeze(-1)
 
-    result = embed_dataset(
+    embeddings = embed_dataset(
         Model(),
         ["ACDE"],
         tokenizer=Tokenizer(),
@@ -710,7 +806,7 @@ def test_max_length_counts_biological_residues_not_special_tokens() -> None:
         full_embeddings=True,
     )
 
-    assert result[0].load_tensor().shape == (3, 1)
+    assert embeddings[0].load_tensor().shape == (3, 1)
 
 
 @pytest.mark.parametrize("input_kind", ("list", "mapping", "generator", "fasta"))
@@ -777,11 +873,11 @@ def test_truncate_false_rejects_overlength_inputs_before_raw_adapter_inference()
 
 def test_all_poolers_and_output_slices() -> None:
     names = ("mean", "max", "norm", "median", "std", "var", "cls", "parti")
-    result = embed_dataset(SyntheticEmbeddingModel(), ["ACD", "GG"], pooling=names)
-    assert tuple(result[0].load_tensor().shape) == (16,)
-    assert torch.isfinite(result[0].load_tensor()).all()
-    assert result.metadata["pool_slices"]["mean"] == (0, 2)
-    assert result.metadata["pool_slices"]["parti"] == (14, 16)
+    embeddings = embed_dataset(SyntheticEmbeddingModel(), ["ACD", "GG"], pooling=names)
+    assert tuple(embeddings[0].load_tensor().shape) == (16,)
+    assert torch.isfinite(embeddings[0].load_tensor()).all()
+    assert embeddings.metadata["pool_slices"]["mean"] == (0, 2)
+    assert embeddings.metadata["pool_slices"]["parti"] == (14, 16)
 
 
 def test_poolers_ignore_nonfinite_excluded_positions_and_reject_nonfinite_output() -> None:
@@ -810,6 +906,39 @@ def test_poolers_ignore_nonfinite_excluded_positions_and_reject_nonfinite_output
     )
     with pytest.raises(ValueError, match="produced non-finite output"):
         Pooler("mean")(torch.tensor([[[torch.nan], [1.0]]]), torch.tensor([[True, False]]))
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_pooling_matches_scalar_population_statistics(dtype: torch.dtype) -> None:
+    X = torch.tensor([[[1.25, -2.5], [3.5, 5.25], [float("nan"), float("inf")]]], dtype=dtype)
+    M = torch.tensor([[True, True, False]])
+    expected = []
+    columns = X[0, :2].double().T.tolist()
+    for operation in ("mean", "var", "std", "max"):
+        for values in columns:
+            mean = sum(values) / len(values)
+            variance = sum((value - mean) ** 2 for value in values) / len(values)
+            statistics = {"mean": mean, "var": variance, "std": variance**0.5, "max": max(values)}
+            expected.append(statistics[operation])
+    pooled = Pooler(("mean", "var", "std", "max"))(X, M)
+    assert pooled.dtype == dtype
+    torch.testing.assert_close(pooled, torch.tensor([expected], dtype=dtype))
+    singleton = Pooler(("var", "std"))(X, torch.tensor([[True, False, False]]))
+    assert torch.equal(singleton, torch.zeros_like(singleton))
+    with pytest.raises(ValueError, match="at least one biological residue"):
+        Pooler("mean")(X, torch.zeros_like(M))
+
+
+def test_pooling_accumulates_before_low_precision_output_cast() -> None:
+    X = torch.full((1, 3, 1), 60_000.0, dtype=torch.float16)
+    pooled = Pooler(("mean", "var", "std"))(X, torch.ones((1, 3), dtype=torch.bool))
+    assert torch.equal(pooled, torch.tensor([[60_000.0, 0.0, 0.0]], dtype=torch.float16))
+    # FP64 inputs must not pass through FP32 on their way to a FP64 result.
+    precise = torch.tensor([[[1.0], [1.0 + 2e-10]]], dtype=torch.float64)
+    pooled = Pooler(("mean", "var"))(precise, torch.ones((1, 2), dtype=torch.bool))
+    torch.testing.assert_close(
+        pooled, torch.tensor([[1.0 + 1e-10, 1e-20]], dtype=torch.float64), rtol=2e-7, atol=0
+    )
 
 
 def test_parti_requires_eager_attention() -> None:
@@ -961,7 +1090,7 @@ def test_large_streaming_inputs_use_bounded_disk_windows(
     monkeypatch.setattr(runner._InputSpool, "__getitem__", tracking_getitem)
     monkeypatch.setattr(runner._InputSpool, "__iter__", reject_full_spool_iteration)
     output = tmp_path / f"{source_kind}.sqlite"
-    result = embed_dataset(
+    embeddings = embed_dataset(
         SyntheticEmbeddingModel(),
         inputs,
         batch_size=64,
@@ -970,22 +1099,46 @@ def test_large_streaming_inputs_use_bounded_disk_windows(
         format="sqlite",
     )
 
-    assert len(result) == count
-    for position, record in enumerate(result):
+    assert len(embeddings) == count
+    for position, record in enumerate(embeddings):
         assert record.id == f"protein-{position}"
         assert record.sequence == "A" * (position % 11 + 1)
     assert observed_slice_widths
     assert max(observed_slice_widths) <= 127
-    assert result.metadata["batching"]["input_storage"] == "disk-spool"
+    assert embeddings.metadata["batching"]["input_storage"] == "disk-spool"
     expected_input_digest.update(count.to_bytes(8, "big"))
-    assert result.metadata["input_fingerprint"] == expected_input_digest.hexdigest()
+    assert embeddings.metadata["input_fingerprint"] == expected_input_digest.hexdigest()
     reopened = load_sqlite_result(output)
-    assert reopened.metadata["input_fingerprint"] == result.metadata["input_fingerprint"]
-    assert reopened.metadata["run_fingerprint"] == result.metadata["run_fingerprint"]
+    assert reopened.metadata["input_fingerprint"] == embeddings.metadata["input_fingerprint"]
+    assert reopened.metadata["run_fingerprint"] == embeddings.metadata["run_fingerprint"]
     if source_kind == "generator":
         assert iterations == 1
         assert source_liveness["peak"] <= 32
         assert source_liveness["live"] == 0
+
+
+def test_a_spool_freed_as_cyclic_garbage_closes_its_database_before_removing_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The cycle collector runs weakref finalizers before any ``__del__``.
+
+    A spool left in a cycle, as a raising ``embed_dataset`` leaves one in its traceback, must
+    still close its SQLite connection before its directory goes: Windows cannot delete an open
+    file, and the failed removal surfaced as an unraisable error inside whichever test was
+    running when the collector fired.
+    """
+    from fastplms.embeddings.inputs import _InputSpool
+
+    unraisable = []
+    monkeypatch.setattr(sys, "unraisablehook", unraisable.append)
+    spool = _InputSpool(["ACD", "GG"])
+    directory = spool.path.parent
+    spool.self_reference = spool  # only the cycle collector can free it now
+    del spool
+    gc.collect()
+
+    assert [hook.exc_value for hook in unraisable] == []
+    assert not directory.exists()
 
 
 def test_sqlite_round_trip_is_lazy_and_bf16_lossless(tmp_path: Path) -> None:
@@ -1053,7 +1206,7 @@ def test_sqlite_filtered_retrieval_preserves_selector_order_and_duplicates(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "selection.sqlite"
-    result = EmbeddingResult(
+    embeddings = EmbeddingResult(
         [
             EmbeddingRecord("x", "AA", torch.tensor([0.0])),
             EmbeddingRecord("y", "BB", torch.tensor([1.0])),
@@ -1061,7 +1214,7 @@ def test_sqlite_filtered_retrieval_preserves_selector_order_and_duplicates(
         ],
         {"run_fingerprint": "selection-run", "complete": True},
     )
-    save_sqlite_result(result, path)
+    save_sqlite_result(embeddings, path)
 
     by_position = load_sqlite_result(path, positions=[2, 0, 2])
     assert [record.load_tensor().item() for record in by_position] == [2.0, 0.0, 2.0]
@@ -1481,7 +1634,7 @@ def test_persistent_resume_metadata_records_true_commit_granularity(
 ) -> None:
     output = tmp_path / ("embeddings.sqlite" if format == "sqlite" else "embeddings")
 
-    result = embed_dataset(
+    embeddings = embed_dataset(
         SyntheticEmbeddingModel(),
         ["AC", "GG"],
         batch_size=1,
@@ -1490,7 +1643,7 @@ def test_persistent_resume_metadata_records_true_commit_granularity(
         format=format,
     )
 
-    assert result.metadata["batching"]["resume_commit_granularity"] == (expected_granularity)
+    assert embeddings.metadata["batching"]["resume_commit_granularity"] == (expected_granularity)
 
 
 def test_safetensors_streaming_packs_batches_into_shards(tmp_path: Path) -> None:
@@ -2032,6 +2185,7 @@ class CraftedBatchModel(SyntheticEmbeddingModel):
     """Return one caller-supplied batch so each runner guard can be exercised alone."""
 
     def __init__(self, X: torch.Tensor, residue_mask: torch.Tensor) -> None:
+        # X: (b, l, d); residue_mask: (b, l)
         super().__init__()
         self.crafted = EmbeddingBatch(X=X, residue_mask=residue_mask)
 
@@ -2044,13 +2198,14 @@ def _two_residue_batch() -> tuple[torch.Tensor, torch.Tensor]:
     # X: (b=2, l=3, d=2); M: (b=2, l=3) with one excluded position per sample.
     X = torch.arange(12, dtype=torch.float32).reshape(2, 3, 2)
     M = torch.tensor([[True, True, False], [True, True, False]])  # (2, 3)
-    return X, M
+    return X, M  # (2, 3, 2) = (b, l, d), (2, 3) = (b, l)
 
 
 def _with_non_finite_residue(X: torch.Tensor, value: float) -> torch.Tensor:
+    # X: (b, l, d)
     corrupted = X.clone()
     corrupted[0, 0, 0] = value  # a position that M selects
-    return corrupted
+    return corrupted  # (b, l, d)
 
 
 @pytest.mark.parametrize(
@@ -2085,20 +2240,29 @@ def test_embedding_batch_guards_fail_closed_with_stable_messages(mutate, message
         embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)
 
 
+def test_embedding_batch_rejects_overflow_during_output_conversion() -> None:
+    X, M = _two_residue_batch()
+    X[0, 0, 0] = 100_000.0
+    with pytest.raises(ValueError, match="dtype conversion produced non-finite"):
+        embed_dataset(
+            CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True, dtype=torch.float16
+        )
+
+
 def test_embedding_batch_guards_report_the_earliest_violation() -> None:
     X, M = _two_residue_batch()
-    non_finite_X = _with_non_finite_residue(X, torch.nan)
+    X_non_finite = _with_non_finite_residue(X, torch.nan)
 
     # A corrupt mask is reported before the embeddings it would have selected.
     with pytest.raises(ValueError, match="finite binary values"):
         embed_dataset(
-            CraftedBatchModel(non_finite_X, M.float() * 2), ["AC", "GG"], full_embeddings=True
+            CraftedBatchModel(X_non_finite, M.float() * 2), ["AC", "GG"], full_embeddings=True
         )
     # An empty sample is reported before non-finite embeddings.
     empty_sample = M & torch.tensor([[True], [False]])
     with pytest.raises(ValueError, match="must contain a biological residue"):
         embed_dataset(
-            CraftedBatchModel(non_finite_X, empty_sample), ["AC", "GG"], full_embeddings=True
+            CraftedBatchModel(X_non_finite, empty_sample), ["AC", "GG"], full_embeddings=True
         )
 
 
@@ -2107,10 +2271,10 @@ def test_embedding_batch_guard_ignores_non_finite_excluded_positions() -> None:
     # Position 2 is excluded by M in both samples, so padding garbage is legal.
     X[:, 2] = torch.tensor([torch.nan, torch.inf])
 
-    result = embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)
+    embeddings = embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)
 
-    assert torch.equal(result[0].load_tensor(), X[0, :2])
-    assert torch.equal(result[1].load_tensor(), X[1, :2])
+    assert torch.equal(embeddings[0].load_tensor(), X[0, :2])
+    assert torch.equal(embeddings[1].load_tensor(), X[1, :2])
 
 
 def test_embedding_batch_guard_accepts_finite_values_whose_sum_overflows() -> None:
@@ -2120,9 +2284,9 @@ def test_embedding_batch_guard_accepts_finite_values_whose_sum_overflows() -> No
     M = torch.tensor([[True, True, False], [True, True, False]])  # (2, 3)
     assert not torch.isfinite(X.sum())
 
-    result = embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)
+    embeddings = embed_dataset(CraftedBatchModel(X, M), ["AC", "GG"], full_embeddings=True)
 
-    assert torch.equal(result[0].load_tensor(), X[0, :2])
+    assert torch.equal(embeddings[0].load_tensor(), X[0, :2])
 
 
 @pytest.mark.parametrize("dtype", (torch.float32, torch.bfloat16))

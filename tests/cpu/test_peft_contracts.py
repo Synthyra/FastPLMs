@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import pytest
 import torch
+import transformers
 
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
 from examples import fine_tuning
+from tests.unit import test_fine_tuning_example as fine_tuning_contracts
+
 from fastplms.models.esm2.modeling_fastesm import (
     FastEsmConfig,
     FastEsmForSequenceClassification,
 )
-from tests.unit import test_fine_tuning_example as fine_tuning_contracts
 
 
 test_pair_collator_enforces_longest_first_tokenizer_limit = (
@@ -94,7 +95,7 @@ def test_fine_tuning_main_wires_both_tasks_without_external_io(
         lambda **kwargs: classification_calls.append(kwargs),
     )
 
-    result = fine_tuning.main(
+    exit_code = fine_tuning.main(
         [
             "--task",
             "both",
@@ -157,7 +158,7 @@ def test_fine_tuning_main_wires_both_tasks_without_external_io(
         "plot_results": False,
         "attn_backend": "eager",
     }
-    assert result == 0
+    assert exit_code == 0
     assert regression_calls == [
         {
             **shared,
@@ -507,8 +508,9 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
         model.tokenizer = tokenizer
         return model
 
+    # fine_tuning imports the Transformers auto class when it builds a model, so patch it there.
     monkeypatch.setattr(
-        fine_tuning.AutoModelForSequenceClassification,
+        transformers.AutoModelForSequenceClassification,
         "from_pretrained",
         staticmethod(load_tiny_model),
     )
@@ -554,7 +556,7 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
 
     def instrumented_sdpa(*args: Any, **kwargs: Any) -> torch.Tensor:
         sdpa_calls.append(dict(kwargs))
-        return original_sdpa(*args, **kwargs)
+        return original_sdpa(*args, **kwargs)  # (b, h, l, d_h) the attention output
 
     monkeypatch.setattr(
         torch.nn.functional,

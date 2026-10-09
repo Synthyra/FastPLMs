@@ -7,6 +7,7 @@ import json
 import pytest
 import torch
 
+from importlib import resources
 from pathlib import Path
 from types import SimpleNamespace
 from safetensors.torch import save_file
@@ -210,7 +211,7 @@ def test_small_native_backbone_aliases_use_selected_manifest_revision(
 
 @pytest.mark.cpu_contract
 def test_small_backbone_source_requires_a_model_reference(tmp_path: Path) -> None:
-    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
+    manifest = resources.files("fastplms").joinpath("models.toml").read_text(encoding="utf-8")
     invalid = manifest.replace('backbone_model = "esmc_small"\n', "", 1)
     assert invalid != manifest
     path = tmp_path / "models.toml"
@@ -222,7 +223,7 @@ def test_small_backbone_source_requires_a_model_reference(tmp_path: Path) -> Non
 
 @pytest.mark.cpu_contract
 def test_small_backbone_model_requires_a_pinned_source(tmp_path: Path) -> None:
-    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
+    manifest = resources.files("fastplms").joinpath("models.toml").read_text(encoding="utf-8")
     backbone_line = 'backbone = { repo = "biohub/ESMC-300M-1500000", '
     invalid = "\n".join(
         line for line in manifest.splitlines() if not line.startswith(backbone_line)
@@ -318,7 +319,7 @@ class _TinyStructureHead(nn.Module):
         ref_pos = kwargs["ref_pos"]
         if not isinstance(ref_pos, Tensor):
             raise TypeError("test structure head expects ref_pos")
-        return {"sample_atom_coords": ref_pos.float()}
+        return {"sample_atom_coords": ref_pos.float()}  # (...) sample_atom_coords (b, a, 3), the shape of ref_pos
 
 
 def _tiny_experimental_config() -> ESMFold2Config:

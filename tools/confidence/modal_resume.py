@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
-
 import modal
 
+from tools.stored_files import write_stored_json
 from .gpu_benchmark import GPU_RATES
 from .modal_gpu_benchmark import environment
 from .modal_v2 import MOUNTS, ROOT, app, campaign_root, credentials, train, volume
-from .v2_campaign import MODEL_IDS, write_json
+from .v2_campaign import MODEL_IDS
 
 
 def resume_training(campaign: str, model_id: str) -> dict[str, object]:
@@ -32,12 +33,12 @@ def inspect_resume(campaign: str, old_calls: dict[str, str]) -> dict[str, object
     root = campaign_root(campaign)
     results = {}
     for model_id in MODEL_IDS:
-        try:
-            modal.FunctionCall.from_id(old_calls[model_id]).get(timeout=0)
-        except TimeoutError as error:
-            raise RuntimeError(f"Old worker is still active: {model_id}") from error
-        except modal.exception.RemoteError:
-            pass  # Terminal cancellation or remote failure; neither still writes the run.
+        # A terminal cancellation or remote failure ends the old worker as well: neither still writes the run.
+        with contextlib.suppress(modal.exception.RemoteError):
+            try:
+                modal.FunctionCall.from_id(old_calls[model_id]).get(timeout=0)
+            except TimeoutError as error:
+                raise RuntimeError(f"Old worker is still active: {model_id}") from error
         results[model_id] = {
             "checkpoint": checkpoint_identity(root, model_id, trusted=True),
             "validation_cache": verify_validation_cache(root, model_id),
@@ -55,7 +56,7 @@ def record_resume(campaign: str, gpu: str, old_calls: dict[str, str], new_calls:
     for model_id in MODEL_IDS:
         item = evidence[model_id]
         write_migration_receipt(root, model_id, old_gpu="H200", new_gpu=gpu, old_call_id=old_calls[model_id], new_call_id=new_calls[model_id], old_call_status="TERMINATED", checkpoint=item["checkpoint"], validation_cache=item["validation_cache"], source_files=item["source_files"])
-    write_json(root / "resume-dispatch.json", {"gpu": gpu, "old_calls": old_calls, "calls": new_calls})
+    write_stored_json(root / "resume-dispatch.json", {"gpu": gpu, "old_calls": old_calls, "calls": new_calls}, sort_keys=False)
     volume.commit()
 
 
@@ -74,10 +75,10 @@ def main() -> None:
         calls = {}
         for model_id in MODEL_IDS:
             calls[model_id] = resume_workers[args.gpu].spawn(args.campaign, model_id).object_id
-            write_json(receipt_path, {"app_id": app.app_id, "gpu": args.gpu, "calls": calls, "status": "dispatching"})
+            write_stored_json(receipt_path, {"app_id": app.app_id, "gpu": args.gpu, "calls": calls, "status": "dispatching"}, sort_keys=False)
         record_resume.remote(args.campaign, args.gpu, old_calls, calls, evidence)
         receipt = {"app_id": app.app_id, "gpu": args.gpu, "calls": calls, "status": "dispatched", "cache_targets": {model_id: item["validation_cache"]["cached_targets"] for model_id, item in evidence.items()}}
-        write_json(receipt_path, receipt)
+        write_stored_json(receipt_path, receipt, sort_keys=False)
         print(json.dumps(receipt, indent=2))
 
 

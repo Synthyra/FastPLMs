@@ -7,10 +7,12 @@ import json
 import math
 import random
 import tempfile
+
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+from fastplms.digests import json_sha256
 from fastplms.registry import ModelRegistry, ModelSpec
 from tools.remote.biohub_reference_environment import (
     BiohubReferenceEnvironmentError,
@@ -140,12 +142,12 @@ ESMC_TOP_LEVEL_FIELDS = {
 
 
 def _esmc_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
+    members: dict[str, object] = {}
     for key, value in pairs:
-        if key in result:
+        if key in members:
             raise EsmcReportError(f"ESMC JSON contains duplicate key {key!r}")
-        result[key] = value
-    return result
+        members[key] = value
+    return members
 
 
 def _esmc_reject_json_constant(value: str) -> object:
@@ -255,13 +257,7 @@ def _esmc_require_gpu_capability(
 def _esmc_report_sha256(payload: Mapping[str, object]) -> str:
     digest_payload = dict(payload)
     digest_payload.pop("report_sha256", None)
-    encoded = json.dumps(
-        digest_payload,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return json_sha256(digest_payload, allow_nan=False)
 
 
 def _esmc_public_case(case: Mapping[str, object]) -> dict[str, object]:

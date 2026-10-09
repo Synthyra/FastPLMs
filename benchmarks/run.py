@@ -467,9 +467,9 @@ def _measure_embedding(
     torch.cuda.synchronize()
     start = time.perf_counter()
     with _numeric_context(arguments, torch):
-        result = embed_dataset(model, sequences, batch_size=batch_size, pooling=("mean",))
+        embeddings = embed_dataset(model, sequences, batch_size=batch_size, pooling=("mean",))
     torch.cuda.synchronize()
-    return (time.perf_counter() - start) * 1000.0, result
+    return (time.perf_counter() - start) * 1000.0, embeddings
 
 
 def _esmfold2_residue_mask(torch: Any, lengths: Sequence[int]) -> Any:

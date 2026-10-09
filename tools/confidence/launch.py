@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from tools.stored_files import write_stored_json
 from .budget import BudgetLedger
 from .config import (
     BENCHMARK_TIMEOUT_SECONDS,
@@ -93,14 +94,9 @@ def _call_identifier(call: Any) -> str | None:
     return str(value) if value else None
 
 
-def _write_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-
-
-def _apply_formatted_files(result: dict[str, Any]) -> None:
-    formatted = result.pop("formatted_files", {})
-    generated = result.pop("generated_files", {})
+def _apply_formatted_files(call_output: dict[str, Any]) -> None:
+    formatted = call_output.pop("formatted_files", {})
+    generated = call_output.pop("generated_files", {})
     if formatted and generated:
         raise ValueError("Remote worker returned both formatted and generated files")
     files = formatted or generated
@@ -117,7 +113,7 @@ def _apply_formatted_files(result: dict[str, Any]) -> None:
             raise ValueError("Remote formatter returned a path outside the confidence workflow")
         path.write_text(content, encoding="utf-8")
     if files:
-        result["updated_paths"] = list(files)
+        call_output["updated_paths"] = list(files)
 
 
 def _reserve_workers(
@@ -188,22 +184,25 @@ def main() -> None:
         "parallel_workers": worker_count,
         "reservations": reservations,
     }
-    _write_json(local_root / f"dispatch-{app_id}.json", dispatch_manifest)
+    write_stored_json(local_root / f"dispatch-{app_id}.json", dispatch_manifest, sort_keys=False)
 
     from dotenv import load_dotenv
 
     load_dotenv(ROOT / ".secrets.env", override=False)
     import modal
 
-    from .modal_app import app, cpu_stage, gpu_workers
+    from .modal_app import app, cpu_stage, gpu_workers, prepare_retained_inputs
 
     started = time.monotonic()
     calls: list[tuple[dict[str, str], Any]] = []
     modal_app_id = app_id
     with modal.enable_output(), app.run(detach=args.detach):
+        if args.stage not in {"tests", "lint", "format", "docs"}:
+            for model_id in models:
+                prepare_retained_inputs.remote(args.stage, model_id, options)
         modal_app_id = str(getattr(app, "app_id", None) or app_id)
         dispatch_manifest["modal_app_id"] = modal_app_id
-        _write_json(local_root / f"dispatch-{app_id}.json", dispatch_manifest)
+        write_stored_json(local_root / f"dispatch-{app_id}.json", dispatch_manifest, sort_keys=False)
         for reservation in reservations:
             call_options = dict(options)
             call_options.update(
@@ -244,7 +243,7 @@ def main() -> None:
                     "remote_call_id": _call_identifier(call),
                 }
             )
-        _write_json(local_root / f"result-{app_id}.json", receipt)
+        write_stored_json(local_root / f"result-{app_id}.json", receipt, sort_keys=False)
         print(json.dumps(receipt, indent=2))
         return
     elif not args.parallel:
@@ -252,24 +251,24 @@ def main() -> None:
 
     elapsed = time.monotonic() - started
     output_results = []
-    for (reservation, _), result in zip(calls, results, strict=True):
-        if not isinstance(result, dict):
-            result = {"status": "passed", "result": result}
-        _apply_formatted_files(result)
-        observed = float(result.get("elapsed_seconds", elapsed)) * resource_rate(
+    for (reservation, _), call_output in zip(calls, results, strict=True):
+        if not isinstance(call_output, dict):
+            call_output = {"status": "passed", "result": call_output}
+        _apply_formatted_files(call_output)
+        observed = float(call_output.get("elapsed_seconds", elapsed)) * resource_rate(
             None if cpu else args.gpu
         )
         ledger.complete(reservation["reservation"], observed)
-        output_results.append(result)
+        output_results.append(call_output)
     receipt = {
         "status": "passed",
         "app_id": app_id,
         "modal_app_id": modal_app_id,
         "results": output_results,
     }
-    if any(result.get("status") == "failed" for result in output_results):
+    if any(call_output.get("status") == "failed" for call_output in output_results):
         receipt["status"] = "failed"
-    _write_json(local_root / f"result-{app_id}.json", receipt)
+    write_stored_json(local_root / f"result-{app_id}.json", receipt, sort_keys=False)
     budget = {key: value for key, value in ledger.summary().items() if key != "reservations"}
     print(json.dumps({"result": receipt, "budget": budget}, indent=2))
     if receipt["status"] == "failed":

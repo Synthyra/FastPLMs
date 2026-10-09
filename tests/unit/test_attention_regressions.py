@@ -13,8 +13,8 @@ import fastplms.models.esm2.modeling_fastesm as esm2_module
 import fastplms.models.esm3.modeling_esm3 as esm3_module
 import fastplms.models.esm_plusplus.modeling_esm_plusplus as esmpp_module
 
-from collections.abc import Callable
 from types import SimpleNamespace
+from tests.unit.compile_counting import counting_compile_backend
 from transformers.models.esm.configuration_esm import EsmConfig
 
 from fastplms.attention import AttentionBackend, _core, _kernel_lock
@@ -85,6 +85,7 @@ from fastplms.models.ttt import LoraInjectedLinear
 def test_attention_masks_require_exact_batch_sequence_shape(
     invalid_mask: torch.Tensor,
 ) -> None:
+    # invalid_mask: (2, 4, 1), (2, 3) or (1, 4); the valid shape would be (b, l) = (2, 4)
     with pytest.raises(ValueError, match=r"attention_mask.*shape"):
         _core.get_attention_mask(
             AttentionBackend.EAGER,
@@ -141,15 +142,7 @@ def test_esmplusplus_builds_attention_masks_outside_torch_compile(
     second_mask = torch.tensor(((1, 1, 1, 0), (1, 0, 0, 0)))  # (b, l)
     expected_first = stack(hidden_states, attention_mask=first_mask).last_hidden_state
     expected_second = stack(hidden_states, attention_mask=second_mask).last_hidden_state
-    compiled_graphs: list[torch.fx.GraphModule] = []
-
-    def counting_backend(
-        graph_module: torch.fx.GraphModule,
-        example_inputs: list[torch.Tensor],
-    ) -> Callable[..., object]:
-        del example_inputs
-        compiled_graphs.append(graph_module)
-        return graph_module.forward
+    counting_backend, compiled_graphs = counting_compile_backend()
 
     compiled_stack = torch.compile(stack, backend=counting_backend, dynamic=False)
     try:
@@ -706,15 +699,7 @@ def test_esm3_builds_intersected_attention_masks_outside_torch_compile(
         expected_first = call(attention_mask=first_mask).last_hidden_state
         expected_second = call(attention_mask=second_mask).last_hidden_state
 
-    compiled_graphs: list[torch.fx.GraphModule] = []
-
-    def counting_backend(
-        graph_module: torch.fx.GraphModule,
-        example_inputs: list[torch.Tensor],
-    ) -> Callable[..., object]:
-        del example_inputs
-        compiled_graphs.append(graph_module)
-        return graph_module.forward
+    counting_backend, compiled_graphs = counting_compile_backend()
 
     compiled_model = torch.compile(model, backend=counting_backend, dynamic=False)
     try:
@@ -767,6 +752,7 @@ def test_esm3_rejects_malformed_padding_and_sequence_masks(
     value: torch.Tensor,
     message: str,
 ) -> None:
+    # value: (2, 4), (2, 3) and (1, 3) in turn, against input_ids (2, 3)
     model = FastESM3Model(
         FastESM3Config(
             hidden_size=8,
@@ -812,7 +798,7 @@ def test_dplm_sdpa_output_attentions_fallback_preserves_cross_attention_mask_and
     original_manual_attention = cross_attention._manual_attn
 
     def record_cross_attention(query, key, value, attention_mask_4d=None, output_s_max=False):
-        result = original_manual_attention(
+        attention_output = original_manual_attention(
             query,
             key,
             value,
@@ -820,8 +806,8 @@ def test_dplm_sdpa_output_attentions_fallback_preserves_cross_attention_mask_and
             output_s_max,
         )
         observed["mask"] = attention_mask_4d.detach().clone()
-        observed["weights"] = result[1].detach().clone()
-        return result
+        observed["weights"] = attention_output[1].detach().clone()
+        return attention_output
 
     monkeypatch.setattr(cross_attention, "_manual_attn", record_cross_attention)
     with pytest.warns(
@@ -1025,7 +1011,8 @@ def test_flash_attention_2_dense_and_varlen_preserve_lora_and_input_gradients(
             projection.lora_up.weight.fill_(0.05)
 
     def project(hidden_states: torch.Tensor) -> tuple[torch.Tensor, ...]:
-        return tuple(projection(hidden_states).reshape(2, 4, 2, 4) for projection in projections)
+        # hidden_states: (2, 4, 8)
+        return tuple(projection(hidden_states).reshape(2, 4, 2, 4) for projection in projections)  # (2, 4, 2, 4) = (b, l, h, d_h) for each of the three projections
 
     dense_input = (torch.arange(1, 65, dtype=torch.float32).reshape(2, 4, 8) / 64).requires_grad_()
     padded_input = (
@@ -1178,8 +1165,9 @@ def test_ankh_output_attentions_eager_fallback_honors_attention_dropout(
         p: float,
         training: bool,
     ) -> torch.Tensor:
+        # tensor: (...) any shape
         dropout_calls.append((p, training))
-        return tensor
+        return tensor  # (...) the input, unchanged
 
     monkeypatch.setattr(ankh_module.F, "dropout", record_dropout)
     hidden_states = torch.randn(1, 3, 8)  # (b=1, l=3, d=8)
@@ -1213,8 +1201,9 @@ def test_ankh_sdpa_receives_training_attention_dropout(
         _value: torch.Tensor,
         **kwargs,
     ) -> torch.Tensor:
+        # query, _key, _value: (1, 2, 3, 4) = (b, h, l, d_h)
         observed_dropout.append(kwargs["dropout_p"])
-        return query
+        return query  # (1, 2, 3, 4) = (b, h, l, d_h)
 
     monkeypatch.setattr(ankh_module.F, "scaled_dot_product_attention", record_sdpa)
     heads = torch.randn(1, 2, 3, 4)  # (b=1, h=2, l=3, d_h=4)

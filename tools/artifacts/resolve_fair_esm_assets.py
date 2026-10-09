@@ -9,14 +9,16 @@ It never uploads content or authenticates to a remote service.
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
 import os
 import urllib.request
+
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlparse
+
+from fastplms.digests import file_sha256
+from fastplms.json_files import indented_json
 
 
 _HOST = "dl.fbaipublicfiles.com"
@@ -65,14 +67,6 @@ def _candidates() -> tuple[tuple[str, str, str, str], ...]:
     return tuple(assets)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(8 * 1024**2):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _validate_url(url: str) -> None:
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname != _HOST:
@@ -113,7 +107,7 @@ def _download_one(
         role=role,
         path=relative.as_posix(),
         url=url,
-        sha256=_sha256(target),
+        sha256=file_sha256(target),
         size=target.stat().st_size,
     )
 
@@ -137,7 +131,7 @@ def main() -> None:
     if args.jobs < 1:
         parser.error("--jobs must be at least one")
     document = [asdict(item) for item in resolve(args.cache, args.jobs)]
-    encoded = json.dumps(document, indent=2, sort_keys=True) + "\n"
+    encoded = indented_json(document)
     if args.output is None:
         print(encoded, end="")
     else:

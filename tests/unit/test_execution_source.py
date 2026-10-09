@@ -60,6 +60,41 @@ def test_nested_credential_paths_are_excluded(name: str) -> None:
     assert excluded_from_upload(Path(name))
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        ".secrets",
+        "config/.secrets.json",
+        "keys/id_ecdsa",
+        "keys/id_rsa_work",
+        "android/release.keystore",
+        "android/release.jks",
+        ".ssh/config",
+        "home/.gnupg/pubring.kbx",
+        ".aws/config",
+        "gcloud/configurations/config_default",
+        "gcloud-credentials.json",
+        "deploy/service-account-prod.json",
+        "firebase-adminsdk-a1b2c.json",
+    ],
+)
+def test_every_credential_file_the_workspace_rule_names_is_excluded(name: str) -> None:
+    assert excluded_from_upload(Path(name))
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "src/fastplms/models.toml",
+        "src/fastplms/tokenizer.json",
+        "docs/credentials.md",
+        "tools/remote/keys.py",
+    ],
+)
+def test_source_that_only_mentions_a_credential_is_uploaded(name: str) -> None:
+    assert not excluded_from_upload(Path(name))
+
+
 def test_custom_exclusion_cannot_enable_credential_upload(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src/.env").write_bytes(b"excluded")

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from tests.conftest import requires_checkout_input
 
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusConfig,
@@ -33,6 +34,10 @@ PINNED_SAE_SOURCE = (
     / "models"
     / "esmc"
     / "modeling_esmc_sae.py"
+)
+requires_pinned_sae_source = requires_checkout_input(
+    PINNED_SAE_SOURCE.relative_to(ROOT).as_posix(),
+    "`git submodule update --init vendor/upstream/biohub-transformers`",
 )
 
 
@@ -86,6 +91,7 @@ class _SyntheticSAELayer(nn.Module):
         return int(self.params.layer)
 
     def forward(self, x: torch.Tensor, **_kwargs: object) -> _SAEOutput:
+        # x: (n, d), the n selected tokens' hidden states
         self.call_count += 1
         x = x - x.mean(dim=-1, keepdim=True)
         x = x / (x.std(dim=-1, keepdim=True) + 1e-5)
@@ -99,6 +105,7 @@ class _SyntheticSAELayer(nn.Module):
         layer_states: torch.Tensor,
         token_mask: torch.Tensor,
     ) -> _SAEOutput:
+        # layer_states: (b, l, d); token_mask: (b, l)
         hidden_size = layer_states.shape[-1]
         return self(layer_states[token_mask].view(-1, hidden_size))
 
@@ -122,7 +129,7 @@ def _model(model_class: type[nn.Module] = ESMplusplusModel) -> nn.Module:
 
 
 def _input_ids() -> torch.Tensor:
-    return torch.tensor(((0, 4, 5, 2, 1), (0, 6, 2, 1, 1)), dtype=torch.long)
+    return torch.tensor(((0, 4, 5, 2, 1), (0, 6, 2, 1, 1)), dtype=torch.long)  # (2, 5) = (b, l)
 
 
 def _expected_features(
@@ -132,11 +139,12 @@ def _expected_features(
     *,
     normalized: bool = False,
 ) -> torch.Tensor:
+    # hidden_states: (b, l, d); token_mask: (b, l)
     with torch.no_grad():
         features = sae.get_sae_output(hidden_states, token_mask).feature_magnitudes
         if normalized:
             features = (features / sae.max) * sae.idf
-    return features
+    return features  # (n, f) for the n masked tokens and f codebook features
 
 
 def test_sae_outputs_are_exact_detached_sparse_features_without_padding() -> None:
@@ -348,6 +356,7 @@ def _load_pinned_biohub_sae_layer() -> type[nn.Module]:
     return namespace["_ESMCSAELayer"]
 
 
+@requires_pinned_sae_source
 def test_attached_features_match_the_pinned_biohub_sae_layer_source() -> None:
     official_layer_class = _load_pinned_biohub_sae_layer()
     params = SimpleNamespace(d_model=4, codebook_dim=6, k=2, layer=0)

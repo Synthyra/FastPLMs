@@ -1,7 +1,6 @@
 """Release evidence preserves failed gates, raw identities, and the spent-test boundary."""
 
 import json
-
 import pytest
 
 from dataclasses import asdict, replace

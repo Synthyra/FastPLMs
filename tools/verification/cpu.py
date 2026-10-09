@@ -69,13 +69,13 @@ def main() -> None:
     image = (
         modal.Image.debian_slim(python_version="3.12")
         .apt_install("git", "libgomp1")
-        .uv_pip_install("torch==2.13.0", index_url="https://download.pytorch.org/whl/cpu")
+        .uv_pip_install("torch==2.14.0", index_url="https://download.pytorch.org/whl/cpu")
     )
     for name in ("core.in", "features/structure.in", "features/dev.in", "features/train.in"):
         image = image.pip_install_from_requirements(str(snapshot.root / "requirements" / name))
     image = (
         image.uv_pip_install(
-            "transformers==5.13.0",
+            "transformers==5.17.0",
             "wandb==0.18.7",
             "lmdb==1.7.3",
             "gdown==5.2.0",
@@ -97,7 +97,7 @@ def main() -> None:
             }
         )
         .workdir("/workspace")
-        .add_local_dir(str(snapshot.root), "/workspace")
+        .add_local_dir(str(snapshot.root), "/workspace", ignore=excluded_from_upload)
     )
     app = modal.App("fastplms-cpu-verification")
     worker = app.function(

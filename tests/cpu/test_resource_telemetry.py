@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -9,7 +10,6 @@ import textwrap
 import pytest
 
 from pathlib import Path
-
 from tests.cpu.resource_telemetry import (
     ConcurrentProcessTreeSampler,
     MemoryEvidenceError,
@@ -270,11 +270,9 @@ def test_sampler_captures_a_live_child_process() -> None:
         assert child_record["rss_bytes"] >= 8 * 1024**2
     finally:
         if child.poll() is None and child.stdin is not None:
-            try:
+            with contextlib.suppress(BrokenPipeError):
                 child.stdin.write(b"x")
                 child.stdin.flush()
-            except BrokenPipeError:
-                pass
         try:
             child.wait(timeout=3)
         except subprocess.TimeoutExpired:

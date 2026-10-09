@@ -6,35 +6,18 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING or __package__:
+    from ._runtime import add_execution_arguments, configure_offline, resolve_execution
+else:
+    from _runtime import add_execution_arguments, configure_offline, resolve_execution
 
 
 # Shapes: b = batch, l = encoded tokens, r = residues, v = vocabulary, c = classes.
-
-def configure_offline() -> None:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
-
-def resolve_execution(device_name: str, dtype_name: str) -> tuple[Any, Any]:
-    """Validate the portable CPU/CUDA execution requested by the user."""
-
-    import torch
-
-    try:
-        device = torch.device(device_name)
-    except (RuntimeError, TypeError) as error:
-        raise ValueError(f"Invalid execution device {device_name!r}") from error
-    if device.type not in {"cpu", "cuda"}:
-        raise ValueError(f"Only CPU and CUDA devices are supported, got {device.type!r}")
-    if device.type == "cuda" and not torch.cuda.is_available():
-        raise ValueError(f"CUDA device {device} was requested but CUDA is unavailable")
-    dtype = torch.float32 if dtype_name == "float32" else torch.bfloat16
-    return device, dtype
-
 
 def _biological_mask(tokenizer: Any, batch: dict[str, Any]) -> Any:
     # batch input_ids/attention_mask: (b, l)
@@ -235,8 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path, help="Local manifest-built ESM2 artifact")
     parser.add_argument("--sequence", action="append", dest="sequences")
-    parser.add_argument("--device", default="cpu", help="cpu or cuda[:index]")
-    parser.add_argument("--dtype", choices=("float32", "bfloat16"), default="float32")
+    add_execution_arguments(parser)
     parser.add_argument(
         "--attn-backend",
         choices=("eager", "sdpa", "flex_attention"),

@@ -13,7 +13,9 @@ from torch import Tensor
 from .identity import _model_device
 from .inputs import _planned_batches
 from .pooling import Pooler
-from .types import EmbeddingBatch, EmbeddingInput, EmbeddingRecord
+from .taps import HiddenTap, ReducedTap, SparseResidueTap, StreamingTap, TapBatch, TapPlan
+from .types import EmbeddingBatch, EmbeddingInput, EmbeddingRecord, TapRecord
+from ..features.layouts import TopKRow, validate_topk
 
 
 _MAX_PARTI_RESIDUES = 2_048
@@ -36,7 +38,7 @@ def select_hidden_state_embeddings(
     store_all_hidden_states: bool = False,
 ) -> Tensor:
     """Select one hidden state or stack every state without changing values."""
-    # last_hidden_state and each hidden_states entry: (b, l, d)
+    # last_hidden_state: (b, l, d); hidden_states: (b, l, d) per entry
     if store_all_hidden_states:
         if not hidden_states:
             raise ValueError("store_all_hidden_states requires model hidden states.")
@@ -101,6 +103,61 @@ def _biological_residue_mask(
     return M  # (b, l)
 
 
+def canonical_residue_ids(sequence: str, tokenizer: Any) -> list[int]:
+    """Validate an already normalized protein's one-token-per-residue representation.
+
+    This does not normalize input or create sequence identity. Canonical callers supply their
+    verified inventory text; unknown residues, including J in ESMC, fail before inference.
+    """
+    if not sequence or not sequence.isascii() or not sequence.isalpha() or not sequence.isupper():
+        raise ValueError("Canonical feature input must be an already normalized uppercase protein.")
+    ids = tokenizer.convert_tokens_to_ids(list(sequence))
+    special = set(tokenizer.all_special_ids)
+    if (not isinstance(ids, list) or len(ids) != len(sequence)
+            or any(type(token) is not int or token in special for token in ids)):
+        raise ValueError("A canonical residue has no non-special tokenizer representation.")
+    return ids
+
+
+def _tokenized_batch(
+    model: Any,
+    sequences: list[str],
+    *,
+    tokenizer: Any,
+    max_length: int | None,
+    truncate: bool,
+) -> tuple[Tensor, Tensor, Tensor]:
+    """Tokenize one batch on the model device: input IDs, attention mask, and residue mask M."""
+
+    tokenize_kwargs: dict[str, Any] = {
+        "return_tensors": "pt",
+        "padding": True,
+        "truncation": truncate,
+    }
+    if max_length is not None and truncate:
+        # ``max_length`` is a biological-residue limit. Tokenizer limits include
+        # boundary tokens, so reserve their declared width instead of dropping
+        # residues at the exact boundary.
+        special_token_count = 0
+        num_special_tokens_to_add = getattr(tokenizer, "num_special_tokens_to_add", None)
+        if callable(num_special_tokens_to_add):
+            special_token_count = int(num_special_tokens_to_add(pair=False))
+        tokenize_kwargs["max_length"] = max_length + special_token_count
+    sequence_tokenizer = getattr(model, "_tokenize_sequence_batch", None)
+    if callable(sequence_tokenizer):
+        encoded = sequence_tokenizer(sequences, tokenizer=tokenizer, **tokenize_kwargs)
+    else:
+        encoded = tokenizer(sequences, **tokenize_kwargs)
+    device = _model_device(model)
+    input_ids = encoded["input_ids"].to(device)  # (b, l)
+    attention_mask = encoded.get(  # (b, l)
+        "attention_mask",
+        input_ids.new_ones(input_ids.shape),
+    ).to(device)
+    M = _biological_residue_mask(input_ids, attention_mask, tokenizer)  # (b, l)
+    return input_ids, attention_mask, M  # each: (b, l)
+
+
 def _generic_embedding_batch(
     model: Any,
     sequences: list[str],
@@ -140,32 +197,13 @@ def _generic_embedding_batch(
     if tokenizer is None:
         raise ValueError("A tokenizer is required for this model's embedding path.")
 
-    tokenize_kwargs: dict[str, Any] = {
-        "return_tensors": "pt",
-        "padding": True,
-        "truncation": truncate,
-    }
-    if max_length is not None and truncate:
-        # ``max_length`` is a biological-residue limit. Tokenizer limits include
-        # boundary tokens, so reserve their declared width instead of dropping
-        # residues at the exact boundary.
-        special_token_count = 0
-        num_special_tokens_to_add = getattr(tokenizer, "num_special_tokens_to_add", None)
-        if callable(num_special_tokens_to_add):
-            special_token_count = int(num_special_tokens_to_add(pair=False))
-        tokenize_kwargs["max_length"] = max_length + special_token_count
-    sequence_tokenizer = getattr(model, "_tokenize_sequence_batch", None)
-    if callable(sequence_tokenizer):
-        encoded = sequence_tokenizer(sequences, tokenizer=tokenizer, **tokenize_kwargs)
-    else:
-        encoded = tokenizer(sequences, **tokenize_kwargs)
-    device = _model_device(model)
-    input_ids = encoded["input_ids"].to(device)  # (b, l)
-    attention_mask = encoded.get(  # (b, l)
-        "attention_mask",
-        input_ids.new_ones(input_ids.shape),
-    ).to(device)
-    M = _biological_residue_mask(input_ids, attention_mask, tokenizer)  # (b, l)
+    input_ids, attention_mask, M = _tokenized_batch(
+        model,
+        sequences,
+        tokenizer=tokenizer,
+        max_length=max_length,
+        truncate=truncate,
+    )  # each: (b, l)
     if need_attentions:
         # Validate l before either the backbone or its quadratic attention graph
         # is materialized. M has shape (b, l).
@@ -187,6 +225,24 @@ def _generic_embedding_batch(
         residue_mask=M,
         attentions=attentions,
     )
+
+
+def _sparse_residue_rows(tap: SparseResidueTap, batch: TapBatch) -> list[TopKRow]:
+    """Validate and own each sequence's sparse biological-residue outputs on the CPU."""
+    rows = tap.reduce(batch)
+    if not isinstance(rows, Sequence) or len(rows) != batch.X.shape[0]:
+        raise ValueError("A sparse residue reducer must return one TopKRow per sequence.")
+    output = []
+    for row, length in zip(rows, batch.residue_mask.sum(dim=1).tolist(), strict=True):
+        if not isinstance(row, TopKRow):
+            raise TypeError("A sparse residue reducer must return TopKRow values.")
+        validate_topk(row.indices, row.values, tap.codebook_size, tap.sparse_count)
+        if row.values.shape[0] != length:
+            raise ValueError("Sparse residue output must retain every biological residue in order.")
+        output.append(TopKRow(
+            row.indices.detach().cpu().clone(), row.values.detach().cpu().clone(),
+        ))
+    return output
 
 
 @dataclass(eq=False)
@@ -312,7 +368,7 @@ class BatchExecutor:
             if not bool(((raw_mask == 0) | (raw_mask == 1)).all()):
                 raise ValueError("Embedding residue_mask must contain finite binary values.")
             M = raw_mask.to(device=X.device, dtype=torch.bool)  # (b, l)
-            valid_X_shape = (
+            valid_embedding_shape = (
                 X.ndim == 3
                 and X.shape[0] == len(batch_records)
                 and X.shape[-1] > 0
@@ -327,7 +383,7 @@ class BatchExecutor:
                 and X.shape[-1] > 0
                 and M.shape == (X.shape[0], X.shape[2])
             )
-            if not (valid_X_shape or valid_all_states_shape):
+            if not (valid_embedding_shape or valid_all_states_shape):
                 raise ValueError(
                     "Embedding batches must provide X with shape (b, l, d), or "
                     "(b, states, l, d) when storing all hidden states, and "
@@ -335,7 +391,7 @@ class BatchExecutor:
                 )
             if not bool(M.any(dim=1).all()):
                 raise ValueError("Every embedding sample must contain a biological residue.")
-            finite_selected = (  # X.shape
+            finite_selected = (  # (b, l, d) or (b, n_states, l, d)
                 torch.isfinite(X) | ~M.unsqueeze(-1)
                 if X.ndim == 3
                 else torch.isfinite(X) | ~M[:, None, :, None]
@@ -347,6 +403,11 @@ class BatchExecutor:
                 _validate_parti_length(M)
             if self.dtype is not None:
                 X = X.to(dtype=self.dtype)  # unchanged shape
+                selected = M.unsqueeze(-1) if X.ndim == 3 else M[:, None, :, None]  # (b, l, 1) or (b, 1, l, 1)
+                if not bool((torch.isfinite(X) | ~selected).all()):
+                    raise ValueError(
+                        "Embedding dtype conversion produced non-finite biological residues."
+                    )
 
             if self.full_embeddings:
                 if X.ndim == 4:
@@ -371,6 +432,227 @@ class BatchExecutor:
                 values = list(Y.detach().cpu().unbind(0))  # each: (n_poolers * d,)
             for position, record, value in zip(batch_positions, batch_records, values, strict=True):
                 window_results[position] = EmbeddingRecord(record.id, record.sequence, value)
+
+        new_records = [
+            window_results[position]
+            for position in range(window_start, window_start + len(window_records))
+        ]
+        return new_records, pool_slices
+
+
+def _tap_states(
+    model: Any,
+    sequences: list[str],
+    *,
+    tokenizer: Any | None,
+    max_length: int | None,
+    truncate: bool,
+    layers: tuple[int, ...],
+    streaming: tuple[StreamingTap, ...] = (),
+    require_residue_identity: bool = False,
+) -> tuple[dict[int, Tensor], Tensor, Tensor, dict[str, Tensor]]:
+    """Record ``layers`` in one forward pass; return the states, the token mask, and M."""
+
+    resolved_tokenizer = tokenizer if tokenizer is not None else getattr(model, "tokenizer", None)
+    if resolved_tokenizer is None:
+        raise ValueError("A tokenizer is required for this model's embedding path.")
+    expected_ids = (
+        [canonical_residue_ids(sequence, resolved_tokenizer) for sequence in sequences]
+        if require_residue_identity else None
+    )
+    input_ids, attention_mask, M = _tokenized_batch(
+        model,
+        sequences,
+        tokenizer=resolved_tokenizer,
+        max_length=max_length,
+        truncate=truncate,
+    )  # each: (b, l)
+    token_mask = attention_mask.to(dtype=torch.bool)  # (b, l)
+    if expected_ids is not None:
+        for index, expected in enumerate(expected_ids):
+            # The actual biological mask must select each original residue exactly once,
+            # in order. This checks tokenization, padding and cropping before the encoder.
+            if input_ids[index, M[index]].tolist() != expected:
+                raise ValueError(
+                    "Tokenizer and biological mask do not preserve original residue positions."
+                )
+    if not bool(M.any(dim=1).all()):
+        raise ValueError("Every embedding sample must contain a biological residue.")
+    streamed: dict[str, Tensor] = {}
+    if streaming:
+        if getattr(model, "embedding_streaming_tap_support", False) is not True:
+            raise ValueError("This model does not support streaming hidden-state taps.")
+        accumulators = [(tap, tap.begin()) for tap in streaming]
+        stream_layers = tuple(sorted({layer for tap in streaming for layer in tap.layers}))
+        seen: list[int] = []
+
+        def consume(layer: int, X: Tensor) -> None:
+            # X: (b, l, d), borrowed until this callback returns.
+            if len(seen) >= len(stream_layers) or layer != stream_layers[len(seen)]:
+                raise RuntimeError("Streaming hidden states arrived out of plan order.")
+            if X.ndim != 3 or X.shape[:2] != M.shape:
+                raise ValueError("Streaming hidden states are not token-aligned.")
+            if not bool((torch.isfinite(X) | ~M.unsqueeze(-1)).all()):
+                raise ValueError("Biological residue embeddings produced non-finite output.")
+            seen.append(layer)
+            batch = TapBatch(X, token_mask, M)
+            for tap, accumulator in accumulators:
+                if layer in tap.layers:
+                    accumulator.update(layer, batch)
+
+        states = model._embed_taps(
+            input_ids, attention_mask, layers, stream_layers=stream_layers, state_consumer=consume,
+        )
+        if tuple(seen) != stream_layers:
+            raise RuntimeError("The encoder did not deliver every streaming hidden state.")
+        for tap, accumulator in accumulators:
+            Y = accumulator.finish()  # (b, l, c)
+            if (not isinstance(Y, Tensor) or Y.ndim != 3
+                    or Y.shape[:2] != M.shape or Y.shape[2] == 0):
+                raise ValueError(
+                    f"Streaming tap {tap.name!r} must return token-aligned (b, l, c) features."
+                )
+            if Y.device != M.device or not Y.is_floating_point():
+                raise ValueError("Streaming features must be floating tensors on the input device.")
+            if not bool((torch.isfinite(Y) | ~M.unsqueeze(-1)).all()):
+                raise ValueError(
+                    f"Streaming tap {tap.name!r} produced non-finite biological residues."
+                )
+            streamed[tap.name] = Y
+    else:
+        states = model._embed_taps(input_ids, attention_mask, layers)  # each: (b, l, d)
+    # states: (b, l, d) per requested layer; token_mask, M: (b, l); streamed: (b, l, c) per streaming tap
+    return states, token_mask, M, streamed  # ((b, l, d), ...), (b, l), (b, l), {tap: (b, l, c)}
+
+
+def _reduced_rows(tap: ReducedTap, batch: TapBatch) -> list[Tensor]:
+    """Apply a reducer and split its output into one CPU tensor per sequence."""
+
+    # batch.X: (b, l, d)
+    Y = tap.reduce(batch)  # (b, ...)
+    if not isinstance(Y, Tensor):
+        raise TypeError(f"The reducer of tap {tap.name!r} must return a Tensor.")
+    if Y.ndim == 0 or Y.shape[0] != batch.X.shape[0]:
+        raise ValueError(
+            f"The reducer of tap {tap.name!r} must return one row per sequence, shape "
+            f"(b, ...) with b={batch.X.shape[0]}; it returned {tuple(Y.shape)}."
+        )
+    if Y.is_floating_point() and not bool(torch.isfinite(Y).all()):
+        raise ValueError(f"The reducer of tap {tap.name!r} produced non-finite output.")
+    return list(Y.detach().cpu().unbind(0))  # b tensors of shape (...), Y without its batch axis
+
+
+@dataclass(eq=False)
+class TapExecutor:
+    """Model and batch policy for one bounded window of a tap plan.
+
+    Each batch runs one forward pass that records every tapped state and stops after the
+    deepest. A hidden tap's dtype overrides the run dtype. Conversion starts from the original
+    state for each tap, so a low-precision residue output cannot quantize a pooled sibling.
+    A reducer receives the run dtype and its output keeps the dtype it returns.
+    """
+
+    model: Any
+    plan: TapPlan
+    batch_size: int
+    max_tokens_per_batch: int | None
+    max_length: int | None
+    truncate: bool
+    tokenizer: Any | None
+    dtype: torch.dtype | None
+    attention_backend: str | None
+    require_residue_identity: bool = False
+    poolers: dict[str, Pooler] = field(init=False)
+
+    def __post_init__(self) -> None:
+        pooled_streams = [tap.name for tap in self.plan.taps if isinstance(tap, StreamingTap) and tap.pooling is not None]
+        if pooled_streams:
+            raise ValueError(f"Pooled streaming taps {pooled_streams} run in a token run (TokenTapExecutor) only.")
+        self.poolers = {
+            tap.name: Pooler(tap.pooling)
+            for tap in self.plan.taps
+            if isinstance(tap, HiddenTap) and tap.pooling is not None
+        }
+
+    def run_window(
+        self,
+        window_records: Sequence[EmbeddingInput],
+        *,
+        window_start: int,
+    ) -> tuple[list[TapRecord], dict[str, dict[str, tuple[int, int]]]]:
+        """Restore source order after length-bucketed inference; return each pooled tap's slices."""
+
+        pool_slices: dict[str, dict[str, tuple[int, int]]] = {}
+        window_results: dict[int, TapRecord] = {}
+        for local_positions in _planned_batches(
+            window_records,
+            range(len(window_records)),
+            batch_size=self.batch_size,
+            max_tokens_per_batch=self.max_tokens_per_batch,
+            max_length=self.max_length,
+            truncate=self.truncate,
+        ):
+            batch_records = [window_records[position] for position in local_positions]
+            sequences = [
+                record.sequence[: self.max_length]
+                if self.truncate and self.max_length is not None
+                else record.sequence
+                for record in batch_records
+            ]
+            states, token_mask, M, streamed = _tap_states(  # states: each (b, l, d); masks: (b, l)
+                self.model,
+                sequences,
+                tokenizer=self.tokenizer,
+                max_length=self.max_length,
+                truncate=self.truncate,
+                layers=self.plan.captured_layers,
+                streaming=tuple(tap for tap in self.plan.taps if isinstance(tap, StreamingTap)),
+                require_residue_identity=self.require_residue_identity,
+            )
+            if not bool(M.any(dim=1).all()):
+                raise ValueError("Every embedding sample must contain a biological residue.")
+            for X in states.values():  # each: (b, l, d)
+                if not bool((torch.isfinite(X) | ~M.unsqueeze(-1)).all()):
+                    raise ValueError("Biological residue embeddings produced non-finite output.")
+            outputs: dict[str, list[Tensor] | list[TopKRow]] = {}
+            for tap, layer in zip(self.plan.taps, self.plan.layers, strict=True):
+                if isinstance(tap, StreamingTap):
+                    outputs[tap.name] = _residue_embeddings(streamed[tap.name], M)  # each: (r_i, c)
+                    continue
+                X = states[layer]  # (b, l, d)
+                dtype = self.dtype
+                if isinstance(tap, HiddenTap) and tap.dtype is not None:
+                    dtype = tap.dtype
+                if dtype is not None:
+                    X = X.to(dtype=dtype)  # (b, l, d), from the original captured state
+                    if not bool((torch.isfinite(X) | ~M.unsqueeze(-1)).all()):
+                        raise ValueError(
+                            "Tap dtype conversion produced non-finite biological residues."
+                        )
+                if isinstance(tap, SparseResidueTap):
+                    batch = TapBatch(X=X, token_mask=token_mask, residue_mask=M)
+                    outputs[tap.name] = _sparse_residue_rows(tap, batch)  # each pair: (r_i,k)
+                elif isinstance(tap, ReducedTap):
+                    batch = TapBatch(X=X, token_mask=token_mask, residue_mask=M)
+                    outputs[tap.name] = _reduced_rows(tap, batch)  # each: (...)
+                elif tap.pooling is None:
+                    outputs[tap.name] = _residue_embeddings(X, M)  # each: (r_i, d)
+                else:
+                    pooler = self.poolers[tap.name]
+                    Y = pooler(X, M, attention_backend=self.attention_backend)  # (b, n_poolers * d)
+                    pool_slices[tap.name] = pooler.output_slices(X.shape[-1])
+                    outputs[tap.name] = list(Y.detach().cpu().unbind(0))  # each: (n_poolers * d,)
+            for offset, (position, record) in enumerate(
+                zip(local_positions, batch_records, strict=True)
+            ):
+                window_results[window_start + position] = TapRecord(
+                    record.id,
+                    record.sequence,
+                    {name: values[offset] for name, values in outputs.items()},
+                    # This correspondence was proven against actual token IDs and M before
+                    # inference, not inferred from a tensor's row count.
+                    tuple(range(len(sequences[offset]))) if self.require_residue_identity else None,
+                )
 
         new_records = [
             window_results[position]

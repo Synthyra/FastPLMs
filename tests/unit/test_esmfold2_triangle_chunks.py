@@ -21,6 +21,7 @@ def _per_chunk_einsum(
     right_stream: torch.Tensor,
     chunk_size: int,
 ) -> torch.Tensor:
+    # left_stream, right_stream: (b, l, l, d)
     outgoing = block.flow == "outgoing"
     length = left_stream.shape[1] if outgoing else left_stream.shape[2]
     chunks = []
@@ -35,7 +36,7 @@ def _streams(device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
     generator = torch.Generator().manual_seed(8)
     routed = torch.randn(2, 11, 11, 2 * LATENT_CHANNELS, generator=generator).to(device)  # (2, 11, 11, 2 * LATENT_CHANNELS)
     left_stream, right_stream = routed.chunk(2, dim=-1)  # each (b, l, l, d), views as in forward
-    return left_stream, right_stream
+    return left_stream, right_stream  # each (2, 11, 11, LATENT_CHANNELS) = (b, l, l, d)
 
 
 def _assert_contractions_match(device: torch.device, flow: str, chunk_size: int) -> None:
@@ -73,8 +74,9 @@ def test_right_stream_is_laid_out_once_per_contraction(monkeypatch: pytest.Monke
     batched_product = torch.bmm
 
     def recording_product(rows: torch.Tensor, columns: torch.Tensor) -> torch.Tensor:
+        # rows: (b * d, i_c, k); columns: (b * d, k, j)
         products.append((rows, columns))
-        return batched_product(rows, columns)
+        return batched_product(rows, columns)  # (b * d, i_c, j)
 
     monkeypatch.setattr(torch, "bmm", recording_product)
     block._triangular_contract_chunked(left_stream, right_stream, 4)
@@ -122,7 +124,7 @@ def test_triangle_block_matches_the_unreleased_reference_bitwise(
         else:
             contracted = _per_chunk_einsum(block, left_stream, right_stream, chunk_size)
         mixed = block.proj_emit(block.norm_mix(contracted))
-        return mixed * torch.sigmoid(block.proj_gate(normalized))
+        return mixed * torch.sigmoid(block.proj_gate(normalized))  # (2, 11, 11, 8) = (b, l, l, d_input)
 
     for autocast in (False, True):
         with torch.no_grad(), torch.autocast("cpu", dtype=torch.bfloat16, enabled=autocast):

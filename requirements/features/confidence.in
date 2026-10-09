@@ -1,0 +1,9 @@
+# tools/confidence and its tests import these; floors are the versions those tests passed on.
+# DockQ is left out: its only release (2.1.3) requires numpy<2, so it runs only in the
+# confidence Modal image, which pins numpy 1.26.4.
+gemmi>=0.7.5
+lmdb>=3.0.0
+modal>=1.6.1
+python-dotenv>=1.2.4
+tmtools>=0.3.0
+wandb>=0.30.0

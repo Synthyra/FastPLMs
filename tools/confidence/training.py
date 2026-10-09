@@ -9,19 +9,20 @@ import platform
 import random
 import time
 import uuid
-
 import torch
 import transformers
 import wandb
 
-from pathlib import Path
+from collections.abc import Iterator
 from dataclasses import replace
-
+from pathlib import Path
+from typing import Any
 from huggingface_hub import hf_hub_download
 from safetensors import safe_open
 from safetensors.torch import save_file
 from torch import Tensor, nn
 
+from fastplms.digests import file_sha256, json_sha256
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
 from fastplms.models.esmfold2.modeling_esmfold2_common import ResIdxAsymIdSymIdEntityIdEncoding
 from fastplms.models.esmfold2.modeling_esmfold2_experimental import ConfidenceHead
@@ -37,16 +38,11 @@ from .config import (
     WANDB_PROJECT,
     resource_rate,
 )
-from .labels import compute_targets, confidence_loss
 from .data import ATLASFOLD_REVISION
+from .labels import compute_targets, confidence_loss
 from .metrics import summarize
 from .selection import improves_checkpoint
 from .structure_metrics import compute_structure_metrics
-
-
-def _file_hash(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def _state_hash(module: nn.Module) -> str:
@@ -77,10 +73,10 @@ class HeadContext(nn.Module):
             hf_hub_download(spec.confidence_training_base.repo_id, "model.safetensors", revision=spec.confidence_training_base.revision)
         )
         expected = spec.confidence_training_base.file_map["model.safetensors"].digest
-        if _file_hash(base) != expected:
+        if file_sha256(base) != expected:
             raise ValueError("Frozen checkpoint hash differs from the registry")
         donor = Path(hf_hub_download(DONOR_REPO, "model.safetensors", revision=DONOR_REVISION))
-        if _file_hash(donor) != DONOR_WEIGHT_SHA256:
+        if file_sha256(donor) != DONOR_WEIGHT_SHA256:
             raise ValueError("Donor checkpoint hash differs from its pinned identity")
         with safe_open(str(base), framework="pt") as handle:
             for name in ("rel_pos", "token_bonds"):
@@ -109,22 +105,23 @@ class HeadContext(nn.Module):
         self.base_weight_sha256 = expected
 
 
-def _cache_path(root: Path, model_id: str, record: dict, seed: int = 17) -> Path:
+def _cache_path(root: Path, model_id: str, record: dict[str, Any], seed: int = 17) -> Path:
     identifier = hashlib.sha256(str(record["id"]).encode()).hexdigest()[:24]
     return root / model_id / "cache" / f"{identifier}-{seed}.safetensors"
 
 
-def _records(root: Path) -> list[dict]:
+def _records(root: Path) -> list[dict[str, Any]]:
     receipt = json.loads((root / "data/split-report.json").read_text())
     if receipt["status"] != "verified":
         raise ValueError("Sequence-cluster split verification has not passed")
     path = root / "data/records.json"
-    if _file_hash(path) != receipt["records_sha256"]:
+    if file_sha256(path) != receipt["records_sha256"]:
         raise ValueError("Dataset manifest changed after split verification")
     return json.loads(path.read_text())
 
 
 def _targets(cache: dict[str, Tensor]) -> dict[str, Tensor]:
+    # cache: (...) one tensor per cache name; x_pred (1, atoms, 3), true_coords (atoms, 3), resolved_mask (atoms,), backbone_indices (tokens, 3)
     # Label fields retain their atom, token, or token-pair axes from compute_targets.
     stored = {
         name.removeprefix("target/"): value
@@ -132,8 +129,8 @@ def _targets(cache: dict[str, Tensor]) -> dict[str, Tensor]:
         if name.startswith("target/")
     }
     if stored:
-        return stored
-    return compute_targets(
+        return stored  # (...) stored label arrays: atom labels (atoms,), CA labels (tokens,), PAE labels (tokens, tokens)
+    return compute_targets(  # (...) computed label arrays: atom labels (atoms,), CA labels (tokens,), PAE labels (tokens, tokens)
         cache["x_pred"].reshape(-1, 3),
         cache["true_coords"],
         cache["resolved_mask"],
@@ -143,7 +140,7 @@ def _targets(cache: dict[str, Tensor]) -> dict[str, Tensor]:
     )
 
 
-def _cache_one(model, record: dict, root: Path, model_id: str, seed: int) -> dict:
+def _cache_one(model: nn.Module, record: dict[str, Any], root: Path, model_id: str, seed: int) -> dict[str, Any]:
     path = _cache_path(root, model_id, record, seed)
     if path.exists():
         try:
@@ -160,9 +157,7 @@ def _cache_one(model, record: dict, root: Path, model_id: str, seed: int) -> dic
     cache, metadata = load_cache(
         path, model_id=model_id, model_revision=get_model_spec(model_id).confidence_training_base.revision, seed=seed
     )
-    record_hash = hashlib.sha256(
-        json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    record_hash = json_sha256(record)
     if metadata["record_sha256"] != record_hash:
         raise ValueError("Cached record differs from the selected dataset")
     if not any(name.startswith("target/") for name in cache):
@@ -179,7 +174,7 @@ def _cache_one(model, record: dict, root: Path, model_id: str, seed: int) -> dic
 
 def generate_caches(
     root: Path, model_id: str, maximum_targets: int = 32, maximum_seconds: int = 6300
-) -> dict:
+) -> dict[str, Any]:
     run = _wandb_run(root, model_id, "cache", _training_settings(root, model_id))
     failed = False
     try:
@@ -199,8 +194,8 @@ def generate_caches(
 
 
 def _generate_caches(
-    root: Path, model_id: str, maximum_targets: int, maximum_seconds: int, run
-) -> dict:
+    root: Path, model_id: str, maximum_targets: int, maximum_seconds: int, run: wandb.sdk.wandb_run.Run
+) -> dict[str, Any]:
     started = time.monotonic()
     records = _records(root)
     tasks = [
@@ -251,30 +246,36 @@ def _generate_caches(
 
 
 def _forward(context: HeadContext, cache: dict[str, Tensor]) -> dict[str, Tensor]:
+    # cache: (...) one tensor per cache name; s_inputs (1, tokens, channels), z (1, tokens, tokens, pair channels), x_pred (1, atoms, 3)
     # Single-target output logits: (1, atoms, 50) pLDDT and (1, tokens, tokens, 64) PAE.
     inputs = confidence_inputs(context, cache)
     with torch.autocast("cuda", dtype=torch.bfloat16):
-        return context.head(**inputs)
+        return context.head(**inputs)  # (...) one tensor per head output; plddt_logits (1, atoms, 50), pae_logits (1, tokens, tokens, 64)
 
 
-def _load_example(root: Path, model_id: str, record: dict, seed: int = 17) -> tuple[dict, dict]:
+def _load_example(
+    root: Path, model_id: str, record: dict[str, Any], seed: int = 17
+) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     cache, metadata = load_cache(
         _cache_path(root, model_id, record, seed),
         model_id=model_id,
         model_revision=get_model_spec(model_id).confidence_training_base.revision,
         seed=seed,
     )
-    expected_record = hashlib.sha256(
-        json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    expected_record = json_sha256(record)
     if metadata.get("record_sha256") != expected_record:
         raise ValueError("Cached labels belong to a different selected record")
-    return cache, {key: value.cuda() for key, value in _targets(cache).items()}
+    return cache, {key: value.cuda() for key, value in _targets(cache).items()}  # (...) cache tensors by name, (...) label tensors by name on the GPU
 
 
 def _prediction_record(
-    record: dict, cache: dict, targets: dict, output: dict, quality: dict
-) -> dict:
+    record: dict[str, Any],
+    cache: dict[str, Tensor],
+    targets: dict[str, Tensor],
+    output: dict[str, Tensor],
+    quality: dict[str, Any],
+) -> dict[str, Any]:
+    # cache: (...) one tensor per cache name; backbone_indices (tokens, 3); targets: (...) one label tensor per name; plddt_mask (atoms,), lddt_ca_mask (tokens,), pae_mask (tokens, tokens); output: (...) one tensor per head output; plddt_per_atom holds one value per atom
     losses = confidence_loss(output, targets)  # scalar tensors () per loss
     atom_mask = targets["plddt_mask"]  # (atoms,)
     ca_mask = targets["lddt_ca_mask"]  # (tokens,)
@@ -300,8 +301,8 @@ def _prediction_record(
 
 @torch.no_grad()
 def predict_records(
-    context: HeadContext, root: Path, model_id: str, records: list[dict], two_seeds: bool = False
-) -> list[dict]:
+    context: HeadContext, root: Path, model_id: str, records: list[dict[str, Any]], two_seeds: bool = False
+) -> list[dict[str, Any]]:
     context.head.eval()
     predictions = []
     for record in records:
@@ -322,7 +323,7 @@ def predict_records(
     return predictions
 
 
-def _wandb_run(root: Path, model_id: str, kind: str, config: dict):
+def _wandb_run(root: Path, model_id: str, kind: str, config: dict[str, Any]) -> wandb.sdk.wandb_run.Run:
     directory = root / model_id / kind
     directory.mkdir(parents=True, exist_ok=True)
     identifier_file = directory / "wandb-id.txt"
@@ -352,7 +353,7 @@ def _wandb_run(root: Path, model_id: str, kind: str, config: dict):
     return run
 
 
-def _training_settings(root: Path, model_id: str) -> dict:
+def _training_settings(root: Path, model_id: str) -> dict[str, Any]:
     config = TrainingConfig().to_dict()
     archive_root = root.parent / "archives" if root.name == "smoke" else root / "archives"
     archive_receipts = {
@@ -376,10 +377,10 @@ def _training_settings(root: Path, model_id: str) -> dict:
         donor_weight_sha256=DONOR_WEIGHT_SHA256,
         atlasfold_revision=ATLASFOLD_REVISION,
         dataset_archives=archive_receipts,
-        dataset_sha256=_file_hash(root / "data/records.json"),
-        training_code_sha256=_file_hash(Path(__file__)),
+        dataset_sha256=file_sha256(root / "data/records.json"),
+        training_code_sha256=file_sha256(Path(__file__)),
         workflow_files={
-            path.name: _file_hash(path) for path in sorted(Path(__file__).parent.glob("*.py"))
+            path.name: file_sha256(path) for path in sorted(Path(__file__).parent.glob("*.py"))
         },
         torch_version=str(torch.__version__),
         transformers_version=transformers.__version__,
@@ -393,7 +394,7 @@ def _training_settings(root: Path, model_id: str) -> dict:
     return config
 
 
-def benchmark(root: Path, model_id: str, maximum_seconds: int = 480, smoke: bool = False) -> dict:
+def benchmark(root: Path, model_id: str, maximum_seconds: int = 480, smoke: bool = False) -> dict[str, Any]:
     if smoke:
         root = root / "smoke"
     run = _wandb_run(
@@ -415,7 +416,7 @@ def benchmark(root: Path, model_id: str, maximum_seconds: int = 480, smoke: bool
         run.finish(exit_code=1 if failed else 0)
 
 
-def _benchmark(root: Path, model_id: str, maximum_seconds: int) -> dict:
+def _benchmark(root: Path, model_id: str, maximum_seconds: int) -> dict[str, Any]:
     records = sorted(
         (r for r in _records(root) if r["split"] == "train"),
         key=lambda r: len(r["sequence"])
@@ -521,7 +522,7 @@ def _learning_rate(update: int, config: TrainingConfig) -> float:
     ) * (1 + math.cos(math.pi * fraction))
 
 
-def _checkpoint_settings_match(actual: dict, expected: dict) -> bool:
+def _checkpoint_settings_match(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
     # Modal can fulfill the same GPU request with a different compatible GPU.
     # Preserve numerical/software/data settings while recording actual hardware.
     return {key: value for key, value in actual.items() if key != "gpu"} == {
@@ -531,7 +532,7 @@ def _checkpoint_settings_match(actual: dict, expected: dict) -> bool:
 
 def train_head(
     root: Path, model_id: str, maximum_seconds: int = 36000, overfit: bool = False
-) -> dict:
+) -> dict[str, Any]:
     config = TrainingConfig()
     if not overfit:
         # Wall time controls the long run; this update bound protects against a
@@ -568,7 +569,7 @@ def train_head(
                 raise ValueError("The eight-target overfit check must pass before training")
         from .evaluation import build_frequency_baseline
 
-        def cached_targets(selected_records):
+        def cached_targets(selected_records: list[dict[str, Any]]) -> Iterator[dict[str, Tensor]]:
             for record in selected_records:
                 cache, _ = load_cache(
                     _cache_path(root, model_id, record, 17),
@@ -614,7 +615,7 @@ def train_head(
                 ("donor-validation.json", "donor_validation_sha256"),
             ):
                 saved_path = directory / filename
-                observed_hash = _file_hash(saved_path) if saved_path.exists() else None
+                observed_hash = file_sha256(saved_path) if saved_path.exists() else None
                 if observed_hash != state[field]:
                     raise ValueError(f"Checkpoint companion file differs: {filename}")
             context.head.load_state_dict(state["head"], strict=True)
@@ -802,16 +803,16 @@ def train_head(
 
 
 def _save_checkpoint(
-    path,
-    context,
-    optimizer,
-    settings,
-    update,
-    best,
-    patience,
-    model_id,
-    frozen_hashes,
-    training_seconds,
+    path: Path,
+    context: HeadContext,
+    optimizer: torch.optim.Optimizer,
+    settings: dict[str, Any],
+    update: int,
+    best: dict[str, Any] | None,
+    patience: int,
+    model_id: str,
+    frozen_hashes: tuple[str, str],
+    training_seconds: float,
 ) -> None:
     temporary = path.with_suffix(".tmp")
     best_path = path.parent / "best.safetensors"
@@ -825,8 +826,8 @@ def _save_checkpoint(
             "best": best,
             "patience": patience,
             "training_seconds": training_seconds,
-            "best_sha256": _file_hash(best_path) if best_path.exists() else None,
-            "donor_validation_sha256": _file_hash(donor_path) if donor_path.exists() else None,
+            "best_sha256": file_sha256(best_path) if best_path.exists() else None,
+            "donor_validation_sha256": file_sha256(donor_path) if donor_path.exists() else None,
             "model_id": model_id,
             "model_revision": get_model_spec(model_id).confidence_training_base.revision,
             "model_pins": context.base_weight_sha256,
@@ -846,7 +847,7 @@ def _save_checkpoint(
     modal.Volume.from_name(VOLUME_NAME).commit()
 
 
-def evaluate_head(root: Path, model_id: str) -> dict:
+def evaluate_head(root: Path, model_id: str) -> dict[str, Any]:
     # Final evaluation is a separate stage so its labels never select a checkpoint.
     from .evaluation import evaluate_final
 

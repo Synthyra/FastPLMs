@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests.conftest import assert_nested_close
+from tests.unit.tiny_families import tiny_esm2_config, tiny_esmc_config
 from transformers.modeling_outputs import (
     MaskedLMOutput,
     ModelOutput,
@@ -29,53 +31,11 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
 
 
 def _esm2_config() -> FastEsmConfig:
-    return FastEsmConfig(
-        vocab_size=16,
-        hidden_size=8,
-        num_hidden_layers=1,
-        num_attention_heads=2,
-        intermediate_size=16,
-        hidden_dropout_prob=0.0,
-        attention_probs_dropout_prob=0.0,
-        max_position_embeddings=16,
-        pad_token_id=1,
-        mask_token_id=5,
-        num_labels=3,
-        position_embedding_type="absolute",
-        attn_backend="eager",
-        return_dict=False,
-        output_hidden_states=True,
-    )
+    return tiny_esm2_config(return_dict=False, output_hidden_states=True)
 
 
 def _esmc_config() -> ESMplusplusConfig:
-    return ESMplusplusConfig(
-        vocab_size=16,
-        hidden_size=8,
-        num_hidden_layers=1,
-        num_attention_heads=2,
-        dropout=0.0,
-        pad_token_id=1,
-        mask_token_id=5,
-        num_labels=3,
-        attn_backend="eager",
-        return_dict=False,
-        output_hidden_states=True,
-    )
-
-
-def _assert_nested_close(actual, expected) -> None:
-    if torch.is_tensor(expected):
-        assert torch.is_tensor(actual)
-        torch.testing.assert_close(actual, expected)
-        return
-    if isinstance(expected, (tuple, list)):
-        assert isinstance(actual, type(expected))
-        assert len(actual) == len(expected)
-        for actual_value, expected_value in zip(actual, expected, strict=True):
-            _assert_nested_close(actual_value, expected_value)
-        return
-    assert actual == expected
+    return tiny_esmc_config(num_labels=3, return_dict=False, output_hidden_states=True)
 
 
 @pytest.mark.parametrize(
@@ -155,9 +115,9 @@ def test_sequence_models_honor_config_and_explicit_output_controls(
         )
 
     assert isinstance(default_output, tuple)
-    _assert_nested_close(default_output, default_structured.to_tuple())
+    assert_nested_close(default_output, default_structured.to_tuple())
     assert isinstance(structured, output_class)
-    _assert_nested_close(tuple_output, structured.to_tuple())
+    assert_nested_close(tuple_output, structured.to_tuple())
     assert structured.hidden_states is not None
     assert structured.attentions is not None
     assert structured.s_max is not None

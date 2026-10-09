@@ -332,11 +332,11 @@ def run_worker(workload: str, smoke: bool) -> dict[str, object]:
     device = "cpu" if smoke else "cuda"
     torch.manual_seed(0)
     operation = WORKLOADS[workload](torch, device, smoke)
-    result: dict[str, object] = {"workload": workload, "fastplms_file": fastplms.__file__}
+    measurement: dict[str, object] = {"workload": workload, "fastplms_file": fastplms.__file__}
     with torch.inference_mode():
         if smoke:
             operation()
-            return result
+            return measurement
         # FP32 parameters under BF16 autocast: the default FastPLMs execution policy.
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             warm_until_stable(torch, operation, tolerance=0.05, maximum_samples=200)
@@ -349,8 +349,8 @@ def run_worker(workload: str, smoke: bool) -> dict[str, object]:
                 minimum_block_ms=1000.0,
             )
     samples = [sample for block in blocks for sample in block.samples_ms]
-    result.update(median_ms=statistics.median(samples), sample_count=len(samples))
-    return result
+    measurement.update(median_ms=statistics.median(samples), sample_count=len(samples))
+    return measurement
 
 
 def _spawn_worker(tree: str, workload: str) -> dict[str, Any]:

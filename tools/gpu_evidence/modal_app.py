@@ -7,7 +7,6 @@ import os
 import subprocess
 import sys
 import time
-
 import modal
 
 from pathlib import Path
@@ -71,7 +70,7 @@ print(json.dumps({
 """
 
 app = modal.App(APP_NAME)
-cache_volume = modal.Volume.from_name(APP_NAME, create_if_missing=True)
+cache_volume = modal.Volume.from_name("synthyra-hf-cache", create_if_missing=True)
 # Forward a credential only when the launcher's environment defines it. Names
 # are tested for presence; values are never read here.
 credentials = modal.Secret.from_local_environ(
@@ -88,7 +87,7 @@ _REFERENCE_EXTRA_PACKAGES = (
     "attrs pandas cloudpathlib httpx tenacity zstd scikit-learn boto3 pygtrie "
     "dna_features_viewer pydssp ipython"
 )
-_FORK_PATHS_NOT_INSTALLED = [
+_FORK_PATHS_NOT_INSTALLED = modal.FilePatternMatcher(
     ".git",
     ".github",
     "tests",
@@ -103,7 +102,12 @@ _FORK_PATHS_NOT_INSTALLED = [
     "scripts",
     "cookbook",
     "_assets",
-]
+)
+
+
+def _excluded_from_fork(path: Path) -> bool:
+    """Leave out what the fork's install never reads, and every credential file."""
+    return _FORK_PATHS_NOT_INSTALLED(path) or excluded_from_upload(path)
 
 
 def _with_reference_environment(image: modal.Image) -> modal.Image:
@@ -112,18 +116,20 @@ def _with_reference_environment(image: modal.Image) -> modal.Image:
     requirements = f"{_REFERENCE_SOURCES}/requirements"
     return (
         image.apt_install("build-essential")
-        .add_local_dir(str(SOURCE_ROOT / "requirements"), requirements, copy=True)
+        .add_local_dir(
+            str(SOURCE_ROOT / "requirements"), requirements, copy=True, ignore=excluded_from_upload
+        )
         .add_local_dir(
             str(SOURCE_ROOT / "vendor/upstream/biohub-transformers"),
             f"{_REFERENCE_SOURCES}/transformers",
             copy=True,
-            ignore=_FORK_PATHS_NOT_INSTALLED,
+            ignore=_excluded_from_fork,
         )
         .add_local_dir(
             str(SOURCE_ROOT / "vendor/upstream/biohub-esm"),
             f"{_REFERENCE_SOURCES}/esm",
             copy=True,
-            ignore=_FORK_PATHS_NOT_INSTALLED,
+            ignore=_excluded_from_fork,
         )
         .run_commands(
             f"python -m venv {REFERENCE_ENVIRONMENT}",
@@ -131,7 +137,9 @@ def _with_reference_environment(image: modal.Image) -> modal.Image:
             f"{pip} -r {requirements}/core.in -r {requirements}/features/structure.in "
             f"-c {requirements}/constraints/validation.txt {_REFERENCE_EXTRA_PACKAGES}",
             f"{pip} --no-deps {_REFERENCE_SOURCES}/transformers {_REFERENCE_SOURCES}/esm",
-            f"{pip} huggingface-hub==0.36.0",
+            # The fork requires a pre-1.0 huggingface-hub and tokenizers<=0.23.0, below
+            # FastPLMs' floors; tokenizers follows docker/constraints/biohub-reference.lock.txt.
+            f"{pip} huggingface-hub==0.36.0 tokenizers==0.22.2",
         )
     )
 
@@ -152,6 +160,13 @@ def _image(
             str(SOURCE_ROOT / "requirements/features" / feature_file)
         )
     image = image.uv_pip_install(f"transformers=={TRANSFORMERS_VERSION}")
+    # uv installs without bytecode and workers set PYTHONDONTWRITEBYTECODE, so every fresh
+    # interpreter a subprocess contract starts would compile transformers again: about 20 s
+    # under ``python -O``, whose bytecode level differs. Compile both levels into the image.
+    image = image.run_commands(
+        "python -c \"import compileall, sysconfig; "
+        "compileall.compile_dir(sysconfig.get_paths()['purelib'], quiet=1, workers=0, optimize=[0, 1])\""
+    )
     # Build steps must precede the working-tree mounts below.
     if reference_environment:
         image = _with_reference_environment(image)
@@ -181,6 +196,9 @@ def _image(
 
 # requirements/profiles/cpu-validation.in and candidate.in, plus structure extras.
 cpu_image = _image(CPU_WHEEL_INDEX, ("dev.in", "structure.in", "train.in"))
+check_image = _image(
+    CPU_WHEEL_INDEX, ("dev.in", "flash.in", "structure.in", "train.in", "oracles.in", "confidence.in")
+)
 gpu_image = _image(CUDA_WHEEL_INDEX, ("dev.in", "flash.in", "structure.in", "train.in"))
 fold_image = _image(
     CUDA_WHEEL_INDEX,
@@ -248,6 +266,18 @@ cpu_worker = app.function(
     timeout=CPU_WORKER_TIMEOUT_SECONDS,
     startup_timeout=STARTUP_TIMEOUT_SECONDS,
     volumes={CACHE_ROOT: cache_volume},
+    max_containers=1,
+)(_run_stage)
+
+check_worker = app.function(
+    name="check_worker",
+    image=check_image,
+    cpu=CPU_CORES,
+    memory=int(CPU_MEMORY_GIB * 1024),
+    timeout=CPU_WORKER_TIMEOUT_SECONDS,
+    startup_timeout=STARTUP_TIMEOUT_SECONDS,
+    volumes={CACHE_ROOT: cache_volume},
+    secrets=[credentials],
     max_containers=1,
 )(_run_stage)
 

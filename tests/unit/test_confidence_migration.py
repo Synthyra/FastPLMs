@@ -4,13 +4,11 @@ import hashlib
 import json
 import struct
 import sys
-
 import numpy as np
 import pytest
 
 from pathlib import Path
 from types import SimpleNamespace
-
 from safetensors.numpy import save_file
 
 from tools.confidence import migration, target_splits

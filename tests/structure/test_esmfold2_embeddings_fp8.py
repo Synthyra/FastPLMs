@@ -123,7 +123,7 @@ class SyntheticESMFold2(ESMFold2EmbeddingMixin, nn.Module):
         H = torch.zeros(*input_ids.shape, 81, 4)
         # H[..., 0]: (b, l, 81), broadcasting input_ids from (b, l, 1).
         H[..., 0] = input_ids.unsqueeze(-1)
-        return H * residue_mask[..., None, None]
+        return H * residue_mask[..., None, None]  # (b, l, 81, 4), zero at padded tokens
 
 
 def test_esmfold2_embedding_is_residue_only_and_rejects_complexes() -> None:
@@ -133,10 +133,10 @@ def test_esmfold2_embedding_is_residue_only_and_rejects_complexes() -> None:
     assert tuple(batch.X.shape) == (2, 3, 3)
     assert batch.residue_mask.tolist() == [[True, True, True], [True, True, False]]
     assert torch.equal(batch.X[1, 2], torch.zeros(3))
-    result = model.embed_dataset(["ACD"], full_embeddings=True)
-    assert result.metadata["layer"] == "all_81_esmc_states"
-    assert result.metadata["projection"] == "esmfold2_learned_sequence_summary"
-    assert "BOS" in result.metadata["token_policy"]["exclude"]
+    embeddings = model.embed_dataset(["ACD"], full_embeddings=True)
+    assert embeddings.metadata["layer"] == "all_81_esmc_states"
+    assert embeddings.metadata["projection"] == "esmfold2_learned_sequence_summary"
+    assert "BOS" in embeddings.metadata["token_policy"]["exclude"]
     with pytest.raises(ValueError, match="one ungapped protein chain"):
         model._embedding_batch(["ACD|GG"])
     with pytest.raises(ValueError, match="at least one protein residue"):

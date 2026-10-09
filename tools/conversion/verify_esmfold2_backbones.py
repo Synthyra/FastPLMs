@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from safetensors.torch import load_file
 
+from fastplms.json_files import compact_json
 from fastplms.registry import CheckpointSource, FileDigest, get_model_registry
 from tools.artifacts.build import ArtifactError, hash_file
 from tools.conversion.esmc_native import esmc_native_to_fastplms_v1
@@ -65,7 +66,7 @@ def _source_pin(source: CheckpointSource, file_hashes: Mapping[str, str]) -> dic
 def _load_snapshot_state(snapshot: Path, source: CheckpointSource) -> dict[str, torch.Tensor]:
     weight = _weight_digest(source)
     path = snapshot.resolve().joinpath(*PurePosixPath(weight.path).parts)
-    return dict(load_file(path, device="cpu"))
+    return dict(load_file(path, device="cpu"))  # (...) one tensor per parameter name, checkpoint-defined shapes
 
 
 def _load_config(snapshot: Path) -> dict[str, object]:
@@ -90,6 +91,7 @@ def _compare_states(
     native_state: Mapping[str, torch.Tensor],
     standard_state: Mapping[str, torch.Tensor],
 ) -> dict[str, object]:
+    # native_state, standard_state: (...) one tensor per parameter name, checkpoint-defined shapes
     native_keys = set(native_state)
     standard_keys = set(standard_state)
     missing = sorted(standard_keys - native_keys)
@@ -118,6 +120,7 @@ def _compare_states(
             max_bf16_error = max(max_bf16_error, float(error))
 
     def exact_bf16_roundtrip(state: Mapping[str, torch.Tensor]) -> bool:
+        # state: (...) one tensor per parameter name, checkpoint-defined shapes
         return all(
             not value.is_floating_point() or torch.equal(value, value.bfloat16().float())
             for value in state.values()
@@ -204,7 +207,7 @@ def main() -> int:
         arguments.native_snapshot,
         arguments.standard_snapshot,
     )
-    payload = json.dumps(report, sort_keys=True, separators=(",", ":"))
+    payload = compact_json(report)
     if arguments.output is not None:
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         arguments.output.write_text(payload + "\n", encoding="utf-8")

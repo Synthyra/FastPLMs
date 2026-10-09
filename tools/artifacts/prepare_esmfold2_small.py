@@ -12,14 +12,15 @@ from __future__ import annotations
 import argparse
 import ast
 import hashlib
-import json
 import re
 import shutil
 import tempfile
+
 from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from fastplms.json_files import indented_json
 from fastplms.models.esmfold2.configuration_esmfold2 import normalize_esmc_id
 from fastplms.registry import ModelSpec, get_model_registry
 from tools.artifacts.build import (
@@ -27,6 +28,7 @@ from tools.artifacts.build import (
     _apply_artifact_config_contract,
     _artifact_auto_map,
     _checkpoint_identity_hash,
+    _load_json_object_for_build as _read_json_object,
     _portable_relative_path,
     hash_file,
     verify_checkpoint,
@@ -43,19 +45,9 @@ _WEIGHT_FILE = "model.safetensors"
 _RUNTIME_HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
-def _read_json_object(path: Path) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ArtifactError(f"Unable to read JSON object: {path}") from error
-    if not isinstance(value, dict):
-        raise ArtifactError(f"JSON document must contain an object: {path}")
-    return value
-
-
 def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        indented_json(value, ensure_ascii=False),
         encoding="utf-8",
         newline="\n",
     )
@@ -170,9 +162,7 @@ def _prepare_one(
     config_payload = _read_json_object(snapshot / "config.json")
     config = _materialize_config(config_payload, spec, runtime_hash)
     output_files = dict(compiled_files)
-    output_files["config.json"] = (
-        json.dumps(config, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-    ).encode("utf-8")
+    output_files["config.json"] = indented_json(config, ensure_ascii=False).encode("utf-8")
     weight_source = snapshot / _WEIGHT_FILE
     if not weight_source.is_file():
         raise ArtifactError(f"Pinned checkpoint has no {_WEIGHT_FILE}: {weight_source}")

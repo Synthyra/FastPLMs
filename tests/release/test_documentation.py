@@ -11,6 +11,8 @@ import pytest
 from pathlib import Path
 from typing import Any, Self
 from urllib.parse import unquote, urlsplit
+from packaging.requirements import Requirement
+from packaging.version import Version
 
 from tools.artifacts.doc_generation.capabilities import (
     CAPABILITY_EVIDENCE_SELECTORS,
@@ -28,12 +30,12 @@ from tools.debug.check_notation import (
     scan_repository,
     violations_in_text,
 )
+from tools.remote.python_matrix import CANONICAL_GPU_PYTHON, PYTHON_SUPPORT_VERSIONS
 
 
 ROOT = Path(__file__).resolve().parents[2]
 MARKDOWN_ROOTS = (
     ROOT / "AGENTS.md",
-    ROOT / "CLAUDE.md",
     ROOT / "README.md",
     ROOT / "THIRD_PARTY_NOTICES.md",
     ROOT / "LICENSES",
@@ -416,16 +418,18 @@ def test_curated_offline_examples_expose_executable_help() -> None:
             env=environment,
             capture_output=True,
             text=True,
-            timeout=20,
+            # A hang guard, not a speed contract: every example imports torch, and a cold torch
+            # import alone took 14 s on a sandboxed cloud CPU worker running the suite in parallel.
+            timeout=60,
             check=False,
         )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         results = tuple(executor.map(run_help, OFFLINE_EXAMPLES))
 
-    for name, result in results:
-        assert result.returncode == 0, f"{name}: {result.stderr}"
-        assert "usage:" in result.stdout.lower()
+    for name, completed in results:
+        assert completed.returncode == 0, f"{name}: {completed.stderr}"
+        assert "usage:" in completed.stdout.lower()
     help_by_name = dict(results)
     structure_help = " ".join(help_by_name["structure_preparation.py"].stdout.split())
     assert "requires a full 48-block checkpoint" in structure_help
@@ -461,7 +465,25 @@ def test_container_guide_runs_complete_candidate_and_compliance_workflows() -> N
     assert "Building these images alone does not run parity" in " ".join(text.split())
 
 
+def _core_floor(distribution: str) -> str:
+    """The release line requirements/core.in floors a distribution at, as docs state it."""
+    core = (ROOT / "requirements" / "core.in").read_text(encoding="utf-8")
+    for line in core.splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            requirement = Requirement(line)
+            if requirement.name == distribution:
+                (floor,) = requirement.specifier
+                return floor.version
+    raise AssertionError(f"core.in does not declare {distribution}")
+
+
 def test_hub_quick_starts_follow_install_and_platform_contracts() -> None:
+    supported = sorted((CANONICAL_GPU_PYTHON, *PYTHON_SUPPORT_VERSIONS), key=Version)
+    python_range = re.compile(
+        rf"Python {re.escape(supported[0])}(?:-| through ){re.escape(supported[-1])}"
+    )
+    torch_line = f"PyTorch {_core_floor('torch')}"
+    transformers_line = f"Transformers {_core_floor('transformers')}"
     paths = (
         ROOT / "README.md",
         ROOT / "docs" / "attention_backends.md",
@@ -476,9 +498,9 @@ def test_hub_quick_starts_follow_install_and_platform_contracts() -> None:
         loading = text.index(".from_pretrained(")
         prefix = text[:loading]
         assert "pip install" in prefix, path.relative_to(ROOT)
-        assert re.search(r"Python 3\.11(?:-| through )3\.14", prefix), path.relative_to(ROOT)
-        assert "PyTorch 2.13" in prefix, path.relative_to(ROOT)
-        assert "Transformers 5.13" in prefix, path.relative_to(ROOT)
+        assert python_range.search(prefix), path.relative_to(ROOT)
+        assert torch_line in prefix, path.relative_to(ROOT)
+        assert transformers_line in prefix, path.relative_to(ROOT)
 
 
 def test_esmfold2_fast_docs_do_not_claim_msa_conditioning() -> None:

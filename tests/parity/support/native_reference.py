@@ -26,7 +26,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 from safetensors.torch import save_file
-
 from tests.parity.support.reference_adapters import (
     OfficialGenerationUnavailable,
     snapshot_path,
@@ -37,6 +36,7 @@ from tests.parity.support.state_transforms import (
     transform_preserves_aliases,
     transform_state,
 )
+
 from tools.remote.biohub_reference_environment import (
     validate_biohub_reference_environment_evidence,
 )
@@ -65,7 +65,7 @@ _TOKENIZER_SETTINGS = (
 
 
 def _tensor_digest(tensor: torch.Tensor) -> dict[str, Any]:
-    # tensor and value share the caller's arbitrary tensor shape through the CPU copy.
+    # tensor: (...) any shape; value shares it through the CPU copy.
     value = tensor.detach().cpu().contiguous()
     raw = value.view(torch.uint8).numpy().tobytes()
     return {
@@ -121,7 +121,7 @@ def _environment_metadata() -> dict[str, object]:
             int(cuda_properties.total_memory) if cuda_properties is not None else None
         ),
         "cuda_runtime": str(torch.version.cuda or "unavailable"),
-        "cuda_driver": _cuda_driver_version(),
+        "cuda_driver": _cuda_driver_version() if cuda_properties is not None else "unavailable",
         "packages": json.dumps(distributions, separators=(",", ":"), sort_keys=True),
         "platform_machine": platform.machine(),
         "python": platform.python_version(),
@@ -196,7 +196,7 @@ def _tokenizer_asset_contract(request: Mapping[str, Any]) -> dict[str, Any]:
         # case; checkpoint-backed tokenizers still hash every declared file.
         return {}
     snapshot = snapshot_path(request["reference_repo_id"], request["reference_revision"])
-    result: dict[str, Any] = {}
+    contract: dict[str, Any] = {}
     for relative_name in files:
         relative = Path(relative_name)
         if relative.is_absolute() or ".." in relative.parts:
@@ -205,11 +205,11 @@ def _tokenizer_asset_contract(request: Mapping[str, Any]) -> dict[str, Any]:
         if not path.is_file():
             raise FileNotFoundError(f"Official tokenizer asset is missing: {path}")
         content = path.read_bytes()
-        result[relative.as_posix()] = {
+        contract[relative.as_posix()] = {
             "size": len(content),
             "sha256": hashlib.sha256(content).hexdigest(),
         }
-    return result
+    return contract
 
 
 def _state_contract(model: nn.Module, transform_name: str) -> dict[str, Any]:
@@ -232,7 +232,7 @@ def _state_contract(model: nn.Module, transform_name: str) -> dict[str, Any]:
     return {"tensors": tensors, "aliases": aliases}
 
 
-def _normalize_tokenizer_error(message: str) -> str:
+def normalize_tokenizer_error(message: str) -> str:
     """Remove a dependency-list difference between Transformers v4 and v5."""
 
     return message.replace(
@@ -244,12 +244,12 @@ def _normalize_tokenizer_error(message: str) -> str:
 def _token_result(tokenizer: object, sequences: Sequence[str], options: Mapping[str, Any]) -> Any:
     try:
         encoded = tokenizer(sequences, return_tensors="pt", **options)
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  the exact error is part of the token contract
         return [
             "error",
             type(error).__module__,
             type(error).__qualname__,
-            _normalize_tokenizer_error(str(error)),
+            normalize_tokenizer_error(str(error)),
         ]
     normalized = {
         key: value.tolist() if torch.is_tensor(value) else value for key, value in encoded.items()
@@ -275,7 +275,7 @@ def _tokenizer_contract(
 
 
 def _to_device(values: Mapping[str, Any], device: torch.device) -> dict[str, torch.Tensor]:
-    return {name: value.to(device) for name, value in values.items() if torch.is_tensor(value)}
+    return {name: value.to(device) for name, value in values.items() if torch.is_tensor(value)}  # (...) the tensor entries of values, one per name, shapes unchanged
 
 
 def _prepare_dplm2_inputs(
@@ -335,7 +335,7 @@ def _prepare_dplm2_inputs(
             row_index,
             aa_start + 1 : aa_start + 1 + residue_count,
         ] = True
-    return {
+    return {  # (...) input_ids, attention_mask: (n, 2 * track_length) for n sequences; residue_mask (n, 2 * track_length)
         "input_ids": input_ids,
         "attention_mask": input_ids.ne(pad_id).long(),
     }, residue_mask
@@ -364,9 +364,9 @@ def _prepare_inputs(
         inputs = {name: prepared[name] for name in required}
         # residue_mask: (b, l)
         residue_mask = inputs["sequence_ids"].ge(0)
-        return inputs, residue_mask
+        return inputs, residue_mask  # (...) the four id tensors (b, l); residue_mask (b, l)
     if request["family"] == "dplm2":
-        return _prepare_dplm2_inputs(sequences, tokenizer, device)
+        return _prepare_dplm2_inputs(sequences, tokenizer, device)  # (...) input_ids, attention_mask: (n, 2 * track_length); residue_mask (n, 2 * track_length)
 
     encoded = _to_device(
         tokenizer(sequences, return_tensors="pt", padding=True),
@@ -384,7 +384,7 @@ def _prepare_inputs(
     if request["architecture"] == "ESMC":
         # inputs['sequence_id']: (b, l)
         inputs["sequence_id"] = encoded["attention_mask"].bool()
-    return inputs, residue_mask
+    return inputs, residue_mask  # (...) input_ids, attention_mask, sometimes sequence_id: each (b, l); residue_mask (b, l)
 
 
 def _output_tensors(output: object) -> dict[str, torch.Tensor]:
@@ -409,7 +409,7 @@ def _output_tensors(output: object) -> dict[str, torch.Tensor]:
     if logits is not None:
         # tensors['output__logits']: (..., c)
         tensors["output__logits"] = logits.detach().cpu().contiguous().clone()
-    return tensors
+    return tensors  # (...) output__hidden_NNNN and output__last_hidden_state (..., d), optionally output__logits (..., c)
 
 
 @contextlib.contextmanager
@@ -477,7 +477,7 @@ def _inference_tensors(
     tensors["residue_mask"] = residue_mask.detach().cpu().contiguous().clone()
     tensors.update(_output_tensors(output))
     del output
-    return tensors
+    return tensors  # (...) input__<name> tensors and residue_mask (b, l), plus the tensors of _output_tensors
 
 
 def _ankh_generation_contract(
@@ -721,8 +721,13 @@ def _validated_generation_limitation(
     return limitation
 
 
-def run_request(request_path: Path, output_root: Path) -> Path:
-    """Execute one official request and atomically publish its normalized result."""
+def run_request(request_path: Path, output_root: Path, *, cpu_fp32: bool = False) -> Path:
+    """Execute one official request and atomically publish its normalized result.
+
+    ``cpu_fp32`` records only the strict-FP32 run, on the CPU. It serves references whose
+    pinned CUDA build does not exist for this platform: FP32 is the hardware-independent
+    truth a golden needs, and the golden takes its BF16 run from an earlier GPU result.
+    """
 
     request = json.loads(request_path.read_text(encoding="utf-8"))
     if request.get("schema_version") != SCHEMA_VERSION:
@@ -730,7 +735,7 @@ def run_request(request_path: Path, output_root: Path) -> Path:
     adapter_name = request.get("adapter")
     if not isinstance(adapter_name, str) or not adapter_name.startswith(_ADAPTER_PREFIX):
         raise ValueError(f"Invalid official adapter in {request_path}")
-    if not torch.cuda.is_available():
+    if not cpu_fp32 and not torch.cuda.is_available():
         raise RuntimeError("Native BF16 compliance requires CUDA")
 
     adapter = importlib.import_module(adapter_name)
@@ -770,7 +775,7 @@ def run_request(request_path: Path, output_root: Path) -> Path:
     if reference_environment is not None:
         metadata["reference_environment"] = reference_environment
 
-    device = torch.device("cuda")
+    device = torch.device("cpu" if cpu_fp32 else "cuda")
     # ANKH's native encoder wrapper intentionally has no decoder. Defer its
     # generation contract until encoder inference is complete, then release the
     # encoder before loading the complete official T5 checkpoint.
@@ -786,19 +791,21 @@ def run_request(request_path: Path, output_root: Path) -> Path:
             device,
             adapter=adapter,
         )
-    precision_tensors: dict[str, dict[str, torch.Tensor]] = {}
-    if request["deep_reference"]:
-        precision_tensors["fp32"] = _inference_tensors(
-            model, tokenizer, request, device, torch.float32
+    # Every checkpoint records strict FP32: it is the hardware-independent truth that
+    # its golden stores. BF16 is the official mixed-precision output on this device.
+    precision_tensors: dict[str, dict[str, torch.Tensor]] = {
+        "fp32": _inference_tensors(model, tokenizer, request, device, torch.float32),
+    }
+    if not cpu_fp32:
+        precision_tensors["bf16"] = _inference_tensors(
+            model, tokenizer, request, device, torch.bfloat16
         )
-    precision_tensors["bf16"] = _inference_tensors(
-        model, tokenizer, request, device, torch.bfloat16
-    )
     metadata["precision_tensor_keys"] = {
         precision: sorted(tensors) for precision, tensors in precision_tensors.items()
     }
     calibration_tensors: dict[str, dict[str, torch.Tensor]] = {}
-    calibration_batches = request.get("calibration_batches", [])
+    # Calibration batches are BF16 diagnostics, so an FP32-only run has none.
+    calibration_batches = [] if cpu_fp32 else request.get("calibration_batches", [])
     if calibration_batches:
         if request["family"] != "esm_plusplus":
             raise ValueError("Calibration batches are reserved for ESM++/ESMC requests")
@@ -911,6 +918,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Run only this request ID; repeat to select multiple checkpoints.",
     )
     parser.add_argument(
+        "--cpu-fp32",
+        action="store_true",
+        help="Record only strict FP32 on the CPU, for a platform without the pinned CUDA build.",
+    )
+    parser.add_argument(
         "--deep-only",
         action="store_true",
         help="Run only manifest-declared deep architecture representatives.",
@@ -922,7 +934,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         deep_only=arguments.deep_only,
     )
     for request in requests:
-        print(run_request(request, arguments.output_dir))
+        print(run_request(request, arguments.output_dir, cpu_fp32=arguments.cpu_fp32))
     return 0
 
 

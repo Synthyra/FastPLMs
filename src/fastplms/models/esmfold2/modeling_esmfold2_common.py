@@ -62,6 +62,9 @@ _VALID_BACKENDS = (None, BACKEND_FUSED, BACKEND_CUEQ)
 ATOM_ATTENTION_DENSE = "dense"
 ATOM_ATTENTION_WINDOWED = "windowed"
 _VALID_ATOM_ATTENTION = (ATOM_ATTENTION_DENSE, ATOM_ATTENTION_WINDOWED)
+# The official sampler starts every fold at this noise level unless a caller overrides it;
+# the public forwards and fold() default to it so an omitted argument keeps the cap.
+DEFAULT_MAX_INFERENCE_SIGMA = 256.0
 MSA_CONDITIONING_INPUT_NAMES = (
     "msa",
     "msa_attention_mask",
@@ -2793,7 +2796,7 @@ class DiffusionStructureHead(nn.Module):
         token_attention_mask: Tensor | None = None,
         num_diffusion_samples: int = 1,
         num_sampling_steps: int | None = None,
-        max_inference_sigma: float | None = 256.0,
+        max_inference_sigma: float | None = DEFAULT_MAX_INFERENCE_SIGMA,
         noise_scale: float | None = None,
         step_scale: float | None = None,
         return_atom_repr: bool = False,

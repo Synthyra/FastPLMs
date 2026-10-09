@@ -81,6 +81,10 @@ def test_hhfilter_passes_paths_as_distinct_arguments(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     executable.chmod(0o755)
+    if sys.platform == "win32":
+        # Windows does not execute a shebang script, so a command script forwards the arguments.
+        script, executable = executable, tmp_path / "fake_hhfilter.cmd"
+        executable.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
     assert hhfilter(["AAA", "BBB", "CCC"], binary=str(executable)) == [2, 0]
 
 

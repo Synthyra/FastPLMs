@@ -5,9 +5,9 @@ import torch
 
 from pathlib import Path
 from typing import Literal
+from tests.unit import test_e1_cache_contract as contracts
 
 from fastplms.embeddings import EmbeddingResult, load_sqlite_result
-from tests.unit import test_e1_cache_contract as contracts
 
 
 test_e1_cache_hit_does_not_slice_target_outputs_twice = (

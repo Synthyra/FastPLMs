@@ -6,34 +6,39 @@ import json
 import subprocess
 import sys
 import time
-
 import modal
 
 from pathlib import Path
 from typing import Any
 
+from foundry.modal_image import workspace_foundry
+from tools.execution.source import excluded_from_upload
 from .config import (
     CAMPAIGN_TIMEOUT_SECONDS,
     GPU_STARTUP_TIMEOUT_SECONDS,
     TRAIN_TIMEOUT_SECONDS,
     VOLUME_NAME,
 )
+from .volume_artifacts import ARTIFACT_MOUNT, HF_VOLUME, PILOT_ROOT, PILOT_SOURCE, pilot_prefixes, restore_source
 
 
 ROOT = Path(__file__).resolve().parents[2]
-REMOTE_ROOT = Path("/vol/confidence")
+REMOTE_ROOT = PILOT_ROOT
 app = modal.App("fastplms-confidence-pilot")
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
+hf_volume = modal.Volume.from_name(HF_VOLUME)
+# Remote paths are POSIX even when the launcher runs on Windows.
+MOUNTS = {ARTIFACT_MOUNT.as_posix(): volume, "/hf": hf_volume}
 credentials = modal.Secret.from_local_environ(["HF_TOKEN", "WANDB_API_KEY"])
 base_image = (
     modal.Image.debian_slim(python_version="3.12")
     .apt_install("git", "libgomp1", "mmseqs2")
-    .uv_pip_install("torch==2.13.0", index_url="https://download.pytorch.org/whl/cu130")
+    .uv_pip_install("torch==2.14.0", index_url="https://download.pytorch.org/whl/cu130")
     .pip_install_from_requirements(str(ROOT / "requirements/core.in"))
     .pip_install_from_requirements(str(ROOT / "requirements/features/structure.in"))
     .uv_pip_install(
-        "transformers==5.13.0",
-        "pytest>=9,<10",
+        "transformers==5.17.0",
+        "pytest>=9.1",
         "wandb==0.18.7",
         "lmdb==1.7.3",
         "gdown==5.2.0",
@@ -50,10 +55,10 @@ base_image = (
     .env(
         {
             "PYTHONPATH": "/workspace/src:/workspace",
-            "HF_HOME": "/vol/huggingface",
+            "HF_HOME": "/hf/huggingface",
             "PYTHONUNBUFFERED": "1",
             "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
-            "WANDB_DIR": "/vol/confidence/wandb",
+            "WANDB_DIR": (REMOTE_ROOT / "wandb").as_posix(),
             "WANDB_CONSOLE": "off",
         }
     )
@@ -62,25 +67,46 @@ base_image = (
 
 
 def with_source_files(environment: modal.Image) -> modal.Image:
+    # Every directory leaves out credential files, which no image may carry.
+    foundry = workspace_foundry(ROOT)
+    if foundry:
+        environment = environment.add_local_dir(str(foundry), "/workspace/foundry", ignore=excluded_from_upload)
+    if (ROOT / "src").is_dir():
+        environment = environment.add_local_dir(str(ROOT / "src"), "/workspace/src", ignore=excluded_from_upload)
+    else:
+        excluded_runtime_dirs = {"tools", "tests", "docs", "requirements", "docker", "benchmarks", "examples", "model_cards", "artifacts", "vendor", "LICENSES"}
+        environment = environment.add_local_dir(str(ROOT), "/workspace/src/fastplms",
+            ignore=lambda path: excluded_from_upload(path) or bool(set(path.parts) & excluded_runtime_dirs))
     return (
         environment
-        .add_local_dir(str(ROOT / "src"), "/workspace/src")
-        .add_local_dir(str(ROOT / "tools"), "/workspace/tools")
-        .add_local_dir(str(ROOT / "model_cards"), "/workspace/model_cards")
-        .add_local_dir(str(ROOT / "docs"), "/workspace/docs")
-        .add_local_dir(str(ROOT / "benchmarks"), "/workspace/benchmarks")
-        .add_local_dir(str(ROOT / "LICENSES"), "/workspace/LICENSES")
-        .add_local_dir(str(ROOT / "requirements"), "/workspace/requirements")
-        .add_local_dir(str(ROOT / "docker/constraints"), "/workspace/docker/constraints")
-        .add_local_dir(str(ROOT / "tests/parity/fixtures"), "/workspace/tests/parity/fixtures")
+        .add_local_dir(str(ROOT / "tools"), "/workspace/tools", ignore=excluded_from_upload)
+        .add_local_dir(str(ROOT / "model_cards"), "/workspace/model_cards", ignore=excluded_from_upload)
+        .add_local_dir(str(ROOT / "docs"), "/workspace/docs", ignore=excluded_from_upload)
+        .add_local_dir(str(ROOT / "benchmarks"), "/workspace/benchmarks", ignore=excluded_from_upload)
+        .add_local_dir(str(ROOT / "LICENSES"), "/workspace/LICENSES", ignore=excluded_from_upload)
+        .add_local_dir(
+            str(ROOT / "requirements"), "/workspace/requirements", ignore=excluded_from_upload
+        )
+        .add_local_dir(
+            str(ROOT / "docker/constraints"),
+            "/workspace/docker/constraints",
+            ignore=excluded_from_upload,
+        )
+        .add_local_dir(
+            str(ROOT / "tests/parity/fixtures"),
+            "/workspace/tests/parity/fixtures",
+            ignore=excluded_from_upload,
+        )
         .add_local_file(str(ROOT / "LICENSE"), "/workspace/LICENSE")
         .add_local_file(str(ROOT / "README.md"), "/workspace/README.md")
         .add_local_file(str(ROOT / "AGENTS.md"), "/workspace/AGENTS.md")
         .add_local_file(str(ROOT / "THIRD_PARTY_NOTICES.md"), "/workspace/THIRD_PARTY_NOTICES.md")
-        .add_local_dir(str(ROOT / "tests/unit"), "/workspace/tests/unit")
+        .add_local_dir(str(ROOT / "tests/unit"), "/workspace/tests/unit", ignore=excluded_from_upload)
         .add_local_dir(
-            str(ROOT / "tests/fixtures/esmfold2_small"), "/workspace/tests/fixtures/esmfold2_small"
-    )
+            str(ROOT / "tests/fixtures/esmfold2_small"),
+            "/workspace/tests/fixtures/esmfold2_small",
+            ignore=excluded_from_upload,
+        )
     .add_local_file(str(ROOT / "pytest.ini"), "/workspace/pytest.ini")
     .add_local_file(str(ROOT / "tests/conftest.py"), "/workspace/tests/conftest.py")
     )
@@ -95,7 +121,7 @@ image = with_source_files(base_image)
     memory=32768,
     timeout=1800,
     startup_timeout=900,
-    volumes={"/vol": volume},
+    volumes=MOUNTS,
     max_containers=1,
 )
 def cpu_stage(stage: str, options: dict[str, Any]) -> dict[str, Any]:
@@ -112,17 +138,17 @@ def cpu_stage(stage: str, options: dict[str, Any]) -> dict[str, Any]:
                 Path("tests/unit/test_esmfold2_decode.py"),
             ]
             command = [sys.executable, "-m", "pytest", "-q", *map(str, paths)]
-            result = subprocess.run(command, capture_output=True, text=True, timeout=1200)
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=1200)
             report = {
-                "status": "passed" if result.returncode == 0 else "failed",
-                "exit_code": result.returncode,
-                "output": result.stdout + result.stderr,
+                "status": "passed" if completed.returncode == 0 else "failed",
+                "exit_code": completed.returncode,
+                "output": completed.stdout + completed.stderr,
             }
         elif stage == "lint":
             paths = sorted(Path("tools/confidence").glob("*.py"))
             paths += sorted(Path("tests/unit").glob("test_confidence_*.py"))
             original = {str(path): path.read_text() for path in paths}
-            result = subprocess.run(
+            completed = subprocess.run(
                 [
                     sys.executable,
                     "-m",
@@ -139,8 +165,8 @@ def cpu_stage(stage: str, options: dict[str, Any]) -> dict[str, Any]:
                 timeout=120,
             )
             report = {
-                "status": "passed" if result.returncode == 0 else "failed",
-                "output": result.stdout + result.stderr,
+                "status": "passed" if completed.returncode == 0 else "failed",
+                "output": completed.stdout + completed.stderr,
                 "formatted_files": {
                     str(path): path.read_text()
                     for path in paths
@@ -152,7 +178,7 @@ def cpu_stage(stage: str, options: dict[str, Any]) -> dict[str, Any]:
             paths += sorted(Path("tests/unit").glob("test_confidence_*.py"))
             formatted = {}
             for path in paths:
-                result = subprocess.run(
+                completed = subprocess.run(
                     [
                         sys.executable, "-m", "ruff", "format", "--isolated",
                         "--stdin-filename", str(path), "-",
@@ -163,8 +189,8 @@ def cpu_stage(stage: str, options: dict[str, Any]) -> dict[str, Any]:
                     check=True,
                     timeout=30,
                 )
-                if result.stdout != path.read_text():
-                    formatted[str(path)] = result.stdout
+                if completed.stdout != path.read_text():
+                    formatted[str(path)] = completed.stdout
             report = {"status": "formatted", "formatted_files": formatted}
         elif stage == "prepare":
             from .workflow import prepare_data
@@ -221,7 +247,7 @@ def cpu_stage(stage: str, options: dict[str, Any]) -> dict[str, Any]:
         report["elapsed_seconds"] = time.monotonic() - start
         (REMOTE_ROOT / f"{stage}-report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  a stage failure of any kind is kept as evidence for the budget controller
         # Preserve failed-stage evidence and measured runtime for the budget controller.
         report = {
             "status": "failed",
@@ -233,6 +259,7 @@ def cpu_stage(stage: str, options: dict[str, Any]) -> dict[str, Any]:
         return report
     finally:
         volume.commit()
+        hf_volume.commit()
 
 
 def _gpu_stage(stage: str, model_id: str, options: dict[str, Any]) -> dict[str, Any]:
@@ -257,7 +284,7 @@ def _gpu_stage(stage: str, model_id: str, options: dict[str, Any]) -> dict[str, 
             }
         )
         return report
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  a GPU stage failure of any kind is written to its report
         report = {
             "status": "failed",
             "error_type": type(error).__name__,
@@ -272,6 +299,7 @@ def _gpu_stage(stage: str, model_id: str, options: dict[str, Any]) -> dict[str, 
         return report
     finally:
         volume.commit()
+        hf_volume.commit()
 
 
 gpu_workers = {
@@ -283,7 +311,7 @@ gpu_workers = {
         memory=32768,
         timeout=timeout,
         startup_timeout=GPU_STARTUP_TIMEOUT_SECONDS,
-        volumes={"/vol": volume},
+        volumes=MOUNTS,
         secrets=[credentials],
         max_containers=2,
         scaledown_window=2,
@@ -297,9 +325,20 @@ gpu_workers = {
 }
 
 
-@app.function(image=image, cpu=0.25, memory=512, timeout=120, volumes={"/vol": volume})
+@app.function(image=image, cpu=(1, 1), memory=(2048, 2048), timeout=600, volumes=MOUNTS, secrets=[credentials])
 def read_report(relative_path: str) -> dict[str, Any]:
     path = (REMOTE_ROOT / relative_path).resolve()
-    if not path.is_relative_to(REMOTE_ROOT):
+    if not path.is_relative_to(REMOTE_ROOT.resolve()):
         raise ValueError("Report path escapes the pilot directory")
+    if not path.exists():
+        normalized = path.relative_to(REMOTE_ROOT.resolve()).as_posix()
+        restore_source(PILOT_SOURCE, (f"confidence/{normalized}",))
+        volume.commit()
     return json.loads(path.read_text())
+
+
+@app.function(image=image, cpu=(2, 2), memory=(8192, 8192), timeout=7200, volumes=MOUNTS,
+              secrets=[credentials], max_containers=1)
+def prepare_retained_inputs(stage: str, model_id: str, options: dict[str, Any]) -> None:
+    restore_source(PILOT_SOURCE, pilot_prefixes(stage, model_id, options))
+    volume.commit()

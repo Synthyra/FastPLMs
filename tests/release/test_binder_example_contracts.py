@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import ast
 import os
-import subprocess
-import sys
 import textwrap
 
 from pathlib import Path
+from tests.conftest import run_optimized_script
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +41,7 @@ def test_binder_example_uses_the_binder_dependency_profile() -> None:
         "-r ../features/structure.in",
         "-r ../features/binder.in",
     ]
-    assert "Python 3.11-3.14" in guide
+    assert "Python 3.12-3.14" in guide
     assert "no standalone PEP 723 dependency block" in guide
     for fragment in (
         "requirements/profiles/binder.in",
@@ -83,17 +82,9 @@ def test_binder_validation_survives_python_optimized_mode() -> None:
         OPENBLAS_NUM_THREADS="1",
         PYTHONPATH=os.pathsep.join((str(ROOT / "src"), str(ROOT))),
     )
-    result = subprocess.run(
-        [sys.executable, "-O", "-c", program],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        check=False,
-    )
+    completed = run_optimized_script(program, environment=environment, timeout=30)
 
-    assert result.returncode == 0, result.stderr or result.stdout
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_binder_output_contract_is_documented_fail_closed() -> None:

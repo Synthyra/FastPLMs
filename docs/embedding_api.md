@@ -2,14 +2,14 @@
 
 ## Dependencies and platform requirements
 
-The shared sequence embedding API requires Python 3.11-3.14, PyTorch 2.13, and
-Transformers 5.13. Install these dependencies. Transformers loads the runtime
+The shared sequence embedding API requires Python 3.12-3.14, PyTorch 2.14, and
+Transformers 5.17. Install these dependencies. Transformers loads the runtime
 source from the pinned Hugging Face model repository:
 
 ```bash
 python -m pip install \
-  "torch>=2.13,<2.14" \
-  "transformers>=5.13,<5.14"
+  "torch>=2.14" \
+  "transformers>=5.17"
 ```
 
 Core tokenizer-mode embeddings run on CPU or CUDA. E1 uses its raw-sequence
@@ -54,11 +54,13 @@ preserves input order, mapping and FASTA identifiers, and duplicate records.
 | `batch_size` | Number of records prepared together; must be positive |
 | `pooling` | One pooler or an ordered pooler sequence; `None` selects mean unless `full_embeddings=True` |
 | `full_embeddings` | Return residue-level tensors instead of pooled vectors |
+| `taps` | Several hidden-state outputs from one forward pass per batch; see [One-pass taps](#one-pass-taps) |
 | `output` | Safetensors directory or SQLite file; omit for in-memory results |
 | `format` | `safetensors` or `sqlite` when `output` is set |
 | `resume` | Reuse an exact compatible ordered prefix when persistent output exists |
 | `tokenizer` | Explicit tokenizer override for a compatible tokenizer-mode family |
 | `max_length` | Optional maximum number of biological residues, excluding tokenizer-added special tokens |
+| `keep_special_tokens` | Tap runs only: keep CLS and EOS in every row output and pool over all `l + 2` rows; default `False`. A contract that keeps them selects it by itself |
 | `truncate` | Truncate biological residues to `max_length`; when false, an over-length record raises |
 | `batch_window_size` | Bounded number of records eligible for stable length bucketing; defaults to `16 * batch_size` |
 | `max_tokens_per_batch` | Optional padded biological-residue budget for one inference batch |
@@ -144,6 +146,12 @@ raw amino-acid sequences through a model adapter that adds its modality-specific
 boundaries and invokes the exact tokenizer with `add_special_tokens=False`.
 Each persisted run records the token policy and tokenizer metadata.
 
+A tap run with `keep_special_tokens=True` (the canonical policy, [feature store](feature_store.md#canonical-token-stores))
+keeps CLS and EOS: `M` is the attention mask, so a sequence of `l` residues gives `l + 2` rows,
+`X: (b, l+2, d)` before padding, and padding is the only thing masked. Taps, pooling and the SAE
+reducer then cover all `l + 2` rows, with pooling semantics version 3. Without it, the residue-only
+policy above stays in force for legacy stores.
+
 ## Pooling
 
 The supported operations are:
@@ -163,6 +171,21 @@ Multiple poolers are concatenated in request order. Metadata records the output
 slice for each operation. `parti` uses Torch power iteration with damping 0.85,
 tolerance `1e-6`, and at most 100 iterations. It requires an explicit
 `attn_implementation="eager"` because it materializes the attention graph.
+
+Pooling semantics version 2 uses the biological-residue mask, excluding padding and every
+tokenizer-declared special token. `cls` remains the explicit position-zero exception.
+Empty residue sets are rejected; population variance and standard deviation of one residue
+are zero. Reductions accumulate in FP32 for FP16, BF16, and FP32 inputs, and in FP64 for FP64
+inputs. The result is cast to the input dtype after reduction; nonfinite biological values
+or output-cast overflow are errors. The runner's `dtype` conversion happens before pooling,
+so the default FP32 output uses FP32 reductions. `pooling_semantics` in metadata and the run
+fingerprint records this policy.
+
+`max_length` counts biological residues. With `truncate=True`, the input prefix is selected
+before the forward pass; with `truncate=False`, overlength inputs fail before that pass.
+There is no sliding-window aggregation. Residue tensors retain input order after special-token
+removal. `retained_positions` records this policy; the record's `sequence` remains the original
+input, while the tensor's residue axis gives the retained length.
 
 ```python
 result = model.embed_dataset(
@@ -278,6 +301,111 @@ residue output. `output`, `format`, `resume`, `shard_size`, and
 `model_state_fingerprint` have the same persistence and compatibility meaning
 as ordinary dataset embedding. Local A3M input is offline; homology search and
 Hub MSA acquisition are separate, explicit networked workflows.
+
+## One-pass taps
+
+`taps=` returns several outputs of one model from a single forward pass per
+batch. Each tap names one hidden state and what to keep from it. The pass stops
+once the deepest tapped state exists, so a plan whose deepest tap is state 27 of
+a 36-block model runs 27 blocks. ESM++ (ESMC) models support taps. Every other
+family raises rather than running one pass per tap.
+
+```python
+import torch
+
+from fastplms.embeddings import HiddenTap
+
+features = model.embed_dataset(
+    inputs,
+    batch_size=8,
+    taps=[
+        HiddenTap("last", layer=-1, dtype=torch.bfloat16),
+        HiddenTap("last_meanvar", layer=-1, pooling=("mean", "var"), dtype=torch.float32),
+        HiddenTap("mid_max", layer=12, pooling="max"),
+    ],
+)
+record = features[0]
+print(record.id, record.tensors["last"].shape, record.tensors["last_meanvar"].shape)
+```
+
+The tap types come from `fastplms.embeddings`, which a loaded FastPLMs artifact
+installs as the `fastplms` package. Layer indices follow the order of
+`output_hidden_states`: index `i` is the input to block `i`, index `n` (the
+block count) is the final normalized state, and negative indices count back from
+it, so `-1` is the final state. The final norm runs only when a tap names the
+final state.
+
+- `HiddenTap(name, layer, pooling=None, dtype=None)` keeps one `(l_i, d)` tensor of
+  biological residue rows per record. With pooler names it applies `Pooler` as
+  `pooling=` does, `cls` included, and equals the single-output run with the
+  same `hidden_state_index`. It rejects `parti`, which needs the attention graph
+  of a full pass. `dtype=None` inherits the run dtype; an explicit floating dtype overrides
+  it for that output. Each conversion starts from the original captured state, so storing
+  residue rows as BF16 does not quantize an FP32 pooled sibling.
+- `ReducedTap(name, layer, reduce, identity)` calls `reduce` with a `TapBatch`:
+  the state `X` with shape `(b, l, d)`, `token_mask` with every attended token,
+  BOS and EOS included, and `residue_mask` with the biological residues. `reduce`
+  returns one row per record, shape `(b, ...)`, such as a sparse-autoencoder
+  encoding pooled per sequence. `identity` describes the reducer in plain data:
+  strings, numbers, booleans, `None`, lists, and string-keyed mappings.
+- `StreamingTap(name, layers, begin, identity, required_state_count=None)` reduces selected
+  states during the same pass. Layers are distinct ascending nonnegative indices. `begin()`
+  creates a fresh `LayerAccumulator` for each batch; `update(layer, TapBatch)` borrows each
+  original state, and `finish()` returns token-aligned `(b, l, c)` features. The engine applies
+  its biological residue mask and restores input order. Reducers must not mutate or retain
+  borrowed hidden states. They own their arithmetic, independently of the run's output dtype,
+  and record it in `identity`. An optional required state count rejects an incompatible depth.
+  Only sibling `HiddenTap`/`ReducedTap` states are saved; no callbacks remain on the model.
+
+The result is a `TapResult` of `TapRecord(id, sequence, tensors)` values in input
+order, with `tensors` keyed by tap name. `result.metadata["taps"]` records the
+plan with each layer resolved, the stop layer, and each pooled tap's output
+slices. The run fingerprint binds the plan, per-tap dtype overrides, and every reducer identity.
+The run `dtype` converts states before pooling or a `ReducedTap` unless a hidden tap overrides it;
+use `dtype=None` to pass original model states to a reducer. A reducer's output
+keeps the dtype it returns. On an FP8-enabled ESMC model, taps use the padding
+and Transformer Engine context of `forward`.
+
+`taps=` cannot be combined with `pooling`, `full_embeddings`,
+`hidden_state_index`, or `store_all_hidden_states`. `embed_dataset` returns tap
+records in memory, and `output=` raises: persist them with `embed_into_features`
+(see [the feature store](feature_store.md)), which writes each tap into the
+store of its key and embeds only the sequences that store lacks.
+
+For bounded delivery, supply `tap_sink(records, identity)` to `embed_dataset`. It receives at
+most `batch_window_size` ordered `TapRecord` objects at a time, plus the run and input
+fingerprints. Retaining these records in the callback retains their tensors; consume them and
+release them before returning. A successful call returns `TapRunReceipt(record_count, metadata)`
+without tensors. Exceptions stop delivery and restore the model's original training mode.
+This uses the same batching and tap executor as the in-memory path. The feature writer supplies
+this sink itself, so ordinary `embed_into_features` no longer collects a full-corpus `TapResult`.
+
+Run-fingerprint schema 5 excludes the physical input-storage choice. Identical ordered inputs
+and computation have the same identity whether their descriptors live in memory or a disk
+spool. Metadata still records that choice. Schema-4 output remains readable through its existing
+loader, but cannot silently resume as a schema-5 run; keep it for its historical experiment.
+
+### Fixed batch shapes
+
+A GEMM's reduction order follows its shape, so in BF16 a sequence's rows can change with the
+companions that set its batch's padded width and row count. `embed_token_features(geometry=...)`
+and `TokenTapExecutor(geometry=...)` remove that dependence: with a `BatchGeometry`, a sequence of
+`l` residues after the crop runs in the bucket `T = bucket_tokens * ceil((l + 2) / bucket_tokens)`,
+and every batch of that bucket holds exactly `rows(T)` sequences padded to `T` columns. `rows(T)` is
+`min(max_rows, token_budget // T)`. A bucket's last batch repeats its last sequence to fill and
+discards the copies' outputs. `plan_geometry_batches` groups the sequences by bucket, longest
+bucket first, in row-key order, so the plan does not depend on the input order either.
+
+```python
+from fastplms.embeddings import BatchGeometry, embed_token_features
+
+geometry = BatchGeometry(bucket_tokens=64, token_budget=32768, max_rows=256)  # 32 buckets up to 2,048 tokens
+embed_token_features(model, sequences, root, features, taps=taps, geometry=geometry)
+```
+
+A geometry run takes none of `max_sequences`, `max_tokens`, `window` or `fixed_batch_size`, and its
+run record's batch policy is `geometry.describe()`. Without a geometry, batches follow the token
+budget and pad to their longest member, as before.
 
 ## Safetensors storage
 
@@ -410,7 +538,7 @@ checkpoint-identity hash fields. Embedding metadata and resume fingerprints use
 those fields as the fallback, so local offline runs retain complete traceability.
 The packaging fields are excluded from semantic configuration parity.
 
-Run-fingerprint schema v3 binds the current bytes, names, dtypes, and shapes of
+Run-fingerprint schema v4 binds pooling semantics and the current bytes, names, dtypes, and shapes of
 each model parameter and persistent buffer. State tensors are copied to CPU in
 bounded chunks. The digest is recomputed from authoritative bytes for each
 persisted run. FastPLMs does not trust object identity, autograd version
@@ -418,6 +546,13 @@ counters, or cached state digests. A mutation through `Parameter.data` or
 another storage alias changes the model-state digest and resume identity.
 Changing any material input, model state, or setting prevents resume into an
 incompatible output. Results from older fingerprint schemas cannot resume.
+
+The tokenizer identity hashes the vocabulary, special tokens, and backend
+configuration, but not the padding and truncation that the previous encode call
+left on the backend. Transformers sets both from each call's own arguments, and
+the run records its own truncation settings. Identical runs in one process
+therefore share one fingerprint, and a tokenizer that was never called hashes
+exactly as it did before this rule.
 
 Models with meta-device tensors, custom offloading, or an externally managed
 state identity may pass the keyword-only `model_state_fingerprint` override.

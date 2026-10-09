@@ -14,7 +14,6 @@ def training_call_status(call_id: str) -> str | None:
         return "failed"
     except (modal.exception.Error, ConnectionError):
         raise  # A service failure does not establish whether the trainer has stopped.
-    except Exception:
-        # Modal re-raises deserialized user exceptions such as RuntimeError directly.
+    except Exception:  # noqa: broad-except  Modal re-raises deserialized user exceptions such as RuntimeError directly
         return "failed"
     return "complete"

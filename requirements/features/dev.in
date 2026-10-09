@@ -1,5 +1,7 @@
-accelerate>=1.10,<2
-mypy>=1.18,<2
-pytest>=9,<10
-pytest-xdist>=3.8,<4
-ruff>=0.14,<1
+accelerate>=1.15
+# tools/typing_gate.py refuses any mypy but the 1.20.2 its baseline was recorded on,
+# so mypy stays below 2 until that baseline is recorded again.
+mypy>=1.20,<2
+pytest>=9.1
+pytest-xdist>=3.8
+ruff>=0.14

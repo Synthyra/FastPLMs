@@ -14,6 +14,7 @@ import torch
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from packaging.requirements import Requirement
 from safetensors.torch import load_file, save_file
 
 from fastplms.registry import (
@@ -169,17 +170,36 @@ def test_shared_sources_are_in_runtime_artifacts() -> None:
             assert (package_root / relative_path).exists()
 
 
+def _declared_line(relative_name: str, distribution: str) -> str:
+    """The line a file under requirements/ declares for one distribution."""
+    lines = [
+        line.strip()
+        for line in (ROOT / relative_name).read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    (declared,) = [line for line in lines if Requirement(line).name == distribution]
+    return declared
+
+
 @pytest.mark.parametrize(
     ("model_id", "required", "excluded"),
     (
-        ("esm2_8m", ("torch>=2.13,<2.14", "kernels>=0.15,<0.16"), ("biotite",)),
-        ("ankh_base", ("torch>=2.13,<2.14",), ("kernels", "biotite")),
-        ("boltz2", ("torch>=2.13,<2.14", "biotite>=1.4,<2"), ("kernels",)),
+        (
+            "esm2_8m",
+            (("requirements/core.in", "torch"), ("requirements/features/flash.in", "kernels")),
+            ("biotite",),
+        ),
+        ("ankh_base", (("requirements/core.in", "torch"),), ("kernels", "biotite")),
+        (
+            "boltz2",
+            (("requirements/core.in", "torch"), ("requirements/features/structure.in", "biotite")),
+            ("kernels",),
+        ),
     ),
 )
 def test_artifact_requirements_match_advertised_runtime(
     model_id: str,
-    required: tuple[str, ...],
+    required: tuple[tuple[str, str], ...],
     excluded: tuple[str, ...],
 ) -> None:
     payloads = {
@@ -192,8 +212,8 @@ def test_artifact_requirements_match_advertised_runtime(
     }
     rendered = _render_artifact_requirements(get_model_registry()[model_id], payloads)
 
-    for requirement in required:
-        assert requirement in rendered
+    for relative_name, distribution in required:
+        assert _declared_line(relative_name, distribution) in rendered.splitlines()
     for requirement in excluded:
         assert requirement not in rendered
     assert "fastplms" not in "\n".join(
@@ -2551,7 +2571,7 @@ def test_official_submodule_worktrees_match_manifest_revisions() -> None:
     declared = {
         parser.get(section, "path"): parser.get(section, "url") for section in parser.sections()
     }
-    expected = {source.path: source.url for source in registry.upstreams.values()}
+    expected = {source.path: source.clone_url for source in registry.upstreams.values()}
     assert declared == expected
 
     # The portable remote runner deliberately strips every .git entry from its
@@ -2588,7 +2608,7 @@ def test_official_submodule_worktrees_match_manifest_revisions() -> None:
         assert mode == "160000"
         assert revision == source.revision
         assert stage_and_path == f"0\t{source.path}"
-        result = subprocess.run(
+        completed = subprocess.run(
             [
                 "git",
                 "-c",
@@ -2602,8 +2622,8 @@ def test_official_submodule_worktrees_match_manifest_revisions() -> None:
             capture_output=True,
             text=True,
         )
-        assert result.returncode == 0, result.stderr
-        assert result.stdout.strip() == source.revision
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout.strip() == source.revision
 
 
 def test_artifact_build_rejects_dirty_official_source(tmp_path: Path) -> None:

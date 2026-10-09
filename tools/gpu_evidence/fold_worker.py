@@ -153,10 +153,10 @@ class PhaseTimer:
             start = torch.cuda.Event(enable_timing=True)  # type: ignore[no-untyped-call]
             stop = torch.cuda.Event(enable_timing=True)  # type: ignore[no-untyped-call]
             start.record()
-            result = function(*args, **kwargs)
+            returned = function(*args, **kwargs)
             stop.record()
             self._events.setdefault(phase, []).append((start, stop))
-            return result
+            return returned
 
         return timed
 
@@ -379,7 +379,7 @@ def main() -> None:
     load_started = time.perf_counter()
     model = load_model(args)
     torch.cuda.synchronize()
-    result: dict[str, Any] = {
+    worker_report: dict[str, Any] = {
         "label": args.label,
         "implementation": args.implementation,
         "repo": args.repo,
@@ -394,24 +394,24 @@ def main() -> None:
         "lengths": [],
     }
     if args.peak_allocations:
-        result["peak_allocations"] = [
+        worker_report["peak_allocations"] = [
             peak_allocations(model, length, settings) for length in args.lengths
         ]
         args.lengths = []
     for length in args.lengths:
         try:
             single_pass = args.single_pass_from is not None and length >= args.single_pass_from
-            result["lengths"].append(
+            worker_report["lengths"].append(
                 measure_length(model, length, args.repeats, settings, single_pass)
             )
         except torch.OutOfMemoryError:
             # Longer proteins need more memory still, so the sweep ends here.
-            result["lengths"].append({"length": length, "status": "out_of_memory"})
+            worker_report["lengths"].append({"length": length, "status": "out_of_memory"})
             torch.cuda.empty_cache()
             break
     if args.compare_atom_attention:
-        result["atom_attention_comparison"] = compare_atom_attention(model, settings)
-    print(RESULT_PREFIX + json.dumps(result), flush=True)
+        worker_report["atom_attention_comparison"] = compare_atom_attention(model, settings)
+    print(RESULT_PREFIX + json.dumps(worker_report), flush=True)
 
 
 if __name__ == "__main__":

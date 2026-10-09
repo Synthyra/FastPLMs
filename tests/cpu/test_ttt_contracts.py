@@ -7,6 +7,9 @@ import torch
 
 from pathlib import Path
 from types import SimpleNamespace
+from tests.integration import test_ttt as contracts
+from tests.unit.test_ankh_cpu_contract import _config as _ankh_config
+from tests.unit.test_e1_cache_contract import _tiny_e1_batch, _tiny_e1_config
 
 from fastplms.models.ankh.modeling_ankh import FastAnkhForMaskedLMExtension
 from fastplms.models.dplm.modeling_dplm import DPLMConfig, DPLMForMaskedLM
@@ -19,9 +22,6 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
     ESMplusplusForMaskedLM,
 )
 from fastplms.models.ttt import LoraInjectedLinear
-from tests.integration import test_ttt as contracts
-from tests.unit.test_ankh_cpu_contract import _config as _ankh_config
-from tests.unit.test_e1_cache_contract import _tiny_e1_batch, _tiny_e1_config
 
 
 test_ttt_first_call_mapping_preserves_explicit_target_override = (
@@ -197,15 +197,15 @@ def _family_model_and_inputs(
     dict[str, torch.Tensor],
 ]:
     if family == "esm2":
-        from tests.cpu.test_sequence_autoclass_contracts import _esm2_config
+        from tests.unit.tiny_families import tiny_esm2_config
 
-        config = _esm2_config()
+        config = tiny_esm2_config()
         config.vocab_size = 32
         tokenizer = _ProteinTokenizer(mask_token_id=config.mask_token_id)
         model = FastEsmForMaskedLM(config)
         model.tokenizer = tokenizer
         residues = [tokenizer.convert_tokens_to_ids(value) for value in "AC"]
-        return model, {"input_ids": torch.tensor([[0, *residues, 2, 1]])}
+        return model, {"input_ids": torch.tensor([[0, *residues, 2, 1]])}  # model, (...) input_ids (1, 5)
     if family == "esm_plusplus":
         tokenizer = _ProteinTokenizer(mask_token_id=3)
         model = ESMplusplusForMaskedLM(
@@ -222,7 +222,7 @@ def _family_model_and_inputs(
         )
         model.tokenizer = tokenizer
         residues = [tokenizer.convert_tokens_to_ids(value) for value in "AC"]
-        return model, {"input_ids": torch.tensor([[0, *residues, 2, 1]])}
+        return model, {"input_ids": torch.tensor([[0, *residues, 2, 1]])}  # model, (...) input_ids (1, 5)
     if family == "esm3":
         model = FastESM3Model(
             FastESM3Config(
@@ -233,7 +233,7 @@ def _family_model_and_inputs(
                 attn_backend="eager",
             )
         )
-        return model, {"input_ids": model.encode("AC")["input_ids"]}
+        return model, {"input_ids": model.encode("AC")["input_ids"]}  # model, (...) input_ids (1, l) from the model's own encoder
     if family == "ankh":
         tokenizer = _ProteinTokenizer(mask_token_id=3)
         model = FastAnkhForMaskedLMExtension(
@@ -241,7 +241,7 @@ def _family_model_and_inputs(
         )
         model.tokenizer = tokenizer
         residues = [tokenizer.convert_tokens_to_ids(value) for value in "AC"]
-        return model, {"input_ids": torch.tensor([[*residues, 1, 0]])}
+        return model, {"input_ids": torch.tensor([[*residues, 1, 0]])}  # model, (...) input_ids (1, 4)
     if family == "dplm":
         from tests.cpu.test_sequence_autoclass_contracts import _dplm_config_values
 
@@ -250,15 +250,15 @@ def _family_model_and_inputs(
         model = DPLMForMaskedLM(config)
         model.tokenizer = tokenizer
         residues = [tokenizer.convert_tokens_to_ids(value) for value in "AC"]
-        return model, {"input_ids": torch.tensor([[0, *residues, 2, 1]])}
+        return model, {"input_ids": torch.tensor([[0, *residues, 2, 1]])}  # model, (...) input_ids (1, 5)
     if family == "dplm2":
         from tests.cpu.test_sequence_autoclass_contracts import _dplm2_config_values
 
         model = DPLM2ForMaskedLM(DPLM2Config(**_dplm2_config_values()))
         model.tokenizer = _DPLM2ProteinTokenizer()
-        return model, {"input_ids": torch.tensor([[0, 4, 5, 2, 1]])}
+        return model, {"input_ids": torch.tensor([[0, 4, 5, 2, 1]])}  # model, (...) input_ids (1, 5)
     if family == "e1":
-        return E1ForMaskedLM(_tiny_e1_config()), _tiny_e1_batch()
+        return E1ForMaskedLM(_tiny_e1_config()), _tiny_e1_batch()  # model, (...) the (1, 4) tiny E1 batch tensors
     raise AssertionError(f"Unhandled TTT family: {family}")
 
 

@@ -1,0 +1,9 @@
+line-length = 100
+target-version = "py311"
+exclude = ["vendor/upstream"]
+
+[lint]
+select = ["E", "F", "UP", "B", "SIM", "RUF"]
+# E741 forbids `l` as a name, and the numerical coding standard names sequence length `l`
+# alongside `b` and `d`. The standard wins, so that one rule is off.
+ignore = ["E741"]

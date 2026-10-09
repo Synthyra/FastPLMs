@@ -49,7 +49,7 @@ representative inference, artifact contents, and legal inventory.
 
 The generated [support matrix](docs/generated/support.md) is the checkpoint
 list of record. It is generated from
-[`src/fastplms/models.toml`](src/fastplms/models.toml), which also defines valid
+[`src/fastplms/models.toml`](https://github.com/Synthyra/FastPLMs/blob/main/src/fastplms/models.toml), which also defines valid
 AutoClasses, attention backends, precision paths, and release tiers.
 
 | Family | Primary use | Typical user input | Important distinction |
@@ -75,14 +75,14 @@ head from the same repository.
 
 ## Dependencies
 
-Published FastPLMs model repositories require Python 3.11 through 3.14,
-PyTorch 2.13, and Transformers 5.13. Install these runtime dependencies. Then
+Published FastPLMs model repositories require Python 3.12 through 3.14,
+PyTorch 2.14, and Transformers 5.17. Install these runtime dependencies. Then
 load the model from Hugging Face:
 
 ```bash
 python -m pip install \
-  "torch>=2.13,<2.14" \
-  "transformers>=5.13,<5.14"
+  "torch>=2.14" \
+  "transformers>=5.17"
 ```
 
 For a source checkout, install the sequence and structure runtime dependencies
@@ -593,7 +593,7 @@ confidence heads directly in the model weights. They return pLDDT, pTM, iPTM,
 and PAE by default without downloading a separate head. Pass
 `calculate_confidence=False` during folding to omit confidence computation.
 Both heads completed 780 updates, about 18 hours per model, on
-[AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data) while
+[AtlasFold-Data](https://huggingface.co/datasets/lhallee/AtlasFold-Data) while
 the backbone and folding parameters stayed frozen. Their model cards report
 the current evaluation results and correlations with production ESMFold2.
 These results use an already-used test split. See
@@ -676,8 +676,8 @@ ESMFold2 structural objectives and an ESM++ sequence prior:
 
 Install the `binder` dependency profile, which includes the structure runtime
 and the example-only table and antibody dependencies. The published workflow
-requires Python 3.11-3.14, PyTorch 2.13,
-Transformers 5.13, the verified ESMFold2 runtime assets, and a CUDA device.
+requires Python 3.12-3.14, PyTorch 2.14,
+Transformers 5.17, the verified ESMFold2 runtime assets, and a CUDA device.
 Docker execution with the required capabilities and numerical tests is valid
 on any compatible host. Record the actual accelerator and software stack in
 the run manifest. Historical release measurements from the containerized Linux
@@ -788,7 +788,7 @@ another checkpoint.
 
 ### Manifest-driven model support
 
-[`src/fastplms/models.toml`](src/fastplms/models.toml) is the source of truth
+[`src/fastplms/models.toml`](https://github.com/Synthyra/FastPLMs/blob/main/src/fastplms/models.toml) is the source of truth
 for model IDs, files, revisions, AutoClasses, tokenizer modes, transformations,
 attention and precision capabilities, upstreams, licenses, and release tiers.
 Support tables and model cards are generated from it.
@@ -833,7 +833,7 @@ self-contained and load through Transformers with `trust_remote_code=True`.
 Artifact construction verifies required file identities, canonical legal
 texts, conversion details, generated model-card metadata, and offline
 loading. A missing or changed required file is a release error. Source licenses
-and notices are centralized under [`LICENSES/`](LICENSES/); checkpoint-specific
+and notices are centralized under [`LICENSES/`](https://github.com/Synthyra/FastPLMs/tree/main/LICENSES); checkpoint-specific
 terms remain distinct from the FastPLMs Apache-2.0 code license.
 
 ## Validation and reproducibility
@@ -861,8 +861,8 @@ skip. Expensive suites retain explicit `gpu`, `slow`, `large`, and `structure`
 markers.
 
 Before merge, run the positive, fully offline `tests/cpu/` allowlist on the
-validation workstation with Python 3.12, CPU-only Torch 2.13, and Transformers
-5.13. It hides CUDA, blocks socket and Hub downloads, rejects skips and xfails,
+validation workstation with Python 3.12, CPU-only Torch 2.14, and Transformers
+5.17. It hides CUDA, blocks socket and Hub downloads, rejects skips and xfails,
 and targets less than five minutes on four CPU cores. Live official references
 remain reserved for the release-candidate `compliance` tier; routine checks
 consume immutable goldens. This repository does not use GitHub Actions.
@@ -961,7 +961,7 @@ the specific checkpoint family:
 ```
 
 The ESMFold2-300 and ESMFold2-600 confidence heads were trained using
-[AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data).
+[AtlasFold-Data](https://huggingface.co/datasets/lhallee/AtlasFold-Data).
 Please also cite the [AtlasFold paper](https://doi.org/10.64898/2026.09.04.749352)
 when using these trained heads:
 

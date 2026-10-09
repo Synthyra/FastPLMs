@@ -798,7 +798,7 @@ class FastEsmForProteinFolding(FastPLMsAttentionMixin, EsmForProteinFolding):
         finally:
             _ESMFOLD_CAPTURED_ATTENTIONS.reset(capture_token)
             _ESMFOLD_OUTPUT_ATTENTIONS.reset(request_token)
-        # Transformers 5.13 returns categorical lDDT probabilities on [0, 1],
+        # Transformers returns categorical lDDT probabilities on [0, 1],
         # while Meta ESMFold's public forward output reports pLDDT on [0, 100].
         output["plddt"] = output["plddt"] * 100
         payload = dict(output)

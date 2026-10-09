@@ -7,7 +7,7 @@ import torch
 from collections.abc import Mapping
 from functools import partial
 from typing import Any
-from transformers import AttentionInterface, AttentionMaskInterface
+from transformers import AttentionInterface, AttentionMaskInterface, PretrainedConfig
 
 from ._auto import (
     AUTO_ATTENTION,
@@ -94,7 +94,7 @@ class FastPLMsAttentionMixin:
 
     _supports_sdpa = True
     _supports_flex_attn = True
-    # Transformers 5.13 uses the singular flag during model construction. A
+    # Transformers checks the singular flag during model construction. A
     # family opts in only when its manifest entry advertises at least one of
     # the two FastPLMs kernels-only FlashAttention implementations.
     _supports_flash_attn = False
@@ -161,7 +161,7 @@ class FastPLMsAttentionMixin:
             allow_all_kernels=False,
         )
 
-    def __init__(self, config, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, config: PretrainedConfig, *args: Any, **kwargs: Any) -> None:
         sentinel = object()
         internal = getattr(config, "_attn_implementation_internal", sentinel)
         stored = getattr(config, "_attn_implementation", None) if internal is sentinel else internal
@@ -355,7 +355,7 @@ def _resolve_auto_attention_before_forward(
 def validate_transformers_attention_interfaces() -> None:
     """Verify that Transformers exposes functions and masks for every backend.
 
-    Transformers 5.13 registers these canonical names. The FastPLMs function
+    The validated Transformers registers these canonical names. The FastPLMs function
     overrides remain instance-local and do not replace process-global handlers.
     """
     function_registry = FASTPLMS_ATTENTION_FUNCTIONS

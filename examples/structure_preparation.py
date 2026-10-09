@@ -8,15 +8,15 @@ The ESMFold2 branch deliberately includes an MSA and therefore requires a full
 from __future__ import annotations
 
 import argparse
-import os
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 
-def configure_offline() -> None:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+if TYPE_CHECKING or __package__:
+    from ._runtime import configure_offline
+else:
+    from _runtime import configure_offline
 
 
 def build_esmfold2_conditioned_complex(types: Any) -> Any:
@@ -154,13 +154,13 @@ def main(argv: list[str] | None = None) -> int:
         distogram_contract = verify_esmfold2_distogram_rejection(model, arguments.seed)
         print("distogram-contract", distogram_contract)
     else:
-        result = run_structure_helper(
+        helper_output = run_structure_helper(
             model,
             arguments.family,
             arguments.sequence,
             arguments.seed,
         )
-        print(type(result).__name__)
+        print(type(helper_output).__name__)
     return 0
 
 

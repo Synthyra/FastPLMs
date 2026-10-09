@@ -1,9 +1,9 @@
 """Saved-record correction preserves original evidence and records its input identities."""
 
+import copy
 import hashlib
 import json
 import sys
-import copy
 import pytest
 
 from pathlib import Path

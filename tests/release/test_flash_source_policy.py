@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from pathlib import Path
+from packaging.requirements import Requirement
 
 from fastplms.registry import get_model_registry
 
@@ -49,9 +50,11 @@ def test_dependency_contract_contains_no_flash_attn_distribution() -> None:
         for requirement in requirements
         if _normalized_package(requirement) in _FLASH_PACKAGES
     }
-    assert _requirements(requirement_root / "features" / "flash.in") == [
-        "kernels>=0.15,<0.16"
-    ]
+    # The flash feature is the precompiled-kernel loader alone, floored at its tested release.
+    flash_file = requirement_root / "features" / "flash.in"
+    flash = [Requirement(line) for line in _requirements(flash_file)]
+    assert [requirement.name for requirement in flash] == ["kernels"]
+    assert [clause.operator for clause in flash[0].specifier] == [">="]
 
 
 def test_no_docker_script_or_documentation_command_builds_source_flash_attn() -> None:

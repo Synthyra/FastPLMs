@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import statistics
+
 from collections.abc import Iterable, Mapping
 
 from tools.artifacts.doc_generation.card_metadata import (

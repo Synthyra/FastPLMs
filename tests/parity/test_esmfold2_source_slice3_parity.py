@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import importlib.util
 import io
-import sys
 import types
 import biotite.structure as bs
 import numpy as np
@@ -12,10 +10,9 @@ import pytest
 import torch
 import zstandard
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from tests.parity.support.parity_helpers import load_pinned_source, namespace_package
 
 from fastplms.models.esmfold2 import esmfold2_affine3d as local_affine
 from fastplms.models.esmfold2 import esmfold2_misc as local_misc
@@ -34,49 +31,15 @@ pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
 ROOT = Path(__file__).resolve().parents[2]
 BIOHUB_ESM = ROOT / "vendor/upstream/biohub-esm/esm"
-_MISSING = object()
-
-
-def _package(name: str) -> types.ModuleType:
-    package = types.ModuleType(name)
-    package.__path__ = []  # type: ignore[attr-defined]
-    return package
-
-
-@contextmanager
-def _temporary_modules(modules: dict[str, types.ModuleType]) -> Iterator[None]:
-    previous = {name: sys.modules.get(name, _MISSING) for name in modules}
-    sys.modules.update(modules)
-    try:
-        yield
-    finally:
-        for name, module in previous.items():
-            if module is _MISSING:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module  # type: ignore[assignment]
-
-
-def _load_source(
-    module_name: str,
-    path: Path,
-    aliases: dict[str, types.ModuleType],
-) -> types.ModuleType:
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    with _temporary_modules({**aliases, module_name: module}):
-        spec.loader.exec_module(module)
-    return module
 
 
 def _base_aliases() -> dict[str, types.ModuleType]:
     return {
-        "esm": _package("esm"),
-        "esm.utils": _package("esm.utils"),
-        "esm.utils.constants": _package("esm.utils.constants"),
-        "esm.utils.msa": _package("esm.utils.msa"),
-        "esm.utils.structure": _package("esm.utils.structure"),
+        "esm": namespace_package("esm"),
+        "esm.utils": namespace_package("esm.utils"),
+        "esm.utils.constants": namespace_package("esm.utils.constants"),
+        "esm.utils.msa": namespace_package("esm.utils.msa"),
+        "esm.utils.structure": namespace_package("esm.utils.structure"),
     }
 
 
@@ -87,7 +50,7 @@ def _official_misc() -> types.ModuleType:
     decompress = zstandard.ZstdDecompressor().decompress
     zstd_adapter.decompress = decompress  # type: ignore[attr-defined]
     zstd_adapter.ZSTD_uncompress = decompress  # type: ignore[attr-defined]
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_misc",
         BIOHUB_ESM / "utils/misc.py",
         {
@@ -100,7 +63,7 @@ def _official_misc() -> types.ModuleType:
 
 
 def _official_affine() -> types.ModuleType:
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_affine3d",
         BIOHUB_ESM / "utils/structure/affine3d.py",
         {**_base_aliases(), "esm.utils.misc": local_misc},
@@ -108,7 +71,7 @@ def _official_affine() -> types.ModuleType:
 
 
 def _official_msa() -> types.ModuleType:
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_msa",
         BIOHUB_ESM / "utils/msa/msa.py",
         {
@@ -123,7 +86,7 @@ def _official_msa() -> types.ModuleType:
 
 
 def _official_mmcif() -> types.ModuleType:
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_mmcif",
         BIOHUB_ESM / "utils/structure/mmcif_parsing.py",
         {**_base_aliases(), "esm.utils.residue_constants": local_residues},
@@ -131,11 +94,12 @@ def _official_mmcif() -> types.ModuleType:
 
 
 def _assert_tensor_equal(actual: torch.Tensor, expected: torch.Tensor) -> None:
-    # This exact comparator accepts matching tensor shapes of any rank.
+    # actual, expected: (...) matching shapes of any rank, compared exactly.
     torch.testing.assert_close(actual, expected, rtol=0, atol=0, equal_nan=True)
 
 
 def _assert_array_equal(actual: np.ndarray, expected: np.ndarray) -> None:
+    # actual, expected: (...) matching shapes of any rank
     np.testing.assert_array_equal(actual, expected)
 
 
@@ -152,15 +116,15 @@ def test_misc_tensor_contracts_match_pinned_biohub(device: str) -> None:
     )
 
     # data: (2, 3, 5, 2)
-    data = torch.arange(2 * 3 * 5 * 2, device=device).reshape(2, 3, 5, 2)
+    source_tensor = torch.arange(2 * 3 * 5 * 2, device=device).reshape(2, 3, 5, 2)
     # indices: (2, 3, 2)
     indices = torch.tensor(
         [[[0, 3], [2, 1], [4, 0]], [[4, 1], [0, 2], [3, 3]]],
         device=device,
     )
     _assert_tensor_equal(
-        local_misc.batched_gather(data, indices, dim=2, no_batch_dims=2),
-        official.batched_gather(data, indices, dim=2, no_batch_dims=2),
+        local_misc.batched_gather(source_tensor, indices, dim=2, no_batch_dims=2),
+        official.batched_gather(source_tensor, indices, dim=2, no_batch_dims=2),
     )
 
     # coords: (2, 3, 3)

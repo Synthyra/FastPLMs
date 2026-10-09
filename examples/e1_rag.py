@@ -4,21 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 
-if __package__:
-    from ._runtime import add_execution_arguments, resolve_execution
+if TYPE_CHECKING or __package__:
+    from ._runtime import add_execution_arguments, configure_offline, resolve_execution
 else:
-    from _runtime import add_execution_arguments, resolve_execution
-
-
-def configure_offline() -> None:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    from _runtime import add_execution_arguments, configure_offline, resolve_execution
 
 
 def embed_local_msa(
@@ -85,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         local_files_only=True,
         dtype=dtype,
     ).to(device).eval()
-    result = embed_local_msa(
+    records = embed_local_msa(
         model,
         arguments.sequence,
         a3m_path,
@@ -93,7 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         output_format=arguments.output_format,
         seed=arguments.seed,
     )
-    print([(record.id, record.sequence) for record in result])
+    print([(record.id, record.sequence) for record in records])
 
     if arguments.output is not None and arguments.output_format == "sqlite":
         from fastplms.embeddings import load_sqlite_result

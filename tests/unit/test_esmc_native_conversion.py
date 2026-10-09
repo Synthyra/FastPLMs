@@ -45,7 +45,7 @@ def _native_state() -> dict[str, torch.Tensor]:
             f"{prefix}.mlp.down_proj.weight": torch.tensor([[37.0, 38.0]]),
         }
     )
-    return state
+    return state  # (...) one tensor per native parameter name, tiny toy shapes
 
 
 def test_native_conversion_preserves_names_and_fuses_in_declared_order() -> None:

@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastplms.registry import get_model_registry
-
 from .fold_worker import RESULT_PREFIX
 from .source import BASELINE_WORKSPACE, WORKSPACE
 
@@ -250,7 +249,7 @@ def main() -> None:
             run_series(series, fold_settings) for series in (SMOKE_SERIES if args.smoke else SERIES)
         ]
     print(json.dumps({"smoke": args.smoke, "long": args.long, "series": results}))
-    if any(result["status"] != "ok" for result in results):
+    if any(case_report["status"] != "ok" for case_report in results):
         raise SystemExit(1)
 
 

@@ -38,7 +38,8 @@ def benchmark_model(root: Path, model_id: str, gpu: str, output: Path, rounds: i
     from .online_training import ExponentialMovingAverage, OnlineTrainingConfig, TargetSampler, structure, target_step
     from .rollouts import fold, use_fast_folding_kernels
     from .training import HeadContext
-    from .v2_campaign import configure_host, write_json
+    from .v2_campaign import configure_host
+    from tools.stored_files import write_stored_json
 
     configure_host(root, "benchmark")
     targets = host.split_targets("train")
@@ -54,8 +55,8 @@ def benchmark_model(root: Path, model_id: str, gpu: str, output: Path, rounds: i
         key=lambda target: abs(int(target["num_tokens"]) - 2048),
     )
     config = OnlineTrainingConfig(model_id=model_id, targets_per_update=MEASURED_TARGETS)
-    result: dict[str, object] = {"status": "running", "model_id": model_id, "gpu": gpu, "samples": 4, "loops": 3, "diffusion_steps": 50, "parameter_dtype": "float32", "autocast_dtype": "bfloat16", "rows": []}
-    write_json(output, result)
+    benchmark_record: dict[str, object] = {"status": "running", "model_id": model_id, "gpu": gpu, "samples": 4, "loops": 3, "diffusion_steps": 50, "parameter_dtype": "float32", "autocast_dtype": "bfloat16", "rows": []}
+    write_stored_json(output, benchmark_record, sort_keys=False)
     torch.manual_seed(17)
     model = load_folding_model(model_id)
     use_fast_folding_kernels(model)
@@ -89,16 +90,16 @@ def benchmark_model(root: Path, model_id: str, gpu: str, output: Path, rounds: i
         return {"target_id": target["target_id"], "num_tokens": int(target["num_tokens"]), "num_chains": int(target["num_chains"]), "seconds": elapsed, "fold_seconds": folding_seconds, "peak_memory_gib": memory, "losses": losses}
 
     try:
-        result["warmup"] = measure(warmup, -1, True)
+        benchmark_record["warmup"] = measure(warmup, -1, True)
         optimizer.zero_grad(set_to_none=True)
-        result["rounds"] = []
+        benchmark_record["rounds"] = []
         for round_index in range(rounds):
             round_rows = []
             for index, target in enumerate(panel):
                 row = {"round": round_index, **measure(target, index, True)}
                 round_rows.append(row)
-                result["rows"].append(row)
-                write_json(output, result)
+                benchmark_record["rows"].append(row)
+                write_stored_json(output, benchmark_record, sort_keys=False)
             torch.cuda.synchronize()
             started = time.monotonic()
             torch.nn.utils.clip_grad_norm_(context.head.parameters(), 1.0)
@@ -108,27 +109,27 @@ def benchmark_model(root: Path, model_id: str, gpu: str, output: Path, rounds: i
             torch.cuda.synchronize()
             optimizer_seconds = time.monotonic() - started
             seconds = sum(row["seconds"] for row in round_rows) + optimizer_seconds
-            result["rounds"].append({"round": round_index, "seconds_per_update": seconds, "optimizer_seconds": optimizer_seconds})
-        result["seconds_per_update"] = seconds
-        result["dollars_per_update"] = seconds * hourly_rate(gpu) / 3600
-        result["training_guard"] = measure(guard, 100, True)
+            benchmark_record["rounds"].append({"round": round_index, "seconds_per_update": seconds, "optimizer_seconds": optimizer_seconds})
+        benchmark_record["seconds_per_update"] = seconds
+        benchmark_record["dollars_per_update"] = seconds * hourly_rate(gpu) / 3600
+        benchmark_record["training_guard"] = measure(guard, 100, True)
         optimizer.zero_grad(set_to_none=True)
-        result["status"] = "passed"
-        write_json(output, result)
+        benchmark_record["status"] = "passed"
+        write_stored_json(output, benchmark_record, sort_keys=False)
         if long_probe:
             context.head.eval()
             try:
-                result["long_evaluation_guard"] = measure(long_guard, 101, False)
+                benchmark_record["long_evaluation_guard"] = measure(long_guard, 101, False)
             except torch.OutOfMemoryError:
-                result["long_evaluation_guard"] = {"status": "out_of_memory", "num_tokens": int(long_guard["num_tokens"])}
+                benchmark_record["long_evaluation_guard"] = {"status": "out_of_memory", "num_tokens": int(long_guard["num_tokens"])}
                 torch.cuda.empty_cache()
-    except Exception as error:
-        result.update(status="failed", error_type=type(error).__name__, error=str(error))
+    except Exception as error:  # noqa: broad-except  a benchmark failure of any kind is recorded in its report
+        benchmark_record.update(status="failed", error_type=type(error).__name__, error=str(error))
     finally:
-        write_json(output, result)
+        write_stored_json(output, benchmark_record, sort_keys=False)
         model = None
         context = None
         del optimizer, ema
         gc.collect()
         torch.cuda.empty_cache()
-    return result
+    return benchmark_record

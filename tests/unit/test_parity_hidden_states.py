@@ -3,7 +3,6 @@
 import torch
 
 from types import SimpleNamespace
-
 from tests.parity.test_model_parity import _hidden_state_tuple, _last_hidden, tensor_metrics
 
 

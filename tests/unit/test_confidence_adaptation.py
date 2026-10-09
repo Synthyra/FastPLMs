@@ -7,6 +7,7 @@ import pytest
 
 from dataclasses import replace
 from pathlib import Path
+from tests.conftest import requires_checkout_input
 
 from fastplms.registry import (
     ConfidenceAdaptation,
@@ -14,6 +15,7 @@ from fastplms.registry import (
     _parse_confidence_adaptation,
     get_model_registry,
 )
+from tools.artifacts.doc_generation.confidence_evidence import CONFIDENCE_RESEARCH_EVIDENCE
 from tools.artifacts.doc_generation.model_cards import render_model_card
 
 
@@ -249,7 +251,19 @@ def test_unadapted_cards_keep_existing_family_paths() -> None:
     assert "The confidence head is disabled" not in render_model_card(registry["esmfold2"])
 
 
-@pytest.mark.parametrize("model_id", ("esmfold2_300", "esmfold2_600"))
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        pytest.param(
+            model_id,
+            marks=requires_checkout_input(
+                CONFIDENCE_RESEARCH_EVIDENCE[model_id],
+                "`python -m tools.artifacts.evidence_store fetch`",
+            ),
+        )
+        for model_id in ("esmfold2_300", "esmfold2_600")
+    ],
+)
 def test_unadapted_cards_withhold_metrics_pending_recomputation(model_id: str) -> None:
     from fastplms.registry import get_model_registry
 

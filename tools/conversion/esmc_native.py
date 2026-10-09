@@ -8,8 +8,8 @@ import os
 import tempfile
 import torch
 
-from pathlib import Path
 from collections.abc import Mapping
+from pathlib import Path
 from safetensors.torch import load_file, save_file
 
 
@@ -18,6 +18,7 @@ def esmc_native_to_fastplms_v1(
 ) -> dict[str, torch.Tensor]:
     """Fuse native Q/K/V and gate/up weights without changing their values."""
 
+    # state: (...) one tensor per native parameter name, checkpoint-defined shapes
     remaining = dict(state)  # Each tensor retains its checkpoint dimensions.
     converted: dict[str, torch.Tensor] = {}
 
@@ -48,7 +49,7 @@ def esmc_native_to_fastplms_v1(
             move(f"lm_head.{native}.{suffix}", f"sequence_head.{fast}.{suffix}")
     if remaining:
         raise ValueError(f"Unrecognized native ESMC checkpoint keys: {sorted(remaining)}")
-    return converted
+    return converted  # (...) one tensor per parameter name, checkpoint-defined shapes
 
 
 def esmc_native_to_reference_v1(
@@ -61,6 +62,7 @@ def esmc_native_to_reference_v1(
     excludes the masked-language-model sequence head.
     """
 
+    # state: (...) one tensor per native parameter name, checkpoint-defined shapes
     fast_state = esmc_native_to_fastplms_v1(state, num_layers)
     converted: dict[str, torch.Tensor] = {}
     suffixes = {
@@ -89,7 +91,7 @@ def esmc_native_to_reference_v1(
             f"Reference ESMC conversion emitted {len(converted)} tensors; "
             f"expected {expected_count} for {num_layers} layers."
         )
-    return converted
+    return converted  # (...) one tensor per parameter name, checkpoint-defined shapes
 
 
 def _positive_int(config: Mapping[str, object], *names: str) -> int:

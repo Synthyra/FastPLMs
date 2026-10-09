@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import torch
+
 from collections.abc import Callable, Iterable, Mapping
 
 
@@ -48,7 +49,7 @@ def _map_state(
     key_mapper: Callable[[str], str | None],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
-    # state[key]: (...)
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     if not state:
         raise StateTransformError("A checkpoint state dictionary cannot be empty.")
     transformed: StateDict = {}
@@ -69,6 +70,7 @@ def _identity(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     return _map_state(state, lambda key: key, expected_keys)
 
 
@@ -77,7 +79,7 @@ def _cast_floating(
     expected_keys: frozenset[str] | None,
     dtype: torch.dtype,
 ) -> StateDict:
-    # state[key]: (...)
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     transformed = _identity(state, expected_keys)  # transformed[key]: (...)
     return {
         key: value.to(dtype=dtype) if value.is_floating_point() else value  # (...)
@@ -89,6 +91,7 @@ def _drop_unused_rotary_position_table(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     return _map_state(
         state,
         lambda key: None if key == "esm.embeddings.position_embeddings.weight" else key,
@@ -102,7 +105,7 @@ def _esm2(
 ) -> StateDict:
     """Map pinned fair-esm ESM2 names to the canonical FastPLMs schema."""
 
-    # state[key]: (...)
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     if not state:
         raise StateTransformError("A checkpoint state dictionary cannot be empty.")
     keys = frozenset(state)
@@ -204,6 +207,7 @@ def _esmc(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     return _map_state(state, _esmc_key, expected_keys)
 
 
@@ -211,7 +215,7 @@ def _esm3(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
-    # state[key]: (...)
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     transformed = _map_state(  # transformed[key]: (...)
         state,
         lambda key: key if key.startswith("esm3.") else f"esm3.{key}",
@@ -227,6 +231,7 @@ def _e1(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     return _cast_floating(state, expected_keys, torch.bfloat16)
 
 
@@ -236,6 +241,7 @@ def _ankh_t5(
 ) -> StateDict:
     """Preserve ANKH's complete official encoder-decoder T5 state exactly."""
 
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     keys = frozenset(state)
     required_exact = {
         "shared.weight",
@@ -261,7 +267,7 @@ def _boltz2(
     state: Mapping[str, torch.Tensor],
     expected_keys: frozenset[str] | None,
 ) -> StateDict:
-    # state[key]: (...)
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     if expected_keys is None:
         raise StateTransformError(
             "boltz2_inference_core_v1 requires the expected FastPLMs core keys."
@@ -313,7 +319,7 @@ def _esmfold(
 ) -> StateDict:
     """Map native Meta ESMFold and prior canonical mirrors to package state."""
 
-    # state[key]: (...)
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     if not state:
         raise StateTransformError("ESMFold checkpoint state cannot be empty.")
     canonical = any(key.startswith("esm.encoder.") for key in state)
@@ -387,7 +393,7 @@ def apply_state_transform(
 ) -> StateDict:
     """Apply one manifest-declared transform without mutating ``state``."""
 
-    # state[key]: (...)
+    # state: (...) one tensor per parameter name, checkpoint-defined shapes
     try:
         transform = _TRANSFORMS[transform_id]
     except KeyError as error:

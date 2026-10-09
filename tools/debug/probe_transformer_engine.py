@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import platform
 import torch
+
 from importlib.metadata import PackageNotFoundError, version
 
 
@@ -29,14 +30,14 @@ def main() -> int:
         import transformer_engine.pytorch as te
 
         try:
-            result = te.is_fp8_available(return_reason=True)
+            fp8_status = te.is_fp8_available(return_reason=True)
         except TypeError:
-            result = te.is_fp8_available()
-        if isinstance(result, tuple):
-            available = bool(result[0])
-            reason = str(result[1]) if len(result) > 1 else ""
+            fp8_status = te.is_fp8_available()
+        if isinstance(fp8_status, tuple):
+            available = bool(fp8_status[0])
+            reason = str(fp8_status[1]) if len(fp8_status) > 1 else ""
         else:
-            available = bool(result)
+            available = bool(fp8_status)
             reason = ""
         report.update(fp8_available=available, reason=reason)
     except (ImportError, OSError, RuntimeError) as error:

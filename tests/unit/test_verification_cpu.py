@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 from pathlib import Path
+from tests.conftest import requires_checkout_input
 
 from tools.verification import worker
 from tools.verification.cpu import upstream_legal_files
@@ -23,7 +24,11 @@ def test_verification_includes_canonical_upstream_licenses() -> None:
     assert {str(Path(name).parent).replace("\\", "/") for name in files} == {
         source["path"] for source in manifest["upstreams"]
     }
-    assert all((ROOT / name).is_file() for name in files)
+
+
+@requires_checkout_input("vendor/upstream", "`git submodule update --init`")
+def test_every_upstream_legal_file_is_checked_out() -> None:
+    assert all((ROOT / name).is_file() for name in upstream_legal_files(ROOT))
 
 
 def test_cpu_policy_is_collected_separately() -> None:
@@ -46,13 +51,13 @@ def test_failure_keeps_outputs_and_later_batches(tmp_path, monkeypatch) -> None:
         return subprocess.CompletedProcess(command, 1 if len(calls) == 1 else 0, "stdout", "stderr")
 
     monkeypatch.setattr(worker.subprocess, "run", run)
-    result = worker.run_batches(ROOT, tmp_path)
-    assert result["status"] == "failed"
+    report = worker.run_batches(ROOT, tmp_path)
+    assert report["status"] == "failed"
     assert len(calls) == 3
-    assert [batch["exit_code"] for batch in result["batches"]] == [1, 0, 0]
-    assert result["batches"][0]["stdout"] == "stdout"
-    assert result["batches"][0]["stderr"] == "stderr"
-    assert 'failures="1"' in result["batches"][0]["junit_xml"]
+    assert [batch["exit_code"] for batch in report["batches"]] == [1, 0, 0]
+    assert report["batches"][0]["stdout"] == "stdout"
+    assert report["batches"][0]["stderr"] == "stderr"
+    assert 'failures="1"' in report["batches"][0]["junit_xml"]
 
 
 def test_timeout_preserves_partial_output(tmp_path, monkeypatch) -> None:
@@ -62,12 +67,12 @@ def test_timeout_preserves_partial_output(tmp_path, monkeypatch) -> None:
         )
 
     monkeypatch.setattr(worker.subprocess, "run", run)
-    result = worker.run_batches(ROOT, tmp_path)
-    assert result["status"] == "failed"
-    assert result["batches"][0]["status"] == "timed_out"
-    assert result["batches"][0]["exit_code"] is None
-    assert result["batches"][0]["stdout"] == "partial"
-    assert result["batches"][0]["junit_xml"] is None
+    report = worker.run_batches(ROOT, tmp_path)
+    assert report["status"] == "failed"
+    assert report["batches"][0]["status"] == "timed_out"
+    assert report["batches"][0]["exit_code"] is None
+    assert report["batches"][0]["stdout"] == "partial"
+    assert report["batches"][0]["junit_xml"] is None
 
 
 def test_exhausted_budget_does_not_start_subprocess(tmp_path, monkeypatch) -> None:
@@ -75,18 +80,18 @@ def test_exhausted_budget_does_not_start_subprocess(tmp_path, monkeypatch) -> No
         raise AssertionError("Budget-exhausted batch must not launch")
 
     monkeypatch.setattr(worker.subprocess, "run", run)
-    result = worker.run_batches(ROOT, tmp_path, maximum_seconds=0)
-    assert result["status"] == "failed"
-    assert all(batch["status"] == "not_run" for batch in result["batches"])
+    report = worker.run_batches(ROOT, tmp_path, maximum_seconds=0)
+    assert report["status"] == "failed"
+    assert all(batch["status"] == "not_run" for batch in report["batches"])
 
 
 def test_help_does_not_need_site_packages() -> None:
-    result = subprocess.run(
+    completed = subprocess.run(
         [sys.executable, "-S", "-m", "tools.verification.cpu", "--help"],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    assert "--output-root" in result.stdout
+    assert completed.returncode == 0, completed.stderr
+    assert "--output-root" in completed.stdout

@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import importlib
 import importlib.util
 import json
 import re
 import sys
+
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from tools.source_record import actual_tree_paths, tracked_tree_digest
+from tools.source_record import is_lower_hex
 
 
 _SCHEMA_VERSION = 1
@@ -54,14 +57,6 @@ def _load_json(path: Path) -> dict[str, object]:
     return _load_json_bytes(path)[0]
 
 
-def _is_lower_hex(value: object, length: int) -> bool:
-    return (
-        isinstance(value, str)
-        and len(value) == length
-        and all(character in "0123456789abcdef" for character in value)
-    )
-
-
 def _portable_relative_path(value: object, *, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ReferenceSourceAttestationError(f"{field} must be a non-empty string.")
@@ -90,11 +85,11 @@ def _validate_contract(raw: Mapping[str, object]) -> ReferenceSourceContract:
         raise ReferenceSourceAttestationError("Unsupported reference source schema version.")
     source_revision = raw["source_revision"]
     tree_sha256 = raw["tree_sha256"]
-    if not isinstance(source_revision, str) or not _is_lower_hex(
+    if not isinstance(source_revision, str) or not is_lower_hex(
         source_revision, _HEX_REVISION_LENGTH
     ):
         raise ReferenceSourceAttestationError("Reference source revision must be 40 lowercase hex.")
-    if not isinstance(tree_sha256, str) or not _is_lower_hex(
+    if not isinstance(tree_sha256, str) or not is_lower_hex(
         tree_sha256, _HEX_DIGEST_LENGTH
     ):
         raise ReferenceSourceAttestationError("Reference tree digest must be 64 lowercase hex.")
@@ -210,10 +205,10 @@ def validate_reference_source_evidence(value: object) -> dict[str, object]:
         raise ReferenceSourceAttestationError(
             "Unsupported reference source evidence schema version."
         )
-    if not _is_lower_hex(value["source_revision"], _HEX_REVISION_LENGTH):
+    if not is_lower_hex(value["source_revision"], _HEX_REVISION_LENGTH):
         raise ReferenceSourceAttestationError("Evidence source revision is invalid.")
     for field in ("tree_sha256", "attestation_sha256"):
-        if not _is_lower_hex(value[field], _HEX_DIGEST_LENGTH):
+        if not is_lower_hex(value[field], _HEX_DIGEST_LENGTH):
             raise ReferenceSourceAttestationError(f"Evidence {field} is invalid.")
     file_count = value["file_count"]
     if isinstance(file_count, bool) or not isinstance(file_count, int) or file_count <= 0:
@@ -317,11 +312,10 @@ def _prioritize_import_parent(import_root: Path) -> None:
     import_parent = import_root.parent.resolve()
     retained: list[str] = []
     for entry in sys.path:
-        try:
+        # An entry that cannot be resolved stays on the path.
+        with contextlib.suppress(OSError):
             if Path(entry or ".").resolve() == import_parent:
                 continue
-        except OSError:
-            pass
         retained.append(entry)
     sys.path[:] = [str(import_parent), *retained]
 
@@ -339,6 +333,18 @@ def _validate_cached_package_modules(
             raise ReferenceSourceAttestationError(
                 f"Cached reference module {module_name!r} has no module object."
             )
+        namespace_paths = getattr(module, "__path__", None)
+        if getattr(module, "__file__", None) is None and namespace_paths is not None:
+            # A namespace package (Biohub's esm.models) has no file; each directory it
+            # spans must still lie in the pinned source.
+            directories = list(namespace_paths)
+            if not directories:
+                raise ReferenceSourceAttestationError(
+                    f"Cached {module_name!r} namespace package spans no directory."
+                )
+            for directory in directories:
+                _assert_source_file(directory, import_root, context=f"Cached {module_name!r}")
+            continue
         _module_source_file(module, import_root, context=f"Cached {module_name!r}")
         if module_name == import_name:
             cached_top_level = module
@@ -354,7 +360,7 @@ def verify_reference_source(
 ) -> dict[str, object]:
     """Rehash the pinned tree and prove that the imported package comes from it."""
 
-    if not _is_lower_hex(expected_revision, _HEX_REVISION_LENGTH):
+    if not is_lower_hex(expected_revision, _HEX_REVISION_LENGTH):
         raise ReferenceSourceAttestationError(
             "Expected reference source revision must be 40 lowercase hex."
         )

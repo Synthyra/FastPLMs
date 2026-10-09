@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import sys
 import tempfile
@@ -14,8 +13,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
 from tests.parity.support.reference_adapters import move_model, snapshot_path
+from tests.structure.support.state_contract import file_sha256
 
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
@@ -26,14 +25,6 @@ def _asset_field(asset: object, name: str) -> Any:
     if isinstance(asset, Mapping):
         return asset[name]
     return getattr(asset, name)
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _verified_asset(asset: object) -> Path:
@@ -50,7 +41,7 @@ def _verified_asset(asset: object) -> Path:
         return (
             destination.is_file()
             and destination.stat().st_size == expected_size
-            and _file_sha256(destination) == expected_sha256
+            and file_sha256(destination) == expected_sha256
         )
 
     if valid():
@@ -62,7 +53,7 @@ def _verified_asset(asset: object) -> Path:
         urllib.request.urlretrieve(str(_asset_field(asset, "url")), temporary_path)
         if temporary_path.stat().st_size != expected_size:
             raise RuntimeError(f"Size mismatch for fair-esm oracle asset {relative}")
-        if _file_sha256(temporary_path) != expected_sha256:
+        if file_sha256(temporary_path) != expected_sha256:
             raise RuntimeError(f"SHA-256 mismatch for fair-esm oracle asset {relative}")
         temporary_path.replace(destination)
     finally:
@@ -123,7 +114,7 @@ class _AlphabetTokenizer:
             input_ids = torch.cat((input_ids, pad), dim=1)
         # attention_mask: (b, l)
         attention_mask = input_ids.ne(self.pad_token_id).long()
-        return {"input_ids": input_ids, "attention_mask": attention_mask}
+        return {"input_ids": input_ids, "attention_mask": attention_mask}  # (...) input_ids, attention_mask: each (b, l)
 
 
 class _OfficialESM2ForwardWrapper(nn.Module):
@@ -138,7 +129,7 @@ class _OfficialESM2ForwardWrapper(nn.Module):
         attention_mask: torch.Tensor | None = None,
         **_kwargs: Any,
     ) -> Any:
-        # input_ids: (b, l)
+        # input_ids, attention_mask: (b, l); attention_mask is deleted unused
         del attention_mask
         layers = list(range(self.model.num_layers + 1))
         output = self.model(input_ids, repr_layers=layers, return_contacts=False)

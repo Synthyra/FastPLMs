@@ -34,9 +34,11 @@ def test_conversion_tools_contain_no_hub_mutation_or_authentication_code() -> No
     files = sorted((ROOT / "tools" / "conversion").glob("*.py"))
     assert {path.name for path in files} == {
         "__init__.py",
+        "esmc_native.py",
         "extract_esmfold2_geometry.py",
         "state_transforms.py",
         "state_validation.py",
+        "verify_esmfold2_backbones.py",
     }
     for path in files:
         assert forbidden.search(path.read_text(encoding="utf-8")) is None, path
@@ -108,7 +110,7 @@ def test_identity_key_transform_is_value_exact_and_non_aliasing() -> None:
 
 
 def _tiny_complete_ankh_state() -> dict[str, torch.Tensor]:
-    return {
+    return {  # (...) one tensor per ANKH parameter name; embeddings and head (2, 4), projections (4, 4)
         "shared.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
         "encoder.embed_tokens.weight": torch.arange(8, dtype=torch.float32).reshape(2, 4),
         "encoder.block.0.layer.0.SelfAttention.q.weight": torch.ones(4, 4),
@@ -335,6 +337,7 @@ def test_boltz2_transform_selects_only_the_declared_inference_core() -> None:
 def test_exact_state_validation_rejects_schema_or_value_drift(
     candidate: dict[str, torch.Tensor],
 ) -> None:
+    # candidate: (...) one tensor per name, each (1,)
     reference = {"weight": torch.tensor([1.0])}
     with pytest.raises(AssertionError, match="state_dict parity failed"):
         assert_state_dict_equal(reference, candidate, context="exact conversion")

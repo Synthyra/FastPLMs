@@ -52,8 +52,8 @@ confidence-derived B factors.
 
 ## Dependencies and platform requirements
 
-ESMFold2 requires the structure dependencies, Python 3.11-3.14, PyTorch
-2.13, Transformers 5.13, and a CUDA device for its published execution
+ESMFold2 requires the structure dependencies, Python 3.12-3.14, PyTorch
+2.14, Transformers 5.17, and a CUDA device for its published execution
 contract. Docker execution with the required capabilities and numerical tests
 is valid on any compatible host. Record the actual accelerator, architecture,
 driver, and software versions in each validation report. The historical release
@@ -95,14 +95,14 @@ The cuEquivariance dependency file pins the version-aligned frontend and CUDA
 kernels used by the release contract: `cuequivariance==0.10.0`,
 `cuequivariance-torch==0.10.0`, and
 `cuequivariance-ops-torch-cu13==0.10.0`. It selects NVIDIA's
-CUDA 13 build because FastPLMs validates PyTorch 2.13 on CUDA 13.0. Do not
+CUDA 13 build because FastPLMs validates PyTorch 2.14 on CUDA 13.0. Do not
 install the CUDA 12 and CUDA 13 kernel packages into the same environment.
 FastPLMs requires both the frontend and the CUDA ops package before accepting
 `model.set_kernel_backend("cuequivariance")`; a frontend-only installation is
 not treated as backend availability.
 
 This backend is available only on Linux with an NVIDIA GPU, a compatible
-CUDA 13 driver, and CPython 3.11-3.14. NVIDIA publishes both x86-64 and ARM64
+CUDA 13 driver, and CPython 3.12-3.14. NVIDIA publishes both x86-64 and ARM64
 manylinux wheels for those interpreters. Results must identify the exact device
 and architecture, and performance baselines from different accelerator models
 are not interchangeable. Windows, macOS, CPU-only hosts, and the FastPLMs
@@ -217,6 +217,16 @@ without an MSA (mean pLDDT 0.36 to 0.48), and its samples differ from one
 another by 4.7 to 7.9 angstrom, so that case does not separate the modes. On
 this small panel the windowed mode sits inside sampling spread. It is not the
 structure benchmark, which remains pending.
+
+These measurements, the cost measurements above, and the confidence-head training
+rollouts predate a sampler fix of 2026-10-08. Until then FastPLMs' forwards and `fold()`
+passed `max_inference_sigma=None` to the diffusion sampler unless a caller set it, which
+removed the official cap of 256 and started every fold at sigma 2,560. Each seed therefore
+gave a different sample than official ESMFold2 (0.17 to 1.10 angstrom C-alpha RMSD on one
+GPU); with the cap as the default, FastPLMs matches official at about 1e-6 angstrom. On
+100 held-out confidence targets the cap left fold quality and the ESMFold2-300 head's
+calibration unchanged within their intervals, so the comparisons above stand as relative
+measurements.
 
 ## Hash-pinned CCD asset
 

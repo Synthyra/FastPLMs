@@ -101,31 +101,31 @@ def test_bootstrap_interval_is_deterministic() -> None:
 
 def test_gate_accepts_equivalent_results() -> None:
     thresholds = GateThresholds(bootstrap_samples=500)
-    result = compare_reports(
+    comparison = compare_reports(
         _report([101, 100, 99, 101, 100, 99, 100]),
         _report([100] * 7),
         thresholds,
     )
-    assert result.passed
-    assert result.cases[0].passed
+    assert comparison.passed
+    assert comparison.cases[0].passed
 
 
 def test_gate_rejects_hard_throughput_regression() -> None:
     thresholds = GateThresholds(bootstrap_samples=500)
-    result = compare_reports(_report([85] * 7), _report([100] * 7), thresholds)
-    assert not result.passed
-    assert any("hard limit" in reason for reason in result.cases[0].reasons)
+    comparison = compare_reports(_report([85] * 7), _report([100] * 7), thresholds)
+    assert not comparison.passed
+    assert any("hard limit" in reason for reason in comparison.cases[0].reasons)
 
 
 def test_gate_rejects_large_memory_growth() -> None:
     thresholds = GateThresholds(bootstrap_samples=100)
-    result = compare_reports(
+    comparison = compare_reports(
         _report([100] * 7, memory=1_400_000_000),
         _report([100] * 7, memory=1_000_000_000),
         thresholds,
     )
-    assert not result.passed
-    assert any("memory" in reason for reason in result.cases[0].reasons)
+    assert not comparison.passed
+    assert any("memory" in reason for reason in comparison.cases[0].reasons)
 
 
 def test_gate_requires_every_baseline_case() -> None:
@@ -133,9 +133,9 @@ def test_gate_requires_every_baseline_case() -> None:
     current["results"] = []
     current["expected_case_count"] = 0
     current["completed_case_count"] = 0
-    result = compare_reports(current, _report([100] * 7))
-    assert not result.passed
-    assert result.unmatched_baseline
+    comparison = compare_reports(current, _report([100] * 7))
+    assert not comparison.passed
+    assert comparison.unmatched_baseline
 
 
 def test_gate_rejects_current_case_without_a_baseline() -> None:
@@ -147,24 +147,24 @@ def test_gate_rejects_current_case_without_a_baseline() -> None:
     current["expected_case_count"] = 2
     current["completed_case_count"] = 2
 
-    result = compare_reports(current, baseline, GateThresholds(bootstrap_samples=100))
+    comparison = compare_reports(current, baseline, GateThresholds(bootstrap_samples=100))
 
-    assert not result.passed
-    assert result.unmatched_current
+    assert not comparison.passed
+    assert comparison.unmatched_current
 
 
 def test_gate_rejects_environment_drift() -> None:
     current = _report([100] * 7)
     current["environment"] = {**ENVIRONMENT, "torch": "2.13.1+cu130"}
 
-    result = compare_reports(
+    comparison = compare_reports(
         current,
         _report([100] * 7),
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert not result.passed
-    assert result.environment_mismatches == (
+    assert not comparison.passed
+    assert comparison.environment_mismatches == (
         "environment.torch: current='2.13.1+cu130', baseline='2.13.0+cu130'",
     )
 
@@ -181,23 +181,23 @@ def test_gate_rejects_cross_device_hopper_comparison() -> None:
         },
     }
 
-    result = compare_reports(
+    comparison = compare_reports(
         current,
         _report([100] * 7),
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert not result.passed
+    assert not comparison.passed
     assert any(
-        mismatch.startswith("environment.gpu:") for mismatch in result.environment_mismatches
+        mismatch.startswith("environment.gpu:") for mismatch in comparison.environment_mismatches
     )
     assert any(
         mismatch.startswith("environment.nvidia_smi.name:")
-        for mismatch in result.environment_mismatches
+        for mismatch in comparison.environment_mismatches
     )
     assert any(
         mismatch.startswith("environment.nvidia_smi.memory.total:")
-        for mismatch in result.environment_mismatches
+        for mismatch in comparison.environment_mismatches
     )
 
 
@@ -212,20 +212,20 @@ def test_gate_rejects_architecture_and_driver_drift() -> None:
         },
     }
 
-    result = compare_reports(
+    comparison = compare_reports(
         current,
         _report([100] * 7),
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert not result.passed
+    assert not comparison.passed
     assert any(
         mismatch.startswith("environment.machine:")
-        for mismatch in result.environment_mismatches
+        for mismatch in comparison.environment_mismatches
     )
     assert any(
         mismatch.startswith("environment.nvidia_smi.driver_version:")
-        for mismatch in result.environment_mismatches
+        for mismatch in comparison.environment_mismatches
     )
 
 
@@ -235,16 +235,16 @@ def test_gate_rejects_missing_required_environment_identity() -> None:
         key: value for key, value in ENVIRONMENT.items() if key != "machine"
     }
 
-    result = compare_reports(
+    comparison = compare_reports(
         _report([100] * 7),
         baseline,
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert not result.passed
+    assert not comparison.passed
     assert (
         "environment.machine: baseline report is missing the field"
-        in result.environment_mismatches
+        in comparison.environment_mismatches
     )
 
 
@@ -257,16 +257,16 @@ def test_gate_rejects_incomplete_or_different_promotion_contracts() -> None:
         "requested": ["sdpa"],
     }
 
-    result = compare_reports(
+    comparison = compare_reports(
         current,
         baseline,
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert not result.passed
-    assert "current report status is not complete" in result.report_mismatches
+    assert not comparison.passed
+    assert "current report status is not complete" in comparison.report_mismatches
     assert any(
-        mismatch.startswith("backend_policy:") for mismatch in result.report_mismatches
+        mismatch.startswith("backend_policy:") for mismatch in comparison.report_mismatches
     )
 
 
@@ -288,29 +288,29 @@ def test_gate_rejects_artifact_identity_drift() -> None:
     current = _with_artifact_inventory(_report([100] * 7), runtime_revision="1" * 40)
     baseline = _with_artifact_inventory(_report([100] * 7), runtime_revision="2" * 40)
 
-    result = compare_reports(
+    comparison = compare_reports(
         current,
         baseline,
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert not result.passed
+    assert not comparison.passed
     assert any(
-        mismatch.startswith("artifacts.esm2_8m:") for mismatch in result.artifact_mismatches
+        mismatch.startswith("artifacts.esm2_8m:") for mismatch in comparison.artifact_mismatches
     )
 
 
 def test_gate_rejects_missing_artifact_inventory() -> None:
     current = _with_artifact_inventory(_report([100] * 7))
 
-    result = compare_reports(
+    comparison = compare_reports(
         current,
         _report([100] * 7),
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert not result.passed
-    assert "baseline report has no artifact inventory mapping" in result.artifact_mismatches
+    assert not comparison.passed
+    assert "baseline report has no artifact inventory mapping" in comparison.artifact_mismatches
 
 
 def test_gate_ignores_telemetry_that_is_not_environment_identity() -> None:
@@ -320,14 +320,14 @@ def test_gate_ignores_telemetry_that_is_not_environment_identity() -> None:
     current_smi["clocks.sm"] = "1980"
     current["environment"] = {**ENVIRONMENT, "nvidia_smi": current_smi}
 
-    result = compare_reports(
+    comparison = compare_reports(
         current,
         _report([100] * 7),
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert result.passed
-    assert not result.environment_mismatches
+    assert comparison.passed
+    assert not comparison.environment_mismatches
 
 
 def test_descriptive_records_do_not_enter_throughput_gate() -> None:
@@ -350,11 +350,11 @@ def test_descriptive_records_do_not_enter_throughput_gate() -> None:
     current["expected_case_count"] = baseline["expected_case_count"] = 2
     current["completed_case_count"] = baseline["completed_case_count"] = 2
 
-    result = compare_reports(
+    comparison = compare_reports(
         current,
         baseline,
         GateThresholds(bootstrap_samples=100),
     )
 
-    assert result.passed
-    assert len(result.cases) == 1
+    assert comparison.passed
+    assert len(comparison.cases) == 1

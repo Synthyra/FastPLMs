@@ -5,10 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import random
+
 from dataclasses import asdict
 from pathlib import Path
-
-from fastplms.registry import get_model_registry
 from tests.parity.support.esmc_calibration import (
     CANONICAL_AA_ALPHABET,
     ESMC_CALIBRATION_SEED,
@@ -17,6 +16,8 @@ from tests.parity.support.esmc_calibration import (
 from tests.parity.support.reference_adapters.dplm2 import (
     DPLM2_3B_GENERATION_LIMITATION,
 )
+
+from fastplms.registry import get_model_registry
 
 
 SCHEMA_VERSION = 1

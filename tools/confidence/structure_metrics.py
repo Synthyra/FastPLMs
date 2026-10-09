@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import re
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-from collections.abc import Mapping
 
 
 _ONE_TO_THREE = {
@@ -194,10 +194,10 @@ def _write_pdb(
 def _dockq_score(model_path: Path, native_path: Path) -> float:
     from DockQ.DockQ import load_PDB, run_on_all_native_interfaces
 
-    result = run_on_all_native_interfaces(load_PDB(str(model_path)), load_PDB(str(native_path)))
-    if not isinstance(result, tuple) or len(result) < 2:
+    dockq_output = run_on_all_native_interfaces(load_PDB(str(model_path)), load_PDB(str(native_path)))
+    if not isinstance(dockq_output, tuple) or len(dockq_output) < 2:
         raise ValueError("DockQ API returned an unexpected result")
-    return float(result[1])
+    return float(dockq_output[1])
 
 
 def compute_structure_metrics(
@@ -300,7 +300,7 @@ def audit_smoke_structures(root: Path) -> dict[str, Any]:
                 item.update(
                     status="passed", record_id=record["id"], cache=str(cache_path), metrics=metrics
                 )
-            except Exception as error:
+            except Exception as error:  # noqa: broad-except  an invalid target of any kind is recorded and the smoke check goes on
                 item.update(
                     status="invalid",
                     record_id=record.get("id"),

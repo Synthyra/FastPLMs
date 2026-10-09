@@ -7,6 +7,7 @@ import ast
 import io
 import re
 import tokenize
+
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -226,15 +227,15 @@ def iter_repository_files(root: Path) -> Iterator[Path]:
 def scan_repository(root: Path) -> list[Violation]:
     """Return every shape-notation violation in repository prose."""
 
-    result: list[Violation] = []
+    violations: list[Violation] = []
     for path in iter_repository_files(root):
         if path.suffix == ".py":
             regions = _python_documentation(path)
         else:
             regions = ((path.read_text(encoding="utf-8"), 1),)
         for text, first_line in regions:
-            result.extend(violations_in_text(text, path=path, first_line=first_line))
-    return result
+            violations.extend(violations_in_text(text, path=path, first_line=first_line))
+    return violations
 
 
 def main(argv: Iterable[str] | None = None) -> int:

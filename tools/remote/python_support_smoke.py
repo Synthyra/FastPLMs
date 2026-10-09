@@ -10,6 +10,7 @@ import json
 import os
 import socket
 import sys
+
 from pathlib import Path
 
 
@@ -34,6 +35,21 @@ def _compile_sources(package_root: Path) -> int:
     return len(source_files)
 
 
+def _validation_pins(repository_root: Path) -> dict[str, str]:
+    """The exact releases requirements/constraints/validation.txt pins, by distribution."""
+    pins: dict[str, str] = {}
+    constraints = repository_root / "requirements" / "constraints" / "validation.txt"
+    for line in constraints.read_text(encoding="utf-8").splitlines():
+        declaration = line.partition("#")[0].strip()
+        if not declaration:
+            continue
+        name, separator, version = declaration.partition("==")
+        if not separator:
+            raise AssertionError(f"validation.txt must pin exact versions: {declaration!r}")
+        pins[name.strip()] = version.strip()
+    return pins
+
+
 def run_smoke(expected_python: str, source_root: Path) -> dict[str, object]:
     """Return evidence for an isolated, CPU-only repository-source environment."""
 
@@ -53,7 +69,7 @@ def run_smoke(expected_python: str, source_root: Path) -> dict[str, object]:
             f"Expected Python {expected_python}, found "
             f"{sys.version_info.major}.{sys.version_info.minor}."
         )
-    if not (sys.version_info[:2] >= (3, 11) and sys.version_info[:2] < (3, 15)):
+    if not (sys.version_info[:2] >= (3, 12) and sys.version_info[:2] < (3, 15)):
         raise AssertionError("Interpreter is outside FastPLMs' supported Python range.")
 
     source_root = source_root.resolve()
@@ -75,13 +91,14 @@ def run_smoke(expected_python: str, source_root: Path) -> dict[str, object]:
         )
     if fastplms.__version__ != "1.0.0":
         raise AssertionError(f"Unexpected FastPLMs source version: {fastplms.__version__!r}")
-    if importlib.metadata.version("torch").split("+", maxsplit=1)[0] != "2.13.0":
+    pins = _validation_pins(source_root.parent)
+    if importlib.metadata.version("torch").split("+", maxsplit=1)[0] != pins["torch"]:
         raise AssertionError(
-            f"Expected Torch 2.13.0, found {importlib.metadata.version('torch')}."
+            f"Expected Torch {pins['torch']}, found {importlib.metadata.version('torch')}."
         )
-    if importlib.metadata.version("transformers") != "5.13.0":
+    if importlib.metadata.version("transformers") != pins["transformers"]:
         raise AssertionError(
-            "Expected Transformers 5.13.0, found "
+            f"Expected Transformers {pins['transformers']}, found "
             f"{importlib.metadata.version('transformers')}."
         )
     if torch.version.cuda is not None or torch.cuda.is_available():

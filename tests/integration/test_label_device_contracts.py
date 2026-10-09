@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tests.unit.tiny_families import tiny_esm3_config, tiny_esmc_config
+
 from fastplms.models.e1.modeling_e1 import E1Config, E1ForTokenClassification
 from fastplms.models.esm3.modeling_esm3 import FastESM3Config, FastESM3Model
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
@@ -15,15 +17,7 @@ from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
 
 
 def _esmc_config() -> ESMplusplusConfig:
-    return ESMplusplusConfig(
-        vocab_size=40,
-        hidden_size=8,
-        num_attention_heads=2,
-        num_hidden_layers=1,
-        num_labels=3,
-        dropout=0.0,
-        attn_backend="sdpa",
-    )
+    return tiny_esmc_config(vocab_size=40, mask_token_id=32, num_labels=3, attn_backend="sdpa")
 
 
 def _e1_config() -> E1Config:
@@ -44,13 +38,7 @@ def _e1_config() -> E1Config:
 
 
 def _esm3_config() -> FastESM3Config:
-    return FastESM3Config(
-        hidden_size=8,
-        num_attention_heads=2,
-        num_vector_heads=2,
-        num_hidden_layers=1,
-        attn_backend="sdpa",
-    )
+    return tiny_esm3_config(attn_backend="sdpa")
 
 
 @pytest.mark.gpu

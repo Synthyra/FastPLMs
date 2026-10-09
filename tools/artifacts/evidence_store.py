@@ -7,7 +7,6 @@ No runtime or test import downloads files. Run ``fetch`` before offline checks;
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -17,6 +16,8 @@ import tomllib
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from fastplms.digests import file_sha256
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -100,8 +101,7 @@ def _local_path(root: Path, relative: str) -> Path:
 def verify_file(path: Path, entry: EvidenceFile) -> None:
     if not path.is_file() or path.stat().st_size != entry.size:
         raise ValueError(f"Missing evidence or size mismatch: {entry.path}")
-    with path.open("rb") as handle:
-        digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    digest = file_sha256(path)
     if digest != entry.sha256:
         raise ValueError(f"Evidence SHA-256 mismatch: {entry.path}")
 

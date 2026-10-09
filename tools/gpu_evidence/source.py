@@ -43,13 +43,27 @@ SOURCE_DIRECTORIES = (
     "vendor/upstream/biohub-esm/esm",
     # The pinned official ESMC source that the sparse-autoencoder tests compare against.
     "vendor/upstream/biohub-transformers/src/transformers/models/esmc",
+    # The other pinned official sources are small enough to upload whole; the check tier's
+    # source-independence, legal-inventory and submodule tests read them.
+    "vendor/upstream/ankh",
+    "vendor/upstream/boltz",
+    "vendor/upstream/dplm",
+    "vendor/upstream/e1",
+    "vendor/upstream/fair-esm",
+    "vendor/upstream/openfold",
+    "vendor/upstream/protein-ttt",
 )
 SOURCE_FILES = (
     "pytest.ini",
+    ".python-version",
     "mypy.ini",
     "kernels.lock",
     "evidence.toml",
     "vendor/README.md",
+    # Legal texts of the two upstreams uploaded only in part.
+    "vendor/upstream/biohub-esm/LICENSE.md",
+    "vendor/upstream/biohub-esm/THIRD_PARTY_NOTICE.md",
+    "vendor/upstream/biohub-transformers/LICENSE",
     # The source-inventory parity test checks the pinned submodule list.
     ".gitmodules",
     ".dockerignore",
@@ -95,6 +109,27 @@ def upload_source_root() -> Path:
 
 def baseline_source_root() -> Path:
     return Path(os.environ.get("FASTPLMS_EVIDENCE_BASELINE_ROOT", str(BASELINE_DIRECTORY)))
+
+
+def is_git_checkout() -> bool:
+    """Whether the repository root is the top of a Git work tree.
+
+    The research workspace that develops FastPLMs keeps no Git metadata, and neither
+    do its projections. A launch from such a tree has no revision and no baseline, so
+    the snapshot digest alone identifies what a worker received.
+    """
+    try:
+        completed = subprocess.run(
+            ["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "--show-toplevel"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+    # A tree nested inside some other repository is not that repository's checkout.
+    return completed.returncode == 0 and Path(completed.stdout.strip()).resolve() == ROOT.resolve()
 
 
 def export_baseline_source(revision: str = "HEAD", *, destination: Path | None = None) -> str:

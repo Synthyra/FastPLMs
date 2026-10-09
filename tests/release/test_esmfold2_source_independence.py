@@ -7,6 +7,7 @@ import pytest
 
 from difflib import SequenceMatcher
 from pathlib import Path
+from tests.release.source_independence import meaningful_lines
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -61,18 +62,17 @@ SOURCE_COUNTERPARTS = {
 }
 # The pinned upstream ESMFold2 package publishes no classification module, and
 # the manifest records the FastPLMs prediction heads as an extension rather than
-# an official head, so they are classified as original FastPLMs source.
+# an official head, so they are classified as original FastPLMs source. The
+# confidence-checkpoint loader serves Synthyra's trained confidence heads, which
+# have no upstream counterpart.
 ORIGINAL_RUNTIME_MODULES = frozenset(
-    {"attention.py", "embedding.py", "modeling_esmfold2_classification.py"}
+    {
+        "attention.py",
+        "confidence_checkpoint.py",
+        "embedding.py",
+        "modeling_esmfold2_classification.py",
+    }
 )
-
-
-def _meaningful_lines(text: str) -> list[str]:
-    return [
-        " ".join(line.strip().split())
-        for line in text.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
 
 
 def test_esmfold2_runtime_source_inventory_is_complete() -> None:
@@ -102,8 +102,8 @@ def test_esmfold2_source_is_independently_organized(
     assert runtime_text.encode() != upstream_text.encode()
     similarity = SequenceMatcher(
         None,
-        _meaningful_lines(runtime_text),
-        _meaningful_lines(upstream_text),
+        meaningful_lines(runtime_text),
+        meaningful_lines(upstream_text),
         autojunk=False,
     ).ratio()
     assert similarity < MAX_LINE_SIMILARITY, (

@@ -7,14 +7,14 @@ the table.
 
 ## Dependencies and platform requirements
 
-FastPLMs 1.0 sequence models require Python 3.11-3.14, PyTorch 2.13, and
-Transformers 5.13. Install these dependencies directly. The pinned Hugging Face
+FastPLMs 1.0 sequence models require Python 3.12-3.14, PyTorch 2.14, and
+Transformers 5.17. Install these dependencies directly. The pinned Hugging Face
 model repository provides the runtime source:
 
 ```bash
 python -m pip install \
-  "torch>=2.13,<2.14" \
-  "transformers>=5.13,<5.14"
+  "torch>=2.14" \
+  "transformers>=5.17"
 ```
 
 Eager and SDPA run on CPU or CUDA. Optimized backends and structure families

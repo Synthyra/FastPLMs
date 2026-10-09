@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
+
+import fastplms
+
+from pathlib import Path, PurePosixPath
 
 from fastplms.registry import get_model_registry
 
@@ -158,6 +163,92 @@ def test_every_advertised_automap_symbol_imports_without_optional_runtime_work()
         for auto_class, symbol_path in sorted(spec.auto_map.items()):
             symbol = _load_symbol(symbol_path)
             assert isinstance(symbol, type), (model_id, auto_class, symbol_path)
+
+
+def _package_imports(path: Path, module: PurePosixPath) -> set[PurePosixPath]:
+    """Every ``fastplms`` module one source file imports, as package-relative paths."""
+
+    imported: set[PurePosixPath] = set()
+    package = module.parent
+    for node in ast.walk(ast.parse(path.read_bytes(), filename=str(path))):
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names if alias.name.startswith("fastplms.")]
+            imported.update(PurePosixPath(*name.split(".")[1:]) for name in names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = package
+                for _ in range(node.level - 1):
+                    base = base.parent
+                target = base.joinpath(*node.module.split(".")) if node.module else base
+            elif node.module and node.module.startswith("fastplms."):
+                target = PurePosixPath(*node.module.split(".")[1:])
+            else:
+                continue
+            imported.add(target)
+            # ``from . import name`` may name a submodule rather than an attribute.
+            imported.update(target / alias.name for alias in node.names)
+    # Importing a submodule first runs every enclosing package's ``__init__``.
+    return imported | {
+        parent for target in imported for parent in target.parents if parent.parts
+    }
+
+
+def _module_source(package_root: Path, module: PurePosixPath) -> PurePosixPath | None:
+    """The source file a package-relative module path names, when it is a module."""
+
+    if (package_root / module).with_suffix(".py").is_file():
+        return module.with_suffix(".py")
+    if (package_root / module / "__init__.py").is_file():
+        return module / "__init__.py"
+    return None
+
+
+def test_every_runtime_bundle_is_closed_over_its_package_imports() -> None:
+    """A Hub artifact ships only its family's runtime paths, so each import must land inside them."""
+
+    package_root = Path(fastplms.__file__).parent
+    for family_id, family in sorted(get_model_registry().families.items()):
+        roots = [PurePosixPath(path) for path in family.runtime_paths]
+
+        def shipped(source: PurePosixPath) -> bool:
+            return any(source == root or root in source.parents for root in roots)
+
+        files = sorted(
+            PurePosixPath(path.relative_to(package_root).as_posix())
+            for root in roots
+            for path in (
+                [package_root / root]
+                if (package_root / root).is_file()
+                else (package_root / root).rglob("*.py")
+            )
+            if path.suffix == ".py"
+        )
+        missing = {
+            (file.as_posix(), source.as_posix())
+            for file in files
+            for module in _package_imports(package_root / file, file)
+            if (source := _module_source(package_root, module)) is not None
+            and not shipped(source)
+        }
+        assert not missing, (family_id, sorted(missing))
+
+
+def test_esm3_saved_runtime_inventory_is_closed_over_its_package_imports() -> None:
+    """A saved ESM3 model ships a fixed file inventory, so each import must land inside it."""
+
+    from fastplms.models.esm3.modeling_esm3 import _SAVED_RUNTIME_FILES
+
+    package_root = Path(fastplms.__file__).parent
+    shipped = {PurePosixPath(path) for path in _SAVED_RUNTIME_FILES}
+    missing = {
+        (file.as_posix(), source.as_posix())
+        for file in sorted(shipped)
+        if file.suffix == ".py"
+        for module in _package_imports(package_root / file, file)
+        if (source := _module_source(package_root, module)) is not None
+        and source not in shipped
+    }
+    assert not missing, sorted(missing)
 
 
 def test_ankh_official_asset_inventory_is_exact_and_complete() -> None:

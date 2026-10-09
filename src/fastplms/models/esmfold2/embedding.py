@@ -110,7 +110,10 @@ class ESMFold2EmbeddingMixin:
     def embed_dataset(self, inputs: Any, **kwargs: Any) -> EmbeddingResult:
         """Embed single-chain proteins using the learned 256-wide ESMFold2 summary."""
 
-        return embed_dataset(self, inputs, **kwargs)
+        embeddings = embed_dataset(self, inputs, **kwargs)
+        # ESMFold2 serves no one-pass taps, and embed_dataset refuses taps= before inference.
+        assert isinstance(embeddings, EmbeddingResult)
+        return embeddings
 
 
 __all__ = ["ESMFold2EmbeddingMixin"]

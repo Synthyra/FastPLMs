@@ -8,20 +8,21 @@ import inspect
 import os
 import pytest
 import torch
-import torch.nn.functional as F
 
 from collections.abc import Mapping
 from pathlib import Path
-
-from fastplms.models.boltz.modeling_boltz2 import Boltz2Config
-from fastplms.registry import get_model_registry
+from tests.conftest import validation_pins
 from tests.structure.support import boltz2_bundle
 from tests.structure.support.boltz2_bundle import load_bundle, load_request
+from tests.structure.support.compliance_metrics import bundle_output, feature_tensors, lddt_ca, probability_jsd
 from tests.structure.support.hardware import (
     assert_same_device,
     device_fingerprint,
 )
-from tests.structure.support.state_contract import semantic_config_contract
+from tests.structure.support.state_contract import checkpoint_metadata, semantic_config_contract, upstream_metadata
+
+from fastplms.models.boltz.modeling_boltz2 import Boltz2Config
+from fastplms.registry import get_model_registry
 
 
 bf16_targets = {
@@ -65,42 +66,6 @@ def _paths() -> tuple[Path, Path, Path]:
     return request, reference, candidate
 
 
-def _checkpoint_contract(checkpoint: object) -> dict[str, object]:
-    return {
-        "repo_id": checkpoint.repo_id,
-        "revision": checkpoint.revision,
-        "files": [
-            {"path": item.path, "algorithm": item.algorithm, "digest": item.digest}
-            for item in checkpoint.files
-        ],
-    }
-
-
-def _upstream_contract(upstream: object) -> dict[str, object]:
-    return {
-        "id": upstream.id,
-        "path": upstream.path,
-        "url": upstream.url,
-        "revision": upstream.revision,
-        "license_expression": upstream.license_expression,
-    }
-
-
-def _features(tensors: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    return {
-        name.removeprefix("feature__"): tensor
-        for name, tensor in tensors.items()
-        if name.startswith("feature__")
-    }
-
-
-def _output(tensors: Mapping[str, torch.Tensor], name: str) -> torch.Tensor:
-    key = f"output__{name}"
-    if key not in tensors:
-        raise KeyError(f"Boltz2 bundle omits required output {name!r}.")
-    return tensors[key]
-
-
 def _assert_bundle_identity(
     metadata: Mapping[str, object],
     request: Mapping[str, object],
@@ -112,9 +77,9 @@ def _assert_bundle_identity(
     assert metadata["producer"] == producer
     assert metadata["model_id"] == spec.id
     assert metadata["request_sha256"] == request["request_sha256"]
-    assert metadata["official"] == _checkpoint_contract(spec.official)
-    assert metadata["candidate"] == _checkpoint_contract(spec.fast)
-    assert metadata["upstream"] == _upstream_contract(registry.upstreams["boltz"])
+    assert metadata["official"] == checkpoint_metadata(spec.official)
+    assert metadata["candidate"] == checkpoint_metadata(spec.fast)
+    assert metadata["upstream"] == upstream_metadata(registry.upstreams["boltz"])
     for name in (
         "sequence",
         "feature_seed",
@@ -136,10 +101,11 @@ def _assert_bundle_identity(
     assert isinstance(environment, Mapping)
     device_fingerprint(environment)
     if producer == "candidate":
-        assert str(environment["torch"]).split("+", maxsplit=1)[0] == "2.13.0"
+        pins = validation_pins()
+        assert str(environment["torch"]).split("+", maxsplit=1)[0] == pins["torch"]
         packages = environment["packages"]
         assert isinstance(packages, Mapping)
-        assert packages["transformers"] == "5.13.0"
+        assert packages["transformers"] == pins["transformers"]
         assert str(environment["cuda_runtime"]).startswith("13.0")
 
 
@@ -149,8 +115,9 @@ def _assert_exact_features(
     expected_tensors: Mapping[str, torch.Tensor],
     expected_metadata: Mapping[str, object],
 ) -> None:
-    actual = _features(actual_tensors)
-    expected = _features(expected_tensors)
+    # actual_tensors, expected_tensors: (...) one tensor per bundle name; feature__token_pad_mask (b, l), feature__atom_pad_mask (b, a), output__sample_atom_coords (*s, a, 3)
+    actual = feature_tensors(actual_tensors)
+    expected = feature_tensors(expected_tensors)
     assert actual.keys() == expected.keys() == set(boltz2_bundle._feature_names)
     for name in boltz2_bundle._exact_features:
         # X and X_ref retain the named feature's shape, checked below.
@@ -177,7 +144,7 @@ def _assert_exact_features(
 
 
 def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual and expected share the named output's arbitrary shape.
+    # actual, expected: (...) the named output's arbitrary shape, shared by both.
     difference = torch.linalg.vector_norm(actual.float() - expected.float())
     # scale: (), the norm over every reference element.
     scale = torch.linalg.vector_norm(expected.float()).clamp_min(torch.finfo(torch.float32).tiny)
@@ -185,13 +152,15 @@ def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
 
 
 def _first_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    # tensors: (...) one tensor per bundle name; feature__token_pad_mask (b, l), feature__atom_pad_mask (b, a), output__sample_atom_coords (*s, a, 3)
     # X: (*s, a, 3), where s contains sample/batch axes and a counts atoms.
-    X = _output(tensors, "sample_atom_coords").float()
-    return X.reshape(-1, X.shape[-2], 3)[0]
+    X = bundle_output(tensors, "sample_atom_coords").float()
+    return X.reshape(-1, X.shape[-2], 3)[0]  # (a, 3)
 
 
 def _ca_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
-    features = _features(tensors)
+    # tensors: (...) one tensor per bundle name; feature__token_pad_mask (b, l), feature__atom_pad_mask (b, a), output__sample_atom_coords (*s, a, 3); feature__ref_atom_name_chars (b, a, 4, c) one-hot
+    features = feature_tensors(tensors)
     # encoded: (4,)
     encoded = torch.tensor([ord("C") - 32, ord("A") - 32, 0, 0])
     # atom_names: (a, 4), four encoded characters per atom.
@@ -201,11 +170,12 @@ def _ca_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
     # ca_mask: (a,), selecting the resolved C-alpha atoms.
     ca_mask = atom_names.eq(encoded).all(dim=-1) & atom_mask
     assert ca_mask.sum().item() == len(boltz2_bundle.fold_sequence)
-    return ca_mask
+    return ca_mask  # (a,) boolean, true at each resolved C-alpha atom
 
 
 def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
-    return _first_coordinates(tensors)[_ca_mask(tensors)]
+    # tensors: (...) one tensor per bundle name; feature__token_pad_mask (b, l), feature__atom_pad_mask (b, a), output__sample_atom_coords (*s, a, 3)
+    return _first_coordinates(tensors)[_ca_mask(tensors)]  # (l, 3) one C-alpha coordinate per residue
 
 
 def _aligned_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
@@ -223,115 +193,77 @@ def _aligned_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
     return torch.sqrt(torch.mean(torch.sum((aligned - X_ref) ** 2, dim=-1))).item()
 
 
-def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
-    actual_distances = torch.cdist(actual.float(), actual.float())  # (n, n)
-    expected_distances = torch.cdist(expected.float(), expected.float())  # (n, n)
-    # pair_mask: (n, n)
-    pair_mask = expected_distances.lt(15.0)
-    pair_mask.fill_diagonal_(False)
-    assert pair_mask.any()
-    errors = (actual_distances - expected_distances).abs()  # (n, n)
-    # scores: (n, n)
-    scores = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
-        dim=0
-    )
-    return scores[pair_mask].mean().item()
-
-
-def _probability_jsd(
-    actual_logits: torch.Tensor,
-    expected_logits: torch.Tensor,
-    mask: torch.Tensor,
-) -> torch.Tensor:
-    # Logits: (*s, c), where s contains batch/sample and atom or token-pair axes.
-    # mask covers the trailing axes of s; c is the number of confidence bins.
-    actual_log_prob = F.log_softmax(actual_logits.float(), dim=-1)
-    expected_log_prob = F.log_softmax(expected_logits.float(), dim=-1)
-    actual_prob = actual_log_prob.exp()
-    expected_prob = expected_log_prob.exp()
-    mean_prob = 0.5 * (actual_prob + expected_prob)
-    log_mean_prob = mean_prob.clamp_min(torch.finfo(torch.float32).tiny).log()
-    divergence = 0.5 * (
-        (actual_prob * (actual_log_prob - log_mean_prob)).sum(dim=-1)
-        + (expected_prob * (expected_log_prob - log_mean_prob)).sum(dim=-1)
-    )
-    while mask.ndim < divergence.ndim:
-        # Prepend one singleton sample/batch axis until the mask has shape rank len(s).
-        mask = mask.unsqueeze(0)
-    mask = torch.broadcast_to(mask, divergence.shape)
-    return divergence[mask].mean()
-
-
 def _metrics(
     actual: Mapping[str, torch.Tensor],
     expected: Mapping[str, torch.Tensor],
 ) -> tuple[dict[str, float], dict[str, float]]:
-    features = _features(actual)
+    # actual, expected: (...) one tensor per bundle name; feature__token_pad_mask (b, l), feature__atom_pad_mask (b, a), output__sample_atom_coords (*s, a, 3); output__plddt (b, l), output__pae (b, l, l)
+    features = feature_tensors(actual)
     # token_mask: (b, l), covering the batch's token positions.
     token_mask = features["token_pad_mask"].bool()
     # pair_mask: (b, l, l)
     pair_mask = token_mask[:, :, None] & token_mask[:, None, :]
-    plddt_actual = _output(actual, "plddt").float().reshape_as(token_mask)
-    plddt_expected = _output(expected, "plddt").float().reshape_as(token_mask)
-    pae_actual = _output(actual, "pae").float().reshape_as(pair_mask)
-    pae_expected = _output(expected, "pae").float().reshape_as(pair_mask)
+    plddt_actual = bundle_output(actual, "plddt").float().reshape_as(token_mask)
+    plddt_expected = bundle_output(expected, "plddt").float().reshape_as(token_mask)
+    pae_actual = bundle_output(actual, "pae").float().reshape_as(pair_mask)
+    pae_expected = bundle_output(expected, "pae").float().reshape_as(pair_mask)
     probability_values = [
-        _probability_jsd(
-            _output(actual, "pdistogram").squeeze(-2),
-            _output(expected, "pdistogram").squeeze(-2),
+        probability_jsd(
+            bundle_output(actual, "pdistogram").squeeze(-2),
+            bundle_output(expected, "pdistogram").squeeze(-2),
             pair_mask,
         ),
-        _probability_jsd(
-            _output(actual, "pde_logits"),
-            _output(expected, "pde_logits"),
+        probability_jsd(
+            bundle_output(actual, "pde_logits"),
+            bundle_output(expected, "pde_logits"),
             pair_mask,
         ),
-        _probability_jsd(
-            _output(actual, "pae_logits"),
-            _output(expected, "pae_logits"),
+        probability_jsd(
+            bundle_output(actual, "pae_logits"),
+            bundle_output(expected, "pae_logits"),
             pair_mask,
         ),
-        _probability_jsd(
-            _output(actual, "plddt_logits"),
-            _output(expected, "plddt_logits"),
+        probability_jsd(
+            bundle_output(actual, "plddt_logits"),
+            bundle_output(expected, "plddt_logits"),
             token_mask,
         ),
     ]
     structure_metrics = {
         "ca_rmsd": _aligned_rmsd(_ca_coordinates(actual), _ca_coordinates(expected)),
-        "lddt_ca": _lddt_ca(_ca_coordinates(actual), _ca_coordinates(expected)),
+        "lddt_ca": lddt_ca(_ca_coordinates(actual), _ca_coordinates(expected)),
         "plddt_mae": (plddt_actual[token_mask] - plddt_expected[token_mask]).abs().mean().item(),
         "pae_mae": (pae_actual[pair_mask] - pae_expected[pair_mask]).abs().mean().item(),
         "ptm_error": (
-            _output(actual, "ptm").float().reshape(-1)[0]
-            - _output(expected, "ptm").float().reshape(-1)[0]
+            bundle_output(actual, "ptm").float().reshape(-1)[0]
+            - bundle_output(expected, "ptm").float().reshape(-1)[0]
         )
         .abs()
         .item(),
         "iptm_error": (
-            _output(actual, "iptm").float().reshape(-1)[0]
-            - _output(expected, "iptm").float().reshape(-1)[0]
+            bundle_output(actual, "iptm").float().reshape(-1)[0]
+            - bundle_output(expected, "iptm").float().reshape(-1)[0]
         )
         .abs()
         .item(),
         "mean_probability_jsd": torch.stack(probability_values).mean().item(),
     }
     relative_l2 = {
-        name: _relative_l2(_output(actual, name), _output(expected, name))
+        name: _relative_l2(bundle_output(actual, name), bundle_output(expected, name))
         for name in ("pdistogram", "pde_logits", "pae_logits", "plddt_logits")
     }
     return structure_metrics, relative_l2
 
 
 def _assert_valid_outputs(tensors: Mapping[str, torch.Tensor], *, context: str) -> None:
-    features = _features(tensors)
+    # tensors: (...) one tensor per bundle name; feature__token_pad_mask (b, l), feature__atom_pad_mask (b, a), output__sample_atom_coords (*s, a, 3)
+    features = feature_tensors(tensors)
     # atom_mask: (a,), covering the atoms in the first batch element.
     atom_mask = features["atom_pad_mask"][0].bool()
     coordinates = _first_coordinates(tensors)
     assert torch.isfinite(coordinates[atom_mask]).all(), f"{context}: coordinates"
     for name in boltz2_bundle._required_outputs:
-        X = _output(tensors, name)
+        X = bundle_output(tensors, name)
         if X.is_floating_point():
             assert torch.isfinite(X).all(), f"{context}: {name}"
 
@@ -357,9 +289,9 @@ def test_boltz2_request_is_manifest_exact(tmp_path: Path) -> None:
     request = load_request(path)
     registry = get_model_registry()
     spec = registry[boltz2_bundle.model_id]
-    assert request["official"] == _checkpoint_contract(spec.official)
-    assert request["candidate"] == _checkpoint_contract(spec.fast)
-    assert request["upstream"] == _upstream_contract(registry.upstreams["boltz"])
+    assert request["official"] == checkpoint_metadata(spec.official)
+    assert request["candidate"] == checkpoint_metadata(spec.fast)
+    assert request["upstream"] == upstream_metadata(registry.upstreams["boltz"])
     assert request["sequence"] == boltz2_bundle.fold_sequence
     assert spec.family.bf16_execution == "fp32_parameters_autocast"
     assert request["parameter_dtype"] == boltz2_bundle.fold_parameter_dtype

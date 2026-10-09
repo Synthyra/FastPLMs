@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
-
+import sys
 import pytest
 import torch
 
@@ -12,7 +12,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, BinaryIO
 from unittest.mock import Mock
-
 from safetensors.torch import load_file
 
 from tools.confidence import live_checkpoints as live
@@ -45,11 +44,11 @@ def staged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> live.LiveCheckpoi
     (run / "wandb-id.txt").write_text("run123", encoding="utf-8")
     loader = Mock(return_value=checkpoint_state())
     monkeypatch.setattr(torch, "load", loader)
-    result = live.stage_live_checkpoint(campaign, "esmfold2_300", tmp_path / "staged")
-    assert result is not None
+    staged_checkpoint = live.stage_live_checkpoint(campaign, "esmfold2_300", tmp_path / "staged")
+    assert staged_checkpoint is not None
     assert loader.call_args.kwargs == {"map_location": "cpu", "weights_only": False}
     assert loader.call_args.args[0] != run / "last.pt"
-    return result
+    return staged_checkpoint
 
 
 def test_ema_overlay_preserves_nontrainable_state(staged: live.LiveCheckpoint) -> None:
@@ -82,6 +81,10 @@ def test_invalid_ema_fails_closed(problem: str) -> None:
         live.ema_head_state(checkpoint)
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="needs POSIX rename semantics: Windows refuses to replace a file a reader holds open",
+)
 def test_snapshot_keeps_old_inode_during_atomic_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source, snapshot = tmp_path / "last.pt", tmp_path / "snapshot.pt"
     source.write_bytes(b"old complete checkpoint")

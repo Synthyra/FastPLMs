@@ -17,6 +17,7 @@ import os
 import subprocess
 import sys
 import tempfile
+
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -204,7 +205,7 @@ def _save_model_for_probe(model: Any, save_path: Path, implementation: str) -> N
     model.save_pretrained(save_path, safe_serialization=True)
 
 
-def _load_class(implementation: str, auto_class: str, class_path: str) -> type:
+def _load_class(implementation: str, auto_class: str, class_path: str) -> type[Any]:
     if implementation == "artifact":
         import transformers
 
@@ -482,12 +483,12 @@ def _run_isolated_reload(
                 "Isolated saved-artifact reload failed" + (f":\n{details}" if details else ".")
             )
         try:
-            result = json.loads(output.read_text(encoding="utf-8"))
+            report = json.loads(output.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError("Isolated saved-artifact reload produced invalid output") from error
-        if not isinstance(result, dict):
+        if not isinstance(report, dict):
             raise RuntimeError("Isolated saved-artifact reload output must be an object")
-        return result
+        return report
 
 
 def _load_model_exact(
@@ -610,7 +611,7 @@ def probe(
         )
         expected_auto_classes = set(config.auto_map)
         first = _semantic_config(config)
-        result = {
+        probe_record = {
             "config": hashlib.sha256(
                 json.dumps(first, sort_keys=True, default=str).encode()
             ).hexdigest()
@@ -632,9 +633,9 @@ def probe(
                 source_root=source_root,
                 attn_implementation=attn_implementation,
             )
-            if reloaded_result != result:
+            if reloaded_result != probe_record:
                 raise AssertionError("Configuration changed across isolated AutoClass save/reload")
-        return result
+        return probe_record
 
     if not torch.cuda.is_available():
         raise RuntimeError("Offline artifact validation requires a CUDA GPU")
@@ -655,7 +656,7 @@ def probe(
     torch.manual_seed(42)
     torch.cuda.manual_seed_all(42)
     output = _exercise(model, artifact, family, bf16_execution, torch)
-    result = {
+    probe_record = {
         "state": _state_digest(model),
         "pretrained_state": _state_digest(
             model,
@@ -695,7 +696,7 @@ def probe(
         )
         del independently_loaded
         torch.cuda.empty_cache()
-        if independently_loaded_state != result["pretrained_state"]:
+        if independently_loaded_state != probe_record["pretrained_state"]:
             raise RuntimeError(
                 "Pretrained AutoModel weights depend on the initialization seed; "
                 "one or more shared/base weights were not loaded from the checkpoint"
@@ -711,12 +712,12 @@ def probe(
             attn_implementation=attn_implementation,
         )
         expected_reload_result = {
-            "state": result["state"],
-            "output": result["output"],
+            "state": probe_record["state"],
+            "output": probe_record["output"],
         }
         if reloaded_result != expected_reload_result:
             raise AssertionError("Model changed across isolated AutoClass save/reload")
-    return result
+    return probe_record
 
 
 def _load_probe_cases(path: Path) -> tuple[ProbeCase, ...]:
@@ -882,10 +883,6 @@ def _cpu_primary_tensor(output: Any, torch: Any) -> Any:
     raise AssertionError("Advertised AutoClass output contains no tensor for backward().")
 
 
-def _cpu_state_digest(model: Any) -> str:
-    return _state_digest(model)
-
-
 def _cpu_resize_and_setter_contract(model: Any) -> int:
     input_embeddings = model.get_input_embeddings()
     if input_embeddings is None or not hasattr(input_embeddings, "num_embeddings"):
@@ -953,7 +950,7 @@ def _probe_tiny_cpu_model(
         # tests/unit/test_structure_output_contracts.py. This isolated artifact
         # check owns remote Auto dispatch plus exact state persistence so those
         # behavior tests do not need a second copy of the runtime bundler.
-        before = _cpu_state_digest(model)
+        before = _state_digest(model)
         with tempfile.TemporaryDirectory(prefix="fastplms-cpu-structure-reload-") as directory:
             save_path = Path(directory)
             _save_model_for_probe(model, save_path, "artifact")
@@ -964,7 +961,7 @@ def _probe_tiny_cpu_model(
             if family == "esmfold2":
                 reload_kwargs["load_esmc"] = False
             reloaded = _load_model_exact(auto_type, save_path, **reload_kwargs).eval()
-            if _cpu_state_digest(reloaded) != before:
+            if _state_digest(reloaded) != before:
                 raise AssertionError("Structure AutoClass state changed across save/reload.")
         return {
             "class": type(model).__name__,
@@ -1004,7 +1001,7 @@ def _probe_tiny_cpu_model(
     with torch.inference_mode():
         expected_output = model(**reloaded_inputs, return_dict=True)
     expected_digest = _output_digest(expected_output)
-    expected_state = _cpu_state_digest(model)
+    expected_state = _state_digest(model)
     resaved = False
     with tempfile.TemporaryDirectory(prefix="fastplms-cpu-autoclass-reload-") as directory:
         save_path = Path(directory) / "first"
@@ -1015,7 +1012,7 @@ def _probe_tiny_cpu_model(
             local_files_only=True,
             trust_remote_code=True,
         ).eval()
-        if _cpu_state_digest(reloaded) != expected_state:
+        if _state_digest(reloaded) != expected_state:
             raise AssertionError("AutoClass state changed across save/reload.")
         with torch.inference_mode():
             observed_output = reloaded(**reloaded_inputs, return_dict=True)
@@ -1032,7 +1029,7 @@ def _probe_tiny_cpu_model(
                 local_files_only=True,
                 trust_remote_code=True,
             ).eval()
-            if _cpu_state_digest(resaved_model) != expected_state:
+            if _state_digest(resaved_model) != expected_state:
                 raise AssertionError("Remote AutoClass state changed across save-resave.")
             with torch.inference_mode():
                 resaved_output = resaved_model(**reloaded_inputs, return_dict=True)
@@ -1319,13 +1316,13 @@ def main(argv: Iterable[str] | None = None) -> int:
                     "--tiny-cpu-contract cannot receive repository source or Flash backend options"
                 )
             _install_cpu_probe_hermetic_guards()
-            result = probe_tiny_cpu_many(
+            probe_report = probe_tiny_cpu_many(
                 artifact=arguments.artifact.resolve(),
                 family=arguments.family,
                 cases=cases,
             )
         else:
-            result = probe_many(
+            probe_report = probe_many(
                 artifact=arguments.artifact.resolve(),
                 family=arguments.family,
                 bf16_execution=arguments.bf16_execution,
@@ -1339,7 +1336,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             parser.error("--tiny-cpu-contract requires --cases-file")
         if arguments.auto_class is None or arguments.class_path is None:
             parser.error("--auto-class and --class-path are required without --cases-file")
-        result = probe(
+        probe_report = probe(
             artifact=arguments.artifact.resolve(),
             family=arguments.family,
             bf16_execution=arguments.bf16_execution,
@@ -1353,7 +1350,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             expected_unexpected_key_prefixes=arguments.expected_unexpected_key_prefix,
         )
     arguments.output.write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n",
+        json.dumps(probe_report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return 0

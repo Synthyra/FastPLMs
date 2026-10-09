@@ -27,18 +27,13 @@ from functools import wraps
 from importlib import metadata
 from numbers import Integral, Real
 from pathlib import Path
-from typing import Any, ParamSpec, TypeVar, cast
-from datasets import load_dataset
-from peft import LoraConfig, PeftModel, get_peft_model
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 from torch.utils.data import Dataset as TorchDataset
-from transformers import (
-    AutoModelForSequenceClassification,
-    EarlyStoppingCallback,
-    EvalPrediction,
-    Trainer,
-    TrainingArguments,
-    set_seed,
-)
+
+# The Transformers training stack takes seconds to import (it also loads PEFT), so the
+# functions that build or train a model import it themselves and --help stays fast.
+if TYPE_CHECKING:
+    from transformers import EvalPrediction, Trainer, TrainingArguments
 
 
 # Shapes: b = batch, b_v = verification batch, l = encoded tokens,
@@ -86,12 +81,6 @@ BASE_TRAINER_KWARGS = {
 }
 
 
-def _output_path_exists(path: Path) -> bool:
-    """Return true for files, directories, and broken symlinks."""
-
-    return os.path.lexists(path)
-
-
 @contextlib.contextmanager
 def _reserved_output_directory(output_dir: str | Path) -> Iterator[Path]:
     """Atomically reserve a new run directory and clean it after a failed run."""
@@ -134,7 +123,7 @@ def _reserved_output_directory(output_dir: str | Path) -> Iterator[Path]:
                     f"preserving {destination} for manual inspection."
                 )
             shutil.rmtree(destination)
-        except BaseException as cleanup_error:
+        except BaseException as cleanup_error:  # noqa: broad-except  a failed cleanup becomes a note on the error raised next
             error.add_note(
                 "FastPLMs could not clean the failed run's reserved output directory: "
                 f"{cleanup_error}"
@@ -173,7 +162,8 @@ def _guard_training_output(
 def _ensure_output_paths_available(paths: list[Path]) -> None:
     """Preflight all requested task outputs before a multi-task CLI starts."""
 
-    collisions = [str(path) for path in paths if _output_path_exists(path)]
+    # `lexists` is true for files, directories, and broken symlinks.
+    collisions = [str(path) for path in paths if os.path.lexists(path)]
     if collisions:
         raise FileExistsError(
             "Refusing to start because task output paths already exist and could mix "
@@ -422,6 +412,9 @@ def _load_dataset_immutable(
         kwargs["revision"] = identity["revision"]
     if split is not None:
         kwargs["split"] = split
+    # Imported where used: datasets and peft take seconds to import, which `--help` should not pay.
+    from datasets import load_dataset
+
     return load_dataset(source, **kwargs), identity
 
 
@@ -475,16 +468,16 @@ def _classification_label_set(dataset: Any, *, split: str) -> set[int]:
     return labels
 
 
-def _validate_classification_dataset_dict(data: Any) -> int:
+def _validate_classification_dataset_dict(dataset_dict: Any) -> int:
     """Validate the complete classification schema before model initialization."""
 
-    if not isinstance(data, Mapping):
+    if not isinstance(dataset_dict, Mapping):
         raise TypeError(
             "Classification data must be a DatasetDict-style mapping with train, "
             "valid, and test splits."
         )
     required_splits = ("train", "valid", "test")
-    missing_splits = [split for split in required_splits if split not in data]
+    missing_splits = [split for split in required_splits if split not in dataset_dict]
     if missing_splits:
         raise ValueError(
             "Classification data is missing required splits: "
@@ -493,7 +486,7 @@ def _validate_classification_dataset_dict(data: Any) -> int:
 
     label_sets: dict[str, set[int]] = {}
     for split in required_splits:
-        dataset = data[split]
+        dataset = dataset_dict[split]
         _require_dataset_columns(
             dataset,
             split=split,
@@ -592,6 +585,8 @@ def initialize_model(
 
     num_labels=1 selects regression; model_revision pins remote model sources.
     """
+    from transformers import AutoModelForSequenceClassification
+
     if attn_backend not in EXAMPLE_ATTENTION_BACKENDS:
         raise ValueError(
             f"The fine-tuning example supports {EXAMPLE_ATTENTION_BACKENDS}, got "
@@ -626,6 +621,8 @@ def initialize_model(
     tokenizer = model.tokenizer
 
     if use_lora:
+        from peft import LoraConfig, get_peft_model
+
         if lora_config is None:
             # Target modules for the ESM2 sequence-classification artifacts.
             target_modules = ["layernorm_qkv.1", "out_proj", "query", "key", "value", "dense"]
@@ -745,7 +742,7 @@ def _dataset_identity(
     split: str,
 ) -> dict[str, Any]:
     fingerprint = getattr(dataset, "_fingerprint", None)
-    info = getattr(dataset, "info", None)
+    dataset_info = getattr(dataset, "info", None)
     return {
         "source": _json_safe(source),
         "split": split,
@@ -753,11 +750,11 @@ def _dataset_identity(
         "ordered_rows_sha256": _ordered_rows_sha256(dataset, columns),
         "library_fingerprint_advisory": fingerprint,
         "rows": len(dataset),
-        "builder_name": getattr(info, "builder_name", None),
-        "config_name": getattr(info, "config_name", None),
+        "builder_name": getattr(dataset_info, "builder_name", None),
+        "config_name": getattr(dataset_info, "config_name", None),
         "version": (
-            str(info.version)
-            if info is not None and getattr(info, "version", None) is not None
+            str(dataset_info.version)
+            if dataset_info is not None and getattr(dataset_info, "version", None) is not None
             else None
         ),
     }
@@ -781,7 +778,7 @@ def _write_training_manifest(
     full_determinism: bool,
     datasets: dict[str, Any],
     dataset_contracts: dict[str, dict[str, Any]],
-    training_arguments: TrainingArguments,
+    training_arguments: "TrainingArguments",
     patience: int,
     final_artifact: Mapping[str, Any],
     requested_attention_backend: str = "sdpa",
@@ -951,7 +948,7 @@ def _primary_prediction_tensor(predictions: Any) -> torch.Tensor:
 
 
 def _held_out_reload_verification(
-    trainer: Trainer,
+    trainer: "Trainer",
     reloaded_model: Any,
     *,
     verification_dataset: Any,
@@ -1042,6 +1039,8 @@ def _reload_final_model(
     use_lora: bool,
     attn_backend: str = "sdpa",
 ) -> Any:
+    from transformers import AutoModelForSequenceClassification
+
     source = _immutable_source_identity(
         model_name,
         model_revision,
@@ -1056,6 +1055,8 @@ def _reload_final_model(
             attn_implementation=attn_backend,
             **revision_kwargs,
         )
+        from peft import PeftModel
+
         return PeftModel.from_pretrained(
             base_model,
             artifact_dir,
@@ -1070,7 +1071,7 @@ def _reload_final_model(
 
 
 def _save_reload_verify_final_artifact(
-    trainer: Trainer,
+    trainer: "Trainer",
     tokenizer: Any,
     *,
     output_dir: str,
@@ -1178,7 +1179,7 @@ def _rankdata(values: np.ndarray) -> np.ndarray:
 
 
 def _spearman_correlation(predictions: np.ndarray, labels: np.ndarray) -> float:
-    # predictions/labels: same-size arrays of arbitrary rank
+    # predictions, labels: (...) same-size arrays of arbitrary rank
     prediction_ranks = _rankdata(predictions)  # (n,)
     label_ranks = _rankdata(labels)  # (n,)
     if prediction_ranks.size < 2:
@@ -1187,7 +1188,7 @@ def _spearman_correlation(predictions: np.ndarray, labels: np.ndarray) -> float:
     return float(correlation)
 
 
-def compute_metrics_regression(p: EvalPrediction) -> dict[str, float]:
+def compute_metrics_regression(p: "EvalPrediction") -> dict[str, float]:
     """Compute Spearman correlation for regression tasks."""
     predictions, labels = p.predictions, p.label_ids  # predictions: (...); labels: (...)
     predictions = (
@@ -1201,7 +1202,7 @@ def compute_metrics_regression(p: EvalPrediction) -> dict[str, float]:
     }
 
 
-def compute_metrics_classification(p: EvalPrediction) -> dict[str, float]:
+def compute_metrics_classification(p: "EvalPrediction") -> dict[str, float]:
     """Compute accuracy for classification tasks"""
     predictions, labels = p.predictions, p.label_ids  # predictions: (n, c); labels: (n,)
     predictions = (
@@ -1246,7 +1247,7 @@ def plot_regression_results(
     import seaborn as sns
     from scipy.stats import spearmanr
 
-    # preds/labels: (n,)
+    # preds, labels: (n,)
     correlation, p_value = spearmanr(preds, labels)
 
     figure, axis = plt.subplots(figsize=(10, 8))
@@ -1275,7 +1276,7 @@ def plot_regression_results(
 
 
 def plot_classification_results(
-    trainer: Trainer,
+    trainer: "Trainer",
     test_dataset: Any,
     output_path: str | Path,
     task_name: str = "Classification",
@@ -1334,12 +1335,14 @@ def train_regression_model(
     plot_results: bool = False,
     attn_backend: str = "sdpa",
     output_dir: str | Path | None = None,
-) -> tuple[Trainer, Any]:
+) -> "tuple[Trainer, Any]":
     """Train protein-pair regression and return the trainer and test dataset.
 
     max_length: Encoded token budget including pair separators and special tokens.
     patience counts evaluations without improvement. output_dir must be new.
     """
+    from transformers import EarlyStoppingCallback, Trainer, TrainingArguments, set_seed
+
     print("Loading datasets for regression task...")
     if max_length <= 0:
         raise ValueError("max_length must be a positive encoded token budget.")
@@ -1524,22 +1527,24 @@ def train_classification_model(
     plot_results: bool = False,
     attn_backend: str = "sdpa",
     output_dir: str | Path | None = None,
-) -> Trainer:
+) -> "Trainer":
     """Train protein solubility classification and return the trainer.
 
     max_length: Encoded token budget including tokenizer-added special tokens.
     patience counts evaluations without improvement. output_dir must be new.
     """
+    from transformers import EarlyStoppingCallback, Trainer, TrainingArguments, set_seed
+
     print("Loading datasets for classification task...")
     if max_length <= 0:
         raise ValueError("max_length must be a positive encoded token budget.")
     set_seed(seed)
 
-    data, dataset_source_identity = _load_dataset_immutable(
+    dataset_dict, dataset_source_identity = _load_dataset_immutable(
         dataset_source,
         dataset_revision,
     )
-    num_labels = _validate_classification_dataset_dict(data)
+    num_labels = _validate_classification_dataset_dict(dataset_dict)
     model, tokenizer = initialize_model(
         model_name=model_name,
         model_revision=model_revision,
@@ -1552,9 +1557,9 @@ def train_classification_model(
     def _filter_by_length(example: Any) -> bool:
         return _fits_token_budget(tokenizer, example["seqs"], None, max_length)
 
-    train_data = data["train"].filter(_filter_by_length)
-    valid_data = data["valid"].filter(_filter_by_length)
-    test_data = data["test"].filter(_filter_by_length)
+    train_data = dataset_dict["train"].filter(_filter_by_length)
+    valid_data = dataset_dict["valid"].filter(_filter_by_length)
+    test_data = dataset_dict["test"].filter(_filter_by_length)
     _require_non_empty_filtered_split(train_data, split="train")
     _require_non_empty_filtered_split(valid_data, split="valid")
     _require_non_empty_filtered_split(test_data, split="test")

@@ -7,34 +7,16 @@ they do not replace or reconstruct any upstream computation.
 
 from __future__ import annotations
 
-import sys
 import torch
 import torch.nn as nn
 
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
 from tests.parity.support.reference_adapters import (
-    install_byprot_sequence_namespace,
+    install_dplm_source_path,
     move_model,
     snapshot_path,
 )
-
-
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-_DPLM_SOURCE = _REPOSITORY_ROOT / "vendor" / "upstream" / "dplm" / "src"
-
-
-def _install_source_path() -> None:
-    if not _DPLM_SOURCE.is_dir():
-        raise FileNotFoundError(
-            "DPLM submodule is missing; run git submodule update --init --recursive"
-        )
-    source = str(_DPLM_SOURCE)
-    if source not in sys.path:
-        sys.path.insert(0, source)
-    install_byprot_sequence_namespace(_DPLM_SOURCE)
 
 
 class _OfficialDPLMForwardWrapper(nn.Module):
@@ -53,7 +35,7 @@ class _OfficialDPLMForwardWrapper(nn.Module):
         attention_mask: torch.Tensor | None = None,
         **_kwargs: Any,
     ) -> SimpleNamespace:
-        # input_ids: (b, l)
+        # input_ids, attention_mask: (b, l); attention_mask is deleted unused
         del attention_mask
         captured: list[torch.Tensor] = []
 
@@ -90,7 +72,7 @@ class _OfficialDPLMForwardWrapper(nn.Module):
         """Invoke the pinned implementation's public diffusion sampler."""
 
         # input_tokens: (b, l), the generation prompt's batch and token axes.
-        return self.oracle.generate(input_tokens=input_tokens, **kwargs)
+        return self.oracle.generate(input_tokens=input_tokens, **kwargs)  # (b, l) generated tokens
 
 
 def load_official_model(
@@ -101,7 +83,7 @@ def load_official_model(
 ) -> tuple[nn.Module, object]:
     """Load DPLM through its pinned official ``from_pretrained`` method."""
 
-    _install_source_path()
+    install_dplm_source_path()
     # Register the exact official network class without triggering ByProt's
     # package-wide discovery of unrelated structure models.
     from byprot.models.dplm.dplm import DiffusionProteinLanguageModel

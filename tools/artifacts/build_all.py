@@ -9,11 +9,12 @@ repository.
 from __future__ import annotations
 
 import argparse
+
 from collections.abc import Iterable
 from pathlib import Path
+from benchmarks.suite import benchmark_artifact_model_ids
 from huggingface_hub import snapshot_download
 
-from benchmarks.suite import benchmark_artifact_model_ids
 from fastplms.registry import get_model_registry
 from tools.artifacts.build import (
     _TOKENIZER_FILE_NAMES,

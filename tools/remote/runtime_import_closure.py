@@ -8,6 +8,7 @@ import json
 import re
 import sys
 import tomllib
+
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass

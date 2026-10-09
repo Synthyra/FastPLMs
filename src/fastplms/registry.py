@@ -87,6 +87,8 @@ _ROOT_FIELDS = frozenset(
         "families",
         "models",
         "runtime_assets",
+        "golden_artifacts",
+        "sparse_autoencoders",
     }
 )
 _UPSTREAM_FIELDS = frozenset(
@@ -94,6 +96,7 @@ _UPSTREAM_FIELDS = frozenset(
         "id",
         "path",
         "url",
+        "fetch_url",
         "revision",
         "license",
         "license_files",
@@ -174,6 +177,17 @@ _RUNTIME_ASSET_FIELDS = frozenset(
         "consumer_family",
         "trust_kind",
         "license",
+        "offline_behavior",
+    }
+)
+_GOLDEN_ARTIFACT_FIELDS = frozenset(
+    {
+        "id",
+        "repository",
+        "revision",
+        "path",
+        "sha256",
+        "size",
         "offline_behavior",
     }
 )
@@ -263,6 +277,20 @@ class CheckpointSource:
 
 
 @dataclass(frozen=True, slots=True)
+class SparseAutoencoderSpec:
+    """Pinned released SAE and its input contract, not its unknown training revision."""
+
+    id: str
+    base_model: str
+    checkpoint: CheckpointSource
+    layer: int
+    input_width: int
+    k: int
+    codebook_dim: int
+    input_kind: Literal["hidden_state"] = "hidden_state"
+
+
+@dataclass(frozen=True, slots=True)
 class OracleAsset:
     """Hash-pinned external file required by a native parity oracle."""
 
@@ -298,6 +326,19 @@ class OfficialGolden:
 
 
 @dataclass(frozen=True, slots=True)
+class GoldenArtifact:
+    """Durable Hub copy of one model's official golden tensors at an immutable revision."""
+
+    model_id: str
+    repository: str
+    revision: str
+    path: str
+    sha256: str
+    size: int
+    offline_behavior: str
+
+
+@dataclass(frozen=True, slots=True)
 class UpstreamSource:
     """Pinned official implementation used as a parity oracle."""
 
@@ -309,6 +350,13 @@ class UpstreamSource:
     license_files: tuple[str, ...]
     license_digests: tuple[FileDigest, ...] = ()
     distribution_files: tuple[FileDigest, ...] = ()
+    # Where the pinned revision is fetched when `url`, the source of record, no longer serves it.
+    fetch_url: str = ""
+
+    @property
+    def clone_url(self) -> str:
+        """The URL that `.gitmodules` and source archives use."""
+        return self.fetch_url or self.url
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,6 +526,8 @@ class ModelRegistry(Mapping[str, ModelSpec]):
         runtime_assets: Mapping[str, RuntimeAsset] = MappingProxyType({}),
         attention_kernels: Mapping[str, AttentionKernelSpec] = MappingProxyType({}),
         legal_files: tuple[FileDigest, ...] = (),
+        golden_artifacts: Mapping[str, GoldenArtifact] = MappingProxyType({}),
+        sparse_autoencoders: Mapping[str, SparseAutoencoderSpec] = MappingProxyType({}),
     ) -> None:
         self.schema_version = schema_version
         self.upstreams = MappingProxyType(dict(upstreams))
@@ -486,6 +536,8 @@ class ModelRegistry(Mapping[str, ModelSpec]):
         self._models = MappingProxyType(dict(models))
         self.runtime_assets = MappingProxyType(dict(runtime_assets))
         self.legal_files = legal_files
+        self.golden_artifacts = MappingProxyType(dict(golden_artifacts))
+        self.sparse_autoencoders = MappingProxyType(dict(sparse_autoencoders))
 
     def __getitem__(self, key: str) -> ModelSpec:
         return self._models[key]
@@ -500,6 +552,22 @@ class ModelRegistry(Mapping[str, ModelSpec]):
         if family_id not in self.families:
             raise KeyError(family_id)
         return tuple(model for model in self._models.values() if model.family.id == family_id)
+
+    def sae_for_base(
+        self, base_model: str, *, layer: int, k: int, codebook_dim: int
+    ) -> SparseAutoencoderSpec:
+        """Resolve an exact registered SAE selection without a Hub lookup or fallback."""
+        matches = tuple(
+            spec for spec in self.sparse_autoencoders.values()
+            if (spec.base_model, spec.layer, spec.k, spec.codebook_dim)
+            == (base_model, layer, k, codebook_dim)
+        )
+        if len(matches) != 1:
+            raise RegistryError(
+                f"Expected one pinned SAE for {base_model}, layer={layer}, k={k}, "
+                f"codebook_dim={codebook_dim}; found {len(matches)}."
+            )
+        return matches[0]
 
     def supported_attention_dtypes(
         self,
@@ -988,8 +1056,11 @@ def _parse_upstreams(raw: object) -> dict[str, UpstreamSource]:
             raise RegistryError(f"Duplicate upstream path: {path!r}")
         paths.add(path)
         url = _require_str(value, "url", context)
-        if not url.startswith("https://github.com/") or not url.endswith(".git"):
-            raise RegistryError(f"{context}.url must be an HTTPS GitHub clone URL.")
+        fetch_url = _optional_str(value, "fetch_url", context) or ""
+        for field, candidate in (("url", url), ("fetch_url", fetch_url)):
+            is_github = candidate.startswith("https://github.com/")
+            if candidate and not (is_github and candidate.endswith(".git")):
+                raise RegistryError(f"{context}.{field} must be an HTTPS GitHub clone URL.")
         license_files = _require_str_list(value, "license_files", context)
         license_digests = _require_digest_list(value, "license_digests", context)
         if tuple(item.path for item in license_digests) != license_files:
@@ -1026,6 +1097,7 @@ def _parse_upstreams(raw: object) -> dict[str, UpstreamSource]:
             license_files=license_files,
             license_digests=license_digests,
             distribution_files=distribution_files,
+            fetch_url=fetch_url,
         )
     return upstreams
 
@@ -1286,6 +1358,67 @@ def _parse_runtime_assets(
             offline_behavior=offline_behavior,
         )
     return runtime_assets
+
+
+def _parse_golden_artifacts(
+    raw: object,
+    models: Mapping[str, ModelSpec],
+) -> dict[str, GoldenArtifact]:
+    """Parse the optional Hub copies of official golden tensors, keyed by model ID.
+
+    A copy must be byte-identical to the tensors its model's official_golden pins, so its
+    SHA-256 must equal that digest and the existing integrity check covers both files.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, list):
+        raise RegistryError("golden_artifacts must be an array of tables.")
+    golden_artifacts: dict[str, GoldenArtifact] = {}
+    for index, value in enumerate(raw):
+        context = f"golden_artifacts[{index}]"
+        if not isinstance(value, dict):
+            raise RegistryError(f"{context} must be a table.")
+        _reject_unknown_fields(value, _GOLDEN_ARTIFACT_FIELDS, context)
+        model_id = _require_str(value, "id", context)
+        model = models.get(model_id)
+        if model is None:
+            raise RegistryError(f"{context}.id references unknown model {model_id!r}.")
+        if model.official_golden is None:
+            raise RegistryError(f"{context}.id names {model_id!r}, which has no official_golden.")
+        if model_id in golden_artifacts:
+            raise RegistryError(f"Duplicate golden artifact for model {model_id!r}.")
+        repository = _require_str(value, "repository", context)
+        if _REPOSITORY_ID_RE.fullmatch(repository) is None:
+            raise RegistryError(f"{context}.repository must be a Hugging Face repository ID.")
+        revision = _require_str(value, "revision", context)
+        _validate_revision(revision, f"{context}.revision")
+        path = _require_str(value, "path", context)
+        expected_path = f"goldens/{model_id}.safetensors"
+        if path != expected_path:
+            raise RegistryError(f"{context}.path must be {expected_path!r}.")
+        sha256 = _require_str(value, "sha256", context)
+        if sha256 != model.official_golden.tensors.digest:
+            raise RegistryError(
+                f"{context}.sha256 must equal the official_golden tensors digest of {model_id!r}."
+            )
+        size = value.get("size")
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise RegistryError(f"{context}.size must be a positive byte count.")
+        offline_behavior = _require_str(value, "offline_behavior", context)
+        if offline_behavior not in _ALLOWED_RUNTIME_ASSET_OFFLINE_BEHAVIORS:
+            raise RegistryError(
+                f"{context}.offline_behavior is unsupported: {offline_behavior!r}."
+            )
+        golden_artifacts[model_id] = GoldenArtifact(
+            model_id=model_id,
+            repository=repository,
+            revision=revision,
+            path=path,
+            sha256=sha256,
+            size=size,
+            offline_behavior=offline_behavior,
+        )
+    return golden_artifacts
 
 
 def _parse_confidence_adaptation(
@@ -1667,6 +1800,57 @@ def _validate_registry(
             )
 
 
+def _parse_sparse_autoencoders(
+    raw: object, models: Mapping[str, ModelSpec]
+) -> dict[str, SparseAutoencoderSpec]:
+    """Validate optional SAE records independently of the base-model mapping."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, list):
+        raise RegistryError("sparse_autoencoders must be an array of tables.")
+    allowed = frozenset({
+        "id", "base_model", "layer", "input_width", "k", "codebook_dim", "input_kind",
+        "checkpoint_repo", "checkpoint_revision", "checkpoint_files",
+    })
+    records: dict[str, SparseAutoencoderSpec] = {}
+    selections: set[tuple[str, int, int, int]] = set()
+    for index, table in enumerate(raw):
+        context = f"sparse_autoencoders[{index}]"
+        if not isinstance(table, dict):
+            raise RegistryError(f"{context} must be a table.")
+        _reject_unknown_fields(table, allowed, context)
+        identifier = _require_str(table, "id", context)
+        if _IDENTIFIER_RE.fullmatch(identifier) is None or identifier in records:
+            raise RegistryError(f"{context} has an invalid or duplicate SAE id: {identifier!r}.")
+        base = _require_str(table, "base_model", context)
+        if base not in models or models[base].family.id != "esm_plusplus":
+            raise RegistryError(f"{context}.base_model must name a registered ESMC base.")
+        numbers: dict[str, int] = {}
+        for field in ("layer", "input_width", "k", "codebook_dim"):
+            value = table.get(field)
+            if type(value) is not int or value < (0 if field == "layer" else 1):
+                raise RegistryError(f"{context}.{field} must be a valid integer dimension.")
+            numbers[field] = value
+        if numbers["k"] > numbers["codebook_dim"]:
+            raise RegistryError(f"{context}.k exceeds codebook_dim.")
+        if _require_str(table, "input_kind", context) != "hidden_state":
+            raise RegistryError(f"{context} requires hidden_state input, not residual updates.")
+        checkpoint = _parse_checkpoint(table, "checkpoint", context)
+        expected_files = {"config.json", f"layer_{numbers['layer']}.safetensors"}
+        if set(checkpoint.file_map) != expected_files or any(
+            item.algorithm != "sha256" for item in checkpoint.files
+        ):
+            raise RegistryError(f"{context} must SHA-256 pin exactly {sorted(expected_files)}.")
+        selection = (base, numbers["layer"], numbers["k"], numbers["codebook_dim"])
+        if selection in selections:
+            raise RegistryError(f"{context} duplicates an SAE selection: {selection}.")
+        selections.add(selection)
+        records[identifier] = SparseAutoencoderSpec(
+            id=identifier, base_model=base, checkpoint=checkpoint, **numbers
+        )
+    return records
+
+
 def _load_manifest_bytes(raw_bytes: bytes) -> ModelRegistry:
     try:
         manifest = tomllib.loads(raw_bytes.decode("utf-8"))
@@ -1685,6 +1869,8 @@ def _load_manifest_bytes(raw_bytes: bytes) -> ModelRegistry:
     runtime_assets = _parse_runtime_assets(manifest.get("runtime_assets"), families)
     models = _parse_models(manifest.get("models"), families)
     _validate_registry(upstreams, attention_kernels, families, models)
+    golden_artifacts = _parse_golden_artifacts(manifest.get("golden_artifacts"), models)
+    sparse_autoencoders = _parse_sparse_autoencoders(manifest.get("sparse_autoencoders"), models)
     return ModelRegistry(
         schema_version=1,
         upstreams=upstreams,
@@ -1693,6 +1879,8 @@ def _load_manifest_bytes(raw_bytes: bytes) -> ModelRegistry:
         models=models,
         runtime_assets=runtime_assets,
         legal_files=legal_files,
+        golden_artifacts=golden_artifacts,
+        sparse_autoencoders=sparse_autoencoders,
     )
 
 
@@ -1729,6 +1917,7 @@ __all__ = [
     "CheckpointSource",
     "FileDigest",
     "GenerationContract",
+    "GoldenArtifact",
     "ModelFamily",
     "ModelRegistry",
     "ModelSpec",
@@ -1737,6 +1926,7 @@ __all__ = [
     "RuntimeAsset",
     "RuntimeAssetTrustKind",
     "RuntimeExtra",
+    "SparseAutoencoderSpec",
     "TestTier",
     "UpstreamSource",
     "VramTier",

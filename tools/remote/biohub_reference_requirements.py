@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import re
 import tomllib
+
 from collections.abc import Sequence
 from pathlib import Path
 

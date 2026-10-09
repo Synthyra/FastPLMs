@@ -864,11 +864,8 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
             else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
-        if self.config.is_decoder:
-            use_cache = use_cache if use_cache is not None else self.config.use_cache
-        else:
-            use_cache = False
+        # The checks above leave no decoder, cross-attention, or cache input.
+        use_cache = False
 
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
@@ -902,14 +899,6 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
         else:
             attention_mask_2d = attention_mask.to(device=device, dtype=torch.bool)  # (b, l)
 
-        encoder_extended_attention_mask = encoder_attention_mask
-        if self.config.is_decoder and encoder_hidden_states is not None:
-            encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
-            encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
-            if encoder_attention_mask is None:
-                encoder_attention_mask = torch.ones(encoder_hidden_shape, device=device)  # (encoder_batch_size, encoder_sequence_length)
-            encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
-
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
         embedding_output = self.embeddings(
@@ -923,7 +912,7 @@ class FAST_DPLM_ENCODER(DPLMPreTrainedModel, EmbeddingMixin):
             attention_mask=attention_mask_2d,
             head_mask=head_mask,
             encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_extended_attention_mask,
+            encoder_attention_mask=encoder_attention_mask,
             past_key_values=past_key_values,
             use_cache=use_cache,
             output_attentions=output_attentions,

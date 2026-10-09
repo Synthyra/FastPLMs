@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import torch
+
 from types import SimpleNamespace
 from typing import Any
 from torch.nn import functional as F
@@ -36,13 +37,13 @@ def _metrics(actual: torch.Tensor, expected: torch.Tensor) -> dict[str, float]:
         expected_float.reshape(-1, expected.shape[-1]),  # (n, d)
         dim=-1,
     )  # (n,)
-    result = {
+    parity_metrics = {
         "relative_l2": relative_l2.item(),
         "minimum_cosine": cosine.min().item(),
     }
-    if result["relative_l2"] > 1e-2 or result["minimum_cosine"] < 0.999:
-        raise RuntimeError(f"FlashAttention parity failed: {result}")
-    return result
+    if parity_metrics["relative_l2"] > 1e-2 or parity_metrics["minimum_cosine"] < 0.999:
+        raise RuntimeError(f"FlashAttention parity failed: {parity_metrics}")
+    return parity_metrics
 
 
 def _sdpa_reference(
@@ -210,13 +211,13 @@ def _model_results() -> dict[str, Any]:
 def main() -> None:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required for FlashAttention validation.")
-    result = {
+    probe_report = {
         "device": torch.cuda.get_device_name(0),
         "shared": _shared_results(),
         "models": _model_results(),
         "torch": torch.__version__,
     }
-    print(json.dumps(result, indent=2, sort_keys=True))
+    print(json.dumps(probe_report, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

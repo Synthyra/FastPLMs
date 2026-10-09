@@ -12,10 +12,10 @@ import io
 import re
 import sys
 import tempfile
+
 from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any
-
 from huggingface_hub import CommitOperationAdd, HfApi
 
 
@@ -132,12 +132,12 @@ def _remote_parent_commit(api: HfApi, repo_id: str, revision: str) -> str:
     """Return the current remote commit SHA or fail closed before upload."""
 
     try:
-        info = api.model_info(repo_id=repo_id, revision=revision)
+        repository_info = api.model_info(repo_id=repo_id, revision=revision)
     except Exception as error:
         raise ArtifactError(
             f"Unable to resolve the remote parent commit for {repo_id}@{revision}."
         ) from error
-    parent_commit = getattr(info, "sha", None)
+    parent_commit = getattr(repository_info, "sha", None)
     if not isinstance(parent_commit, str) or _COMMIT_SHA_RE.fullmatch(parent_commit) is None:
         raise ArtifactError(
             f"Remote parent commit for {repo_id}@{revision} is missing or invalid."

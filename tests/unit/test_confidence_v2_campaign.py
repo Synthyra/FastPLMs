@@ -1,13 +1,14 @@
 """Fail closed when reusing preparation or publishing campaign artifacts."""
 
 import json
-
 import pytest
 
 from pathlib import Path
 from types import SimpleNamespace
 
+from fastplms.digests import file_sha256
 from tools.confidence import target_splits, v2_campaign
+from tools.stored_files import write_stored_json
 
 
 def prepared_campaign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -18,11 +19,11 @@ def prepared_campaign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     positions = root / "pool/positions"
     positions.mkdir(parents=True)
     (positions / "one.npy").write_bytes(b"coordinates")
-    v2_campaign.write_json(root / "prepared.json", {
+    write_stored_json(root / "prepared.json", {
         "status": "prepared",
         "dataset_revision": v2_campaign.DATASET_REVISION,
-        "pilot_files": {"records.json": v2_campaign.file_hash(pilot / "records.json")},
-    })
+        "pilot_files": {"records.json": file_sha256(pilot / "records.json")},
+    }, sort_keys=False)
     monkeypatch.setattr(target_splits, "load_split", lambda _: [{"positions_file": "one.npy"}])
     return root
 
@@ -46,7 +47,7 @@ def test_prepared_data_rejects_different_dataset(tmp_path: Path, monkeypatch: py
     root = prepared_campaign(tmp_path, monkeypatch)
     receipt = json.loads((root / "prepared.json").read_text())
     receipt["dataset_revision"] = "different"
-    v2_campaign.write_json(root / "prepared.json", receipt)
+    write_stored_json(root / "prepared.json", receipt, sort_keys=False)
     with pytest.raises(ValueError, match="dataset pin"):
         v2_campaign.validate_prepared(root)
 
@@ -76,12 +77,12 @@ def test_public_archive_is_explicit_and_parent_protected(tmp_path: Path, monkeyp
 def test_completion_requires_every_evaluation_upload(tmp_path: Path) -> None:
     root = tmp_path / "campaign"
     for model_id in (*v2_campaign.MODEL_IDS, "esmfold2"):
-        v2_campaign.write_json(root / "evaluation" / root.name / model_id / "completion.json", {})
+        write_stored_json(root / "evaluation" / root.name / model_id / "completion.json", {}, sort_keys=False)
     assert not v2_campaign.evaluations_archived(root)
     for model_id in v2_campaign.MODEL_IDS:
-        v2_campaign.write_json(root / "uploads" / f"evaluate-{model_id}.json", {})
+        write_stored_json(root / "uploads" / f"evaluate-{model_id}.json", {}, sort_keys=False)
     assert not v2_campaign.evaluations_archived(root)
-    v2_campaign.write_json(root / "uploads/evaluate-esmfold2.json", {})
+    write_stored_json(root / "uploads/evaluate-esmfold2.json", {}, sort_keys=False)
     assert v2_campaign.evaluations_archived(root)
 
 
@@ -130,17 +131,17 @@ def test_evaluation_recovery_requires_undispatched_completed_training(tmp_path: 
     from tools.confidence import experiment_artifacts
 
     model_id = "esmfold2_300"
-    v2_campaign.write_json(tmp_path / "runs" / model_id / "v2/report.json", {
+    write_stored_json(tmp_path / "runs" / model_id / "v2/report.json", {
         "status": "complete", "model_id": model_id, "updates": 779 if existing == "incomplete" else 780,
-    })
+    }, sort_keys=False)
     if existing in {"queued", "training"}:
         status = {"evaluation_call_id": "fc-queued"} if existing == "queued" else {"status": "running"}
-        v2_campaign.write_json(tmp_path / "status" / f"train-{model_id}.json", status)
+        write_stored_json(tmp_path / "status" / f"train-{model_id}.json", status, sort_keys=False)
     elif existing == "directory":
         (tmp_path / "evaluation" / tmp_path.name / model_id).mkdir(parents=True)
     elif existing in {"receipt", "status"}:
         name = f"dispatch-evaluate-{model_id}.json" if existing == "receipt" else f"evaluate-{model_id}.json"
-        v2_campaign.write_json(tmp_path / "status" / name, {"status": "running"})
+        write_stored_json(tmp_path / "status" / name, {"status": "running"}, sort_keys=False)
     verified = []
     monkeypatch.setattr(experiment_artifacts, "verify_evaluation", lambda *args, **kwargs: verified.append((args, kwargs)))
     if existing is None:

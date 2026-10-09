@@ -189,7 +189,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             local_files_only=arguments.local_files_only,
         )
         exit_code = 0
-    except Exception as error:
+    except Exception as error:  # noqa: broad-except  a check failure of any kind is written to the report and the exit code
         report = {
             "schema_version": SCHEMA_VERSION,
             "status": "failed",

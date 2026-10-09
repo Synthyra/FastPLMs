@@ -8,8 +8,10 @@ import re
 import struct
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+
+from fastplms.digests import file_sha256
 
 
 MODEL_IDS = frozenset({"esmfold2_300", "esmfold2_600"})
@@ -29,8 +31,7 @@ def _model_directory(root: Path, model_id: str) -> Path:
 def _file_identity(path: Path) -> dict[str, int | str]:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"Resume input must be a regular file: {path.name}")
-    with path.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    digest = file_sha256(path)
     return {"size": path.stat().st_size, "sha256": digest}
 
 
@@ -190,7 +191,7 @@ def write_migration_receipt(
     path = directory / f"{model_id}-{old_call_id}.json"
     receipt = {
         "schema_version": 1,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "campaign": root.name,
         "model_id": model_id,
         "old_gpu": old_gpu,

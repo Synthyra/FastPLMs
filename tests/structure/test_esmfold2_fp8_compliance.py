@@ -54,13 +54,13 @@ def _assert_fp8_smoke(model: torch.nn.Module) -> None:
     assert len(paths) == len(set(paths)) == EXPECTED_FP8_PROJECTIONS
     assert all(path.endswith(".attn.out_proj") for path in paths)
 
-    result = model.embed_dataset(
+    records = model.embed_dataset(
         list(SEQUENCES),
         batch_size=2,
         full_embeddings=True,
         dtype=torch.float32,
     )
-    embeddings = tuple(record.load_tensor() for record in result)
+    embeddings = tuple(record.load_tensor() for record in records)
     assert tuple(tensor.shape for tensor in embeddings) == ((17, 256), (9, 256))
     assert all(torch.isfinite(tensor).all() for tensor in embeddings)
     assert not any(key.startswith("_esmc.") for key in model.state_dict())
@@ -123,13 +123,13 @@ def test_auto_precision_selects_runtime_bf16_on_the_locked_h100() -> None:
         assert status.resolved == "bf16"
         assert str(status.device).startswith("cuda")
         assert model._esmc_fp8_module_paths == ()
-        result = model.embed_dataset(
+        records = model.embed_dataset(
             list(SEQUENCES),
             batch_size=2,
             full_embeddings=True,
             dtype=torch.float32,
         )
-        assert all(torch.isfinite(record.load_tensor()).all() for record in result)
+        assert all(torch.isfinite(record.load_tensor()).all() for record in records)
         assert not any(key.startswith("_esmc.") for key in model.state_dict())
     finally:
         del model

@@ -8,6 +8,7 @@ import torch
 
 from collections.abc import Callable
 from pathlib import Path
+from tests.unit.tiny_families import tiny_esm2_config, tiny_esm3_config, tiny_esmc_config
 from transformers import PretrainedConfig, PreTrainedModel
 
 from fastplms.models.ankh.modeling_ankh import FastAnkhConfig, FastAnkhModel
@@ -35,31 +36,12 @@ from fastplms.models.esm2.modeling_fastesm import (
     FastEsmForTokenClassification,
     FastEsmModel,
 )
-from fastplms.models.esm3.modeling_esm3 import FastESM3Config, FastESM3Model
-from fastplms.models.esm_plusplus.modeling_esm_plusplus import (
-    ESMplusplusConfig,
-    ESMplusplusModel,
-)
+from fastplms.models.esm3.modeling_esm3 import FastESM3Model
+from fastplms.models.esm_plusplus.modeling_esm_plusplus import ESMplusplusModel
 
 
 def _esm2_config() -> FastEsmConfig:
-    return FastEsmConfig(
-        vocab_size=16,
-        hidden_size=8,
-        num_hidden_layers=1,
-        num_attention_heads=2,
-        intermediate_size=16,
-        hidden_dropout_prob=0.0,
-        attention_probs_dropout_prob=0.0,
-        max_position_embeddings=16,
-        pad_token_id=1,
-        mask_token_id=5,
-        num_labels=3,
-        position_embedding_type="absolute",
-        add_pooling_layer=False,
-        attn_backend="eager",
-        use_cache=False,
-    )
+    return tiny_esm2_config(add_pooling_layer=False, use_cache=False)
 
 
 def _dplm_config() -> DPLMConfig:
@@ -106,19 +88,6 @@ def _dplm2_config() -> DPLM2Config:
     )
 
 
-def _esmc_config() -> ESMplusplusConfig:
-    return ESMplusplusConfig(
-        vocab_size=16,
-        hidden_size=8,
-        num_attention_heads=2,
-        num_hidden_layers=1,
-        dropout=0.0,
-        pad_token_id=1,
-        mask_token_id=5,
-        attn_backend="eager",
-    )
-
-
 def _ankh_config() -> FastAnkhConfig:
     return FastAnkhConfig(
         vocab_size=16,
@@ -134,16 +103,6 @@ def _ankh_config() -> FastAnkhConfig:
         decoder_start_token_id=0,
         attn_backend="eager",
         use_cache=False,
-    )
-
-
-def _esm3_config() -> FastESM3Config:
-    return FastESM3Config(
-        hidden_size=8,
-        num_attention_heads=2,
-        num_vector_heads=2,
-        num_hidden_layers=1,
-        attn_backend="eager",
     )
 
 
@@ -250,9 +209,9 @@ _PACKAGE_RESAVE_CASES: tuple[
     ("esm2", _esm2_config, FastEsmModel, False),
     ("dplm", _dplm_config, DPLMModel, False),
     ("dplm2", _dplm2_config, DPLM2Model, False),
-    ("esmc", _esmc_config, ESMplusplusModel, False),
+    ("esmc", tiny_esmc_config, ESMplusplusModel, False),
     ("ankh", _ankh_config, FastAnkhModel, False),
-    ("esm3", _esm3_config, FastESM3Model, True),
+    ("esm3", tiny_esm3_config, FastESM3Model, True),
 )
 
 
@@ -348,7 +307,7 @@ def test_dplm2_public_forwards_reject_cache_and_cross_attention_arguments() -> N
 
 
 def test_esmc_sequence_id_is_authoritative_for_chain_and_padding_masks() -> None:
-    model = ESMplusplusModel(_esmc_config()).eval()
+    model = ESMplusplusModel(tiny_esmc_config()).eval()
     input_ids = torch.tensor([[0, 3, 4, 5, 1, 1]])  # (b=1, l=6)
     sequence_id = torch.tensor([[0, 0, 1, 1, -1, -1]])  # (b, l)
 

@@ -22,6 +22,7 @@ from .types import (
     EmbeddingResult,
     LazyTensorReference,
 )
+from ..json_files import indented_json
 
 
 _DTYPE_NAMES: dict[torch.dtype, str] = {
@@ -102,13 +103,15 @@ def _bounded_tensor_chunks(X: Tensor, max_bytes: int) -> Iterator[Tensor]:
 
 
 def _tensor_hash_chunks(X: Tensor) -> Iterator[bytes]:
-    for chunk in _bounded_tensor_chunks(X, _TENSOR_HASH_CHUNK_BYTES):
+    # X: (...)
+    for chunk in _bounded_tensor_chunks(X, _TENSOR_HASH_CHUNK_BYTES):  # (n_chunk,)
         yield chunk.view(torch.uint8).numpy().tobytes()
 
 
 def tensor_sha256(X: Tensor) -> str:
     """Hash dtype, shape, and exact tensor bytes."""
 
+    # X: (...)
     if not isinstance(X, Tensor):
         raise TypeError("X must be a tensor.")
     if X.dtype not in _DTYPE_NAMES:
@@ -126,22 +129,23 @@ def tensor_sha256(X: Tensor) -> str:
 
 
 def _encode_tensor(X: Tensor) -> tuple[str, str, bytes]:
+    # X: (...)
     if X.dtype not in _DTYPE_NAMES:
         raise TypeError(f"Unsupported tensor dtype {X.dtype}.")
     shape = json.dumps(tuple(X.shape), separators=(",", ":"))
     return _DTYPE_NAMES[X.dtype], shape, _tensor_bytes(X)
 
 
-def _decode_tensor(dtype_name: str, shape_json: str, data: bytes) -> Tensor:
+def _decode_tensor(dtype_name: str, shape_json: str, raw_bytes: bytes) -> Tensor:
     try:
         dtype = _NAME_DTYPES[dtype_name]
     except KeyError as error:
         raise ValueError(f"Unsupported stored dtype {dtype_name!r}.") from error
     shape = tuple(json.loads(shape_json))
     # uint8 is used only as a byte-level carrier, preserving BF16 bits exactly.
-    byte_array = np.frombuffer(data, dtype=np.uint8).copy()  # (n_bytes,)
+    byte_array = np.frombuffer(raw_bytes, dtype=np.uint8).copy()  # (n_bytes,)
     X = torch.from_numpy(byte_array).view(dtype)  # (n_elements,)
-    return X.reshape(shape).clone()  # shape
+    return X.reshape(shape).clone()  # (...), the stored shape
 
 
 def _index_path(path: str | Path) -> Path:
@@ -172,10 +176,6 @@ def _resolve_index_child(root: Path, relative: str, *, label: str) -> Path:
     return candidate
 
 
-def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
-    return (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
-
-
 def _load_authoritative_index(
     path: str | Path,
 ) -> tuple[dict[str, Any], Path, dict[str, Any]]:
@@ -198,7 +198,7 @@ def _load_authoritative_index(
         snapshot = run_manifest.get("index_payload")
         if isinstance(snapshot, dict):
             payload = snapshot
-            index_bytes = _canonical_json_bytes(payload)
+            index_bytes = indented_json(payload).encode("utf-8")
         elif snapshot is None:
             index_bytes = stable_index_path.read_bytes()
             payload = json.loads(index_bytes.decode("utf-8"))
@@ -268,7 +268,7 @@ def _load_safetensor(path: Path, key: str) -> Tensor:
     except ImportError as error:
         raise ImportError("Loading embeddings requires the 'safetensors' package.") from error
     with safe_open(path, framework="pt", device="cpu") as handle:
-        return cast(Tensor, handle.get_tensor(key))
+        return cast(Tensor, handle.get_tensor(key))  # (...), as stored under key
 
 
 def _safetensors_shard_prefix(path: str | Path) -> str:
@@ -361,7 +361,7 @@ def _record_from_safetensors_descriptor(root: Path, item: dict[str, Any]) -> Emb
         raise ValueError(f"Safetensors tensor shard is missing: {relative}.")
 
     def load_tensor() -> Tensor:
-        return _load_safetensor(tensor_path, key)
+        return _load_safetensor(tensor_path, key)  # (...), the descriptor's shape
 
     reference = LazyTensorReference(
         source=str(tensor_path),
@@ -720,7 +720,7 @@ class SafetensorsStreamWriter:
             raise FileExistsError(
                 f"Refusing to reuse immutable safetensors generation index {generation_index_path}."
             )
-        encoded_index = _canonical_json_bytes(payload)
+        encoded_index = indented_json(payload).encode("utf-8")
         temporary_generation_index.write_bytes(encoded_index)
         temporary_generation_index.replace(generation_index_path)
 
@@ -739,7 +739,7 @@ class SafetensorsStreamWriter:
         temporary_manifest = self.run_manifest_path.with_name(
             f".{self.run_manifest_path.name}.{pointer_identity}.tmp"
         )
-        temporary_manifest.write_bytes(_canonical_json_bytes(run_manifest))
+        temporary_manifest.write_bytes(indented_json(run_manifest).encode("utf-8"))
         temporary_manifest.replace(self.run_manifest_path)
 
         # ``index.json`` is a non-authoritative convenience pointer. The run
@@ -753,7 +753,7 @@ class SafetensorsStreamWriter:
         temporary_index = self.index_path.with_name(
             f".{self.index_path.name}.{pointer_identity}.tmp"
         )
-        temporary_index.write_bytes(_canonical_json_bytes(stable_pointer))
+        temporary_index.write_bytes(indented_json(stable_pointer).encode("utf-8"))
         temporary_index.replace(self.index_path)
 
         return load_safetensors_result(self.index_path)
@@ -771,7 +771,7 @@ class SafetensorsStreamWriter:
 
 
 def save_safetensors_result(
-    result: EmbeddingResult,
+    embedding_result: EmbeddingResult,
     path: str | Path,
     *,
     shard_size: int = DEFAULT_SHARD_SIZE,
@@ -780,13 +780,13 @@ def save_safetensors_result(
 
     writer = SafetensorsStreamWriter(
         path,
-        result.metadata,
+        embedding_result.metadata,
         shard_size=shard_size,
         publish_initial=False,
         publish_incremental=False,
     )
-    writer.append(result, publish=False)
-    return writer.publish(complete=bool(result.metadata.get("complete", True)))
+    writer.append(embedding_result, publish=False)
+    return writer.publish(complete=bool(embedding_result.metadata.get("complete", True)))
 
 
 def load_safetensors_result(path: str | Path) -> EmbeddingResult:
@@ -925,19 +925,19 @@ def _ensure_sqlite_schema(connection: sqlite3.Connection) -> None:
         connection.commit()
 
 
-def save_sqlite_result(result: EmbeddingResult, path: str | Path) -> EmbeddingResult:
+def save_sqlite_result(embedding_result: EmbeddingResult, path: str | Path) -> EmbeddingResult:
     """Transactionally store an ordered result in normalized SQLite tables."""
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    run_id = str(result.metadata.get("run_fingerprint", ""))
+    run_id = str(embedding_result.metadata.get("run_fingerprint", ""))
     if not run_id:
         raise ValueError("SQLite results require metadata['run_fingerprint'].")
     metadata_json = json.dumps(
         _persistent_metadata(
-            result.metadata,
+            embedding_result.metadata,
             descriptor_index="sqlite-records",
-            record_count=len(result),
+            record_count=len(embedding_result),
         ),
         sort_keys=True,
     )
@@ -951,13 +951,13 @@ def save_sqlite_result(result: EmbeddingResult, path: str | Path) -> EmbeddingRe
             "SELECT ?, ?, COALESCE(MAX(published_order), 0) + 1 FROM runs",
             (run_id, metadata_json),
         )
-        for position, record in enumerate(result):
+        for position, record in enumerate(embedding_result):
             X = record.load_tensor().detach().cpu().contiguous()  # (...)
-            dtype_name, shape_json, data = _encode_tensor(X)
+            dtype_name, shape_json, raw_bytes = _encode_tensor(X)
             digest = tensor_sha256(X)
             connection.execute(
                 "INSERT INTO tensors VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, position, dtype_name, shape_json, data, digest),
+                (run_id, position, dtype_name, shape_json, raw_bytes, digest),
             )
             connection.execute(
                 "INSERT INTO records VALUES (?, ?, ?, ?)",
@@ -1057,11 +1057,11 @@ def append_sqlite_records(
         for offset, record in enumerate(records):
             position = start_position + offset
             X = record.load_tensor().detach().cpu().contiguous()  # (...)
-            dtype_name, shape_json, data = _encode_tensor(X)
+            dtype_name, shape_json, raw_bytes = _encode_tensor(X)
             digest = tensor_sha256(X)
             connection.execute(
                 "INSERT INTO tensors VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, position, dtype_name, shape_json, data, digest),
+                (run_id, position, dtype_name, shape_json, raw_bytes, digest),
             )
             connection.execute(
                 "INSERT INTO records VALUES (?, ?, ?, ?)",
@@ -1142,7 +1142,7 @@ def _load_sqlite_tensor(path: Path, run_id: str, position: int) -> Tensor:
         ).fetchone()
     if row is None:
         raise KeyError(f"Missing SQLite tensor {run_id}:{position}.")
-    return _decode_tensor(*row)
+    return _decode_tensor(*row)  # (...), the stored shape
 
 
 def _validate_sqlite_descriptor_row(
@@ -1180,7 +1180,7 @@ def _sqlite_record_from_row(path: Path, run_id: str, row: Sequence[Any]) -> Embe
     )
 
     def load_tensor() -> Tensor:
-        return _load_sqlite_tensor(path, run_id, position)
+        return _load_sqlite_tensor(path, run_id, position)  # (...), the stored shape
 
     reference = LazyTensorReference(
         source=str(path),
@@ -1284,7 +1284,7 @@ def load_sqlite_result(
         _validate_sqlite_result_schema(connection, path)
         if run_id is None:
             run_columns = {
-                str(info[1]) for info in connection.execute("PRAGMA table_info(runs)").fetchall()
+                str(column[1]) for column in connection.execute("PRAGMA table_info(runs)").fetchall()
             }
             if "published_order" in run_columns:
                 row = connection.execute(
@@ -1434,36 +1434,36 @@ _LEGACY_CODE_DTYPES: dict[int, tuple[np.dtype[Any], torch.dtype]] = {
 
 
 def _decode_legacy_sqlite_blob(
-    data: bytes,
+    blob: bytes,
     *,
     fallback_shape: tuple[int, ...] | None,
     allow_unsafe_pickle: bool,
 ) -> Tensor:
-    if len(data) >= 6 and data[0] == _LEGACY_COMPACT_VERSION:
-        dtype_code = int(data[1])
+    if len(blob) >= 6 and blob[0] == _LEGACY_COMPACT_VERSION:
+        dtype_code = int(blob[1])
         if dtype_code not in _LEGACY_CODE_DTYPES:
             raise ValueError(f"Unsupported legacy compact dtype code {dtype_code}.")
-        (ndim,) = struct.unpack_from("<i", data, 2)
-        if ndim < 0 or ndim > 16 or len(data) < 6 + 4 * ndim:
+        (ndim,) = struct.unpack_from("<i", blob, 2)
+        if ndim < 0 or ndim > 16 or len(blob) < 6 + 4 * ndim:
             raise ValueError("Malformed legacy compact embedding header.")
-        shape = tuple(int(value) for value in struct.unpack_from(f"<{ndim}i", data, 6))
+        shape = tuple(int(value) for value in struct.unpack_from(f"<{ndim}i", blob, 6))
         if any(size < 0 for size in shape):
             raise ValueError("Malformed negative legacy embedding dimension.")
         numpy_dtype, target_dtype = _LEGACY_CODE_DTYPES[dtype_code]
         offset = 6 + 4 * ndim
         expected = int(np.prod(shape, dtype=np.int64)) * numpy_dtype.itemsize
-        if len(data) - offset != expected:
+        if len(blob) - offset != expected:
             raise ValueError("Legacy compact embedding payload length does not match shape.")
-        array = (  # shape
-            np.frombuffer(data, dtype=numpy_dtype, offset=offset).copy().reshape(shape)
+        array = (  # (...), the stored shape
+            np.frombuffer(blob, dtype=numpy_dtype, offset=offset).copy().reshape(shape)
         )
-        return torch.from_numpy(array).to(dtype=target_dtype)  # shape
+        return torch.from_numpy(array).to(dtype=target_dtype)  # (...), the stored shape
 
     try:
-        loaded = torch.load(io.BytesIO(data), map_location="cpu", weights_only=True)
+        loaded = torch.load(io.BytesIO(blob), map_location="cpu", weights_only=True)
     except Exception as safe_error:
         if allow_unsafe_pickle:
-            loaded = torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
+            loaded = torch.load(io.BytesIO(blob), map_location="cpu", weights_only=False)
         elif fallback_shape is None:
             raise ValueError(
                 "Legacy embedding blob is neither compact nor safely loadable. "
@@ -1472,14 +1472,14 @@ def _decode_legacy_sqlite_blob(
             ) from safe_error
         else:
             expected = int(np.prod(fallback_shape, dtype=np.int64)) * 4
-            if len(data) != expected:
+            if len(blob) != expected:
                 raise ValueError(
                     "Legacy raw FP32 payload length does not match fallback_shape."
                 ) from safe_error
-            array = np.frombuffer(data, dtype=np.float32).copy().reshape(  # fallback_shape
+            array = np.frombuffer(blob, dtype=np.float32).copy().reshape(  # (...), fallback_shape
                 fallback_shape
             )
-            return torch.from_numpy(array)  # fallback_shape
+            return torch.from_numpy(array)  # (...), fallback_shape
     if not isinstance(loaded, Tensor):
         raise ValueError("Legacy serialized embedding payload must contain one tensor.")
     return loaded.detach().cpu()  # (...)
@@ -1522,13 +1522,13 @@ def convert_legacy_sqlite(
 
     records: list[EmbeddingRecord] = []
     content_digest = hashlib.sha256()
-    for position, (sequence, data) in enumerate(rows):
+    for position, (sequence, blob) in enumerate(rows):
         if not isinstance(sequence, str) or not sequence:
             raise ValueError("Legacy embedding sequences must be non-empty strings.")
-        if not isinstance(data, bytes):
-            data = bytes(data)
+        if not isinstance(blob, bytes):
+            blob = bytes(blob)
         tensor = _decode_legacy_sqlite_blob(
-            data,
+            blob,
             fallback_shape=fallback_shape,
             allow_unsafe_pickle=allow_unsafe_pickle,
         )
@@ -1559,16 +1559,16 @@ def convert_legacy_sqlite(
 
 
 def save_result(
-    result: EmbeddingResult,
+    embedding_result: EmbeddingResult,
     path: str | Path,
     *,
     format: str = "safetensors",
     shard_size: int = DEFAULT_SHARD_SIZE,
 ) -> EmbeddingResult:
     if format == "safetensors":
-        return save_safetensors_result(result, path, shard_size=shard_size)
+        return save_safetensors_result(embedding_result, path, shard_size=shard_size)
     if format == "sqlite":
-        return save_sqlite_result(result, path)
+        return save_sqlite_result(embedding_result, path)
     if format == "pth":
         raise ValueError("Writing pickle-based .pth embeddings is not supported.")
     raise ValueError("format must be 'safetensors' or 'sqlite'.")

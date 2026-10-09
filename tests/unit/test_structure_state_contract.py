@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 
 from collections.abc import Callable
-
 from tests.structure.support.state_contract import (
     exact_state_contract,
     semantic_config_contract,

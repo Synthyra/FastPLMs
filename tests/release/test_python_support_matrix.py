@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_python_support_versions_match_the_executed_matrix() -> None:
     assert CANONICAL_GPU_PYTHON == "3.12"
-    assert PYTHON_SUPPORT_VERSIONS == ("3.11", "3.13", "3.14")
+    assert PYTHON_SUPPORT_VERSIONS == ("3.13", "3.14")
     assert (ROOT / ".python-version").read_text(encoding="utf-8").strip() == "3.12.3"
 
 
@@ -108,7 +108,6 @@ def test_python_matrix_is_documented() -> None:
 
     for document in (remote, testing):
         assert "python-matrix" in document
-        assert "3.11" in document
-        assert "3.13" in document
-        assert "3.14" in document
-        assert "Python 3.12" in document
+        for version in PYTHON_SUPPORT_VERSIONS:
+            assert version in document
+        assert f"Python {CANONICAL_GPU_PYTHON}" in document

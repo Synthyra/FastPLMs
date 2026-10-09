@@ -3,7 +3,7 @@
 FastPLMs models follow Transformers `PreTrainedModel` conventions. Compatible
 families and task heads work with Trainer, Accelerate, distributed, and adapter
 workflows. Core training dependencies are in `requirements/features/train.in`.
-FastPLMs 1.0 supports Python 3.11-3.14 with PyTorch 2.13 and Transformers 5.13.
+FastPLMs 1.0 supports Python 3.12-3.14 with PyTorch 2.14 and Transformers 5.17.
 Use a CPU for a small contract run. Checkpoint fine-tuning normally needs a CUDA
 accelerator with memory for the model, optimizer state, and batch.
 

@@ -9,7 +9,6 @@ import torch
 
 from collections.abc import Sequence
 from pathlib import Path
-
 from tests.parity.support.reference_adapters import (
     pinned_biohub_snapshot,
     use_esm_submodule,

@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
+import sys
 import pytest
 
 from pathlib import Path
+from tests.conftest import requires_checkout_input
 
 from fastplms.registry import get_model_registry
 from tools.execution.budget import BudgetExceeded, BudgetLedger
-from tools.gpu_evidence import config, lever_bench
+from tools.gpu_evidence import config, launch, lever_bench, source
 from tools.gpu_evidence.launch import (
     failing_tests_by_cause,
     junit_counts,
@@ -40,11 +42,26 @@ def test_pinned_versions_match_the_validation_constraints() -> None:
     assert f"transformers=={config.TRANSFORMERS_VERSION}" in constraints.split()
 
 
+def _from_git_submodules(relative_path: str) -> bool:
+    """True for the submodule list and the pinned official sources beneath vendor/."""
+    return relative_path == ".gitmodules" or Path(relative_path).parts[0] == "vendor"
+
+
 def test_every_uploaded_path_exists_and_none_is_the_repository_root() -> None:
     for directory in SOURCE_DIRECTORIES:
-        assert (ROOT / directory).is_dir(), directory
         assert Path(directory).parts, directory
+        if not _from_git_submodules(directory):
+            assert (ROOT / directory).is_dir(), directory
     for file_name in SOURCE_FILES:
+        if not _from_git_submodules(file_name):
+            assert (ROOT / file_name).is_file(), file_name
+
+
+@requires_checkout_input(".gitmodules", "the Git repository")
+def test_every_uploaded_upstream_path_exists() -> None:
+    for directory in filter(_from_git_submodules, SOURCE_DIRECTORIES):
+        assert (ROOT / directory).is_dir(), directory
+    for file_name in filter(_from_git_submodules, SOURCE_FILES):
         assert (ROOT / file_name).is_file(), file_name
 
 
@@ -96,9 +113,12 @@ def test_ordinary_source_is_uploaded(path: str) -> None:
 def test_stage_table_is_well_formed() -> None:
     assert set(STAGES) == {
         "cpu-contract",
+        "check",
         "unit",
         "parity-local",
         "flash-integration",
+        "goldens",
+        "structure-goldens",
         "probe",
         "typing",
         "lever-bench",
@@ -124,6 +144,52 @@ def test_stage_table_is_well_formed() -> None:
         for argument in spec.arguments:
             if argument.startswith(("tests/", "tools/")):
                 assert (ROOT / argument).exists(), argument
+
+
+def test_stages_that_read_the_git_baseline_declare_it() -> None:
+    from tools.gpu_evidence import fold_bench
+
+    fold_series = {
+        (): fold_bench.SERIES,
+        ("--smoke",): fold_bench.SMOKE_SERIES,
+        ("--long",): fold_bench.LONG_SERIES,
+        ("--peak",): fold_bench.PEAK_SERIES,
+    }
+    for spec in STAGES.values():
+        module = spec.arguments[1] if spec.arguments[0] == "-m" else None
+        if module == "tools.gpu_evidence.typing_check":
+            reads_baseline = True
+        elif module == "tools.gpu_evidence.lever_bench":
+            # Only the backend mode times the working tree alone.
+            reads_baseline = "backends" not in spec.arguments
+        elif module == "tools.gpu_evidence.fold_bench":
+            series = fold_series[spec.arguments[2:]]
+            reads_baseline = any(entry.implementation == "fastplms-baseline" for entry in series)
+        else:
+            reads_baseline = False
+        assert spec.compares_baseline == reads_baseline, spec.name
+
+
+def test_a_tree_without_git_metadata_is_not_a_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(source, "ROOT", tmp_path)
+
+    assert not source.is_git_checkout()
+
+
+def test_a_launch_without_git_refuses_a_baseline_stage_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    monkeypatch.setattr(launch, "is_git_checkout", lambda: False)
+    monkeypatch.setattr(launch, "ARTIFACT_ROOT", artifact_root)
+    monkeypatch.setattr(sys, "argv", ["launch", "lever-bench"])
+
+    with pytest.raises(SystemExit, match="has no Git metadata"):
+        launch.main()
+    # Nothing was staged, reserved, or dispatched.
+    assert not artifact_root.exists()
 
 
 def test_stages_mirror_the_repository_suite_commands() -> None:

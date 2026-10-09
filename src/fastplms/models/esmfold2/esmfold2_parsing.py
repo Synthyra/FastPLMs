@@ -10,7 +10,20 @@ from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import NamedTuple, TextIO
 
+from ...embeddings.inputs import FastaDialect, scan_fasta_lines
 from .esmfold2_utils_types import PathOrBuffer
+
+
+# Lines are used as given and `#` lines are comments. A header keeps its full text, and sequence data
+# before the first header is skipped.
+ESMFOLD2_FASTA = FastaDialect(
+    strip_lines=False,
+    comment_prefix="#",
+    first_word_header=False,
+    squeeze_sequence_whitespace=False,
+    orphan_message=None,
+    empty_message="Found no sequences in input",
+)
 
 
 class FastaEntry(NamedTuple):
@@ -23,27 +36,8 @@ class FastaEntry(NamedTuple):
 def parse_fasta(text: str) -> Generator[FastaEntry, None, None]:
     """Yield records from FASTA text without normalizing sequence symbols."""
 
-    header: str | None = None
-    sequence_lines: list[str] = []
-    found_record = False
-
-    for line in text.splitlines():
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith(">"):
-            if header is not None:
-                found_record = True
-                yield FastaEntry(header, "".join(sequence_lines))
-            header = line[1:].strip()
-            sequence_lines.clear()
-        elif header is not None:
-            sequence_lines.append(line)
-
-    if header is not None:
-        found_record = True
-        yield FastaEntry(header, "".join(sequence_lines))
-    if not found_record:
-        raise ValueError("Found no sequences in input")
+    for record in scan_fasta_lines(text.splitlines(), ESMFOLD2_FASTA, source="input"):
+        yield FastaEntry(record.header, record.sequence)
 
 
 def _open_reader(source: PathOrBuffer) -> AbstractContextManager[TextIO]:

@@ -44,18 +44,18 @@ def test_a_head_that_ranks_and_calibrates_like_production_passes_every_gate():
     model = _records({"v2": "correct", "pilot": "reversed", "donor": "reversed"})
     reference = _records({"production": "correct"})
     estimates = acceptance.paired_estimates(model, ["v2", "pilot", "donor"], reference)
-    result = acceptance.acceptance_gates(estimates)
-    assert result["gates"] == {"beats_pilot": True, "sample_selection": True, "production_parity": True}
-    assert result["passed"]
+    gates = acceptance.acceptance_gates(estimates)
+    assert gates["gates"] == {"beats_pilot": True, "sample_selection": True, "production_parity": True}
+    assert gates["passed"]
     assert estimates["v2-minus-pilot"]["estimate"]["plddt_ce"] == pytest.approx(-2.0)
 
 
 def test_a_head_that_inverts_samples_fails_against_the_pilot_and_production():
     model = _records({"v2": "reversed", "pilot": "correct", "donor": "reversed"})
     reference = _records({"production": "correct"})
-    result = acceptance.acceptance_gates(acceptance.paired_estimates(model, ["v2", "pilot", "donor"], reference))
-    assert result["gates"] == {"beats_pilot": False, "sample_selection": False, "production_parity": False}
-    assert "within_target_plddt_accuracy" in result["beats_pilot"]["significant_regressions"]
+    gates = acceptance.acceptance_gates(acceptance.paired_estimates(model, ["v2", "pilot", "donor"], reference))
+    assert gates["gates"] == {"beats_pilot": False, "sample_selection": False, "production_parity": False}
+    assert "within_target_plddt_accuracy" in gates["beats_pilot"]["significant_regressions"]
 
 
 def test_the_long_stratum_is_left_out_and_only_shared_targets_are_compared():

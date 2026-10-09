@@ -5,7 +5,6 @@ from __future__ import annotations
 import torch
 
 from collections.abc import Mapping
-
 from torch import Tensor
 from torch.nn import functional
 
@@ -18,7 +17,7 @@ LDDT_THRESHOLDS = (0.5, 1.0, 2.0, 4.0)
 
 
 def _check_coordinates(predicted: Tensor, true: Tensor, resolved: Tensor) -> None:
-    # Expected: predicted/true (atoms, 3), resolved (atoms,); validate before use.
+    # predicted, true: (atoms, 3); resolved: (atoms,); validated before use.
     if predicted.ndim != 2 or predicted.shape[-1] != 3:
         raise ValueError("coordinates must have shape (atoms, 3)")
     if true.shape != predicted.shape:
@@ -29,7 +28,7 @@ def _check_coordinates(predicted: Tensor, true: Tensor, resolved: Tensor) -> Non
 
 def _lddt_scores(predicted: Tensor, true: Tensor, valid: Tensor) -> tuple[Tensor, Tensor]:
     """Return per-point lDDT scores and masks from coordinates shaped (points, 3)."""
-    # valid: (points,); thresholds is len(LDDT_THRESHOLDS).
+    # predicted, true: (points, 3); valid: (points,); thresholds is len(LDDT_THRESHOLDS).
     finite = torch.isfinite(predicted).all(-1) & torch.isfinite(true).all(-1)  # (points,)
     valid = valid.to(torch.bool) & finite  # (points,)
     true_distances = torch.cdist(true, true)  # (points, points)
@@ -106,6 +105,8 @@ def compute_targets(
     ``(tokens,)``. Returned atom labels are ``(atoms,)``, CA labels are
     ``(tokens,)``, and PAE labels are ``(tokens, tokens)``.
     """
+    # predicted_coords, true_coords: (atoms, 3); resolved_mask, atom_to_token: (atoms,)
+    # backbone_indices: (tokens, 3); token_mask: (tokens,)
     _check_coordinates(predicted_coords, true_coords, resolved_mask)
     if atom_to_token.shape != (predicted_coords.shape[0],):
         raise ValueError("atom_to_token must have shape (atoms,)")
@@ -171,7 +172,7 @@ def compute_targets(
     pae_error = pae_error.nan_to_num(posinf=PAE_MAX_ANGSTROM, neginf=0.0)  # (tokens, tokens)
     pae_target = (pae_error.clamp(0.0, PAE_MAX_ANGSTROM) * PAE_BINS / PAE_MAX_ANGSTROM).long()  # (tokens, tokens)
     pae_target = pae_target.clamp_max(PAE_BINS - 1)  # (tokens, tokens)
-    return {
+    return {  # (...) atom labels (atoms,), CA labels (tokens,), PAE labels (tokens, tokens)
         "plddt_target": plddt_target,
         "plddt_score": plddt_score,
         "plddt_mask": plddt_mask,
@@ -184,7 +185,7 @@ def compute_targets(
 
 
 def _masked_cross_entropy(logits: Tensor, target: Tensor, mask: Tensor) -> Tensor:
-    # logits: (*sites, bins); target/mask: (*sites). Sites are atoms or token pairs.
+    # logits: (*sites, bins); target, mask: (*sites). Sites are atoms or token pairs.
     logits = logits.float()  # (*sites, bins)
     valid_count = mask.sum()  # ()
     if valid_count.item() == 0:
@@ -197,6 +198,7 @@ def confidence_loss(
     outputs: Mapping[str, Tensor], targets: Mapping[str, Tensor]
 ) -> dict[str, Tensor]:
     """Compute normalized pLDDT plus 0.1-weighted PAE cross entropy."""
+    # outputs: (...) one tensor per head output; targets: (...) one label array per name from compute_targets
     plddt_logits = outputs["plddt_logits"]  # (1, atoms, bins) or (atoms, bins); optional singleton batch
     pae_logits = outputs["pae_logits"]  # (1, tokens, tokens, bins) or (tokens, tokens, bins)
     plddt_logits = (

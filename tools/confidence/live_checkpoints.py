@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .experiment_artifacts import file_identity, validate_evaluation_id
+from fastplms.digests import file_sha256
 from tools.execution.source import require_regular_source
+from .experiment_artifacts import file_identity, validate_evaluation_id
 
 
 if TYPE_CHECKING:
@@ -62,7 +63,7 @@ def ema_head_state(checkpoint: Mapping[str, Any]) -> dict[str, Tensor]:
         if not torch.isfinite(value).all():
             raise ValueError(f"Nonfinite head tensor: {name}")
         state[name] = value.detach().cpu().contiguous().clone()  # (...), independent storage
-    return state  # named tensors retain their checkpoint-defined shapes
+    return state  # (...) one tensor per head name, keeping its checkpoint-defined shape
 
 
 @dataclass(frozen=True)
@@ -235,8 +236,7 @@ def publish_live_checkpoint(checkpoint: LiveCheckpoint, api: HfApi) -> str | Non
         if api.file_exists(DATASET_REPO, remote_path, repo_type="dataset", revision=parent):
             existing = api.hf_hub_download(DATASET_REPO, remote_path, repo_type="dataset", revision=parent)
             # Hub cache files may be SDK-managed links to immutable blobs.
-            with Path(existing).open("rb") as stream:
-                observed = hashlib.file_digest(stream, "sha256").hexdigest()
+            observed = file_sha256(existing)
             if observed != expected:
                 raise ValueError(f"Immutable live checkpoint path already differs: {remote_path}")
         else:

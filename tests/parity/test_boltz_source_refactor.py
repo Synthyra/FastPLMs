@@ -94,7 +94,7 @@ def _install_import_only_dependency_stubs() -> None:
         @staticmethod
         def rvs(*args: object, **kwargs: object) -> np.ndarray:
             del args
-            return np.zeros(kwargs["size"], dtype=np.float32)
+            return np.zeros(kwargs["size"], dtype=np.float32)  # (...) zeros shaped by the size keyword
 
     scipy = ModuleType("scipy")
     scipy.__path__ = []  # type: ignore[attr-defined]
@@ -238,8 +238,8 @@ def test_chunk_layer_matches_upstream(
     }
 
     def layer(left: torch.Tensor, right: torch.Tensor) -> dict[str, torch.Tensor]:
-        # Each chunk has at most four flattened batch rows and four feature channels.
-        return {"sum": left + right, "product": left * right}
+        # left, right: (m, 4), at most m = 4 flattened batch rows and four feature channels per chunk.
+        return {"sum": left + right, "product": left * right}  # (...) sum (m, 4), product (m, 4)
 
     expected = upstream_attention_utils.chunk_layer(
         layer,
@@ -833,7 +833,8 @@ def _to_device(
     tree: dict[str, torch.Tensor],
     device: torch.device,
 ) -> dict[str, torch.Tensor]:
-    return {name: tensor.to(device) for name, tensor in tree.items()}
+    # tree: (...) one tensor per name, shapes unchanged
+    return {name: tensor.to(device) for name, tensor in tree.items()}  # (...) one tensor per name, shapes unchanged
 
 
 def _load_local_state(reference: torch.nn.Module, local: torch.nn.Module) -> None:

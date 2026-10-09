@@ -39,7 +39,8 @@ def _build_with_seed(
     seed: int,
 ) -> tuple[dict[str, torch.Tensor], ProteinStructureTemplate]:
     torch.manual_seed(seed)
-    return build_boltz2_features(SEQUENCE)
+    # n residues, a atoms padded to a multiple of 32
+    return build_boltz2_features(SEQUENCE)  # (...) one tensor per feature name: token features (1, n), atom features (1, a, ...)
 
 
 def test_boltz2_feature_preparation_is_seed_reproducible() -> None:

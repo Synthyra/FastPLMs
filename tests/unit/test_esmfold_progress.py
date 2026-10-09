@@ -41,6 +41,7 @@ def _patch_tiny_forward(monkeypatch: pytest.MonkeyPatch) -> None:
         input_ids: torch.Tensor,
         **kwargs: object,
     ) -> dict[str, torch.Tensor | None]:
+        # input_ids: (b, l), deleted unused
         del input_ids
         num_recycles = kwargs["num_recycles"]
         passes = 1 if num_recycles is None else int(num_recycles) + 1
@@ -52,7 +53,7 @@ def _patch_tiny_forward(monkeypatch: pytest.MonkeyPatch) -> None:
             self.trunk.structure_module(value)
         for name in ("distogram_head", "lm_head", "lddt_head", "ptm_head"):
             getattr(self, name)(value)
-        return {
+        return {  # (...) plddt (1, 1, 1), s_s (1, 1, 1), attentions None
             "plddt": value.reshape(1, 1, 1),
             "s_s": value.reshape(1, 1, 1),
             "attentions": None,
@@ -157,7 +158,7 @@ def test_infer_forwards_verbose_to_public_forward(monkeypatch: pytest.MonkeyPatc
     def fake_forward(*_args: object, **kwargs: object) -> dict[str, torch.Tensor]:
         seen["verbose"] = kwargs["verbose"]
         shape = (1, 2, 37)
-        return {
+        return {  # (...) plddt, atom37_atom_exists: each (1, 2, 37)
             "plddt": torch.ones(shape),
             "atom37_atom_exists": torch.ones(shape),
         }

@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import partial
@@ -416,7 +416,7 @@ class RotaryEmbedding(torch.nn.Module):
             and self._seq_len_cached >= token_count
             and cached.device == device
             and cached.dtype == dtype
-            and not (self.training and cached.is_inference())
+            and not (torch.is_grad_enabled() and cached.is_inference())  # autograd cannot save inference-created tables, in eval mode too
         )
 
     def _rotary_angles(
@@ -808,6 +808,7 @@ class TransformerOutput(ModelOutput):
     s_max: tuple[list[torch.Tensor], ...] | None = None
     sae_outputs: dict[str, torch.Tensor] | None = None
     sae_hidden_states: dict[int, torch.Tensor] | None = None
+    captured_hidden_states: dict[int, torch.Tensor] | None = None
 
 
 @dataclass
@@ -884,13 +885,53 @@ class TransformerStack(nn.Module):
         output_s_max: bool | None = False,
         esmfold2_hidden_states: bool = False,
         sae_layers: tuple[int, ...] = (),
+        capture_layers: tuple[int, ...] = (),
+        stop_after_layer: int | None = None,
+        stream_layers: tuple[int, ...] = (),
+        state_consumer: Callable[[int, torch.Tensor], None] | None = None,
+        assume_valid_mask: bool = False,
     ) -> TransformerOutput:
+        """Run the blocks and record the requested hidden states.
+
+        Hidden state ``i`` is the input to block ``i``, and state ``n_layers`` is the final
+        normalized state. ``capture_layers`` and ``sae_layers`` record states by that index.
+        ``stop_after_layer`` ends the pass once its state exists: no later block runs, and the
+        final norm runs only when that state is ``n_layers``, the default.
+        ``assume_valid_mask`` skips the check that every row keeps a valid key. That check reads a
+        device value and so stalls the host until the device is idle; a caller that builds its mask
+        from known lengths, as the canonical token executor does, sets it.
+        """
         # x: (b, l, d); attention_mask, sequence_id: (b, l)
+        n_layers = len(self.blocks)
+        depth = n_layers if stop_after_layer is None else stop_after_layer
+        if not 0 <= depth <= n_layers:
+            raise ValueError(
+                f"stop_after_layer must be a hidden-state index in 0..{n_layers}; "
+                f"received {stop_after_layer!r}."
+            )
+        capture_set = set(capture_layers)
+        stream_set = set(stream_layers)
+        if bool(stream_set) != (state_consumer is not None):
+            raise ValueError("Streaming layers and their state consumer must be supplied together.")
+        sae_layer_set = set(sae_layers)
+        # A full pass keeps the SAE contract unchanged; an early stop must reach every SAE state.
+        requested = capture_set | sae_layer_set if depth < n_layers else capture_set
+        requested = requested | stream_set
+        uncomputed = sorted(index for index in requested if not 0 <= index <= depth)
+        if uncomputed:
+            raise ValueError(
+                f"Hidden states {uncomputed} are outside the states 0..{depth} this call computes."
+            )
+        if depth < n_layers and (output_hidden_states or output_attentions or output_s_max):
+            raise ValueError(
+                "A stack that stops before its final state returns only captured hidden states; "
+                "output_hidden_states, output_attentions, and output_s_max need every block."
+            )
         hidden_states = () if output_hidden_states else None
         attentions = () if output_attentions else None
         full_s_max = () if output_s_max else None
-        sae_layer_set = set(sae_layers)
-        sae_hidden_states = {} if sae_layer_set else None
+        sae_hidden_states: dict[int, torch.Tensor] | None = {} if sae_layer_set else None
+        captured_hidden_states: dict[int, torch.Tensor] | None = {} if capture_set else None
         # Match the pinned Biohub Transformers contract: a supplied sequence_id
         # is authoritative and must encode padding as -1.  attention_mask is
         # ignored in that mode rather than intersected with the chain mask.
@@ -902,6 +943,7 @@ class TransformerStack(nn.Module):
             device=x.device,
             dtype=x.dtype,
             output_attentions=bool(output_attentions),
+            validate_mask=not assume_valid_mask,
         )
         # A call that returns attention weights runs eager attention and needs no layout.
         flash_padding_layout = (
@@ -911,6 +953,8 @@ class TransformerStack(nn.Module):
         )
 
         for layer_index, block in enumerate(self.blocks):
+            if layer_index == depth:
+                break
             if output_hidden_states:
                 if hidden_states is None:
                     raise RuntimeError(
@@ -922,6 +966,10 @@ class TransformerStack(nn.Module):
                 hidden_states += (x,)
             if sae_hidden_states is not None and layer_index in sae_layer_set:
                 sae_hidden_states[layer_index] = x
+            if captured_hidden_states is not None and layer_index in capture_set:
+                captured_hidden_states[layer_index] = x
+            if layer_index in stream_set:
+                state_consumer(layer_index, x)
             if self.gradient_checkpointing and self.training:
                 x, attn_weights, s_max = self._gradient_checkpointing_func(
                     block.__call__,
@@ -949,12 +997,20 @@ class TransformerStack(nn.Module):
             if full_s_max is not None:
                 full_s_max += (s_max,)
 
-        last_hidden_state = self.norm(x)
-        if output_hidden_states:
-            hidden_states += (last_hidden_state,)
-        final_layer_index = len(self.blocks)
-        if sae_hidden_states is not None and final_layer_index in sae_layer_set:
-            sae_hidden_states[final_layer_index] = last_hidden_state
+        last_hidden_state: torch.Tensor | None = None
+        if depth == n_layers:
+            last_hidden_state = self.norm(x)  # (b, l, d)
+            if output_hidden_states:
+                hidden_states += (last_hidden_state,)
+        # State `depth` is the final normalized state, or, after an early stop, the input to
+        # block `depth`, which the final norm never touches.
+        deepest_state = x if last_hidden_state is None else last_hidden_state  # (b, l, d)
+        if sae_hidden_states is not None and depth in sae_layer_set:
+            sae_hidden_states[depth] = deepest_state
+        if captured_hidden_states is not None and depth in capture_set:
+            captured_hidden_states[depth] = deepest_state
+        if depth in stream_set:
+            state_consumer(depth, deepest_state)
 
         return TransformerOutput(
             last_hidden_state=last_hidden_state,
@@ -962,6 +1018,7 @@ class TransformerStack(nn.Module):
             attentions=attentions,
             s_max=full_s_max,
             sae_hidden_states=sae_hidden_states,
+            captured_hidden_states=captured_hidden_states,
         )
 
     @torch.compiler.disable
@@ -975,6 +1032,7 @@ class TransformerStack(nn.Module):
         dtype: torch.dtype | None = None,
         effective_backend: AttentionBackend | None = None,
         output_attentions: bool = False,
+        validate_mask: bool = True,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None, BlockMask | None]:
         mask_name = "sequence_id" if sequence_id is not None else "attention_mask"
         mask_pattern = sequence_id if sequence_id is not None else attention_mask
@@ -1006,7 +1064,7 @@ class TransformerStack(nn.Module):
         attention_mask_2d = (
             mask_pattern if mask_pattern.dtype == torch.bool else mask_pattern != -1
         )
-        if not bool(attention_mask_2d.any(dim=1).all()):
+        if validate_mask and not bool(attention_mask_2d.any(dim=1).all()):
             raise ValueError("attention_mask must keep at least one valid key per batch row.")
 
         if mask_pattern.dtype == torch.bool:
@@ -1092,6 +1150,9 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
         "flash_attention_3",
     )
     _fastplms_attention_auto_order = ("sdpa",)
+    # embed_dataset(taps=...) runs _embed_taps; families without this marker reject taps.
+    embedding_tap_support: ClassVar[bool] = True
+    embedding_streaming_tap_support: ClassVar[bool] = True
 
     def __init__(self, config: ESMplusplusConfig, *args: object, **kwargs: object) -> None:
         super().__init__(config, *args, **kwargs)
@@ -1367,13 +1428,77 @@ class PreTrainedESMplusplusModel(FastPLMsAttentionMixin, PreTrainedModel):
             if output.attentions is not None
             else None
         )
+        captured_hidden_states = (
+            {
+                index: state[:, :sequence_length]  # (b, l, d)
+                for index, state in output.captured_hidden_states.items()
+            }
+            if output.captured_hidden_states is not None
+            else None
+        )
         return TransformerOutput(
-            last_hidden_state=output.last_hidden_state[:, :sequence_length],
+            last_hidden_state=(
+                output.last_hidden_state[:, :sequence_length]
+                if output.last_hidden_state is not None
+                else None
+            ),
             hidden_states=hidden_states,
             attentions=attentions,
             s_max=output.s_max,
             sae_hidden_states=output.sae_hidden_states,
+            captured_hidden_states=captured_hidden_states,
         )
+
+    @property
+    def embedding_tap_state_count(self) -> int:
+        """Hidden states a tap can name: each block's input, then the final normalized state."""
+
+        return int(self.config.num_hidden_layers) + 1
+
+    def _embed_taps(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        layers: tuple[int, ...],
+        *,
+        stream_layers: tuple[int, ...] = (),
+        state_consumer: Callable[[int, torch.Tensor], None] | None = None,
+        assume_valid_mask: bool = False,
+    ) -> dict[int, torch.Tensor]:
+        """Hidden states at the FastPLMs indices ``layers`` from one pass.
+
+        The pass stops once the deepest requested state exists. It pads, enters, and trims the
+        FP8 context exactly as ``forward`` does, so each state equals the one
+        ``forward(output_hidden_states=True)`` returns for the same batch. ``assume_valid_mask``
+        skips the device-side mask check, which would stall the host on every batch.
+        """
+        # input_ids, attention_mask: (b, l)
+        if not layers and not stream_layers:
+            raise ValueError("_embed_taps needs at least one hidden-state index.")
+        input_ids, attention_mask, _, _, original_length = self._pad_fp8_inputs(
+            input_ids, attention_mask, None, None
+        )  # input_ids, attention_mask: (b, l_fp8), l_fp8 = l unless FP8 pads to 16
+        x = self.embed(input_ids)  # (b, l_fp8, d)
+
+        def consume(index: int, state: torch.Tensor) -> None:
+            # Reducer masks describe original tokens, never the alignment-only FP8 padding.
+            trimmed = state[:, :original_length] if original_length is not None else state
+            state_consumer(index, trimmed)  # (b, l, d)
+
+        with _esmplusplus_fp8_context(self._esmc_fp8, self.device):
+            output = self.transformer(
+                x=x,
+                attention_mask=attention_mask,
+                capture_layers=layers,
+                stop_after_layer=max((*layers, *stream_layers)),
+                stream_layers=stream_layers,
+                state_consumer=consume if state_consumer is not None else None,
+                assume_valid_mask=assume_valid_mask,
+            )
+        captured = self._trim_transformer_output(output, original_length).captured_hidden_states
+        if captured is None and layers:
+            raise RuntimeError("ESM++ did not capture the requested hidden states.")
+        return captured or {}  # each: (b, l, d); streaming-only runs retain no states
 
     @property
     def tokenizer(self) -> EsmSequenceTokenizer:

@@ -87,7 +87,7 @@ def semantic_config(model: nn.Module) -> dict[str, Any]:
     roots: list[object] = [model]
     if hasattr(model, "esm3"):
         roots.insert(0, model.esm3)
-    result: dict[str, Any] = {}
+    values: dict[str, Any] = {}
     for semantic_name, paths in SEMANTIC_PATHS.items():
         for root in roots:
             for path in paths:
@@ -99,23 +99,23 @@ def semantic_config(model: nn.Module) -> dict[str, Any]:
                 if torch.is_tensor(value) and value.numel() == 1:
                     value = value.item()
                 if isinstance(value, (str, int, float, bool)):
-                    result[semantic_name] = value
+                    values[semantic_name] = value
                     break
-            if semantic_name in result:
+            if semantic_name in values:
                 break
-    missing = sorted({"vocab_size", "d_model", "n_layers", "n_heads"}.difference(result))
+    missing = sorted({"vocab_size", "d_model", "n_layers", "n_heads"}.difference(values))
     if missing:
         raise RuntimeError(f"Could not extract required semantic configuration fields: {missing}")
-    return result
+    return values
 
 
 def transformed_semantic_config(model: nn.Module, transform_name: str) -> dict[str, Any]:
     """Extract semantics after applying a declared checkpoint conversion."""
 
-    result = semantic_config(model)
+    config = semantic_config(model)
     if transform_name == "dplm_to_fastplms_v1":
-        result["tie_word_embeddings"] = False
-    return result
+        config["tie_word_embeddings"] = False
+    return config
 
 
 __all__ = ["SEMANTIC_PATHS", "semantic_config", "transformed_semantic_config"]

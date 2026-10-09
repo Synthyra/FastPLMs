@@ -658,6 +658,12 @@ class FastEsmPreTrainedModel(FastPLMsAttentionMixin, PreTrainedModel):
             module.weight.data.normal_(mean=0.0, std=std)
             if module.padding_idx is not None:
                 module.weight.data[module.padding_idx].zero_()
+        elif isinstance(module, EsmEmbeddings):
+            # position_ids is a non-persistent buffer. Transformers 5 builds the model on
+            # the meta device and leaves it uninitialized unless it is rebuilt here.
+            position_ids = module.position_ids  # (1, l_max)
+            positions = torch.arange(position_ids.shape[-1], device=position_ids.device)  # (l_max,)
+            position_ids.copy_(positions.expand_as(position_ids))  # (1, l_max)
 
     def post_init(self) -> None:
         super().post_init()

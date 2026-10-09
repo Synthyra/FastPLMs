@@ -336,10 +336,10 @@ def create_source_archive(
             seen.add(archive_name)
             archive.add(source, arcname=archive_name, recursive=False)
         for name, payload in evidence:
-            info = tarfile.TarInfo(name)
-            info.size = len(payload)
-            info.mode = 0o644
-            archive.addfile(info, io.BytesIO(payload))
+            tar_entry = tarfile.TarInfo(name)
+            tar_entry.size = len(payload)
+            tar_entry.mode = 0o644
+            archive.addfile(tar_entry, io.BytesIO(payload))
         provenance_bytes = render_archive_provenance(provenance, root=root_record)
         provenance_info = tarfile.TarInfo(ARCHIVE_PROVENANCE_NAME)
         provenance_info.size = len(provenance_bytes)

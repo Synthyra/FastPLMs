@@ -7,12 +7,10 @@ import inspect
 import os
 import pytest
 import torch
-import torch.nn.functional as F
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
-
-from fastplms.registry import ModelSpec, get_model_registry
+from tests.conftest import validation_pins
 from tests.parity.support.reference_adapters.biohub_source import (
     BIOHUB_ESM_REVISION,
     BIOHUB_ESM_TREE_SHA256,
@@ -21,11 +19,15 @@ from tests.parity.support.reference_adapters.biohub_source import (
     BIOHUB_TRANSFORMERS_TREE_SHA256,
 )
 from tests.structure.support import esmfold2_bundle
+from tests.structure.support.compliance_metrics import aligned_ca_rmsd, bundle_output, feature_tensors, lddt_ca, probability_jsd
 from tests.structure.support.esmfold2_bundle import load_bundle, load_request
 from tests.structure.support.hardware import (
     assert_same_device,
     device_fingerprint,
 )
+from tests.structure.support.state_contract import checkpoint_metadata
+
+from fastplms.registry import ModelSpec, get_model_registry
 from tools.remote.biohub_reference_environment import (
     validate_biohub_reference_environment_evidence,
 )
@@ -66,36 +68,6 @@ def _bundle_paths(spec: ModelSpec) -> tuple[Path, Path, Path]:
     return request, reference, candidate / "bf16"
 
 
-def _feature_tensors(tensors: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    return {
-        name.removeprefix("feature__"): tensor
-        for name, tensor in tensors.items()
-        if name.startswith("feature__")
-    }
-
-
-def _output(tensors: Mapping[str, torch.Tensor], name: str) -> torch.Tensor:
-    key = f"output__{name}"
-    if key not in tensors:
-        raise KeyError(f"Structure bundle omits required output {name!r}.")
-    return tensors[key]
-
-
-def _checkpoint_contract(checkpoint: object) -> dict[str, object]:
-    return {
-        "repo_id": checkpoint.repo_id,
-        "revision": checkpoint.revision,
-        "files": [
-            {
-                "path": item.path,
-                "algorithm": item.algorithm,
-                "digest": item.digest,
-            }
-            for item in checkpoint.files
-        ],
-    }
-
-
 def _assert_bundle_identity(
     metadata: Mapping[str, object],
     request: Mapping[str, object],
@@ -107,8 +79,8 @@ def _assert_bundle_identity(
     assert metadata["producer"] == producer
     assert metadata["model_id"] == spec.id
     assert metadata["request_sha256"] == request["request_sha256"]
-    assert metadata["official"] == _checkpoint_contract(spec.official)
-    assert metadata["candidate"] == _checkpoint_contract(spec.fast)
+    assert metadata["official"] == checkpoint_metadata(spec.official)
+    assert metadata["candidate"] == checkpoint_metadata(spec.fast)
     assert metadata["sequence"] == request["sequence"]
     assert metadata["seed"] == request["seed"]
     assert metadata["sampling_steps"] == request["sampling_steps"]
@@ -124,8 +96,9 @@ def _assert_bundle_identity(
     assert isinstance(environment, Mapping)
     device_fingerprint(environment)
     if producer == "candidate":
-        assert str(environment["torch"]).split("+", maxsplit=1)[0] == "2.13.0"
-        assert environment["transformers"] == "5.13.0"
+        pins = validation_pins()
+        assert str(environment["torch"]).split("+", maxsplit=1)[0] == pins["torch"]
+        assert environment["transformers"] == pins["transformers"]
         assert str(environment["cuda_runtime"]).startswith("13.0")
     else:
         locked_environment = validate_biohub_reference_environment_evidence(
@@ -161,8 +134,9 @@ def _assert_exact_inputs(
     *,
     context: str,
 ) -> None:
-    actual_features = _feature_tensors(actual_tensors)
-    expected_features = _feature_tensors(expected_tensors)
+    # actual_tensors, expected_tensors: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3); noise__initial_standard_normal (b, a, 3)
+    actual_features = feature_tensors(actual_tensors)
+    expected_features = feature_tensors(expected_tensors)
     assert actual_features.keys() == expected_features.keys(), context
     for name in actual_features:
         actual = actual_features[name]
@@ -179,17 +153,19 @@ def _assert_exact_inputs(
 
 
 def _first_coordinate_sample(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
+    # tensors: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3)
     # coordinates: (..., 3)
-    coordinates = _output(tensors, "sample_atom_coords").float()
+    coordinates = bundle_output(tensors, "sample_atom_coords").float()
     if coordinates.ndim == 4:
         # coordinates: (-1, coordinates.shape[-2], 3)
         coordinates = coordinates.reshape(-1, coordinates.shape[-2], 3)
     assert coordinates.ndim == 3 and coordinates.shape[-1] == 3
-    return coordinates[0]
+    return coordinates[0]  # (a, 3)
 
 
 def _ca_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
-    features = _feature_tensors(tensors)
+    # tensors: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3); feature__ref_atom_name_chars (b, a, 4)
+    features = feature_tensors(tensors)
     # encoded_ca: (4,)
     encoded_ca = torch.tensor([ord("C") - 32, ord("A") - 32, 0, 0])
     atom_names = features["ref_atom_name_chars"][0]
@@ -202,41 +178,12 @@ def _ca_mask(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
     assert torch.equal(token_ids, valid_token_ids), (
         "Each biological residue must have exactly one C-alpha atom."
     )
-    return mask
+    return mask  # (a,) boolean, true at each C-alpha atom
 
 
 def _ca_coordinates(tensors: Mapping[str, torch.Tensor]) -> torch.Tensor:
-    return _first_coordinate_sample(tensors)[_ca_mask(tensors)]
-
-
-def _aligned_ca_rmsd(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
-    actual_centered = actual.float() - actual.float().mean(dim=0, keepdim=True)  # (n, 3)
-    expected_centered = expected.float() - expected.float().mean(dim=0, keepdim=True)  # (n, 3)
-    covariance = actual_centered.T @ expected_centered  # (3, 3)
-    left, _, right = torch.linalg.svd(covariance)
-    # correction: (3, 3)
-    correction = torch.eye(3, dtype=torch.float32)
-    correction[-1, -1] = torch.sign(torch.det(left @ right))
-    rotation = left @ correction @ right  # (3, 3)
-    aligned = actual_centered @ rotation  # (n, 3)
-    return torch.sqrt(torch.mean(torch.sum((aligned - expected_centered) ** 2, dim=-1))).item()
-
-
-def _lddt_ca(actual: torch.Tensor, expected: torch.Tensor) -> float:
-    # actual, expected: (n, 3), where n is the number of C-alpha atoms.
-    actual_distances = torch.cdist(actual.float(), actual.float())  # (n, n)
-    expected_distances = torch.cdist(expected.float(), expected.float())  # (n, n)
-    # pair_mask: (n, n)
-    pair_mask = expected_distances.lt(15.0)
-    pair_mask.fill_diagonal_(False)
-    assert pair_mask.any(), "No valid C-alpha pairs for lDDT."
-    errors = (actual_distances - expected_distances).abs()  # (n, n)
-    # score: (n, n)
-    score = torch.stack([errors.lt(threshold).float() for threshold in (0.5, 1.0, 2.0, 4.0)]).mean(
-        dim=0
-    )
-    return score[pair_mask].mean().item()
+    # tensors: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3)
+    return _first_coordinate_sample(tensors)[_ca_mask(tensors)]  # (l, 3) one C-alpha coordinate per residue
 
 
 def _token_vector(
@@ -244,7 +191,8 @@ def _token_vector(
     name: str,
     sequence_length: int,
 ) -> torch.Tensor:
-    return _output(tensors, name).float().reshape(-1, sequence_length)[0]
+    # tensors: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3)
+    return bundle_output(tensors, name).float().reshape(-1, sequence_length)[0]  # (l,) the first sample's per-token values
 
 
 def _token_pair(
@@ -252,8 +200,9 @@ def _token_pair(
     name: str,
     sequence_length: int,
 ) -> torch.Tensor:
-    return (
-        _output(tensors, name)
+    # tensors: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3)
+    return (  # (l, l) the first sample's per-token-pair values
+        bundle_output(tensors, name)
         .float()
         .reshape(
             -1,
@@ -266,22 +215,32 @@ def _token_pair(
 def _structure_metrics(
     actual: Mapping[str, torch.Tensor],
     expected: Mapping[str, torch.Tensor],
+    *,
+    confidence: bool = True,
 ) -> dict[str, float]:
-    actual_features = _feature_tensors(actual)
+    """Compare coordinates, and confidence outputs unless ``confidence`` is off."""
+
+    # actual, expected: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3)
+    actual_features = feature_tensors(actual)
     # token_mask: (l,), one flag per token in the first batch element.
     token_mask = actual_features["token_attention_mask"][0].bool()
     sequence_length = token_mask.numel()
     # pair_mask: (l, l)
     pair_mask = token_mask[:, None] & token_mask[None, :]
+    structure = {
+        "ca_rmsd": aligned_ca_rmsd(
+            _ca_coordinates(actual),
+            _ca_coordinates(expected),
+        ),
+        "lddt_ca": lddt_ca(
+            _ca_coordinates(actual),
+            _ca_coordinates(expected),
+        ),
+    }
+    if not confidence:
+        return structure
     return {
-        "ca_rmsd": _aligned_ca_rmsd(
-            _ca_coordinates(actual),
-            _ca_coordinates(expected),
-        ),
-        "lddt_ca": _lddt_ca(
-            _ca_coordinates(actual),
-            _ca_coordinates(expected),
-        ),
+        **structure,
         "plddt_mae": (
             _token_vector(actual, "plddt", sequence_length)[token_mask]
             - _token_vector(expected, "plddt", sequence_length)[token_mask]
@@ -297,50 +256,26 @@ def _structure_metrics(
         .mean()
         .item(),
         "ptm_error": (
-            _output(actual, "ptm").float().reshape(-1)[0]
-            - _output(expected, "ptm").float().reshape(-1)[0]
+            bundle_output(actual, "ptm").float().reshape(-1)[0]
+            - bundle_output(expected, "ptm").float().reshape(-1)[0]
         )
         .abs()
         .item(),
         "iptm_error": (
-            _output(actual, "iptm").float().reshape(-1)[0]
-            - _output(expected, "iptm").float().reshape(-1)[0]
+            bundle_output(actual, "iptm").float().reshape(-1)[0]
+            - bundle_output(expected, "iptm").float().reshape(-1)[0]
         )
         .abs()
         .item(),
     }
 
 
-def _probability_jsd(
-    actual_logits: torch.Tensor,
-    expected_logits: torch.Tensor,
-    mask: torch.Tensor,
-) -> torch.Tensor:
-    # Logits: (*s, c), where s contains batch/sample and atom or token-pair axes.
-    # mask covers the trailing axes of s; c is the number of confidence bins.
-    actual_log_prob = F.log_softmax(actual_logits.float(), dim=-1)
-    expected_log_prob = F.log_softmax(expected_logits.float(), dim=-1)
-    actual_prob = actual_log_prob.exp()
-    expected_prob = expected_log_prob.exp()
-    mean_prob = 0.5 * (actual_prob + expected_prob)
-    log_mean_prob = mean_prob.clamp_min(torch.finfo(torch.float32).tiny).log()
-    jsd = 0.5 * (
-        (actual_prob * (actual_log_prob - log_mean_prob)).sum(dim=-1)
-        + (expected_prob * (expected_log_prob - log_mean_prob)).sum(dim=-1)
-    )
-    while mask.ndim < jsd.ndim:
-        # Prepend one singleton sample/batch axis until the mask has shape rank len(s).
-        mask = mask.unsqueeze(0)
-    mask = torch.broadcast_to(mask, jsd.shape)
-    assert mask.any()
-    return jsd[mask].mean()
-
-
 def _mean_probability_jsd(
     actual: Mapping[str, torch.Tensor],
     expected: Mapping[str, torch.Tensor],
 ) -> float:
-    features = _feature_tensors(actual)
+    # actual, expected: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3); the *_logits outputs end in a bin axis
+    features = feature_tensors(actual)
     # atom_mask: (b, a), with batch and atom axes.
     atom_mask = features["atom_attention_mask"].bool()
     # token_mask: (b, l), with batch and token axes.
@@ -353,7 +288,7 @@ def _mean_probability_jsd(
         if key not in actual or key not in expected:
             continue
         mask = atom_mask if name == "plddt_logits" else pair_mask
-        values.append(_probability_jsd(actual[key], expected[key], mask))
+        values.append(probability_jsd(actual[key], expected[key], mask))
     assert values, "No probability tensors were returned for JSD compliance."
     return torch.stack(values).mean().item()
 
@@ -363,12 +298,13 @@ def _assert_valid_geometry(
     *,
     context: str,
 ) -> None:
-    features = _feature_tensors(tensors)
+    # tensors: (...) one tensor per bundle name; feature__token_attention_mask (b, l), feature__atom_attention_mask (b, a), output__sample_atom_coords (b, a, 3) or (b, s, a, 3); output__atom_pad_mask (b, a)
+    features = feature_tensors(tensors)
     coordinates = _first_coordinate_sample(tensors)
     # atom_mask: (a,), one flag per atom in the first batch element.
     atom_mask = features["atom_attention_mask"][0].bool()
     assert torch.equal(
-        _output(tensors, "atom_pad_mask").bool().reshape_as(atom_mask),
+        bundle_output(tensors, "atom_pad_mask").bool().reshape_as(atom_mask),
         atom_mask,
     )
     assert torch.isfinite(coordinates[atom_mask]).all(), f"{context}: non-finite coordinates"
@@ -440,13 +376,13 @@ def test_structure_metric_helpers_are_exact_for_rigid_identity() -> None:
     # rotation: (3, 3)
     rotation = torch.tensor([[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
     actual = expected @ rotation + torch.tensor([4.0, -2.0, 7.0])
-    assert _aligned_ca_rmsd(actual, expected) == pytest.approx(0.0, abs=1e-5)
-    assert _lddt_ca(actual, expected) == pytest.approx(1.0)
+    assert aligned_ca_rmsd(actual, expected) == pytest.approx(0.0, abs=1e-5)
+    assert lddt_ca(actual, expected) == pytest.approx(1.0)
     # logits: (1, 2, 2)
     logits = torch.tensor([[[1.0, 2.0], [0.0, -1.0]]])
     # mask: (1, 2)
     mask = torch.tensor([[True, True]])
-    assert _probability_jsd(logits, logits, mask).item() == pytest.approx(0.0)
+    assert probability_jsd(logits, logits, mask).item() == pytest.approx(0.0)
 
 
 def test_prepare_structure_requests_is_manifest_exact(tmp_path: Path) -> None:
@@ -456,18 +392,22 @@ def test_prepare_structure_requests_is_manifest_exact(tmp_path: Path) -> None:
     for path in paths:
         request = load_request(path)
         spec = registry[request["model_id"]]
-        assert request["official"] == _checkpoint_contract(spec.official)
-        assert request["candidate"] == _checkpoint_contract(spec.fast)
+        assert request["official"] == checkpoint_metadata(spec.official)
+        assert request["candidate"] == checkpoint_metadata(spec.fast)
         assert request["candidate_auto_model"] == spec.auto_map["AutoModel"]
-        assert request["backbone_model"] == spec.family.backbone_model
+        assert request["backbone_model"] == (spec.backbone_model or spec.family.backbone_model)
         assert request["attention_backend"] == "sdpa"
         assert request["deterministic_algorithms"] is True
+        backbone = spec.backbone or registry[spec.family.backbone_model].official
+        assert request["official_backbone"] == checkpoint_metadata(backbone)
 
 
 def test_all_prepared_requests_requires_the_exact_release_inventory(tmp_path: Path) -> None:
     paths = esmfold2_bundle.prepare_requests(tmp_path)
     selected = esmfold2_bundle._all_prepared_requests(tmp_path)
-    assert selected == paths
+    assert selected == tuple(
+        path for path in paths if path.stem in esmfold2_bundle.compliance_model_ids
+    )
 
     paths[0].unlink()
     with pytest.raises(FileNotFoundError, match=r"missing=.*esmfold2"):

@@ -11,7 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
+import shutil
+import tempfile
 import time
 import uuid
 import warnings
@@ -21,6 +22,7 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
+from tools.stored_files import write_stored_json
 from .experiment_artifacts import (
     EvaluationArtifacts,
     environment_identity,
@@ -31,6 +33,7 @@ from .experiment_artifacts import (
     verify_evaluation_group,
     write_new_json,
 )
+from .v2_campaign import DATASET_REPO
 
 
 DATA_ROOT = Path.home() / "data" / "confidence-v2"
@@ -40,8 +43,6 @@ SPLITS_DIR = DATA_ROOT / "splits"
 PILOT_DIR = DATA_ROOT / "pilot"
 RUNS_DIR = DATA_ROOT / "runs"
 LEDGER_PATH = DATA_ROOT / "ledger.json"
-MODAL_CLI = Path.home() / "venvs" / "modal" / "bin" / "modal"
-MODAL_CREDENTIALS = Path.home() / ".config" / "synthyra" / "modal.env"
 MMSEQS = str(Path.home() / "bin" / "mmseqs")
 SMOKE_BUDGET_HOURS = 2.0
 MODEL_BUDGET_HOURS = 24.0
@@ -62,13 +63,6 @@ PILOT_FILES = {
 
 def log(message: str) -> None:
     print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}", flush=True)
-
-
-def write_json(path: Path, payload: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
 
 
 def ledger_hours(category: str) -> float:
@@ -99,33 +93,32 @@ def gpu_budget(category: str, stage: str, budget_hours: float) -> Iterator[float
                 "seconds": time.time() - started,
             }
         )
-        write_json(LEDGER_PATH, entries)
+        write_stored_json(LEDGER_PATH, entries, sort_keys=False)
 
 
 def fetch_pilot_artifacts() -> None:
-    """Copy the pilot's split records, selected heads, and reports from its Modal volume."""
-    from dotenv import dotenv_values
+    """Restore only the five pinned pilot inputs from the verified private archive."""
+    import modal
 
-    environment = {
-        **os.environ,
-        **{name: value for name, value in dotenv_values(MODAL_CREDENTIALS).items() if value},
-    }
+    from foundry.artifact_archive import restore_files
+    from .volume_artifacts import HF_VOLUME, PILOT_SOURCE
+
+    receipt = json.loads(b"".join(modal.Volume.from_name(HF_VOLUME).read_file(
+        f"volume_archive_receipts/{PILOT_SOURCE}/complete.json")))
+    if receipt.get("status") != "verified" or receipt.get("source_volume") != PILOT_SOURCE:
+        raise ValueError("Missing verified confidence pilot archive receipt")
     PILOT_DIR.mkdir(parents=True, exist_ok=True)
-    for remote, local in PILOT_FILES.items():
-        subprocess.run(
-            [
-                str(MODAL_CLI),
-                "volume",
-                "get",
-                "--force",
-                "fastplms-confidence-pilot",
-                remote,
-                str(PILOT_DIR / local),
-            ],
-            check=True,
-            env=environment,
-        )
-        log(f"copied {remote}")
+    with tempfile.TemporaryDirectory(prefix="confidence-pilot-") as staging:
+        restored = Path(staging) / "restored"
+        restore_files(receipt["repo_id"], receipt["manifest_path"], receipt["revision"], receipt["manifest_sha256"],
+                      restored, prefixes=tuple(PILOT_FILES), cache_dir=str(Path(staging) / "downloads"))
+        for remote, local in PILOT_FILES.items():
+            source, target = restored / remote, PILOT_DIR / local
+            if target.exists() and target.read_bytes() != source.read_bytes():
+                raise ValueError(f"Existing pilot input differs from verified archive: {local}")
+            if not target.exists():
+                shutil.copyfile(source, target)
+            log(f"restored {remote}")
 
 
 def stage_pool(workers: int) -> None:
@@ -170,16 +163,16 @@ def stage_smoke(check: str, model_id: str) -> None:
             chosen = closest_targets(train, (128, 384, 768, 1024), 768) + closest_targets(
                 long_targets, (1536, 2048), 0
             )
-            result: object = throughput(model_id, POOL_DIR, chosen, 4, TOKEN_BUDGET, log)
+            smoke_record: object = throughput(model_id, POOL_DIR, chosen, 4, TOKEN_BUDGET, log)
         elif check == "kernels":
-            result = kernels(model_id, POOL_DIR, closest_targets(train, (512, 1024), 768), 4, log)
+            smoke_record = kernels(model_id, POOL_DIR, closest_targets(train, (512, 1024), 768), 4, log)
         elif check == "training-rate":
             sampler = TargetSampler(
                 train,
                 OnlineTrainingConfig(model_id=model_id).monomer_fraction,
                 seed=RATE_SAMPLER_SEED,
             )
-            result = training_rate(
+            smoke_record = training_rate(
                 model_id, POOL_DIR, [sampler.draw() for _ in range(RATE_TARGETS + 1)], log
             )
         elif check == "parity":
@@ -198,14 +191,14 @@ def stage_smoke(check: str, model_id: str) -> None:
                     and target["sequences"][0] != target["sequences"][1]
                 ),
             ]
-            result = parity(model_id, POOL_DIR, chosen, log)
+            smoke_record = parity(model_id, POOL_DIR, chosen, log)
         else:
             # Small targets keep 150 full passes over the fixed rollouts within the smoke budget.
             small = [target for target in short if int(target["num_tokens"]) <= 256]
             monomers = [target for target in small if int(target["num_chains"]) == 1][:6]
             complexes = [target for target in small if int(target["num_chains"]) > 1][:6]
-            result = overfit(model_id, POOL_DIR, monomers + complexes, updates=150, log=log)
-    write_json(DATA_ROOT / "smoke" / f"{check}-{model_id}.json", result)
+            smoke_record = overfit(model_id, POOL_DIR, monomers + complexes, updates=150, log=log)
+    write_stored_json(DATA_ROOT / "smoke" / f"{check}-{model_id}.json", smoke_record, sort_keys=False)
 
 
 def stage_train(args: argparse.Namespace) -> None:
@@ -356,7 +349,7 @@ def prepare_evaluation(
             "esmc_precision": "bf16",
         },
         "dataset": {
-            "repo_id": "Synthyra/AtlasFold-Data",
+            "repo_id": DATASET_REPO,
             "split_identity": "inputs/split-report.json",
         },
         "source_files": source_identity(Path(__file__).resolve().parents[2]),
@@ -620,12 +613,12 @@ def stage_acceptance(model_id: str, evaluation_id: str | None = None) -> None:
     )
     heads = ["v2", "pilot", "donor"]
     estimates = paired_estimates(model_records, heads, reference_records)
-    result = acceptance_gates(estimates)
+    gates = acceptance_gates(estimates)
     agreement = production_agreement(model_records, heads, reference_records)
     write_new_json(
         output,
         {
-            **result,
+            **gates,
             "production_agreement": agreement,
             "estimates": estimates,
             "evaluation_id": evaluation_id,
@@ -640,7 +633,7 @@ def stage_acceptance(model_id: str, evaluation_id: str | None = None) -> None:
             },
         },
     )
-    log(json.dumps({**result, "production_agreement": agreement}, indent=2))
+    log(json.dumps({**gates, "production_agreement": agreement}, indent=2))
 
 
 def main() -> None:

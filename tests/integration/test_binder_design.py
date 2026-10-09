@@ -11,7 +11,6 @@ import torch
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
-
 from examples import binder_design_fastplms as binder
 
 
@@ -27,6 +26,7 @@ class FakeInputBuilder:
         num_diffusion_samples: int,
         complex_id: str,
     ) -> dict[str, Any]:
+        # output, inputs: (...) one tensor per name, deleted unused
         del output, inputs, chain_infos, num_diffusion_samples
         return {"complex_id": complex_id}
 
@@ -92,15 +92,15 @@ def _fake_pseudoperplexity(
     n_passes: int = 4,
     mask_fraction: float = binder.DEFAULT_ESMC_MASK_FRACTION,
 ) -> torch.Tensor:
-    # binder_design: (b, binder_length, d); this fake scorer ignores score_mask.
+    # binder_design: (b, binder_length, d); score_mask: (b, binder_length), ignored by this fake scorer.
     del lm_model, score_mask, batch_size, n_passes, mask_fraction
-    return binder_design.square().mean(dim=(1, 2))
+    return binder_design.square().mean(dim=(1, 2))  # (b,)
 
 
 def _run_seeded_workflow() -> tuple[
     list[str], dict[int, dict[str, torch.Tensor]], list[dict[str, Any]]
 ]:
-    return binder.design_binder(
+    return binder.design_binder(  # best sequences, trajectory (b,) per loss name per step, critic result rows
         inversion_models={APPROVED_CRITIC: FakeCritic()},
         critic_models={APPROVED_CRITIC: FakeCritic()},
         lm_model=object(),
@@ -472,7 +472,7 @@ def test_selected_sequence_loss_and_logits_share_the_same_optimization_step(
         seed: int | None = None,
     ) -> dict[str, Any]:
         # target_one_hot: (b, target_length, d); design: (b, binder_length, d).
-        result = _fake_fold(
+        fold_outputs = _fake_fold(
             model,
             target_seq,
             target_one_hot,
@@ -486,14 +486,14 @@ def test_selected_sequence_loss_and_logits_share_the_same_optimization_step(
             optimization_step = len(optimization_designs)
             optimization_designs.append(design.detach().clone())
             residue = "A" if optimization_step == 0 else "D"
-            result["seq_list"] = [f"{target_seq}|{residue * design.size(1)}"]
+            fold_outputs["seq_list"] = [f"{target_seq}|{residue * design.size(1)}"]
             # result['iptm']: (design.size(0),)
-            result["iptm"] = torch.full(
+            fold_outputs["iptm"] = torch.full(
                 (design.size(0),),
                 0.95 if optimization_step == 0 else 0.20,
                 device=design.device,
             )
-        return result
+        return fold_outputs
 
     monkeypatch.setattr(binder, "fold_and_get_distogram", ranked_fake_fold)
     monkeypatch.setattr(

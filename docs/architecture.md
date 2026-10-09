@@ -25,6 +25,10 @@ a model, compile a kernel, log, change global Torch settings, or access the
 network.
 
 Official repositories live under `vendor/upstream` as real Git submodules.
+Each `[[upstreams]]` entry records its source repository as `url`. When that
+repository no longer serves the pinned revision, `fetch_url` names one that
+does, and `.gitmodules` and source archives use it; Biohub Transformers is
+fetched from the `huggingface/transformers` fork network.
 Reference adapters call their public APIs and normalize outputs for comparison.
 An adapter may not import FastPLMs, patch an upstream class, use a FastPLMs
 loader, or reconstruct an official forward pass.
@@ -93,8 +97,9 @@ produces its learned width-256 representation through a dedicated mixin.
 Within that package, `inputs.py` normalizes and spools inputs, `identity.py`
 defines run fingerprints, `batches.py` executes bounded windows, and `output.py`
 coordinates resume validation and transactional persistence. `runner.py` keeps
-the public interface and orders these phases. Storage schemas and fingerprints
-remain compatible across the module split.
+the public interface and orders these phases. `taps.py` defines one-pass tap
+plans, which a family serves only when it implements them; ESM++ does. Storage
+schemas and fingerprints remain compatible across the module split.
 
 ESMFold2 structure variants retain the semantics declared by their pinned
 configs. The experimental Fast base300M and base600M variants use 24 folding

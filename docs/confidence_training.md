@@ -15,7 +15,7 @@ exponential moving-average checkpoint. Training logs are available for
 Final validation cross-entropy was 5.51839 and 5.39807, respectively.
 
 Targets come from the `rcsb` and `rcsb_multimer` configurations of
-[AtlasFold-Data](https://huggingface.co/datasets/Synthyra/AtlasFold-Data), pinned
+[AtlasFold-Data](https://huggingface.co/datasets/lhallee/AtlasFold-Data), pinned
 in the evidence records. Eligible experimental structures have resolution at
 most 4.0 Å, standard amino acids, and at least four resolved C-alpha atoms per
 chain. Whole-chain spatial subsets limit large assemblies to the token budget.

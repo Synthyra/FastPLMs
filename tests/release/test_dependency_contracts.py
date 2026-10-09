@@ -5,11 +5,15 @@ from __future__ import annotations
 import pytest
 
 from pathlib import Path
+from packaging.requirements import Requirement
+from packaging.version import Version
+from tests.conftest import validation_pins
 
 from tools.remote.runtime_import_closure import (
     RuntimeImportClosureError,
     inspect_runtime_import_closure,
 )
+from tools.typing_gate import BASELINE_MYPY_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -25,32 +29,78 @@ def _requirements(relative_path: str) -> list[str]:
     ]
 
 
-def _package_name(requirement: str) -> str:
-    name = requirement.partition(";")[0]
-    for operator in ("==", ">="):
-        name = name.partition(operator)[0]
-    return name.strip()
+def _declarations(relative_path: str) -> list[Requirement]:
+    return [Requirement(requirement) for requirement in _requirements(relative_path)]
 
 
-def test_core_dependencies_are_direct_and_bounded() -> None:
-    assert _requirements("core.in") == [
-        "torch>=2.13,<2.14",
-        "transformers>=5.13,<5.14",
-        "huggingface-hub>=0.34,<2",
-        "tokenizers>=0.22,<0.23",
-        "safetensors>=0.5,<1",
-        "numpy>=1.26,<3",
-        "einops>=0.8,<1",
-        "tqdm>=4.67,<5",
+def _operators(requirement: Requirement) -> list[str]:
+    return sorted(clause.operator for clause in requirement.specifier)
+
+
+def test_every_range_is_a_floor_without_a_cap() -> None:
+    """A range starts at the tested release and admits every later one; a pin stays exact.
+
+    A cap is allowed only directly beneath a comment naming the incompatibility behind it.
+    """
+    declaration_files = [
+        *sorted(REQUIREMENTS.glob("*.in")),
+        *sorted((REQUIREMENTS / "features").glob("*.in")),
+        REQUIREMENTS / "constraints" / "validation.txt",
     ]
+    for path in declaration_files:
+        explained = False
+        for line in path.read_text(encoding="utf-8").splitlines():
+            declaration = line.strip()
+            if not declaration or declaration.startswith("#"):
+                explained = declaration.startswith("#")
+                continue
+            requirement = Requirement(declaration)
+            allowed = [[">="], ["=="], *([["<", ">="]] if explained else [])]
+            assert _operators(requirement) in allowed, f"{path.name}: {requirement}"
+            explained = False
+
+
+def test_mypy_cap_holds_only_while_the_typing_baseline_needs_it() -> None:
+    """dev.in caps mypy because tools/typing_gate.py compares only on its baseline's mypy.
+
+    Recording the baseline on a mypy the cap excludes fails this test, which is the cue
+    to move or drop the cap.
+    """
+    (mypy,) = [
+        requirement
+        for requirement in _declarations("features/dev.in")
+        if requirement.name == "mypy"
+    ]
+    baseline = Version(BASELINE_MYPY_VERSION)
+    assert mypy.specifier.contains(BASELINE_MYPY_VERSION)
+    # A resolver must not reach the next mypy major while the baseline is on this one.
+    assert not mypy.specifier.contains(f"{baseline.major + 1}.0")
+
+
+def test_core_dependencies_are_direct_and_floored_at_the_validated_stack() -> None:
+    core = {requirement.name: requirement for requirement in _declarations("core.in")}
+    assert list(core) == [
+        "torch",
+        "transformers",
+        "huggingface-hub",
+        "tokenizers",
+        "safetensors",
+        "numpy",
+        "einops",
+        "tqdm",
+    ]
+    assert all(_operators(requirement) == [">="] for requirement in core.values())
+    # The declared floor of each pinned package is the validated release line.
+    for distribution, pinned in validation_pins().items():
+        (floor,) = core[distribution].specifier
+        assert Version(floor.version).release[:2] == Version(pinned).release[:2], distribution
+        assert core[distribution].specifier.contains(pinned), distribution
 
 
 def test_cpu_validation_profile_is_explicit_and_cuda_free() -> None:
-    assert _requirements("features/cpu.in") == ["torch==2.13.0"]
-    assert _requirements("constraints/validation.txt") == [
-        "torch==2.13.0",
-        "transformers==5.13.0",
-    ]
+    pins = validation_pins()
+    assert list(pins) == ["torch", "transformers"]
+    assert _requirements("features/cpu.in") == [f"torch=={pins['torch']}"]
     assert _requirements("profiles/cpu-validation.in") == [
         "-r ../core.in",
         "-r ../features/cpu.in",
@@ -70,31 +120,34 @@ def test_cpu_validation_profile_is_explicit_and_cuda_free() -> None:
 
 
 def test_structure_dependencies_are_runtime_owned_or_documented_integrations() -> None:
-    assert _requirements("features/structure.in") == [
-        "accelerate>=1.10,<2",  # Transformers device_map in the 6B quick start.
-        "biopython>=1.85,<2",
-        "biotite>=1.4,<2",
-        "brotli>=1.1,<2",
-        "msgpack>=1.1,<2",
-        "msgpack-numpy>=0.4.8,<1",
-        "omegaconf>=2.3,<3",  # Explicit trusted Boltz Lightning import boundary.
-        "rdkit>=2025.9,<2027",
-        "scipy>=1.15,<2",
-        "zstandard>=0.23,<1",
+    structure = _declarations("features/structure.in")
+    assert [requirement.name for requirement in structure] == [
+        "accelerate",  # Transformers device_map in the 6B quick start.
+        "biopython",
+        "biotite",
+        "brotli",
+        "msgpack",
+        "msgpack-numpy",
+        "omegaconf",  # Explicit trusted Boltz Lightning import boundary.
+        "rdkit",
+        "scipy",
+        "zstandard",
     ]
+    assert all(_operators(requirement) == [">="] for requirement in structure)
 
 
-def test_binder_dependencies_are_bounded_and_separate_from_structure() -> None:
-    binder = _requirements("features/binder.in")
-    structure = _requirements("features/structure.in")
-    assert binder == [
-        "abnumber==0.4.4",
-        "anarcii==2.0.8",
-        "pandas>=3.0,<3.1",
-        "pyarrow>=25,<26",
-    ]
-    assert {_package_name(item) for item in binder}.isdisjoint(
-        {_package_name(item) for item in structure}
+def test_binder_dependencies_are_pinned_or_floored_and_separate_from_structure() -> None:
+    binder = _declarations("features/binder.in")
+    structure = _declarations("features/structure.in")
+    # The numbering tools stay exact; the table libraries follow the tested stack.
+    assert {requirement.name: _operators(requirement) for requirement in binder} == {
+        "abnumber": ["=="],
+        "anarcii": ["=="],
+        "pandas": [">="],
+        "pyarrow": [">="],
+    }
+    assert {requirement.name for requirement in binder}.isdisjoint(
+        {requirement.name for requirement in structure}
     )
     assert _requirements("profiles/binder.in") == [
         "-r ../core.in",
@@ -104,13 +157,17 @@ def test_binder_dependencies_are_bounded_and_separate_from_structure() -> None:
 
 
 def test_cueq_dependencies_are_version_aligned_cuda13_and_isolated() -> None:
-    cueq = _requirements("features/cueq.in")
+    cueq = _declarations("features/cueq.in")
     structure = _requirements("features/structure.in")
-    assert cueq == [
-        'cuequivariance==0.10.0; platform_system == "Linux"',
-        'cuequivariance-torch==0.10.0; platform_system == "Linux"',
-        'cuequivariance-ops-torch-cu13==0.10.0; platform_system == "Linux"',
+    assert [requirement.name for requirement in cueq] == [
+        "cuequivariance",
+        "cuequivariance-torch",
+        "cuequivariance-ops-torch-cu13",
     ]
+    # One exact release across the three packages, installed on Linux only.
+    assert all(_operators(requirement) == ["=="] for requirement in cueq)
+    assert len({str(requirement.specifier) for requirement in cueq}) == 1
+    assert {str(requirement.marker) for requirement in cueq} == {'platform_system == "Linux"'}
     assert not any("cuequivariance" in requirement for requirement in structure)
 
     source = (ROOT / "src/fastplms/models/esmfold2/modeling_esmfold2_common.py").read_text(
@@ -139,16 +196,17 @@ def test_cueq_dependencies_are_version_aligned_cuda13_and_isolated() -> None:
 
 
 def test_reporting_dependencies_are_separate_from_training_runtime() -> None:
-    reporting = _requirements("features/reporting.in")
-    training = _requirements("features/train.in")
-    assert reporting == [
-        "matplotlib>=3.10,<4",
-        "scikit-learn>=1.7,<2",
-        "scipy>=1.15,<2",
-        "seaborn>=0.13,<1",
+    reporting = _declarations("features/reporting.in")
+    training = _declarations("features/train.in")
+    assert [requirement.name for requirement in reporting] == [
+        "matplotlib",
+        "scikit-learn",
+        "scipy",
+        "seaborn",
     ]
-    assert {_package_name(item) for item in training}.isdisjoint(
-        {_package_name(item) for item in reporting}
+    assert all(_operators(requirement) == [">="] for requirement in reporting)
+    assert {requirement.name for requirement in training}.isdisjoint(
+        {requirement.name for requirement in reporting}
     )
 
 

@@ -34,12 +34,14 @@ class _RecordingBar:
 
 class _RandomTrunk(nn.Module):
     def forward(self, value: Tensor, *, pair_attention_mask: Tensor) -> Tensor:
+        # value: (b, l, l, d); pair_attention_mask: (b, l, l)
         del pair_attention_mask
-        return value + torch.rand_like(value)
+        return value + torch.rand_like(value)  # (b, l, l, d)
 
 
 class _DummyDiffusion(nn.Module):
     def forward(self, *, x_noisy: Tensor, **_kwargs):
+        # x_noisy: (bs, a, 3), bs = b * samples
         return {
             "x_denoised": x_noisy,
             "token_repr": None,
@@ -62,7 +64,7 @@ def _tiny_standard_model() -> standard.ESMFold2Model:
 
 def _run_standard_loop(model: standard.ESMFold2Model, verbose: bool) -> tuple[Tensor, Tensor]:
     shape = (1, 2, 2, 3)
-    return (
+    return (  # (1, 2, 2, 3) = (b, l, l, d) pair state, then (...) the CPU RNG state
         model._run_one_loop(
             z=torch.zeros(shape),
             z_init=torch.zeros(shape),

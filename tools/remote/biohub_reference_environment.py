@@ -7,6 +7,7 @@ import json
 import platform
 import re
 import subprocess
+
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path

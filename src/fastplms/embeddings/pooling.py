@@ -10,6 +10,63 @@ from torch import Tensor
 
 
 POOLING_NAMES = frozenset({"mean", "max", "norm", "median", "std", "var", "cls", "parti"})
+POOLING_SEMANTICS = {
+    "version": 2,
+    "mask": "biological_residues_only",
+    "accumulator": "float64_for_float64_input_else_float32",
+    "output_dtype": "input_dtype_after_reduction",
+    "variance_correction": 0,
+    "empty_residues": "reject",
+    "singleton_variance": 0,
+}
+
+
+# Pooling over every attended token, CLS and EOS included: the canonical policy of a store that
+# keeps the special tokens. Version 3 supersedes the residue-only version 2 for those stores.
+POOLING_SEMANTICS_TOKENS = {
+    "version": 3,
+    "mask": "all_attended_tokens_including_cls_and_eos",
+    "accumulator": "float64_for_float64_input_else_float32",
+    "output_dtype": "input_dtype_after_reduction",
+    "variance_correction": 0,
+    "empty_residues": "reject",
+    "singleton_variance": 0,
+}
+TOKEN_POOLING_NAMES = ("mean", "var", "std", "max", "norm")
+
+
+def pool_token_rows(X: Tensor, token_mask: Tensor, names: Sequence[str]) -> Tensor:
+    """Pool every attended token of each sequence, CLS and EOS included, without any device read.
+
+    The reductions equal ``Pooler`` over a mask that is true on every token: float32 accumulation
+    (float64 for float64 input), population variance from the two-pass mean, and a cast to the input
+    dtype after reduction. Unlike ``Pooler`` this skips its input validation, which reads device
+    values and stalls the host; the caller checks finiteness on the device after the copy lands.
+    """
+    # X: (b, n, d) padded, n = the longest l + 2; token_mask: (b, n) true on CLS, residues and EOS
+    unsupported = [name for name in names if name not in TOKEN_POOLING_NAMES]
+    if unsupported or not names or len(set(names)) != len(names):
+        raise ValueError(f"Token pooling supports {TOKEN_POOLING_NAMES}, each once; received {list(names)}.")
+    work = torch.float64 if X.dtype == torch.float64 else torch.float32
+    values = X.to(work)  # (b, n, d)
+    kept = token_mask.unsqueeze(-1)  # (b, n, 1)
+    count = kept.sum(dim=1).clamp_min(1).to(work)  # (b, 1), attended rows per sequence: l + 2
+    masked = values.masked_fill(~kept, 0)  # (b, n, d), padding zeroed
+    mean = masked.sum(dim=1) / count  # (b, d)
+    outputs: list[Tensor] = []
+    for name in names:
+        if name == "mean":
+            pooled = mean  # (b, d)
+        elif name == "max":
+            pooled = values.masked_fill(~kept, -torch.inf).amax(dim=1)  # (b, d)
+        elif name == "norm":
+            pooled = torch.linalg.vector_norm(masked, ord=2, dim=1)  # (b, d)
+        else:
+            centered = (values - mean.unsqueeze(1)).masked_fill(~kept, 0)  # (b, n, d)
+            variance = (centered * centered).sum(dim=1) / count  # (b, d)
+            pooled = variance.sqrt() if name == "std" else variance  # (b, d)
+        outputs.append(pooled.to(X.dtype))
+    return torch.cat(outputs, dim=-1)  # (b, len(names) * d)
 
 
 def _validate_inputs(X: Tensor, M: Tensor) -> Tensor:
@@ -42,6 +99,7 @@ def _pooled_attention(attentions: Tensor | Sequence[Tensor], *, batch_size: int)
     must not change that reduction.
     """
 
+    # attentions: (b, ..., l, l), or a sequence of (b, h, l, l) layer maps
     if isinstance(attentions, Sequence):
         if not attentions:
             raise ValueError("parti received an empty attention sequence.")
@@ -164,8 +222,12 @@ class Pooler:
         attentions: Tensor | Sequence[Tensor] | None = None,
         attention_backend: str | None = None,
     ) -> Tensor:
-        # X: (b, l, d); residue_mask: (b, l)
+        # X: (b, l, d); residue_mask: (b, l); attentions: (b, ..., l, l), or a sequence of (b, h, l, l) layer maps
         M = _validate_inputs(X, residue_mask)  # (b, l)
+        output_dtype = X.dtype
+        # Sum/variance in FP16 can overflow even when the final answer is representable.
+        # Retain FP64 precision, otherwise accumulate in FP32 and cast only the result.
+        X = X.to(dtype=torch.float64 if X.dtype == torch.float64 else torch.float32)  # (b, l, d)
         M_expanded = M.unsqueeze(-1)  # (b, l, 1)
         count = M_expanded.sum(dim=1).clamp_min(1)  # (b, 1)
         X_residues = X.masked_fill(~M_expanded, 0)  # (b, l, d)
@@ -206,6 +268,7 @@ class Pooler:
                     w = pagerank_weights(A_residue).to(dtype=X.dtype)  # (r,)
                     pooled.append(w @ X_i.index_select(0, indices))  # (d,)
                 Y = torch.stack(pooled)  # (b, d)
+            Y = Y.to(dtype=output_dtype)  # (b, d)
             if not bool(torch.isfinite(Y).all()):
                 raise ValueError(
                     f"Pooling operation {name!r} produced non-finite output from "
@@ -216,4 +279,7 @@ class Pooler:
         return torch.cat(outputs, dim=-1)  # (b, len(self.names) * d)
 
 
-__all__ = ["POOLING_NAMES", "Pooler", "pagerank_weights"]
+__all__ = [
+    "POOLING_NAMES", "POOLING_SEMANTICS_TOKENS", "TOKEN_POOLING_NAMES", "Pooler", "pagerank_weights",
+    "pool_token_rows",
+]

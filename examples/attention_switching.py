@@ -4,22 +4,22 @@
 from __future__ import annotations
 
 import argparse
-import os
 import warnings
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING or __package__:
+    from ._runtime import configure_offline
+else:
+    from _runtime import configure_offline
 
 
 # Shapes: b = batch, l = padded tokens, d = hidden width, h = attention heads.
 
 FLASH_BACKENDS = frozenset({"flash_attention_2", "flash_attention_3"})
 DTYPE_NAMES = ("float32", "bfloat16")
-
-
-def configure_offline() -> None:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 
 def attention_configuration_snapshot(model: Any) -> tuple[tuple[str, str, Any], ...]:

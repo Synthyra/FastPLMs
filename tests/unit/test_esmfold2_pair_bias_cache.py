@@ -33,7 +33,7 @@ def _step_inputs(step: int, samples: int) -> tuple[torch.Tensor, torch.Tensor]:
     generator = torch.Generator().manual_seed(100 + step)
     tokens = torch.randn(2 * samples, 7, 32, generator=generator)  # (b * samples, n, d_model)
     conditioning = torch.randn(2 * samples, 7, 16, generator=generator)  # (b * samples, n, d_cond)
-    return tokens, conditioning
+    return tokens, conditioning  # (b * samples, 7, 32), (b * samples, 7, 16) with b = 2
 
 
 @pytest.mark.parametrize("samples", (1, 3))

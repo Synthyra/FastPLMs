@@ -6,8 +6,8 @@ import math
 import pytest
 import torch
 
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 from tools.confidence import online_training
 from tools.confidence.online_training import (

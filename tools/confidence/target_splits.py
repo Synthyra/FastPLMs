@@ -11,17 +11,17 @@ which joins about a third of all targets through transitive homology.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import tempfile
-
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from collections import Counter
 from pathlib import Path
+
+from fastplms.digests import file_sha256
 
 
 SEED = 20260917
@@ -158,7 +158,7 @@ def build_splits(pool_dir: Path, pilot_records: Path, output_dir: Path, mmseqs: 
     output_dir.mkdir(parents=True, exist_ok=True)
     table_path = output_dir / "targets.parquet"
     pq.write_table(pa.Table.from_pylist(targets), table_path)
-    digest = hashlib.sha256(table_path.read_bytes()).hexdigest()
+    digest = file_sha256(table_path)
     counts = Counter((target["split"], target["stratum"]) for target in targets)
     largest = component_sizes.most_common(5)
     report = {
@@ -183,6 +183,6 @@ def load_split(output_dir: Path) -> list[dict[str, object]]:
     """Read split targets after checking the table against its recorded digest."""
     report = json.loads((output_dir / "split-report.json").read_text(encoding="utf-8"))
     table_path = output_dir / "targets.parquet"
-    if report.get("status") != "verified" or hashlib.sha256(table_path.read_bytes()).hexdigest() != report["targets_sha256"]:
+    if report.get("status") != "verified" or file_sha256(table_path) != report["targets_sha256"]:
         raise ValueError("split table differs from its verified report")
     return pq.read_table(table_path).to_pylist()

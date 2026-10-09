@@ -9,7 +9,6 @@ early stopping.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import random
@@ -17,7 +16,6 @@ import shutil
 import tempfile
 import time
 import uuid
-
 import numpy as np
 import torch
 import wandb
@@ -25,11 +23,11 @@ import wandb
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-
 from safetensors.torch import load_file, save_file
 from torch import Tensor, nn
 from wandb.sdk.wandb_run import Run
 
+from fastplms.digests import json_sha256
 from fastplms.registry import get_model_spec
 from .config import DONOR_REPO, DONOR_REVISION, DONOR_WEIGHT_SHA256
 from .experiment_artifacts import file_identity, source_identity
@@ -137,11 +135,12 @@ class ExponentialMovingAverage:
         for name, parameter in module.named_parameters():
             if name in self.shadow:
                 parameter.copy_(self.shadow[name])  # parameter shape unchanged
-        return replaced
+        return replaced  # (...) one tensor per replaced parameter name, checkpoint-defined shapes
 
 
 @torch.no_grad()
 def restore(module: nn.Module, weights: Mapping[str, Tensor]) -> None:
+    # weights: (...) one tensor per parameter name, checkpoint-defined shapes
     for name, parameter in module.named_parameters():
         if name in weights:
             parameter.copy_(weights[name])  # parameter shape unchanged
@@ -178,17 +177,19 @@ def head_output(
     context: HeadContext, inputs: Mapping[str, Tensor], x_pred: Tensor, sample: int
 ) -> dict[str, Tensor]:
     """Run the head on one diffusion sample; `x_pred` holds all samples, shape (k, a, 3)."""
+    # inputs: (...) one tensor per head input, batch size 1; x_pred: (k, a, 3)
     # Head inputs keep batch size 1; the selected coordinates are (1, a, 3).
     # Outputs include pLDDT logits (1, a, 50) and PAE logits (1, t, t, 64), t tokens.
     context.head.set_chunk_size(head_chunk_size(inputs["token_attention_mask"].shape[-1]))
     with torch.autocast("cuda", dtype=torch.bfloat16):
-        return context.head(**inputs, x_pred=x_pred[sample : sample + 1], num_diffusion_samples=1)
+        return context.head(**inputs, x_pred=x_pred[sample : sample + 1], num_diffusion_samples=1)  # (...) one tensor per head output; plddt_logits (1, a, 50), pae_logits (1, t, t, 64)
 
 
 def sample_scores(
     output: Mapping[str, Tensor], targets: Mapping[str, Tensor], inputs: Mapping[str, Tensor]
 ) -> tuple[Tensor, Tensor]:
     """Differentiable mean pLDDT over labeled atoms and ipTM of one sample; each has shape (1,)."""
+    # output: (...) one tensor per head output; targets: (...) one label array per name; inputs: (...) one tensor per head input
     plddt = expected_mean_plddt(output["plddt_logits"], targets["plddt_mask"][None])  # (1,)
     _, iptm = expected_tm_scores(
         output["pae_logits"], inputs["asym_id"], inputs["token_attention_mask"]
@@ -199,7 +200,7 @@ def sample_scores(
 def cross_entropy(
     output: Mapping[str, Tensor], targets: Mapping[str, Tensor], pae_weight: float
 ) -> tuple[Tensor, Tensor]:
-    # Logits: (1, atoms, 50), (1, tokens, tokens, 64); targets omit batch and bins.
+    # output: (...) one tensor per head output, plddt_logits (1, atoms, 50), pae_logits (1, tokens, tokens, 64); targets: (...) one label array per name, without batch or bins
     plddt = _masked_cross_entropy(
         output["plddt_logits"][0], targets["plddt_target"], targets["plddt_mask"]
     )  # ()
@@ -430,8 +431,7 @@ def _training_provenance(
     spec = get_model_spec(config.model_id)
     targets = {}
     for split, records in (("train", train_targets), ("validation", validation_targets)):
-        payload = json.dumps(list(records), sort_keys=True, separators=(",", ":")).encode()
-        targets[split] = {"count": len(records), "sha256": hashlib.sha256(payload).hexdigest()}
+        targets[split] = {"count": len(records), "sha256": json_sha256(list(records))}
     return {
         "model_id": config.model_id,
         "base_repo": spec.confidence_training_base.repo_id,

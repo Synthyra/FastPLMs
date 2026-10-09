@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import tempfile
 import time
-
 import numpy as np
 import torch
 
@@ -79,25 +78,25 @@ def throughput(
     config = OnlineTrainingConfig(model_id=model_id, samples_per_target=samples, targets_per_update=1)
     results = []
     for target in targets:
-        result: dict[str, object] = {
+        measurements: dict[str, object] = {
             "target_id": target["target_id"],
             "num_tokens": int(target["num_tokens"]),
             "num_chains": int(target["num_chains"]),
         }
-        with _measured(result, "fold"):
+        with _measured(measurements, "fold"):
             rollout = fold(model, structure(pool_dir, target), samples, seed=17)
-        with torch.no_grad(), _measured(result, "evaluation_head"):
+        with torch.no_grad(), _measured(measurements, "evaluation_head"):
             for sample in range(samples):
                 head_output(context, rollout.head_inputs, rollout.x_pred, sample)
-        result["sample_lddt"] = [round(item["lddt"], 4) for item in rollout.quality]
-        result["sample_true_iptm"] = [round(item["true_iptm"], 4) for item in rollout.quality]
+        measurements["sample_lddt"] = [round(item["lddt"], 4) for item in rollout.quality]
+        measurements["sample_true_iptm"] = [round(item["true_iptm"], 4) for item in rollout.quality]
         if int(target["num_tokens"]) <= max_training_tokens:
-            with _measured(result, "training_step"):
+            with _measured(measurements, "training_step"):
                 losses = target_step(context, rollout, config)
             context.head.zero_grad(set_to_none=True)
-            result |= {name: round(value, 4) for name, value in losses.items()}
-        log(f"throughput {model_id}: {result}")
-        results.append(result)
+            measurements |= {name: round(value, 4) for name, value in losses.items()}
+        log(f"throughput {model_id}: {measurements}")
+        results.append(measurements)
         del rollout
         torch.cuda.empty_cache()
     return results
@@ -122,7 +121,7 @@ def training_rate(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, 
         tokens.append(int(target["num_tokens"]))
         del rollout
     measured = np.array(seconds[1:])  # (targets - 1,)
-    result: dict[str, object] = {
+    measurements: dict[str, object] = {
         "targets": len(measured),
         "num_sampling_steps": config.num_sampling_steps,
         "mean_seconds_per_target": float(measured.mean()),
@@ -131,8 +130,8 @@ def training_rate(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, 
         "seconds": [round(value, 2) for value in seconds],
         "tokens": tokens,
     }
-    log(f"training rate {model_id}: {result['mean_seconds_per_target']:.2f} s per target (standard error {result['standard_error_seconds']:.2f}) at {result['mean_tokens']:.0f} mean tokens")
-    return result
+    log(f"training rate {model_id}: {measurements['mean_seconds_per_target']:.2f} s per target (standard error {measurements['standard_error_seconds']:.2f}) at {measurements['mean_tokens']:.0f} mean tokens")
+    return measurements
 
 
 def kernels(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, object]], samples: int, log: Log) -> list[dict[str, object]]:
@@ -153,21 +152,21 @@ def kernels(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, object
             for module in (model, context.head):
                 module.set_kernel_backend(backend)
                 module.set_chunk_size(chunk_size)
-            result: dict[str, object] = {
+            measurements: dict[str, object] = {
                 "target_id": target["target_id"],
                 "num_tokens": int(target["num_tokens"]),
                 "backend": backend or "reference",
                 "chunk_size": chunk_size,
             }
             try:
-                with _measured(result, "fold"):
+                with _measured(measurements, "fold"):
                     rollout = fold(model, structure(pool_dir, target), samples, seed=17)
-                with _measured(result, "training_step"):
+                with _measured(measurements, "training_step"):
                     target_step(context, rollout, config)
             except torch.OutOfMemoryError:
-                result["out_of_memory"] = True
-                log(f"kernels {model_id}: {result}")
-                results.append(result)
+                measurements["out_of_memory"] = True
+                log(f"kernels {model_id}: {measurements}")
+                results.append(measurements)
                 context.head.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
                 continue
@@ -181,7 +180,7 @@ def kernels(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, object
             for name in ("plddt_logits", "pae_logits"):
                 reference_logits.setdefault(name, logits[name].float().cpu())
             z = rollout.head_inputs["z"].cpu()  # (1, t, t, d_pair)
-            result |= {
+            measurements |= {
                 "mean_sample_lddt": round(float(np.mean([item["lddt"] for item in rollout.quality])), 4),
                 "z_relative_difference": float((z - reference["z"]).norm() / reference["z"].norm()),
                 **{
@@ -189,8 +188,8 @@ def kernels(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, object
                     for name in ("plddt_logits", "pae_logits")
                 },
             }
-            log(f"kernels {model_id}: {result}")
-            results.append(result)
+            log(f"kernels {model_id}: {measurements}")
+            results.append(measurements)
             del rollout, inputs, logits
             torch.cuda.empty_cache()
     return results
@@ -198,6 +197,7 @@ def kernels(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, object
 
 def _pilot_structure_file(path: Path, sequences: Sequence[str], positions: np.ndarray) -> None:
     """Write the pilot's normalized structure format: atom14 names and 1-based residue numbers."""
+    # positions: (l, 14, 3)
     names = np.full((len(positions), 14), "", dtype="U4")  # (l, 14)
     chain_index, residue_index, offset = [], [], 0
     for chain, sequence in enumerate(sequences):
@@ -253,7 +253,7 @@ def parity(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, object]
         native = rollout.native_confidence
         assert native is not None
         online = head_output(context, rollout.head_inputs, rollout.x_pred, 0)
-        result = {
+        parity_record = {
             "target_id": target["target_id"],
             "num_chains": int(target["num_chains"]),
             "resolved_atoms_equal": bool(torch.equal(our_resolved, pilot_resolved)),
@@ -266,8 +266,8 @@ def parity(model_id: str, pool_dir: Path, targets: Sequence[Mapping[str, object]
             "repeat_call_max_coordinate_difference": float((repeat.x_pred - rollout.x_pred).abs().max()),
             "repeat_call_max_z_difference": float((repeat.head_inputs["z"] - rollout.head_inputs["z"]).abs().max()),
         }
-        log(f"parity {model_id}: {result}")
-        results.append(result)
+        log(f"parity {model_id}: {parity_record}")
+        results.append(parity_record)
     return results
 
 

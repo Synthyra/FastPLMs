@@ -84,7 +84,7 @@ def test_esmplusplus_rejects_invalid_attention_mask_before_pairwise_construction
 
         def any(self, *, dim: int) -> torch.Tensor:
             assert dim == 1
-            return torch.tensor([False])
+            return torch.tensor([False])  # (1,)
 
         def __getitem__(self, _key):
             raise AssertionError("pairwise mask construction must follow row validation")
@@ -203,6 +203,7 @@ def test_esmplusplus_wide_classifier_forward_backward_and_reload(
     expected_shape: tuple[int, ...],
     tmp_path: Path,
 ) -> None:
+    # labels: (2,) = (b,) for sequence labels, (2, 4) = (b, l) for token labels
     config = _sequence_classifier_config()
     kwargs = {} if pooling_types is None else {"pooling_types": pooling_types}
     model = model_class(config, **kwargs).train()

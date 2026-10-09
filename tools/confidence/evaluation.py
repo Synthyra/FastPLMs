@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -135,8 +135,8 @@ def _require_completed_training(root: Path, model_id: str) -> Path:
         raise ValueError(
             "final evaluation requires a completed training result and best.safetensors"
         )
-    result = json.loads(result_path.read_text(encoding="utf-8"))
-    if result.get("status") != "complete":
+    training_record = json.loads(result_path.read_text(encoding="utf-8"))
+    if training_record.get("status") != "complete":
         raise ValueError("final evaluation requires training status complete")
     return checkpoint
 
@@ -292,7 +292,7 @@ def evaluate_final(root: Path, model_id: str) -> dict[str, Any]:
             else None
         )
 
-        def target_stream(selected_records: list[dict[str, Any]], seeds: tuple[int, ...]):
+        def target_stream(selected_records: list[dict[str, Any]], seeds: tuple[int, ...]) -> Iterator[Mapping[str, Any]]:
             for selected_record in selected_records:
                 for seed in seeds:
                     cache, _ = load_cache(

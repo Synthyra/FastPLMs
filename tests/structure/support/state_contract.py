@@ -1,13 +1,21 @@
-"""Compact exact checkpoint contracts for isolated structure-model oracles."""
+"""Compact exact checkpoint contracts and the digest and file helpers every isolated structure oracle shares.
+
+docker/Dockerfile copies this file and the three bundle producers beside it into the oracle image, where FastPLMs is
+absent, so none of them may import FastPLMs or any other tools module. ``tools/tensor_digests.py`` holds the same
+tensor digests for host code, and ``tests/unit/test_tensor_digests.py`` fails when the two differ.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import torch
 
 from collections.abc import Callable, Mapping
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 
 NameTransform = Callable[[str], tuple[str, ...]]
@@ -43,13 +51,127 @@ def _canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def _tensor_bytes(X: torch.Tensor) -> bytes:
+    # X: (...) the named state entry's shape; flattened only for byte hashing.
+    value = X.detach().to(device="cpu").contiguous().reshape(-1)  # (X.numel(),)
+    return value.view(torch.uint8).numpy().tobytes()
+
+
 def tensor_sha256(X: torch.Tensor) -> str:
     """Hash one tensor exactly, including scalar tensors."""
 
-    # X has the named state entry's shape; flatten only for byte hashing.
-    # value: (X.numel(),)
-    value = X.detach().to(device="cpu").contiguous().reshape(-1)
-    return hashlib.sha256(value.view(torch.uint8).numpy().tobytes()).hexdigest()
+    # X: (...)
+    return hashlib.sha256(_tensor_bytes(X)).hexdigest()
+
+
+def tensor_set_sha256(tensors: Mapping[str, torch.Tensor]) -> str:
+    """Hash tensor names, dtypes, shapes, and values in stable name order."""
+
+    # tensors: (...) one tensor per name, any shape
+    digest = hashlib.sha256()
+    for name in sorted(tensors):
+        X = tensors[name]  # (...)
+        digest.update(name.encode("utf-8"))
+        digest.update(str(X.dtype).encode("ascii"))
+        digest.update(repr(tuple(X.shape)).encode("ascii"))
+        digest.update(_tensor_bytes(X))
+    return digest.hexdigest()
+
+
+def file_sha256(path: Path) -> str:
+    """Return the SHA-256 of a file's bytes, read in blocks."""
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def stored_json_text(value: Mapping[str, Any]) -> str:
+    """Return the two-space-indented, key-sorted JSON form of a stored bundle file, with one trailing newline."""
+
+    return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def request_fingerprint(request: Mapping[str, Any]) -> str:
+    """Return the SHA-256 of a request in compact, key-sorted JSON."""
+
+    payload = json.dumps(
+        request,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    """Replace ``path`` with ``content`` in one step, creating its parent directories."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        text=True,
+    )
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_name, path)
+    except BaseException:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise
+
+
+def load_request_object(path: Path, label: str) -> dict[str, Any]:
+    """Read the JSON object a request file holds; ``label`` names the model in the error of any other JSON value."""
+
+    request = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(request, dict):
+        raise TypeError(f"{label} request must be a JSON object: {path}")
+    return request
+
+
+def result_directory(
+    exchange_root: Path,
+    model_id: str,
+    *,
+    producer: Literal["reference", "candidate"],
+    precision: str | None = None,
+) -> Path:
+    """Return where ``producer`` writes the bundle of ``model_id`` under the exchange root, below ``precision`` if given."""
+
+    path = exchange_root / "structure" / "results" / producer / model_id
+    return path if precision is None else path / precision
+
+
+def checkpoint_metadata(checkpoint: Any) -> dict[str, Any]:
+    """Return the repository, revision, and file digests a request records for one checkpoint."""
+
+    return {
+        "repo_id": checkpoint.repo_id,
+        "revision": checkpoint.revision,
+        "files": [
+            {"path": item.path, "algorithm": item.algorithm, "digest": item.digest}
+            for item in checkpoint.files
+        ],
+    }
+
+
+def upstream_metadata(upstream: Any) -> dict[str, Any]:
+    """Return the pinned upstream record a request carries."""
+
+    return {
+        "id": upstream.id,
+        "path": upstream.path,
+        "url": upstream.url,
+        "revision": upstream.revision,
+        "license_expression": upstream.license_expression,
+    }
 
 
 def _included(name: str, excluded_prefixes: tuple[str, ...]) -> bool:
@@ -203,9 +325,18 @@ def validate_semantic_config_contract(contract: object) -> None:
 
 
 __all__ = [
+    "atomic_write_text",
+    "checkpoint_metadata",
     "exact_state_contract",
+    "file_sha256",
+    "load_request_object",
+    "request_fingerprint",
+    "result_directory",
     "semantic_config_contract",
+    "stored_json_text",
+    "tensor_set_sha256",
     "tensor_sha256",
+    "upstream_metadata",
     "validate_exact_state_contract",
     "validate_semantic_config_contract",
 ]

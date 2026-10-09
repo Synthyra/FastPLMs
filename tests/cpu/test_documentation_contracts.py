@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import sqlite3
 import struct
 import sys
@@ -14,7 +15,6 @@ import transformers
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
-
 from examples import (
     _runtime,
     ankh_embeddings,
@@ -27,6 +27,11 @@ from examples import (
     task_heads,
     ttt,
 )
+from tests.integration import test_ttt as ttt_contracts
+from tests.unit import test_ankh_cpu_contract as ankh_contracts
+from tests.unit import test_e1_cache_contract as e1_contracts
+from tests.unit import test_embeddings_api as embedding_contracts
+
 from fastplms.embeddings import (
     EmbeddingRecord,
     EmbeddingResult,
@@ -37,10 +42,6 @@ from fastplms.embeddings import (
 )
 from fastplms.models.esm3.modeling_esm3 import FastESM3Config, FastESM3Model
 from fastplms.models.esmfold2 import esmfold2_types
-from tests.integration import test_ttt as ttt_contracts
-from tests.unit import test_ankh_cpu_contract as ankh_contracts
-from tests.unit import test_e1_cache_contract as e1_contracts
-from tests.unit import test_embeddings_api as embedding_contracts
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -144,7 +145,7 @@ class _TinyTokenizer:
         input_ids = torch.tensor(  # (b, l)
             [row + [0] * (width - len(row)) for row in rows]
         )
-        return {
+        return {  # (...) input_ids, attention_mask: each (b, l)
             "input_ids": input_ids,
             "attention_mask": input_ids.ne(0).long(),
         }
@@ -166,7 +167,7 @@ def test_embedding_and_retrieval_example_executes_with_ordered_sqlite(
         model, inputs, **kwargs
     )
     output = tmp_path / "example.sqlite"
-    result = embedding_and_retrieval.run_embeddings(
+    records = embedding_and_retrieval.run_embeddings(
         model,
         _TinyTokenizer(),
         {"a": "ACD", "b": "GG"},
@@ -175,7 +176,7 @@ def test_embedding_and_retrieval_example_executes_with_ordered_sqlite(
         max_length=16,
     )
 
-    assert [record.id for record in result] == ["a", "b"]
+    assert [record.id for record in records] == ["a", "b"]
     selected = load_sqlite_result(output, record_ids=["b", "a", "b"])
     assert [record.id for record in selected] == ["b", "a", "b"]
 
@@ -281,10 +282,10 @@ def test_attention_switching_main_executes_optimized_and_masked_fallback(
         lambda: cleared.append(True),
     )
 
-    result = attention_switching.main([str(artifact), "--backend", "sdpa"])
+    exit_code = attention_switching.main([str(artifact), "--backend", "sdpa"])
     output = capsys.readouterr().out
 
-    assert result == 0
+    assert exit_code == 0
     assert sdpa_calls
     assert "optimized (2," in output
     assert "fallback (2," in output
@@ -447,7 +448,7 @@ def test_task_head_example_executes_all_advertised_heads_offline(
             input_ids = torch.tensor(  # (b, l)
                 [row + [1] * (width - len(row)) for row in rows]
             )
-            return {
+            return {  # (...) input_ids, attention_mask: each (b, l)
                 "input_ids": input_ids,
                 "attention_mask": input_ids.ne(1).long(),
             }
@@ -480,7 +481,7 @@ def test_task_head_example_executes_all_advertised_heads_offline(
         AutoTokenizer=FakeTokenizer,
     )
 
-    result = task_heads.main(
+    exit_code = task_heads.main(
         [
             str(artifact),
             "--sequence",
@@ -497,7 +498,7 @@ def test_task_head_example_executes_all_advertised_heads_offline(
     )
     summary = json.loads(capsys.readouterr().out)
 
-    assert result == 0
+    assert exit_code == 0
     assert summary["masked_lm"]["status"] == "checkpoint-provided pretrained head"
     assert summary["contacts"]["status"] == "checkpoint-provided pretrained head"
     assert summary["contacts"]["finite"] is True
@@ -554,7 +555,7 @@ def test_ankh_embedding_example_executes_encoder_and_decoder_layers() -> None:
             tokenizer_calls.append((text, add_special_tokens))
             ids = [[2, 3, 4, 1]] if add_special_tokens else [[9, 7]]
             input_ids = torch.tensor(ids)
-            return {
+            return {  # (...) input_ids, attention_mask: each (1, l), l = 4 with special tokens, else 2
                 "input_ids": input_ids,
                 "attention_mask": torch.ones_like(input_ids),
             }
@@ -565,7 +566,7 @@ def test_ankh_embedding_example_executes_encoder_and_decoder_layers() -> None:
 
         def generate(self, **kwargs: Any) -> torch.Tensor:
             generation_arguments.update(kwargs)
-            return kwargs["decoder_input_ids"]
+            return kwargs["decoder_input_ids"]  # (b, l) the decoder_input_ids as supplied
 
     generated = ankh_embeddings.generate_ankh_task(
         PromptedSeq2Seq(),
@@ -591,7 +592,7 @@ class _GenerationExampleTokenizer:
     def __call__(self, sequence: str, *, return_tensors: str) -> dict[str, torch.Tensor]:
         assert return_tensors == "pt"
         self.encoded_sequences.append(sequence)
-        return {
+        return {  # (...) input_ids (1, len(sequence) + 2)
             "input_ids": torch.tensor(
                 [[0, *([3] * len(sequence)), 2]],
                 dtype=torch.long,
@@ -617,10 +618,11 @@ class _GenerationExampleModel:
         self.calls: list[tuple[torch.Tensor, dict[str, Any]]] = []
 
     def generate(self, input_ids: torch.Tensor, **kwargs: Any) -> Any:
+        # input_ids: (1, l)
         self.calls.append((input_ids.clone(), dict(kwargs)))
         sampled = torch.randint(0, 100, (1, 1), device=input_ids.device)  # (1, 1)
         output = torch.cat((input_ids, sampled), dim=1)
-        return {"output_tokens": output} if self.multimodal else output
+        return {"output_tokens": output} if self.multimodal else output  # (1, l + 1)
 
 
 def test_generation_example_executes_seeded_dplm_branch_offline() -> None:
@@ -643,8 +645,8 @@ def test_generation_example_executes_seeded_dplm_branch_offline() -> None:
             "sampling_strategy": "argmax",
             "disable_resample": True,
         }
-    assert generation.os.environ["HF_HUB_OFFLINE"] == "1"
-    assert generation.os.environ["TRANSFORMERS_OFFLINE"] == "1"
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
 
 
 def test_generation_example_executes_seeded_dplm2_branch_offline() -> None:
@@ -667,8 +669,8 @@ def test_generation_example_executes_seeded_dplm2_branch_offline() -> None:
             "sampling_strategy": "argmax",
             "unmasking_strategy": "deterministic",
         }
-    assert generation.os.environ["HF_HUB_OFFLINE"] == "1"
-    assert generation.os.environ["TRANSFORMERS_OFFLINE"] == "1"
+    assert os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["TRANSFORMERS_OFFLINE"] == "1"
 
 
 def test_generation_example_executes_seeded_esm3_trace() -> None:
@@ -715,7 +717,7 @@ def test_e1_rag_example_executes_local_msa_and_shared_persistence(
     output = tmp_path / "e1.sqlite"
     model = e1_contracts.E1ForMaskedLM(e1_contracts._tiny_e1_config()).eval()
 
-    result = e1_rag.embed_local_msa(
+    records = e1_rag.embed_local_msa(
         model,
         sequence,
         a3m_path,
@@ -724,7 +726,7 @@ def test_e1_rag_example_executes_local_msa_and_shared_persistence(
         seed=7,
     )
 
-    assert [(record.id, record.sequence) for record in result] == [
+    assert [(record.id, record.sequence) for record in records] == [
         ("0", sequence),
         ("1", sequence),
     ]
@@ -902,8 +904,8 @@ def test_migration_python_snippets_execute_against_tiny_offline_objects(
     monkeypatch.chdir(tmp_path)
     namespace = {"model": model, "inputs": inputs, "__builtins__": __builtins__}
     exec(blocks[1], namespace)
-    result = namespace["result"]
-    exec(blocks[2], {"result": result, "__builtins__": __builtins__})
+    snippet_result = namespace["result"]
+    exec(blocks[2], {"result": snippet_result, "__builtins__": __builtins__})
 
     records = EmbeddingResult(
         [

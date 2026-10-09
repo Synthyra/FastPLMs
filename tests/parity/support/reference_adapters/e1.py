@@ -21,7 +21,7 @@ class _OfficialE1ForwardWrapper(nn.Module):
         **kwargs,
     ):
         # input_ids: (b, l); within_seq_position_ids: (b, l)
-        # global_position_ids: (b, l); sequence_ids: (b, l)
+        # global_position_ids: (b, l); sequence_ids: (b, l); attention_mask: (b, l), deleted unused
         del attention_mask, kwargs
         batch = {
             "input_ids": input_ids,

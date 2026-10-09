@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import ast
-import copy
 import pytest
 
 from difflib import SequenceMatcher
 from pathlib import Path
+from tests.release.source_independence import function_node, normalized_ast_lines
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -65,54 +64,6 @@ SOURCE_PAIRS = (
 )
 
 
-def _function(path: Path, qualified_name: str) -> ast.FunctionDef:
-    body: list[ast.stmt] = ast.parse(path.read_text(encoding="utf-8"), filename=str(path)).body
-    selected: ast.AST | None = None
-    for part in qualified_name.split("."):
-        selected = next(
-            (
-                node
-                for node in body
-                if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name == part
-            ),
-            None,
-        )
-        assert selected is not None, f"{qualified_name!r} is absent from {path}"
-        body = selected.body
-    assert isinstance(selected, ast.FunctionDef)
-    return selected
-
-
-def _normalized_ast_lines(node: ast.FunctionDef) -> list[str]:
-    normalized = copy.deepcopy(node)
-    normalized.name = "function"
-    normalized.decorator_list = []
-    normalized.returns = None
-    for argument in (
-        *normalized.args.posonlyargs,
-        *normalized.args.args,
-        *normalized.args.kwonlyargs,
-    ):
-        argument.annotation = None
-    if normalized.args.vararg is not None:
-        normalized.args.vararg.annotation = None
-    if normalized.args.kwarg is not None:
-        normalized.args.kwarg.annotation = None
-    if (
-        normalized.body
-        and isinstance(normalized.body[0], ast.Expr)
-        and isinstance(normalized.body[0].value, ast.Constant)
-        and isinstance(normalized.body[0].value.value, str)
-    ):
-        normalized.body.pop(0)
-    ast.fix_missing_locations(normalized)
-    return [
-        " ".join(line.strip().split())
-        for line in ast.unparse(normalized).splitlines()
-        if line.strip()
-    ]
-
-
 @pytest.mark.parametrize(
     ("local_name", "local_path", "upstream_path", "upstream_name"),
     SOURCE_PAIRS,
@@ -126,8 +77,8 @@ def test_e1_functions_are_independently_implemented(
 ) -> None:
     assert upstream_path.is_file(), f"pinned E1 source is missing: {upstream_path}"
     assert local_path.is_file(), f"local E1 source is missing: {local_path}"
-    local_lines = _normalized_ast_lines(_function(local_path, local_name))
-    upstream_lines = _normalized_ast_lines(_function(upstream_path, upstream_name))
+    local_lines = normalized_ast_lines(function_node(local_path, local_name))
+    upstream_lines = normalized_ast_lines(function_node(upstream_path, upstream_name))
     similarity = SequenceMatcher(
         None,
         local_lines,

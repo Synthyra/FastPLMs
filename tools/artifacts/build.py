@@ -18,12 +18,16 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+
 from collections.abc import Iterable, Mapping
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from zipfile import ZIP_DEFLATED, BadZipFile, ZipFile, ZipInfo
 
 from fastplms import __version__
+from fastplms.checkpoint_files import ArtifactError, hash_file, verify_checkpoint
+from fastplms.digests import json_sha256
+from fastplms.json_files import indented_json
 from fastplms.registry import (
     CheckpointSource,
     FileDigest,
@@ -76,6 +80,9 @@ _RELEASE_TOOL_SCOPE_PATHS = (
     *_ARTIFACT_REQUIREMENT_INPUTS,
     "evidence.toml",
     "src/fastplms/__init__.py",
+    "src/fastplms/checkpoint_files.py",
+    "src/fastplms/digests.py",
+    "src/fastplms/json_files.py",
     "src/fastplms/models.toml",
     "src/fastplms/registry.py",
     "tools/artifacts/__init__.py",
@@ -112,6 +119,9 @@ _RELEASE_TOOL_SCOPE_ROOTS = (
     *_ARTIFACT_REQUIREMENT_INPUTS,
     "evidence.toml",
     "src/fastplms/__init__.py",
+    "src/fastplms/checkpoint_files.py",
+    "src/fastplms/digests.py",
+    "src/fastplms/json_files.py",
     "src/fastplms/models.toml",
     "src/fastplms/registry.py",
     "tools/artifacts",
@@ -168,10 +178,6 @@ _TOKENIZER_FILE_NAMES = frozenset(
 )
 
 
-class ArtifactError(RuntimeError):
-    """Raised when an artifact cannot be built or validated safely."""
-
-
 def _update_length_prefixed(digest: Any, value: bytes) -> None:
     digest.update(len(value).to_bytes(8, "big"))
     digest.update(value)
@@ -220,22 +226,6 @@ def _canonical_state_sha256(state: Mapping[str, Any]) -> str:
     return digest.hexdigest()
 
 
-def hash_file(path: Path, algorithm: str = "sha256") -> str:
-    """Return a normal SHA-256 or Git-blob SHA-1 digest for one file."""
-
-    if algorithm == "sha256":
-        digest = hashlib.sha256()
-    elif algorithm == "git-sha1":
-        digest = hashlib.sha1(usedforsecurity=False)
-        digest.update(f"blob {path.stat().st_size}\0".encode("ascii"))
-    else:
-        raise ArtifactError(f"Unsupported digest algorithm: {algorithm!r}")
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _canonical_legal_bytes(path: Path) -> bytes:
     """Return UTF-8 legal text with Git-canonical LF line endings."""
 
@@ -253,29 +243,6 @@ def _hash_canonical_legal_file(path: Path, algorithm: str) -> str:
     if algorithm != "sha256":
         raise ArtifactError(f"Legal texts require SHA-256, received {algorithm!r}.")
     return hashlib.sha256(_canonical_legal_bytes(path)).hexdigest()
-
-
-def verify_checkpoint(snapshot: Path, source: CheckpointSource) -> None:
-    """Verify every manifest-pinned file in a local checkpoint snapshot."""
-
-    snapshot = snapshot.resolve()
-    if not snapshot.is_dir():
-        raise ArtifactError(f"Checkpoint snapshot does not exist: {snapshot}")
-    failures: list[str] = []
-    for expected in source.files:
-        path = snapshot.joinpath(*PurePosixPath(expected.path).parts)
-        if not path.is_file():
-            failures.append(f"missing {expected.path}")
-            continue
-        actual = hash_file(path, expected.algorithm)
-        if actual != expected.digest:
-            failures.append(
-                f"{expected.path}: expected {expected.encoded}, "
-                f"received {expected.algorithm}:{actual}"
-            )
-    if failures:
-        detail = "\n  - ".join(failures)
-        raise ArtifactError(f"Checkpoint verification failed for {source.repo_id}:\n  - {detail}")
 
 
 def _is_weight_file(path: str) -> bool:
@@ -1271,9 +1238,7 @@ def _runtime_payload_tree_sha256(payloads: Mapping[str, bytes]) -> str:
         name: f"sha256:{hashlib.sha256(payload).hexdigest()}"
         for name, payload in payloads.items()
     }
-    return hashlib.sha256(
-        json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return json_sha256(inventory)
 
 
 def _archived_runtime_payloads(
@@ -1418,9 +1383,7 @@ def _tree_sha256(root: Path) -> str:
         path.relative_to(root).as_posix(): f"sha256:{hash_file(path)}"
         for path in _iter_files(root)
     }
-    return hashlib.sha256(
-        json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return json_sha256(inventory)
 
 
 def _validate_attention_kernel_lock(
@@ -1491,7 +1454,7 @@ def _copy_attention_kernel_lock(
 def _write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        indented_json(value, ensure_ascii=False),
         encoding="utf-8",
         newline="\n",
     )
@@ -1618,10 +1581,10 @@ def _build_runtime_archive(package_root: Path) -> bytes:
     buffer = io.BytesIO()
     with ZipFile(buffer, mode="w", compression=ZIP_DEFLATED, compresslevel=9) as archive:
         for archive_path, contents in sorted(files.items()):
-            info = ZipInfo(archive_path, date_time=(1980, 1, 1, 0, 0, 0))
-            info.compress_type = ZIP_DEFLATED
-            info.external_attr = 0o100644 << 16
-            archive.writestr(info, contents, compress_type=ZIP_DEFLATED, compresslevel=9)
+            zip_entry = ZipInfo(archive_path, date_time=(1980, 1, 1, 0, 0, 0))
+            zip_entry.compress_type = ZIP_DEFLATED
+            zip_entry.external_attr = 0o100644 << 16
+            archive.writestr(zip_entry, contents, compress_type=ZIP_DEFLATED, compresslevel=9)
     payload = buffer.getvalue()
     if len(payload) > _MAX_RUNTIME_ARCHIVE_BYTES:
         raise ArtifactError("The compressed artifact runtime archive exceeds its size limit.")
@@ -2204,7 +2167,7 @@ def _validate_vendor_revisions(source_root: Path, registry: ModelRegistry, spec:
                     f"Official source {source_id!r} has invalid archive provenance: {error}"
                 ) from error
             continue
-        result = subprocess.run(
+        completed = subprocess.run(
             [
                 "git",
                 "-c",
@@ -2218,11 +2181,11 @@ def _validate_vendor_revisions(source_root: Path, registry: ModelRegistry, spec:
             capture_output=True,
             text=True,
         )
-        revision = result.stdout.strip()
-        if result.returncode != 0 or revision != source.revision:
+        revision = completed.stdout.strip()
+        if completed.returncode != 0 or revision != source.revision:
             raise ArtifactError(
                 f"Official source {source_id!r} must be at {source.revision}; "
-                f"received {revision or result.stderr.strip()!r}."
+                f"received {revision or completed.stderr.strip()!r}."
             )
         status = subprocess.run(
             [
@@ -2514,9 +2477,7 @@ def _checkpoint_identity_hash_fields(
         "revision": revision,
         "files": [{"path": path, "digest": digest} for path, digest in sorted(files.items())],
     }
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    return json_sha256(payload)
 
 
 def _checkpoint_identity_hash(source: CheckpointSource) -> str:
@@ -2561,19 +2522,17 @@ def _conversion_equality_attestation(spec: ModelSpec) -> dict[str, Any] | None:
             "sha256": expected_state_sha256,
         },
     }
-    payload["attestation_sha256"] = hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
+    payload["attestation_sha256"] = json_sha256(payload)
     return payload
 
 
 def _content_manifest(root: Path) -> dict[str, str]:
-    result: dict[str, str] = {}
+    digests_by_path: dict[str, str] = {}
     for path in _iter_files(root):
         relative = path.relative_to(root).as_posix()
         if relative != "artifact-manifest.json":
-            result[relative] = f"sha256:{hash_file(path)}"
-    return result
+            digests_by_path[relative] = f"sha256:{hash_file(path)}"
+    return digests_by_path
 
 
 def _runtime_attestation(

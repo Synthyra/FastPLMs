@@ -4,6 +4,11 @@ The converter never loads a model or imports an upstream package. It accepts
 only the normalized, hash-checkable interchange formats written by the native
 reference services, verifies their identity against ``models.toml``, and keeps
 the minimum tensors needed for a routine candidate regression.
+
+A sequence golden stores the official strict-FP32 outputs as ``output__*``. They
+are the hardware-independent truth a candidate's FP32 run must match. The same
+native run's official BF16 outputs are kept as ``official_bf16__*`` so a
+candidate's BF16 error against that truth can be bounded by the official error.
 """
 
 from __future__ import annotations
@@ -12,20 +17,31 @@ import argparse
 import hashlib
 import json
 import torch
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from safetensors.torch import load_file
 
+from fastplms.digests import file_sha256
+from fastplms.json_files import compact_json
 from fastplms.registry import ModelRegistry, ModelSpec, get_model_registry
-from tools.goldens.bundle import GoldenBundleRecord, GoldenError, write_golden_bundle
+from tools.goldens.bundle import (
+    GoldenBundleRecord,
+    GoldenError,
+    validate_golden_bundle,
+    write_golden_bundle,
+)
+from tools.tensor_digests import raw_tensor_sha256, tensor_bytes
 
 
 NativeResultKind = Literal["sequence", "structure"]
 _SEQUENCE_REQUIRED_TENSORS = frozenset(
     {"residue_mask", "output__last_hidden_state"}
 )
+_SEQUENCE_PRECISIONS = ("bf16", "fp32")
+OFFICIAL_BF16_PREFIX = "official_bf16__"
 _MAX_GOLDEN_TENSOR_BYTES = 64 * 1024 * 1024
 _DPLM2_3B_GENERATION_LIMITATION = {
     "status": "official_unavailable",
@@ -162,7 +178,9 @@ def golden_generation_matrix(
                 / f"{spec.id}.json"
             )
             native_result_path = _matrix_native_result_path(native_root, spec)
-            native_tensors_name = "bf16.safetensors"
+            native_tensor_names = tuple(
+                f"{precision}.safetensors" for precision in _SEQUENCE_PRECISIONS
+            )
         else:
             request_path = (
                 native_root
@@ -172,7 +190,7 @@ def golden_generation_matrix(
                 / f"{spec.id}.json"
             )
             native_result_path = _matrix_native_result_path(native_root, spec)
-            native_tensors_name = "bundle.safetensors"
+            native_tensor_names = ("bundle.safetensors",)
         metadata_path = output_root / f"{spec.id}.json"
         tensors_path = output_root / f"{spec.id}.safetensors"
         entries.append(
@@ -184,7 +202,7 @@ def golden_generation_matrix(
                 request_path=request_path,
                 native_result_path=native_result_path,
                 native_ready=(native_result_path / "metadata.json").is_file()
-                and (native_result_path / native_tensors_name).is_file(),
+                and all((native_result_path / name).is_file() for name in native_tensor_names),
                 metadata_path=metadata_path,
                 tensors_path=tensors_path,
                 converted_ready=metadata_path.is_file() and tensors_path.is_file(),
@@ -212,52 +230,26 @@ def require_complete_check_goldens(registry: ModelRegistry) -> None:
         )
 
 
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _tensor_bytes(T: torch.Tensor) -> bytes:
-    # T: (...)
-    return T.detach().to(device="cpu").contiguous().view(torch.uint8).numpy().tobytes()
-
-
-def _raw_tensor_sha256(T: torch.Tensor) -> str:
-    # T: (...)
-    return hashlib.sha256(_tensor_bytes(T)).hexdigest()
-
-
 def _tensor_set_fingerprint(tensors: Mapping[str, torch.Tensor]) -> str:
+    # tensors: (...) one tensor per name, any shape
     if not tensors:
         raise GoldenError("A native golden input fingerprint requires tensors.")
     digest = hashlib.sha256()
     for name in sorted(tensors):
         T = tensors[name].detach().to(device="cpu").contiguous()  # (...)
         digest.update(
-            _canonical_json(
+            compact_json(
                 {"dtype": str(T.dtype), "name": name, "shape": list(T.shape)}
-            )
+            ).encode("utf-8")
         )
         digest.update(b"\0")
-        digest.update(_tensor_bytes(T))
+        digest.update(tensor_bytes(T))
         digest.update(b"\0")
     return digest.hexdigest()
 
 
 def _ensure_compact(tensors: Mapping[str, torch.Tensor], *, model_id: str) -> None:
-    # tensors[name]: (...)
+    # tensors: (...) one tensor per name, any shape
     size = sum(T.numel() * T.element_size() for T in tensors.values())
     if size > _MAX_GOLDEN_TENSOR_BYTES:
         raise GoldenError(
@@ -283,7 +275,7 @@ def _environment(raw: object, *, model_id: str) -> dict[str, str]:
             f"{model_id}: native result has no environment record; regenerate it in the "
             "pinned reference container."
         )
-    result: dict[str, str] = {}
+    environment: dict[str, str] = {}
     for key, value in raw.items():
         if not isinstance(key, str) or not key:
             raise GoldenError(f"{model_id}: native environment contains an invalid key.")
@@ -294,15 +286,15 @@ def _environment(raw: object, *, model_id: str) -> dict[str, str]:
         elif isinstance(value, (bool, int, float)):
             normalized = json.dumps(value, separators=(",", ":"))
         elif isinstance(value, (Mapping, list, tuple)):
-            normalized = _canonical_json(value).decode("ascii")
+            normalized = compact_json(value)
         else:
             raise GoldenError(
                 f"{model_id}: native environment value {key!r} is not serializable."
             )
         if not normalized:
             raise GoldenError(f"{model_id}: native environment value {key!r} is empty.")
-        result[key] = normalized
-    return result
+        environment[key] = normalized
+    return environment
 
 
 def _expected_files(spec: ModelSpec) -> list[dict[str, str]]:
@@ -339,14 +331,16 @@ def _validate_identity(metadata: Mapping[str, Any], spec: ModelSpec) -> None:
 def _load_sequence_result(
     result_dir: Path,
     spec: ModelSpec,
+    registry: ModelRegistry,
+    official_bf16_golden_root: Path | None,
 ) -> tuple[
     dict[str, torch.Tensor],
     dict[str, str],
     str,
     tuple[dict[str, str], ...],
+    dict[str, str],
 ]:
     metadata_path = result_dir / "metadata.json"
-    tensors_path = result_dir / "bf16.safetensors"
     metadata = _read_metadata(metadata_path)
     _validate_identity(metadata, spec)
     if metadata.get("state_transform") != spec.family.state_transform:
@@ -379,41 +373,118 @@ def _load_sequence_result(
         and not isinstance(generation, Mapping)
     ):
         raise GoldenError(f"{spec.id}: native result omits required generation parity.")
-    if not tensors_path.is_file():
-        raise GoldenError(f"{spec.id}: native BF16 result is missing: {tensors_path}.")
-    try:
-        tensors = load_file(tensors_path, device="cpu")  # values: (...)
-    except Exception as error:
-        raise GoldenError(f"{spec.id}: unable to load native BF16 tensors.") from error
     precision_keys = metadata.get("precision_tensor_keys")
-    if not isinstance(precision_keys, Mapping) or precision_keys.get("bf16") != sorted(tensors):
-        raise GoldenError(f"{spec.id}: native BF16 tensor-key contract mismatch.")
-
-    missing = sorted(_SEQUENCE_REQUIRED_TENSORS.difference(tensors))
-    input_names = sorted(name for name in tensors if name.startswith("input__"))
-    if missing or not input_names:
-        raise GoldenError(
-            f"{spec.id}: native BF16 result omits required golden tensors: "
-            f"{missing or ['input__*']}."
+    if not isinstance(precision_keys, Mapping):
+        raise GoldenError(f"{spec.id}: native result has no precision tensor-key record.")
+    fp32 = _load_precision_tensors(result_dir, spec, precision_keys, "fp32")  # values: (...)
+    environment = _environment(metadata.get("environment"), model_id=spec.id)
+    bf16_source_files: dict[str, str] = {}
+    if "bf16" in precision_keys:
+        if official_bf16_golden_root is not None:
+            raise GoldenError(f"{spec.id}: native result already holds its own BF16 run.")
+        bf16 = _load_precision_tensors(result_dir, spec, precision_keys, "bf16")  # values: (...)
+    else:
+        bf16, bf16_environment, bf16_source_files = _prior_official_bf16(  # values: (...)
+            spec, registry, official_bf16_golden_root
         )
-    selected_names = [
-        *input_names,
-        "residue_mask",
-        "output__last_hidden_state",
-    ]
-    if "output__logits" in tensors:
-        selected_names.append("output__logits")
-    selected = {name: tensors[name] for name in selected_names}  # values: (...)
+        environment["official_bf16_environment"] = bf16_environment
+    input_names = sorted(name for name in fp32 if name.startswith("input__"))
+    for name in (*input_names, "residue_mask"):
+        if name not in bf16 or not torch.equal(fp32[name], bf16[name]):
+            raise GoldenError(
+                f"{spec.id}: native FP32 and BF16 runs used different inputs ({name})."
+            )
+    output_names = ["output__last_hidden_state"]
+    if "output__logits" in fp32:
+        output_names.append("output__logits")
+    if ("output__logits" in bf16) != ("output__logits" in fp32):
+        raise GoldenError(f"{spec.id}: native FP32 and BF16 output heads differ.")
+    for name in output_names:
+        if fp32[name].dtype != torch.float32:
+            raise GoldenError(f"{spec.id}: native FP32 {name} is {fp32[name].dtype}.")
+    selected = {name: fp32[name] for name in (*input_names, "residue_mask", *output_names)}
+    for name in output_names:
+        # The official BF16 output keeps its own dtype; it only sets the candidate's error budget.
+        selected[OFFICIAL_BF16_PREFIX + name.removeprefix("output__")] = bf16[name]
     input_tensors = {
         name: selected[name]  # (...)
         for name in (*input_names, "residue_mask")
     }  # values: (...)
-    return (
+    return (  # (...) selected tensors by name, environment, input fingerprint, limitations, BF16 sources
         selected,
-        _environment(metadata.get("environment"), model_id=spec.id),
+        environment,
         _tensor_set_fingerprint(input_tensors),
         limitations,
+        bf16_source_files,
     )
+
+
+def _prior_official_bf16(
+    spec: ModelSpec,
+    registry: ModelRegistry,
+    golden_root: Path | None,
+) -> tuple[dict[str, torch.Tensor], str, dict[str, str]]:
+    """Take the official BF16 run from the golden ``models.toml`` currently pins.
+
+    A reference whose pinned CUDA build does not exist on the recording platform runs in
+    FP32 on the CPU. Its BF16 sample is then the official GPU run already in the declared
+    golden, checked against the manifest digests before any tensor is used.
+    """
+
+    if golden_root is None:
+        raise GoldenError(
+            f"{spec.id}: native result has no BF16 run; pass --official-bf16-golden-root."
+        )
+    if spec.official_golden is None:
+        raise GoldenError(f"{spec.id}: no declared golden can supply the official BF16 run.")
+    metadata_path = golden_root / f"{spec.id}.json"
+    tensors_path = golden_root / f"{spec.id}.safetensors"
+    validate_golden_bundle(
+        spec,
+        registry,
+        metadata_path=metadata_path,
+        tensors_path=tensors_path,
+        declaration=spec.official_golden,
+    )
+    prior = load_file(tensors_path, device="cpu")  # values: (...)
+    if any(name.startswith(OFFICIAL_BF16_PREFIX) for name in prior):
+        raise GoldenError(f"{spec.id}: the declared golden is already an FP32 golden.")
+    environment = _read_metadata(metadata_path)["environment"]["details"]
+    return (  # (...) the prior golden's tensors, its environment, and its file digests
+        prior,
+        compact_json(environment),
+        {
+            f"official_bf16/{spec.id}.json": file_sha256(metadata_path),
+            f"official_bf16/{spec.id}.safetensors": file_sha256(tensors_path),
+        },
+    )
+
+
+def _load_precision_tensors(
+    result_dir: Path,
+    spec: ModelSpec,
+    precision_keys: Mapping[str, object],
+    precision: str,
+) -> dict[str, torch.Tensor]:
+    """Load one native precision's tensors and check them against the metadata record."""
+
+    label = precision.upper()
+    tensors_path = result_dir / f"{precision}.safetensors"
+    if not tensors_path.is_file():
+        raise GoldenError(f"{spec.id}: native {label} result is missing: {tensors_path}.")
+    try:
+        tensors = load_file(tensors_path, device="cpu")  # values: (...)
+    except Exception as error:
+        raise GoldenError(f"{spec.id}: unable to load native {label} tensors.") from error
+    if precision_keys.get(precision) != sorted(tensors):
+        raise GoldenError(f"{spec.id}: native {label} tensor-key contract mismatch.")
+    missing = sorted(_SEQUENCE_REQUIRED_TENSORS.difference(tensors))
+    if missing or not any(name.startswith("input__") for name in tensors):
+        raise GoldenError(
+            f"{spec.id}: native {label} result omits required golden tensors: "
+            f"{missing or ['input__*']}."
+        )
+    return tensors  # (...) one tensor per native name
 
 
 def _load_structure_result(
@@ -442,14 +513,14 @@ def _load_structure_result(
     if metadata.get("tensor_keys") != sorted(tensors):
         raise GoldenError(f"{spec.id}: native structure tensor-key contract mismatch.")
     observed_hashes = {
-        name: _raw_tensor_sha256(T)  # T: (...)
+        name: raw_tensor_sha256(T)  # T: (...)
         for name, T in sorted(tensors.items())
     }
     if metadata.get("tensor_hashes") != observed_hashes:
         raise GoldenError(f"{spec.id}: native structure tensor hash mismatch.")
     if not any(name.startswith("output__") for name in tensors):
         raise GoldenError(f"{spec.id}: native structure result contains no outputs.")
-    return (
+    return (  # (...) tensors by name, environment, request fingerprint
         dict(tensors),
         _environment(metadata.get("environment"), model_id=spec.id),
         request_sha256,
@@ -459,12 +530,15 @@ def _load_structure_result(
 def detect_native_result_kind(result_dir: Path) -> NativeResultKind:
     """Identify one normalized result directory from its immutable files."""
 
-    has_sequence = (result_dir / "bf16.safetensors").is_file()
+    # Either precision marks a sequence result, so a missing one is reported by name on load.
+    has_sequence = any(
+        (result_dir / f"{precision}.safetensors").is_file() for precision in _SEQUENCE_PRECISIONS
+    )
     has_structure = (result_dir / "bundle.safetensors").is_file()
-    if has_sequence == has_structure:
-        raise GoldenError(
-            f"Native result must contain exactly one BF16 or structure tensor file: {result_dir}."
-        )
+    if has_sequence and has_structure:
+        raise GoldenError(f"Native result holds both sequence and structure tensors: {result_dir}.")
+    if not has_sequence and not has_structure:
+        raise GoldenError(f"Native result holds neither sequence nor structure tensors: {result_dir}.")
     return "sequence" if has_sequence else "structure"
 
 
@@ -476,8 +550,13 @@ def convert_native_result(
     *,
     generation_command: Sequence[str],
     replace: bool = False,
+    official_bf16_golden_root: Path | None = None,
 ) -> NativeGoldenRecord:
-    """Validate and convert one isolated official output without model loading."""
+    """Validate and convert one isolated official output without model loading.
+
+    ``official_bf16_golden_root`` holds the currently declared golden, which supplies the
+    official BF16 run when the native result recorded only FP32 on the CPU.
+    """
 
     result_dir = result_dir.resolve()
     kind = detect_native_result_kind(result_dir)
@@ -489,7 +568,8 @@ def convert_native_result(
             environment,
             input_fingerprint,
             limitations,
-        ) = _load_sequence_result(result_dir, spec)
+            bf16_source_files,
+        ) = _load_sequence_result(result_dir, spec, registry, official_bf16_golden_root)
     else:
         if spec.family.tokenizer_mode != "structure":
             raise GoldenError(f"{spec.id}: structure native result used for a sequence model.")
@@ -497,16 +577,22 @@ def convert_native_result(
             result_dir, spec
         )
         limitations = ()
+        bf16_source_files = {}
     _ensure_compact(tensors, model_id=spec.id)
 
-    native_tensor_name = (
-        "native/bf16.safetensors" if kind == "sequence" else "native/bundle.safetensors"
+    native_tensor_files = (
+        tuple(
+            name
+            for name in (f"{precision}.safetensors" for precision in _SEQUENCE_PRECISIONS)
+            if (result_dir / name).is_file()
+        )
+        if kind == "sequence"
+        else ("bundle.safetensors",)
     )
     source_files = {
-        "native/metadata.json": _sha256_file(result_dir / "metadata.json"),
-        native_tensor_name: _sha256_file(
-            result_dir / ("bf16.safetensors" if kind == "sequence" else "bundle.safetensors")
-        ),
+        "native/metadata.json": file_sha256(result_dir / "metadata.json"),
+        **{f"native/{name}": file_sha256(result_dir / name) for name in native_tensor_files},
+        **bf16_source_files,
     }
 
     output_root = output_root.resolve()
@@ -550,8 +636,11 @@ def _find_native_result(native_root: Path, spec: ModelSpec) -> Path:
     return existing[0]
 
 
-def _canonical_generation_command(spec: ModelSpec) -> tuple[str, ...]:
-    return (
+def _canonical_generation_command(
+    spec: ModelSpec,
+    official_bf16_golden_root: Path | None,
+) -> tuple[str, ...]:
+    command = (
         "python",
         "-m",
         "tools.goldens",
@@ -562,6 +651,9 @@ def _canonical_generation_command(spec: ModelSpec) -> tuple[str, ...]:
         "--model",
         spec.id,
     )
+    if official_bf16_golden_root is None:
+        return command
+    return (*command, "--official-bf16-golden-root", official_bf16_golden_root.as_posix())
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -575,6 +667,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Explicit result directory; valid only with exactly one --model.",
     )
     parser.add_argument("--replace", action="store_true")
+    parser.add_argument(
+        "--official-bf16-golden-root",
+        type=Path,
+        help="Directory with the declared goldens that supply BF16 for FP32-only native results.",
+    )
     parser.add_argument(
         "--status-only",
         action="store_true",
@@ -654,8 +751,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 registry,
                 result_dir,
                 args.output_root,
-                generation_command=_canonical_generation_command(spec),
+                generation_command=_canonical_generation_command(
+                    spec, args.official_bf16_golden_root
+                ),
                 replace=args.replace,
+                official_bf16_golden_root=args.official_bf16_golden_root,
             )
         )
 

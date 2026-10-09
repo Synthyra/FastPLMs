@@ -15,6 +15,7 @@ import fastplms.models.esm3.modeling_esm3 as esm3_module
 
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+from tests.conftest import strict_fp32_matmul
 from transformers import AutoModel
 
 from fastplms.models.esm3.modeling_esm3 import (
@@ -31,7 +32,6 @@ from fastplms.models.esm3.modeling_esm3 import (
     _saved_runtime_tree_hash,
     _validate_saved_runtime_relative_path,
 )
-from tests.conftest import strict_fp32_matmul
 
 
 def _small_config() -> FastESM3Config:
@@ -86,14 +86,14 @@ def _rewrite_saved_runtime_archive(
     ):
         for index, member in enumerate(source.infolist()):
             name = first_name if index == 0 and first_name is not None else member.filename
-            info = ZipInfo(name, date_time=member.date_time)
-            info.create_system = member.create_system
-            info.compress_type = member.compress_type
-            info.external_attr = (
+            zip_entry = ZipInfo(name, date_time=member.date_time)
+            zip_entry.create_system = member.create_system
+            zip_entry.compress_type = member.compress_type
+            zip_entry.external_attr = (
                 first_mode << 16 if index == 0 and first_mode is not None else member.external_attr
             )
             destination.writestr(
-                info,
+                zip_entry,
                 source.read(member),
                 compress_type=ZIP_DEFLATED,
                 compresslevel=9,
@@ -510,7 +510,7 @@ def test_esm3_repeated_save_removes_stale_runtime_outputs(tmp_path: Path) -> Non
 def test_esm3_saved_bridge_reuses_same_runtime_in_process(tmp_path: Path) -> None:
     model_path = tmp_path / "saved"
     _small_model().save_pretrained(model_path)
-    result = _run_isolated_bridge_probe(
+    completed = _run_isolated_bridge_probe(
         model_path,
         tmp_path,
         """
@@ -527,13 +527,13 @@ def test_esm3_saved_bridge_reuses_same_runtime_in_process(tmp_path: Path) -> Non
         """,
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_esm3_saved_bridge_rejects_preimported_runtime_mismatch(tmp_path: Path) -> None:
     model_path = tmp_path / "saved"
     _small_model().save_pretrained(model_path)
-    result = _run_isolated_bridge_probe(
+    completed = _run_isolated_bridge_probe(
         model_path,
         tmp_path,
         """
@@ -549,8 +549,8 @@ def test_esm3_saved_bridge_rejects_preimported_runtime_mismatch(tmp_path: Path) 
         """,
     )
 
-    assert result.returncode != 0
-    assert "Loaded FastPLMs version/runtime mismatch" in result.stderr
+    assert completed.returncode != 0
+    assert "Loaded FastPLMs version/runtime mismatch" in completed.stderr
 
 
 @pytest.mark.parametrize(
@@ -571,14 +571,14 @@ def test_esm3_saved_bridge_rejects_poisoned_archive(
     _small_model().save_pretrained(model_path)
     _rewrite_saved_runtime_archive(model_path, **poison)
 
-    result = _run_isolated_bridge_probe(
+    completed = _run_isolated_bridge_probe(
         model_path,
         tmp_path,
         'load_bridge("artifact_poisoned")',
     )
 
-    assert result.returncode != 0
-    assert message in result.stderr
+    assert completed.returncode != 0
+    assert message in completed.stderr
 
 
 def test_esm3_seeded_generation_is_repeatable_and_preserves_context() -> None:
@@ -780,7 +780,7 @@ def test_esm3_saved_model_loads_without_installed_fastplms(tmp_path: Path) -> No
     environment.pop("PYTHONPATH", None)
     environment["HF_HUB_OFFLINE"] = "1"
     environment["TRANSFORMERS_OFFLINE"] = "1"
-    result = subprocess.run(
+    completed = subprocess.run(
         [sys.executable, "-I", "-c", script, str(model_path), str(runtime_record)],
         cwd=tmp_path,
         env=environment,
@@ -789,7 +789,7 @@ def test_esm3_saved_model_loads_without_installed_fastplms(tmp_path: Path) -> No
         timeout=120,
         check=False,
     )
-    assert result.returncode == 0, result.stdout + result.stderr
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     extracted_runtime = Path(runtime_record.read_text(encoding="utf-8"))
     assert not extracted_runtime.exists()
     assert (
@@ -803,7 +803,7 @@ def test_esm3_embed_dataset(tmp_path: Path) -> None:
     model = _small_model()
     save_path = tmp_path / "embeddings"
 
-    result = model.embed_dataset(
+    embedding_result = model.embed_dataset(
         inputs=["MKTAYIAKQ", "GGGG"],
         batch_size=2,
         max_length=16,
@@ -811,7 +811,7 @@ def test_esm3_embed_dataset(tmp_path: Path) -> None:
         output=save_path,
     )
 
-    embeddings = result.as_dict(key="sequence")
+    embeddings = embedding_result.as_dict(key="sequence")
     assert set(embeddings) == {"MKTAYIAKQ", "GGGG"}
     assert embeddings["MKTAYIAKQ"].shape == (128,)
     assert (save_path / "index.json").is_file()

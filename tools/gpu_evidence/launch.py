@@ -11,11 +11,10 @@ import time
 import uuid
 import xml.etree.ElementTree as ElementTree
 
-from pathlib import Path
 from typing import Any
 
 from tools.execution.budget import BudgetExceeded, BudgetLedger
-
+from tools.stored_files import write_stored_json
 from .config import (
     DEFAULT_GPU,
     DEFAULT_MAX_DOLLARS,
@@ -24,7 +23,7 @@ from .config import (
     STARTUP_TIMEOUT_SECONDS,
     worker_rate,
 )
-from .source import ROOT, export_baseline_source, stage_upload_source
+from .source import ROOT, export_baseline_source, is_git_checkout, stage_upload_source
 from .stages import STAGES, StageSpec, stage_arguments
 
 
@@ -122,8 +121,14 @@ def failing_tests_by_cause(junit_xml: str | None) -> dict[str, list[str]]:
     return {cause: sorted(node_ids) for cause, node_ids in causes.items()}
 
 
-def _git_state() -> dict[str, object]:
-    """Identify the uploaded source; a dirty tree makes the run descriptive only."""
+def _git_state(git_checkout: bool) -> dict[str, object]:
+    """Identify the uploaded source; a dirty tree makes the run descriptive only.
+
+    A tree without Git metadata has no revision, so the snapshot digest recorded beside
+    this state is its only identity.
+    """
+    if not git_checkout:
+        return {"revision": None, "dirty": None, "changed_paths": None}
     revision = subprocess.run(
         ["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "HEAD"],
         cwd=ROOT, capture_output=True, text=True, check=True,
@@ -135,17 +140,18 @@ def _git_state() -> dict[str, object]:
     return {"revision": revision, "dirty": bool(changed), "changed_paths": len(changed)}
 
 
-def _write_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
-
-
 def main() -> None:
     args = _parser().parse_args()
     spec = STAGES[args.stage]
     gpu = args.gpu if spec.device == "gpu" else None
     # Reject a malformed selection before any money is reserved.
     stage_arguments(spec, args.select, "junit.xml")
+    git_checkout = is_git_checkout()
+    if spec.compares_baseline and not git_checkout:
+        raise SystemExit(
+            f"Stage {spec.name!r} compares the working tree with its Git baseline, "
+            "and this tree has no Git metadata."
+        )
 
     if not math.isfinite(args.max_dollars) or args.max_dollars <= 0:
         raise SystemExit("max_dollars must be positive and finite")
@@ -153,11 +159,14 @@ def main() -> None:
         ARTIFACT_ROOT / f"{time.strftime('%Y%m%dT%H%M%S')}-{spec.name}-{uuid.uuid4().hex[:8]}"
     )
     snapshot = stage_upload_source(run_directory / "source")
+    # Without Git nothing is exported there, so the worker image mounts no baseline.
     baseline_directory = run_directory / "baseline"
-    baseline_revision = export_baseline_source(destination=baseline_directory)
+    baseline_revision = (
+        export_baseline_source(destination=baseline_directory) if git_checkout else None
+    )
     os.environ["FASTPLMS_EVIDENCE_SOURCE_ROOT"] = str(snapshot.root)
     os.environ["FASTPLMS_EVIDENCE_BASELINE_ROOT"] = str(baseline_directory)
-    source_state = _git_state()
+    source_state = _git_state(git_checkout)
     source_state["snapshot"] = snapshot.to_dict()
 
     ledger = BudgetLedger(ARTIFACT_ROOT / "budget.json")
@@ -175,7 +184,7 @@ def main() -> None:
         "reserved_dollars": reservation_dollars(spec, gpu),
         "status": "dispatching",
     }
-    _write_json(run_directory / "receipt.json", receipt)
+    write_stored_json(run_directory / "receipt.json", receipt, sort_keys=False)
 
     import modal
 
@@ -183,22 +192,22 @@ def main() -> None:
 
     # The Modal app reads credential names from the environment when it is imported.
     load_dotenv(ROOT / ".secrets.env", override=False)
-    from .modal_app import app, cpu_worker, fold_workers, gpu_workers
+    from .modal_app import app, check_worker, cpu_worker, fold_workers, gpu_workers
 
     if gpu is None:
-        worker = cpu_worker
+        worker = check_worker if spec.image == "check" else cpu_worker
     else:
         worker = (fold_workers if spec.image == "fold" else gpu_workers)[gpu]
     started = time.monotonic()
-    result: dict[str, Any] | None = None
+    worker_receipt: dict[str, Any] | None = None
     try:
         with modal.enable_output(), app.run():
             receipt["modal_app_id"] = str(getattr(app, "app_id", None))
-            result = worker.remote(spec.name, args.select)
+            worker_receipt = worker.remote(spec.name, args.select)
     finally:
         # Charge the longer of the two clocks; wall time also covers startup.
         wall_seconds = time.monotonic() - started
-        worker_seconds = float(result["elapsed_seconds"]) if result else None
+        worker_seconds = float(worker_receipt["elapsed_seconds"]) if worker_receipt else None
         observed_dollars = settle_worker_receipt(
             ledger, reservation,
             wall_seconds=wall_seconds, worker_seconds=worker_seconds, gpu=gpu,
@@ -207,21 +216,21 @@ def main() -> None:
             wall_seconds=wall_seconds,
             observed_dollars=observed_dollars,
             committed_dollars=ledger.committed(),
-            status="failed" if result is None else result["status"],
-            budget_settlement="awaiting_worker_receipt" if result is None else "completed",
+            status="failed" if worker_receipt is None else worker_receipt["status"],
+            budget_settlement="awaiting_worker_receipt" if worker_receipt is None else "completed",
         )
-        _write_json(run_directory / "receipt.json", receipt)
+        write_stored_json(run_directory / "receipt.json", receipt, sort_keys=False)
 
     # A failed dispatch re-raises out of the ``finally`` block above.
-    assert result is not None
-    junit_xml = result.pop("junit_xml")
-    output_tail = result.pop("output_tail")
+    assert worker_receipt is not None
+    junit_xml = worker_receipt.pop("junit_xml")
+    output_tail = worker_receipt.pop("output_tail")
     if junit_xml is not None:
         (run_directory / "junit.xml").write_text(junit_xml, encoding="utf-8")
     (run_directory / "output.txt").write_text(output_tail, encoding="utf-8")
     failing = failing_tests_by_cause(junit_xml)
-    receipt.update(result=result, junit=junit_counts(junit_xml), failing_tests=failing)
-    _write_json(run_directory / "receipt.json", receipt)
+    receipt.update(result=worker_receipt, junit=junit_counts(junit_xml), failing_tests=failing)
+    write_stored_json(run_directory / "receipt.json", receipt, sort_keys=False)
 
     print(output_tail[-6_000:])
     print(

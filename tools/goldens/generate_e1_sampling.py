@@ -12,6 +12,7 @@ import json
 import subprocess
 import sys
 import tempfile
+
 from pathlib import Path
 from typing import Any
 
@@ -32,13 +33,13 @@ def _write_fixture(path: Path) -> None:
 
 
 def _git_revision(upstream_root: Path) -> str:
-    result = subprocess.run(
+    completed = subprocess.run(
         ["git", "-C", str(upstream_root), "rev-parse", "HEAD"],
         check=True,
         capture_output=True,
         text=True,
     )
-    return result.stdout.strip()
+    return completed.stdout.strip()
 
 
 def _generate(upstream_root: Path) -> dict[str, Any]:

@@ -202,17 +202,17 @@ def _throughput_records(report: Mapping[str, Any]) -> dict[str, Mapping[str, Any
     raw_results = report.get("results")
     if not isinstance(raw_results, list):
         raise ValueError("Benchmark report results must be a list")
-    result: dict[str, Mapping[str, Any]] = {}
+    records_by_key: dict[str, Mapping[str, Any]] = {}
     for record in raw_results:
         if not isinstance(record, Mapping):
             raise ValueError("Benchmark report contains a non-object result")
         blocks = record.get("blocks")
         if isinstance(blocks, list) and blocks:
             key = _case_key(record)
-            if key in result:
+            if key in records_by_key:
                 raise ValueError(f"Benchmark report contains duplicate case: {key}")
-            result[key] = record
-    return result
+            records_by_key[key] = record
+    return records_by_key
 
 
 def _peak_memory(record: Mapping[str, Any]) -> int:
@@ -460,13 +460,13 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("baseline", type=Path)
     parser.add_argument("--output", type=Path)
     arguments = parser.parse_args(argv)
-    result = compare_reports(_load(arguments.current), _load(arguments.baseline))
-    rendered = json.dumps(result.to_dict(), indent=2, sort_keys=True)
+    comparison = compare_reports(_load(arguments.current), _load(arguments.baseline))
+    rendered = json.dumps(comparison.to_dict(), indent=2, sort_keys=True)
     if arguments.output:
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
         arguments.output.write_text(rendered + "\n", encoding="utf-8")
     print(rendered)
-    return 0 if result.passed else 1
+    return 0 if comparison.passed else 1
 
 
 if __name__ == "__main__":

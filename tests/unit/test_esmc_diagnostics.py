@@ -10,8 +10,6 @@ import torch
 from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
-
-from fastplms.registry import get_model_registry
 from tests.parity import test_native_results as diagnostics
 from tests.parity.support.esmc_calibration import (
     ESMC_CALIBRATION_SEED,
@@ -19,6 +17,8 @@ from tests.parity.support.esmc_calibration import (
     validate_esmc_calibration_batch,
 )
 from tests.unit.test_biohub_reference_lock import _reference_environment_payload
+
+from fastplms.registry import get_model_registry
 from tools.remote.prepare_references import _esmc_calibration_batches
 
 
@@ -62,6 +62,7 @@ REFERENCE_SOURCES: dict[str, dict[str, object]] = {
 
 
 def _output(hidden: torch.Tensor) -> SimpleNamespace:
+    # hidden: (b, l, d)
     signal = hidden[..., :1] * 8
     logits = torch.cat((signal, -signal), dim=-1)
     return SimpleNamespace(
@@ -90,7 +91,7 @@ def _panel_tensors(
     residue_mask = torch.arange(maximum).unsqueeze(0) < lengths.unsqueeze(1)  # (b, l)
     reference = torch.ones(len(cases), maximum, 4)  # (b, l, d=4)
     candidate = reference * candidate_scale
-    return batch, candidate, reference, residue_mask
+    return batch, candidate, reference, residue_mask  # (...) batch, then candidate (b, l, 4), reference (b, l, 4), residue_mask (b, l)
 
 
 def _candidate_model(

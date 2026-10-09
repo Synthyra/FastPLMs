@@ -77,15 +77,33 @@ _SAVED_RUNTIME_FILES = (
     "attention/_core.py",
     "attention/_kernel_lock.py",
     "attention/interfaces.py",
+    "digests.py",
     "embeddings/__init__.py",
     "embeddings/batches.py",
+    "embeddings/feature_runs.py",
     "embeddings/identity.py",
     "embeddings/inputs.py",
     "embeddings/output.py",
     "embeddings/pooling.py",
     "embeddings/runner.py",
     "embeddings/storage.py",
+    "embeddings/taps.py",
+    "embeddings/token_batches.py",
+    "embeddings/token_runs.py",
+    "embeddings/tokens.py",
     "embeddings/types.py",
+    "features/__init__.py",
+    "features/async_writer.py",
+    "features/conversion.py",
+    "features/digests.py",
+    "features/json_files.py",
+    "features/layouts.py",
+    "features/reader.py",
+    "features/receipts.py",
+    "features/store.py",
+    "features/transactions.py",
+    "features/writing.py",
+    "json_files.py",
     "models/__init__.py",
     "models/esm3/__init__.py",
     "models/esm3/modeling_esm3.py",
@@ -1103,7 +1121,7 @@ class RotaryEmbedding(nn.Module):
             or self._cos_cached is None
             or self._cos_cached.device != device
             or self._cos_cached.dtype != dtype
-            or (self.training and self._cos_cached.is_inference())
+            or (torch.is_grad_enabled() and self._cos_cached.is_inference())  # autograd cannot save inference-created tables, in eval mode too
         ):
             self._seq_len_cached = seqlen
             # ``inv_freq`` is non-persistent and may have been materialized

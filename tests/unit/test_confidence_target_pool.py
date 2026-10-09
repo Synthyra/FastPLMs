@@ -12,7 +12,7 @@ def _positions(lengths: list[int]) -> np.ndarray:
     for chain, length in enumerate(lengths):
         positions[start : start + length, 1] = [10.0 * chain, 0.0, 0.0]
         start += length
-    return positions
+    return positions  # (l, 14, 3) with l = sum(lengths)
 
 
 def test_spatial_subset_grows_by_nearest_contact_and_skips_chains_that_do_not_fit():

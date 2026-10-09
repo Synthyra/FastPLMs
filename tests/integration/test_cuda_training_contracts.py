@@ -6,6 +6,12 @@ import pytest
 import torch
 
 from pathlib import Path
+from tests.conftest import strict_fp32_matmul
+from tests.integration.test_ttt import (
+    DummyPretrainedTTTConfig,
+    DummyPretrainedTTTModel,
+)
+from tests.unit.tiny_families import dplm_values
 
 from fastplms.attention import _core
 from fastplms.models.dplm.modeling_dplm import DPLMConfig, DPLMForMaskedLM
@@ -17,33 +23,9 @@ from fastplms.models.esm3.modeling_esm3 import (
     FastESM3Model,
 )
 from fastplms.models.esm_plusplus.modeling_esm_plusplus import TransformerStack
-from tests.conftest import strict_fp32_matmul
-from tests.integration.test_ttt import (
-    DummyPretrainedTTTConfig,
-    DummyPretrainedTTTModel,
-)
 
 
 pytestmark = pytest.mark.gpu
-
-
-def _diffusion_config(vocab_size: int) -> dict[str, object]:
-    return {
-        "vocab_size": vocab_size,
-        "hidden_size": 32,
-        "num_hidden_layers": 1,
-        "num_attention_heads": 4,
-        "intermediate_size": 64,
-        "hidden_dropout_prob": 0.0,
-        "attention_probs_dropout_prob": 0.0,
-        "max_position_embeddings": 64,
-        "pad_token_id": 1,
-        "bos_token_id": 0,
-        "eos_token_id": 2,
-        "mask_token_id": 32,
-        "position_embedding_type": "rotary",
-        "attn_backend": "sdpa",
-    }
 
 
 @pytest.mark.parametrize("family", ("dplm", "dplm2", "esm3"))
@@ -55,18 +37,18 @@ def test_seeded_generation_trace_executes_deterministically_on_cuda(
 
     if family == "dplm":
         model = DPLMForMaskedLM(
-            DPLMConfig(**_diffusion_config(33)),
+            DPLMConfig(**dplm_values(33)),
             dropout=0.0,
         ).train().cuda()
         # inputs: (1, 5)
         inputs = torch.tensor([[0, 6, 32, 8, 2]], device="cuda")
 
         def run() -> torch.Tensor:
-            return model.generate(inputs, max_iter=2)
+            return model.generate(inputs, max_iter=2)  # (b, l) generated tokens
 
     elif family == "dplm2":
         model = DPLM2ForMaskedLM(
-            DPLM2Config(**_diffusion_config(64)),
+            DPLM2Config(**dplm_values(64)),
             dropout=0.0,
         ).train().cuda()
         # inputs: (1, 8)
@@ -77,7 +59,7 @@ def test_seeded_generation_trace_executes_deterministically_on_cuda(
 
         def run() -> torch.Tensor:
             generated = model.generate(inputs, max_iter=2)
-            return generated["output_tokens"]
+            return generated["output_tokens"]  # (b, l) generated tokens
 
     else:
         model = FastESM3Model(
@@ -124,7 +106,7 @@ def test_generation_restores_mixed_training_state_after_cuda_forward_failure(
     assert torch.cuda.is_available(), "Generation CUDA contract requires CUDA."
     if family == "dplm":
         model = DPLMForMaskedLM(
-            DPLMConfig(**_diffusion_config(33)),
+            DPLMConfig(**dplm_values(33)),
             dropout=0.2,
         ).train().cuda()
         # inputs: (1, 5)
@@ -135,7 +117,7 @@ def test_generation_restores_mixed_training_state_after_cuda_forward_failure(
 
     elif family == "dplm2":
         model = DPLM2ForMaskedLM(
-            DPLM2Config(**_diffusion_config(64)),
+            DPLM2Config(**dplm_values(64)),
             dropout=0.2,
         ).train().cuda()
         # inputs: (1, 8)

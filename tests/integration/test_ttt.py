@@ -7,6 +7,7 @@ import torch.nn as nn
 from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
+from tests.conftest import MODEL_REGISTRY, STRUCTURE_MODEL_REGISTRY
 from transformers import PretrainedConfig, PreTrainedModel
 
 from fastplms.models.ankh.modeling_ankh import FastAnkhForMaskedLMExtension
@@ -22,7 +23,6 @@ from fastplms.models.ttt import (
     LoraInjectedLinear,
     TTTConfig,
 )
-from tests.conftest import MODEL_REGISTRY, STRUCTURE_MODEL_REGISTRY
 
 
 TEST_SEQUENCE = "MSTNPKPQRKTKRNT"
@@ -93,7 +93,7 @@ class DummyTokenizer:
         for row, ids in enumerate(encoded):
             # One row slice and its source token vector both have shape (len(ids),).
             input_ids[row, : len(ids)] = torch.tensor(ids)
-        return {"input_ids": input_ids.long()}
+        return {"input_ids": input_ids.long()}  # (...) input_ids (n, max_len) for n sequences
 
 
 class DummyTTTModel(FastPLMTestTimeTrainingMixin, nn.Module):
@@ -130,7 +130,7 @@ class DummyTTTModel(FastPLMTestTimeTrainingMixin, nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
     ):
-        # input_ids: (b, l)
+        # input_ids, attention_mask: (b, l); attention_mask is deleted unused
         del attention_mask
         hidden = self.backbone(self.embed(input_ids))
         return SimpleNamespace(logits=self.lm_head(hidden))
@@ -144,7 +144,7 @@ class FamilyAttention(nn.Module):
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         # hidden_states: (..., d)
-        return self.query(hidden_states) + self.value(hidden_states)
+        return self.query(hidden_states) + self.value(hidden_states)  # (..., d)
 
 
 class DummyFamilyTargetTTTModel(FastPLMTestTimeTrainingMixin, nn.Module):
@@ -170,7 +170,7 @@ class DummyFamilyTargetTTTModel(FastPLMTestTimeTrainingMixin, nn.Module):
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
     ):
-        # input_ids: (b, l)
+        # input_ids, attention_mask: (b, l); attention_mask is deleted unused
         del attention_mask
         hidden = self.embed(input_ids)
         hidden = self.backbone["attention"](hidden)
@@ -626,7 +626,7 @@ def test_esmfold2_ttt_smoke() -> None:
         .cuda()
     )
 
-    result = model.fold_protein(
+    prediction = model.fold_protein(
         TEST_SEQUENCE,
         num_loops=1,
         num_sampling_steps=1,
@@ -643,10 +643,10 @@ def test_esmfold2_ttt_smoke() -> None:
         },
     )
 
-    assert result.ttt_metrics is not None
-    assert len(result.ttt_metrics["losses"]) == 1
-    assert len(result.ttt_metrics["step_plddts"]) == 2
-    assert result.ttt_metrics["best_step"] in {0, 1}
+    assert prediction.ttt_metrics is not None
+    assert len(prediction.ttt_metrics["losses"]) == 1
+    assert len(prediction.ttt_metrics["step_plddts"]) == 2
+    assert prediction.ttt_metrics["best_step"] in {0, 1}
 
-    del model, result
+    del model, prediction
     torch.cuda.empty_cache()

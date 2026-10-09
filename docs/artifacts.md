@@ -38,7 +38,7 @@ establish a new numerical result.
 
 ## Dependencies
 
-Artifact tooling uses Python 3.11-3.14, PyTorch 2.13, and Transformers 5.13.
+Artifact tooling uses Python 3.12-3.14, PyTorch 2.14, and Transformers 5.17.
 From a normal checkout, without official parity submodules, install the
 artifact profile before building:
 

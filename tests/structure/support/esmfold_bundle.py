@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import gc
-import hashlib
 import importlib
 import json
 import os
@@ -24,11 +23,18 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 from safetensors.torch import load_file, save_file
-
 from tests.parity.support.state_transforms import transform_parameter_names
 from tests.structure.support.state_contract import (
+    atomic_write_text,
+    checkpoint_metadata,
     exact_state_contract,
+    load_request_object,
+    request_fingerprint,
+    result_directory,
     semantic_config_contract,
+    stored_json_text,
+    tensor_sha256,
+    upstream_metadata,
     validate_exact_state_contract,
     validate_semantic_config_contract,
 )
@@ -79,62 +85,6 @@ _derived_state_buffers = frozenset(
 )
 
 
-def _canonical_json(value: Mapping[str, Any]) -> str:
-    return json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
-
-
-def _request_fingerprint(request: Mapping[str, Any]) -> str:
-    payload = json.dumps(
-        request,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    ).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
-
-
-def _tensor_bytes(tensor: torch.Tensor) -> bytes:
-    # tensor and value share the caller's arbitrary tensor shape through the CPU copy.
-    value = tensor.detach().cpu().contiguous()
-    return value.reshape(-1).view(torch.uint8).numpy().tobytes()
-
-
-def tensor_sha256(tensor: torch.Tensor) -> str:
-    """Return the exact byte digest for one tensor."""
-
-    # Retain the named tensor's arbitrary shape; the digest includes its byte representation.
-    return hashlib.sha256(_tensor_bytes(tensor)).hexdigest()
-
-
-def _checkpoint_metadata(checkpoint: Any) -> dict[str, Any]:
-    return {
-        "repo_id": checkpoint.repo_id,
-        "revision": checkpoint.revision,
-        "files": [
-            {
-                "path": item.path,
-                "algorithm": item.algorithm,
-                "digest": item.digest,
-            }
-            for item in checkpoint.files
-        ],
-    }
-
-
-def _upstream_metadata(upstream: Any) -> dict[str, Any]:
-    return {
-        "id": upstream.id,
-        "path": upstream.path,
-        "url": upstream.url,
-        "revision": upstream.revision,
-        "license_expression": upstream.license_expression,
-    }
-
-
-def _oracle_asset_metadata(asset: Any) -> dict[str, Any]:
-    return asdict(asset)
-
-
 def prepare_request(exchange_root: Path) -> Path:
     """Write the manifest-derived ESMFold v1 reference request."""
 
@@ -153,11 +103,11 @@ def prepare_request(exchange_root: Path) -> Path:
         "architecture": spec.family.architecture,
         "adapter": spec.family.reference_adapter,
         "reference_container": spec.family.reference_container,
-        "official": _checkpoint_metadata(spec.official),
-        "candidate": _checkpoint_metadata(spec.fast),
+        "official": checkpoint_metadata(spec.official),
+        "candidate": checkpoint_metadata(spec.fast),
         "candidate_auto_model": spec.auto_map["AutoModel"],
-        "upstreams": [_upstream_metadata(registry.upstreams[name]) for name in expected_upstreams],
-        "oracle_assets": [_oracle_asset_metadata(asset) for asset in spec.oracle_assets],
+        "upstreams": [upstream_metadata(registry.upstreams[name]) for name in expected_upstreams],
+        "oracle_assets": [asdict(asset) for asset in spec.oracle_assets],
         "state_transform": spec.family.state_transform,
         "sequence": fold_sequence,
         "seed": fold_seed,
@@ -167,9 +117,9 @@ def prepare_request(exchange_root: Path) -> Path:
         "parameter_dtype": "float32",
         "compute_dtypes": list(supported_precisions),
     }
-    request["request_sha256"] = _request_fingerprint(request)
+    request["request_sha256"] = request_fingerprint(request)
     path = exchange_root / "structure" / "requests" / reference_container / f"{model_id}.json"
-    _atomic_write_text(path, _canonical_json(request))
+    atomic_write_text(path, stored_json_text(request))
     return path
 
 
@@ -201,7 +151,7 @@ def _validate_request(request: Mapping[str, Any]) -> None:
         raise ValueError("ESMFold structure parity requires FP32 and BF16 compute gates.")
     expected = dict(request)
     observed_fingerprint = expected.pop("request_sha256", None)
-    if observed_fingerprint != _request_fingerprint(expected):
+    if observed_fingerprint != request_fingerprint(expected):
         raise ValueError("ESMFold request fingerprint mismatch.")
     _validate_checkpoint(request.get("official"), label="official")
     _validate_checkpoint(request.get("candidate"), label="candidate")
@@ -225,9 +175,7 @@ def _validate_request(request: Mapping[str, Any]) -> None:
 def load_request(path: Path) -> dict[str, Any]:
     """Load and validate one manifest-derived ESMFold request."""
 
-    request = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(request, dict):
-        raise TypeError(f"ESMFold request must be a JSON object: {path}")
+    request = load_request_object(path, "ESMFold")
     _validate_request(request)
     return request
 
@@ -296,7 +244,7 @@ def _normalize_output(output: object) -> dict[str, torch.Tensor]:
             raise TypeError(f"ESMFold output {name!r} is not a tensor.")
         # Preserve this named model output's shape in the CPU snapshot.
         tensors[f"output__{name}"] = value.detach().cpu().contiguous().clone()
-    return tensors
+    return tensors  # (...) output__<name> per required output, shapes as the model emitted them
 
 
 def _run_infer(
@@ -315,7 +263,7 @@ def _run_infer(
             request["sequence"],
             num_recycles=int(request["recycles"]),
         )
-    return _normalize_output(output)
+    return _normalize_output(output)  # (...) output__<name> per required output, shapes as the model emitted them
 
 
 def _environment_metadata() -> dict[str, Any]:
@@ -479,25 +427,6 @@ def _metadata(
     }
 
 
-def _atomic_write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        text=True,
-    )
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_name, path)
-    except BaseException:
-        Path(temporary_name).unlink(missing_ok=True)
-        raise
-
-
 def write_bundle(
     output_dir: Path,
     tensors: Mapping[str, torch.Tensor],
@@ -505,6 +434,7 @@ def write_bundle(
 ) -> None:
     """Atomically publish one normalized ESMFold structure bundle."""
 
+    # tensors: (...) one tensor per bundle name, any shape
     output_dir.mkdir(parents=True, exist_ok=True)
     normalized = {
         name: tensor.detach().cpu().contiguous().clone() for name, tensor in sorted(tensors.items())
@@ -529,7 +459,7 @@ def write_bundle(
     except BaseException:
         Path(temporary_name).unlink(missing_ok=True)
         raise
-    _atomic_write_text(output_dir / "metadata.json", _canonical_json(complete_metadata))
+    atomic_write_text(output_dir / "metadata.json", stored_json_text(complete_metadata))
 
 
 def load_bundle(path: Path) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
@@ -552,7 +482,7 @@ def load_bundle(path: Path) -> tuple[dict[str, torch.Tensor], dict[str, Any]]:
         raise ValueError(f"Tensor hash mismatch in ESMFold bundle {path}.")
     validate_exact_state_contract(metadata.get("state"))
     validate_semantic_config_contract(metadata.get("semantic_config"))
-    return tensors, metadata
+    return tensors, metadata  # (...) one tensor per bundle name, then the metadata
 
 
 def _require_fp32_parameters(model: torch.nn.Module) -> None:
@@ -625,14 +555,6 @@ def _default_request(exchange_root: Path) -> Path:
     return exchange_root / "structure" / "requests" / reference_container / f"{model_id}.json"
 
 
-def _default_output(
-    exchange_root: Path,
-    producer: Literal["reference", "candidate"],
-    precision: Precision,
-) -> Path:
-    return exchange_root / "structure" / "results" / producer / model_id / precision
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -653,10 +575,10 @@ def main() -> None:
     request_path = _default_request(arguments.exchange_root)
     precision = arguments.precision
     if arguments.command == "produce-reference":
-        output = _default_output(arguments.exchange_root, "reference", precision)
+        output = result_directory(arguments.exchange_root, model_id, producer="reference", precision=precision)
         produce_reference(request_path, output, precision=precision)
     else:
-        output = _default_output(arguments.exchange_root, "candidate", precision)
+        output = result_directory(arguments.exchange_root, model_id, producer="candidate", precision=precision)
         produce_candidate(request_path, output, precision=precision)
     print(output)
 

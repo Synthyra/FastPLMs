@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-import importlib.util
 import inspect
 import io
-import sys
 import types
 import numpy as np
 import pytest
 import torch
 
-from collections.abc import Iterator
-from contextlib import contextmanager
 from functools import cache
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from tests.parity.support.parity_helpers import load_pinned_source, namespace_package
 
 from fastplms.models.esmfold2 import esmfold2_affine3d as local_affine
 from fastplms.models.esmfold2 import esmfold2_aligner as local_aligner
@@ -38,52 +35,17 @@ pytestmark = [pytest.mark.compliance, pytest.mark.gpu, pytest.mark.structure]
 
 ROOT = Path(__file__).resolve().parents[2]
 BIOHUB_ESM = ROOT / "vendor/upstream/biohub-esm/esm"
-_MISSING = object()
 SOURCE_PAIRS = {
     "esmfold2_protein_chain.py": BIOHUB_ESM / "utils/structure/protein_chain.py",
     "esmfold2_protein_complex.py": BIOHUB_ESM / "utils/structure/protein_complex.py",
 }
 
 
-def _package(name: str) -> types.ModuleType:
-    package = types.ModuleType(name)
-    package.__path__ = []  # type: ignore[attr-defined]
-    return package
-
-
-@contextmanager
-def _temporary_modules(modules: dict[str, types.ModuleType]) -> Iterator[None]:
-    previous = {name: sys.modules.get(name, _MISSING) for name in modules}
-    sys.modules.update(modules)
-    try:
-        yield
-    finally:
-        for name, module in previous.items():
-            if module is _MISSING:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module  # type: ignore[assignment]
-
-
-def _load_source(
-    module_name: str,
-    path: Path,
-    aliases: dict[str, types.ModuleType],
-) -> types.ModuleType:
-    assert path.is_file(), f"pinned source is missing: {path}"
-    specification = importlib.util.spec_from_file_location(module_name, path)
-    assert specification is not None and specification.loader is not None
-    module = importlib.util.module_from_spec(specification)
-    with _temporary_modules({**aliases, module_name: module}):
-        specification.loader.exec_module(module)
-    return module
-
-
 def _base_aliases() -> dict[str, types.ModuleType]:
     return {
-        "esm": _package("esm"),
-        "esm.utils": _package("esm.utils"),
-        "esm.utils.structure": _package("esm.utils.structure"),
+        "esm": namespace_package("esm"),
+        "esm.utils": namespace_package("esm.utils"),
+        "esm.utils.structure": namespace_package("esm.utils.structure"),
         "esm.utils.residue_constants": local_residues,
         "esm.utils.misc": local_misc,
         "esm.utils.structure.affine3d": local_affine,
@@ -99,7 +61,7 @@ def _base_aliases() -> dict[str, types.ModuleType]:
 
 @cache
 def _official_chain() -> types.ModuleType:
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_protein_chain",
         SOURCE_PAIRS["esmfold2_protein_chain.py"],
         _base_aliases(),
@@ -109,7 +71,7 @@ def _official_chain() -> types.ModuleType:
 @cache
 def _official_complex() -> types.ModuleType:
     official_chain = _official_chain()
-    return _load_source(
+    return load_pinned_source(
         "_fastplms_pinned_biohub_protein_complex",
         SOURCE_PAIRS["esmfold2_protein_complex.py"],
         {
@@ -192,7 +154,7 @@ def _atom37_coordinates(offset: float = 0.0) -> np.ndarray:
         }
         for atom_name, coordinate in atoms.items():
             X[residue_index, local_residues.atom_order[atom_name]] = coordinate
-    return X
+    return X  # (4, 37, 3)
 
 
 def _make_chain(module: types.ModuleType, *, chain_id: str, entity_id: int, offset: float):

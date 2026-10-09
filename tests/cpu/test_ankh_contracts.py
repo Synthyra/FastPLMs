@@ -9,9 +9,8 @@ import pytest
 import torch
 
 from pathlib import Path
-from transformers.utils import ModelOutput
-
 from tests.unit import test_ankh_cpu_contract as contracts
+from transformers.utils import ModelOutput
 
 
 def _assert_nested_output_close(actual: object, expected: object) -> None:
@@ -38,12 +37,13 @@ def _encoder_labels(
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
 ) -> torch.Tensor | None:
+    # input_ids, attention_mask: (b, l), the mask boolean
     if model_class is contracts.FastAnkhForMaskedLMExtension:
-        return input_ids.masked_fill(~attention_mask, -100)
+        return input_ids.masked_fill(~attention_mask, -100)  # (b, l) masked-LM labels, -100 at padding
     if model_class is contracts.FastAnkhForSequenceClassification:
-        return torch.tensor([1, 2])
+        return torch.tensor([1, 2])  # (2,) = (b,) sequence labels
     if model_class is contracts.FastAnkhForTokenClassification:
-        return input_ids.remainder(3).masked_fill(~attention_mask, -100)
+        return input_ids.remainder(3).masked_fill(~attention_mask, -100)  # (b, l) token labels, -100 at padding
     return None
 
 

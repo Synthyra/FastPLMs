@@ -4,10 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import os
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+
+if TYPE_CHECKING or __package__:
+    from ._runtime import configure_offline
+else:
+    from _runtime import configure_offline
 
 
 AUTO_CLASS_NAMES = (
@@ -27,11 +32,6 @@ def require_local_artifact(value: str) -> Path:
             f"Expected a local artifact directory containing config.json: {artifact}"
         )
     return artifact
-
-
-def configure_offline() -> None:
-    os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 
 def load_local_artifact(artifact: Path, auto_class_name: str) -> Any:

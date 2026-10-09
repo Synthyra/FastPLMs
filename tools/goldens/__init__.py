@@ -8,6 +8,7 @@ from .bundle import (
     write_golden_bundle,
 )
 from .from_native import (
+    OFFICIAL_BF16_PREFIX,
     GoldenMatrixEntry,
     NativeGoldenRecord,
     check_tier_specs,
@@ -20,6 +21,7 @@ from .from_native import (
 
 
 __all__ = [
+    "OFFICIAL_BF16_PREFIX",
     "GoldenBundleRecord",
     "GoldenError",
     "GoldenMatrixEntry",

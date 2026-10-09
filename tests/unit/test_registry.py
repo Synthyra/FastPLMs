@@ -9,11 +9,26 @@ import sys
 import pytest
 
 from pathlib import Path
+from packaging.version import Version
+from tests.conftest import requires_checkout_input, validation_pins
 
 from fastplms.registry import FileDigest, RegistryError, load_model_registry
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _assert_edited_manifest_is_rejected(tmp_path: Path, old: str, new: str, message: str) -> None:
+    """Write the manifest with its first ``old`` replaced by ``new`` and require the registry to reject it."""
+
+    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
+    invalid = manifest.replace(old, new, 1)
+    assert invalid != manifest
+    path = tmp_path / "models.toml"
+    path.write_text(invalid, encoding="utf-8")
+
+    with pytest.raises(RegistryError, match=message):
+        load_model_registry(path)
 
 
 def test_model_manifest_is_complete_and_typed() -> None:
@@ -235,7 +250,7 @@ def test_attention_kernel_revisions_are_typed_and_immutable() -> None:
         implementation: kernel.revision
         for implementation, kernel in registry.attention_kernels.items()
     } == {
-        "flash_attention_2": "db6b51744f0cd7061386442c09df890fc6d9f47e",
+        "flash_attention_2": "81fb77c12b2ad5d69380669b46739d5868614502",
         "flash_attention_3": "43f0bd269777115d94ff826e0d113ce9c1c9087b",
     }
     assert {
@@ -268,8 +283,8 @@ def test_attention_kernel_lock_matches_manifest_and_h100_variants() -> None:
 
     expected_h100 = {
         "kernels-community/flash-attn2": (
-            "torch213-cxx11-cu130-x86_64-linux",
-            "sha256-238cdad1945962331ad685a07119bb9e893ed976f11ecbf257e03d36682f95e4",
+            "torch-stable-abi210-cu130-x86_64-linux",
+            "sha256-fb59888ad577b7f075961f485d3df6e49aad896a3d4f8a30caf9298e81c8b204",
         ),
         "kernels-community/flash-attn3": (
             "torch-stable-abi29-cu130-x86_64-linux",
@@ -284,15 +299,49 @@ def test_attention_kernel_lock_matches_manifest_and_h100_variants() -> None:
         kernel.repository: kernel.version
         for kernel in registry.attention_kernels.values()
     } == {
-        "kernels-community/flash-attn2": 2,
+        "kernels-community/flash-attn2": 3,
         "kernels-community/flash-attn3": 1,
     }
+
+
+def _loads_on_an_h100_with(variant_name: str, torch_release: Version) -> bool:
+    """Whether a locked build loads on an x86_64 CUDA 13.0 host running this Torch release.
+
+    A Torch build must name the same minor release. A stable-ABI build loads on its ABI's
+    release and every later one.
+    """
+    platform = "-cu130-x86_64-linux"
+    if not variant_name.endswith(platform):
+        return False
+    framework = variant_name.removesuffix(platform)
+    release_tag = f"torch{torch_release.major}{torch_release.minor}"
+    if framework in (release_tag, f"{release_tag}-cxx11"):
+        return True
+    stable_abi = re.fullmatch(r"torch-stable-abi(\d)(\d+)", framework)
+    return stable_abi is not None and (int(stable_abi[1]), int(stable_abi[2])) <= (
+        torch_release.major,
+        torch_release.minor,
+    )
+
+
+def test_attention_kernel_lock_covers_the_validated_torch_on_h100() -> None:
+    torch_release = Version(validation_pins()["torch"])
+    entries = json.loads((ROOT / "kernels.lock").read_text(encoding="utf-8"))
+    uncovered = [
+        f"{entry['repo_id']}@{entry['sha']}"
+        for entry in entries
+        if not any(_loads_on_an_h100_with(name, torch_release) for name in entry["variants"])
+    ]
+    assert not uncovered, (
+        f"kernels.lock locks no x86_64 CUDA 13.0 build for Torch "
+        f"{torch_release.major}.{torch_release.minor} of: {', '.join(uncovered)}"
+    )
 
 
 def test_manifest_rejects_mutable_attention_kernel_revision(tmp_path: Path) -> None:
     manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
     invalid = manifest.replace(
-        'revision = "db6b51744f0cd7061386442c09df890fc6d9f47e"',
+        'revision = "81fb77c12b2ad5d69380669b46739d5868614502"',
         'revision = "main"',
         1,
     )
@@ -398,14 +447,7 @@ def test_manifest_rejects_invalid_family_enums_and_paths(
     new: str,
     message: str,
 ) -> None:
-    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
-    invalid = manifest.replace(old, new, 1)
-    assert invalid != manifest
-    path = tmp_path / "models.toml"
-    path.write_text(invalid, encoding="utf-8")
-
-    with pytest.raises(RegistryError, match=message):
-        load_model_registry(path)
+    _assert_edited_manifest_is_rejected(tmp_path, old, new, message)
 
 
 def test_manifest_rejects_unknown_backbone_model(tmp_path: Path) -> None:
@@ -470,14 +512,7 @@ def test_manifest_rejects_invalid_runtime_asset_fields(
     new: str,
     message: str,
 ) -> None:
-    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
-    invalid = manifest.replace(old, new, 1)
-    assert invalid != manifest
-    path = tmp_path / "models.toml"
-    path.write_text(invalid, encoding="utf-8")
-
-    with pytest.raises(RegistryError, match=message):
-        load_model_registry(path)
+    _assert_edited_manifest_is_rejected(tmp_path, old, new, message)
 
 
 def test_manifest_accepts_an_alternative_hash_pinned_runtime_asset(tmp_path: Path) -> None:
@@ -515,14 +550,7 @@ def test_manifest_rejects_invalid_generation_contracts(
     new: str,
     message: str,
 ) -> None:
-    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
-    invalid = manifest.replace(old, new, 1)
-    assert invalid != manifest
-    path = tmp_path / "models.toml"
-    path.write_text(invalid, encoding="utf-8")
-
-    with pytest.raises(RegistryError, match=message):
-        load_model_registry(path)
+    _assert_edited_manifest_is_rejected(tmp_path, old, new, message)
 
 
 def test_hub_license_metadata_is_typed_and_complete() -> None:
@@ -612,14 +640,7 @@ def test_manifest_rejects_invalid_hub_license_metadata(
     new: str,
     message: str,
 ) -> None:
-    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
-    invalid = manifest.replace(old, new, 1)
-    assert invalid != manifest
-    path = tmp_path / "models.toml"
-    path.write_text(invalid, encoding="utf-8")
-
-    with pytest.raises(RegistryError, match=message):
-        load_model_registry(path)
+    _assert_edited_manifest_is_rejected(tmp_path, old, new, message)
 
 
 def test_esmfold2_support_is_exactly_the_approved_six() -> None:
@@ -734,6 +755,7 @@ def test_runtime_paths_cannot_include_official_sources() -> None:
     assert (ROOT / "src" / "fastplms" / "models" / "__init__.py").is_file()
 
 
+@requires_checkout_input(".gitmodules", "the Git repository")
 def test_gitmodules_matches_manifest_paths_and_urls() -> None:
     registry = load_model_registry()
     parser = configparser.ConfigParser()
@@ -742,7 +764,7 @@ def test_gitmodules_matches_manifest_paths_and_urls() -> None:
     configured = {}
     for section in parser.sections():
         configured[parser[section]["path"]] = parser[section]["url"]
-    assert configured == {source.path: source.url for source in registry.upstreams.values()}
+    assert configured == {source.path: source.clone_url for source in registry.upstreams.values()}
 
 
 def test_manifest_rejects_an_alternative_pinned_esmfold2_repository(tmp_path: Path) -> None:
@@ -895,6 +917,12 @@ def test_manifest_parses_optional_hash_pinned_official_golden(tmp_path: Path) ->
         count=1,
         flags=re.MULTILINE,
     )
+    # The Hub copy of these tensors must carry the same digest, so it changes with them.
+    modified = modified.replace(
+        'sha256 = "d08a7572cbef20b8b19b545bcb0427b7e9ae19b986d015c559cd5a3a2cfc8aa4"',
+        'sha256 = "' + "b" * 64 + '"',
+        1,
+    )
     path = tmp_path / "models.toml"
     path.write_text(modified, encoding="utf-8")
 
@@ -929,6 +957,65 @@ def test_manifest_rejects_an_unsafe_official_golden_path(tmp_path: Path) -> None
         load_model_registry(path)
 
 
+def test_manifest_pins_a_hub_copy_of_every_official_golden() -> None:
+    registry = load_model_registry()
+
+    assert set(registry.golden_artifacts) == {
+        model_id for model_id, model in registry.items() if model.official_golden is not None
+    }
+    artifact = registry.golden_artifacts["esm2_8m"]
+    assert artifact.repository == "Synthyra/fastplms_parity_goldens"
+    assert artifact.revision == "50b93a0fc2be21a36c2522118754c74c4a9631ad"
+    assert artifact.path == "goldens/esm2_8m.safetensors"
+    assert artifact.sha256 == registry["esm2_8m"].official_golden.tensors.digest
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    (
+        (
+            'id = "esm2_8m"\nrepository = "Synthyra/fastplms_parity_goldens"',
+            'id = "esm2_unknown"\nrepository = "Synthyra/fastplms_parity_goldens"',
+            r"golden_artifacts\[0\]\.id references unknown model",
+        ),
+        (
+            'revision = "50b93a0fc2be21a36c2522118754c74c4a9631ad"',
+            'revision = "main"',
+            r"golden_artifacts\[0\]\.revision must be an immutable",
+        ),
+        (
+            'path = "goldens/esm2_8m.safetensors"',
+            'path = "goldens/esm2_35m.safetensors"',
+            r"golden_artifacts\[0\]\.path must be 'goldens/esm2_8m\.safetensors'",
+        ),
+        (
+            'sha256 = "d08a7572cbef20b8b19b545bcb0427b7e9ae19b986d015c559cd5a3a2cfc8aa4"',
+            'sha256 = "' + "c" * 64 + '"',
+            r"golden_artifacts\[0\]\.sha256 must equal the official_golden tensors digest",
+        ),
+        ("size = 537589", "size = 0", r"golden_artifacts\[0\]\.size must be a positive"),
+        ("size = 537589", 'size = 537589\nlicense = "MIT"', "contains unknown fields"),
+    ),
+)
+def test_manifest_rejects_invalid_golden_artifact_fields(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    message: str,
+) -> None:
+    _assert_edited_manifest_is_rejected(tmp_path, old, new, message)
+
+
+def test_manifest_without_golden_artifacts_still_loads(tmp_path: Path) -> None:
+    manifest = (ROOT / "src" / "fastplms" / "models.toml").read_text(encoding="utf-8")
+    without = re.sub(r"\[\[golden_artifacts\]\]\n(?:[^\[\n].*\n)*\n?", "", manifest)
+    assert "[[golden_artifacts]]" not in without
+    path = tmp_path / "models.toml"
+    path.write_text(without, encoding="utf-8")
+
+    assert load_model_registry(path).golden_artifacts == {}
+
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -945,7 +1032,7 @@ def test_file_digest_rejects_unsafe_or_unverifiable_values(value: str) -> None:
 def test_top_level_import_does_not_import_torch() -> None:
     environment = os.environ.copy()
     environment["PYTHONPATH"] = str(ROOT / "src")
-    result = subprocess.run(
+    completed = subprocess.run(
         [
             sys.executable,
             "-c",
@@ -957,4 +1044,4 @@ def test_top_level_import_does_not_import_torch() -> None:
         text=True,
         env=environment,
     )
-    assert result.returncode == 0, result.stderr
+    assert completed.returncode == 0, completed.stderr

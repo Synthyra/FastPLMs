@@ -22,6 +22,12 @@ D_ATOM = 128  # d_atom: atom-state width.
 N_HEADS = 4
 HALF_WINDOW = 2
 requires_cuda = pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+# Variable-length attention runs the FlashAttention kernels PyTorch compiles into its
+# Linux CUDA wheels; the Windows wheels leave them out.
+requires_flash_build = pytest.mark.skipif(
+    not torch.backends.cuda.is_flash_attention_available(),
+    reason="needs a PyTorch build with FlashAttention kernels for torch.nn.attention.varlen",
+)
 
 
 def _attention(half_window: int = HALF_WINDOW) -> common.SWA3DRoPEAttention:
@@ -30,6 +36,7 @@ def _attention(half_window: int = HALF_WINDOW) -> common.SWA3DRoPEAttention:
 
 
 def _attention_params(atom_mask: torch.Tensor) -> tuple:
+    # atom_mask: (b, n_atoms)
     batch_size, n_atoms = atom_mask.shape
     generator = torch.Generator().manual_seed(3)
     ref_pos = torch.randn(batch_size, n_atoms, 3, generator=generator)  # (b, n_atoms, xyz)
@@ -45,6 +52,7 @@ def _windowed_reference(
     module: common.SWA3DRoPEAttention, x: torch.Tensor, params: tuple, atom_mask: torch.Tensor
 ) -> torch.Tensor:
     """Dense attention restricted to ``half_window`` real atoms on each side."""
+    # x: (b, n_atoms, d_atom); atom_mask: (b, n_atoms)
     batch_size, n_atoms = x.shape[:2]
     qkv = module.Wqkv(x).view(batch_size, n_atoms, 3, N_HEADS, D_ATOM // N_HEADS)
     q, k, v = qkv.permute(2, 0, 1, 3, 4).unbind(0)  # each (b, n_atoms, h, d_h)
@@ -59,7 +67,7 @@ def _windowed_reference(
     logits = logits.masked_fill(~allowed[:, None], float("-inf"))
     weights = torch.softmax(logits, dim=-1).nan_to_num(0.0)  # padded query rows have no key
     attended = torch.matmul(weights, v).transpose(1, 2).reshape(batch_size, n_atoms, D_ATOM)
-    return module.out_proj(attended * torch.sigmoid(module.gate_proj(x)))
+    return module.out_proj(attended * torch.sigmoid(module.gate_proj(x)))  # (b, n_atoms, d_atom)
 
 
 def test_dense_is_the_default_and_unknown_modes_raise() -> None:
@@ -104,6 +112,7 @@ def test_model_setter_reaches_every_atom_attention_module(model_class: type) -> 
 
 
 @requires_cuda
+@requires_flash_build
 @pytest.mark.gpu
 @pytest.mark.parametrize("padded", (False, True))
 def test_windowed_attention_matches_a_dense_window_over_real_atoms(padded: bool) -> None:
@@ -135,6 +144,7 @@ def test_windowed_attention_matches_a_dense_window_over_real_atoms(padded: bool)
 
 
 @requires_cuda
+@requires_flash_build
 @pytest.mark.gpu
 def test_a_window_wider_than_the_sample_matches_dense_attention() -> None:
     device = torch.device("cuda")

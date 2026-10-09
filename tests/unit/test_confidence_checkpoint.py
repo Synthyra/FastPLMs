@@ -9,6 +9,7 @@ import torch
 
 from pathlib import Path
 from safetensors.torch import save_file
+from tests.unit.test_esmfold2_small import _tiny_experimental_config
 
 from fastplms.models.esmfold2 import confidence_checkpoint
 from fastplms.models.esmfold2.configuration_esmfold2 import ESMFold2Config
@@ -19,7 +20,6 @@ from fastplms.models.esmfold2.modeling_esmfold2_experimental import (
     ConfidenceHead,
     ESMFold2ExperimentalModel,
 )
-from tests.unit.test_esmfold2_small import _tiny_experimental_config
 
 
 REVISION = "a" * 40

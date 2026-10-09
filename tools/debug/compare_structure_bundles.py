@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import torch
+
 from collections.abc import Sequence
 from pathlib import Path
 from safetensors.torch import load_file

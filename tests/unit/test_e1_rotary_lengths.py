@@ -34,7 +34,7 @@ def _encoder() -> FAST_E1_ENCODER:
 
 def _inputs() -> dict[str, torch.Tensor]:
     # Two packed proteins in row 0 and one in row 1; -1 marks padding. All: (b=2, l=5).
-    return {
+    return {  # (...) inputs_embeds (2, 5, 8) = (b, l, d), the three id tensors (2, 5)
         "inputs_embeds": torch.randn(2, 5, 8, generator=torch.Generator().manual_seed(1)),
         "within_seq_position_ids": torch.tensor(((0, 1, 0, 1, -1), (0, 1, 2, -1, -1))),
         "global_position_ids": torch.tensor(((0, 1, 2, 3, -1), (0, 1, 2, -1, -1))),

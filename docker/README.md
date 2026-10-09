@@ -1,7 +1,7 @@
 # Container environments
 
 `docker/Dockerfile` is the only maintained Dockerfile. Candidate stages use
-Python 3.12, CUDA 13.0, PyTorch 2.13.0, and Transformers 5.13.0. The runtime
+Python 3.12, CUDA 13.0, PyTorch 2.14.0, and Transformers 5.17.0. The runtime
 stage contains FastPLMs source, but not `vendor/upstream/`. Candidate
 dependencies are installed with `uv pip install` from the named profiles in
 `requirements/profiles/` and the validation constraint. FastPLMs is not

@@ -345,7 +345,7 @@ def test_training_manifest_records_reproducible_model_data_and_tokenizer_identit
 
     class FakeDataset:
         _fingerprint = "dataset-fingerprint"
-        info = SimpleNamespace(builder_name="builder", config_name="config", version="1.0")
+        dataset_info = SimpleNamespace(builder_name="builder", config_name="config", version="1.0")
         rows: ClassVar[list[dict[str, object]]] = [
             {"sequence": "AC", "label": 0},
             {"sequence": "DEF", "label": 1},
@@ -601,6 +601,7 @@ def test_atomic_final_artifact_reload_preserves_trainer_and_held_out_logits(
         model.projection.weight.copy_(torch.tensor([[0.25, -0.5]]))  # (c=1, d=2)
 
     def collate(rows: list[tuple[torch.Tensor, float]]) -> dict[str, torch.Tensor]:
+        # rows: (2,) = (d,) one input vector per example, each paired with a float label
         inputs, labels = zip(*rows, strict=True)
         return {
             "input_ids": torch.stack(inputs),

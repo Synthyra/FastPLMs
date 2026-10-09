@@ -19,10 +19,10 @@ REQUIRED_STRATA = {"monomer": 64, "dimer": 64}
 
 
 def _number(value: Any, name: str) -> float:
-    result = float(value)
-    if not math.isfinite(result):
+    parsed = float(value)
+    if not math.isfinite(parsed):
         raise ValueError(f"{name} must be finite")
-    return result
+    return parsed
 
 
 def _vector(record: dict[str, Any], name: str) -> list[float]:
