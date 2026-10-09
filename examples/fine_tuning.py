@@ -27,18 +27,13 @@ from functools import wraps
 from importlib import metadata
 from numbers import Integral, Real
 from pathlib import Path
-from typing import Any, ParamSpec, TypeVar, cast
-from datasets import load_dataset
-from peft import LoraConfig, PeftModel, get_peft_model
+from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, cast
 from torch.utils.data import Dataset as TorchDataset
-from transformers import (
-    AutoModelForSequenceClassification,
-    EarlyStoppingCallback,
-    EvalPrediction,
-    Trainer,
-    TrainingArguments,
-    set_seed,
-)
+
+# The Transformers training stack takes seconds to import (it also loads PEFT), so the
+# functions that build or train a model import it themselves and --help stays fast.
+if TYPE_CHECKING:
+    from transformers import EvalPrediction, Trainer, TrainingArguments
 
 
 # Shapes: b = batch, b_v = verification batch, l = encoded tokens,
@@ -417,6 +412,9 @@ def _load_dataset_immutable(
         kwargs["revision"] = identity["revision"]
     if split is not None:
         kwargs["split"] = split
+    # Imported where used: datasets and peft take seconds to import, which `--help` should not pay.
+    from datasets import load_dataset
+
     return load_dataset(source, **kwargs), identity
 
 
@@ -587,6 +585,8 @@ def initialize_model(
 
     num_labels=1 selects regression; model_revision pins remote model sources.
     """
+    from transformers import AutoModelForSequenceClassification
+
     if attn_backend not in EXAMPLE_ATTENTION_BACKENDS:
         raise ValueError(
             f"The fine-tuning example supports {EXAMPLE_ATTENTION_BACKENDS}, got "
@@ -621,6 +621,8 @@ def initialize_model(
     tokenizer = model.tokenizer
 
     if use_lora:
+        from peft import LoraConfig, get_peft_model
+
         if lora_config is None:
             # Target modules for the ESM2 sequence-classification artifacts.
             target_modules = ["layernorm_qkv.1", "out_proj", "query", "key", "value", "dense"]
@@ -776,7 +778,7 @@ def _write_training_manifest(
     full_determinism: bool,
     datasets: dict[str, Any],
     dataset_contracts: dict[str, dict[str, Any]],
-    training_arguments: TrainingArguments,
+    training_arguments: "TrainingArguments",
     patience: int,
     final_artifact: Mapping[str, Any],
     requested_attention_backend: str = "sdpa",
@@ -946,7 +948,7 @@ def _primary_prediction_tensor(predictions: Any) -> torch.Tensor:
 
 
 def _held_out_reload_verification(
-    trainer: Trainer,
+    trainer: "Trainer",
     reloaded_model: Any,
     *,
     verification_dataset: Any,
@@ -1037,6 +1039,8 @@ def _reload_final_model(
     use_lora: bool,
     attn_backend: str = "sdpa",
 ) -> Any:
+    from transformers import AutoModelForSequenceClassification
+
     source = _immutable_source_identity(
         model_name,
         model_revision,
@@ -1051,6 +1055,8 @@ def _reload_final_model(
             attn_implementation=attn_backend,
             **revision_kwargs,
         )
+        from peft import PeftModel
+
         return PeftModel.from_pretrained(
             base_model,
             artifact_dir,
@@ -1065,7 +1071,7 @@ def _reload_final_model(
 
 
 def _save_reload_verify_final_artifact(
-    trainer: Trainer,
+    trainer: "Trainer",
     tokenizer: Any,
     *,
     output_dir: str,
@@ -1182,7 +1188,7 @@ def _spearman_correlation(predictions: np.ndarray, labels: np.ndarray) -> float:
     return float(correlation)
 
 
-def compute_metrics_regression(p: EvalPrediction) -> dict[str, float]:
+def compute_metrics_regression(p: "EvalPrediction") -> dict[str, float]:
     """Compute Spearman correlation for regression tasks."""
     predictions, labels = p.predictions, p.label_ids  # predictions: (...); labels: (...)
     predictions = (
@@ -1196,7 +1202,7 @@ def compute_metrics_regression(p: EvalPrediction) -> dict[str, float]:
     }
 
 
-def compute_metrics_classification(p: EvalPrediction) -> dict[str, float]:
+def compute_metrics_classification(p: "EvalPrediction") -> dict[str, float]:
     """Compute accuracy for classification tasks"""
     predictions, labels = p.predictions, p.label_ids  # predictions: (n, c); labels: (n,)
     predictions = (
@@ -1270,7 +1276,7 @@ def plot_regression_results(
 
 
 def plot_classification_results(
-    trainer: Trainer,
+    trainer: "Trainer",
     test_dataset: Any,
     output_path: str | Path,
     task_name: str = "Classification",
@@ -1329,12 +1335,14 @@ def train_regression_model(
     plot_results: bool = False,
     attn_backend: str = "sdpa",
     output_dir: str | Path | None = None,
-) -> tuple[Trainer, Any]:
+) -> "tuple[Trainer, Any]":
     """Train protein-pair regression and return the trainer and test dataset.
 
     max_length: Encoded token budget including pair separators and special tokens.
     patience counts evaluations without improvement. output_dir must be new.
     """
+    from transformers import EarlyStoppingCallback, Trainer, TrainingArguments, set_seed
+
     print("Loading datasets for regression task...")
     if max_length <= 0:
         raise ValueError("max_length must be a positive encoded token budget.")
@@ -1519,12 +1527,14 @@ def train_classification_model(
     plot_results: bool = False,
     attn_backend: str = "sdpa",
     output_dir: str | Path | None = None,
-) -> Trainer:
+) -> "Trainer":
     """Train protein solubility classification and return the trainer.
 
     max_length: Encoded token budget including tokenizer-added special tokens.
     patience counts evaluations without improvement. output_dir must be new.
     """
+    from transformers import EarlyStoppingCallback, Trainer, TrainingArguments, set_seed
+
     print("Loading datasets for classification task...")
     if max_length <= 0:
         raise ValueError("max_length must be a positive encoded token budget.")

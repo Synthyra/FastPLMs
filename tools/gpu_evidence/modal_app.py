@@ -161,10 +161,11 @@ def _image(
         )
     image = image.uv_pip_install(f"transformers=={TRANSFORMERS_VERSION}")
     # uv installs without bytecode and workers set PYTHONDONTWRITEBYTECODE, so every fresh
-    # interpreter a subprocess contract starts would compile torch and transformers again.
+    # interpreter a subprocess contract starts would compile transformers again: about 20 s
+    # under ``python -O``, whose bytecode level differs. Compile both levels into the image.
     image = image.run_commands(
         "python -c \"import compileall, sysconfig; "
-        "compileall.compile_dir(sysconfig.get_paths()['purelib'], quiet=1, workers=0)\""
+        "compileall.compile_dir(sysconfig.get_paths()['purelib'], quiet=1, workers=0, optimize=[0, 1])\""
     )
     # Build steps must precede the working-tree mounts below.
     if reference_environment:

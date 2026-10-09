@@ -418,7 +418,9 @@ def test_curated_offline_examples_expose_executable_help() -> None:
             env=environment,
             capture_output=True,
             text=True,
-            timeout=20,
+            # A hang guard, not a speed contract: every example imports torch, and a cold torch
+            # import alone took 14 s on a sandboxed cloud CPU worker running the suite in parallel.
+            timeout=60,
             check=False,
         )
 

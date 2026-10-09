@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+import transformers
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -507,8 +508,9 @@ def test_shipped_initializer_drives_one_peft_step_and_atomic_final_reload(
         model.tokenizer = tokenizer
         return model
 
+    # fine_tuning imports the Transformers auto class when it builds a model, so patch it there.
     monkeypatch.setattr(
-        fine_tuning.AutoModelForSequenceClassification,
+        transformers.AutoModelForSequenceClassification,
         "from_pretrained",
         staticmethod(load_tiny_model),
     )
